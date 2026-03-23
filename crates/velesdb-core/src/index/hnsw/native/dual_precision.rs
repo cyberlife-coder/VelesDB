@@ -136,7 +136,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     /// # Errors
     ///
     /// Returns an error if allocation or insertion fails.
-    pub fn insert(&mut self, vector: Vec<f32>) -> crate::error::Result<NodeId> {
+    pub fn insert(&mut self, vector: &[f32]) -> crate::error::Result<NodeId> {
         debug_assert_eq!(vector.len(), self.dimension);
 
         // F-13: Push to quantized store or training buffer using a reference
@@ -144,16 +144,16 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         // Note: inner.insert() still clones internally (F-14), but we avoid an
         // additional clone at this level for the quantized path.
         if let Some(ref mut store) = self.quantized_store {
-            store.push(&vector);
+            store.push(vector);
         } else {
-            // Training path: must clone because inner.insert() consumes vector
-            self.training_buffer.push(vector.clone());
+            // Training path: clone into buffer for later quantizer training
+            self.training_buffer.push(vector.to_vec());
             if self.training_buffer.len() >= self.training_sample_size {
                 self.train_quantizer();
             }
         }
 
-        self.inner.insert(&vector)
+        self.inner.insert(vector)
     }
 
     /// Trains the quantizer on accumulated samples.

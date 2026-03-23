@@ -53,7 +53,7 @@ fn test_heuristic_selection_empty_candidates() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Insert a single vector to have valid query
-    hnsw.insert(&vec![0.0; 32]).expect("test");
+    hnsw.insert(&[0.0; 32]).expect("test");
 
     let candidates: Vec<(NodeId, f32)> = vec![];
 
@@ -69,7 +69,7 @@ fn test_heuristic_selection_fewer_than_max() {
 
     // Insert vectors
     for i in 0..5 {
-        hnsw.insert(&vec![i as f32; 32]).expect("test");
+        hnsw.insert(&[i as f32; 32]).expect("test");
     }
 
     let candidates: Vec<(NodeId, f32)> = vec![(0, 0.0), (1, 1.0), (2, 2.0)];
@@ -90,7 +90,7 @@ fn test_heuristic_selection_respects_max() {
 
     // Insert vectors
     for i in 0..20 {
-        hnsw.insert(&vec![i as f32; 32]).expect("test");
+        hnsw.insert(&[i as f32; 32]).expect("test");
     }
 
     let candidates: Vec<(NodeId, f32)> = (0..15).map(|i| (i, i as f32)).collect();
@@ -105,7 +105,7 @@ fn test_heuristic_selection_prefers_diverse_neighbors() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Insert diverse vectors: one at origin, cluster around (10,0,0...), spread around (0,10,0...)
-    hnsw.insert(&vec![0.0; 32]).expect("test"); // 0: origin
+    hnsw.insert(&[0.0; 32]).expect("test"); // 0: origin
 
     // Cluster A: near (10, 0, 0, ...)
     let mut v1 = vec![0.0; 32];
@@ -148,7 +148,7 @@ fn test_heuristic_fills_quota_with_closest_if_needed() {
 
     // Insert vectors
     for i in 0..10 {
-        hnsw.insert(&vec![i as f32; 32]).expect("test");
+        hnsw.insert(&[i as f32; 32]).expect("test");
     }
 
     let candidates: Vec<(NodeId, f32)> = (0..10).map(|i| (i, i as f32)).collect();

@@ -44,7 +44,7 @@ fn test_native_hnsw_recall() {
         .collect();
 
     for v in &vectors {
-        hnsw.insert(&v).expect("test");
+        hnsw.insert(v).expect("test");
     }
 
     // Test recall with multiple queries

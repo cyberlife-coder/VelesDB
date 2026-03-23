@@ -141,9 +141,9 @@ impl GpuAccelerator {
     ///
     /// Uses the shared quad bind-group layout from [`super::helpers`]:
     /// binding 0 = storage(read), binding 1 = storage(read),
-    /// binding 2 = storage(read_write), binding 3 = uniform.
+    /// binding 2 = `storage(read_write)`, binding 3 = uniform.
     ///
-    /// All four shaders (cosine, euclidean, dot_product, kmeans) share this
+    /// All four shaders (cosine, euclidean, `dot_product`, kmeans) share this
     /// structural layout. The uniform buffer's internal data layout (e.g.,
     /// 2-field params for distance vs 4-field for kmeans) is interpreted
     /// by the shader code, not constrained by the bind group layout.

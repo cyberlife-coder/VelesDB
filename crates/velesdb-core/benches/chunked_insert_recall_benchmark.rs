@@ -1,4 +1,4 @@
-//! Chunked insert recall quality benchmark for VelesDB HNSW index.
+//! Chunked insert recall quality benchmark for `VelesDB` HNSW index.
 #![allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,

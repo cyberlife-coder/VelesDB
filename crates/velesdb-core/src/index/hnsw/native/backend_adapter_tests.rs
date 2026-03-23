@@ -80,7 +80,7 @@ fn test_search_neighbours_format() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     for i in 0..50 {
-        hnsw.insert(&vec![i as f32 * 0.1; 32]).expect("test");
+        hnsw.insert(&[i as f32 * 0.1; 32]).expect("test");
     }
 
     let query = vec![0.0; 32];
@@ -134,7 +134,7 @@ fn test_file_dump_creates_files() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     for i in 0..20 {
-        hnsw.insert(&vec![i as f32; 32]).expect("test");
+        hnsw.insert(&[i as f32; 32]).expect("test");
     }
 
     let dir = tempdir().unwrap();
@@ -244,7 +244,7 @@ fn test_native_backend_generic_function() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     for i in 0..10 {
-        hnsw.insert(&vec![i as f32; 32]).expect("test");
+        hnsw.insert(&[i as f32; 32]).expect("test");
     }
 
     let query = vec![0.0; 32];
@@ -266,7 +266,7 @@ fn test_native_backend_len_and_is_empty() {
         0
     );
 
-    hnsw.insert(&vec![1.0; 32]).expect("test");
+    hnsw.insert(&[1.0; 32]).expect("test");
 
     assert!(!<NativeHnsw<SimdDistance> as NativeHnswBackend>::is_empty(
         &hnsw

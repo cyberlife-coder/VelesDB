@@ -45,7 +45,7 @@ fn bench_search_latency(c: &mut Criterion) {
     let mut dual_hnsw =
         DualPrecisionHnsw::new(engine_dual, dim, 32, 200, num_vectors).expect("bench");
     for v in &vectors {
-        dual_hnsw.insert(v.clone()).expect("bench");
+        dual_hnsw.insert(v).expect("bench");
     }
     // Force training if not already done
     dual_hnsw.force_train_quantizer();
@@ -126,7 +126,7 @@ fn bench_memory_footprint(c: &mut Criterion) {
                 let mut hnsw =
                     DualPrecisionHnsw::new(engine, dim, 32, 200, num_vectors).expect("bench");
                 for v in &vectors {
-                    hnsw.insert(v.clone()).expect("bench");
+                    hnsw.insert(v).expect("bench");
                 }
                 hnsw.force_train_quantizer();
                 black_box(hnsw.len())
