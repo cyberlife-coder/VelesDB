@@ -9,8 +9,13 @@
 pub mod delta;
 
 #[cfg(feature = "persistence")]
+pub mod deferred;
+
+#[cfg(feature = "persistence")]
 mod ingester;
 
+#[cfg(feature = "persistence")]
+pub use deferred::{DeferredIndexer, DeferredIndexerConfig};
 #[cfg(feature = "persistence")]
 pub use delta::{merge_with_delta, merge_with_delta_scored};
 #[cfg(feature = "persistence")]
