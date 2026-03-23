@@ -418,7 +418,7 @@ impl Collection {
         Ok(())
     }
 
-    /// Deletes vector points from all stores (vector, payload, index, caches, sparse).
+    /// Deletes vector points from all stores (vector, payload, index, caches, sparse, delta).
     fn delete_vector_points(&self, ids: &[u64]) -> Result<()> {
         let mut payload_storage = self.payload_storage.write();
         let mut vector_storage = self.vector_storage.write();
@@ -446,7 +446,15 @@ impl Collection {
         drop(pq_cache);
         self.config.write().point_count = point_count;
 
-        self.delete_from_sparse_indexes(ids)
+        self.delete_from_sparse_indexes(ids)?;
+
+        // Lock order: delta_buffer(10) acquired after sparse_indexes(9) released.
+        #[cfg(feature = "persistence")]
+        for &id in ids {
+            self.delta_buffer.remove(id);
+        }
+
+        Ok(())
     }
 
     /// Deletes IDs from sparse indexes with WAL-before-apply.

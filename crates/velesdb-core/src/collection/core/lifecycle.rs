@@ -594,6 +594,11 @@ impl Collection {
 
     /// Saves the collection configuration and index to disk.
     ///
+    /// If the delta buffer is active (HNSW rebuild in progress), drains
+    /// buffered vectors into the HNSW index before persisting it. This
+    /// ensures graceful shutdown does not lose vectors that were accepted
+    /// during the rebuild window.
+    ///
     /// # Errors
     ///
     /// Returns an error if storage operations fail.
@@ -601,10 +606,37 @@ impl Collection {
         self.save_config()?;
         self.vector_storage.write().flush()?;
         self.payload_storage.write().flush()?;
+        // Drain delta buffer into HNSW before persisting the index.
+        // Lock order: delta_buffer(10) is acquired after vector_storage(2)
+        // and payload_storage(3) — both already released above.
+        self.drain_delta_into_index();
         self.index.save(&self.path)?;
         self.flush_secondary_indexes()?;
         self.flush_sparse_indexes()
     }
+
+    /// Drains the delta buffer into the HNSW index (if active).
+    ///
+    /// No-op when the delta buffer is inactive (no rebuild in progress).
+    /// After draining, the buffer is empty and inactive.
+    ///
+    /// # Lock ordering
+    ///
+    /// Acquires only `delta_buffer` (position 10). The caller must NOT hold
+    /// any lower-numbered lock when calling this method.
+    #[cfg(feature = "persistence")]
+    fn drain_delta_into_index(&self) {
+        use crate::index::VectorIndex;
+
+        let drained = self.delta_buffer.deactivate_and_drain();
+        for (id, vector) in &drained {
+            self.index.insert(*id, vector);
+        }
+    }
+
+    /// No-op stub when persistence is disabled.
+    #[cfg(not(feature = "persistence"))]
+    fn drain_delta_into_index(&self) {}
 
     /// Persists property index, range index, and edge store (EPIC-009 US-005).
     fn flush_secondary_indexes(&self) -> Result<()> {

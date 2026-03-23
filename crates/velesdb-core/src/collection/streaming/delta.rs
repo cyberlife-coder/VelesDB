@@ -123,7 +123,14 @@ impl DeltaBuffer {
         drained
     }
 
-    /// Pushes a single entry into the delta buffer.
+    /// Pushes a single entry into the delta buffer (upsert semantics).
+    ///
+    /// If an entry with the same `id` already exists, it is replaced.
+    /// This prevents duplicate IDs from accumulating when the same point
+    /// is inserted multiple times during an HNSW rebuild.
+    ///
+    /// The retain-then-push is O(n) but acceptable: the buffer is bounded
+    /// by `merge_threshold` (typically 1024-4096 entries).
     ///
     /// No-op if the buffer is not in `ACTIVE` state. The check is performed
     /// **inside** the write lock to close the TOCTOU window between `is_active()`
@@ -131,11 +138,15 @@ impl DeltaBuffer {
     pub fn push(&self, id: u64, vector: Vec<f32>) {
         let mut points = self.points.write();
         if self.state.load(Ordering::Acquire) == ACTIVE {
+            points.retain(|(existing_id, _)| *existing_id != id);
             points.push((id, vector));
         }
     }
 
-    /// Extends the delta buffer with multiple entries.
+    /// Extends the delta buffer with multiple entries (upsert semantics).
+    ///
+    /// For each entry, any existing entry with the same ID is replaced.
+    /// This prevents duplicate IDs from accumulating in the buffer.
     ///
     /// No-op if the buffer is not in `ACTIVE` state. The check is performed
     /// **inside** the write lock to close the TOCTOU window between `is_active()`
@@ -143,8 +154,21 @@ impl DeltaBuffer {
     pub fn extend(&self, entries: impl IntoIterator<Item = (u64, Vec<f32>)>) {
         let mut points = self.points.write();
         if self.state.load(Ordering::Acquire) == ACTIVE {
-            points.extend(entries);
+            let new_entries: Vec<(u64, Vec<f32>)> = entries.into_iter().collect();
+            let new_ids: HashSet<u64> = new_entries.iter().map(|(id, _)| *id).collect();
+            points.retain(|(existing_id, _)| !new_ids.contains(existing_id));
+            points.extend(new_entries);
         }
+    }
+
+    /// Removes all entries matching the given point ID from the buffer.
+    ///
+    /// Works in any state (`ACTIVE`, `DRAINING`, or `INACTIVE`): a delete
+    /// must always purge stale data regardless of the buffer lifecycle.
+    /// This prevents ghost results where a deleted vector is still returned
+    /// by the delta brute-force scan.
+    pub fn remove(&self, id: u64) {
+        self.points.write().retain(|(eid, _)| *eid != id);
     }
 
     /// Returns the number of buffered entries.
@@ -464,5 +488,78 @@ mod tests {
         let (len, is_empty) = buf.stats();
         assert_eq!(len, 1);
         assert!(!is_empty);
+    }
+
+    // ── Bug B0.1: remove() filters deleted points from search ──────────
+
+    #[test]
+    fn test_delta_remove_filters_deleted_point() {
+        let buf = DeltaBuffer::new();
+        buf.activate();
+        buf.push(1, vec![1.0, 2.0, 3.0]);
+        buf.push(2, vec![4.0, 5.0, 6.0]);
+        buf.remove(1);
+        let results = buf.search(&[1.0, 2.0, 3.0], 10, DistanceMetric::Euclidean);
+        assert!(
+            results.iter().all(|(id, _)| *id != 1),
+            "Deleted point should not appear in search results"
+        );
+        assert_eq!(results.len(), 1, "Only point 2 should remain");
+    }
+
+    #[test]
+    fn test_delta_remove_nonexistent_id_is_noop() {
+        let buf = DeltaBuffer::new();
+        buf.activate();
+        buf.push(1, vec![1.0, 2.0]);
+        buf.remove(999);
+        assert_eq!(buf.len(), 1, "Removing absent ID should not change length");
+    }
+
+    #[test]
+    fn test_delta_remove_works_in_draining_state() {
+        let buf = DeltaBuffer::new();
+        buf.activate();
+        buf.push(1, vec![1.0]);
+        buf.push(2, vec![2.0]);
+        // remove() works unconditionally (any state) — a delete must always
+        // purge stale data regardless of buffer lifecycle.
+        buf.remove(1);
+        assert_eq!(buf.len(), 1);
+    }
+
+    // ── Bug B0.4: push() deduplicates on same ID (upsert semantics) ───
+
+    #[test]
+    fn test_delta_push_deduplicates_on_same_id() {
+        let buf = DeltaBuffer::new();
+        buf.activate();
+        buf.push(1, vec![1.0, 2.0, 3.0]);
+        buf.push(1, vec![4.0, 5.0, 6.0]); // Same ID, different vector
+        assert_eq!(buf.len(), 1, "Should have deduplicated");
+        let results = buf.search(&[4.0, 5.0, 6.0], 1, DistanceMetric::Euclidean);
+        assert_eq!(results[0].0, 1);
+        // Distance should be ~0 since query matches the updated vector
+        assert!(
+            results[0].1 < 0.01,
+            "Updated vector should match query closely"
+        );
+    }
+
+    #[test]
+    fn test_delta_extend_deduplicates_on_same_id() {
+        let buf = DeltaBuffer::new();
+        buf.activate();
+        buf.push(1, vec![1.0, 0.0]);
+        buf.push(2, vec![0.0, 1.0]);
+        // Extend with updates for id=1 and a new id=3
+        buf.extend(vec![(1, vec![0.5, 0.5]), (3, vec![0.0, 0.0])]);
+        assert_eq!(buf.len(), 3, "Should have ids 1, 2, 3");
+        let results = buf.search(&[0.5, 0.5], 1, DistanceMetric::Euclidean);
+        assert_eq!(
+            results[0].0, 1,
+            "ID 1 should have updated vector [0.5, 0.5]"
+        );
+        assert!(results[0].1 < 0.01, "Updated vector should match query");
     }
 }
