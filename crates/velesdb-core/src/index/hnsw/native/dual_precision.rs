@@ -139,10 +139,9 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     pub fn insert(&mut self, vector: &[f32]) -> crate::error::Result<NodeId> {
         debug_assert_eq!(vector.len(), self.dimension);
 
-        // F-13: Push to quantized store or training buffer using a reference
-        // BEFORE passing ownership to inner.insert().
-        // Note: inner.insert() still clones internally (F-14), but we avoid an
-        // additional clone at this level for the quantized path.
+        // F-13: Push the borrowed slice to the quantized store or copy into the
+        // training buffer before forwarding to inner.insert(). The quantized
+        // path is zero-copy; only the training path allocates via to_vec().
         if let Some(ref mut store) = self.quantized_store {
             store.push(vector);
         } else {

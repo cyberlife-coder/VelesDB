@@ -395,3 +395,436 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         }
     }
 }
+
+// =============================================================================
+// Phase A.1 RED tests — search_layer refactoring (Issue #366)
+//
+// These tests define the contract for the extracted SearchState struct and
+// helper functions. They are written BEFORE the implementation exists (TDD RED
+// phase). Tests that reference not-yet-existing types are #[ignore]d with the
+// concrete assertions commented out behind TODO(US-366) markers.
+// =============================================================================
+
+#[cfg(test)]
+mod search_refactor_tests {
+    #![allow(unused_imports)] // RED phase: imports needed once TODO(US-366) code is uncommented
+
+    use super::super::super::distance::SimdDistance;
+    use super::super::super::layer::NodeId;
+    use super::super::super::ordered_float::OrderedFloat;
+    use super::super::NativeHnsw;
+    use crate::distance::DistanceMetric;
+    // TODO(US-366): uncomment after SearchState is implemented
+    // use super::SearchState;
+    // use super::gather_unvisited_neighbors;
+    // use super::process_batch_results;
+    use rustc_hash::FxHashSet;
+    use smallvec::SmallVec;
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    // =========================================================================
+    // Helpers
+    // =========================================================================
+
+    /// Brute-force cosine distance for ground-truth computation.
+    fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm_a == 0.0 || norm_b == 0.0 {
+            1.0
+        } else {
+            1.0 - (dot / (norm_a * norm_b))
+        }
+    }
+
+    // =========================================================================
+    // 1. SearchState::new + push_candidate
+    // =========================================================================
+
+    #[test]
+    #[ignore = "RED: SearchState does not exist yet"]
+    fn test_search_state_new_and_push() {
+        // TODO(US-366): uncomment after SearchState is implemented
+        // let mut state = SearchState::new();
+        //
+        // // Push three candidates with known distances
+        // state.push_candidate(10, 0.5);
+        // state.push_candidate(20, 0.1);
+        // state.push_candidate(30, 0.9);
+        //
+        // // Candidates min-heap: closest first (0.1 at top)
+        // let (OrderedFloat(top_dist), top_node) = state.candidates.peek()
+        //     .map(|Reverse(item)| item)
+        //     .copied()
+        //     .expect("candidates should not be empty");
+        // assert_eq!(top_node, 20, "min-heap should surface closest candidate");
+        // assert!((top_dist - 0.1).abs() < f32::EPSILON);
+        //
+        // // Results max-heap: furthest first (0.9 at top)
+        // let &(OrderedFloat(furthest_dist), furthest_node) = state.results.peek()
+        //     .expect("results should not be empty");
+        // assert_eq!(furthest_node, 30, "max-heap should surface furthest result");
+        // assert!((furthest_dist - 0.9).abs() < f32::EPSILON);
+        //
+        // // Visited set should contain all three
+        // assert!(state.visited.contains(&10));
+        // assert!(state.visited.contains(&20));
+        // assert!(state.visited.contains(&30));
+    }
+
+    // =========================================================================
+    // 2. SearchState::should_terminate
+    // =========================================================================
+
+    #[test]
+    #[ignore = "RED: SearchState does not exist yet"]
+    fn test_search_state_should_terminate() {
+        // TODO(US-366): uncomment after SearchState is implemented
+        // let mut state = SearchState::new();
+        //
+        // // Fill ef=3 results with distances 0.1, 0.3, 0.5
+        // state.push_candidate(1, 0.1);
+        // state.push_candidate(2, 0.3);
+        // state.push_candidate(3, 0.5);
+        //
+        // let ef = 3;
+        // let stagnation_limit = 10;
+        //
+        // // c_dist=0.6 > furthest(0.5) AND results.len()>=ef => should terminate
+        // assert!(
+        //     state.should_terminate(0.6, ef, stagnation_limit),
+        //     "should terminate: c_dist > furthest and results full"
+        // );
+        //
+        // // c_dist=0.4 < furthest(0.5) => should NOT terminate
+        // assert!(
+        //     !state.should_terminate(0.4, ef, stagnation_limit),
+        //     "should not terminate: c_dist < furthest"
+        // );
+        //
+        // // c_dist=0.6 > furthest but results.len() < ef => should NOT terminate
+        // // (simulate by creating state with only 2 results)
+        // let mut state2 = SearchState::new();
+        // state2.push_candidate(1, 0.1);
+        // state2.push_candidate(2, 0.3);
+        // assert!(
+        //     !state2.should_terminate(0.6, ef, stagnation_limit),
+        //     "should not terminate: results not yet full"
+        // );
+    }
+
+    // =========================================================================
+    // 3. SearchState stagnation tracking
+    // =========================================================================
+
+    #[test]
+    #[ignore = "RED: SearchState does not exist yet"]
+    fn test_search_state_stagnation() {
+        // TODO(US-366): uncomment after SearchState is implemented
+        // let mut state = SearchState::new();
+        //
+        // // Fill ef=2 results
+        // state.push_candidate(1, 0.1);
+        // state.push_candidate(2, 0.3);
+        //
+        // let ef = 2;
+        // let stagnation_limit = 3;
+        //
+        // // Initial stagnation count is 0
+        // assert_eq!(state.stagnation_count, 0);
+        //
+        // // Three rounds without improvement
+        // state.update_stagnation(false); // count -> 1
+        // assert_eq!(state.stagnation_count, 1);
+        // assert!(!state.should_terminate(0.0, ef, stagnation_limit));
+        //
+        // state.update_stagnation(false); // count -> 2
+        // assert_eq!(state.stagnation_count, 2);
+        // assert!(!state.should_terminate(0.0, ef, stagnation_limit));
+        //
+        // state.update_stagnation(false); // count -> 3 >= limit
+        // assert_eq!(state.stagnation_count, 3);
+        // assert!(
+        //     state.should_terminate(0.0, ef, stagnation_limit),
+        //     "should terminate after reaching stagnation limit"
+        // );
+        //
+        // // Improvement resets stagnation
+        // state.update_stagnation(true); // count -> 0
+        // assert_eq!(state.stagnation_count, 0);
+        // assert!(!state.should_terminate(0.0, ef, stagnation_limit));
+    }
+
+    // =========================================================================
+    // 4. SearchState::into_sorted_results
+    // =========================================================================
+
+    #[test]
+    #[ignore = "RED: SearchState does not exist yet"]
+    fn test_search_state_into_sorted_results() {
+        // TODO(US-366): uncomment after SearchState is implemented
+        // let mut state = SearchState::new();
+        //
+        // // Insert results in non-sorted order
+        // state.push_candidate(10, 0.7);
+        // state.push_candidate(20, 0.2);
+        // state.push_candidate(30, 0.5);
+        // state.push_candidate(40, 0.1);
+        // state.push_candidate(50, 0.9);
+        //
+        // let sorted = state.into_sorted_results();
+        //
+        // // Should be sorted ascending by distance
+        // assert_eq!(sorted.len(), 5);
+        // assert_eq!(sorted[0].0, 40); // dist 0.1
+        // assert_eq!(sorted[1].0, 20); // dist 0.2
+        // assert_eq!(sorted[2].0, 30); // dist 0.5
+        // assert_eq!(sorted[3].0, 10); // dist 0.7
+        // assert_eq!(sorted[4].0, 50); // dist 0.9
+        //
+        // // Verify distances are monotonically non-decreasing
+        // for window in sorted.windows(2) {
+        //     assert!(
+        //         window[0].1 <= window[1].1,
+        //         "results must be sorted by distance ascending: {} <= {}",
+        //         window[0].1,
+        //         window[1].1,
+        //     );
+        // }
+    }
+
+    // =========================================================================
+    // 5. gather_unvisited_neighbors filters visited nodes
+    // =========================================================================
+
+    #[test]
+    #[ignore = "RED: gather_unvisited_neighbors does not exist yet"]
+    fn test_gather_unvisited_neighbors_filters_visited() {
+        // TODO(US-366): uncomment after gather_unvisited_neighbors is implemented
+        // let dim = 4;
+        // let mut vectors = crate::perf_optimizations::ContiguousVectors::new(dim, 10)
+        //     .expect("alloc should succeed");
+        // for i in 0..5_usize {
+        //     let v: Vec<f32> = (0..dim).map(|j| (i * dim + j) as f32).collect();
+        //     vectors.push(&v).expect("push should succeed");
+        // }
+        //
+        // let neighbors: Vec<NodeId> = vec![0, 1, 2, 3, 4];
+        // let mut visited = FxHashSet::default();
+        // // Pre-mark nodes 1 and 3 as visited
+        // visited.insert(1);
+        // visited.insert(3);
+        //
+        // let unvisited: SmallVec<[(NodeId, &[f32]); 32]> =
+        //     gather_unvisited_neighbors(&neighbors, &mut visited, &vectors);
+        //
+        // let ids: Vec<NodeId> = unvisited.iter().map(|(id, _)| *id).collect();
+        // assert_eq!(ids.len(), 3, "should exclude 2 visited nodes");
+        // assert!(ids.contains(&0));
+        // assert!(ids.contains(&2));
+        // assert!(ids.contains(&4));
+        // assert!(!ids.contains(&1), "visited node 1 must be excluded");
+        // assert!(!ids.contains(&3), "visited node 3 must be excluded");
+    }
+
+    // =========================================================================
+    // 6. gather_unvisited_neighbors marks returned nodes as visited
+    // =========================================================================
+
+    #[test]
+    #[ignore = "RED: gather_unvisited_neighbors does not exist yet"]
+    fn test_gather_unvisited_neighbors_marks_visited() {
+        // TODO(US-366): uncomment after gather_unvisited_neighbors is implemented
+        // let dim = 4;
+        // let mut vectors = crate::perf_optimizations::ContiguousVectors::new(dim, 10)
+        //     .expect("alloc should succeed");
+        // for i in 0..3_usize {
+        //     let v: Vec<f32> = (0..dim).map(|j| (i * dim + j) as f32).collect();
+        //     vectors.push(&v).expect("push should succeed");
+        // }
+        //
+        // let neighbors: Vec<NodeId> = vec![0, 1, 2];
+        // let mut visited = FxHashSet::default();
+        //
+        // let _unvisited = gather_unvisited_neighbors(&neighbors, &mut visited, &vectors);
+        //
+        // // All returned neighbors should now be in the visited set
+        // assert!(visited.contains(&0), "node 0 should be marked visited");
+        // assert!(visited.contains(&1), "node 1 should be marked visited");
+        // assert!(visited.contains(&2), "node 2 should be marked visited");
+    }
+
+    // =========================================================================
+    // 7. process_batch_results updates candidate and result heaps
+    // =========================================================================
+
+    #[test]
+    #[ignore = "RED: SearchState / process_batch_results do not exist yet"]
+    fn test_process_batch_results_updates_heaps() {
+        // TODO(US-366): uncomment after SearchState + process_batch_results
+        // let mut state = SearchState::new();
+        // let ef = 10;
+        //
+        // // Simulate a batch of 3 neighbors with their pre-computed distances
+        // let dim = 4;
+        // let vecs: Vec<Vec<f32>> = (0..3)
+        //     .map(|i| (0..dim).map(|j| (i * dim + j) as f32).collect())
+        //     .collect();
+        // let batch: Vec<(NodeId, &[f32])> = vecs
+        //     .iter()
+        //     .enumerate()
+        //     .map(|(i, v)| (i, v.as_slice()))
+        //     .collect();
+        // let distances = vec![0.3_f32, 0.1, 0.5];
+        //
+        // let improved = process_batch_results(&batch, &distances, ef, &mut state);
+        //
+        // assert!(improved, "first batch should improve empty state");
+        //
+        // // Candidates should contain all 3
+        // assert_eq!(state.candidates.len(), 3);
+        //
+        // // Results should contain all 3
+        // assert_eq!(state.results.len(), 3);
+        //
+        // // Min-candidate should be node 1 (dist 0.1)
+        // let Reverse((OrderedFloat(min_dist), min_node)) =
+        //     *state.candidates.peek().expect("non-empty");
+        // assert_eq!(min_node, 1);
+        // assert!((min_dist - 0.1).abs() < f32::EPSILON);
+    }
+
+    // =========================================================================
+    // 8. process_batch_results evicts furthest when results exceed ef
+    // =========================================================================
+
+    #[test]
+    #[ignore = "RED: SearchState / process_batch_results do not exist yet"]
+    fn test_process_batch_results_evicts_furthest_when_full() {
+        // TODO(US-366): uncomment after SearchState + process_batch_results
+        // let mut state = SearchState::new();
+        // let ef = 3;
+        //
+        // // Pre-fill with 3 results (ef is full)
+        // state.push_candidate(10, 0.2);
+        // state.push_candidate(20, 0.4);
+        // state.push_candidate(30, 0.6);
+        //
+        // // New batch: one candidate closer than the furthest (0.6), one farther
+        // let dim = 4;
+        // let v_close: Vec<f32> = vec![1.0; dim];
+        // let v_far: Vec<f32> = vec![2.0; dim];
+        // let batch: Vec<(NodeId, &[f32])> = vec![
+        //     (40, v_close.as_slice()),
+        //     (50, v_far.as_slice()),
+        // ];
+        // let distances = vec![0.3_f32, 0.8];
+        //
+        // let improved = process_batch_results(&batch, &distances, ef, &mut state);
+        //
+        // assert!(improved, "batch with closer candidate should improve results");
+        //
+        // // Results should still be capped at ef=3
+        // assert_eq!(
+        //     state.results.len(),
+        //     ef,
+        //     "results must not exceed ef"
+        // );
+        //
+        // // The furthest result should now be 0.4 (node 20), since:
+        // //   - 0.6 was evicted when 0.3 was inserted
+        // //   - 0.8 was rejected (> furthest after eviction)
+        // let result_ids: Vec<NodeId> = state.results.iter().map(|(_, id)| *id).collect();
+        // assert!(
+        //     !result_ids.contains(&30),
+        //     "node 30 (dist 0.6) should have been evicted"
+        // );
+        // assert!(
+        //     result_ids.contains(&40),
+        //     "node 40 (dist 0.3) should have been admitted"
+        // );
+    }
+
+    // =========================================================================
+    // 9. Refactored search recall matches original (regression guard)
+    //
+    // This test uses only the existing public API and compiles TODAY.
+    // After the refactoring, search results must remain identical.
+    // =========================================================================
+
+    #[test]
+    fn test_refactored_search_recall_matches_original() {
+        let dim = 32;
+        let n = 200;
+        let k = 10;
+        let ef_search = 64;
+        let n_queries = 10;
+
+        // Build index
+        let engine = SimdDistance::new(DistanceMetric::Euclidean);
+        let hnsw = NativeHnsw::new(engine, 16, 100, n);
+
+        let vectors: Vec<Vec<f32>> = (0..n)
+            .map(|i| {
+                (0..dim)
+                    .map(|j| ((i * dim + j) as f32 * 0.001).sin())
+                    .collect()
+            })
+            .collect();
+
+        for v in &vectors {
+            hnsw.insert(v).expect("insert should succeed in test");
+        }
+
+        // Verify recall against brute-force ground truth
+        let mut total_recall = 0.0_f64;
+
+        for q_idx in 0..n_queries {
+            let query = &vectors[q_idx * (n / n_queries)];
+
+            let hnsw_results: Vec<NodeId> = hnsw
+                .search(query, k, ef_search)
+                .iter()
+                .map(|(id, _)| *id)
+                .collect();
+
+            // Brute-force ground truth (euclidean)
+            let mut brute: Vec<(NodeId, f32)> = vectors
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let dist: f32 = v
+                        .iter()
+                        .zip(query.iter())
+                        .map(|(a, b)| (a - b) * (a - b))
+                        .sum();
+                    (i, dist)
+                })
+                .collect();
+            brute.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let ground_truth: Vec<NodeId> = brute.iter().take(k).map(|(id, _)| *id).collect();
+
+            let hits = hnsw_results
+                .iter()
+                .filter(|id| ground_truth.contains(id))
+                .count();
+
+            #[allow(clippy::cast_precision_loss)]
+            {
+                total_recall += hits as f64 / k as f64;
+            }
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let avg_recall = total_recall / n_queries as f64;
+
+        assert!(
+            avg_recall >= 0.90,
+            "search recall must be >= 90% (got {:.1}%); \
+             if this fails after refactoring, the extraction broke correctness",
+            avg_recall * 100.0,
+        );
+    }
+}
