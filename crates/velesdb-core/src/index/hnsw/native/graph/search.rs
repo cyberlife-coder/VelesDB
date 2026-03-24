@@ -78,8 +78,7 @@ impl SearchState {
     /// Pushes a candidate node into both heaps and marks it visited.
     #[inline]
     fn push_candidate(&mut self, node: NodeId, dist: f32) {
-        self.candidates
-            .push(Reverse((OrderedFloat(dist), node)));
+        self.candidates.push(Reverse((OrderedFloat(dist), node)));
         self.results.push((OrderedFloat(dist), node));
         self.visited.insert(node);
     }
@@ -114,11 +113,8 @@ impl SearchState {
     /// Releases the visited set back to the thread-local pool.
     fn into_sorted_results(self) -> Vec<(NodeId, f32)> {
         release_visited_set(self.visited);
-        let mut result_vec: Vec<(NodeId, f32)> = self
-            .results
-            .into_iter()
-            .map(|(d, n)| (n, d.0))
-            .collect();
+        let mut result_vec: Vec<(NodeId, f32)> =
+            self.results.into_iter().map(|(d, n)| (n, d.0)).collect();
         result_vec.sort_by(|a, b| a.1.total_cmp(&b.1));
         result_vec
     }
@@ -431,16 +427,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
                 let improved = layers[layer]
                     .with_neighbors(c_node, |neighbors| {
-                        let batch = gather_unvisited_neighbors(
-                            neighbors,
-                            &mut state.visited,
-                            vectors,
-                        );
+                        let batch =
+                            gather_unvisited_neighbors(neighbors, &mut state.visited, vectors);
                         if batch.is_empty() {
                             return false;
                         }
-                        let vecs: SmallVec<[&[f32]; 32]> =
-                            batch.iter().map(|(_, v)| *v).collect();
+                        let vecs: SmallVec<[&[f32]; 32]> = batch.iter().map(|(_, v)| *v).collect();
                         let distances = self.distance.batch_distance(query, &vecs);
                         process_batch_results(&batch, &distances, ef, &mut state)
                     })
@@ -539,10 +531,7 @@ mod search_refactor_tests {
         // Results max-heap: furthest first (0.9 at top)
         let &(OrderedFloat(furthest_dist), furthest_node) =
             state.results.peek().expect("results should not be empty");
-        assert_eq!(
-            furthest_node, 30,
-            "max-heap should surface furthest result"
-        );
+        assert_eq!(furthest_node, 30, "max-heap should surface furthest result");
         assert!((furthest_dist - 0.9).abs() < f32::EPSILON);
 
         // Visited set should contain all three
@@ -781,13 +770,15 @@ mod search_refactor_tests {
         let dim = 4;
         let v_close: Vec<f32> = vec![1.0; dim];
         let v_far: Vec<f32> = vec![2.0; dim];
-        let batch: Vec<(NodeId, &[f32])> =
-            vec![(40, v_close.as_slice()), (50, v_far.as_slice())];
+        let batch: Vec<(NodeId, &[f32])> = vec![(40, v_close.as_slice()), (50, v_far.as_slice())];
         let distances = vec![0.3_f32, 0.8];
 
         let improved = process_batch_results(&batch, &distances, ef, &mut state);
 
-        assert!(improved, "batch with closer candidate should improve results");
+        assert!(
+            improved,
+            "batch with closer candidate should improve results"
+        );
 
         // Results should still be capped at ef=3
         assert_eq!(state.results.len(), ef, "results must not exceed ef");

@@ -5,7 +5,7 @@ use crate::collection::types::{Collection, CollectionConfig, CollectionType};
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::guardrails::GuardRails;
-use crate::index::{Bm25Index, HnswIndex};
+use crate::index::{Bm25Index, HnswIndex, VectorIndex};
 use crate::quantization::StorageMode;
 use crate::sparse_index::DEFAULT_SPARSE_INDEX_NAME;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
@@ -72,6 +72,9 @@ impl Collection {
     /// This is the single point of truth for the `Self { .. }` struct literal,
     /// eliminating duplication across the five public constructors.
     fn assemble(parts: CollectionParts) -> Self {
+        #[cfg(feature = "persistence")]
+        let deferred_indexer = Self::build_deferred_indexer(&parts.config);
+
         Self {
             path: parts.path,
             config: Arc::new(RwLock::new(parts.config)),
@@ -98,7 +101,28 @@ impl Collection {
             stream_ingester: Arc::new(RwLock::new(None)),
             #[cfg(feature = "persistence")]
             delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
+            #[cfg(feature = "persistence")]
+            deferred_indexer,
         }
+    }
+
+    /// Builds the optional `DeferredIndexer` from config.
+    ///
+    /// Returns `Some(Arc<DeferredIndexer>)` when `deferred_indexing` is
+    /// configured and enabled; `None` otherwise.
+    #[cfg(feature = "persistence")]
+    fn build_deferred_indexer(
+        config: &CollectionConfig,
+    ) -> Option<Arc<crate::collection::streaming::DeferredIndexer>> {
+        config
+            .deferred_indexing
+            .as_ref()
+            .filter(|cfg| cfg.enabled)
+            .map(|cfg| {
+                Arc::new(crate::collection::streaming::DeferredIndexer::new(
+                    cfg.clone(),
+                ))
+            })
     }
 
     /// Initialises persistent storages and indexes for a new collection.
@@ -218,6 +242,8 @@ impl Collection {
             embedding_dimension: None,
             pq_rescore_oversampling: Some(4),
             hnsw_params: None,
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
         };
         Self::create_from_config(path, config, None)
     }
@@ -257,6 +283,8 @@ impl Collection {
             embedding_dimension: None,
             pq_rescore_oversampling: Some(4),
             hnsw_params: Some(hnsw_params),
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
         };
         Self::create_from_config(path, config, Some(hnsw_params))
     }
@@ -315,6 +343,8 @@ impl Collection {
             embedding_dimension: None,
             pq_rescore_oversampling: Some(4),
             hnsw_params: None,
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
         };
         Self::create_from_config(path, config, None)
     }
@@ -383,6 +413,12 @@ impl Collection {
         let mut config = config;
         config.point_count = actual_count;
 
+        // TODO(US-366): implement crash recovery gap detection for deferred indexer.
+        // After loading HNSW and vector storage, detect vectors in storage but
+        // not in HNSW (gap vectors from a crash during deferred merge) and
+        // re-index them. This requires comparing storage IDs against HNSW IDs
+        // which may be expensive for large collections.
+
         Ok(Self::assemble(CollectionParts {
             path,
             config,
@@ -422,6 +458,8 @@ impl Collection {
             embedding_dimension: embedding_dim,
             pq_rescore_oversampling: Some(4),
             hnsw_params: None,
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
         };
         // NOTE: create_from_config validates dimension only when > 0,
         // so embedding_dim=None (dimension=0) skips validation correctly.
@@ -610,6 +648,8 @@ impl Collection {
         // Lock order: delta_buffer(10) is acquired after vector_storage(2)
         // and payload_storage(3) — both already released above.
         self.drain_delta_into_index();
+        // Drain deferred indexer into HNSW (position 11, after delta at 10).
+        self.drain_deferred_into_index();
         self.index.save(&self.path)?;
         self.flush_secondary_indexes()?;
         self.flush_sparse_indexes()
@@ -637,6 +677,29 @@ impl Collection {
     /// No-op stub when persistence is disabled.
     #[cfg(not(feature = "persistence"))]
     fn drain_delta_into_index(&self) {}
+
+    /// Drains the deferred indexer into the HNSW index (if configured).
+    ///
+    /// No-op when deferred indexing is not configured or disabled.
+    /// After draining, both buffers are empty and inactive.
+    ///
+    /// # Lock ordering
+    ///
+    /// Acquires only `deferred_indexer` internal locks (position 11).
+    /// The caller must NOT hold any lower-numbered lock.
+    #[cfg(feature = "persistence")]
+    fn drain_deferred_into_index(&self) {
+        if let Some(ref di) = self.deferred_indexer {
+            let drained = di.drain_all();
+            for (id, vector) in &drained {
+                self.index.insert(*id, vector);
+            }
+        }
+    }
+
+    /// No-op stub when persistence is disabled.
+    #[cfg(not(feature = "persistence"))]
+    fn drain_deferred_into_index(&self) {}
 
     /// Persists property index, range index, and edge store (EPIC-009 US-005).
     fn flush_secondary_indexes(&self) -> Result<()> {

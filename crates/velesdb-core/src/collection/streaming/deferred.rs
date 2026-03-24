@@ -154,10 +154,7 @@ impl DeferredIndexer {
     ///
     /// Returns `true` if the front buffer has reached `merge_threshold`.
     /// No-op if deferred indexing is disabled.
-    pub fn extend(
-        &self,
-        entries: impl IntoIterator<Item = (u64, Vec<f32>)>,
-    ) -> bool {
+    pub fn extend(&self, entries: impl IntoIterator<Item = (u64, Vec<f32>)>) -> bool {
         if !self.config.enabled {
             return false;
         }
@@ -181,22 +178,12 @@ impl DeferredIndexer {
     /// Results are deduplicated by ID (best score wins), sorted by the
     /// metric ordering, and truncated to `k`.
     #[must_use]
-    pub fn search(
-        &self,
-        query: &[f32],
-        k: usize,
-        metric: DistanceMetric,
-    ) -> Vec<(u64, f32)> {
+    pub fn search(&self, query: &[f32], k: usize, metric: DistanceMetric) -> Vec<(u64, f32)> {
         let front_results = self.front.search(query, k, metric);
         let back_results = self.back.search(query, k, metric);
 
         let deleted = self.deleted_ids.read();
-        let merged = merge_and_dedup(
-            front_results,
-            back_results,
-            &deleted,
-            metric,
-        );
+        let merged = merge_and_dedup(front_results, back_results, &deleted, metric);
         truncated(merged, k)
     }
 
@@ -218,8 +205,7 @@ impl DeferredIndexer {
         if buffer_results.is_empty() {
             return hnsw_results;
         }
-        let hnsw_ids: HashSet<u64> =
-            hnsw_results.iter().map(|(id, _)| *id).collect();
+        let hnsw_ids: HashSet<u64> = hnsw_results.iter().map(|(id, _)| *id).collect();
         let mut combined: Vec<(u64, f32)> = hnsw_results;
         combined.extend(
             buffer_results
@@ -262,8 +248,7 @@ impl DeferredIndexer {
     /// searchable data.
     #[must_use]
     pub fn is_searchable(&self) -> bool {
-        self.config.enabled
-            && (self.front.is_searchable() || self.back.is_searchable())
+        self.config.enabled && (self.front.is_searchable() || self.back.is_searchable())
     }
 
     /// Drains all vectors from both buffers (for shutdown / flush).
@@ -297,8 +282,7 @@ fn merge_and_dedup(
     metric: DistanceMetric,
 ) -> Vec<(u64, f32)> {
     let mut seen: HashSet<u64> = HashSet::with_capacity(a.len() + b.len());
-    let mut merged: Vec<(u64, f32)> =
-        Vec::with_capacity(a.len() + b.len());
+    let mut merged: Vec<(u64, f32)> = Vec::with_capacity(a.len() + b.len());
 
     for (id, score) in a.into_iter().chain(b) {
         if deleted.contains(&id) {
@@ -317,12 +301,7 @@ fn merge_and_dedup(
 
 /// Updates the score for `id` in `results` if `new_score` is better
 /// according to the metric ordering.
-fn update_best_score(
-    results: &mut [(u64, f32)],
-    id: u64,
-    new_score: f32,
-    metric: DistanceMetric,
-) {
+fn update_best_score(results: &mut [(u64, f32)], id: u64, new_score: f32, metric: DistanceMetric) {
     for entry in results.iter_mut() {
         if entry.0 == id {
             let keep_new = if metric.higher_is_better() {
@@ -389,11 +368,7 @@ mod tests {
     #[test]
     fn test_deferred_extend_returns_true_at_threshold() {
         let idx = DeferredIndexer::new(enabled_config(3));
-        let entries = vec![
-            (1, vec![1.0]),
-            (2, vec![2.0]),
-            (3, vec![3.0]),
-        ];
+        let entries = vec![(1, vec![1.0]), (2, vec![2.0]), (3, vec![3.0])];
         assert!(idx.extend(entries), "batch should hit threshold");
     }
 
@@ -419,13 +394,9 @@ mod tests {
         idx.push(3, vec![0.0, 0.0, 1.0]);
         idx.remove(2);
 
-        let results =
-            idx.search(&[1.0, 0.0, 0.0], 10, DistanceMetric::Euclidean);
+        let results = idx.search(&[1.0, 0.0, 0.0], 10, DistanceMetric::Euclidean);
         let ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
-        assert!(
-            !ids.contains(&2),
-            "deleted ID 2 must not appear in results"
-        );
+        assert!(!ids.contains(&2), "deleted ID 2 must not appear in results");
         assert_eq!(ids.len(), 2);
     }
 
@@ -462,12 +433,7 @@ mod tests {
 
         // HNSW results: id=10 (also in buffer) and id=20 (only in HNSW)
         let hnsw = vec![(10, 0.95_f32), (20, 0.80_f32)];
-        let merged = idx.merge_with_hnsw(
-            hnsw,
-            &[1.0, 0.0],
-            3,
-            DistanceMetric::Cosine,
-        );
+        let merged = idx.merge_with_hnsw(hnsw, &[1.0, 0.0], 3, DistanceMetric::Cosine);
 
         // No duplicate IDs
         let ids: Vec<u64> = merged.iter().map(|(id, _)| *id).collect();
@@ -493,12 +459,7 @@ mod tests {
         let idx = DeferredIndexer::new(enabled_config(1024));
         // Buffer is empty — merge should return HNSW results unchanged
         let hnsw = vec![(1, 0.9_f32), (2, 0.8_f32)];
-        let merged = idx.merge_with_hnsw(
-            hnsw.clone(),
-            &[1.0, 0.0],
-            5,
-            DistanceMetric::Cosine,
-        );
+        let merged = idx.merge_with_hnsw(hnsw.clone(), &[1.0, 0.0], 5, DistanceMetric::Cosine);
         assert_eq!(merged, hnsw);
     }
 
@@ -526,8 +487,7 @@ mod tests {
             max_buffer_age_ms: 3000,
         };
         let json = serde_json::to_string(&config).expect("serialize");
-        let restored: DeferredIndexerConfig =
-            serde_json::from_str(&json).expect("deserialize");
+        let restored: DeferredIndexerConfig = serde_json::from_str(&json).expect("deserialize");
         assert!(restored.enabled);
         assert_eq!(restored.merge_threshold, 512);
         assert_eq!(restored.max_buffer_age_ms, 3000);
@@ -536,8 +496,7 @@ mod tests {
     #[test]
     fn test_deferred_config_serde_defaults() {
         let json = "{}";
-        let config: DeferredIndexerConfig =
-            serde_json::from_str(json).expect("deserialize empty");
+        let config: DeferredIndexerConfig = serde_json::from_str(json).expect("deserialize empty");
         assert!(!config.enabled);
         assert_eq!(config.merge_threshold, DEFAULT_MERGE_THRESHOLD);
         assert_eq!(config.max_buffer_age_ms, DEFAULT_MAX_BUFFER_AGE_MS);

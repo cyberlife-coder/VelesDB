@@ -67,9 +67,9 @@ impl Collection {
         rescored
     }
 
-    /// Merges HNSW results with the delta buffer (if active).
+    /// Merges HNSW results with delta buffer and deferred indexer (if active).
     ///
-    /// When the delta buffer is inactive (no rebuild in progress), this is
+    /// When both the delta buffer and deferred indexer are inactive, this is
     /// a no-op that returns results unchanged.
     #[cfg(feature = "persistence")]
     #[inline]
@@ -80,13 +80,36 @@ impl Collection {
         k: usize,
         metric: DistanceMetric,
     ) -> Vec<ScoredResult> {
-        crate::collection::streaming::merge_with_delta_scored(
+        let after_delta = crate::collection::streaming::merge_with_delta_scored(
             results,
             &self.delta_buffer,
             query,
             k,
             metric,
-        )
+        );
+        self.merge_deferred_search(after_delta, query, k, metric)
+    }
+
+    /// Merges search results with the deferred indexer buffer.
+    ///
+    /// No-op when deferred indexing is not configured or has no searchable data.
+    #[cfg(feature = "persistence")]
+    fn merge_deferred_search(
+        &self,
+        results: Vec<ScoredResult>,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+    ) -> Vec<ScoredResult> {
+        let Some(ref di) = self.deferred_indexer else {
+            return results;
+        };
+        if !di.is_searchable() {
+            return results;
+        }
+        let hnsw_tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
+        let merged = di.merge_with_hnsw(hnsw_tuples, query, k, metric);
+        merged.into_iter().map(ScoredResult::from).collect()
     }
 
     #[cfg(not(feature = "persistence"))]

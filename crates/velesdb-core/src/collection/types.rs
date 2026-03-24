@@ -5,7 +5,7 @@ use crate::collection::stats::CollectionStats;
 #[cfg(feature = "persistence")]
 use crate::collection::streaming::delta::DeltaBuffer;
 #[cfg(feature = "persistence")]
-use crate::collection::streaming::{BackpressureError, StreamIngester};
+use crate::collection::streaming::{BackpressureError, DeferredIndexer, StreamIngester};
 use crate::distance::DistanceMetric;
 use crate::guardrails::GuardRails;
 use crate::index::hnsw::HnswParams;
@@ -174,6 +174,18 @@ pub struct CollectionConfig {
     /// deserialize to `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hnsw_params: Option<HnswParams>,
+
+    /// Deferred indexing configuration (US-366).
+    ///
+    /// When `Some` and `enabled`, inserts are buffered in memory and
+    /// batch-merged into the HNSW index when the buffer reaches
+    /// `merge_threshold`. This decouples write latency from index cost.
+    ///
+    /// Backward compatible: old `config.json` files without this field
+    /// deserialize to `None` (disabled).
+    #[cfg(feature = "persistence")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_indexing: Option<crate::collection::streaming::DeferredIndexerConfig>,
 }
 
 /// Returns `Some(4)` as the default PQ rescore oversampling factor.
@@ -198,6 +210,7 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 //   8. edge_store
 //   9. sparse_indexes
 //  10. delta_buffer
+//  11. deferred_indexer (internal locks)
 
 /// A collection of vectors with associated metadata.
 #[deprecated(
@@ -292,6 +305,15 @@ pub struct Collection {
     /// Lock order position: **10** (after `sparse_indexes` at 9).
     #[cfg(feature = "persistence")]
     pub(crate) delta_buffer: Arc<DeltaBuffer>,
+
+    /// Deferred indexer for high-throughput sequential inserts (US-366).
+    ///
+    /// `None` when deferred indexing is not configured. When `Some`, inserts
+    /// are buffered and batch-merged into the HNSW index at threshold.
+    ///
+    /// Lock order position: **11** (after `delta_buffer` at 10).
+    #[cfg(feature = "persistence")]
+    pub(crate) deferred_indexer: Option<Arc<DeferredIndexer>>,
 }
 
 impl Collection {
@@ -382,6 +404,8 @@ mod rescore_config_tests {
             embedding_dimension: None,
             pq_rescore_oversampling: oversampling,
             hnsw_params: None,
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
         }
     }
 

@@ -105,7 +105,7 @@ impl Collection {
                 old_payload.as_ref(),
                 point.payload.as_ref(),
             );
-            self.index.insert(point.id, &point.vector);
+            self.insert_or_defer(point.id, &point.vector);
             Self::update_text_index(&self.text_index, point);
             Self::collect_sparse_vectors(point, &mut sparse_batch);
         }
@@ -117,9 +117,7 @@ impl Collection {
         drop(payload_storage);
 
         self.config.write().point_count = point_count;
-        // NOTE: index.save() removed — atomic_write fsyncs are too slow on CI
-        // runners and production batch workloads. The WAL + payload log ensure
-        // data durability; call collection.flush() to persist the HNSW index.
+        self.maybe_merge_deferred();
 
         Ok(sparse_batch)
     }
@@ -194,6 +192,46 @@ impl Collection {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Inserts into HNSW directly, or buffers in the deferred indexer.
+    ///
+    /// When deferred indexing is enabled, the vector is pushed into the
+    /// deferred buffer instead of the HNSW graph. Otherwise falls through
+    /// to `VectorIndex::insert`.
+    fn insert_or_defer(&self, id: u64, vector: &[f32]) {
+        #[cfg(feature = "persistence")]
+        if let Some(ref di) = self.deferred_indexer {
+            if di.is_enabled() {
+                di.push(id, vector.to_vec());
+                return;
+            }
+        }
+        self.index.insert(id, vector);
+    }
+
+    /// Triggers a deferred merge if the buffer has reached threshold.
+    ///
+    /// Drains buffered vectors and batch-inserts them into HNSW.
+    /// No-op when deferred indexing is not configured.
+    fn maybe_merge_deferred(&self) {
+        #[cfg(feature = "persistence")]
+        if let Some(ref di) = self.deferred_indexer {
+            if di.should_merge() {
+                self.merge_deferred_batch(di);
+            }
+        }
+    }
+
+    /// Drains the deferred indexer and batch-inserts into HNSW.
+    #[cfg(feature = "persistence")]
+    fn merge_deferred_batch(&self, di: &crate::collection::streaming::DeferredIndexer) {
+        let drained = di.swap_and_drain();
+        if drained.is_empty() {
+            return;
+        }
+        let refs: Vec<(u64, &[f32])> = drained.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+        self.index.insert_batch_parallel(refs);
+    }
+
     /// Inserts or updates metadata-only points (no vectors).
     ///
     /// This method is for metadata-only collections. Points should have
@@ -265,15 +303,33 @@ impl Collection {
         self.bulk_store_vectors(&vector_refs)?;
         self.bulk_store_payloads(points)?;
 
-        let inserted = self.index.insert_batch_parallel(vector_refs);
-        self.index.set_searching_mode();
-
+        let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
 
         self.apply_sparse_batch_bulk(&sparse_batch)?;
         self.invalidate_caches_and_bump_generation();
 
         Ok(inserted)
+    }
+
+    /// Batch-inserts into HNSW or defers into the deferred indexer.
+    ///
+    /// Returns the number of vectors that reached the HNSW index (0 when
+    /// deferred indexing absorbs the entire batch).
+    fn bulk_index_or_defer(&self, vector_refs: Vec<(u64, &[f32])>) -> usize {
+        #[cfg(feature = "persistence")]
+        if let Some(ref di) = self.deferred_indexer {
+            if di.is_enabled() {
+                di.extend(vector_refs.iter().map(|(id, v)| (*id, v.to_vec())));
+                if di.should_merge() {
+                    self.merge_deferred_batch(di);
+                }
+                return vector_refs.len();
+            }
+        }
+        let inserted = self.index.insert_batch_parallel(vector_refs);
+        self.index.set_searching_mode();
+        inserted
     }
 
     /// Collects sparse vectors grouped by index name for batch insert.
@@ -452,6 +508,14 @@ impl Collection {
         #[cfg(feature = "persistence")]
         for &id in ids {
             self.delta_buffer.remove(id);
+        }
+
+        // Lock order: deferred_indexer(11) acquired after delta_buffer(10).
+        #[cfg(feature = "persistence")]
+        if let Some(ref di) = self.deferred_indexer {
+            for &id in ids {
+                di.remove(id);
+            }
         }
 
         Ok(())
