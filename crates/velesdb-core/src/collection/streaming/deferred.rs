@@ -180,6 +180,10 @@ impl DeferredIndexer {
     ///
     /// Results are sorted by the metric ordering and truncated to `k`.
     ///
+    /// To compensate for post-filter attrition, the buffer is queried with
+    /// `k + deleted_ids.len()` candidates. This is bounded: `deleted_ids`
+    /// never exceeds `merge_threshold` entries (cleared on every drain).
+    ///
     /// # TOCTOU note
     ///
     /// The `deleted_ids` snapshot is read under a separate lock from the
@@ -188,9 +192,11 @@ impl DeferredIndexer {
     /// search after the delete completes.
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, metric: DistanceMetric) -> Vec<(u64, f32)> {
-        let buffer_results = self.buffer.search(query, k, metric);
         let deleted = self.deleted_ids.read();
+        let overfetch = k.saturating_add(deleted.len());
+        let buffer_results = self.buffer.search(query, overfetch, metric);
         let mut filtered = filter_deleted(buffer_results, &deleted);
+        drop(deleted);
         metric.sort_results(&mut filtered);
         filtered.truncate(k);
         filtered

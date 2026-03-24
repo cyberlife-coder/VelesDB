@@ -313,8 +313,8 @@ impl Collection {
 
     /// Batch-inserts into HNSW or defers into the deferred indexer.
     ///
-    /// Returns the number of vectors that reached the HNSW index (0 when
-    /// deferred indexing absorbs the entire batch).
+    /// Returns the number of vectors processed (whether indexed directly
+    /// or deferred for later merge).
     ///
     /// Invariant: `self.deferred_indexer` is `Some` only when enabled
     /// (`build_deferred_indexer` filters on `cfg.enabled`), so no

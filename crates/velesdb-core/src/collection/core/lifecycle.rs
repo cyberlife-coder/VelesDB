@@ -5,7 +5,7 @@ use crate::collection::types::{Collection, CollectionConfig, CollectionType};
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::guardrails::GuardRails;
-use crate::index::{Bm25Index, HnswIndex, VectorIndex};
+use crate::index::{Bm25Index, HnswIndex};
 use crate::quantization::StorageMode;
 use crate::sparse_index::DEFAULT_SPARSE_INDEX_NAME;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
@@ -660,18 +660,22 @@ impl Collection {
     /// No-op when the delta buffer is inactive (no rebuild in progress).
     /// After draining, the buffer is empty and inactive.
     ///
+    /// Uses `insert_batch_parallel` for consistent batch insert performance
+    /// (same strategy as `merge_deferred_batch` in crud.rs).
+    ///
     /// # Lock ordering
     ///
     /// Acquires only `delta_buffer` (position 10). The caller must NOT hold
     /// any lower-numbered lock when calling this method.
     #[cfg(feature = "persistence")]
     fn drain_delta_into_index(&self) {
-        use crate::index::VectorIndex;
-
         let drained = self.delta_buffer.deactivate_and_drain();
-        for (id, vector) in &drained {
-            self.index.insert(*id, vector);
+        if drained.is_empty() {
+            return;
         }
+        let refs: Vec<(u64, &[f32])> =
+            drained.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+        self.index.insert_batch_parallel(refs);
     }
 
     /// No-op stub when persistence is disabled.
@@ -683,6 +687,9 @@ impl Collection {
     /// No-op when deferred indexing is not configured or disabled.
     /// After draining, both buffers are empty and inactive.
     ///
+    /// Uses `insert_batch_parallel` for consistent batch insert performance
+    /// (same strategy as `merge_deferred_batch` in crud.rs).
+    ///
     /// # Lock ordering
     ///
     /// Acquires only `deferred_indexer` internal locks (position 11).
@@ -691,9 +698,12 @@ impl Collection {
     fn drain_deferred_into_index(&self) {
         if let Some(ref di) = self.deferred_indexer {
             let drained = di.drain_all();
-            for (id, vector) in &drained {
-                self.index.insert(*id, vector);
+            if drained.is_empty() {
+                return;
             }
+            let refs: Vec<(u64, &[f32])> =
+                drained.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+            self.index.insert_batch_parallel(refs);
         }
     }
 
