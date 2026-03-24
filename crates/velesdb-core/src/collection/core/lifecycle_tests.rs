@@ -296,14 +296,23 @@ fn test_flush_drains_delta_buffer_into_hnsw() {
     ];
     collection.upsert(initial_points).expect("initial upsert");
 
-    // 2. Activate delta buffer (simulates an HNSW rebuild starting)
+    // 2. Store vectors in MmapStorage first (real application flow: vectors
+    //    are persisted to storage before being delta-buffered).
+    {
+        use crate::storage::VectorStorage;
+        let mut vs = collection.vector_storage.write();
+        vs.store(10, &[0.5, 0.5, 0.0, 0.0]).expect("store 10");
+        vs.store(11, &[0.0, 0.0, 0.5, 0.5]).expect("store 11");
+    }
+
+    // 3. Activate delta buffer (simulates an HNSW rebuild starting)
     collection.delta_buffer.activate();
     assert!(
         collection.delta_buffer.is_active(),
         "delta should be active"
     );
 
-    // 3. Push vectors into the delta buffer (simulates upserts during rebuild)
+    // 4. Push vectors into the delta buffer (simulates upserts during rebuild)
     collection.delta_buffer.push(10, vec![0.5, 0.5, 0.0, 0.0]);
     collection.delta_buffer.push(11, vec![0.0, 0.0, 0.5, 0.5]);
     assert_eq!(
@@ -312,10 +321,10 @@ fn test_flush_drains_delta_buffer_into_hnsw() {
         "delta should hold 2 entries"
     );
 
-    // 4. Call flush — this should drain the delta buffer into HNSW
+    // 5. Call flush — this should drain the delta buffer into HNSW
     collection.flush().expect("flush should succeed");
 
-    // 5. Verify: delta buffer is now empty and inactive
+    // 6. Verify: delta buffer is now empty and inactive
     assert!(
         !collection.delta_buffer.is_active(),
         "delta buffer must be inactive after flush"
@@ -325,7 +334,7 @@ fn test_flush_drains_delta_buffer_into_hnsw() {
         "delta buffer must be empty after flush"
     );
 
-    // 6. Verify: the drained vectors are now in the HNSW index (searchable)
+    // 7. Verify: the drained vectors are now in the HNSW index (searchable)
     let results = collection.index.search(&[0.5, 0.5, 0.0, 0.0], 5);
     let result_ids: Vec<u64> = results.iter().map(|r| r.id).collect();
     assert!(

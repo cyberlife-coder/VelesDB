@@ -145,6 +145,12 @@ impl DeferredIndexer {
     /// the push. This is benign: a concurrent drain may reset the count
     /// between push and the threshold check, causing a missed merge signal.
     /// The next push will re-trigger.
+    ///
+    /// A previous TOCTOU window existed where `swap_and_drain` could
+    /// deactivate the buffer between `ensure_buffer_active` and the
+    /// underlying `buffer.push`, causing the vector to be silently dropped.
+    /// This is fixed: `swap_and_drain` now re-activates the buffer after
+    /// draining so pushes between drain and the next merge succeed.
     pub fn push(&self, id: u64, vector: Vec<f32>) -> bool {
         if !self.config.enabled {
             return false;
@@ -204,8 +210,12 @@ impl DeferredIndexer {
 
     /// Merges HNSW results with deferred buffer results.
     ///
-    /// HNSW is authoritative: if the same ID appears in both HNSW and the
-    /// buffer, the HNSW score is kept (the indexed position is canonical).
+    /// Buffer is authoritative on duplicate IDs (more recent data): when a
+    /// point is upserted while deferred indexing is active, the new vector
+    /// goes to the buffer while HNSW still holds the stale vector. On ID
+    /// conflict the buffer score is kept, mirroring `merge_with_delta` in
+    /// `delta.rs`.
+    ///
     /// Deleted IDs are filtered from buffer results but not from HNSW
     /// results (HNSW has its own tombstone system).
     #[must_use]
@@ -220,13 +230,14 @@ impl DeferredIndexer {
         if buffer_results.is_empty() {
             return hnsw_results;
         }
-        let hnsw_ids: FxHashSet<u64> = hnsw_results.iter().map(|(id, _)| *id).collect();
-        let mut combined: Vec<(u64, f32)> = hnsw_results;
-        combined.extend(
-            buffer_results
-                .into_iter()
-                .filter(|(id, _)| !hnsw_ids.contains(id)),
-        );
+        // Buffer holds more-recent data (upserts route through buffer, not HNSW).
+        // On ID conflict, keep the buffer score.
+        let buffer_ids: FxHashSet<u64> = buffer_results.iter().map(|(id, _)| *id).collect();
+        let mut combined: Vec<(u64, f32)> = hnsw_results
+            .into_iter()
+            .filter(|(id, _)| !buffer_ids.contains(id))
+            .collect();
+        combined.extend(buffer_results);
         metric.sort_results(&mut combined);
         combined.truncate(k);
         combined
@@ -234,9 +245,10 @@ impl DeferredIndexer {
 
     /// Drains the buffer and returns vectors for HNSW insertion.
     ///
-    /// After this call the buffer is empty and inactive (a subsequent
-    /// `push` will re-activate it). The `deleted_ids` set is cleared because
-    /// the caller is expected to apply deletions to HNSW after merge.
+    /// After this call the buffer is empty but **re-activated** so that
+    /// pushes arriving between drain and the next merge are not silently
+    /// dropped. The `deleted_ids` set is cleared because the caller is
+    /// expected to apply deletions to HNSW after merge.
     ///
     /// Serialized by an internal mutex so concurrent calls are safe (the
     /// second caller gets an empty drain).
@@ -244,6 +256,9 @@ impl DeferredIndexer {
         let _guard = self.swap_lock.lock();
         let drained = self.buffer.deactivate_and_drain();
         self.deleted_ids.write().clear();
+        // Re-activate the buffer so pushes between drain and next merge
+        // are not silently dropped (fixes TOCTOU race with concurrent push).
+        self.buffer.activate();
         drained
     }
 
@@ -399,6 +414,45 @@ mod tests {
         assert!(idx.deleted_ids.read().is_empty());
     }
 
+    #[test]
+    fn test_deferred_swap_and_drain_reactivates_buffer() {
+        // Regression: swap_and_drain must re-activate the buffer so that
+        // pushes between drain and the next merge are not silently dropped.
+        let idx = DeferredIndexer::new(enabled_config(1024));
+        idx.push(1, vec![1.0]);
+        let _ = idx.swap_and_drain();
+
+        // After drain, the buffer should be re-activated and accept pushes.
+        idx.push(2, vec![2.0]);
+        assert_eq!(idx.pending_count(), 1, "push after drain must succeed");
+        assert!(
+            idx.is_searchable(),
+            "buffer should be searchable after push"
+        );
+    }
+
+    #[test]
+    fn test_deferred_drain_all_leaves_buffer_inactive() {
+        // drain_all is for shutdown — buffer is left inactive (not
+        // re-activated like swap_and_drain). A subsequent push *will*
+        // re-activate via ensure_buffer_active, but there is a window
+        // where the buffer is inactive immediately after drain_all.
+        let idx = DeferredIndexer::new(enabled_config(1024));
+        idx.push(1, vec![1.0]);
+        let _ = idx.drain_all();
+
+        // Immediately after drain_all the buffer is inactive.
+        assert!(
+            !idx.is_searchable(),
+            "buffer must not be searchable immediately after drain_all"
+        );
+        assert_eq!(
+            idx.pending_count(),
+            0,
+            "buffer should be empty after drain_all"
+        );
+    }
+
     // ── Merge with HNSW tests ────────────────────────────────────────────
 
     #[test]
@@ -416,17 +470,18 @@ mod tests {
         let unique: HashSet<u64> = ids.iter().copied().collect();
         assert_eq!(ids.len(), unique.len(), "no duplicate IDs");
 
-        // All three IDs should be present (10 from HNSW, 20 from HNSW, 30 from buffer)
+        // All three IDs should be present (10 from buffer, 20 from HNSW, 30 from buffer)
         assert_eq!(merged.len(), 3);
         assert!(ids.contains(&10));
         assert!(ids.contains(&20));
         assert!(ids.contains(&30));
 
-        // HNSW score for id=10 should be kept (0.95), not buffer score
+        // Buffer score for id=10 should be kept (not the HNSW score of 0.95),
+        // because the buffer holds more-recent data (upserts route there).
         let id10_score = merged.iter().find(|(id, _)| *id == 10).map(|(_, s)| *s);
         assert!(
-            (id10_score.unwrap_or(0.0) - 0.95).abs() < f32::EPSILON,
-            "HNSW score should be authoritative for id=10"
+            (id10_score.unwrap_or(0.0) - 0.95).abs() > f32::EPSILON,
+            "buffer score should be authoritative for id=10, not HNSW"
         );
     }
 

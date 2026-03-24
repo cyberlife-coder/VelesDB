@@ -217,22 +217,36 @@ impl Collection {
 
     /// Drains the deferred indexer and batch-inserts into HNSW.
     ///
-    /// Logs a warning if fewer vectors were inserted than drained, which
-    /// indicates a partial failure (e.g., duplicate IDs filtered out or
-    /// graph insertion error). The drained vectors are not retried.
+    /// Filters out IDs that have been deleted from vector storage since they
+    /// were buffered, preventing ghost vectors from being re-inserted into
+    /// HNSW after a concurrent delete.
+    ///
+    /// Logs a warning if fewer vectors were inserted than expected, which
+    /// indicates a partial failure (e.g., duplicate IDs filtered out,
+    /// ghost-vector filtering, or graph insertion error). The drained
+    /// vectors are not retried.
     #[cfg(feature = "persistence")]
     fn merge_deferred_batch(&self, di: &crate::collection::streaming::DeferredIndexer) {
         let drained = di.swap_and_drain();
         if drained.is_empty() {
             return;
         }
-        let expected = drained.len();
-        let refs: Vec<(u64, &[f32])> = drained.iter().map(|(id, v)| (*id, v.as_slice())).collect();
-        let inserted = self.index.insert_batch_parallel(refs);
+        // Filter out vectors deleted from storage during the buffer's
+        // lifetime to prevent ghost re-insertion into HNSW.
+        let storage = self.vector_storage.read();
+        let valid: Vec<(u64, &[f32])> = drained
+            .iter()
+            .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
+            .map(|(id, v)| (*id, v.as_slice()))
+            .collect();
+        drop(storage); // Release read lock before batch insert
+        let expected = valid.len();
+        if valid.is_empty() {
+            return;
+        }
+        let inserted = self.index.insert_batch_parallel(valid);
         if inserted < expected {
-            tracing::warn!(
-                "merge_deferred_batch: inserted {inserted}/{expected} vectors"
-            );
+            tracing::warn!("merge_deferred_batch: inserted {inserted}/{expected} vectors");
         }
     }
 

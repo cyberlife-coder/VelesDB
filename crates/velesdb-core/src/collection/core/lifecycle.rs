@@ -660,22 +660,37 @@ impl Collection {
     /// No-op when the delta buffer is inactive (no rebuild in progress).
     /// After draining, the buffer is empty and inactive.
     ///
+    /// Filters out IDs that have been deleted from vector storage since they
+    /// were buffered, preventing ghost vectors from being re-inserted into
+    /// HNSW after a concurrent delete.
+    ///
     /// Uses `insert_batch_parallel` for consistent batch insert performance
     /// (same strategy as `merge_deferred_batch` in crud.rs).
     ///
     /// # Lock ordering
     ///
-    /// Acquires only `delta_buffer` (position 10). The caller must NOT hold
-    /// any lower-numbered lock when calling this method.
+    /// Acquires `vector_storage` (position 2) briefly for the validity
+    /// check, releases it, then inserts into the index (no lock).
+    /// `delta_buffer` (position 10) is acquired first via `deactivate_and_drain`.
+    /// The caller must NOT hold any lower-numbered lock when calling this method.
     #[cfg(feature = "persistence")]
     fn drain_delta_into_index(&self) {
         let drained = self.delta_buffer.deactivate_and_drain();
         if drained.is_empty() {
             return;
         }
-        let refs: Vec<(u64, &[f32])> =
-            drained.iter().map(|(id, v)| (*id, v.as_slice())).collect();
-        self.index.insert_batch_parallel(refs);
+        // Filter out vectors deleted from storage during the buffer's
+        // lifetime to prevent ghost re-insertion into HNSW.
+        let storage = self.vector_storage.read();
+        let valid: Vec<(u64, &[f32])> = drained
+            .iter()
+            .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
+            .map(|(id, v)| (*id, v.as_slice()))
+            .collect();
+        drop(storage); // Release read lock before batch insert
+        if !valid.is_empty() {
+            self.index.insert_batch_parallel(valid);
+        }
     }
 
     /// No-op stub when persistence is disabled.
@@ -687,12 +702,18 @@ impl Collection {
     /// No-op when deferred indexing is not configured or disabled.
     /// After draining, both buffers are empty and inactive.
     ///
+    /// Filters out IDs that have been deleted from vector storage since they
+    /// were buffered, preventing ghost vectors from being re-inserted into
+    /// HNSW after a concurrent delete.
+    ///
     /// Uses `insert_batch_parallel` for consistent batch insert performance
     /// (same strategy as `merge_deferred_batch` in crud.rs).
     ///
     /// # Lock ordering
     ///
-    /// Acquires only `deferred_indexer` internal locks (position 11).
+    /// Acquires `vector_storage` (position 2) briefly for the validity
+    /// check, releases it, then inserts into the index (no lock).
+    /// `deferred_indexer` (position 11) is acquired first via `drain_all`.
     /// The caller must NOT hold any lower-numbered lock.
     #[cfg(feature = "persistence")]
     fn drain_deferred_into_index(&self) {
@@ -701,9 +722,18 @@ impl Collection {
             if drained.is_empty() {
                 return;
             }
-            let refs: Vec<(u64, &[f32])> =
-                drained.iter().map(|(id, v)| (*id, v.as_slice())).collect();
-            self.index.insert_batch_parallel(refs);
+            // Filter out vectors deleted from storage during the buffer's
+            // lifetime to prevent ghost re-insertion into HNSW.
+            let storage = self.vector_storage.read();
+            let valid: Vec<(u64, &[f32])> = drained
+                .iter()
+                .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
+                .map(|(id, v)| (*id, v.as_slice()))
+                .collect();
+            drop(storage); // Release read lock before batch insert
+            if !valid.is_empty() {
+                self.index.insert_batch_parallel(valid);
+            }
         }
     }
 
