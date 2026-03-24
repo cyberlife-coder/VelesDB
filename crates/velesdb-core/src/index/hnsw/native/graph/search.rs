@@ -466,12 +466,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 }
 
 // =============================================================================
-// Phase A.1 RED tests — search_layer refactoring (Issue #366)
-//
-// These tests define the contract for the extracted SearchState struct and
-// helper functions. They are written BEFORE the implementation exists (TDD RED
-// phase). Tests that reference not-yet-existing types are #[ignore]d with the
-// concrete assertions commented out behind TODO(US-366) markers.
+// Contract tests for SearchState, gather_unvisited_neighbors, and
+// process_batch_results helpers extracted from search_layer (Issue #366).
 // =============================================================================
 
 #[cfg(test)]

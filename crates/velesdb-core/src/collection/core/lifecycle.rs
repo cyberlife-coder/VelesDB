@@ -413,7 +413,7 @@ impl Collection {
         let mut config = config;
         config.point_count = actual_count;
 
-        // TODO(US-366): implement crash recovery gap detection for deferred indexer.
+        // TODO #370: implement crash recovery gap detection for deferred indexer.
         // After loading HNSW and vector storage, detect vectors in storage but
         // not in HNSW (gap vectors from a crash during deferred merge) and
         // re-index them. This requires comparing storage IDs against HNSW IDs
