@@ -1,16 +1,16 @@
 //! Deferred indexer for high-throughput sequential vector inserts.
 //!
-//! The [`DeferredIndexer`] buffers incoming vectors in memory and exposes them
-//! to search via brute-force scan while they await insertion into the HNSW
-//! graph. This decouples the write path (fast, O(1) per point) from the index
-//! path (slower, O(log n) per point) and enables background merge.
+//! The [`DeferredIndexer`] buffers incoming vectors in a single write buffer
+//! and exposes them to search via brute-force scan while they await insertion
+//! into the HNSW graph. This decouples the write path (fast, O(1) per point)
+//! from the index path (slower, O(log n) per point) and enables
+//! threshold-triggered merge.
 //!
-//! # Double-buffering
+//! # Single-buffer with threshold-triggered merge
 //!
-//! Internally the indexer holds a *front* buffer that accepts writes and a
-//! *back* buffer used during drain. [`swap_and_drain`](DeferredIndexer::swap_and_drain)
-//! rotates front to back, drains the old front, and returns the vectors for
-//! the caller to insert into HNSW.
+//! The indexer holds one buffer that accepts writes. When the buffer reaches
+//! `merge_threshold`, [`swap_and_drain`](DeferredIndexer::swap_and_drain)
+//! drains it and returns the vectors for the caller to batch-insert into HNSW.
 //!
 //! # Deleted IDs
 //!
@@ -28,8 +28,8 @@
 use super::delta::DeltaBuffer;
 use crate::distance::DistanceMetric;
 use parking_lot::{Mutex, RwLock};
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::sync::Arc;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -96,17 +96,15 @@ impl Default for DeferredIndexerConfig {
 ///
 /// See the [module-level docs](self) for design details.
 pub struct DeferredIndexer {
-    /// Front buffer — accepts writes.
-    front: Arc<DeltaBuffer>,
-
-    /// Back buffer — used during swap-and-drain.
-    back: Arc<DeltaBuffer>,
+    /// Write buffer — accepts pushes and is drained on merge.
+    buffer: Arc<DeltaBuffer>,
 
     /// Serializes swap-and-drain operations so only one drain runs at a time.
     swap_lock: Mutex<()>,
 
     /// IDs deleted while in the buffer. Filtered out of search results.
-    deleted_ids: RwLock<HashSet<u64>>,
+    /// Uses `FxHashSet` for faster integer hashing on the hot search path.
+    deleted_ids: RwLock<FxHashSet<u64>>,
 
     /// Configuration (immutable after construction).
     config: DeferredIndexerConfig,
@@ -115,15 +113,14 @@ pub struct DeferredIndexer {
 impl DeferredIndexer {
     /// Creates a new `DeferredIndexer` with the given configuration.
     ///
-    /// Both buffers start inactive. If `config.enabled` is `false`, all
+    /// The buffer starts inactive. If `config.enabled` is `false`, all
     /// write operations are no-ops.
     #[must_use]
     pub fn new(config: DeferredIndexerConfig) -> Self {
         Self {
-            front: Arc::new(DeltaBuffer::new()),
-            back: Arc::new(DeltaBuffer::new()),
+            buffer: Arc::new(DeltaBuffer::new()),
             swap_lock: Mutex::new(()),
-            deleted_ids: RwLock::new(HashSet::new()),
+            deleted_ids: RwLock::new(FxHashSet::default()),
             config,
         }
     }
@@ -134,57 +131,69 @@ impl DeferredIndexer {
         self.config.enabled
     }
 
-    /// Pushes a vector into the front buffer.
+    /// Pushes a vector into the write buffer.
     ///
-    /// Activates the front buffer lazily on first write. Returns `true` if
-    /// the front buffer has reached `merge_threshold`, signaling the caller
+    /// Activates the buffer lazily on first write. Returns `true` if
+    /// the buffer has reached `merge_threshold`, signaling the caller
     /// to trigger a merge.
     ///
     /// No-op if deferred indexing is disabled.
+    ///
+    /// # TOCTOU note
+    ///
+    /// The `enabled` check and `len() >= threshold` read are not atomic with
+    /// the push. This is benign: a concurrent drain may reset the count
+    /// between push and the threshold check, causing a missed merge signal.
+    /// The next push will re-trigger.
     pub fn push(&self, id: u64, vector: Vec<f32>) -> bool {
         if !self.config.enabled {
             return false;
         }
-        self.ensure_front_active();
-        self.front.push(id, vector);
-        self.front.len() >= self.config.merge_threshold
+        self.ensure_buffer_active();
+        self.buffer.push(id, vector);
+        self.buffer.len() >= self.config.merge_threshold
     }
 
-    /// Batch-pushes vectors into the front buffer.
+    /// Batch-pushes vectors into the write buffer.
     ///
-    /// Returns `true` if the front buffer has reached `merge_threshold`.
+    /// Returns `true` if the buffer has reached `merge_threshold`.
     /// No-op if deferred indexing is disabled.
     pub fn extend(&self, entries: impl IntoIterator<Item = (u64, Vec<f32>)>) -> bool {
         if !self.config.enabled {
             return false;
         }
-        self.ensure_front_active();
-        self.front.extend(entries);
-        self.front.len() >= self.config.merge_threshold
+        self.ensure_buffer_active();
+        self.buffer.extend(entries);
+        self.buffer.len() >= self.config.merge_threshold
     }
 
-    /// Marks `id` as deleted, removing it from both buffers.
+    /// Marks `id` as deleted, removing it from the buffer.
     ///
     /// The ID is added to `deleted_ids` so that search results are filtered
     /// even if the vector was already snapshot for a concurrent search.
     pub fn remove(&self, id: u64) {
-        self.front.remove(id);
-        self.back.remove(id);
+        self.buffer.remove(id);
         self.deleted_ids.write().insert(id);
     }
 
-    /// Brute-force searches both buffers, filtering deleted IDs.
+    /// Brute-force searches the buffer, filtering deleted IDs.
     ///
-    /// Results are deduplicated by ID (best score wins), sorted by the
-    /// metric ordering, and truncated to `k`.
+    /// Results are sorted by the metric ordering and truncated to `k`.
+    ///
+    /// # TOCTOU note
+    ///
+    /// The `deleted_ids` snapshot is read under a separate lock from the
+    /// buffer search. A concurrent delete between the buffer snapshot and the
+    /// `deleted_ids` read is benign: the ID will be filtered on the next
+    /// search after the delete completes.
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, metric: DistanceMetric) -> Vec<(u64, f32)> {
-        let front_results = self.front.search(query, k, metric);
-        let back_results = self.back.search(query, k, metric);
-
+        let buffer_results = self.buffer.search(query, k, metric);
         let deleted = self.deleted_ids.read();
-        let merged = merge_and_dedup(front_results, back_results, &deleted, metric);
-        truncated(merged, k)
+        let mut filtered = filter_deleted(buffer_results, &deleted);
+        metric.sort_results(&mut filtered);
+        filtered.truncate(k);
+        filtered
     }
 
     /// Merges HNSW results with deferred buffer results.
@@ -205,7 +214,7 @@ impl DeferredIndexer {
         if buffer_results.is_empty() {
             return hnsw_results;
         }
-        let hnsw_ids: HashSet<u64> = hnsw_results.iter().map(|(id, _)| *id).collect();
+        let hnsw_ids: FxHashSet<u64> = hnsw_results.iter().map(|(id, _)| *id).collect();
         let mut combined: Vec<(u64, f32)> = hnsw_results;
         combined.extend(
             buffer_results
@@ -217,9 +226,9 @@ impl DeferredIndexer {
         combined
     }
 
-    /// Drains the front buffer and returns vectors for HNSW insertion.
+    /// Drains the buffer and returns vectors for HNSW insertion.
     ///
-    /// After this call the front buffer is empty and inactive (a subsequent
+    /// After this call the buffer is empty and inactive (a subsequent
     /// `push` will re-activate it). The `deleted_ids` set is cleared because
     /// the caller is expected to apply deletions to HNSW after merge.
     ///
@@ -227,100 +236,60 @@ impl DeferredIndexer {
     /// second caller gets an empty drain).
     pub fn swap_and_drain(&self) -> Vec<(u64, Vec<f32>)> {
         let _guard = self.swap_lock.lock();
-        let drained = self.front.deactivate_and_drain();
+        let drained = self.buffer.deactivate_and_drain();
         self.deleted_ids.write().clear();
         drained
     }
 
-    /// Total number of pending (not yet indexed) vectors across both buffers.
+    /// Total number of pending (not yet indexed) vectors in the buffer.
     #[must_use]
     pub fn pending_count(&self) -> usize {
-        self.front.len() + self.back.len()
+        self.buffer.len()
     }
 
-    /// Returns `true` if the front buffer has reached `merge_threshold`.
+    /// Returns `true` if the buffer has reached `merge_threshold`.
     #[must_use]
     pub fn should_merge(&self) -> bool {
-        self.front.len() >= self.config.merge_threshold
+        self.buffer.len() >= self.config.merge_threshold
     }
 
-    /// Returns `true` if deferred indexing is enabled and either buffer has
+    /// Returns `true` if deferred indexing is enabled and the buffer has
     /// searchable data.
     #[must_use]
     pub fn is_searchable(&self) -> bool {
-        self.config.enabled && (self.front.is_searchable() || self.back.is_searchable())
+        self.config.enabled && self.buffer.is_searchable()
     }
 
-    /// Drains all vectors from both buffers (for shutdown / flush).
+    /// Drains all vectors from the buffer (for shutdown / flush).
     ///
-    /// Clears `deleted_ids`. After this call both buffers are empty and
+    /// Clears `deleted_ids`. After this call the buffer is empty and
     /// inactive.
     pub fn drain_all(&self) -> Vec<(u64, Vec<f32>)> {
         let _guard = self.swap_lock.lock();
-        let mut all = self.front.deactivate_and_drain();
-        all.extend(self.back.deactivate_and_drain());
+        let all = self.buffer.deactivate_and_drain();
         self.deleted_ids.write().clear();
         all
     }
 
-    /// Lazily activates the front buffer if it is not already active.
-    fn ensure_front_active(&self) {
-        if !self.front.is_active() {
-            self.front.activate();
+    /// Lazily activates the buffer if it is not already active.
+    fn ensure_buffer_active(&self) {
+        if !self.buffer.is_active() {
+            self.buffer.activate();
         }
     }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Merges two result sets, deduplicating by ID (best score wins) and
-/// filtering deleted IDs.
-fn merge_and_dedup(
-    a: Vec<(u64, f32)>,
-    b: Vec<(u64, f32)>,
-    deleted: &HashSet<u64>,
-    metric: DistanceMetric,
-) -> Vec<(u64, f32)> {
-    let mut seen: HashSet<u64> = HashSet::with_capacity(a.len() + b.len());
-    let mut merged: Vec<(u64, f32)> = Vec::with_capacity(a.len() + b.len());
-
-    for (id, score) in a.into_iter().chain(b) {
-        if deleted.contains(&id) {
-            continue;
-        }
-        if seen.insert(id) {
-            merged.push((id, score));
-        } else {
-            update_best_score(&mut merged, id, score, metric);
-        }
+/// Filters out deleted IDs from a result set.
+fn filter_deleted(results: Vec<(u64, f32)>, deleted: &FxHashSet<u64>) -> Vec<(u64, f32)> {
+    if deleted.is_empty() {
+        return results;
     }
-
-    metric.sort_results(&mut merged);
-    merged
-}
-
-/// Updates the score for `id` in `results` if `new_score` is better
-/// according to the metric ordering.
-fn update_best_score(results: &mut [(u64, f32)], id: u64, new_score: f32, metric: DistanceMetric) {
-    for entry in results.iter_mut() {
-        if entry.0 == id {
-            let keep_new = if metric.higher_is_better() {
-                new_score > entry.1
-            } else {
-                new_score < entry.1
-            };
-            if keep_new {
-                entry.1 = new_score;
-            }
-            return;
-        }
-    }
-}
-
-/// Truncates a result vector to at most `k` elements.
-fn truncated(mut v: Vec<(u64, f32)>, k: usize) -> Vec<(u64, f32)> {
-    v.truncate(k);
-    v
+    results
+        .into_iter()
+        .filter(|(id, _)| !deleted.contains(id))
+        .collect()
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -328,6 +297,7 @@ fn truncated(mut v: Vec<(u64, f32)>, k: usize) -> Vec<(u64, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     /// Helper: builds an enabled config with a custom threshold.
     fn enabled_config(threshold: usize) -> DeferredIndexerConfig {
@@ -410,7 +380,7 @@ mod tests {
 
         let drained = idx.swap_and_drain();
         assert_eq!(drained.len(), 2);
-        assert_eq!(idx.pending_count(), 0, "front should be empty after drain");
+        assert_eq!(idx.pending_count(), 0, "buffer should be empty after drain");
     }
 
     #[test]

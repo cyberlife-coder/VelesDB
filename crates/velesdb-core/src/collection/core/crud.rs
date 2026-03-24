@@ -39,14 +39,6 @@ impl Collection {
     ///
     /// Returns an error if any point has a mismatched dimension, or if
     /// attempting to insert vectors into a metadata-only collection.
-    /// Inserts or updates points in the collection.
-    ///
-    /// Accepts any iterator of points (Vec, slice, array, etc.)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any point has a mismatched dimension, or if
-    /// attempting to insert vectors into a metadata-only collection.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
         let config = self.config.read();
@@ -194,16 +186,18 @@ impl Collection {
 
     /// Inserts into HNSW directly, or buffers in the deferred indexer.
     ///
-    /// When deferred indexing is enabled, the vector is pushed into the
+    /// When a deferred indexer is present, the vector is pushed into the
     /// deferred buffer instead of the HNSW graph. Otherwise falls through
     /// to `VectorIndex::insert`.
+    ///
+    /// Invariant: `self.deferred_indexer` is `Some` only when enabled
+    /// (`build_deferred_indexer` filters on `cfg.enabled`), so no
+    /// redundant `is_enabled()` check is needed here.
     fn insert_or_defer(&self, id: u64, vector: &[f32]) {
         #[cfg(feature = "persistence")]
         if let Some(ref di) = self.deferred_indexer {
-            if di.is_enabled() {
-                di.push(id, vector.to_vec());
-                return;
-            }
+            di.push(id, vector.to_vec());
+            return;
         }
         self.index.insert(id, vector);
     }
@@ -222,14 +216,24 @@ impl Collection {
     }
 
     /// Drains the deferred indexer and batch-inserts into HNSW.
+    ///
+    /// Logs a warning if fewer vectors were inserted than drained, which
+    /// indicates a partial failure (e.g., duplicate IDs filtered out or
+    /// graph insertion error). The drained vectors are not retried.
     #[cfg(feature = "persistence")]
     fn merge_deferred_batch(&self, di: &crate::collection::streaming::DeferredIndexer) {
         let drained = di.swap_and_drain();
         if drained.is_empty() {
             return;
         }
+        let expected = drained.len();
         let refs: Vec<(u64, &[f32])> = drained.iter().map(|(id, v)| (*id, v.as_slice())).collect();
-        self.index.insert_batch_parallel(refs);
+        let inserted = self.index.insert_batch_parallel(refs);
+        if inserted < expected {
+            tracing::warn!(
+                "merge_deferred_batch: inserted {inserted}/{expected} vectors"
+            );
+        }
     }
 
     /// Inserts or updates metadata-only points (no vectors).
@@ -281,11 +285,6 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if any point has a mismatched dimension.
-    /// Bulk insert optimized for high-throughput import.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any point has a mismatched dimension.
     pub fn upsert_bulk(&self, points: &[Point]) -> Result<usize> {
         if points.is_empty() {
             return Ok(0);
@@ -316,16 +315,18 @@ impl Collection {
     ///
     /// Returns the number of vectors that reached the HNSW index (0 when
     /// deferred indexing absorbs the entire batch).
+    ///
+    /// Invariant: `self.deferred_indexer` is `Some` only when enabled
+    /// (`build_deferred_indexer` filters on `cfg.enabled`), so no
+    /// redundant `is_enabled()` check is needed here.
     fn bulk_index_or_defer(&self, vector_refs: Vec<(u64, &[f32])>) -> usize {
         #[cfg(feature = "persistence")]
         if let Some(ref di) = self.deferred_indexer {
-            if di.is_enabled() {
-                di.extend(vector_refs.iter().map(|(id, v)| (*id, v.to_vec())));
-                if di.should_merge() {
-                    self.merge_deferred_batch(di);
-                }
-                return vector_refs.len();
+            di.extend(vector_refs.iter().map(|(id, v)| (*id, v.to_vec())));
+            if di.should_merge() {
+                self.merge_deferred_batch(di);
             }
+            return vector_refs.len();
         }
         let inserted = self.index.insert_batch_parallel(vector_refs);
         self.index.set_searching_mode();
