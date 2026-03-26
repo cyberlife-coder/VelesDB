@@ -22,7 +22,7 @@ COPY integrations ./integrations
 RUN cargo build --release --bin velesdb-server
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:13.4-slim
 
 WORKDIR /app
 
