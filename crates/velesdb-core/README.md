@@ -233,8 +233,8 @@ db.create_collection_with_options(
 | Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
 |--------|------|-----------|-----------|-------------|--------|
 | **10K/128D** | Balanced | 128 | **98.8%** | 57µs | ✅ |
-| **10K/128D** | Accurate | 512 | **100%** | 130µs | ✅ |
-| **10K/128D** | Perfect | 4096 | **100%** | 200µs | ✅ |
+| **10K/128D** | Accurate (ef=512) | 512 | **99.9%** | 130µs | ✅ |
+| **10K/128D** | Perfect (ef=4096) | 4096 | **100%** | 200µs | ✅ |
 | **10K/128D** | Adaptive | 32-512 | **95%+** | ~40µs (easy) | ✅ |
 
 > *Latency P50 = median over 100 queries. Measured March 27, 2026. The headline "47.0µs" is for 10K/768D Balanced — higher dimensions use SIMD more efficiently. 128D benchmarks above are worst-case for recall measurement.*
