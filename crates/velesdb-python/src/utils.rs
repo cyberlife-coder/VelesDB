@@ -43,33 +43,21 @@ pub fn extract_vector(py: Python<'_>, obj: &PyObject) -> PyResult<Vec<f32>> {
     ))
 }
 
-/// Parse a distance metric string into a DistanceMetric enum.
+/// Parse a distance metric string into a `DistanceMetric` enum.
+///
+/// Delegates to [`DistanceMetric::from_str`] to keep alias parsing in one place.
 pub fn parse_metric(metric: &str) -> PyResult<DistanceMetric> {
-    match metric.to_lowercase().as_str() {
-        "cosine" => Ok(DistanceMetric::Cosine),
-        "euclidean" | "l2" => Ok(DistanceMetric::Euclidean),
-        "dot" | "dotproduct" | "ip" => Ok(DistanceMetric::DotProduct),
-        "hamming" => Ok(DistanceMetric::Hamming),
-        "jaccard" => Ok(DistanceMetric::Jaccard),
-        _ => Err(PyValueError::new_err(format!(
-            "Invalid metric '{}'. Use 'cosine', 'euclidean', 'dot', 'hamming', or 'jaccard'",
-            metric
-        ))),
-    }
+    metric
+        .parse::<DistanceMetric>()
+        .map_err(|e| PyValueError::new_err(e))
 }
 
-/// Parse a storage mode string into a StorageMode enum.
+/// Parse a storage mode string into a `StorageMode` enum.
+///
+/// Delegates to [`StorageMode::from_str`] (single source of truth in `velesdb-core`).
 pub fn parse_storage_mode(mode: &str) -> PyResult<StorageMode> {
-    match mode.to_lowercase().as_str() {
-        "full" | "f32" => Ok(StorageMode::Full),
-        "sq8" | "int8" => Ok(StorageMode::SQ8),
-        "binary" | "bit" => Ok(StorageMode::Binary),
-        "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
-        "rabitq" => Ok(StorageMode::RaBitQ),
-        _ => Err(PyValueError::new_err(format!(
-            "Invalid storage_mode '{mode}'. Use 'full', 'sq8', 'binary', 'pq', or 'rabitq'"
-        ))),
-    }
+    mode.parse::<StorageMode>()
+        .map_err(|e| PyValueError::new_err(e))
 }
 
 /// Convert a Python object to a `serde_json::Value`.

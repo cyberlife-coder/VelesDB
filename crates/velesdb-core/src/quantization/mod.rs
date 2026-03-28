@@ -78,3 +78,141 @@ pub enum StorageMode {
     /// `RaBitQ` binary quantization for 32x compression with scalar correction.
     RaBitQ,
 }
+
+impl StorageMode {
+    /// Returns the canonical lowercase name for this storage mode.
+    ///
+    /// This is the single source of truth for string representations,
+    /// used by [`Display`], [`FromStr`], and downstream crates.
+    #[must_use]
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::SQ8 => "sq8",
+            Self::Binary => "binary",
+            Self::ProductQuantization => "pq",
+            Self::RaBitQ => "rabitq",
+        }
+    }
+
+    /// Parses a storage mode string with alias support.
+    ///
+    /// Accepted aliases (case-insensitive):
+    /// - `full`, `f32` -> `Full`
+    /// - `sq8`, `int8` -> `SQ8`
+    /// - `binary`, `bit` -> `Binary`
+    /// - `pq`, `product_quantization` -> `ProductQuantization`
+    /// - `rabitq` -> `RaBitQ`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use velesdb_core::StorageMode;
+    ///
+    /// assert_eq!(StorageMode::parse_alias("sq8"), Some(StorageMode::SQ8));
+    /// assert_eq!(StorageMode::parse_alias("INT8"), Some(StorageMode::SQ8));
+    /// assert_eq!(StorageMode::parse_alias("unknown"), None);
+    /// ```
+    #[must_use]
+    pub fn parse_alias(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "full" | "f32" => Some(Self::Full),
+            "sq8" | "int8" => Some(Self::SQ8),
+            "binary" | "bit" => Some(Self::Binary),
+            "pq" | "product_quantization" => Some(Self::ProductQuantization),
+            "rabitq" => Some(Self::RaBitQ),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for StorageMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.canonical_name())
+    }
+}
+
+impl std::str::FromStr for StorageMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_alias(s).ok_or_else(|| {
+            format!(
+                "Unknown storage mode '{s}'. Valid options: full, f32, sq8, int8, binary, bit, pq, product_quantization, rabitq"
+            )
+        })
+    }
+}
+
+#[cfg(test)]
+mod storage_mode_parsing_tests {
+    use super::StorageMode;
+
+    #[test]
+    fn test_parse_all_canonical_names() {
+        assert_eq!("full".parse::<StorageMode>().unwrap(), StorageMode::Full);
+        assert_eq!("sq8".parse::<StorageMode>().unwrap(), StorageMode::SQ8);
+        assert_eq!(
+            "binary".parse::<StorageMode>().unwrap(),
+            StorageMode::Binary
+        );
+        assert_eq!(
+            "pq".parse::<StorageMode>().unwrap(),
+            StorageMode::ProductQuantization
+        );
+        assert_eq!(
+            "rabitq".parse::<StorageMode>().unwrap(),
+            StorageMode::RaBitQ
+        );
+    }
+
+    #[test]
+    fn test_parse_aliases() {
+        assert_eq!("f32".parse::<StorageMode>().unwrap(), StorageMode::Full);
+        assert_eq!("int8".parse::<StorageMode>().unwrap(), StorageMode::SQ8);
+        assert_eq!("bit".parse::<StorageMode>().unwrap(), StorageMode::Binary);
+        assert_eq!(
+            "product_quantization".parse::<StorageMode>().unwrap(),
+            StorageMode::ProductQuantization
+        );
+    }
+
+    #[test]
+    fn test_parse_case_insensitive() {
+        assert_eq!("SQ8".parse::<StorageMode>().unwrap(), StorageMode::SQ8);
+        assert_eq!("FULL".parse::<StorageMode>().unwrap(), StorageMode::Full);
+        assert_eq!(
+            "RaBitQ".parse::<StorageMode>().unwrap(),
+            StorageMode::RaBitQ
+        );
+    }
+
+    #[test]
+    fn test_parse_unknown_returns_error() {
+        assert!("unknown".parse::<StorageMode>().is_err());
+        assert!("".parse::<StorageMode>().is_err());
+    }
+
+    #[test]
+    fn test_canonical_name_roundtrip() {
+        for mode in [
+            StorageMode::Full,
+            StorageMode::SQ8,
+            StorageMode::Binary,
+            StorageMode::ProductQuantization,
+            StorageMode::RaBitQ,
+        ] {
+            let name = mode.canonical_name();
+            assert_eq!(name.parse::<StorageMode>().unwrap(), mode);
+        }
+    }
+
+    #[test]
+    fn test_display_uses_canonical_name() {
+        assert_eq!(format!("{}", StorageMode::Full), "full");
+        assert_eq!(format!("{}", StorageMode::SQ8), "sq8");
+        assert_eq!(format!("{}", StorageMode::Binary), "binary");
+        assert_eq!(format!("{}", StorageMode::ProductQuantization), "pq");
+        assert_eq!(format!("{}", StorageMode::RaBitQ), "rabitq");
+    }
+}

@@ -42,14 +42,23 @@ pub fn parse_storage_mode(mode: &str) -> Result<StorageMode, JsValue> {
     parse_storage_mode_inner(mode).map_err(|e| JsValue::from_str(&e))
 }
 
+/// Delegates to [`velesdb_core::StorageMode::from_str`] (single source of truth)
+/// and maps to the local WASM `StorageMode` enum.
 fn parse_storage_mode_inner(mode: &str) -> Result<StorageMode, String> {
-    match mode.to_lowercase().as_str() {
-        "full" => Ok(StorageMode::Full),
-        "sq8" => Ok(StorageMode::SQ8),
-        "binary" => Ok(StorageMode::Binary),
-        "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
-        "rabitq" => Ok(StorageMode::RaBitQ),
-        _ => Err("Unknown storage mode. Use: full, sq8, binary, pq, rabitq".to_string()),
+    let core: velesdb_core::StorageMode = mode.parse()?;
+    Ok(core_to_wasm_storage_mode(core))
+}
+
+/// Maps a `velesdb_core::StorageMode` to the local WASM `StorageMode`.
+const fn core_to_wasm_storage_mode(core: velesdb_core::StorageMode) -> StorageMode {
+    match core {
+        velesdb_core::StorageMode::Full => StorageMode::Full,
+        velesdb_core::StorageMode::SQ8 => StorageMode::SQ8,
+        velesdb_core::StorageMode::Binary => StorageMode::Binary,
+        velesdb_core::StorageMode::ProductQuantization => StorageMode::ProductQuantization,
+        velesdb_core::StorageMode::RaBitQ => StorageMode::RaBitQ,
+        // Reason: StorageMode is #[non_exhaustive] — future variants default to Full.
+        _ => StorageMode::Full,
     }
 }
 

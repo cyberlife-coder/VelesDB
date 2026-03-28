@@ -7,63 +7,38 @@
 use crate::error::{Error, Result};
 
 /// Parses a metric string into a `DistanceMetric`.
+///
+/// Delegates to [`DistanceMetric::from_str`](velesdb_core::distance::DistanceMetric::from_str)
+/// to keep alias parsing in one place.
 pub fn parse_metric(metric: &str) -> Result<velesdb_core::distance::DistanceMetric> {
-    use velesdb_core::distance::DistanceMetric;
-    match metric.to_lowercase().as_str() {
-        "cosine" => Ok(DistanceMetric::Cosine),
-        "euclidean" | "l2" => Ok(DistanceMetric::Euclidean),
-        "dot" | "dotproduct" | "inner" => Ok(DistanceMetric::DotProduct),
-        "hamming" => Ok(DistanceMetric::Hamming),
-        "jaccard" => Ok(DistanceMetric::Jaccard),
-        _ => Err(Error::InvalidConfig(format!(
-            "Unknown metric '{metric}'. Use: cosine, euclidean, dot, hamming, jaccard"
-        ))),
-    }
+    metric
+        .parse::<velesdb_core::distance::DistanceMetric>()
+        .map_err(|e| Error::InvalidConfig(e.to_string()))
 }
 
-/// Converts a `DistanceMetric` to its string representation.
+/// Converts a `DistanceMetric` to its canonical string representation.
+///
+/// Delegates to [`DistanceMetric::canonical_name`](velesdb_core::distance::DistanceMetric::canonical_name)
+/// to keep the mapping in one place.
 #[must_use]
 pub fn metric_to_string(metric: velesdb_core::distance::DistanceMetric) -> &'static str {
-    use velesdb_core::distance::DistanceMetric;
-    match metric {
-        DistanceMetric::Cosine => "cosine",
-        DistanceMetric::Euclidean => "euclidean",
-        DistanceMetric::DotProduct => "dot",
-        DistanceMetric::Hamming => "hamming",
-        DistanceMetric::Jaccard => "jaccard",
-        // Reason: DistanceMetric is #[non_exhaustive] — future variants default to "unknown".
-        _ => "unknown",
-    }
+    metric.canonical_name()
 }
 
 /// Parses a storage mode string into a `StorageMode`.
+///
+/// Delegates to [`StorageMode::from_str`] (single source of truth in `velesdb-core`).
 pub fn parse_storage_mode(mode: &str) -> Result<velesdb_core::StorageMode> {
-    use velesdb_core::StorageMode;
-    match mode.to_lowercase().as_str() {
-        "full" | "f32" => Ok(StorageMode::Full),
-        "sq8" | "int8" => Ok(StorageMode::SQ8),
-        "binary" | "bit" => Ok(StorageMode::Binary),
-        "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
-        "rabitq" => Ok(StorageMode::RaBitQ),
-        _ => Err(Error::InvalidConfig(format!(
-            "Invalid storage_mode '{mode}'. Use 'full', 'sq8', 'binary', 'pq', or 'rabitq'"
-        ))),
-    }
+    mode.parse::<velesdb_core::StorageMode>()
+        .map_err(Error::InvalidConfig)
 }
 
 /// Converts a `StorageMode` to its string representation.
+///
+/// Delegates to [`StorageMode::canonical_name`] (single source of truth in `velesdb-core`).
 #[must_use]
 pub fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> &'static str {
-    use velesdb_core::StorageMode;
-    match mode {
-        StorageMode::Full => "full",
-        StorageMode::SQ8 => "sq8",
-        StorageMode::Binary => "binary",
-        StorageMode::ProductQuantization => "pq",
-        StorageMode::RaBitQ => "rabitq",
-        // Reason: StorageMode is #[non_exhaustive] — future variants default to "unknown".
-        _ => "unknown",
-    }
+    mode.canonical_name()
 }
 
 /// Parses fusion strategy from string and optional params.
@@ -157,8 +132,8 @@ pub fn map_core_results(
 pub fn parse_filter(filter: &Option<serde_json::Value>) -> Result<Option<velesdb_core::Filter>> {
     match filter {
         Some(filter_json) => {
-            let f: velesdb_core::Filter = serde_json::from_value(filter_json.clone())
-                .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?;
+            let f = velesdb_core::Filter::from_json_value(filter_json.clone())
+                .map_err(Error::InvalidConfig)?;
             Ok(Some(f))
         }
         None => Ok(None),
