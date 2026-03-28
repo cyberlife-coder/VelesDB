@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-03-28
+
+### Fixed
+- **Compaction crash safety** — WAL marker now written BEFORE in-memory state update,
+  closing a crash window where recovery could miss a completed compaction
+- **WASM StorageMode aliases** — `f32`, `int8`, `bit` aliases now recognized in WASM
+  builds (previously only `full`, `sq8`, `binary` worked)
+- **DistanceMetric alias "ip"** — `"ip"` (inner product) now accepted as an alias for
+  DotProduct in all crates, matching existing server/Python behavior
+
+### Added
+- **Structured error codes in REST API** — Error responses now include an optional
+  `code` field with VELES-XXX codes (e.g., `{"error": "...", "code": "VELES-004"}`).
+  Backward-compatible: field absent when no structured code applies.
+- **SearchQuality Custom/Adaptive** — Server now accepts `"custom:256"` and
+  `"adaptive:32:512"` in the `mode` search parameter for fine-grained ef_search control
+- **TypeScript SDK** — Added `SearchQuality` type, `quality` field in `SearchOptions`,
+  `'relative_score'` fusion strategy, `storageMode` in `HnswParams`
+
+### Refactored
+- **DRY: Centralized parsing** — `StorageMode` gains `FromStr`/`parse_alias()`/
+  `canonical_name()` (like `DistanceMetric`). Five duplicate parsers replaced with
+  single-line delegation across server, Python, WASM, Tauri, CLI
+- **DRY: DistanceMetric delegation** — Three duplicate metric parsers (server, Python,
+  Tauri) replaced with delegation to core `FromStr`
+- **DRY: Filter parsing** — `Filter::from_json_value()` centralizes JSON filter
+  deserialization used by server, Python, and Tauri
+- **DRY: Test fixtures** — New `test_fixtures.rs` module centralizes collection setup
+  and point creation across 12+ test files
+- **File splits (NLOC compliance)** — `search.rs` (1,897 LOC) split into 4 modules
+  (search, search_pools, search_state, search_tests). `repl_commands.rs` (1,520 LOC)
+  split into 6 domain modules. `main.rs` (1,574 LOC) split into 3 modules (commands,
+  cli_types, main)
+
+### Performance
+- **Zero-alloc cosine query normalization** — Thread-local buffer reuse eliminates
+  per-search Vec allocation for cosine distance (6KB saved per 1536-dim query)
+- **Eliminated double normalization** — Multi-entry search no longer re-normalizes
+  an already-prepared query vector
+
 ## [1.9.1] - 2026-03-28
 
 ### Fixed

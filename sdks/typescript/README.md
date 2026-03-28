@@ -2,9 +2,17 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.9.1** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.9.2** | Node.js >= 18 | Browser (WASM) | MIT License
 
-## What's New in v1.9.1
+## What's New in v1.9.2
+
+- **SearchQuality type** -- new `SearchQuality` type and `quality` field in `SearchOptions` for per-query recall/latency control (`fast`, `balanced`, `accurate`, `perfect`, `custom:N`, `adaptive:min:max`)
+- **StorageMode in HnswParams** -- `storageMode` field in HNSW configuration
+- **Relative score fusion** -- `'relative_score'` fusion strategy in `MultiQuerySearchOptions`
+- **DistanceMetric "ip" alias** -- `"ip"` accepted as an alias for `"dot"` (inner product)
+- **StorageMode aliases** -- `"f32"`, `"int8"`, `"bit"` accepted as aliases for `"full"`, `"sq8"`, `"binary"`
+
+### Previous (v1.9.1)
 
 - **Agent Memory API** -- semantic, episodic, and procedural memory for AI agents (REST only)
 - **Graph collections** -- dedicated `createGraphCollection()` for knowledge graphs (REST only)
@@ -122,8 +130,8 @@ Create a vector collection.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `dimension` | `number` | Required | Vector dimension |
-| `metric` | `'cosine' \| 'euclidean' \| 'dot' \| 'hamming' \| 'jaccard'` | `'cosine'` | Distance metric |
-| `storageMode` | `'full' \| 'sq8' \| 'binary'` | `'full'` | Quantization mode |
+| `metric` | `'cosine' \| 'euclidean' \| 'dot' \| 'hamming' \| 'jaccard'` | `'cosine'` | Distance metric (aliases: `'ip'`/`'inner'`/`'dotproduct'` for dot) |
+| `storageMode` | `'full' \| 'sq8' \| 'binary'` | `'full'` | Quantization mode (aliases: `'f32'` for full, `'int8'` for sq8, `'bit'` for binary) |
 | `hnsw` | `{ m?: number, efConstruction?: number }` | - | HNSW index tuning |
 | `description` | `string` | - | Optional description |
 
@@ -234,6 +242,7 @@ Vector similarity search.
 | `filter` | `object` | - | Payload filter expression |
 | `includeVectors` | `boolean` | `false` | Include vectors in results |
 | `sparseVector` | `Record<number, number>` | - | Sparse vector for hybrid sparse+dense search |
+| `quality` | `SearchQuality` | - | Search quality mode (e.g., `'fast'`, `'balanced'`, `'custom:256'`, `'adaptive:32:512'`) |
 
 ```typescript
 const results = await db.search('docs', queryVector, {
@@ -689,6 +698,7 @@ import {
   type CollectionConfig,
   type VectorDocument,
   type SearchOptions,
+  type SearchQuality,
   type SearchResult,
   type SparseVector,
   type MultiQuerySearchOptions,

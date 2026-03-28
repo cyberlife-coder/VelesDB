@@ -72,11 +72,13 @@ Response (`201 Created`):
 
 ```bash
 # Create collection with quantization (SQ8 = 4x memory reduction)
+# Aliases: "sq8" or "int8"
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
   -d '{"name": "compressed", "dimension": 768, "metric": "cosine", "storage_mode": "sq8"}'
 
 # Create binary collection (Hamming + Binary = 32x compression)
+# Aliases: "binary" or "bit"
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
   -d '{"name": "fingerprints", "dimension": 256, "metric": "hamming", "storage_mode": "binary"}'
@@ -121,7 +123,46 @@ curl -X POST http://localhost:8080/collections/documents/search \
     "top_k": 5,
     "filter": {"type": "eq", "field": "category", "value": "tech"}
   }'
+
+# Search with explicit search quality mode
+curl -X POST http://localhost:8080/collections/documents/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vector": [0.15, 0.25, ...],
+    "top_k": 10,
+    "mode": "accurate"
+  }'
+
+# Search with custom ef_search (fine-grained control)
+curl -X POST http://localhost:8080/collections/documents/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vector": [0.15, 0.25, ...],
+    "top_k": 10,
+    "mode": "custom:256"
+  }'
+
+# Search with adaptive ef_search (auto-escalation for hard queries)
+curl -X POST http://localhost:8080/collections/documents/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vector": [0.15, 0.25, ...],
+    "top_k": 10,
+    "mode": "adaptive:32:512"
+  }'
 ```
+
+The `mode` parameter accepts the following values:
+
+| Value | Description |
+|-------|-------------|
+| `fast` | Low latency (~92% recall) |
+| `balanced` | Default (~99% recall) |
+| `accurate` | High precision (~99.5% recall) |
+| `perfect` | Exhaustive (100% recall) |
+| `autotune` | Auto-computed ef from collection size |
+| `custom:<ef>` | Fixed ef_search (e.g., `custom:256`) |
+| `adaptive:<min>:<max>` | Two-phase adaptive (e.g., `adaptive:32:512`) |
 
 Response:
 ```json
@@ -312,6 +353,19 @@ curl http://localhost:8080/api-docs/openapi.json
 # Open in browser: http://localhost:8080/swagger-ui
 ```
 
+## Error Responses
+
+All error responses include an `error` field with a human-readable message. When the
+error maps to a structured VelesDB error code, the response also includes a `code` field:
+
+```json
+{"error": "Vector dimension mismatch: expected 768, got 384", "code": "VELES-004"}
+```
+
+The `code` field is optional and omitted when no structured code applies. Use it for
+programmatic error handling (e.g., retry on `VELES-006`, display user hint on `VELES-004`).
+See [ERROR_CODES.md](../../docs/reference/ERROR_CODES.md) for the full list.
+
 ## Authentication
 
 VelesDB supports optional API key authentication. When no keys are configured, the server runs in **local dev mode** (all requests are accepted). When one or more keys are configured, every request must include a valid `Authorization: Bearer <key>` header.
@@ -485,13 +539,13 @@ readinessProbe:
 
 ## Distance Metrics
 
-| Metric | API Value | Use Case |
-|--------|-----------|----------|
-| Cosine | `cosine` | Text embeddings |
-| Euclidean | `euclidean` | Spatial data |
-| Dot Product | `dot` | Pre-normalized vectors |
-| Hamming | `hamming` | Binary vectors |
-| Jaccard | `jaccard` | Set similarity |
+| Metric | API Value | Aliases | Use Case |
+|--------|-----------|---------|----------|
+| Cosine | `cosine` | | Text embeddings |
+| Euclidean | `euclidean` | | Spatial data |
+| Dot Product | `dot` | `dotproduct`, `inner`, `ip` | Pre-normalized vectors |
+| Hamming | `hamming` | | Binary vectors |
+| Jaccard | `jaccard` | | Set similarity |
 
 ## Performance
 

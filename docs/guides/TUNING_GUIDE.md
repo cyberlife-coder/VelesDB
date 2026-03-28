@@ -12,13 +12,13 @@ VelesDB supports five storage modes via the `StorageMode` enum
 
 ### When to Use Each Mode
 
-| Mode | Compression | Recall Impact | Training Required | Best For |
-|------|-------------|---------------|-------------------|----------|
-| `Full` (default) | 1x (baseline) | Perfect | No | Small datasets (<100K), high-precision needs |
-| `SQ8` | 4x | ~1-2% recall loss | No | Medium datasets (100K-10M), general purpose |
-| `Binary` | 32x | ~10-15% recall loss | No | Edge/IoT, fingerprints, memory-constrained |
-| `ProductQuantization` | 8-32x | ~5-15% recall loss | Yes | Large datasets, aggressive compression |
-| `RaBitQ` | 32x | ~5-10% recall loss | Yes (rotation matrix) | High compression with better recall than Binary |
+| Mode | Aliases | Compression | Recall Impact | Training Required | Best For |
+|------|---------|-------------|---------------|-------------------|----------|
+| `Full` (default) | `f32` | 1x (baseline) | Perfect | No | Small datasets (<100K), high-precision needs |
+| `SQ8` | `int8` | 4x | ~1-2% recall loss | No | Medium datasets (100K-10M), general purpose |
+| `Binary` | `bit` | 32x | ~10-15% recall loss | No | Edge/IoT, fingerprints, memory-constrained |
+| `ProductQuantization` | | 8-32x | ~5-15% recall loss | Yes | Large datasets, aggressive compression |
+| `RaBitQ` | | 32x | ~5-10% recall loss | Yes (rotation matrix) | High compression with better recall than Binary |
 
 ### SQ8 (Scalar Quantization 8-bit)
 
@@ -213,6 +213,26 @@ let results = index.search_with_quality(&query, 10, quality);
 **When to use**: Production workloads where most queries are "easy" (hit a dense
 cluster) but some are "hard" (scattered results). Adaptive saves 2-4x latency on
 easy queries while gracefully escalating for hard ones.
+
+### Custom and Adaptive via REST API (v1.9.2)
+
+The `mode` parameter in the search endpoint accepts `Custom` and `Adaptive` using
+a colon-separated syntax:
+
+```bash
+# Custom ef_search = 256
+curl -X POST http://localhost:8080/collections/docs/search \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [...], "top_k": 10, "mode": "custom:256"}'
+
+# Adaptive with min_ef=32, max_ef=512
+curl -X POST http://localhost:8080/collections/docs/search \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [...], "top_k": 10, "mode": "adaptive:32:512"}'
+```
+
+This complements the existing named presets (`fast`, `balanced`, `accurate`,
+`perfect`, `autotune`) with fine-grained control over `ef_search`.
 
 ### SearchMode (Collection-level)
 

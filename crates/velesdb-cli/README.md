@@ -252,8 +252,8 @@ velesdb info ./data
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
 | `-d, --dimension` | integer | (required) | Vector dimension |
-| `-m, --metric` | `cosine`, `euclidean`, `dot`, `hamming`, `jaccard` | `cosine` | Distance metric |
-| `-s, --storage` | `full`, `sq8`, `binary`, `pq`, `rabitq` | `full` | Storage/quantization mode |
+| `-m, --metric` | `cosine`, `euclidean`, `dot` (aliases: `dotproduct`, `inner`, `ip`), `hamming`, `jaccard` | `cosine` | Distance metric |
+| `-s, --storage` | `full` (`f32`), `sq8` (`int8`), `binary` (`bit`), `pq`, `rabitq` | `full` | Storage/quantization mode |
 
 **`create-metadata-collection`:** Creates a collection that stores only structured JSON payloads -- no vectors, no graph edges. Useful for reference tables, configuration, or any metadata that does not need similarity search. There are no additional flags beyond the database path and collection name.
 
@@ -335,8 +335,8 @@ Lines with mismatched vector dimensions are counted as errors and skipped.
 | `-d, --database` | `./data` | Database directory |
 | `-c, --collection` | (required) | Target collection name |
 | `--dimension` | auto-detected | Vector dimension (detected from first record if omitted) |
-| `--metric` | `cosine` | Distance metric (`cosine`, `euclidean`, `dot`, `hamming`, `jaccard`) |
-| `--storage-mode` | `full` | Storage mode (`full`, `sq8`, `binary`, `pq`, `rabitq`) |
+| `--metric` | `cosine` | Distance metric (`cosine`, `euclidean`, `dot`/`ip`, `hamming`, `jaccard`) |
+| `--storage-mode` | `full` | Storage mode (`full`/`f32`, `sq8`/`int8`, `binary`/`bit`, `pq`, `rabitq`) |
 | `--id-column` | `id` | ID column name (CSV only) |
 | `--vector-column` | `vector` | Vector column name (CSV only) |
 | `--batch-size` | `1000` | Insertion batch size |

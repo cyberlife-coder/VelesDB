@@ -53,13 +53,13 @@ Create a new collection.
 
 **Distance Metrics:**
 
-| Metric | Description | Best For |
-|--------|-------------|----------|
-| `cosine` | Cosine similarity (default) | Text embeddings, semantic search |
-| `euclidean` | L2 distance | Spatial data, image features |
-| `dotproduct` | Inner product (MIPS) | Recommendations, ranking |
-| `hamming` | Bit difference count | Binary embeddings, fingerprints |
-| `jaccard` | Set intersection/union | Tags, preferences, document similarity |
+| Metric | Aliases | Description | Best For |
+|--------|---------|-------------|----------|
+| `cosine` | | Cosine similarity (default) | Text embeddings, semantic search |
+| `euclidean` | | L2 distance | Spatial data, image features |
+| `dotproduct` | `dot`, `inner`, `ip` | Inner product (MIPS) | Recommendations, ranking |
+| `hamming` | | Bit difference count | Binary embeddings, fingerprints |
+| `jaccard` | | Set intersection/union | Tags, preferences, document similarity |
 
 **Example (standard embeddings):**
 ```json
@@ -301,13 +301,18 @@ Hybrid search combining vector similarity and BM25 text relevance using Reciproc
 
 ## Error Responses
 
-All errors return a JSON object with an `error` field:
+All errors return a JSON object with an `error` field and an optional `code` field
+containing the structured VELES-XXX error code (when applicable):
 
 ```json
 {
-  "error": "Collection 'documents' not found"
+  "error": "Vector dimension mismatch: expected 768, got 384",
+  "code": "VELES-004"
 }
 ```
+
+The `code` field is omitted when no structured error code applies (e.g., generic
+validation errors). See [ERROR_CODES.md](ERROR_CODES.md) for the full list of codes.
 
 For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), payload is standardized:
 
@@ -329,6 +334,7 @@ For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), 
 | 201 | Created |
 | 400 | Bad Request (invalid input) |
 | 404 | Not Found |
+| 429 | Too Many Requests (streaming backpressure) |
 | 500 | Internal Server Error |
 
 ---

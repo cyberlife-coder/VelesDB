@@ -311,6 +311,8 @@ or internal bugs:
 
 ## Programmatic Usage
 
+### Rust
+
 ```rust
 use velesdb_core::error::Error;
 
@@ -326,6 +328,31 @@ fn handle_error(err: &Error) {
         eprintln!("Fatal error {code}: {err}");
         // Log, alert, and abort operation
     }
+}
+```
+
+### REST API (v1.9.2)
+
+Error responses from `velesdb-server` now include an optional `code` field with the
+VELES-XXX error code when applicable:
+
+```json
+{"error": "Vector dimension mismatch: expected 768, got 384", "code": "VELES-004"}
+```
+
+The `code` field is omitted when no structured code applies (e.g., generic HTTP
+errors). Use it for programmatic error handling in client applications.
+
+### TypeScript SDK
+
+```typescript
+try {
+  await db.insert('docs', { id: 1, vector: wrongDimVector });
+} catch (error) {
+  if (error instanceof ValidationError) {
+    console.log(error.code);    // "VELES-004"
+    console.log(error.message); // "Vector dimension mismatch: ..."
+  }
 }
 ```
 

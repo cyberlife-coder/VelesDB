@@ -627,6 +627,21 @@ curl -X POST http://localhost:8080/collections/my_collection/search \
 curl -X POST http://localhost:8080/collections/my_collection/search \
   -H "Content-Type: application/json" \
   -d '{"vector": [0.1, 0.2, ...], "top_k": 10, "ef_search": 512}'
+
+# Mode via le parametre "mode" (v1.9.2)
+curl -X POST http://localhost:8080/collections/my_collection/search \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, ...], "top_k": 10, "mode": "accurate"}'
+
+# Custom ef_search via "mode" (v1.9.2)
+curl -X POST http://localhost:8080/collections/my_collection/search \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, ...], "top_k": 10, "mode": "custom:256"}'
+
+# Adaptive ef_search via "mode" (v1.9.2)
+curl -X POST http://localhost:8080/collections/my_collection/search \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, ...], "top_k": 10, "mode": "adaptive:32:512"}'
 ```
 
 ### VelesQL

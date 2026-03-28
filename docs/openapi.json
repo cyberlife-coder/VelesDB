@@ -11,7 +11,7 @@
       "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
-    "version": "1.7.2"
+    "version": "1.9.1"
   },
   "servers": [
     {
@@ -2450,6 +2450,13 @@
           "error"
         ],
         "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Structured error code (e.g., `\"VELES-004\"` for dimension mismatch)."
+          },
           "error": {
             "type": "string",
             "description": "Error message."

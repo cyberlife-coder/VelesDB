@@ -71,8 +71,8 @@ VelesDBVectorStore(
     embedding: Embeddings,
     path: str = "./velesdb_data",
     collection_name: str = "langchain",
-    metric: str = "cosine",      # "cosine", "euclidean", "dot", "hamming", "jaccard"
-    storage_mode: str = "full",  # "full" (f32), "sq8" (4× compression), "binary" (32× compression)
+    metric: str = "cosine",      # "cosine", "euclidean", "dot" (aliases: "dotproduct", "inner", "ip"), "hamming", "jaccard"
+    storage_mode: str = "full",  # "full"/"f32", "sq8"/"int8" (4× compression), "binary"/"bit" (32× compression)
 )
 ```
 
