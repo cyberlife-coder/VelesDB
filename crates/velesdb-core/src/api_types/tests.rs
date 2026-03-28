@@ -543,6 +543,8 @@ fn test_mode_to_search_quality_invalid_adaptive() {
     use super::mode_to_search_quality;
     assert!(mode_to_search_quality("adaptive:32").is_none());
     assert!(mode_to_search_quality("adaptive:a:b").is_none());
+    // Inverted range (min > max) is rejected
+    assert!(mode_to_search_quality("adaptive:512:32").is_none());
 }
 
 #[cfg(feature = "persistence")]

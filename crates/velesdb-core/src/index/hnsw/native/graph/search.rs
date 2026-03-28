@@ -460,7 +460,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         {
             let mut buf = QUERY_BUF.with(|cell| {
                 let mut borrow = cell.borrow_mut();
-                if borrow.is_empty() {
+                if borrow.capacity() == 0 {
                     // First call or after previous Cow was dropped without
                     // returning the buffer — allocate fresh.
                     Vec::with_capacity(query.len())

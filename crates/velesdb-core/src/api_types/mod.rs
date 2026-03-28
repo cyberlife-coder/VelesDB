@@ -128,7 +128,9 @@ fn parse_advanced_quality(mode: &str) -> Option<crate::SearchQuality> {
         if parts.len() == 2 {
             let min_ef = parts[0].parse::<usize>().ok()?;
             let max_ef = parts[1].parse::<usize>().ok()?;
-            return Some(crate::SearchQuality::Adaptive { min_ef, max_ef });
+            if min_ef <= max_ef {
+                return Some(crate::SearchQuality::Adaptive { min_ef, max_ef });
+            }
         }
     }
     None
