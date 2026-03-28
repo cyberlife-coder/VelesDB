@@ -3,36 +3,46 @@
 #![cfg(all(test, feature = "persistence"))]
 
 use crate::collection::types::Collection;
-use crate::distance::DistanceMetric;
 use crate::filter::{Condition, Filter};
-use crate::point::Point;
-use std::path::PathBuf;
+use crate::test_fixtures::fixtures::{make_point_with_payload, setup_collection};
 
 /// Helper: create a collection with 6 test points spanning the unit hypercube.
 fn setup_batch_collection() -> (tempfile::TempDir, Collection) {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let col = Collection::create(PathBuf::from(dir.path()), 4, DistanceMetric::Cosine)
-        .expect("create collection");
-
     let points = vec![
-        make_point(1, vec![1.0, 0.0, 0.0, 0.0], "tech"),
-        make_point(2, vec![0.0, 1.0, 0.0, 0.0], "sports"),
-        make_point(3, vec![0.7, 0.7, 0.0, 0.0], "tech"),
-        make_point(4, vec![0.0, 0.0, 1.0, 0.0], "music"),
-        make_point(5, vec![0.5, 0.5, 0.5, 0.5], "tech"),
-        make_point(6, vec![0.9, 0.1, 0.0, 0.0], "sports"),
+        make_point_with_payload(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            serde_json::json!({ "category": "tech" }),
+        ),
+        make_point_with_payload(
+            2,
+            vec![0.0, 1.0, 0.0, 0.0],
+            serde_json::json!({ "category": "sports" }),
+        ),
+        make_point_with_payload(
+            3,
+            vec![0.7, 0.7, 0.0, 0.0],
+            serde_json::json!({ "category": "tech" }),
+        ),
+        make_point_with_payload(
+            4,
+            vec![0.0, 0.0, 1.0, 0.0],
+            serde_json::json!({ "category": "music" }),
+        ),
+        make_point_with_payload(
+            5,
+            vec![0.5, 0.5, 0.5, 0.5],
+            serde_json::json!({ "category": "tech" }),
+        ),
+        make_point_with_payload(
+            6,
+            vec![0.9, 0.1, 0.0, 0.0],
+            serde_json::json!({ "category": "sports" }),
+        ),
     ];
-    col.upsert(points).expect("upsert");
+    let (dir, col) = setup_collection(4);
+    col.upsert(points).expect("test: upsert");
     (dir, col)
-}
-
-fn make_point(id: u64, vector: Vec<f32>, category: &str) -> Point {
-    Point {
-        id,
-        vector,
-        payload: Some(serde_json::json!({ "category": category })),
-        sparse_vectors: None,
-    }
 }
 
 // -----------------------------------------------------------------------
@@ -117,9 +127,7 @@ fn test_batch_with_filters_rejects_mismatched_lengths() {
 
 #[test]
 fn test_batch_parallel_empty_collection_returns_empty_vecs() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let col = Collection::create(PathBuf::from(dir.path()), 4, DistanceMetric::Cosine)
-        .expect("create collection");
+    let (_dir, col) = setup_collection(4);
 
     let q: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0];
     let queries: Vec<&[f32]> = vec![&q];

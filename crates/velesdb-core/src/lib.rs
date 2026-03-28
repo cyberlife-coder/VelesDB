@@ -140,6 +140,8 @@ mod simd_tests;
 #[cfg(feature = "persistence")]
 pub mod storage;
 pub mod sync;
+#[cfg(all(test, feature = "persistence"))]
+mod test_fixtures;
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
 pub mod update_check;
 pub mod validation;

@@ -3,18 +3,15 @@
 #![cfg(all(test, feature = "persistence"))]
 
 use crate::collection::types::Collection;
-use crate::distance::DistanceMetric;
 use crate::fusion::FusionStrategy;
 use crate::index::sparse::SparseVector;
 use crate::point::Point;
+use crate::test_fixtures::fixtures::setup_collection;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 /// Helper: create a collection with both dense and sparse vectors.
 fn setup_sparse_collection() -> (tempfile::TempDir, Collection) {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let col = Collection::create(PathBuf::from(dir.path()), 4, DistanceMetric::Cosine)
-        .expect("create collection");
+    let (dir, col) = setup_collection(4);
 
     let mut points = Vec::new();
     for i in 0u64..8 {
@@ -38,7 +35,7 @@ fn setup_sparse_collection() -> (tempfile::TempDir, Collection) {
             sparse_vectors: sparse,
         });
     }
-    col.upsert(points).expect("upsert");
+    col.upsert(points).expect("test: upsert");
     (dir, col)
 }
 

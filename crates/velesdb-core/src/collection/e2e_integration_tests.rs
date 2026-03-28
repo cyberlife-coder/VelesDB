@@ -7,17 +7,16 @@
 //! - CBO planner selection (logged, no assertion on strategy — heuristic may vary)
 
 use crate::collection::types::Collection;
-use crate::distance::DistanceMetric;
 use crate::guardrails::{GuardRails, QueryLimits};
 use crate::point::Point;
+use crate::test_fixtures::fixtures::setup_collection;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Helper: create a 4-dim collection with 10 points + named payload vector field.
-fn make_collection(dir: &TempDir) -> Collection {
-    let col = Collection::create(dir.path().join("e2e_col"), 4, DistanceMetric::Cosine)
-        .expect("create failed");
+fn make_collection() -> (TempDir, Collection) {
+    let (dir, col) = setup_collection(4);
     let points: Vec<Point> = (0u64..10)
         .map(|i| {
             #[allow(clippy::cast_precision_loss)]
@@ -33,16 +32,15 @@ fn make_collection(dir: &TempDir) -> Collection {
             )
         })
         .collect();
-    col.upsert(points).expect("upsert failed");
-    col
+    col.upsert(points).expect("test: upsert");
+    (dir, col)
 }
 
 // ─── execute_query_str() cache ────────────────────────────────────────────────
 
 #[test]
 fn test_execute_query_str_parses_and_executes() {
-    let dir = TempDir::new().unwrap();
-    let col = make_collection(&dir);
+    let (_dir, col) = make_collection();
     let params = HashMap::new();
 
     let result = col.execute_query_str("SELECT * FROM col LIMIT 5;", &params);
@@ -52,8 +50,7 @@ fn test_execute_query_str_parses_and_executes() {
 
 #[test]
 fn test_execute_query_str_caches_repeated_calls() {
-    let dir = TempDir::new().unwrap();
-    let col = make_collection(&dir);
+    let (_dir, col) = make_collection();
     let params = HashMap::new();
     let sql = "SELECT * FROM col LIMIT 3;";
 
@@ -70,8 +67,7 @@ fn test_execute_query_str_caches_repeated_calls() {
 
 #[test]
 fn test_execute_query_str_rejects_invalid_sql() {
-    let dir = TempDir::new().unwrap();
-    let col = make_collection(&dir);
+    let (_dir, col) = make_collection();
     let params = HashMap::new();
 
     let result = col.execute_query_str("NOT VALID SQL !!!", &params);
@@ -82,8 +78,7 @@ fn test_execute_query_str_rejects_invalid_sql() {
 
 #[test]
 fn test_execute_query_str_metadata_filter() {
-    let dir = TempDir::new().unwrap();
-    let col = make_collection(&dir);
+    let (_dir, col) = make_collection();
     let params = HashMap::new();
 
     let result = col
@@ -110,8 +105,7 @@ fn test_execute_query_str_metadata_filter() {
 
 #[test]
 fn test_e2e_guardrails_cardinality_respected() {
-    let dir = TempDir::new().unwrap();
-    let mut col = make_collection(&dir);
+    let (_dir, mut col) = make_collection();
 
     let limits = QueryLimits {
         max_cardinality: 3, // only 3 results allowed
@@ -132,8 +126,7 @@ fn test_e2e_guardrails_cardinality_respected() {
 
 #[test]
 fn test_e2e_guardrails_timeout_zero_disables_check() {
-    let dir = TempDir::new().unwrap();
-    let mut col = make_collection(&dir);
+    let (_dir, mut col) = make_collection();
 
     // timeout_ms = 0 is the "disabled" sentinel — the guard-rail must never fire.
     // Reason: 0 means no timeout (batch/offline workloads), not "0 ms budget".
@@ -152,8 +145,7 @@ fn test_e2e_guardrails_timeout_zero_disables_check() {
 
 #[test]
 fn test_e2e_guardrails_circuit_breaker_state() {
-    let dir = TempDir::new().unwrap();
-    let mut col = make_collection(&dir);
+    let (_dir, mut col) = make_collection();
 
     col.guard_rails = Arc::new(GuardRails::with_limits(QueryLimits {
         max_cardinality: 1, // forces failures
@@ -179,8 +171,7 @@ fn test_e2e_guardrails_circuit_breaker_state() {
 
 #[test]
 fn test_e2e_match_single_pattern_no_panic() {
-    let dir = TempDir::new().unwrap();
-    let col = make_collection(&dir);
+    let (_dir, col) = make_collection();
     let params = HashMap::new();
 
     // Single pattern MATCH — exercises multi-pattern loop with 1 pattern
@@ -194,8 +185,7 @@ fn test_e2e_match_single_pattern_no_panic() {
 
 #[test]
 fn test_e2e_similarity_primary_vector_field() {
-    let dir = TempDir::new().unwrap();
-    let col = make_collection(&dir);
+    let (_dir, col) = make_collection();
     let mut params = HashMap::new();
     params.insert("v".to_string(), serde_json::json!([0.5, 0.1, 0.1, 0.1]));
 
@@ -214,8 +204,7 @@ fn test_e2e_similarity_primary_vector_field() {
 
 #[test]
 fn test_e2e_similarity_named_payload_vector_field() {
-    let dir = TempDir::new().unwrap();
-    let col = make_collection(&dir);
+    let (_dir, col) = make_collection();
     let mut params = HashMap::new();
     params.insert("v".to_string(), serde_json::json!([0.5, 0.2, 0.2, 0.2]));
 
@@ -247,8 +236,7 @@ fn test_e2e_similarity_named_payload_vector_field() {
 
 #[test]
 fn test_e2e_cbo_with_vector_and_filter_no_panic() {
-    let dir = TempDir::new().unwrap();
-    let col = make_collection(&dir);
+    let (_dir, col) = make_collection();
     let mut params = HashMap::new();
     params.insert("v".to_string(), serde_json::json!([0.5, 0.1, 0.1, 0.1]));
 

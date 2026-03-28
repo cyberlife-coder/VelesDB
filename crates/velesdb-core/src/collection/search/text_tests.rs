@@ -3,60 +3,51 @@
 #![cfg(all(test, feature = "persistence"))]
 
 use crate::collection::types::Collection;
-use crate::distance::DistanceMetric;
 use crate::filter::{Condition, Filter};
-use crate::point::Point;
-use std::path::PathBuf;
+use crate::test_fixtures::fixtures::{make_point_with_payload, setup_collection};
 
 /// Helper: create a collection with points that have text-rich payloads.
 ///
 /// The BM25 index is populated automatically during `upsert` when payloads
 /// contain string fields (Collection::upsert indexes all string values).
 fn setup_text_collection() -> (tempfile::TempDir, Collection) {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let col = Collection::create(PathBuf::from(dir.path()), 4, DistanceMetric::Cosine)
-        .expect("create collection");
-
     let points = vec![
-        Point {
-            id: 1,
-            vector: vec![1.0, 0.0, 0.0, 0.0],
-            payload: Some(serde_json::json!({
+        make_point_with_payload(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            serde_json::json!({
                 "title": "rust programming language",
                 "category": "tech"
-            })),
-            sparse_vectors: None,
-        },
-        Point {
-            id: 2,
-            vector: vec![0.0, 1.0, 0.0, 0.0],
-            payload: Some(serde_json::json!({
+            }),
+        ),
+        make_point_with_payload(
+            2,
+            vec![0.0, 1.0, 0.0, 0.0],
+            serde_json::json!({
                 "title": "python programming tutorial",
                 "category": "tech"
-            })),
-            sparse_vectors: None,
-        },
-        Point {
-            id: 3,
-            vector: vec![0.0, 0.0, 1.0, 0.0],
-            payload: Some(serde_json::json!({
+            }),
+        ),
+        make_point_with_payload(
+            3,
+            vec![0.0, 0.0, 1.0, 0.0],
+            serde_json::json!({
                 "title": "football world cup results",
                 "category": "sports"
-            })),
-            sparse_vectors: None,
-        },
-        Point {
-            id: 4,
-            vector: vec![0.5, 0.5, 0.0, 0.0],
-            payload: Some(serde_json::json!({
+            }),
+        ),
+        make_point_with_payload(
+            4,
+            vec![0.5, 0.5, 0.0, 0.0],
+            serde_json::json!({
                 "title": "rust web framework comparison",
                 "category": "tech"
-            })),
-            sparse_vectors: None,
-        },
+            }),
+        ),
     ];
 
-    col.upsert(points).expect("upsert");
+    let (dir, col) = setup_collection(4);
+    col.upsert(points).expect("test: upsert");
     (dir, col)
 }
 
