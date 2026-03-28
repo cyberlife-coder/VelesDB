@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"adaptive:32:512"` in the `mode` search parameter for fine-grained ef_search control
 - **TypeScript SDK** — Added `SearchQuality` type (with `custom:N` and `adaptive:N:N`
   template literals), `quality` field in `SearchOptions`, `'relative_score'` fusion strategy
+- **Startup update check** — Server and CLI now perform a non-blocking version check
+  at startup (enabled by default). Sends only version/OS/arch/instance hash (no PII).
+  Disable with `VELESDB_NO_UPDATE_CHECK=1` or `[update_check] enabled = false` in config.
 
 ### Refactored
 - **DRY: Centralized parsing** — `StorageMode` gains `FromStr`/`parse_alias()`/

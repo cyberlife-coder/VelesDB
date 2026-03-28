@@ -574,6 +574,7 @@ A custom config file path can be specified with `--config /path/to/velesdb.toml`
 | `VELESDB_TLS_CERT` | `--tls-cert` | *(none)* | Path to TLS certificate file (PEM). Requires `VELESDB_TLS_KEY`. |
 | `VELESDB_TLS_KEY` | `--tls-key` | *(none)* | Path to TLS private key file (PEM). Requires `VELESDB_TLS_CERT`. |
 | `RUST_LOG` | -- | `info` | Log level filter (e.g. `warn`, `info`, `debug`, `trace`). |
+| `VELESDB_NO_UPDATE_CHECK` | -- | *(unset)* | Set to `1` to disable startup update check. |
 
 ### TOML Configuration File
 
@@ -590,9 +591,24 @@ api_keys = ["sk-prod-abc123", "sk-prod-def456"]
 [tls]
 cert = "/etc/velesdb/cert.pem"
 key  = "/etc/velesdb/key.pem"
+
+# Startup update check (enabled by default, no PII collected)
+[update_check]
+enabled = true       # set to false to disable
+# timeout_ms = 2000  # network timeout in ms
 ```
 
 All sections and fields are optional. Only include what you need to override.
+
+### Update Check (v1.9.2+)
+
+On startup, the server performs a non-blocking version check against `velesdb.com/api/check`. This sends only: version, OS, architecture, and a non-reversible SHA256 instance hash. No personal data is collected.
+
+Disable via environment variable or config:
+
+```bash
+export VELESDB_NO_UPDATE_CHECK=1
+```
 
 ## License
 

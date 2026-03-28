@@ -272,6 +272,21 @@ rerank_enabled = true
 rerank_multiplier = 2
 
 # -----------------------------------------------------------------------------
+# UPDATE CHECK (v1.9.2+)
+# Non-blocking startup check for new versions. No PII collected.
+# -----------------------------------------------------------------------------
+[update_check]
+# Enable/disable update check (default: true)
+# Can also be disabled via VELESDB_NO_UPDATE_CHECK=1
+enabled = true
+
+# Endpoint URL (default: https://velesdb.com/api/check)
+# endpoint = "https://velesdb.com/api/check"
+
+# Timeout in milliseconds (default: 2000)
+# timeout_ms = 2000
+
+# -----------------------------------------------------------------------------
 # PREMIUM FEATURES (nécessite velesdb-premium)
 # -----------------------------------------------------------------------------
 [premium]
@@ -310,6 +325,7 @@ All options can be set via environment variables with the `VELESDB_` prefix:
 | `VELESDB_TLS_KEY` | `tls.key` | `/etc/ssl/key.pem` |
 | `VELESDB_LOGGING_LEVEL` | `logging.level` | `debug` |
 | `VELESDB_LICENSE_KEY` | `premium.license_key` | `VELES-...` |
+| `VELESDB_NO_UPDATE_CHECK` | `update_check.enabled` | `1` (disables) |
 | `VELESDB_CONFIG` | Config file path | `/etc/velesdb/velesdb.toml` |
 
 ### Name Mapping
@@ -463,6 +479,16 @@ SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 | `default_type` | string | `"none"` | Default type |
 | `rerank_enabled` | bool | `true` | Enable reranking |
 | `rerank_multiplier` | int | `2` | Candidate multiplier |
+
+### Section [update_check]
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `true` | Enable startup update check |
+| `endpoint` | string | `"https://velesdb.com/api/check"` | Update check endpoint URL |
+| `timeout_ms` | u64 | `2000` | Timeout in milliseconds |
+
+**Privacy**: Only sends version, OS, architecture, and a non-reversible SHA256 instance hash. No personal data collected. Disable with `VELESDB_NO_UPDATE_CHECK=1` or `enabled = false`.
 
 ### Section [premium]
 
