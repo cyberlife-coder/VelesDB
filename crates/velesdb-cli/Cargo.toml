@@ -57,7 +57,7 @@ base64 = { workspace = true }
 chrono = "0.4"
 
 [features]
-default = ["velesdb-core/default"]
+default = ["velesdb-core/default", "update-check"]
 gpu = ["velesdb-core/gpu"]
 update-check = ["velesdb-core/update-check"]
 loom = ["velesdb-core/loom"]

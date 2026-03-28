@@ -48,7 +48,7 @@ utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 
 [features]
-default = ["velesdb-core/default"]
+default = ["velesdb-core/default", "update-check"]
 gpu = ["velesdb-core/gpu"]
 internal-bench = ["velesdb-core/internal-bench"]
 loom = ["velesdb-core/loom"]

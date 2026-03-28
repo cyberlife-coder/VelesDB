@@ -452,6 +452,15 @@ async fn main() -> anyhow::Result<()> {
 
     log_startup(&cfg);
 
+    // Non-blocking update check (background thread, 2s timeout).
+    // Disable: VELESDB_NO_UPDATE_CHECK=1 or [update_check] enabled=false in config.
+    #[cfg(feature = "update-check")]
+    velesdb_core::spawn_update_check(
+        velesdb_core::UpdateCheckConfig::default(),
+        std::path::PathBuf::from(&cfg.data_dir),
+        "core".to_string(),
+    );
+
     let state = init_app_state(&cfg.data_dir)?;
     let auth_state = AuthState::new(cfg.api_keys.clone());
     let app = build_router(state.clone(), auth_state);

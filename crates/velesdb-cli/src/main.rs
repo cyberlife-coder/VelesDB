@@ -55,6 +55,15 @@ struct Cli {
 
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)] // Reason: CLI entry point with command dispatch
 fn main() -> anyhow::Result<()> {
+    // Non-blocking update check (background thread, 2s timeout).
+    // Disable: VELESDB_NO_UPDATE_CHECK=1 or [update_check] enabled=false in config.
+    #[cfg(feature = "update-check")]
+    velesdb_core::spawn_update_check(
+        velesdb_core::UpdateCheckConfig::default(),
+        std::path::PathBuf::from("."),
+        "core".to_string(),
+    );
+
     let cli = Cli::parse();
 
     match cli.command {
