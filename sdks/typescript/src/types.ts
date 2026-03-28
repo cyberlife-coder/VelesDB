@@ -10,7 +10,7 @@ export type DistanceMetric = 'cosine' | 'euclidean' | 'dot' | 'hamming' | 'jacca
 export type StorageMode = 'full' | 'sq8' | 'binary' | 'pq' | 'rabitq';
 
 /** Search quality preset controlling recall vs speed tradeoff. */
-export type SearchQuality = 'fast' | 'balanced' | 'accurate' | 'perfect' | 'autotune';
+export type SearchQuality = 'fast' | 'balanced' | 'accurate' | 'perfect' | 'autotune' | `custom:${number}` | `adaptive:${number}:${number}`;
 
 /** Backend type for VelesDB connection */
 export type BackendType = 'wasm' | 'rest';
@@ -39,8 +39,6 @@ export interface HnswParams {
   m?: number;
   /** Size of dynamic candidate list during construction */
   efConstruction?: number;
-  /** Storage mode for quantization (default: 'full'). */
-  storageMode?: StorageMode;
 }
 
 /** Collection configuration */
