@@ -25,8 +25,7 @@ pub fn core_err(e: velesdb_core::Error) -> PyErr {
 /// then deserializes into [`Filter`]. This avoids the Python `json.dumps` round-trip.
 pub fn parse_filter(py: Python<'_>, filter: &PyObject) -> PyResult<Filter> {
     let json_value = crate::utils::python_to_json(py, filter)?;
-    serde_json::from_value(json_value)
-        .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))
+    Filter::from_json_value(json_value).map_err(|e| PyValueError::new_err(e))
 }
 
 /// Parse an optional Python filter object.

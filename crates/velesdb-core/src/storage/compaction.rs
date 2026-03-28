@@ -396,7 +396,18 @@ impl CompactionContext<'_> {
         // Reason: Reloading mmap is required to switch storage to compacted bytes.
         let new_mmap = unsafe { MmapMut::map_mut(&new_data_file)? };
 
-        // 7. Update internal state
+        // 7. Write compaction marker to WAL
+        // Crash safety: write WAL compaction marker BEFORE updating in-memory state.
+        // The compacted data file is already atomically in place (step 5). If a crash
+        // occurs after WAL write but before state update, recovery re-derives the
+        // in-memory index from the compacted file.
+        {
+            let mut wal = self.wal.write();
+            wal.write_all(&[4u8])?;
+            wal.flush()?;
+        }
+
+        // 8. Update internal state
         // Issue #316: Atomic index swap — replace mmap and index without
         // an intermediate empty state visible to concurrent readers.
         *self.mmap.write() = new_mmap;
@@ -406,13 +417,6 @@ impl CompactionContext<'_> {
         // architectures observe the updated mmap and index before seeing the
         // new offset value.
         self.next_offset.store(new_offset, Ordering::Release);
-
-        // 8. Write compaction marker to WAL
-        {
-            let mut wal = self.wal.write();
-            wal.write_all(&[4u8])?;
-            wal.flush()?;
-        }
 
         Ok(bytes_to_reclaim)
     }

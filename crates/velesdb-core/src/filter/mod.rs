@@ -41,6 +41,16 @@ impl Filter {
         Self { condition }
     }
 
+    /// Deserializes a `Filter` from a JSON value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if the JSON structure does not match
+    /// the expected filter format.
+    pub fn from_json_value(value: serde_json::Value) -> Result<Self, String> {
+        serde_json::from_value(value).map_err(|e| format!("Invalid filter: {e}"))
+    }
+
     /// Evaluates the filter against a payload.
     ///
     /// Returns `true` if the payload matches the filter conditions.
