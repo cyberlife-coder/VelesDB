@@ -100,7 +100,9 @@ pub fn mode_to_ef_search(mode: &str) -> Option<usize> {
 /// Convert search mode string to [`SearchQuality`].
 ///
 /// Supports all named modes including `"autotune"` which adapts ef
-/// automatically based on collection statistics.
+/// automatically based on collection statistics, plus advanced modes:
+/// - `"custom:<ef>"` for a custom `ef_search` value
+/// - `"adaptive:<min_ef>:<max_ef>"` for two-phase adaptive search
 #[cfg(feature = "persistence")]
 #[must_use]
 pub fn mode_to_search_quality(mode: &str) -> Option<crate::SearchQuality> {
@@ -110,6 +112,24 @@ pub fn mode_to_search_quality(mode: &str) -> Option<crate::SearchQuality> {
         "accurate" => Some(crate::SearchQuality::Accurate),
         "perfect" => Some(crate::SearchQuality::Perfect),
         "autotune" | "auto_tune" | "auto" => Some(crate::SearchQuality::AutoTune),
-        _ => None,
+        other => parse_advanced_quality(other),
     }
+}
+
+/// Parses advanced search quality modes: `custom:<ef>` and `adaptive:<min_ef>:<max_ef>`.
+#[cfg(feature = "persistence")]
+fn parse_advanced_quality(mode: &str) -> Option<crate::SearchQuality> {
+    if let Some(ef_str) = mode.strip_prefix("custom:") {
+        let ef = ef_str.parse::<usize>().ok()?;
+        return Some(crate::SearchQuality::Custom(ef));
+    }
+    if let Some(params) = mode.strip_prefix("adaptive:") {
+        let parts: Vec<&str> = params.split(':').collect();
+        if parts.len() == 2 {
+            let min_ef = parts[0].parse::<usize>().ok()?;
+            let max_ef = parts[1].parse::<usize>().ok()?;
+            return Some(crate::SearchQuality::Adaptive { min_ef, max_ef });
+        }
+    }
+    None
 }

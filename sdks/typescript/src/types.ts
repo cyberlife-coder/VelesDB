@@ -9,6 +9,9 @@ export type DistanceMetric = 'cosine' | 'euclidean' | 'dot' | 'hamming' | 'jacca
 /** Storage mode for vector quantization */
 export type StorageMode = 'full' | 'sq8' | 'binary' | 'pq' | 'rabitq';
 
+/** Search quality preset controlling recall vs speed tradeoff. */
+export type SearchQuality = 'fast' | 'balanced' | 'accurate' | 'perfect' | 'autotune';
+
 /** Backend type for VelesDB connection */
 export type BackendType = 'wasm' | 'rest';
 
@@ -36,6 +39,8 @@ export interface HnswParams {
   m?: number;
   /** Size of dynamic candidate list during construction */
   efConstruction?: number;
+  /** Storage mode for quantization (default: 'full'). */
+  storageMode?: StorageMode;
 }
 
 /** Collection configuration */
@@ -99,6 +104,8 @@ export interface SearchOptions {
   includeVectors?: boolean;
   /** Optional sparse vector for hybrid sparse+dense search */
   sparseVector?: SparseVector;
+  /** Search quality preset (default: 'balanced'). */
+  quality?: SearchQuality;
 }
 
 /** PQ (Product Quantization) training options */
@@ -112,7 +119,7 @@ export interface PqTrainOptions {
 }
 
 /** Fusion strategy for multi-query search */
-export type FusionStrategy = 'rrf' | 'average' | 'maximum' | 'weighted';
+export type FusionStrategy = 'rrf' | 'average' | 'maximum' | 'weighted' | 'relative_score';
 
 /** Multi-query search options */
 export interface MultiQuerySearchOptions {
