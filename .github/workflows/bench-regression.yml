@@ -13,8 +13,10 @@ on:
   pull_request:
     branches: [main, develop]
     paths:
-      - 'crates/velesdb-core/src/simd/**'
-      - 'crates/velesdb-core/src/index/**'
+      - 'crates/velesdb-core/src/simd_native/**'
+      - 'crates/velesdb-core/src/simd_dispatch.rs'
+      - 'crates/velesdb-core/src/index/hnsw/native/graph/search.rs'
+      - 'crates/velesdb-core/src/quantization/**'
       - 'crates/velesdb-core/benches/simd_benchmark.rs'
       - '!**/*_tests.rs'
       - '!**/*.md'
