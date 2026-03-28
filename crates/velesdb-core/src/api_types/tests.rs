@@ -474,6 +474,86 @@ fn test_default_fusion_weights() {
 }
 
 // ============================================================================
+// E. mode_to_search_quality advanced modes (Custom, Adaptive)
+// ============================================================================
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_mode_to_search_quality_named_modes() {
+    use super::mode_to_search_quality;
+    assert!(matches!(
+        mode_to_search_quality("fast"),
+        Some(crate::SearchQuality::Fast)
+    ));
+    assert!(matches!(
+        mode_to_search_quality("balanced"),
+        Some(crate::SearchQuality::Balanced)
+    ));
+    assert!(matches!(
+        mode_to_search_quality("accurate"),
+        Some(crate::SearchQuality::Accurate)
+    ));
+    assert!(matches!(
+        mode_to_search_quality("perfect"),
+        Some(crate::SearchQuality::Perfect)
+    ));
+    assert!(matches!(
+        mode_to_search_quality("autotune"),
+        Some(crate::SearchQuality::AutoTune)
+    ));
+    assert!(matches!(
+        mode_to_search_quality("auto"),
+        Some(crate::SearchQuality::AutoTune)
+    ));
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_mode_to_search_quality_custom() {
+    use super::mode_to_search_quality;
+    let q = mode_to_search_quality("custom:256");
+    assert!(matches!(q, Some(crate::SearchQuality::Custom(256))));
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_mode_to_search_quality_adaptive() {
+    use super::mode_to_search_quality;
+    let q = mode_to_search_quality("adaptive:32:512");
+    assert!(matches!(
+        q,
+        Some(crate::SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 512
+        })
+    ));
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_mode_to_search_quality_invalid_custom() {
+    use super::mode_to_search_quality;
+    assert!(mode_to_search_quality("custom:abc").is_none());
+    assert!(mode_to_search_quality("custom:").is_none());
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_mode_to_search_quality_invalid_adaptive() {
+    use super::mode_to_search_quality;
+    assert!(mode_to_search_quality("adaptive:32").is_none());
+    assert!(mode_to_search_quality("adaptive:a:b").is_none());
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_mode_to_search_quality_unknown() {
+    use super::mode_to_search_quality;
+    assert!(mode_to_search_quality("nonexistent").is_none());
+    assert!(mode_to_search_quality("").is_none());
+}
+
+// ============================================================================
 // Additional edge-case tests for response serialization
 // ============================================================================
 
@@ -481,9 +561,23 @@ fn test_default_fusion_weights() {
 fn serialize_error_response() {
     let resp = ErrorResponse {
         error: "collection not found".to_string(),
+        code: None,
     };
     let json = serde_json::to_value(&resp).unwrap();
     assert_eq!(json["error"], "collection not found");
+    // code: None is skipped by serde
+    assert!(!json.as_object().unwrap().contains_key("code"));
+}
+
+#[test]
+fn serialize_error_response_with_code() {
+    let resp = ErrorResponse {
+        error: "Dimension mismatch".to_string(),
+        code: Some("VELES-004".to_string()),
+    };
+    let json = serde_json::to_value(&resp).unwrap();
+    assert_eq!(json["error"], "Dimension mismatch");
+    assert_eq!(json["code"], "VELES-004");
 }
 
 #[test]

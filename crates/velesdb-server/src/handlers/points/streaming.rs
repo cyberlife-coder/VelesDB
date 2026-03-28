@@ -301,6 +301,7 @@ fn stream_insert_result_to_response(
                 headers,
                 Json(ErrorResponse {
                     error: "Stream buffer full, retry after 1s".to_string(),
+                    code: None,
                 }),
             )
                 .into_response()

@@ -31,13 +31,11 @@ pub(crate) fn parse_filter_or_400(
     filter_json: &serde_json::Value,
     onboarding_metrics: &crate::OnboardingMetrics,
 ) -> Result<velesdb_core::Filter, axum::response::Response> {
-    serde_json::from_value(filter_json.clone()).map_err(|e| {
+    velesdb_core::Filter::from_json_value(filter_json.clone()).map_err(|error| {
         onboarding_metrics.record_filter_parse_error();
         (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Invalid filter: {e}"),
-            }),
+            Json(ErrorResponse { error, code: None }),
         )
             .into_response()
     })
@@ -52,6 +50,7 @@ pub(crate) fn dimension_mismatch_error(
         error: format!(
             "Vector dimension mismatch for collection '{collection_name}': expected {expected}, got {actual}. Hint: use embeddings with the same dimension as the collection or create a new collection with the target dimension."
         ),
+        code: Some("VELES-004".to_string()),
     }
 }
 
@@ -75,7 +74,7 @@ pub(crate) fn validate_query_dimension(
     Err(dimension_mismatch_error(collection_name, expected, actual))
 }
 
-pub(crate) fn actionable_search_error(error: &dyn std::fmt::Display) -> ErrorResponse {
+pub(crate) fn actionable_search_error(error: &velesdb_core::Error) -> ErrorResponse {
     let base_error = error.to_string();
     let lower = base_error.to_lowercase();
     let hint = if lower.contains("dimension") {
@@ -88,6 +87,7 @@ pub(crate) fn actionable_search_error(error: &dyn std::fmt::Display) -> ErrorRes
 
     ErrorResponse {
         error: format!("{base_error}{hint}"),
+        code: Some(error.code().to_string()),
     }
 }
 
@@ -113,6 +113,7 @@ pub(crate) fn resolve_sparse_input(
                          or supply a single 'sparse_vector'.",
                         m.len()
                     ),
+                    code: None,
                 }),
             )
                 .into_response());
@@ -129,9 +130,14 @@ pub(crate) fn resolve_sparse_input(
     match raw {
         Some(sv_input) => match sv_input.into_sparse_vector() {
             Ok(sv) => Ok(Some(sv)),
-            Err(e) => {
-                Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })).into_response())
-            }
+            Err(e) => Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e,
+                    code: None,
+                }),
+            )
+                .into_response()),
         },
         None => Ok(None),
     }
@@ -164,6 +170,7 @@ pub(crate) fn parse_fusion_strategy(
                     StatusCode::BAD_REQUEST,
                     Json(ErrorResponse {
                         error: format!("Invalid RSF fusion weights: {e}"),
+                        code: None,
                     }),
                 )
                     .into_response()
@@ -176,6 +183,7 @@ pub(crate) fn parse_fusion_strategy(
                     "Invalid fusion strategy: '{other}'. \
                      Valid values: 'rrf', 'rsf' (alias: 'relative_score')"
                 ),
+                code: None,
             }),
         )
             .into_response()),
@@ -231,6 +239,7 @@ pub(crate) fn execute_search_request(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Either 'vector' or 'sparse_vector' must be provided".to_string(),
+                code: None,
             }),
         )
             .into_response());

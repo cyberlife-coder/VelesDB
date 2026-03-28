@@ -14,7 +14,7 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::helpers::{error_response, get_collection_or_404};
+use super::helpers::{core_error_response, error_response, get_collection_or_404};
 
 /// Get detailed collection configuration (HNSW params, storage mode, schema, etc.).
 #[utoipa::path(
@@ -86,7 +86,7 @@ pub async fn analyze_collection(
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            error_response(status, e.to_string())
+            core_error_response(status, &e)
         }
     }
 }
@@ -118,7 +118,7 @@ pub async fn get_collection_stats(
             StatusCode::NOT_FOUND,
             format!("No stats for '{name}'. Run POST /collections/{name}/analyze first."),
         ),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => core_error_response(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }
 

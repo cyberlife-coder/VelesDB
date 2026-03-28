@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::types::{CreateIndexRequest, ErrorResponse, IndexResponse, ListIndexesResponse};
 use crate::AppState;
 
-use super::helpers::{error_response, get_vector_collection_or_404};
+use super::helpers::{core_error_response, error_response, get_vector_collection_or_404};
 
 /// Create a property index on a graph collection.
 #[utoipa::path(
@@ -55,7 +55,7 @@ pub async fn create_index(
             }),
         )
             .into_response(),
-        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => core_error_response(StatusCode::BAD_REQUEST, &e),
     }
 }
 
@@ -153,6 +153,6 @@ pub async fn delete_index(
                 )
             }
         }
-        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => core_error_response(StatusCode::BAD_REQUEST, &e),
     }
 }

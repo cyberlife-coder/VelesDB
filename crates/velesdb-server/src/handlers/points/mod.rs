@@ -18,7 +18,7 @@ use crate::types::{ErrorResponse, SparseVectorInput, UpsertPointsRequest};
 use crate::AppState;
 use velesdb_core::Point;
 
-use crate::handlers::helpers::{error_response, get_vector_collection_or_404};
+use crate::handlers::helpers::{core_error_response, error_response, get_vector_collection_or_404};
 
 use velesdb_core::index::sparse::SparseVector;
 
@@ -111,7 +111,7 @@ pub async fn upsert_points(
             }))
             .into_response()
         }
-        Ok(Err(e)) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
+        Ok(Err(e)) => core_error_response(StatusCode::BAD_REQUEST, &e),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Task panicked: {e}"),
@@ -196,6 +196,6 @@ pub async fn delete_point(
             "id": id
         }))
         .into_response(),
-        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => core_error_response(StatusCode::BAD_REQUEST, &e),
     }
 }

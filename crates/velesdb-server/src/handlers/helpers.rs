@@ -6,8 +6,34 @@ use crate::types::ErrorResponse;
 use crate::AppState;
 
 /// Build an error response with the given status code and message.
+///
+/// Sets `code` to `None` — use [`core_error_response`] when a
+/// `velesdb_core::Error` is available to propagate its VELES-XXX code.
 pub(crate) fn error_response(status: StatusCode, message: String) -> axum::response::Response {
-    (status, Json(ErrorResponse { error: message })).into_response()
+    (
+        status,
+        Json(ErrorResponse {
+            error: message,
+            code: None,
+        }),
+    )
+        .into_response()
+}
+
+/// Build an error response from a [`velesdb_core::Error`], including the
+/// VELES-XXX code in the JSON body.
+pub(crate) fn core_error_response(
+    status: StatusCode,
+    error: &velesdb_core::Error,
+) -> axum::response::Response {
+    (
+        status,
+        Json(ErrorResponse {
+            error: error.to_string(),
+            code: Some(error.code().to_string()),
+        }),
+    )
+        .into_response()
 }
 
 /// Look up a legacy collection by name, returning a 404 response on miss.
@@ -38,6 +64,7 @@ pub(crate) fn get_vector_collection_or_404(
                     "Collection '{}' not found or is not a vector collection",
                     name
                 ),
+                code: None,
             }),
         )
             .into_response()
@@ -100,7 +127,14 @@ pub(crate) fn apply_pre_check(
                 format!("Guard rail violation: {other}"),
             ),
         };
-        return Err((status, Json(ErrorResponse { error: msg })).into_response());
+        return Err((
+            status,
+            Json(ErrorResponse {
+                error: msg,
+                code: None,
+            }),
+        )
+            .into_response());
     }
     Ok(())
 }
@@ -130,5 +164,21 @@ mod tests {
         // so we verify the fallback path by omitting the header.
         headers.insert("x-other-header", "value".parse().unwrap());
         assert_eq!(extract_client_id(&headers), "anonymous");
+    }
+
+    #[test]
+    fn test_error_response_no_code() {
+        let resp = error_response(StatusCode::BAD_REQUEST, "bad request".to_string());
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_core_error_response_includes_code() {
+        let err = velesdb_core::Error::DimensionMismatch {
+            expected: 384,
+            actual: 768,
+        };
+        let resp = core_error_response(StatusCode::BAD_REQUEST, &err);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

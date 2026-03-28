@@ -102,6 +102,7 @@ fn validate_batch_dimensions(
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: format!("Invalid query at index {idx}: {}", error.error),
+                    code: error.code.clone(),
                 }),
             )
                 .into_response());
@@ -129,6 +130,7 @@ fn parse_batch_filters(
                             error: format!(
                                 "Invalid filter at index {idx}: {e}. Hint: validate filter syntax and start with a broader query before reintroducing strict filters."
                             ),
+                            code: None,
                         }),
                     )
                         .into_response());

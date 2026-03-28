@@ -558,8 +558,11 @@ mod tests {
     fn test_error_response_serialize() {
         let resp = ErrorResponse {
             error: "Test error".to_string(),
+            code: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"error\":\"Test error\""));
+        // code: None is omitted from JSON output
+        assert!(!json.contains("\"code\""));
     }
 }

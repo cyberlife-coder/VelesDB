@@ -65,6 +65,7 @@ pub async fn multi_query_search(
                         "Invalid strategy: {}. Valid: average, maximum, rrf, weighted",
                         req.strategy
                     ),
+                    code: None,
                 }),
             )
                 .into_response()
@@ -78,6 +79,7 @@ pub async fn multi_query_search(
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: format!("Invalid query vector at index {idx}: {}", error.error),
+                    code: error.code.clone(),
                 }),
             )
                 .into_response();

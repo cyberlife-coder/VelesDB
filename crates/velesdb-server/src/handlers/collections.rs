@@ -12,7 +12,7 @@ use crate::types::{CollectionResponse, CreateCollectionRequest, ErrorResponse};
 use crate::AppState;
 use velesdb_core::{DistanceMetric, StorageMode};
 
-use super::helpers::{error_response, get_collection_or_404};
+use super::helpers::{core_error_response, error_response, get_collection_or_404};
 
 /// List all collections.
 #[utoipa::path(
@@ -60,46 +60,26 @@ pub async fn create_collection(
 
     match result {
         Ok(()) => create_collection_success_response(&req),
-        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => core_error_response(StatusCode::BAD_REQUEST, &e),
     }
 }
 
 /// Parse a distance metric string into the core enum.
+///
+/// Delegates to [`DistanceMetric::from_str`] to keep alias parsing in one place.
 #[allow(clippy::result_large_err)]
 fn parse_distance_metric(raw: &str) -> Result<DistanceMetric, axum::response::Response> {
-    match raw.to_lowercase().as_str() {
-        "cosine" => Ok(DistanceMetric::Cosine),
-        "euclidean" | "l2" => Ok(DistanceMetric::Euclidean),
-        "dot" | "dotproduct" | "ip" => Ok(DistanceMetric::DotProduct),
-        "hamming" => Ok(DistanceMetric::Hamming),
-        "jaccard" => Ok(DistanceMetric::Jaccard),
-        _ => Err(error_response(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "Invalid metric: {}. Valid: cosine, euclidean, dot, hamming, jaccard",
-                raw
-            ),
-        )),
-    }
+    raw.parse::<DistanceMetric>()
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, e.to_string()))
 }
 
 /// Parse a storage mode string into the core enum.
+///
+/// Delegates to [`StorageMode::from_str`] (single source of truth in `velesdb-core`).
 #[allow(clippy::result_large_err)]
 fn parse_storage_mode(raw: &str) -> Result<StorageMode, axum::response::Response> {
-    match raw.to_lowercase().as_str() {
-        "full" | "f32" => Ok(StorageMode::Full),
-        "sq8" | "int8" => Ok(StorageMode::SQ8),
-        "binary" | "bit" => Ok(StorageMode::Binary),
-        "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
-        "rabitq" => Ok(StorageMode::RaBitQ),
-        _ => Err(error_response(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "Invalid storage_mode: {}. Valid: full, sq8, binary, pq, rabitq",
-                raw
-            ),
-        )),
-    }
+    raw.parse::<StorageMode>()
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, e))
 }
 
 /// Create a vector collection, requiring a dimension in the request.
@@ -306,7 +286,7 @@ pub async fn delete_collection(
             "name": name
         }))
         .into_response(),
-        Err(e) => error_response(StatusCode::NOT_FOUND, e.to_string()),
+        Err(e) => core_error_response(StatusCode::NOT_FOUND, &e),
     }
 }
 
@@ -367,9 +347,6 @@ pub async fn flush_collection(
             "collection": name
         }))
         .into_response(),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Flush failed: {}", e),
-        ),
+        Err(e) => core_error_response(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }

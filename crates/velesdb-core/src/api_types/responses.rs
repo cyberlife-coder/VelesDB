@@ -107,6 +107,9 @@ pub struct IdScoreResult {
 pub struct ErrorResponse {
     /// Error message.
     pub error: String,
+    /// Structured error code (e.g., `"VELES-004"` for dimension mismatch).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 // ============================================================================

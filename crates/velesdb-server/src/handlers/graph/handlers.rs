@@ -48,6 +48,7 @@ fn get_graph_collection_or_404(
                      Use /collections/{}/graph only on graph-typed collections.",
                     name, name
                 ),
+                code: None,
             }),
         ));
     }
@@ -62,6 +63,7 @@ fn get_graph_collection_or_404(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     error: format!("Failed to auto-create graph collection '{}': {e}", name),
+                    code: None,
                 }),
             )
         })?;
@@ -71,6 +73,7 @@ fn get_graph_collection_or_404(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Graph collection '{}' not found after creation.", name),
+                code: None,
             }),
         )
     })
@@ -102,6 +105,7 @@ pub async fn get_edges(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Query parameter 'label' is required. Listing all edges requires pagination (not yet implemented).".to_string(),
+                code: None,
             }),
         )
     })?;
@@ -151,6 +155,7 @@ pub async fn add_edge(
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: "Properties must be an object or null".to_string(),
+                    code: None,
                 }),
             ));
         }
@@ -162,6 +167,7 @@ pub async fn add_edge(
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: format!("Invalid edge: {e}"),
+                    code: None,
                 }),
             )
         })?
@@ -174,6 +180,7 @@ pub async fn add_edge(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to add edge: {e}"),
+                code: None,
             }),
         )
     })?;
@@ -216,6 +223,7 @@ pub async fn traverse_graph(
                         "Invalid strategy '{}'. Use 'bfs' or 'dfs'.",
                         request.strategy
                     ),
+                    code: None,
                 }),
             ));
         }
