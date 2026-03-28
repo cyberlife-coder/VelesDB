@@ -23,8 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Backward-compatible: field absent when no structured code applies.
 - **SearchQuality Custom/Adaptive** — Server now accepts `"custom:256"` and
   `"adaptive:32:512"` in the `mode` search parameter for fine-grained ef_search control
-- **TypeScript SDK** — Added `SearchQuality` type, `quality` field in `SearchOptions`,
-  `'relative_score'` fusion strategy, `storageMode` in `HnswParams`
+- **TypeScript SDK** — Added `SearchQuality` type (with `custom:N` and `adaptive:N:N`
+  template literals), `quality` field in `SearchOptions`, `'relative_score'` fusion strategy
 
 ### Refactored
 - **DRY: Centralized parsing** — `StorageMode` gains `FromStr`/`parse_alias()`/
