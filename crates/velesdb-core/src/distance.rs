@@ -59,7 +59,7 @@ impl DistanceMetric {
     /// Supported aliases:
     /// - cosine
     /// - euclidean, l2
-    /// - dot, dotproduct, inner
+    /// - dot, dotproduct, inner, ip
     /// - hamming
     /// - jaccard
     #[must_use]
@@ -67,7 +67,7 @@ impl DistanceMetric {
         match value.trim().to_lowercase().as_str() {
             "cosine" => Some(Self::Cosine),
             "euclidean" | "l2" => Some(Self::Euclidean),
-            "dot" | "dotproduct" | "inner" => Some(Self::DotProduct),
+            "dot" | "dotproduct" | "inner" | "ip" => Some(Self::DotProduct),
             "hamming" => Some(Self::Hamming),
             "jaccard" => Some(Self::Jaccard),
             _ => None,
@@ -155,6 +155,7 @@ impl FromStr for DistanceMetric {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse_alias(s).ok_or("Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard")
+        Self::parse_alias(s)
+            .ok_or("Unknown metric. Use: cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard")
     }
 }

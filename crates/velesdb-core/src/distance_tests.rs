@@ -271,3 +271,26 @@ fn test_canonical_names_and_from_str() {
     );
     assert!(DistanceMetric::from_str("invalid").is_err());
 }
+
+#[test]
+fn test_parse_ip_alias() {
+    use std::str::FromStr;
+
+    // "ip" (inner product) is a common alias for DotProduct in ML ecosystems
+    assert_eq!(
+        DistanceMetric::from_str("ip").unwrap(),
+        DistanceMetric::DotProduct
+    );
+    assert_eq!(
+        DistanceMetric::from_str("IP").unwrap(),
+        DistanceMetric::DotProduct
+    );
+    assert_eq!(
+        DistanceMetric::parse_alias("ip"),
+        Some(DistanceMetric::DotProduct)
+    );
+    assert_eq!(
+        DistanceMetric::parse_alias("  IP  "),
+        Some(DistanceMetric::DotProduct)
+    );
+}
