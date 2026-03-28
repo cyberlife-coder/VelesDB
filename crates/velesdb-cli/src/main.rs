@@ -13,22 +13,32 @@
 //!   `velesdb query ./my_database "SELECT * FROM docs LIMIT 10"`
 //!   `velesdb import ./data.jsonl --collection docs`
 
+mod cli_types;
 mod collection_helpers;
+mod commands;
 mod graph;
 mod graph_display;
 mod helpers;
 mod import;
 mod license;
 mod repl;
+mod repl_collection_cmds;
 mod repl_commands;
+mod repl_config_cmds;
+mod repl_data_cmds;
+mod repl_graph_cmds;
 mod repl_output;
+mod repl_query_cmds;
+mod repl_search_cmds;
 mod session;
 
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use clap_complete::{generate, Shell};
+use clap::{CommandFactory, Parser};
+use clap_complete::generate;
 use std::io;
 use std::path::PathBuf;
 use velesdb_core::{DistanceMetric, StorageMode};
+
+use commands::{Commands, IndexAction, LicenseAction, SimdAction};
 
 #[derive(Parser)]
 #[command(name = "velesdb")]
@@ -41,448 +51,6 @@ use velesdb_core::{DistanceMetric, StorageMode};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
-}
-
-/// CLI metric option
-#[derive(Debug, Clone, Copy, ValueEnum, Default)]
-enum MetricArg {
-    #[default]
-    Cosine,
-    Euclidean,
-    Dot,
-    Hamming,
-    Jaccard,
-}
-
-impl From<MetricArg> for DistanceMetric {
-    fn from(m: MetricArg) -> Self {
-        match m {
-            MetricArg::Cosine => DistanceMetric::Cosine,
-            MetricArg::Euclidean => DistanceMetric::Euclidean,
-            MetricArg::Dot => DistanceMetric::DotProduct,
-            MetricArg::Hamming => DistanceMetric::Hamming,
-            MetricArg::Jaccard => DistanceMetric::Jaccard,
-        }
-    }
-}
-
-/// CLI storage mode option
-#[derive(Debug, Clone, Copy, ValueEnum, Default)]
-enum StorageModeArg {
-    #[default]
-    Full,
-    Sq8,
-    Binary,
-    Pq,
-    Rabitq,
-}
-
-impl From<StorageModeArg> for StorageMode {
-    fn from(m: StorageModeArg) -> Self {
-        match m {
-            StorageModeArg::Full => StorageMode::Full,
-            StorageModeArg::Sq8 => StorageMode::SQ8,
-            StorageModeArg::Binary => StorageMode::Binary,
-            StorageModeArg::Pq => StorageMode::ProductQuantization,
-            StorageModeArg::Rabitq => StorageMode::RaBitQ,
-        }
-    }
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Start interactive REPL
-    Repl {
-        /// Path to database directory
-        #[arg(default_value = "./data")]
-        path: PathBuf,
-    },
-
-    /// Execute a single query
-    Query {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// `VelesQL` query to execute
-        query: String,
-
-        /// Output format (table, json)
-        #[arg(short, long, default_value = "table")]
-        format: String,
-    },
-
-    /// Show database info
-    Info {
-        /// Path to database directory
-        path: PathBuf,
-    },
-
-    /// List all collections in the database
-    List {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Output format (table, json)
-        #[arg(short, long, default_value = "table")]
-        format: String,
-    },
-
-    /// Show detailed information about a collection
-    Show {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Show sample records
-        #[arg(short, long, default_value = "0")]
-        samples: usize,
-
-        /// Output format (table, json)
-        #[arg(short, long, default_value = "table")]
-        format: String,
-    },
-
-    /// Export a collection to JSON file
-    Export {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Output file path
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Include vectors in export
-        #[arg(long, default_value = "true")]
-        include_vectors: bool,
-    },
-
-    /// Import vectors from CSV or JSONL file
-    Import {
-        /// Path to data file (CSV or JSONL)
-        file: PathBuf,
-
-        /// Path to database directory
-        #[arg(short, long, default_value = "./data")]
-        database: PathBuf,
-
-        /// Collection name
-        #[arg(short, long)]
-        collection: String,
-
-        /// Vector dimension (auto-detected if not specified)
-        #[arg(long)]
-        dimension: Option<usize>,
-
-        /// Distance metric
-        #[arg(long, value_enum, default_value = "cosine")]
-        metric: MetricArg,
-
-        /// Storage mode (full, sq8, binary)
-        #[arg(long, value_enum, default_value = "full")]
-        storage_mode: StorageModeArg,
-
-        /// ID column name (for CSV)
-        #[arg(long, default_value = "id")]
-        id_column: String,
-
-        /// Vector column name (for CSV)
-        #[arg(long, default_value = "vector")]
-        vector_column: String,
-
-        /// Batch size for insertion
-        #[arg(long, default_value = "1000")]
-        batch_size: usize,
-
-        /// Show progress bar
-        #[arg(long, default_value = "true")]
-        progress: bool,
-    },
-
-    /// License management commands
-    License {
-        #[command(subcommand)]
-        action: LicenseAction,
-    },
-
-    /// Create a metadata-only collection (no vectors)
-    CreateMetadataCollection {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        name: String,
-    },
-
-    /// Get a point by ID
-    Get {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Point ID to retrieve
-        id: u64,
-
-        /// Output format (table, json)
-        #[arg(short, long, default_value = "json")]
-        format: String,
-    },
-
-    /// Perform multi-query search with fusion
-    MultiSearch {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Query vectors as JSON array of arrays (e.g., '[[1.0, 0.0], [0.0, 1.0]]')
-        vectors: String,
-
-        /// Number of results to return
-        #[arg(short = 'k', long, default_value = "10")]
-        top_k: usize,
-
-        /// Fusion strategy (average, maximum, rrf, weighted)
-        #[arg(short, long, default_value = "rrf")]
-        strategy: String,
-
-        /// RRF k parameter (only for rrf strategy)
-        #[arg(long, default_value = "60")]
-        rrf_k: u32,
-
-        /// Output format (table, json)
-        #[arg(short, long, default_value = "table")]
-        format: String,
-    },
-
-    /// Graph operations (EPIC-016 US-050)
-    Graph {
-        #[command(subcommand)]
-        action: graph::GraphAction,
-    },
-
-    /// Generate shell completions (EPIC-014 US-007)
-    Completions {
-        /// Shell type (bash, zsh, fish, powershell, elvish)
-        #[arg(value_enum)]
-        shell: Shell,
-    },
-
-    /// SIMD performance diagnostics and benchmarking
-    Simd {
-        #[command(subcommand)]
-        action: SimdAction,
-    },
-
-    /// Create a vector collection with dimension, metric, and storage options
-    CreateVectorCollection {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        name: String,
-
-        /// Vector dimension
-        #[arg(short, long)]
-        dimension: usize,
-
-        /// Distance metric (cosine, euclidean, dot, hamming, jaccard)
-        #[arg(short, long, value_enum, default_value = "cosine")]
-        metric: MetricArg,
-
-        /// Storage mode (full, sq8, binary, pq, rabitq)
-        #[arg(short, long, value_enum, default_value = "full")]
-        storage: StorageModeArg,
-    },
-
-    /// Create a graph collection
-    CreateGraphCollection {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        name: String,
-
-        /// Create with schemaless mode (any node/edge types accepted)
-        #[arg(long, default_value = "true")]
-        schemaless: bool,
-    },
-
-    /// Delete a collection (vector, graph, or metadata)
-    DeleteCollection {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        name: String,
-
-        /// Skip interactive confirmation
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Show the query execution plan (EXPLAIN) for a VelesQL query
-    Explain {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// VelesQL query to explain
-        query: String,
-
-        /// Output format (tree, json)
-        #[arg(short, long, default_value = "tree")]
-        format: String,
-    },
-
-    /// Analyze a collection and display statistics
-    Analyze {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Output format (table, json)
-        #[arg(short, long, default_value = "table")]
-        format: String,
-    },
-
-    /// Delete points from a vector collection by ID
-    DeletePoints {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Point IDs to delete
-        #[arg(required = true)]
-        ids: Vec<u64>,
-    },
-
-    /// Upsert a single point into a vector collection
-    Upsert {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Point ID
-        #[arg(long)]
-        id: u64,
-
-        /// Vector as JSON array (e.g., '[0.1, 0.2, 0.3]')
-        #[arg(long)]
-        vector: Option<String>,
-
-        /// Payload as JSON object (e.g., '{"title": "Hello"}')
-        #[arg(long)]
-        payload: Option<String>,
-    },
-
-    /// Index management (create, drop, list)
-    Index {
-        #[command(subcommand)]
-        action: IndexAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum SimdAction {
-    /// Show current SIMD dispatch configuration
-    Info,
-
-    /// Force re-benchmark of all SIMD backends
-    Benchmark,
-}
-
-/// CLI index type option
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum IndexTypeArg {
-    Secondary,
-    Property,
-    Range,
-}
-
-#[derive(Subcommand)]
-enum IndexAction {
-    /// Create an index on a collection field
-    Create {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Field name to index
-        field: String,
-
-        /// Index type (secondary, property, range)
-        #[arg(long, value_enum, default_value = "secondary")]
-        index_type: IndexTypeArg,
-
-        /// Label (required for property and range index types)
-        #[arg(long)]
-        label: Option<String>,
-    },
-
-    /// Drop an index from a collection
-    Drop {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Label of the index to drop
-        label: String,
-
-        /// Property of the index to drop
-        property: String,
-    },
-
-    /// List all indexes on a collection
-    List {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Output format (table, json)
-        #[arg(short, long, default_value = "table")]
-        format: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum LicenseAction {
-    /// Show current license status
-    Show,
-
-    /// Activate a license key
-    Activate {
-        /// License key from email (format: base64_payload.base64_signature)
-        key: String,
-    },
-
-    /// Verify a license key without activating it
-    Verify {
-        /// License key to verify
-        key: String,
-
-        /// Public key for verification (base64 encoded)
-        #[arg(short, long)]
-        public_key: String,
-    },
 }
 
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)] // Reason: CLI entry point with command dispatch
@@ -1368,7 +936,7 @@ fn main() -> anyhow::Result<()> {
                     })?;
 
                     match index_type {
-                        IndexTypeArg::Secondary => {
+                        cli_types::IndexTypeArg::Secondary => {
                             col.create_index(&field)
                                 .map_err(|e| anyhow::anyhow!("Create index failed: {}", e))?;
                             println!(
@@ -1378,7 +946,7 @@ fn main() -> anyhow::Result<()> {
                                 collection.cyan()
                             );
                         }
-                        IndexTypeArg::Property => {
+                        cli_types::IndexTypeArg::Property => {
                             let lbl = label.as_deref().unwrap_or("default");
                             col.create_property_index(lbl, &field)
                                 .map_err(|e| anyhow::anyhow!("Create index failed: {}", e))?;
@@ -1390,7 +958,7 @@ fn main() -> anyhow::Result<()> {
                                 collection.cyan()
                             );
                         }
-                        IndexTypeArg::Range => {
+                        cli_types::IndexTypeArg::Range => {
                             let lbl = label.as_deref().unwrap_or("default");
                             col.create_range_index(lbl, &field)
                                 .map_err(|e| anyhow::anyhow!("Create index failed: {}", e))?;
@@ -1497,6 +1065,7 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cli_types::{MetricArg, StorageModeArg};
 
     // =========================================================================
     // Tests for MetricArg conversions

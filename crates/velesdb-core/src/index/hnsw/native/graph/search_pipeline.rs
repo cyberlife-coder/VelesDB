@@ -24,7 +24,7 @@
 use super::super::distance::{batch_distance_with_prefetch, DistanceEngine};
 use super::super::layer::{Layer, NodeId};
 use super::super::ordered_float::OrderedFloat;
-use super::search::{gather_unvisited_neighbors, process_batch_results, SearchState};
+use super::search_state::{gather_unvisited_neighbors, process_batch_results, SearchState};
 use crate::perf_optimizations::ContiguousVectors;
 use smallvec::SmallVec;
 use std::cmp::Reverse;
@@ -38,7 +38,7 @@ use std::cmp::Reverse;
 ///
 /// Called from [`search_layer`] when `should_prefetch()` returns `true`.
 ///
-/// [`search_layer`]: super::search::NativeHnsw::search_layer
+/// [`search_layer`]: super::NativeHnsw::search_layer
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::index::hnsw::native::graph) fn search_layer_pipelined<D: DistanceEngine>(

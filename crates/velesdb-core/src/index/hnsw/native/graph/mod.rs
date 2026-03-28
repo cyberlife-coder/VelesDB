@@ -16,6 +16,10 @@ mod reorder;
 pub(crate) mod safety_counters;
 mod search;
 mod search_pipeline;
+mod search_pools;
+mod search_state;
+#[cfg(test)]
+mod search_tests;
 
 use super::columnar_vectors::ColumnarVectors;
 use super::distance::DistanceEngine;
