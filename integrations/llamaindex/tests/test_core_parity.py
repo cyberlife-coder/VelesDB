@@ -53,7 +53,7 @@ def vectorstore_module(monkeypatch):
 def test_storage_mode_validation_accepts_all_core_modes(vectorstore_module):
     VelesDBVectorStore = vectorstore_module.VelesDBVectorStore
 
-    for mode in ("full", "sq8", "binary"):
+    for mode in ("full", "sq8", "binary", "pq", "rabitq"):
         store = VelesDBVectorStore(path="/tmp/veles", collection_name="t", storage_mode=mode)
         assert store.storage_mode == mode
 

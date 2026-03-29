@@ -425,7 +425,7 @@ class TestStorageMode:
 
     def test_storage_mode_search_accuracy(self, temp_db):
         """Test that search works correctly with different storage modes."""
-        for mode in ["full", "sq8", "binary"]:
+        for mode in ["full", "sq8", "binary", "pq", "rabitq"]:
             collection = temp_db.create_collection(f"mode_{mode}", dimension=4, storage_mode=mode)
 
             collection.upsert([

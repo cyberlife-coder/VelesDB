@@ -8,6 +8,7 @@ import ...`` call-sites continue to work without modification.
 from velesdb_common.security import (  # noqa: F401
     ALLOWED_METRICS,
     ALLOWED_STORAGE_MODES,
+    STORAGE_MODE_ALIASES,
     DEFAULT_TIMEOUT_MS,
     MAX_BATCH_SIZE,
     MAX_DIMENSION,
@@ -34,7 +35,8 @@ from velesdb_common.security import (  # noqa: F401
 )
 
 __all__ = [
-    "ALLOWED_METRICS", "ALLOWED_STORAGE_MODES", "DEFAULT_TIMEOUT_MS",
+    "ALLOWED_METRICS", "ALLOWED_STORAGE_MODES", "STORAGE_MODE_ALIASES",
+    "DEFAULT_TIMEOUT_MS",
     "MAX_BATCH_SIZE", "MAX_DIMENSION", "MAX_K_VALUE", "MAX_PATH_LENGTH",
     "MAX_QUERY_LENGTH", "MAX_SPARSE_VECTOR_SIZE", "MAX_TEXT_LENGTH",
     "MIN_DIMENSION", "SecurityError", "validate_batch_size",
