@@ -91,10 +91,8 @@ impl Collection {
         } else {
             limit
         };
-        let ef_search = stmt
-            .with_clause
-            .as_ref()
-            .and_then(crate::velesql::WithClause::get_ef_search);
+        let search_opts = super::QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())
+            .with_fusion(stmt.fusion_clause.clone());
         let first_similarity = extracted.similarity_conditions.first().cloned();
         let (cbo_strategy, cbo_over_fetch) =
             self.compute_cbo_strategy(extracted.filter_condition.as_ref(), limit);
@@ -107,7 +105,7 @@ impl Collection {
                 extracted.filter_condition.as_ref(),
                 execution_limit,
                 skip_metadata_prefilter_for_graph_or,
-                ef_search,
+                &search_opts,
                 cbo_strategy,
                 cbo_over_fetch,
             )

@@ -250,6 +250,102 @@ impl Collection {
         ))
     }
 
+    /// Routes vector search through `QuerySearchOptions` from a WITH clause.
+    ///
+    /// Priority: `quality` (from `mode`) > `ef_search` > default `search()`.
+    /// When `force_rerank` is `Some(true)`, applies explicit SIMD reranking
+    /// regardless of quality mode. When `Some(false)`, suppresses automatic
+    /// reranking even if the quality mode would enable it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match the collection.
+    pub(crate) fn search_with_opts(
+        &self,
+        query: &[f32],
+        k: usize,
+        opts: &crate::collection::search::query::QuerySearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        // When no options are set, fall back to default search.
+        if opts.quality.is_none() && opts.ef_search.is_none() && opts.force_rerank.is_none() {
+            return self.search(query, k);
+        }
+
+        // Resolve the search quality: explicit mode > ef_search bracket > default.
+        let quality = opts.quality.unwrap_or_else(|| {
+            opts.ef_search
+                .map_or(crate::SearchQuality::Balanced, |ef| match ef {
+                    0..=64 => crate::SearchQuality::Fast,
+                    65..=128 => crate::SearchQuality::Balanced,
+                    129..=512 => crate::SearchQuality::Accurate,
+                    _ => crate::SearchQuality::Perfect,
+                })
+        });
+
+        match opts.force_rerank {
+            Some(true) => self.search_with_forced_rerank(query, k, quality),
+            Some(false) => self.search_with_quality_no_rerank(query, k, quality),
+            None => self.search_with_quality(query, k, quality),
+        }
+    }
+
+    /// Searches with forced SIMD reranking regardless of quality mode.
+    fn search_with_forced_rerank(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+        validate_dimension_match(config.dimension, query.len())?;
+        let metric = config.metric;
+        drop(config);
+
+        let rerank_k = k.saturating_mul(4).max(k + 32);
+        let index_results = self
+            .index
+            .search_with_rerank_quality(query, k, rerank_k, quality);
+        let index_results = self.merge_delta(index_results, query, k, metric);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        Ok(resolve::resolve_scored_results(
+            &index_results,
+            &*vector_storage,
+            &*payload_storage,
+        ))
+    }
+
+    /// Searches with a quality profile but suppresses two-stage reranking.
+    ///
+    /// Uses `search_hnsw_only` via the ef_search derived from the quality profile,
+    /// skipping the automatic reranking that `search_with_quality` would enable.
+    fn search_with_quality_no_rerank(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+        validate_dimension_match(config.dimension, query.len())?;
+        let metric = config.metric;
+        drop(config);
+
+        let ef_search = quality.ef_search(k);
+        let index_results = self.index.search_hnsw_only(query, k, ef_search);
+        let index_results = self.merge_delta(index_results, query, k, metric);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        Ok(resolve::resolve_scored_results(
+            &index_results,
+            &*vector_storage,
+            &*payload_storage,
+        ))
+    }
+
     /// Performs fast vector similarity search returning only IDs and scores.
     ///
     /// Perf: This is ~3-5x faster than `search()` because it skips vector/payload retrieval.

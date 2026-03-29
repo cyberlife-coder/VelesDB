@@ -66,6 +66,8 @@ mod sparse_dispatch;
 mod union_query;
 mod validation;
 mod where_eval;
+#[cfg(test)]
+mod with_options_tests;
 
 // Re-export for potential external use
 #[allow(unused_imports)]
@@ -81,6 +83,70 @@ use std::collections::HashSet;
 
 /// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
 const MAX_LIMIT: usize = 100_000;
+
+/// Query-time search options extracted from the WITH clause.
+///
+/// Consolidates `mode`, `ef_search`, `rerank`, and `fusion_clause` into a single
+/// struct that flows through all dispatch paths. When no WITH clause is present,
+/// all fields are `None` and the default behavior is preserved.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct QuerySearchOptions {
+    /// Search quality profile parsed from `WITH (mode='...')`.
+    pub quality: Option<crate::SearchQuality>,
+    /// Explicit ef_search override from `WITH (ef_search=N)`.
+    pub ef_search: Option<usize>,
+    /// Force reranking on (`true`) or off (`false`) from `WITH (rerank=...)`.
+    pub force_rerank: Option<bool>,
+    /// Fusion clause from `USING FUSION (...)`.
+    pub fusion_clause: Option<crate::velesql::FusionClause>,
+}
+
+impl QuerySearchOptions {
+    /// Extracts search options from an optional WITH clause and fusion clause.
+    ///
+    /// Maps `mode` string to [`SearchQuality`](crate::SearchQuality) using the
+    /// same parsing logic as `mode_to_search_quality()`. Invalid mode strings
+    /// are silently ignored (quality remains `None`).
+    #[must_use]
+    pub(crate) fn from_with_clause(with: Option<&crate::velesql::WithClause>) -> Self {
+        let Some(with) = with else {
+            return Self::default();
+        };
+
+        let quality = with.get_mode().and_then(parse_mode_to_quality);
+
+        let ef_search = with.get_ef_search();
+        let force_rerank = with.get_rerank();
+
+        Self {
+            quality,
+            ef_search,
+            force_rerank,
+            fusion_clause: None,
+        }
+    }
+
+    /// Creates options with a fusion clause attached.
+    #[must_use]
+    pub(crate) fn with_fusion(mut self, fusion: Option<crate::velesql::FusionClause>) -> Self {
+        self.fusion_clause = fusion;
+        self
+    }
+}
+
+/// Maps a mode string from `WITH (mode='...')` to a [`SearchQuality`](crate::SearchQuality).
+///
+/// Returns `None` for unrecognized mode strings (caller preserves default behavior).
+fn parse_mode_to_quality(mode: &str) -> Option<crate::SearchQuality> {
+    match mode.to_lowercase().as_str() {
+        "fast" => Some(crate::SearchQuality::Fast),
+        "balanced" => Some(crate::SearchQuality::Balanced),
+        "accurate" => Some(crate::SearchQuality::Accurate),
+        "perfect" => Some(crate::SearchQuality::Perfect),
+        "autotune" | "auto_tune" | "auto" => Some(crate::SearchQuality::AutoTune),
+        _ => None,
+    }
+}
 
 /// Context for early-return query paths (NOT-similarity, union).
 struct EarlyReturnCtx<'a> {
@@ -178,7 +244,17 @@ impl Collection {
             .map_err(crate::error::Error::from)?;
 
         // Create per-query execution context for timeout + cardinality tracking.
-        let ctx = self.guard_rails.create_context();
+        let mut ctx = self.guard_rails.create_context();
+
+        // WITH (timeout_ms=N) overrides the collection-level timeout for this query.
+        if let Some(override_ms) = query
+            .select
+            .with_clause
+            .as_ref()
+            .and_then(crate::velesql::WithClause::get_timeout_ms)
+        {
+            ctx.limits.timeout_ms = override_ms;
+        }
 
         crate::velesql::QueryValidator::validate(query)
             .map_err(|e| crate::error::Error::Query(e.to_string()))?;

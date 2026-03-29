@@ -1,4 +1,4 @@
-use super::{Collection, HashSet, Result, SearchResult, MAX_LIMIT};
+use super::{Collection, HashSet, QuerySearchOptions, Result, SearchResult, MAX_LIMIT};
 
 impl Collection {
     pub(super) fn execute_indexed_metadata_query(
@@ -156,23 +156,35 @@ impl Collection {
     }
 
     /// Handles the `(NEAR vector, no similarity(), optional metadata filter)` path.
+    #[allow(clippy::too_many_arguments)] // All arguments come from dispatch_vector_query.
     fn dispatch_near_with_filter(
         &self,
         vector: &[f32],
         cond: &crate::velesql::Condition,
         execution_limit: usize,
         skip_metadata_prefilter_for_graph_or: bool,
+        search_opts: &QuerySearchOptions,
         cbo_strategy: crate::velesql::ExecutionStrategy,
         cbo_over_fetch: usize,
     ) -> Result<Vec<SearchResult>> {
         if let Some(text_query) = Self::extract_match_query(cond) {
-            return self.hybrid_search(vector, &text_query, execution_limit, None);
+            let vector_weight = search_opts
+                .fusion_clause
+                .as_ref()
+                .and_then(|fc| fc.vector_weight)
+                .map(|w| {
+                    // Reason: f64 → f32 for API compat; weight is clamped 0.0–1.0.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let w_f32 = w as f32;
+                    w_f32
+                });
+            return self.hybrid_search(vector, &text_query, execution_limit, vector_weight);
         }
         let cbo_search_k = execution_limit
             .saturating_mul(cbo_over_fetch)
             .min(MAX_LIMIT);
         if skip_metadata_prefilter_for_graph_or {
-            return self.search(vector, execution_limit);
+            return self.search_with_opts(vector, execution_limit, search_opts);
         }
         if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
             let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
@@ -183,7 +195,7 @@ impl Collection {
                 _ => self.search_with_filter(vector, cbo_search_k, &filter),
             };
         }
-        self.search(vector, execution_limit)
+        self.search_with_opts(vector, execution_limit, search_opts)
     }
 
     /// Handles the metadata-only (`(None, None, Some(cond))`) query path.
@@ -222,7 +234,7 @@ impl Collection {
         filter_condition: Option<&crate::velesql::Condition>,
         execution_limit: usize,
         skip_metadata_prefilter_for_graph_or: bool,
-        ef_search: Option<usize>,
+        search_opts: &QuerySearchOptions,
         cbo_strategy: crate::velesql::ExecutionStrategy,
         cbo_over_fetch: usize,
     ) -> Result<Vec<SearchResult>> {
@@ -235,6 +247,7 @@ impl Collection {
                 filter_cond,
                 execution_limit,
                 skip_metadata_prefilter_for_graph_or,
+                search_opts,
             ),
             // NEAR + metadata filter (no similarity threshold)
             (Some(vector), None, Some(cond)) => self.dispatch_near_with_filter(
@@ -242,12 +255,13 @@ impl Collection {
                 cond,
                 execution_limit,
                 skip_metadata_prefilter_for_graph_or,
+                search_opts,
                 cbo_strategy,
                 cbo_over_fetch,
             ),
             // Pure NEAR (no filter, no similarity threshold)
             (Some(vector), None, None) => {
-                self.dispatch_pure_near(vector, execution_limit, ef_search)
+                self.dispatch_pure_near(vector, execution_limit, search_opts)
             }
             // Metadata-only
             (None, None, Some(cond)) => self.dispatch_metadata_only(
@@ -264,6 +278,7 @@ impl Collection {
     }
 
     /// Handles the similarity() path with optional NEAR vector and optional metadata filter.
+    #[allow(clippy::too_many_arguments)] // All arguments come from dispatch_vector_query.
     fn dispatch_similarity_query(
         &self,
         search_vector: Option<&[f32]>,
@@ -272,12 +287,13 @@ impl Collection {
         filter_cond: Option<&crate::velesql::Condition>,
         execution_limit: usize,
         skip_metadata_prefilter_for_graph_or: bool,
+        search_opts: &QuerySearchOptions,
     ) -> Result<Vec<SearchResult>> {
         let k = execution_limit
             .saturating_mul(10 * similarity_conditions.len().max(1))
             .min(MAX_LIMIT);
         let search_vec = search_vector.unwrap_or(&sim.1);
-        let candidates = self.search(search_vec, k)?;
+        let candidates = self.search_with_opts(search_vec, k, search_opts)?;
         let filtered = self.apply_similarity_cascade(
             candidates,
             sim,
@@ -297,12 +313,8 @@ impl Collection {
         &self,
         vector: &[f32],
         execution_limit: usize,
-        ef_search: Option<usize>,
+        search_opts: &QuerySearchOptions,
     ) -> Result<Vec<SearchResult>> {
-        if let Some(ef) = ef_search {
-            self.search_with_ef(vector, execution_limit, ef)
-        } else {
-            self.search(vector, execution_limit)
-        }
+        self.search_with_opts(vector, execution_limit, search_opts)
     }
 }
