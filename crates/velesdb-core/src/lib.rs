@@ -39,7 +39,7 @@
 //!     let results = collection.search(&query_vector, 10)?;
 //!
 //!     // Hybrid search (vector + text)
-//!     let hybrid = collection.hybrid_search(&query_vector, "hello", 5, Some(0.7), None)?;
+//!     let hybrid = collection.hybrid_search(&query_vector, "hello", 5, Some(0.7))?;
 //!     # Ok(())
 //! }
 //! ```
