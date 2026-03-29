@@ -14,6 +14,7 @@ mod tests {
 
     fn make_query(where_clause: Option<Condition>) -> Query {
         Query {
+            let_bindings: vec![],
             select: SelectStatement {
                 distinct: crate::velesql::DistinctMode::None,
                 columns: SelectColumns::All,

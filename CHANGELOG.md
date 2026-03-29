@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of all variables resolving to the same fused score
 - **Hybrid search preserves component contributions** — `hybrid_search()` now records
   individual vector RRF and BM25 RRF contributions alongside the fused score
+- **LET clause for named score bindings** — `LET hybrid = 0.7 * vector_score + 0.3 * bm25_score`
+  defines reusable score variables available in SELECT and ORDER BY. Supports arithmetic
+  expressions, chained bindings, and all score variables. Grammar rule, AST, parser,
+  and execution fully wired. 7 conformance cases (P053-P059)
 
 ### Refactored
 - **Split Phase: execute_query_with_client()** — CC reduced from 12 to 8 by extracting

@@ -40,6 +40,7 @@ impl Parser {
         };
 
         Ok(Query {
+            let_bindings: Vec::new(),
             select,
             compound,
             match_clause: None,

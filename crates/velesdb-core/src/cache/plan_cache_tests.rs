@@ -255,6 +255,7 @@ fn select_query(collection: &str) -> crate::velesql::Query {
     use crate::velesql::{Condition, SelectColumns, SelectStatement, VectorExpr, VectorSearch};
 
     crate::velesql::Query {
+        let_bindings: Vec::new(),
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::default(),
             columns: SelectColumns::All,

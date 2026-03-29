@@ -82,6 +82,21 @@ impl Collection {
         order_by: &[crate::velesql::SelectOrderBy],
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<()> {
+        self.apply_order_by_with_let(results, order_by, params, &[])
+    }
+
+    /// Apply ORDER BY with pre-evaluated LET bindings (VelesQL v1.10 Phase 3).
+    ///
+    /// `let_bindings` contains per-result pre-evaluated `(name, value)` pairs
+    /// stored as `[result_idx][(name, value)]`. If empty, behaves identically
+    /// to [`apply_order_by`].
+    pub(crate) fn apply_order_by_with_let(
+        &self,
+        results: &mut [SearchResult],
+        order_by: &[crate::velesql::SelectOrderBy],
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        per_result_let: &[Vec<(String, f32)>],
+    ) -> Result<()> {
         if order_by.is_empty() {
             return Ok(());
         }
@@ -98,6 +113,7 @@ impl Collection {
                 order_by,
                 &similarity_scores_map,
                 higher_is_better,
+                per_result_let,
             )
         });
 
@@ -159,6 +175,7 @@ impl Collection {
     }
 
     /// Compares two result indices across all ORDER BY columns.
+    #[allow(clippy::too_many_arguments)]
     fn compare_by_order_columns(
         i: usize,
         j: usize,
@@ -166,6 +183,7 @@ impl Collection {
         order_by: &[crate::velesql::SelectOrderBy],
         similarity_scores: &std::collections::HashMap<usize, Vec<f32>>,
         higher_is_better: bool,
+        per_result_let: &[Vec<(String, f32)>],
     ) -> Ordering {
         use crate::velesql::OrderByExpr;
         for (idx, ob) in order_by.iter().enumerate() {
@@ -174,17 +192,7 @@ impl Collection {
                     .get(&idx)
                     .map_or(Ordering::Equal, |scores| scores[i].total_cmp(&scores[j])),
                 OrderByExpr::Field(field_name) => {
-                    let val_i = results[i]
-                        .point
-                        .payload
-                        .as_ref()
-                        .and_then(|p| p.get(field_name));
-                    let val_j = results[j]
-                        .point
-                        .payload
-                        .as_ref()
-                        .and_then(|p| p.get(field_name));
-                    compare_json_values(val_i, val_j)
+                    Self::compare_field_or_let(field_name, i, j, results, per_result_let)
                 }
                 OrderByExpr::Aggregate(_) => Ordering::Equal,
                 // Design: Arithmetic ORDER BY uses direct numeric ordering without
@@ -192,21 +200,7 @@ impl Collection {
                 // Euclidean/Hamming scores should account for lower-is-better semantics
                 // in their expression (e.g., `ORDER BY -1 * vector_score + price ASC`).
                 OrderByExpr::Arithmetic(expr) => {
-                    let comps_i = results[i].component_scores.as_deref();
-                    let comps_j = results[j].component_scores.as_deref();
-                    let ctx_i = ScoreContext::with_components(
-                        results[i].score,
-                        results[i].point.payload.as_ref(),
-                        comps_i,
-                    );
-                    let ctx_j = ScoreContext::with_components(
-                        results[j].score,
-                        results[j].point.payload.as_ref(),
-                        comps_j,
-                    );
-                    let val_i = evaluate_arithmetic(expr, &ctx_i);
-                    let val_j = evaluate_arithmetic(expr, &ctx_j);
-                    val_i.total_cmp(&val_j)
+                    Self::compare_arithmetic(expr, i, j, results, per_result_let)
                 }
             };
 
@@ -221,6 +215,71 @@ impl Collection {
             }
         }
         Ordering::Equal
+    }
+
+    /// Compares a payload field value between two results.
+    fn compare_payload_field(
+        field_name: &str,
+        i: usize,
+        j: usize,
+        results: &[SearchResult],
+    ) -> Ordering {
+        let val_i = results[i]
+            .point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(field_name));
+        let val_j = results[j]
+            .point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(field_name));
+        compare_json_values(val_i, val_j)
+    }
+
+    /// Compares a field name, checking LET bindings first, then payload.
+    fn compare_field_or_let(
+        field_name: &str,
+        i: usize,
+        j: usize,
+        results: &[SearchResult],
+        per_result_let: &[Vec<(String, f32)>],
+    ) -> Ordering {
+        if let (Some(let_i), Some(let_j)) = (per_result_let.get(i), per_result_let.get(j)) {
+            if let Some(vi) = let_i.iter().find(|(k, _)| k == field_name).map(|(_, v)| *v) {
+                let vj = let_j
+                    .iter()
+                    .find(|(k, _)| k == field_name)
+                    .map_or(0.0, |(_, v)| *v);
+                return vi.total_cmp(&vj);
+            }
+        }
+        Self::compare_payload_field(field_name, i, j, results)
+    }
+
+    /// Compares two results by an arithmetic expression with full context.
+    fn compare_arithmetic(
+        expr: &crate::velesql::ArithmeticExpr,
+        i: usize,
+        j: usize,
+        results: &[SearchResult],
+        per_result_let: &[Vec<(String, f32)>],
+    ) -> Ordering {
+        let ctx_i = ScoreContext::with_let_bindings(
+            results[i].score,
+            results[i].point.payload.as_ref(),
+            results[i].component_scores.as_deref(),
+            per_result_let.get(i).map(Vec::as_slice),
+        );
+        let ctx_j = ScoreContext::with_let_bindings(
+            results[j].score,
+            results[j].point.payload.as_ref(),
+            results[j].component_scores.as_deref(),
+            per_result_let.get(j).map(Vec::as_slice),
+        );
+        let val_i = evaluate_arithmetic(expr, &ctx_i);
+        let val_j = evaluate_arithmetic(expr, &ctx_j);
+        val_i.total_cmp(&val_j)
     }
 
     /// Applies ASC/DESC direction, accounting for distance metric inversion.
@@ -247,7 +306,7 @@ impl Collection {
 /// Context for evaluating arithmetic ORDER BY expressions (EPIC-042).
 ///
 /// Holds the pre-computed search score, optional per-component score breakdown,
-/// and optional payload for variable resolution.
+/// LET bindings (v1.10), and optional payload for variable resolution.
 pub(crate) struct ScoreContext<'a> {
     /// Pre-computed search score (vector similarity or fused score).
     search_score: f32,
@@ -258,6 +317,10 @@ pub(crate) struct ScoreContext<'a> {
     /// When present, built-in score variables (`vector_score`, `bm25_score`, etc.)
     /// resolve to their individual component values instead of the fused score.
     component_scores: Option<&'a [(String, f32)]>,
+    /// Pre-evaluated LET binding values (VelesQL v1.10 Phase 3).
+    ///
+    /// Resolution priority: LET bindings > component_scores > search_score > payload.
+    let_bindings: Option<&'a [(String, f32)]>,
 }
 
 impl<'a> ScoreContext<'a> {
@@ -270,10 +333,12 @@ impl<'a> ScoreContext<'a> {
             search_score,
             payload,
             component_scores: None,
+            let_bindings: None,
         }
     }
 
     /// Creates a score context with per-component score breakdown.
+    #[allow(dead_code)] // Used by component_scores_tests.
     pub(crate) fn with_components(
         search_score: f32,
         payload: Option<&'a serde_json::Value>,
@@ -283,21 +348,40 @@ impl<'a> ScoreContext<'a> {
             search_score,
             payload,
             component_scores,
+            let_bindings: None,
+        }
+    }
+
+    /// Creates a score context with LET bindings and component scores.
+    pub(crate) fn with_let_bindings(
+        search_score: f32,
+        payload: Option<&'a serde_json::Value>,
+        component_scores: Option<&'a [(String, f32)]>,
+        let_bindings: Option<&'a [(String, f32)]>,
+    ) -> Self {
+        Self {
+            search_score,
+            payload,
+            component_scores,
+            let_bindings,
         }
     }
 
     /// Resolves a variable name to a numeric value.
     ///
-    /// Resolution priority for built-in score names (`vector_score`, `graph_score`,
-    /// `bm25_score`):
-    /// 1. Look up in `component_scores` if present and contains the name.
-    /// 2. Fall back to `search_score` (fused/primary score).
+    /// Resolution priority:
+    /// 1. LET bindings (highest — user-defined score aliases).
+    /// 2. Built-in component scores (`vector_score`, `bm25_score`, etc.).
+    /// 3. `search_score` (fused/primary score) for built-in names.
+    /// 4. Payload fields for non-built-in names.
     ///
     /// `fused_score` and `similarity` always resolve to `search_score` (they
     /// represent the combined result, not an individual component).
-    ///
-    /// Non-built-in names are looked up in the payload.
     fn resolve_variable(&self, name: &str) -> f32 {
+        // Priority 1: LET bindings override everything.
+        if let Some(val) = self.lookup_let_binding(name) {
+            return val;
+        }
         match name {
             // fused_score and similarity always use the primary fused score.
             "fused_score" | "similarity" => self.search_score,
@@ -307,6 +391,14 @@ impl<'a> ScoreContext<'a> {
             }
             _ => self.resolve_payload_variable(name),
         }
+    }
+
+    /// Looks up a named LET binding, returning `None` if absent.
+    fn lookup_let_binding(&self, name: &str) -> Option<f32> {
+        self.let_bindings?
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| *v)
     }
 
     /// Looks up a named component score, returning `None` if absent.
@@ -330,6 +422,30 @@ impl<'a> ScoreContext<'a> {
                 }
             })
     }
+}
+
+/// Evaluates all LET bindings in declaration order for a single result.
+///
+/// Each binding can reference earlier bindings, component scores, or the
+/// search score. The returned vec contains `(name, value)` pairs in order.
+pub(crate) fn evaluate_let_bindings(
+    bindings: &[crate::velesql::LetBinding],
+    search_score: f32,
+    payload: Option<&serde_json::Value>,
+    component_scores: Option<&[(String, f32)]>,
+) -> Vec<(String, f32)> {
+    let mut evaluated: Vec<(String, f32)> = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let ctx = ScoreContext::with_let_bindings(
+            search_score,
+            payload,
+            component_scores,
+            Some(&evaluated),
+        );
+        let value = evaluate_arithmetic(&binding.expr, &ctx);
+        evaluated.push((binding.name.clone(), value));
+    }
+    evaluated
 }
 
 /// Maximum recursion depth for arithmetic expression evaluation.

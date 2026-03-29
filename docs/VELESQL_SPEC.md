@@ -30,6 +30,8 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | NEAR_FUSED multi-vector fusion | ✅ Stable | 2.2 |
 | FUSE BY fusion clause | 🔜 Planned | - |
 | TRAIN QUANTIZER command | ✅ Stable | 2.2 |
+| ORDER BY arithmetic scoring | ✅ Stable | 3.0 |
+| LET score bindings | ✅ Stable | 3.2 |
 | Table aliases | 🔜 Planned | - |
 
 ### REST Contract Notes
@@ -758,6 +760,43 @@ SELECT * FROM docs LIMIT 10
 -- Pagination
 SELECT * FROM docs LIMIT 10 OFFSET 20
 ```
+
+## LET Clause (Score Bindings, v3.2+)
+
+Define named score bindings evaluated once and reusable in SELECT and ORDER BY:
+
+```sql
+LET vec_score = similarity(embedding, $q)
+LET hybrid = 0.7 * vec_score + 0.3 * bm25_score
+SELECT *, hybrid FROM docs
+WHERE vector NEAR $q AND content MATCH 'machine learning'
+ORDER BY hybrid DESC
+LIMIT 10
+```
+
+### Rules
+
+- LET clauses appear **before** the SELECT statement
+- Each binding has a name and an arithmetic expression
+- Bindings can reference earlier bindings (forward references are invalid)
+- Available in SELECT projection and ORDER BY
+- NOT available in WHERE (WHERE runs before scores exist)
+- LET names take **highest priority** in variable resolution (overrides component scores)
+- Case-insensitive keyword (`LET`, `let`, `Let` all work)
+
+### Expression Support
+
+LET expressions support the same arithmetic as ORDER BY:
+
+```sql
+LET boost = 1.5
+LET weighted = 0.7 * vector_score + 0.3 * bm25_score
+LET final_score = weighted * boost
+LET sim = similarity()
+```
+
+Available variables: `vector_score`, `bm25_score`, `graph_score`, `sparse_score`,
+`fused_score`, `similarity()`, numeric literals, and earlier LET bindings.
 
 ## WITH Clause (Search Options)
 

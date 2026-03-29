@@ -184,7 +184,9 @@ impl Parser {
     /// A single identifier atom becomes `OrderByExpr::Field` for backward compat.
     /// A bare `similarity()` atom becomes `OrderByExpr::SimilarityBare`.
     /// A `similarity(field, vec)` atom becomes `OrderByExpr::Similarity`.
-    fn parse_order_by_arithmetic(
+    ///
+    /// Also used by `parse_let_clause` (VelesQL v1.10 Phase 3).
+    pub(in crate::velesql::parser) fn parse_order_by_arithmetic(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<(OrderByExpr, bool), ParseError> {
         // order_by_arithmetic = { arithmetic_additive }

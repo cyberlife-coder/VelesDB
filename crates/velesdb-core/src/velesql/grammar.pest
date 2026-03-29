@@ -1,12 +1,16 @@
 // VelesQL Grammar - SQL-like query language for VelesDB
-// Version 3.1.0 — string escaping, NOT IN, vector literal integers, N-ary compound queries
+// Version 3.2.0 — LET clause for named score bindings (v1.10 Phase 3)
 
 // Whitespace and comments
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 
+// LET clause: named score bindings evaluated once (VelesQL v1.10 Phase 3)
+let_clause = { ^"LET" ~ identifier ~ "=" ~ order_by_arithmetic }
+
 // Main entry point - supports SELECT, MATCH and DML (INSERT/UPDATE)
-query = { SOI ~ (match_query | compound_query | train_stmt | insert_stmt | update_stmt) ~ ";"? ~ EOI }
+// LET clauses appear zero or more times before the main statement.
+query = { SOI ~ let_clause* ~ (match_query | compound_query | train_stmt | insert_stmt | update_stmt) ~ ";"? ~ EOI }
 
 // MATCH query for graph pattern matching (EPIC-045 US-001)
 // Syntax: MATCH pattern WHERE condition RETURN items [ORDER BY ...] [LIMIT n]

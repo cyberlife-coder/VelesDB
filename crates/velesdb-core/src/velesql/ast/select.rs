@@ -149,6 +149,24 @@ pub enum OrderByExpr {
     Arithmetic(ArithmeticExpr),
 }
 
+/// A named score binding defined by a `LET` clause (VelesQL v1.10 Phase 3).
+///
+/// Each binding assigns an arithmetic expression to a name. Bindings are
+/// evaluated in declaration order; later bindings may reference earlier ones.
+///
+/// # Example
+///
+/// ```sql
+/// LET hybrid = 0.7 * vector_score + 0.3 * bm25_score
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LetBinding {
+    /// Binding name (identifier).
+    pub name: String,
+    /// Expression to evaluate.
+    pub expr: ArithmeticExpr,
+}
+
 /// Arithmetic expression for ORDER BY custom scoring (EPIC-042).
 ///
 /// Supports binary operations (+, -, *, /) with numeric literals,

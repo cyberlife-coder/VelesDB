@@ -218,6 +218,7 @@ fn create_query_with_multiple_similarity() -> Query {
     });
 
     Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -256,6 +257,7 @@ fn create_query_with_multiple_similarity_or() -> Query {
     });
 
     Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -287,6 +289,7 @@ fn create_query_with_single_similarity() -> Query {
     });
 
     Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -323,6 +326,7 @@ fn create_query_with_similarity_or_metadata() -> Query {
     });
 
     Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -359,6 +363,7 @@ fn create_query_with_similarity_and_metadata() -> Query {
     });
 
     Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -390,6 +395,7 @@ fn create_query_with_not_similarity() -> Query {
     });
 
     Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -414,6 +420,7 @@ fn create_query_with_not_similarity() -> Query {
 
 fn create_simple_query() -> Query {
     Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -454,6 +461,7 @@ fn test_validate_vector_search_near_with_or_detected() {
     });
 
     let query = Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -497,6 +505,7 @@ fn test_validate_vector_search_or_now_passes() {
     });
 
     let query = Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -545,6 +554,7 @@ fn test_validate_compound_query_where_clause() {
     // Main SELECT has no similarity
     // UNION's right side has multiple similarity with OR (invalid)
     let query = Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -600,6 +610,7 @@ use crate::velesql::ast::VectorSearch;
 
 fn make_query(where_clause: Option<Condition>) -> Query {
     Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
@@ -927,6 +938,7 @@ fn test_complexity_rejects_like_budget() {
     });
 
     let query = Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: super::ast::DistinctMode::None,
             columns: SelectColumns::All,
@@ -988,6 +1000,7 @@ fn make_query_with_arithmetic_order_by(
     arithmetic_expr: ArithmeticExpr,
 ) -> Query {
     Query {
+        let_bindings: vec![],
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,

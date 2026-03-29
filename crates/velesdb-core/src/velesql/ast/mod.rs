@@ -28,8 +28,8 @@ pub use dml::{DmlStatement, InsertStatement, UpdateAssignment, UpdateStatement};
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
 pub use join::{ColumnRef, JoinClause, JoinCondition, JoinType};
 pub use select::{
-    ArithmeticExpr, ArithmeticOp, Column, DistinctMode, OrderByExpr, SelectColumns, SelectOrderBy,
-    SelectStatement, SimilarityOrderBy, SimilarityScoreExpr,
+    ArithmeticExpr, ArithmeticOp, Column, DistinctMode, LetBinding, OrderByExpr, SelectColumns,
+    SelectOrderBy, SelectStatement, SimilarityOrderBy, SimilarityScoreExpr,
 };
 pub use train::TrainStatement;
 pub use values::{
@@ -40,6 +40,12 @@ pub use with_clause::{QuantizationMode, WithClause, WithOption, WithValue};
 /// A complete VelesQL query.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Query {
+    /// Named score bindings defined by `LET` clauses (VelesQL v1.10 Phase 3).
+    ///
+    /// Bindings are evaluated in order before ORDER BY; each binding can
+    /// reference earlier bindings, component scores, or literal values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub let_bindings: Vec<LetBinding>,
     /// The SELECT statement.
     pub select: SelectStatement,
     /// Compound query (UNION/INTERSECT/EXCEPT) - EPIC-040 US-006.
@@ -85,6 +91,7 @@ impl Query {
     #[must_use]
     pub fn new_select(select: SelectStatement) -> Self {
         Self {
+            let_bindings: Vec::new(),
             select,
             compound: None,
             match_clause: None,
@@ -100,6 +107,7 @@ impl Query {
         select.where_clause.clone_from(&match_clause.where_clause);
         select.limit = match_clause.return_clause.limit;
         Self {
+            let_bindings: Vec::new(),
             select,
             compound: None,
             match_clause: Some(match_clause),
@@ -112,6 +120,7 @@ impl Query {
     #[must_use]
     pub fn new_dml(dml: DmlStatement) -> Self {
         Self {
+            let_bindings: Vec::new(),
             select: SelectStatement::empty(),
             compound: None,
             match_clause: None,
@@ -124,6 +133,7 @@ impl Query {
     #[must_use]
     pub fn new_train(train: TrainStatement) -> Self {
         Self {
+            let_bindings: Vec::new(),
             select: SelectStatement::empty(),
             compound: None,
             match_clause: None,

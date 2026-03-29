@@ -1,5 +1,5 @@
 {
-  "version": "3.1.0",
+  "version": "3.2.0",
   "cases": [
     {
       "id": "P001",
@@ -265,6 +265,41 @@
     {
       "id": "P052",
       "query": "SELECT * FROM docs ORDER BY score * 2 + 1 ASC LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P053",
+      "query": "LET x = 0.5 SELECT * FROM docs LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P054",
+      "query": "LET x = similarity() SELECT * FROM docs LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P055",
+      "query": "LET x = 0.7 * vector_score + 0.3 * bm25_score SELECT * FROM docs LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P056",
+      "query": "LET a = 1.0 LET b = a + 0.5 SELECT * FROM docs LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P057",
+      "query": "LET = 5 SELECT * FROM docs LIMIT 5",
+      "should_parse": false
+    },
+    {
+      "id": "P058",
+      "query": "LET x SELECT * FROM docs LIMIT 5",
+      "should_parse": false
+    },
+    {
+      "id": "P059",
+      "query": "LET x = similarity() MATCH (a)-[r]->(b) RETURN a LIMIT 5",
       "should_parse": true
     }
   ]

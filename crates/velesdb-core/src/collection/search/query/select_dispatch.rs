@@ -143,19 +143,25 @@ impl Collection {
         }
     }
 
-    /// Applies DISTINCT, ORDER BY, OFFSET, and LIMIT to SELECT results.
+    /// Applies DISTINCT, ORDER BY (with LET bindings), OFFSET, and LIMIT.
     pub(super) fn apply_select_postprocessing(
         &self,
         stmt: &crate::velesql::SelectStatement,
         mut results: Vec<SearchResult>,
         params: &std::collections::HashMap<String, serde_json::Value>,
         limit: usize,
+        let_bindings: &[crate::velesql::LetBinding],
     ) -> Result<Vec<SearchResult>> {
         if stmt.distinct == crate::velesql::DistinctMode::All {
             results = distinct::apply_distinct(results, &stmt.columns);
         }
         if let Some(ref order_by) = stmt.order_by {
-            self.apply_order_by(&mut results, order_by, params)?;
+            if let_bindings.is_empty() {
+                self.apply_order_by(&mut results, order_by, params)?;
+            } else {
+                let per_result_let = Self::evaluate_let_for_results(let_bindings, &results);
+                self.apply_order_by_with_let(&mut results, order_by, params, &per_result_let)?;
+            }
         }
         // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
         if let Some(offset) = stmt.offset {
@@ -164,5 +170,23 @@ impl Collection {
         }
         results.truncate(limit);
         Ok(results)
+    }
+
+    /// Evaluates LET bindings for every result, producing per-result binding maps.
+    fn evaluate_let_for_results(
+        let_bindings: &[crate::velesql::LetBinding],
+        results: &[SearchResult],
+    ) -> Vec<Vec<(String, f32)>> {
+        results
+            .iter()
+            .map(|r| {
+                super::ordering::evaluate_let_bindings(
+                    let_bindings,
+                    r.score,
+                    r.point.payload.as_ref(),
+                    r.component_scores.as_deref(),
+                )
+            })
+            .collect()
     }
 }

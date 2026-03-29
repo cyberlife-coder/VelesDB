@@ -43,6 +43,7 @@ fn test_value_from_bool() {
 #[test]
 fn test_query_serialization() {
     let query = Query {
+        let_bindings: vec![],
         compound: None,
         match_clause: None,
         dml: None,

@@ -8,20 +8,42 @@ mod clause_projection;
 pub(crate) mod validation;
 
 use super::Rule;
-use crate::velesql::ast::{Query, SelectColumns, SelectStatement};
+use crate::velesql::ast::{LetBinding, Query, SelectColumns, SelectStatement};
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
 
 impl Parser {
     pub(crate) fn parse_query(pair: pest::iterators::Pair<Rule>) -> Result<Query, ParseError> {
+        let mut let_bindings = Vec::new();
         let inner = pair.into_inner();
         for p in inner {
             match p.as_rule() {
-                Rule::match_query => return Self::parse_match_query(p),
-                Rule::compound_query => return Self::parse_compound_query(p),
-                Rule::train_stmt => return Self::parse_train_stmt(p),
-                Rule::insert_stmt => return Self::parse_insert_stmt(p),
-                Rule::update_stmt => return Self::parse_update_stmt(p),
+                Rule::let_clause => let_bindings.push(Self::parse_let_clause(p)?),
+                Rule::match_query => {
+                    let mut q = Self::parse_match_query(p)?;
+                    q.let_bindings = let_bindings;
+                    return Ok(q);
+                }
+                Rule::compound_query => {
+                    let mut q = Self::parse_compound_query(p)?;
+                    q.let_bindings = let_bindings;
+                    return Ok(q);
+                }
+                Rule::train_stmt => {
+                    let mut q = Self::parse_train_stmt(p)?;
+                    q.let_bindings = let_bindings;
+                    return Ok(q);
+                }
+                Rule::insert_stmt => {
+                    let mut q = Self::parse_insert_stmt(p)?;
+                    q.let_bindings = let_bindings;
+                    return Ok(q);
+                }
+                Rule::update_stmt => {
+                    let mut q = Self::parse_update_stmt(p)?;
+                    q.let_bindings = let_bindings;
+                    return Ok(q);
+                }
                 _ => {}
             }
         }
@@ -30,6 +52,58 @@ impl Parser {
             "",
             "Expected MATCH, SELECT, INSERT, UPDATE, or TRAIN query",
         ))
+    }
+
+    /// Parses a single `LET name = expr` clause (VelesQL v1.10 Phase 3).
+    fn parse_let_clause(pair: pest::iterators::Pair<Rule>) -> Result<LetBinding, ParseError> {
+        let (name, expr) = Self::extract_let_name_and_expr(pair)?;
+        Ok(LetBinding { name, expr })
+    }
+
+    /// Extracts the name and arithmetic expression from a LET clause pair.
+    ///
+    /// Grammar guarantees exactly one `identifier` and one `order_by_arithmetic`.
+    fn extract_let_name_and_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(String, crate::velesql::ArithmeticExpr), ParseError> {
+        let mut inner = pair.into_inner();
+        let name = inner
+            .find(|p| p.as_rule() == Rule::identifier)
+            .map(|p| super::extract_identifier(&p))
+            .ok_or_else(|| ParseError::syntax(0, "", "LET clause requires a binding name"))?;
+        let expr_pair = inner
+            .find(|p| p.as_rule() == Rule::order_by_arithmetic)
+            .ok_or_else(|| ParseError::syntax(0, "", "LET clause requires an expression"))?;
+        let (parsed, _) = Self::parse_order_by_arithmetic(expr_pair)?;
+        Ok((name, Self::order_by_to_arithmetic(parsed)))
+    }
+
+    /// Converts an `OrderByExpr` back to `ArithmeticExpr` for LET storage.
+    ///
+    /// `parse_order_by_arithmetic` collapses single-atom arithmetic expressions
+    /// to legacy `OrderByExpr::Field` / `OrderByExpr::SimilarityBare` variants.
+    /// LET bindings always store `ArithmeticExpr`, so we reverse that collapse.
+    fn order_by_to_arithmetic(expr: crate::velesql::OrderByExpr) -> crate::velesql::ArithmeticExpr {
+        match expr {
+            crate::velesql::OrderByExpr::Field(name) => {
+                crate::velesql::ArithmeticExpr::Variable(name)
+            }
+            crate::velesql::OrderByExpr::SimilarityBare => {
+                crate::velesql::ArithmeticExpr::Similarity(Box::new(
+                    crate::velesql::OrderByExpr::SimilarityBare,
+                ))
+            }
+            crate::velesql::OrderByExpr::Similarity(sim) => {
+                crate::velesql::ArithmeticExpr::Similarity(Box::new(
+                    crate::velesql::OrderByExpr::Similarity(sim),
+                ))
+            }
+            crate::velesql::OrderByExpr::Arithmetic(arith) => arith,
+            crate::velesql::OrderByExpr::Aggregate(_) => {
+                // Aggregates in LET are nonsensical; store as literal 0.
+                crate::velesql::ArithmeticExpr::Literal(0.0)
+            }
+        }
     }
 
     pub(crate) fn parse_select_stmt(

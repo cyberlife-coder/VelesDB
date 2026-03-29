@@ -36,6 +36,8 @@ mod hybrid_sparse_tests;
 pub mod join;
 #[cfg(test)]
 mod join_tests;
+#[cfg(test)]
+mod let_execution_tests;
 pub mod match_exec;
 #[cfg(test)]
 mod match_exec_tests;
@@ -272,8 +274,16 @@ impl Collection {
         // Phase 2: Main dispatch.
         let mut results = self.dispatch_main_select(stmt, params, &extracted, fetch_limit, &ctx)?;
 
-        // Phase 3: Post-processing and finalization.
-        self.finalize_query_results(stmt, &mut results, params, limit, &extracted, &ctx)?;
+        // Phase 3: Post-processing and finalization (includes LET evaluation).
+        self.finalize_query_results(
+            stmt,
+            &mut results,
+            params,
+            limit,
+            &extracted,
+            &ctx,
+            &query.let_bindings,
+        )?;
         Ok(results)
     }
 
@@ -309,6 +319,7 @@ impl Collection {
     }
 
     /// Phase 3: Join analysis, guard-rail checks, post-processing, and stats update.
+    #[allow(clippy::too_many_arguments)]
     fn finalize_query_results(
         &self,
         stmt: &crate::velesql::SelectStatement,
@@ -317,12 +328,18 @@ impl Collection {
         limit: usize,
         extracted: &ExtractedComponents,
         ctx: &crate::guardrails::QueryContext,
+        let_bindings: &[crate::velesql::LetBinding],
     ) -> Result<()> {
         self.analyze_join_pushdown(stmt);
         self.check_guardrails_and_record(ctx, results.len())?;
 
-        *results =
-            self.apply_select_postprocessing(stmt, std::mem::take(results), params, limit)?;
+        *results = self.apply_select_postprocessing(
+            stmt,
+            std::mem::take(results),
+            params,
+            limit,
+            let_bindings,
+        )?;
 
         // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
         if extracted.vector_search.is_some() {
