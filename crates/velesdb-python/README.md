@@ -795,6 +795,12 @@ collection = db.create_collection("sq8", dimension=768, storage_mode="sq8")
 
 # Binary quantization - 1 bit per dimension (32x compression)
 collection = db.create_collection("binary", dimension=768, storage_mode="binary")
+
+# Product quantization - 8-32x compression, best for large-scale datasets
+collection = db.create_collection("pq", dimension=768, storage_mode="pq")
+
+# RaBitQ - 32x compression with scalar correction, best for high-compression with good recall
+collection = db.create_collection("rabitq", dimension=768, storage_mode="rabitq")
 ```
 
 | Mode | Memory per Vector (768D) | Compression | Best For |
@@ -802,6 +808,8 @@ collection = db.create_collection("binary", dimension=768, storage_mode="binary"
 | `full` | 3,072 bytes | 1x | Maximum accuracy |
 | `sq8` | 768 bytes | 4x | Good accuracy/memory balance |
 | `binary` | 96 bytes | 32x | Edge/IoT, massive scale |
+| `pq` | 96-384 bytes | 8-32x | Large-scale datasets, lossy |
+| `rabitq` | 96 bytes | 32x | High-compression with good recall |
 
 ### Bulk Loading Performance
 

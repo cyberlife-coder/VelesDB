@@ -181,7 +181,7 @@ class TestDistanceMetricsE2E:
 class TestStorageModesE2E:
     """E2E tests for storage quantization modes."""
 
-    @pytest.mark.parametrize("mode", ["full", "sq8", "binary"])
+    @pytest.mark.parametrize("mode", ["full", "sq8", "binary", "pq", "rabitq"])
     def test_storage_mode_support(self, mock_embeddings, mode):
         """Test all storage modes."""
         temp_dir = tempfile.mkdtemp()

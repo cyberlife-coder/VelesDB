@@ -80,7 +80,7 @@ VelesDBVectorStore(
 | `path` | `str` | `"./velesdb_data"` | Path to database directory |
 | `collection_name` | `str` | `"llamaindex"` | Name of the collection |
 | `metric` | `str` | `"cosine"` | Distance metric: `cosine`, `euclidean`, `dot` (aliases: `dotproduct`, `inner`, `ip`), `hamming`, `jaccard` |
-| `storage_mode` | `str` | `"full"` | Storage mode: `full`/`f32`, `sq8`/`int8` (4× compression), `binary`/`bit` (32× compression) |
+| `storage_mode` | `str` | `"full"` | Storage mode: `full`/`f32`, `sq8`/`int8` (4× compression), `binary`/`bit` (32× compression), `pq` (8-32× compression), `rabitq` (32× with scalar correction) |
 
 **Methods:**
 

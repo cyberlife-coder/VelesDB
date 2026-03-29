@@ -106,10 +106,12 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
                 - "dot": Dot product (inner product)
                 - "hamming": Hamming distance (for binary vectors)
                 - "jaccard": Jaccard similarity (for binary vectors)
-            storage_mode: Storage mode ("full", "sq8", "binary").
+            storage_mode: Storage mode ("full", "sq8", "binary", "pq", "rabitq").
                 - "full": Full f32 precision (default)
                 - "sq8": 8-bit scalar quantization (4x memory reduction)
                 - "binary": 1-bit binary quantization (32x memory reduction)
+                - "pq": Product quantization (8-32x compression, best for large-scale datasets)
+                - "rabitq": RaBitQ with scalar correction (32x compression, good recall)
             **kwargs: Additional arguments passed to the database.
 
         Raises:

@@ -2,6 +2,7 @@ import pytest
 from velesdb_common.security import (
     validate_batch_size,
     validate_weight,
+    validate_storage_mode,
     SecurityError,
     validate_k,
     validate_text,
@@ -45,3 +46,24 @@ def test_allowed_metrics_is_frozenset():
 
 def test_allowed_storage_modes_is_frozenset():
     assert isinstance(ALLOWED_STORAGE_MODES, frozenset)
+
+
+@pytest.mark.parametrize("mode", ["full", "sq8", "binary", "pq", "rabitq"])
+def test_validate_storage_mode_accepts_all_modes(mode):
+    assert validate_storage_mode(mode) == mode
+
+
+@pytest.mark.parametrize("mode", ["FULL", "SQ8", "Binary", "PQ", "RaBitQ"])
+def test_validate_storage_mode_accepts_case_insensitive(mode):
+    assert validate_storage_mode(mode) == mode.lower()
+
+
+@pytest.mark.parametrize("mode", ["invalid", "fp16", "int4", "", "sq4", "rabit"])
+def test_validate_storage_mode_rejects_invalid(mode):
+    with pytest.raises(SecurityError, match="Invalid storage mode"):
+        validate_storage_mode(mode)
+
+
+def test_validate_storage_mode_rejects_non_string():
+    with pytest.raises(SecurityError, match="must be a string"):
+        validate_storage_mode(42)

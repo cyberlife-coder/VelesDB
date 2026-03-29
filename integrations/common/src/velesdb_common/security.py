@@ -25,7 +25,7 @@ MAX_DIMENSION = 65_536           # Max vector dimension (reasonable for any mode
 MIN_DIMENSION = 1
 MAX_PATH_LENGTH = 4096           # Max path length
 ALLOWED_METRICS = frozenset({"cosine", "euclidean", "dot", "hamming", "jaccard"})
-ALLOWED_STORAGE_MODES = frozenset({"full", "sq8", "binary"})
+ALLOWED_STORAGE_MODES = frozenset({"full", "sq8", "binary", "pq", "rabitq"})
 MAX_SPARSE_VECTOR_SIZE = 100_000  # Max entries in a sparse vector
 DEFAULT_TIMEOUT_MS = 30_000      # 30 seconds maximum timeout
 

@@ -410,8 +410,10 @@ class TestStorageMode:
             ("full", "full"),
             ("sq8", "sq8"),
             ("binary", "binary"),
+            ("pq", "pq"),
+            ("rabitq", "rabitq"),
         ],
-        ids=["full", "sq8", "binary"],
+        ids=["full", "sq8", "binary", "pq", "rabitq"],
     )
     def test_create_collection_storage_modes(self, temp_db, mode, expected_mode):
         """Test creating collections with each storage quantization mode."""

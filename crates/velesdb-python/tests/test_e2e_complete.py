@@ -92,7 +92,7 @@ class TestDatabaseE2E:
         results = col.search(vec1, top_k=2)
         assert len(results) > 0, f"Search returned no results for metric: {metric}"
 
-    @pytest.mark.parametrize("mode", ["full", "sq8", "binary"])
+    @pytest.mark.parametrize("mode", ["full", "sq8", "binary", "pq", "rabitq"])
     def test_all_storage_modes(self, temp_db, mode):
         """Test each storage quantization mode creates a searchable collection."""
         col_name = f"storage_{mode}"
