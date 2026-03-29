@@ -208,11 +208,13 @@ pub async fn check_response(
     if response.status().is_success() {
         return Ok(response);
     }
-    let status = response.status();
+    let status = response.status().as_u16();
     let body = response.text().await.unwrap_or_default();
-    Err(Error::SourceConnection(format!(
-        "{source_name} {operation} failed: {status} - {body}"
-    )))
+    Err(handle_http_error(
+        status,
+        &format!("{operation} failed: {body}"),
+        source_name,
+    ))
 }
 
 /// Builds an [`ExtractedBatch`] from collected points using numeric offset pagination.
