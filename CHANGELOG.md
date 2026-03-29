@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-03-29
+
 ### Fixed
 - **WITH options silently ignored** — `WITH (mode='accurate')`, `WITH (timeout_ms=5000)`,
   and `WITH (rerank=true)` were parsed but never executed. Now all WITH options are wired

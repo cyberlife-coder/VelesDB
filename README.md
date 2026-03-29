@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.9.3">Download v1.9.3</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.10.0">Download v1.10.0</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
@@ -698,6 +698,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 | Version | Status | Highlights |
 |---------|--------|------------|
+| **v1.10.0** | Released | VelesQL v3.2 — WITH options wiring, component scores, LET clause, Agent Memory VelesQL bridge. All 5 pillars accessible via SQL. |
 | **v1.9.3** | Released | VelesQL ecosystem completion — OFFSET fix, MATCH propagation to Python/CLI/tauri/mobile, aggregation routing, DRY refactoring |
 | **v1.9.0** | Released | VelesQL ORDER BY arithmetic expressions, MATCH graph documentation, conformance cases P046-P052 |
 | **v1.8.0** | Released | 6 perf optimization phases (software pipelining, RaBitQ, PDX layout, SmallVec, AutoTune, Trigram SIMD) + production wiring across 8 crates. **x55 insert, x4 search vs v0.8.10** |
@@ -709,6 +710,8 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 <details>
 <summary>Detailed release history</summary>
+
+**v1.10.0** — VelesQL v3.2: WITH options wired to execution (mode, timeout_ms, rerank were parsed but silently ignored — now functional). Independent component scores (`vector_score`, `bm25_score` resolve independently in ORDER BY arithmetic). LET clause for named score bindings (`LET hybrid = 0.7 * vector_score + 0.3 * bm25_score`). Agent Memory VelesQL bridge (`query_semantic/episodic/procedural()` convenience API). USING FUSION configurable for vector+text hybrid queries. 100+ new tests, grammar v3.2.0 with 7 conformance cases.
 
 **v1.9.3** — VelesQL ecosystem completion: OFFSET clause now executed (was parsed-only), MATCH start-node discovery includes graph-only nodes, CLI routes MATCH via active collection, tauri-plugin aggregation results preserved, mobile SDK returns payloads. Python GraphCollection gains 4 VelesQL methods (query, match_query, explain, query_ids). DRY refactoring: shared query helpers. 11 new integration tests.
 

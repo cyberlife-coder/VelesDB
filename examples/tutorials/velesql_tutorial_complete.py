@@ -10,7 +10,7 @@ GitHub:  https://github.com/cyberlife-coder/VelesDB
 Docs:    https://velesdb.com/en/
 
 Requirements:
-    pip install velesdb==1.9.3 sentence-transformers
+    pip install velesdb==1.10.0 sentence-transformers
 
 This script contains every code example from the article.
 Run it end-to-end to reproduce all results.
