@@ -149,6 +149,28 @@ pub(super) fn search_collection(
         .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))
 }
 
+/// Executes a `VelesQL` query string against a named collection.
+///
+/// Resolves the collection from the database by name, then delegates to
+/// `Collection::execute_query_str`.
+///
+/// # Errors
+///
+/// Returns `AgentMemoryError::CollectionError` if the collection is not found,
+/// or `AgentMemoryError::DatabaseError` if the query fails to parse or execute.
+#[allow(deprecated)]
+pub(super) fn execute_velesql(
+    db: &Database,
+    collection_name: &str,
+    sql: &str,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    collection
+        .execute_query_str(sql, params)
+        .map_err(AgentMemoryError::DatabaseError)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

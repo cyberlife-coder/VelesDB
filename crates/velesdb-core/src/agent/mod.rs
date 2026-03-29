@@ -57,6 +57,8 @@ mod temporal_index_tests;
 pub mod ttl;
 #[cfg(test)]
 mod ttl_tests;
+#[cfg(test)]
+mod velesql_bridge_tests;
 
 pub use memory::{
     AgentMemory, AgentMemoryError, EpisodicMemory, ProceduralMemory, ProcedureMatch,

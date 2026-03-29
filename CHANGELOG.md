@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defines reusable score variables available in SELECT and ORDER BY. Supports arithmetic
   expressions, chained bindings, and all score variables. Grammar rule, AST, parser,
   and execution fully wired. 7 conformance cases (P053-P059)
+- **Agent Memory VelesQL bridge** — `AgentMemory::query_semantic()`, `query_episodic()`,
+  `query_procedural()` enable VelesQL queries on agent memory collections. All three
+  subsystems (`_semantic_memory`, `_episodic_memory`, `_procedural_memory`) are queryable
+  with standard VelesQL: vector NEAR, payload filters (timestamp, confidence), ORDER BY,
+  WITH options. Thin delegation to Collection::execute_query_str()
 
 ### Refactored
 - **Split Phase: execute_query_with_client()** — CC reduced from 12 to 8 by extracting

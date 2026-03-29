@@ -47,6 +47,7 @@ pub const DEFAULT_DIMENSION: usize = 384;
 /// - Temporal indexing for efficient time-based queries
 /// - Configurable eviction policies
 pub struct AgentMemory {
+    db: Arc<Database>,
     semantic: SemanticMemory,
     episodic: EpisodicMemory,
     procedural: ProceduralMemory,
@@ -91,9 +92,10 @@ impl AgentMemory {
             Arc::clone(&ttl),
             Arc::clone(&temporal_index),
         )?;
-        let procedural = ProceduralMemory::new(db, dimension, Arc::clone(&ttl))?;
+        let procedural = ProceduralMemory::new(Arc::clone(&db), dimension, Arc::clone(&ttl))?;
 
         Ok(Self {
+            db,
             semantic,
             episodic,
             procedural,
@@ -300,6 +302,72 @@ impl AgentMemory {
     pub fn list_snapshot_versions(&self) -> Result<Vec<u64>, AgentMemoryError> {
         let manager = self.require_snapshot_manager()?;
         Ok(manager.list_versions()?)
+    }
+
+    /// Executes a `VelesQL` query against the semantic memory collection.
+    ///
+    /// Delegates to `Collection::execute_query_str` on the `_semantic_memory`
+    /// collection. Use standard `VelesQL` syntax including `WHERE vector NEAR $v`,
+    /// payload filters, `ORDER BY`, and `WITH` options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection is missing or the query fails.
+    pub fn query_semantic(
+        &self,
+        sql: &str,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
+        super::memory_helpers::execute_velesql(
+            &self.db,
+            self.semantic.collection_name(),
+            sql,
+            params,
+        )
+    }
+
+    /// Executes a `VelesQL` query against the episodic memory collection.
+    ///
+    /// Delegates to `Collection::execute_query_str` on the `_episodic_memory`
+    /// collection. Supports payload field filters like `WHERE timestamp > N`,
+    /// `ORDER BY timestamp DESC`, and similarity search via `NEAR`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection is missing or the query fails.
+    pub fn query_episodic(
+        &self,
+        sql: &str,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
+        super::memory_helpers::execute_velesql(
+            &self.db,
+            self.episodic.collection_name(),
+            sql,
+            params,
+        )
+    }
+
+    /// Executes a `VelesQL` query against the procedural memory collection.
+    ///
+    /// Delegates to `Collection::execute_query_str` on the `_procedural_memory`
+    /// collection. Supports payload field filters like `WHERE confidence > 0.7`,
+    /// `ORDER BY confidence DESC`, and scan queries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection is missing or the query fails.
+    pub fn query_procedural(
+        &self,
+        sql: &str,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
+        super::memory_helpers::execute_velesql(
+            &self.db,
+            self.procedural.collection_name(),
+            sql,
+            params,
+        )
     }
 
     fn restore_state(&self, state: &MemoryState) -> Result<(), AgentMemoryError> {

@@ -32,6 +32,7 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | TRAIN QUANTIZER command | ✅ Stable | 2.2 |
 | ORDER BY arithmetic scoring | ✅ Stable | 3.0 |
 | LET score bindings | ✅ Stable | 3.2 |
+| Agent Memory VelesQL queries | ✅ Stable | 3.2 |
 | Table aliases | 🔜 Planned | - |
 
 ### REST Contract Notes
@@ -1258,6 +1259,63 @@ Content-Type: application/json
   "params": { "v": [0.1, 0.2, ...] }
 }
 ```
+
+## Agent Memory VelesQL Queries (v3.2+)
+
+The Agent Memory SDK creates three internal collections that are fully queryable via VelesQL:
+
+### Semantic Memory (`_semantic_memory`)
+
+```sql
+-- Similarity search on stored knowledge
+SELECT * FROM _semantic_memory
+WHERE vector NEAR $query_embedding
+LIMIT 10 WITH (mode='accurate')
+```
+
+Payload fields: `content` (string).
+
+### Episodic Memory (`_episodic_memory`)
+
+```sql
+-- Recent events (last 24h)
+SELECT * FROM _episodic_memory
+WHERE timestamp > 1711234567
+ORDER BY timestamp DESC
+LIMIT 20
+
+-- Similarity search on events with embeddings
+SELECT * FROM _episodic_memory
+WHERE vector NEAR $query_embedding
+LIMIT 5
+```
+
+Payload fields: `description` (string), `timestamp` (integer, Unix epoch).
+
+### Procedural Memory (`_procedural_memory`)
+
+```sql
+-- High-confidence procedures
+SELECT * FROM _procedural_memory
+WHERE confidence > 0.7
+ORDER BY confidence DESC
+LIMIT 10
+```
+
+Payload fields: `name` (string), `steps` (array), `confidence` (float),
+`usage_count` (integer), `created_at` (integer), `last_used_at` (integer).
+
+### Convenience API (Rust/Python)
+
+```rust
+let results = agent_memory.query_semantic(
+    "SELECT * FROM _semantic_memory WHERE vector NEAR $v LIMIT 5",
+    &params,
+)?;
+```
+
+All three subsystems support: vector NEAR, payload filters, ORDER BY, LIMIT/OFFSET,
+WITH options, LET bindings, and USING FUSION.
 
 ## TRAIN QUANTIZER Command (v2.2+)
 
