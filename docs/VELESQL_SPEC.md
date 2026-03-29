@@ -780,7 +780,7 @@ LIMIT 10
 - LET clauses appear **before** the SELECT statement
 - Each binding has a name and an arithmetic expression
 - Bindings can reference earlier bindings (forward references are invalid)
-- Available in SELECT projection and ORDER BY
+- Available in ORDER BY (SELECT projection support planned for v1.11)
 - NOT available in WHERE (WHERE runs before scores exist)
 - LET names take **highest priority** in variable resolution (overrides component scores)
 - Case-insensitive keyword (`LET`, `let`, `Let` all work)
