@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector search in VelesDB.
 
-**Version**: 3.1.0 | **Last Updated**: 2026-03-25
+**Version**: 3.2.0 | **Last Updated**: 2026-03-29
 
 ## Overview
 
@@ -742,10 +742,10 @@ WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 
 | Option | Type | Values | Description |
 |--------|------|--------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` | Search mode preset |
-| `ef_search` | integer | 16-4096 | HNSW ef_search parameter |
-| `timeout_ms` | integer | >=100 | Query timeout in milliseconds |
-| `rerank` | boolean | `true`/`false` | Enable reranking for quantized vectors |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune` | Search quality preset — maps to ef_search values (64/128/512/4096/auto). Applied to all search paths including NEAR+filter and NEAR+MATCH. |
+| `ef_search` | integer | 16-4096 | HNSW ef_search parameter (overrides mode). Applied to all vector search paths. |
+| `timeout_ms` | integer | >=100 | Per-query timeout in milliseconds. Overrides collection-level timeout for this query only. |
+| `rerank` | boolean | `true`/`false` | Force two-stage SIMD reranking on (`true`) or off (`false`). When `true`, retrieves 4x candidates then re-ranks with exact distance. |
 
 ### Examples
 

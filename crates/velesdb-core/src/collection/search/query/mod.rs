@@ -238,26 +238,8 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         client_id: &str,
     ) -> Result<Vec<SearchResult>> {
-        // Guard-rail pre-checks: circuit breaker + rate limiting (EPIC-048).
-        self.guard_rails
-            .pre_check(client_id)
-            .map_err(crate::error::Error::from)?;
-
-        // Create per-query execution context for timeout + cardinality tracking.
-        let mut ctx = self.guard_rails.create_context();
-
-        // WITH (timeout_ms=N) overrides the collection-level timeout for this query.
-        if let Some(override_ms) = query
-            .select
-            .with_clause
-            .as_ref()
-            .and_then(crate::velesql::WithClause::get_timeout_ms)
-        {
-            ctx.limits.timeout_ms = override_ms;
-        }
-
-        crate::velesql::QueryValidator::validate(query)
-            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        // Phase 1: Pre-checks and context setup.
+        let ctx = self.prepare_query_context(query, client_id)?;
 
         // Unified VelesQL dispatch: allow Collection::execute_query() to run top-level MATCH queries.
         if let Some(match_clause) = query.match_clause.as_ref() {
@@ -285,17 +267,60 @@ impl Collection {
             return Ok(results);
         }
 
-        // Main vector/similarity/metadata dispatch path.
+        // Phase 2: Main dispatch.
         let mut results = self.dispatch_main_select(stmt, params, &extracted, fetch_limit, &ctx)?;
 
-        // JOIN pushdown analysis (EPIC-031 US-006).
+        // Phase 3: Post-processing and finalization.
+        self.finalize_query_results(stmt, &mut results, params, limit, &extracted, &ctx)?;
+        Ok(results)
+    }
+
+    /// Phase 1: Guard-rail pre-checks, context creation, and query validation.
+    ///
+    /// Creates a [`QueryContext`](crate::guardrails::QueryContext) with optional
+    /// timeout override from `WITH (timeout_ms=N)`.
+    fn prepare_query_context(
+        &self,
+        query: &crate::velesql::Query,
+        client_id: &str,
+    ) -> Result<crate::guardrails::QueryContext> {
+        self.guard_rails
+            .pre_check(client_id)
+            .map_err(crate::error::Error::from)?;
+
+        let mut ctx = self.guard_rails.create_context();
+
+        // WITH (timeout_ms=N) overrides the collection-level timeout for this query.
+        if let Some(override_ms) = query
+            .select
+            .with_clause
+            .as_ref()
+            .and_then(crate::velesql::WithClause::get_timeout_ms)
+        {
+            ctx.limits.timeout_ms = override_ms;
+        }
+
+        crate::velesql::QueryValidator::validate(query)
+            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+
+        Ok(ctx)
+    }
+
+    /// Phase 3: Join analysis, guard-rail checks, post-processing, and stats update.
+    fn finalize_query_results(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        results: &mut Vec<SearchResult>,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        limit: usize,
+        extracted: &ExtractedComponents,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<()> {
         self.analyze_join_pushdown(stmt);
+        self.check_guardrails_and_record(ctx, results.len())?;
 
-        // Final guard-rail checks (EPIC-048).
-        self.check_guardrails_and_record(&ctx, results.len())?;
-
-        // Post-processing: DISTINCT, ORDER BY, LIMIT.
-        results = self.apply_select_postprocessing(stmt, results, params, limit)?;
+        *results =
+            self.apply_select_postprocessing(stmt, std::mem::take(results), params, limit)?;
 
         // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
         if extracted.vector_search.is_some() {
@@ -307,7 +332,7 @@ impl Collection {
                 .update_vector_latency(vector_latency_us);
         }
         self.guard_rails.circuit_breaker.record_success();
-        Ok(results)
+        Ok(())
     }
 
     /// Extracts all query components from the SELECT statement's WHERE clause.

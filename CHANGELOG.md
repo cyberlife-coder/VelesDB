@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **WITH options silently ignored** — `WITH (mode='accurate')`, `WITH (timeout_ms=5000)`,
+  and `WITH (rerank=true)` were parsed but never executed. Now all WITH options are wired
+  to their respective execution paths via new `QuerySearchOptions` struct
+- **USING FUSION ignored for NEAR+text MATCH** — Hybrid vector+text queries always used
+  hardcoded RRF k=60 with equal weights. `USING FUSION (strategy='weighted', vector_weight=0.8)`
+  now configures the text hybrid path
+
+### Refactored
+- **Split Phase: execute_query_with_client()** — CC reduced from 12 to 8 by extracting
+  `prepare_query_context()` (pre-checks, timeout override, validation) and
+  `finalize_query_results()` (guardrails, post-processing, stats update)
+- **Replace Parameter with Object** — All search dispatch functions now accept
+  `&QuerySearchOptions` instead of individual `ef_search: Option<usize>` parameter,
+  enabling mode/rerank/fusion to flow through all 5 dispatch paths
+
 ## [1.9.3] - 2026-03-29
 
 ### Fixed
