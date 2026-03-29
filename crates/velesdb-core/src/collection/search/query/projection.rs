@@ -163,15 +163,15 @@ mod tests {
     use crate::velesql::Column;
 
     fn make_result(id: u64, score: f32, payload: serde_json::Value) -> SearchResult {
-        SearchResult {
-            point: Point {
+        SearchResult::new(
+            Point {
                 id,
                 vector: vec![0.0; 4],
                 payload: Some(payload),
                 sparse_vectors: None,
             },
             score,
-        }
+        )
     }
 
     #[test]
@@ -349,15 +349,15 @@ mod tests {
 
     #[test]
     fn test_project_wildcard_no_payload() {
-        let result = SearchResult {
-            point: Point {
+        let result = SearchResult::new(
+            Point {
                 id: 7,
                 vector: vec![0.0; 4],
                 payload: None,
                 sparse_vectors: None,
             },
-            score: 0.5,
-        };
+            0.5,
+        );
         let projected = project_single(&result, &SelectColumns::All);
         let obj = projected.as_object().unwrap();
         assert_eq!(obj.len(), 1);
@@ -366,15 +366,15 @@ mod tests {
 
     #[test]
     fn test_project_column_no_payload() {
-        let result = SearchResult {
-            point: Point {
+        let result = SearchResult::new(
+            Point {
                 id: 7,
                 vector: vec![0.0; 4],
                 payload: None,
                 sparse_vectors: None,
             },
-            score: 0.5,
-        };
+            0.5,
+        );
         let columns = SelectColumns::Columns(vec![Column::new("title")]);
         let projected = project_single(&result, &columns);
         let obj = projected.as_object().unwrap();

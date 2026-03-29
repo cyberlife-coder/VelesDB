@@ -10,15 +10,15 @@ mod tests {
     use crate::velesql::{Column, SelectColumns};
 
     fn make_result(id: u64, payload: Option<serde_json::Value>) -> SearchResult {
-        SearchResult {
-            point: Point {
+        SearchResult::new(
+            Point {
                 id,
                 vector: vec![0.0; 4],
                 payload,
                 sparse_vectors: None,
             },
-            score: 1.0,
-        }
+            1.0,
+        )
     }
 
     // -----------------------------------------------------------------------

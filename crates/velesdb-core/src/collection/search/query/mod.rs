@@ -20,6 +20,8 @@
 #![allow(clippy::implicit_hasher)] // HashSet hasher genericity adds noise for internal APIs.
 
 mod aggregation;
+#[cfg(test)]
+mod component_scores_tests;
 pub(crate) mod condition_tree;
 mod distinct;
 #[cfg(test)]

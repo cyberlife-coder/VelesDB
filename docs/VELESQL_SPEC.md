@@ -425,6 +425,36 @@ ORDER BY similarity(vector, $v) DESC, created_at DESC
 LIMIT 20
 ```
 
+### Arithmetic Scoring (v3.2+)
+
+Combine multiple score components with arithmetic expressions:
+
+```sql
+-- Weighted hybrid scoring: 70% vector + 30% text relevance
+SELECT * FROM docs
+WHERE vector NEAR $v AND content MATCH 'machine learning'
+ORDER BY 0.7 * vector_score + 0.3 * bm25_score DESC
+LIMIT 10
+```
+
+#### Available Score Variables
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `vector_score` | HNSW search | Vector similarity score from the nearest-neighbor index |
+| `bm25_score` | BM25 text search | Text relevance score from the inverted index |
+| `graph_score` | Graph traversal | Graph distance/relevance score from MATCH patterns |
+| `sparse_score` | Sparse vector search | Sparse vector inner-product score |
+| `fused_score` | Fusion pipeline | Combined score after RRF/weighted fusion (same as `similarity()`) |
+| `similarity()` | Pre-computed | Primary search score (zero-arg form uses pre-computed value) |
+
+Component scores are populated independently by each search path. In hybrid queries
+(NEAR + MATCH text), `vector_score` and `bm25_score` have different values reflecting
+each component's individual contribution before fusion.
+
+For non-hybrid queries, only the relevant component is populated (e.g., pure NEAR
+populates `vector_score` only). Unset components fall back to the primary fused score.
+
 ### Direction
 
 | Direction | Description |

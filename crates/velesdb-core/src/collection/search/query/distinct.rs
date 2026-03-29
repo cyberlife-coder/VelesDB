@@ -110,15 +110,15 @@ mod tests {
     }
 
     fn make_result_with_score(id: u64, payload: serde_json::Value, score: f32) -> SearchResult {
-        SearchResult {
-            point: Point {
+        SearchResult::new(
+            Point {
                 id,
                 vector: vec![0.0; 4],
                 payload: Some(payload),
                 sparse_vectors: None,
             },
             score,
-        }
+        )
     }
 
     #[test]

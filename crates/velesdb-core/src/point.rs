@@ -182,6 +182,17 @@ impl Point {
     }
 }
 
+/// Per-component score breakdown for hybrid search results.
+///
+/// Stores individual scores from each search pipeline component (vector,
+/// BM25, graph, sparse) so arithmetic ORDER BY expressions like
+/// `0.7 * vector_score + 0.3 * bm25_score` can resolve each variable
+/// independently instead of mapping everything to the fused score.
+///
+/// Uses `SmallVec<4>` to avoid heap allocation for typical queries
+/// (at most 2-3 components: vector, text, sparse).
+pub type ComponentScores = smallvec::SmallVec<[(String, f32); 4]>;
+
 /// A search result containing a point and its similarity score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
@@ -190,12 +201,42 @@ pub struct SearchResult {
 
     /// Similarity score (interpretation depends on the distance metric).
     pub score: f32,
+
+    /// Optional per-component score breakdown for arithmetic ORDER BY.
+    ///
+    /// When present, variables like `vector_score` and `bm25_score` resolve
+    /// to their individual component values. When `None`, all score variables
+    /// fall back to `score` (the fused/primary score).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_scores: Option<ComponentScores>,
 }
 
 impl SearchResult {
-    /// Creates a new search result.
+    /// Creates a new search result with no component score breakdown.
     #[must_use]
-    pub const fn new(point: Point, score: f32) -> Self {
-        Self { point, score }
+    pub fn new(point: Point, score: f32) -> Self {
+        Self {
+            point,
+            score,
+            component_scores: None,
+        }
+    }
+
+    /// Creates a search result with per-component score breakdown.
+    #[must_use]
+    pub fn with_component_scores(
+        point: Point,
+        score: f32,
+        component_scores: ComponentScores,
+    ) -> Self {
+        Self {
+            point,
+            score,
+            component_scores: if component_scores.is_empty() {
+                None
+            } else {
+                Some(component_scores)
+            },
+        }
     }
 }

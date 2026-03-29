@@ -95,15 +95,15 @@ impl Collection {
                     }
                 }
                 let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
-                Some(SearchResult {
-                    point: Point {
+                Some(SearchResult::new(
+                    Point {
                         id: sr.id,
                         vector,
                         payload,
                         sparse_vectors: None,
                     },
-                    score: sr.score,
-                })
+                    sr.score,
+                ))
             })
             .collect()
     }

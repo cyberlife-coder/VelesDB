@@ -360,10 +360,8 @@ fn test_mode_autotune_alias_auto_tune() {
 
 #[test]
 fn test_mode_empty_string_ignored() {
-    let with = crate::velesql::WithClause::new().with_option(
-        "mode",
-        crate::velesql::WithValue::String(String::new()),
-    );
+    let with = crate::velesql::WithClause::new()
+        .with_option("mode", crate::velesql::WithValue::String(String::new()));
     let opts = QuerySearchOptions::from_with_clause(Some(&with));
     assert!(opts.quality.is_none());
 }
@@ -375,10 +373,7 @@ fn test_mode_balanced_is_default_equivalent() {
         crate::velesql::WithValue::String("balanced".to_string()),
     );
     let opts = QuerySearchOptions::from_with_clause(Some(&with));
-    assert!(matches!(
-        opts.quality,
-        Some(crate::SearchQuality::Balanced)
-    ));
+    assert!(matches!(opts.quality, Some(crate::SearchQuality::Balanced)));
 }
 
 // --- ef_search edge cases ---

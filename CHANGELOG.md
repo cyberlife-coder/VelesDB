@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hardcoded RRF k=60 with equal weights. `USING FUSION (strategy='weighted', vector_weight=0.8)`
   now configures the text hybrid path
 
+### Added
+- **Component scores in SearchResult** — `SearchResult.component_scores` tracks individual
+  `vector_score`, `bm25_score`, `graph_score`, `sparse_score` independently. Enables
+  `ORDER BY 0.7 * vector_score + 0.3 * bm25_score DESC` with real per-component values
+  instead of all variables resolving to the same fused score
+- **Hybrid search preserves component contributions** — `hybrid_search()` now records
+  individual vector RRF and BM25 RRF contributions alongside the fused score
+
 ### Refactored
 - **Split Phase: execute_query_with_client()** — CC reduced from 12 to 8 by extracting
   `prepare_query_context()` (pre-checks, timeout override, validation) and
@@ -22,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Replace Parameter with Object** — All search dispatch functions now accept
   `&QuerySearchOptions` instead of individual `ef_search: Option<usize>` parameter,
   enabling mode/rerank/fusion to flow through all 5 dispatch paths
+- **DRY: component score tagging** — `tag_vector_component_scores()` and
+  `attach_rrf_components()` centralize score tagging across all search paths
 
 ## [1.9.3] - 2026-03-29
 

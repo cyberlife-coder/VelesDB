@@ -192,10 +192,18 @@ impl Collection {
                 // Euclidean/Hamming scores should account for lower-is-better semantics
                 // in their expression (e.g., `ORDER BY -1 * vector_score + price ASC`).
                 OrderByExpr::Arithmetic(expr) => {
-                    let ctx_i =
-                        ScoreContext::new(results[i].score, results[i].point.payload.as_ref());
-                    let ctx_j =
-                        ScoreContext::new(results[j].score, results[j].point.payload.as_ref());
+                    let comps_i = results[i].component_scores.as_deref();
+                    let comps_j = results[j].component_scores.as_deref();
+                    let ctx_i = ScoreContext::with_components(
+                        results[i].score,
+                        results[i].point.payload.as_ref(),
+                        comps_i,
+                    );
+                    let ctx_j = ScoreContext::with_components(
+                        results[j].score,
+                        results[j].point.payload.as_ref(),
+                        comps_j,
+                    );
                     let val_i = evaluate_arithmetic(expr, &ctx_i);
                     let val_j = evaluate_arithmetic(expr, &ctx_j);
                     val_i.total_cmp(&val_j)
@@ -238,47 +246,89 @@ impl Collection {
 
 /// Context for evaluating arithmetic ORDER BY expressions (EPIC-042).
 ///
-/// Holds the pre-computed search score and optional payload for variable resolution.
+/// Holds the pre-computed search score, optional per-component score breakdown,
+/// and optional payload for variable resolution.
 pub(crate) struct ScoreContext<'a> {
     /// Pre-computed search score (vector similarity or fused score).
     search_score: f32,
     /// Payload fields for variable resolution.
     payload: Option<&'a serde_json::Value>,
+    /// Optional per-component scores from hybrid search (v1.10+).
+    ///
+    /// When present, built-in score variables (`vector_score`, `bm25_score`, etc.)
+    /// resolve to their individual component values instead of the fused score.
+    component_scores: Option<&'a [(String, f32)]>,
 }
 
 impl<'a> ScoreContext<'a> {
-    /// Creates a new score context from a search result.
+    /// Creates a new score context without component scores (backward compat).
+    ///
+    /// Used by tests and simple code paths where component scores are not available.
+    #[allow(dead_code)] // Used by ordering_tests and component_scores_tests.
     pub(crate) fn new(search_score: f32, payload: Option<&'a serde_json::Value>) -> Self {
         Self {
             search_score,
             payload,
+            component_scores: None,
+        }
+    }
+
+    /// Creates a score context with per-component score breakdown.
+    pub(crate) fn with_components(
+        search_score: f32,
+        payload: Option<&'a serde_json::Value>,
+        component_scores: Option<&'a [(String, f32)]>,
+    ) -> Self {
+        Self {
+            search_score,
+            payload,
+            component_scores,
         }
     }
 
     /// Resolves a variable name to a numeric value.
     ///
-    /// Built-in names (`vector_score`, `graph_score`, `bm25_score`, `fused_score`,
-    /// `similarity`) all map to the pre-computed search score. In v1.9.0, individual
-    /// component scores (graph, BM25) are not available separately -- the search score
-    /// is the fused RRF score when multiple components are present.
-    /// Other names are looked up in the payload.
+    /// Resolution priority for built-in score names (`vector_score`, `graph_score`,
+    /// `bm25_score`):
+    /// 1. Look up in `component_scores` if present and contains the name.
+    /// 2. Fall back to `search_score` (fused/primary score).
+    ///
+    /// `fused_score` and `similarity` always resolve to `search_score` (they
+    /// represent the combined result, not an individual component).
+    ///
+    /// Non-built-in names are looked up in the payload.
     fn resolve_variable(&self, name: &str) -> f32 {
         match name {
-            "vector_score" | "graph_score" | "bm25_score" | "fused_score" | "similarity" => {
-                self.search_score
+            // fused_score and similarity always use the primary fused score.
+            "fused_score" | "similarity" => self.search_score,
+            // Component-aware built-ins: check component_scores first.
+            "vector_score" | "graph_score" | "bm25_score" | "sparse_score" => {
+                self.lookup_component(name).unwrap_or(self.search_score)
             }
-            _ => self
-                .payload
-                .and_then(|p| p.get(name))
-                .and_then(serde_json::Value::as_f64)
-                .map_or(0.0, |v| {
-                    #[allow(clippy::cast_possible_truncation)]
-                    // Reason: payload values are user-defined scores; f64→f32 precision loss is acceptable.
-                    {
-                        v as f32
-                    }
-                }),
+            _ => self.resolve_payload_variable(name),
         }
+    }
+
+    /// Looks up a named component score, returning `None` if absent.
+    fn lookup_component(&self, name: &str) -> Option<f32> {
+        self.component_scores?
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| *v)
+    }
+
+    /// Resolves a variable name from the payload.
+    fn resolve_payload_variable(&self, name: &str) -> f32 {
+        self.payload
+            .and_then(|p| p.get(name))
+            .and_then(serde_json::Value::as_f64)
+            .map_or(0.0, |v| {
+                #[allow(clippy::cast_possible_truncation)]
+                // Reason: payload values are user-defined scores; f64→f32 precision loss is acceptable.
+                {
+                    v as f32
+                }
+            })
     }
 }
 

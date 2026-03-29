@@ -11,6 +11,18 @@ use crate::scored_result::ScoredResult;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 
+/// Tags each `SearchResult` with a `vector_score` component equal to its score.
+///
+/// For pure vector search, the HNSW/PQ score IS the vector component.
+fn tag_vector_component_scores(results: &mut [SearchResult]) {
+    for result in results {
+        result.component_scores = Some(smallvec::smallvec![(
+            "vector_score".to_string(),
+            result.score
+        ),]);
+    }
+}
+
 impl Collection {
     fn search_ids_with_adc_if_pq(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         let config = self.config.read();
@@ -170,11 +182,10 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        Ok(resolve::resolve_scored_results(
-            &index_results,
-            &*vector_storage,
-            &*payload_storage,
-        ))
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        Ok(results)
     }
 
     /// Performs vector similarity search with custom `ef_search` parameter.
@@ -211,11 +222,10 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        Ok(resolve::resolve_scored_results(
-            &index_results,
-            &*vector_storage,
-            &*payload_storage,
-        ))
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        Ok(results)
     }
 
     /// Performs vector similarity search with a specific [`SearchQuality`] profile.
@@ -243,11 +253,10 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        Ok(resolve::resolve_scored_results(
-            &index_results,
-            &*vector_storage,
-            &*payload_storage,
-        ))
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        Ok(results)
     }
 
     /// Routes vector search through `QuerySearchOptions` from a WITH clause.
@@ -310,11 +319,10 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        Ok(resolve::resolve_scored_results(
-            &index_results,
-            &*vector_storage,
-            &*payload_storage,
-        ))
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        Ok(results)
     }
 
     /// Searches with a quality profile but suppresses two-stage reranking.
@@ -339,11 +347,10 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        Ok(resolve::resolve_scored_results(
-            &index_results,
-            &*vector_storage,
-            &*payload_storage,
-        ))
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        Ok(results)
     }
 
     /// Performs fast vector similarity search returning only IDs and scores.
@@ -441,6 +448,7 @@ impl Collection {
 
         resolve::sort_results_by_metric(&mut results, higher_is_better);
         results.truncate(k);
+        tag_vector_component_scores(&mut results);
         Ok(results)
     }
 }

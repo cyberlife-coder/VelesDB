@@ -7,27 +7,27 @@ use crate::point::SearchResult;
 use crate::velesql::{ColumnRef, JoinClause, JoinCondition};
 
 fn make_search_result(id: u64, payload_id: i64) -> SearchResult {
-    SearchResult {
-        point: Point {
+    SearchResult::new(
+        Point {
             id,
             vector: vec![0.1, 0.2, 0.3],
             payload: Some(serde_json::json!({"id": payload_id, "name": format!("item_{}", id)})),
             sparse_vectors: None,
         },
-        score: 0.9,
-    }
+        0.9,
+    )
 }
 
 fn make_search_result_with_payload(id: u64, payload: serde_json::Value) -> SearchResult {
-    SearchResult {
-        point: Point {
+    SearchResult::new(
+        Point {
             id,
             vector: vec![0.1, 0.2, 0.3],
             payload: Some(payload),
             sparse_vectors: None,
         },
-        score: 0.9,
-    }
+        0.9,
+    )
 }
 
 fn make_column_store() -> ColumnStore {
@@ -178,15 +178,15 @@ fn test_joined_to_search_results() {
 #[test]
 fn test_extract_join_keys_u64_overflow_safety() {
     let large_id = u64::MAX;
-    let result = SearchResult {
-        point: Point {
+    let result = SearchResult::new(
+        Point {
             id: large_id,
             vector: vec![0.1, 0.2, 0.3],
             payload: None,
             sparse_vectors: None,
         },
-        score: 0.9,
-    };
+        0.9,
+    );
 
     let condition = JoinCondition {
         left: ColumnRef {
@@ -211,15 +211,15 @@ fn test_extract_join_keys_u64_overflow_safety() {
 #[test]
 fn test_extract_join_keys_i64_max_boundary() {
     let max_safe_id = i64::MAX as u64;
-    let result = SearchResult {
-        point: Point {
+    let result = SearchResult::new(
+        Point {
             id: max_safe_id,
             vector: vec![0.1, 0.2, 0.3],
             payload: None,
             sparse_vectors: None,
         },
-        score: 0.9,
-    };
+        0.9,
+    );
 
     let condition = JoinCondition {
         left: ColumnRef {
@@ -240,15 +240,15 @@ fn test_extract_join_keys_i64_max_boundary() {
 #[test]
 fn test_extract_join_keys_just_above_i64_max() {
     let just_over = (i64::MAX as u64) + 1;
-    let result = SearchResult {
-        point: Point {
+    let result = SearchResult::new(
+        Point {
             id: just_over,
             vector: vec![0.1, 0.2, 0.3],
             payload: None,
             sparse_vectors: None,
         },
-        score: 0.9,
-    };
+        0.9,
+    );
 
     let condition = JoinCondition {
         left: ColumnRef {

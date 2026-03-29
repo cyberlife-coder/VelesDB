@@ -8,6 +8,19 @@ use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 
+/// Attaches RRF component scores to a `SearchResult` from the component map.
+fn attach_rrf_components(
+    result: &mut SearchResult,
+    component_map: &rustc_hash::FxHashMap<u64, (f32, f32)>,
+) {
+    if let Some(&(vec_score, bm25_score)) = component_map.get(&result.point.id) {
+        result.component_scores = Some(smallvec::smallvec![
+            ("vector_score".to_string(), vec_score),
+            ("bm25_score".to_string(), bm25_score),
+        ]);
+    }
+}
+
 impl Collection {
     /// Performs full-text search using BM25.
     ///
@@ -29,12 +42,20 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        Ok(resolve::resolve_id_score_pairs(
+        let mut results = resolve::resolve_id_score_pairs(
             &bm25_results,
             bm25_results.len(),
             &*vector_storage,
             &*payload_storage,
-        ))
+        );
+        // Tag each result with its BM25 component score.
+        for result in &mut results {
+            result.component_scores = Some(smallvec::smallvec![(
+                "bm25_score".to_string(),
+                result.score
+            ),]);
+        }
+        Ok(results)
     }
 
     /// Performs full-text search with metadata filtering.
@@ -84,7 +105,11 @@ impl Collection {
                     sparse_vectors: None,
                 };
 
-                Some(SearchResult::new(point, score))
+                Some(SearchResult::with_component_scores(
+                    point,
+                    score,
+                    smallvec::smallvec![("bm25_score".to_string(), score)],
+                ))
             })
             .take(k)
             .collect())
@@ -133,33 +158,48 @@ impl Collection {
             self.merge_delta(raw_vector_results, vector_query, overfetch_k, metric);
         let text_results = self.text_index.search(text_query, k * 2);
 
-        let fused_scores =
-            Self::compute_rrf_scores(&vector_results, &text_results, weight, text_weight);
+        let (fused_scores, component_map) = Self::compute_rrf_scores_with_components(
+            &vector_results,
+            &text_results,
+            weight,
+            text_weight,
+        );
 
         let scored_ids = Self::top_k_from_scores(fused_scores, k);
-        Ok(self.resolve_scored_ids(&scored_ids))
+        Ok(self.resolve_scored_ids_with_components(&scored_ids, &component_map))
     }
 
-    /// Computes RRF fused scores from vector and text search results.
+    /// Computes RRF fused scores and per-component score breakdowns.
+    ///
+    /// Returns `(fused_scores, component_map)` where `component_map` maps each
+    /// point ID to its individual `(vector_rrf, bm25_rrf)` contributions.
     #[allow(clippy::cast_precision_loss)]
-    fn compute_rrf_scores(
+    fn compute_rrf_scores_with_components(
         vector_results: &[crate::scored_result::ScoredResult],
         text_results: &[(u64, f32)],
         vector_weight: f32,
         text_weight: f32,
-    ) -> rustc_hash::FxHashMap<u64, f32> {
+    ) -> (
+        rustc_hash::FxHashMap<u64, f32>,
+        rustc_hash::FxHashMap<u64, (f32, f32)>,
+    ) {
+        let cap = vector_results.len() + text_results.len();
         let mut fused: rustc_hash::FxHashMap<u64, f32> =
-            rustc_hash::FxHashMap::with_capacity_and_hasher(
-                vector_results.len() + text_results.len(),
-                rustc_hash::FxBuildHasher,
-            );
+            rustc_hash::FxHashMap::with_capacity_and_hasher(cap, rustc_hash::FxBuildHasher);
+        let mut components: rustc_hash::FxHashMap<u64, (f32, f32)> =
+            rustc_hash::FxHashMap::with_capacity_and_hasher(cap, rustc_hash::FxBuildHasher);
+
         for (rank, sr) in vector_results.iter().enumerate() {
-            *fused.entry(sr.id).or_insert(0.0) += vector_weight / (rank as f32 + 60.0);
+            let contribution = vector_weight / (rank as f32 + 60.0);
+            *fused.entry(sr.id).or_insert(0.0) += contribution;
+            components.entry(sr.id).or_insert((0.0, 0.0)).0 += contribution;
         }
         for (rank, (id, _)) in text_results.iter().enumerate() {
-            *fused.entry(*id).or_insert(0.0) += text_weight / (rank as f32 + 60.0);
+            let contribution = text_weight / (rank as f32 + 60.0);
+            *fused.entry(*id).or_insert(0.0) += contribution;
+            components.entry(*id).or_insert((0.0, 0.0)).1 += contribution;
         }
-        fused
+        (fused, components)
     }
 
     /// Extracts top-k IDs from fused scores using a streaming min-heap.
@@ -185,17 +225,24 @@ impl Collection {
         scored
     }
 
-    /// Resolves scored IDs to full `SearchResult` with point data.
-    fn resolve_scored_ids(&self, scored_ids: &[(u64, f32)]) -> Vec<SearchResult> {
+    /// Resolves scored IDs to `SearchResult` with per-component score breakdown.
+    fn resolve_scored_ids_with_components(
+        &self,
+        scored_ids: &[(u64, f32)],
+        component_map: &rustc_hash::FxHashMap<u64, (f32, f32)>,
+    ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        resolve::resolve_id_score_pairs(
-            scored_ids,
-            scored_ids.len(),
-            &*vector_storage,
-            &*payload_storage,
-        )
+        scored_ids
+            .iter()
+            .filter_map(|&(id, score)| {
+                let mut result =
+                    resolve::hydrate_point(id, score, &*vector_storage, &*payload_storage)?;
+                attach_rrf_components(&mut result, component_map);
+                Some(result)
+            })
+            .collect()
     }
 
     /// Performs hybrid search (vector + text) with metadata filtering.
@@ -238,21 +285,33 @@ impl Collection {
             self.merge_delta(raw_vector_results, vector_query, candidates_k, metric);
         let text_results = self.text_index.search(text_query, candidates_k);
 
-        let fused_scores =
-            Self::compute_rrf_scores(&vector_results, &text_results, weight, text_weight);
+        let (fused_scores, component_map) = Self::compute_rrf_scores_with_components(
+            &vector_results,
+            &text_results,
+            weight,
+            text_weight,
+        );
 
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
         scored_ids.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-        Ok(self.resolve_scored_ids_filtered(&scored_ids, filter, k))
+        Ok(
+            self.resolve_scored_ids_filtered_with_components(
+                &scored_ids,
+                filter,
+                k,
+                &component_map,
+            ),
+        )
     }
 
-    /// Resolves scored IDs to `SearchResult` with metadata filter applied.
-    fn resolve_scored_ids_filtered(
+    /// Resolves scored IDs with filter and optional per-component score breakdown.
+    fn resolve_scored_ids_filtered_with_components(
         &self,
         scored_ids: &[(u64, f32)],
         filter: &crate::filter::Filter,
         k: usize,
+        component_map: &rustc_hash::FxHashMap<u64, (f32, f32)>,
     ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
@@ -266,15 +325,15 @@ impl Collection {
                 if !filter.matches(payload_ref) {
                     return None;
                 }
-                Some(SearchResult::new(
-                    Point {
-                        id,
-                        vector,
-                        payload,
-                        sparse_vectors: None,
-                    },
-                    score,
-                ))
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                    sparse_vectors: None,
+                };
+                let mut result = SearchResult::new(point, score);
+                attach_rrf_components(&mut result, component_map);
+                Some(result)
             })
             .take(k)
             .collect()
