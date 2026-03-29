@@ -274,10 +274,13 @@ impl Collection {
         let extracted = self.extract_query_components(stmt, params)?;
 
         // Early-return paths for special query shapes.
-        if let Some(results) =
-            self.try_early_return_path(stmt, params, &extracted, fetch_limit, &ctx)?
-        {
-            return Ok(results);
+        // LET bindings require finalize_query_results() which early-return paths bypass.
+        if query.let_bindings.is_empty() {
+            if let Some(results) =
+                self.try_early_return_path(stmt, params, &extracted, fetch_limit, &ctx)?
+            {
+                return Ok(results);
+            }
         }
 
         // Phase 2: Main dispatch.

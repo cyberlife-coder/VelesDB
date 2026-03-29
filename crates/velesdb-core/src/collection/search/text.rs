@@ -155,7 +155,7 @@ impl Collection {
         let text_weight = 1.0 - weight;
         // Reason: RRF k is typically 1–1000; u32→f32 is lossless below 2^24.
         #[allow(clippy::cast_precision_loss)]
-        let rrf_constant = rrf_k.unwrap_or(60) as f32;
+        let rrf_constant = rrf_k.unwrap_or(60).max(1) as f32;
 
         let overfetch_k = k * 2;
         let raw_vector_results = self.index.search(vector_query, overfetch_k);
