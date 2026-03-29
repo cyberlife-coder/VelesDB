@@ -311,3 +311,197 @@ fn test_with_empty_clause_unchanged_behavior() {
     assert!(opts.ef_search.is_none());
     assert!(opts.force_rerank.is_none());
 }
+
+// ============================================================================
+// F. Edge cases and boundary conditions
+// ============================================================================
+
+// --- Mode edge cases ---
+
+#[test]
+fn test_mode_case_insensitive_uppercase() {
+    let with = crate::velesql::WithClause::new().with_option(
+        "mode",
+        crate::velesql::WithValue::String("ACCURATE".to_string()),
+    );
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert!(matches!(opts.quality, Some(crate::SearchQuality::Accurate)));
+}
+
+#[test]
+fn test_mode_case_insensitive_mixed() {
+    let with = crate::velesql::WithClause::new().with_option(
+        "mode",
+        crate::velesql::WithValue::String("Perfect".to_string()),
+    );
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert!(matches!(opts.quality, Some(crate::SearchQuality::Perfect)));
+}
+
+#[test]
+fn test_mode_autotune_alias_auto() {
+    let with = crate::velesql::WithClause::new().with_option(
+        "mode",
+        crate::velesql::WithValue::String("auto".to_string()),
+    );
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert!(matches!(opts.quality, Some(crate::SearchQuality::AutoTune)));
+}
+
+#[test]
+fn test_mode_autotune_alias_auto_tune() {
+    let with = crate::velesql::WithClause::new().with_option(
+        "mode",
+        crate::velesql::WithValue::String("auto_tune".to_string()),
+    );
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert!(matches!(opts.quality, Some(crate::SearchQuality::AutoTune)));
+}
+
+#[test]
+fn test_mode_empty_string_ignored() {
+    let with = crate::velesql::WithClause::new().with_option(
+        "mode",
+        crate::velesql::WithValue::String(String::new()),
+    );
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert!(opts.quality.is_none());
+}
+
+#[test]
+fn test_mode_balanced_is_default_equivalent() {
+    let with = crate::velesql::WithClause::new().with_option(
+        "mode",
+        crate::velesql::WithValue::String("balanced".to_string()),
+    );
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert!(matches!(
+        opts.quality,
+        Some(crate::SearchQuality::Balanced)
+    ));
+}
+
+// --- ef_search edge cases ---
+
+#[test]
+fn test_ef_search_zero() {
+    let with = crate::velesql::WithClause::new()
+        .with_option("ef_search", crate::velesql::WithValue::Integer(0));
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert_eq!(opts.ef_search, Some(0));
+}
+
+#[test]
+fn test_ef_search_very_large() {
+    let with = crate::velesql::WithClause::new()
+        .with_option("ef_search", crate::velesql::WithValue::Integer(100_000));
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert_eq!(opts.ef_search, Some(100_000));
+}
+
+// --- timeout_ms edge cases ---
+
+#[test]
+fn test_timeout_ms_very_small_still_executes() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    // Very small timeout — on a tiny dataset this should still succeed
+    // (20 points is sub-millisecond even with timeout_ms=1)
+    let result = col.execute_query_str(
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (timeout_ms=100)",
+        &params,
+    );
+    // Should succeed on tiny dataset
+    assert!(result.is_ok());
+}
+
+// --- Conflicting options ---
+
+#[test]
+fn test_mode_and_ef_search_both_set() {
+    // mode provides quality, ef_search provides explicit override — both captured
+    let with = crate::velesql::WithClause::new()
+        .with_option(
+            "mode",
+            crate::velesql::WithValue::String("fast".to_string()),
+        )
+        .with_option("ef_search", crate::velesql::WithValue::Integer(4096));
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    // Both are available — search_with_opts() decides precedence
+    assert!(matches!(opts.quality, Some(crate::SearchQuality::Fast)));
+    assert_eq!(opts.ef_search, Some(4096));
+}
+
+#[test]
+fn test_rerank_true_with_mode_fast() {
+    // rerank=true + mode='fast' — rerank should override the no-rerank default of fast
+    let with = crate::velesql::WithClause::new()
+        .with_option(
+            "mode",
+            crate::velesql::WithValue::String("fast".to_string()),
+        )
+        .with_option("rerank", crate::velesql::WithValue::Boolean(true));
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert!(matches!(opts.quality, Some(crate::SearchQuality::Fast)));
+    assert_eq!(opts.force_rerank, Some(true));
+}
+
+// --- E2E edge cases ---
+
+#[test]
+fn test_with_unknown_option_key_ignored() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    // Unknown WITH options should be silently ignored
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (ef_search=128, bogus_option=42)",
+            &params,
+        )
+        .expect("unknown options should not cause errors");
+    assert_eq!(results.len(), 5);
+}
+
+#[test]
+fn test_with_all_options_combined() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (mode='accurate', ef_search=512, rerank=true, timeout_ms=30000)",
+            &params,
+        )
+        .expect("all options combined should work");
+    assert_eq!(results.len(), 5);
+}
+
+#[test]
+fn test_metadata_only_query_ignores_with_mode() {
+    let (_dir, col) = setup_with_options_collection();
+    let params = HashMap::new();
+    // Metadata-only query (no vector search) — WITH mode should be harmless
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE idx > 10 LIMIT 5 WITH (mode='accurate')",
+            &params,
+        )
+        .expect("metadata query with mode should not error");
+    assert!(!results.is_empty());
+}
+
+#[test]
+fn test_query_with_offset_and_with_clause() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 OFFSET 3 WITH (mode='fast')",
+            &params,
+        )
+        .expect("OFFSET + WITH should work together");
+    assert_eq!(results.len(), 5);
+}
