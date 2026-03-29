@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-03-27",
+  "last_updated": "2026-03-29",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
@@ -37,7 +37,7 @@
       "must_contain": "**21.7 ns**",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-27"
+      "last_updated": "2026-03-29"
     },
     {
       "id": "readme_production_search_latency",
@@ -45,7 +45,7 @@
       "must_contain": "**450 us**",
       "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
       "note": "Full production path p50 search latency (10K/384D, WAL ON)",
-      "last_updated": "2026-03-27"
+      "last_updated": "2026-03-29"
     },
     {
       "id": "readme_hnsw_core_search_latency",
@@ -53,7 +53,7 @@
       "must_contain": "**55 us**",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
       "note": "Core engine index-only search latency",
-      "last_updated": "2026-03-27"
+      "last_updated": "2026-03-29"
     },
     {
       "id": "readme_recall_at_10_accurate",
@@ -69,7 +69,7 @@
       "must_contain": "| Fast | 64 | 92.2% |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-27"
+      "last_updated": "2026-03-29"
     },
     {
       "id": "readme_recall_balanced_mode",
@@ -77,7 +77,7 @@
       "must_contain": "| Balanced (default) | 128 | 98.8% |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-27"
+      "last_updated": "2026-03-29"
     },
     {
       "id": "readme_recall_accurate_mode",
@@ -85,7 +85,7 @@
       "must_contain": "| Accurate | 512 | 100% |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-27"
+      "last_updated": "2026-03-29"
     }
   ]
 }
