@@ -144,7 +144,7 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore)
         path: Path to the VelesDB database directory.
         collection_name: Name of the collection to use.
         metric: Distance metric (cosine, euclidean, dot).
-        storage_mode: Vector storage mode (full, sq8, binary).
+        storage_mode: Vector storage mode (full, sq8, binary, pq, rabitq) or alias (f32, int8, bit, product_quantization, product-quantization).
     """
 
     stores_text: bool = True
@@ -180,12 +180,17 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore)
                 - "dot": Dot product (inner product)
                 - "hamming": Hamming distance (for binary vectors)
                 - "jaccard": Jaccard similarity (for binary vectors)
-            storage_mode: Storage mode ("full", "sq8", "binary", "pq", "rabitq").
-                - "full": Full f32 precision (default)
-                - "sq8": 8-bit scalar quantization (4x memory reduction)
-                - "binary": 1-bit binary quantization (32x memory reduction)
-                - "pq": Product quantization (8-32x compression, best for large-scale datasets)
-                - "rabitq": RaBitQ with scalar correction (32x compression, good recall)
+            storage_mode: Storage mode — canonical name or alias (case-insensitive).
+                Canonical names:
+
+                - "full": Full f32 precision (default). Alias: "f32".
+                - "sq8": 8-bit scalar quantization (4x memory reduction). Alias: "int8".
+                - "binary": 1-bit binary quantization (32x memory reduction). Alias: "bit".
+                - "pq": Product quantization (8-32x compression, best for large-scale
+                  datasets). Aliases: "product_quantization", "product-quantization".
+                - "rabitq": RaBitQ with scalar correction (32x compression, good recall).
+
+                Examples: ``storage_mode="int8"`` is equivalent to ``storage_mode="sq8"``.
             **kwargs: Additional arguments.
 
         Raises:

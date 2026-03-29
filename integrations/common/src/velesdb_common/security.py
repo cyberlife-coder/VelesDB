@@ -26,6 +26,15 @@ MIN_DIMENSION = 1
 MAX_PATH_LENGTH = 4096           # Max path length
 ALLOWED_METRICS = frozenset({"cosine", "euclidean", "dot", "hamming", "jaccard"})
 ALLOWED_STORAGE_MODES = frozenset({"full", "sq8", "binary", "pq", "rabitq"})
+# Aliases accepted by the Rust core via ``from_str_with_aliases()``.
+# Maps alias → canonical name (same set of aliases as Rust).
+STORAGE_MODE_ALIASES: dict[str, str] = {
+    "f32": "full",
+    "int8": "sq8",
+    "bit": "binary",
+    "product_quantization": "pq",
+    "product-quantization": "pq",
+}
 MAX_SPARSE_VECTOR_SIZE = 100_000  # Max entries in a sparse vector
 DEFAULT_TIMEOUT_MS = 30_000      # 30 seconds maximum timeout
 
@@ -270,28 +279,41 @@ def validate_metric(metric: str) -> str:
 
 
 def validate_storage_mode(mode: str) -> str:
-    """Validate vector storage mode.
+    """Validate vector storage mode and resolve aliases to canonical names.
+
+    Accepts both canonical names and the aliases that the VelesDB Rust core
+    recognises via ``from_str_with_aliases()``:
+
+    * ``"f32"`` → ``"full"``
+    * ``"int8"`` → ``"sq8"``
+    * ``"bit"`` → ``"binary"``
+    * ``"product_quantization"`` / ``"product-quantization"`` → ``"pq"``
 
     Args:
-        mode: Storage mode name.
+        mode: Storage mode name (canonical or alias). No implicit whitespace
+            stripping is performed; leading/trailing spaces are rejected.
 
     Returns:
-        Validated storage mode (lowercase).
+        Canonical storage mode string (lowercase), e.g. ``"full"``, ``"sq8"``.
 
     Raises:
-        SecurityError: If storage mode is not allowed.
+        SecurityError: If ``mode`` is not a string, or is not a recognised
+            canonical name or alias.
     """
     if not isinstance(mode, str):
         raise SecurityError(
             f"Storage mode must be a string, got {type(mode).__name__}"
         )
     mode_lower = mode.lower()
-    if mode_lower not in ALLOWED_STORAGE_MODES:
+    # Resolve alias first so the canonical name goes through the allow-list check.
+    canonical = STORAGE_MODE_ALIASES.get(mode_lower, mode_lower)
+    if canonical not in ALLOWED_STORAGE_MODES:
         raise SecurityError(
             f"Invalid storage mode '{mode}'. "
-            f"Allowed: {', '.join(sorted(ALLOWED_STORAGE_MODES))}"
+            f"Allowed: {', '.join(sorted(ALLOWED_STORAGE_MODES))} "
+            f"(aliases: {', '.join(sorted(STORAGE_MODE_ALIASES))})"
         )
-    return mode_lower
+    return canonical
 
 
 def validate_collection_name(name: str) -> str:

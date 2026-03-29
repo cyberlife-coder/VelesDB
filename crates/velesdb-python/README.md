@@ -803,13 +803,15 @@ collection = db.create_collection("pq", dimension=768, storage_mode="pq")
 collection = db.create_collection("rabitq", dimension=768, storage_mode="rabitq")
 ```
 
-| Mode | Memory per Vector (768D) | Compression | Best For |
-|------|-------------------------|-------------|----------|
-| `full` | 3,072 bytes | 1x | Maximum accuracy |
-| `sq8` | 768 bytes | 4x | Good accuracy/memory balance |
-| `binary` | 96 bytes | 32x | Edge/IoT, massive scale |
-| `pq` | 96-384 bytes | 8-32x | Large-scale datasets, lossy |
-| `rabitq` | 96 bytes | 32x | High-compression with good recall |
+| Mode | Alias | Memory per Vector (768D) | Compression | Best For |
+|------|-------|-------------------------|-------------|----------|
+| `full` | `f32` | 3,072 bytes | 1x | Maximum accuracy |
+| `sq8` | `int8` | 768 bytes | 4x | Good accuracy/memory balance |
+| `binary` | `bit` | 96 bytes | 32x | Edge/IoT, massive scale |
+| `pq` | `product_quantization`, `product-quantization` | 96-384 bytes | 8-32x | Large-scale datasets, lossy |
+| `rabitq` | — | 96 bytes | 32x | High-compression with good recall |
+
+Canonical names and aliases are interchangeable: ``storage_mode="f32"`` is equivalent to ``storage_mode="full"``.
 
 ### Bulk Loading Performance
 
