@@ -1,40 +1,44 @@
-<p align="center">
-  <img src="velesdb_icon_pack/favicon/android-chrome-512x512.png" alt="VelesDB Logo" width="200"/>
-</p>
+<div align="center">
 
-<h1 align="center">
-  <img src="velesdb_icon_pack/favicon/favicon-32x32.png" alt="VelesDB" width="32" height="32" style="vertical-align: middle;"/>
-</h1>
+# VelesDB
 
-<h3 align="center">
-  The Local Knowledge Engine for AI Agents
-</h3>
+### Your AI agents forget everything. VelesDB fixes that.
 
-<p align="center">
-  <strong>One 6 MB binary. Three engines. One query language.</strong><br/>
-  <em>Vector + Graph + ColumnStore &mdash; unified under VelesQL</em>
-</p>
+**One 6 MB binary. Three engines. One query language. Zero cloud dependency.**
 
-<p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://app.codacy.com/gh/cyberlife-coder/VelesDB/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade"><img src="https://app.codacy.com/project/badge/Grade/58c73832dd294ba38144856ae69e9cf2" alt="Codacy Badge"></a>
-  <a href="https://crates.io/crates/velesdb-core"><img src="https://img.shields.io/crates/v/velesdb-core.svg" alt="Crates.io"></a>
-  <a href="https://crates.io/crates/velesdb-core"><img src="https://img.shields.io/crates/d/velesdb-core.svg" alt="Crates.io Downloads"></a>
-  <a href="https://pypi.org/project/velesdb/"><img src="https://img.shields.io/pypi/v/velesdb.svg" alt="PyPI"></a>
-  <a href="https://www.npmjs.com/package/@wiscale/velesdb-sdk"><img src="https://img.shields.io/npm/v/@wiscale/velesdb-sdk.svg" alt="npm"></a>
-  <img src="https://img.shields.io/badge/coverage-82.3%25-brightgreen" alt="Coverage">
-  <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-VelesDB_Core_1.0-blue" alt="License"></a>
-  <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="Stars"></a>
-</p>
+Vector + Graph + ColumnStore — unified under [VelesQL](docs/reference/velesql.md)
 
-<p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.10.0">Download v1.10.0</a> &bull;
-  <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
-  <a href="https://velesdb.com/en/">Documentation</a> &bull;
-  <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
-</p>
+[![Crates.io](https://img.shields.io/crates/v/velesdb-core)](https://crates.io/crates/velesdb-core)
+[![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
+[![npm](https://img.shields.io/npm/v/@wiscale/velesdb-sdk)](https://www.npmjs.com/package/@wiscale/velesdb-sdk)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/cyberlife-coder/VelesDB)](https://github.com/cyberlife-coder/VelesDB/stargazers)
+[![Contributors Welcome](https://img.shields.io/badge/contributors-welcome-brightgreen)](CONTRIBUTING.md)
+
+[Download v1.9.3](https://github.com/cyberlife-coder/VelesDB/releases/latest) · [Quick Start](#getting-started-in-60-seconds) · [Documentation](https://velesdb.com/en/) · [DeepWiki](https://deepwiki.com/cyberlife-coder/VelesDB)
+
+</div>
 
 ---
+
+> **Every AI agent today stitches together 3 databases for memory — vectors for "what feels similar", a graph for "what is connected", and SQL for "what I know for sure". That's 3 deployments, 3 configs, 3 query languages, and a pile of glue code.**
+>
+> **VelesDB replaces all of that with a single Rust binary that fits on a floppy disk.**
+
+---
+
+## Why VelesDB?
+
+| Today (3 systems to maintain) | With VelesDB (1 binary) |
+|-------------------------------|------------------------|
+| pgvector for embeddings | **Vector Engine** â 47us HNSW search (768D) |
+| Neo4j for knowledge graphs | **Graph Engine** â MATCH clause, BFS/DFS |
+| PostgreSQL/DuckDB for metadata | **ColumnStore** â 130x faster than JSON at 100K rows |
+| Custom glue code + 3 query languages | **VelesQL** â one language for everything |
+| 3 deployments, 3 configs, 3 backups | **6 MB binary** â works offline, air-gapped |
+
+---
+
 
 ## What is VelesDB?
 
@@ -46,7 +50,7 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 | **Graph** | Knowledge relationships (BFS/DFS, edge properties) | Native **MATCH** clause |
 | **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning |
 
-All three are queried through **VelesQL** — a single SQL-like language with vector, graph, and columnar extensions:
+All three are queried through **VelesQL** â a single SQL-like language with vector, graph, and columnar extensions:
 
 ```sql
 MATCH (doc:Document)-[:AUTHORED_BY]->(author:Person)
@@ -56,21 +60,9 @@ RETURN author.name, doc.title
 ORDER BY similarity() DESC LIMIT 5
 ```
 
-**Built-in Agent Memory SDK** provides semantic, episodic, and procedural memory for AI agents — no external services needed.
+**Built-in Agent Memory SDK** provides semantic, episodic, and procedural memory for AI agents â no external services needed.
 
 > **One binary. No cloud. No glue code. Runs on server, browser, mobile, and desktop.**
-
----
-
-## Why VelesDB?
-
-| Today (3 systems to maintain) | With VelesDB (1 binary) |
-|-------------------------------|------------------------|
-| pgvector for embeddings | **Vector Engine** — 47us HNSW search (768D) |
-| Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
-| PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows |
-| Custom glue code + 3 query languages | **VelesQL** — one language for everything |
-| 3 deployments, 3 configs, 3 backups | **6 MB binary** — works offline, air-gapped |
 
 ---
 
@@ -99,7 +91,7 @@ ORDER BY similarity() DESC LIMIT 5
 **The power is in the fusion.** VelesQL combines all three in a single statement:
 
 ```sql
--- Vector similarity + Graph traversal + ColumnStore filter — ONE query
+-- Vector similarity + Graph traversal + ColumnStore filter â ONE query
 MATCH (doc:Document)-[:AUTHORED_BY]->(author:Person)
 WHERE similarity(doc.embedding, $question) > 0.8
   AND author.department = 'Engineering'
@@ -112,7 +104,7 @@ LIMIT 5
 
 ## Agent Memory SDK
 
-Built-in memory subsystems for AI agents — no external vector DB, no graph DB, no extra dependencies. **99 tests** cover the SDK end-to-end.
+Built-in memory subsystems for AI agents â no external vector DB, no graph DB, no extra dependencies. **99 tests** cover the SDK end-to-end.
 
 ```python
 from velesdb import Database, AgentMemory
@@ -129,7 +121,7 @@ memory = AgentMemory(db, dimension=384)
 | **Episodic** | Event timeline with context | `record`, `recent`, `older_than`, `recall_similar`, `delete` |
 | **Procedural** | Learned patterns & actions | `learn`, `recall`, `reinforce`, `list_all`, `delete` |
 
-### Semantic Memory — What the agent knows
+### Semantic Memory â What the agent knows
 
 ```python
 memory.semantic.store(1, "Paris is the capital of France", embedding)
@@ -137,7 +129,7 @@ results = memory.semantic.query(query_embedding, top_k=5)
 memory.semantic.delete(1)  # Remove outdated knowledge
 ```
 
-### Episodic Memory — What happened and when
+### Episodic Memory â What happened and when
 
 ```python
 memory.episodic.record(1, "User asked about geography", int(time.time()), embedding)
@@ -147,7 +139,7 @@ similar = memory.episodic.recall_similar(query_embedding, top_k=5)
 memory.episodic.delete(1)
 ```
 
-### Procedural Memory — What the agent learned to do
+### Procedural Memory â What the agent learned to do
 
 ```python
 memory.procedural.learn(
@@ -205,7 +197,7 @@ memory.procedural.delete(1)
 | **Mobile (iOS/Android)** | Yes | No | No | No |
 | **Offline / Local-first** | Yes | Partial | No | No |
 
-> *Competitor latencies are typical ranges from public benchmarks and vendor documentation. Direct comparison is approximate — architectures differ (embedded vs client-server, durable vs in-memory, recall levels). Run your own benchmarks for accurate comparison.*
+> *Competitor latencies are typical ranges from public benchmarks and vendor documentation. Direct comparison is approximate â architectures differ (embedded vs client-server, durable vs in-memory, recall levels). Run your own benchmarks for accurate comparison.*
 
 > **VelesDB's sweet spot:** When you need vector + graph + structured filtering in a single engine, local-first deployment, or a lightweight binary that runs anywhere.
 >
@@ -329,9 +321,9 @@ End-to-end numbers on the **complete production path**: WAL durability, payload 
 <details>
 <summary>What these numbers mean</summary>
 
-- **Full production path**: measures the real user experience — Python SDK call, WAL write, HNSW search, payload + vector retrieval. This is what your application actually sees. Measured with `benchmarks/velesdb_benchmark.py --recall`.
+- **Full production path**: measures the real user experience â Python SDK call, WAL write, HNSW search, payload + vector retrieval. This is what your application actually sees. Measured with `benchmarks/velesdb_benchmark.py --recall`.
 - **Core engine**: measures the Rust index layer in isolation (Criterion.rs, sequential runs). Useful for architecture comparisons but not representative of end-to-end latency.
-- **Recall@10 >= 96%**: measured on synthetic clustered datasets (50 Gaussian clusters, 384D). Real-world recall depends on your data distribution — run the benchmark on your own dataset to verify. We use `Balanced` mode (ef_search=128) which prioritizes recall over raw speed.
+- **Recall@10 >= 96%**: measured on synthetic clustered datasets (50 Gaussian clusters, 384D). Real-world recall depends on your data distribution â run the benchmark on your own dataset to verify. We use `Balanced` mode (ef_search=128) which prioritizes recall over raw speed.
 - **WAL ON**: every insert is durable. A crash at any point recovers all committed data.
 - **Reproduce these numbers**: `pip install velesdb numpy && python benchmarks/velesdb_benchmark.py --recall`
 
@@ -382,7 +374,7 @@ SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 5
 
 ## Graph Engine
 
-Property graph with BFS/DFS traversal, edge labels, and Cypher-inspired MATCH queries — all integrated with vector search.
+Property graph with BFS/DFS traversal, edge labels, and Cypher-inspired MATCH queries â all integrated with vector search.
 
 ### Graph operations
 
@@ -400,7 +392,7 @@ curl -X POST http://localhost:8080/collections/docs/graph/traverse \
 
 ### Vector + Graph fusion (VelesQL)
 
-The query that defines VelesDB — semantic similarity AND relationship traversal in ONE statement:
+The query that defines VelesDB â semantic similarity AND relationship traversal in ONE statement:
 
 ```sql
 -- Find authors of documents similar to my question
@@ -431,18 +423,18 @@ RETURN related.name, related.price
 
 ## ColumnStore Engine
 
-Most vector databases store metadata as JSON blobs and scan them linearly. VelesDB's ColumnStore uses typed columns — the same approach analytical databases (DuckDB, ClickHouse) use for fast filtering.
+Most vector databases store metadata as JSON blobs and scan them linearly. VelesDB's ColumnStore uses typed columns â the same approach analytical databases (DuckDB, ClickHouse) use for fast filtering.
 
 ```
 Traditional (JSON):     VelesDB (ColumnStore):
-┌──────────────────┐    ┌──────────┬───────┬────────┬──────────┐
-│ {"category":"tech"│    │ category │ price │ rating │ in_stock │
-│  "price": 29.99, │    ├──────────┼───────┼────────┼──────────┤
-│  "rating": 4.5,  │    │ "tech"   │ 29.99 │ 4.5    │ true     │
-│  "in_stock": true│    │ "science"│ 49.99 │ 4.2    │ false    │
-│ }                │    │ "tech"   │ 19.99 │ 4.8    │ true     │
-│ Parse every row  │    │ Scan one column   │        │          │
-└──────────────────┘    └──────────┴───────┴────────┴──────────┘
+ââââââââââââââââââââ    ââââââââââââ¬ââââââââ¬âââââââââ¬âââââââââââ
+â {"category":"tech"â    â category â price â rating â in_stock â
+â  "price": 29.99, â    ââââââââââââ¼ââââââââ¼âââââââââ¼âââââââââââ¤
+â  "rating": 4.5,  â    â "tech"   â 29.99 â 4.5    â true     â
+â  "in_stock": trueâ    â "science"â 49.99 â 4.2    â false    â
+â }                â    â "tech"   â 19.99 â 4.8    â true     â
+â Parse every row  â    â Scan one column   â        â          â
+ââââââââââââââââââââ    ââââââââââââ´ââââââââ´âââââââââ´âââââââââââ
     3.84 ms @ 100K           29.5 us @ 100K (130x faster)
 ```
 
@@ -498,7 +490,7 @@ ColumnStore filters are applied as pre-filters or post-filters depending on sele
 | Use Case | VelesDB Feature |
 |----------|-----------------|
 | **RAG Pipelines** | Vector search + ColumnStore metadata filters |
-| **AI Agents** | [Agent Memory SDK](#agent-memory-sdk) — semantic, episodic, procedural memory |
+| **AI Agents** | [Agent Memory SDK](#agent-memory-sdk) â semantic, episodic, procedural memory |
 | **E-commerce** | Vector similarity + price/stock ColumnStore filters + co-purchase graph |
 | **Desktop Apps (Tauri/Electron)** | Single binary, no server needed |
 | **Mobile AI (iOS/Android)** | Native SDKs with 32x memory compression |
@@ -512,17 +504,17 @@ ColumnStore filters are applied as pre-filters or post-filters depending on sele
 
 | Domain | Component | Install |
 |--------|-----------|---------|
-| **Core** | [velesdb-core](crates/velesdb-core) — Vector + Graph + ColumnStore + VelesQL | `cargo add velesdb-core` |
-| **Server** | [velesdb-server](crates/velesdb-server) — REST API (37 endpoints, OpenAPI) | `cargo install velesdb-server` |
-| **CLI** | [velesdb-cli](crates/velesdb-cli) — Interactive VelesQL REPL | `cargo install velesdb-cli` |
-| **Python** | [velesdb-python](crates/velesdb-python) — PyO3 bindings + NumPy | `pip install velesdb` |
-| **TypeScript** | [typescript-sdk](sdks/typescript) — Node.js & Browser SDK | `npm install @wiscale/velesdb-sdk` |
-| **WASM** | [velesdb-wasm](crates/velesdb-wasm) — Browser-side vector search | `npm install @wiscale/velesdb-wasm` |
-| **Mobile** | [velesdb-mobile](crates/velesdb-mobile) — iOS (Swift) & Android (Kotlin) | [Build instructions](docs/guides/INSTALLATION.md#-mobile-iosandroid) |
-| **Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) — Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
-| **LangChain** | [langchain-velesdb](integrations/langchain) — Official VectorStore | [From source](integrations/langchain/README.md) |
-| **LlamaIndex** | [llamaindex-velesdb](integrations/llamaindex) — Document indexing | [From source](integrations/llamaindex/README.md) |
-| **Migration** | [velesdb-migrate](crates/velesdb-migrate) — From Qdrant, Pinecone, Supabase | `cargo install velesdb-migrate` |
+| **Core** | [velesdb-core](crates/velesdb-core) â Vector + Graph + ColumnStore + VelesQL | `cargo add velesdb-core` |
+| **Server** | [velesdb-server](crates/velesdb-server) â REST API (37 endpoints, OpenAPI) | `cargo install velesdb-server` |
+| **CLI** | [velesdb-cli](crates/velesdb-cli) â Interactive VelesQL REPL | `cargo install velesdb-cli` |
+| **Python** | [velesdb-python](crates/velesdb-python) â PyO3 bindings + NumPy | `pip install velesdb` |
+| **TypeScript** | [typescript-sdk](sdks/typescript) â Node.js & Browser SDK | `npm install @wiscale/velesdb-sdk` |
+| **WASM** | [velesdb-wasm](crates/velesdb-wasm) â Browser-side vector search | `npm install @wiscale/velesdb-wasm` |
+| **Mobile** | [velesdb-mobile](crates/velesdb-mobile) â iOS (Swift) & Android (Kotlin) | [Build instructions](docs/guides/INSTALLATION.md#-mobile-iosandroid) |
+| **Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) â Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
+| **LangChain** | [langchain-velesdb](integrations/langchain) â Official VectorStore | [From source](integrations/langchain/README.md) |
+| **LlamaIndex** | [llamaindex-velesdb](integrations/llamaindex) â Document indexing | [From source](integrations/llamaindex/README.md) |
+| **Migration** | [velesdb-migrate](crates/velesdb-migrate) â From Qdrant, Pinecone, Supabase | `cargo install velesdb-migrate` |
 
 ---
 
@@ -530,24 +522,24 @@ ColumnStore filters are applied as pre-filters or post-filters depending on sele
 
 ```
 INSERT                      INDEX                       SEARCH
-┌──────────┐  upsert   ┌──────────────┐  build   ┌──────────────┐
-│ Your App │──────────> │ WAL (append) │────────> │  HNSW Graph  │
-│          │           │ + mmap store │         │  (in-memory) │
-└──────────┘           └──────┬───────┘         └──────┬───────┘
-                              │                        │
-                       ┌──────▼───────┐                │ search
-                       │  ColumnStore  │  filter   ┌────▼─────────┐
-                       │ (typed cols)  │────────> │ SIMD Distance│
-                       └──────────────┘          │(AVX-512/NEON)│
-                        RESULT                    └──────┬───────┘
-┌──────────┐  top-k    ┌──────────────┐  rank           │
-│ Your App │<──────────│   Payload    │<────────────────┘
-│          │           │  Hydration   │
-└──────────┘           └──────────────┘
+ââââââââââââ  upsert   ââââââââââââââââ  build   ââââââââââââââââ
+â Your App âââââââââââ> â WAL (append) âââââââââ> â  HNSW Graph  â
+â          â           â + mmap store â         â  (in-memory) â
+ââââââââââââ           ââââââââ¬ââââââââ         ââââââââ¬ââââââââ
+                              â                        â
+                       ââââââââ¼ââââââââ                â search
+                       â  ColumnStore  â  filter   ââââââ¼ââââââââââ
+                       â (typed cols)  âââââââââ> â SIMD Distanceâ
+                       ââââââââââââââââ          â(AVX-512/NEON)â
+                        RESULT                    ââââââââ¬ââââââââ
+ââââââââââââ  top-k    ââââââââââââââââ  rank           â
+â Your App â<âââââââââââ   Payload    â<âââââââââââââââââ
+â          â           â  Hydration   â
+ââââââââââââ           ââââââââââââââââ
 ```
 
 **Key design choices:**
-- **Local-first**: In-process or single binary — no network hops, no cloud dependency
+- **Local-first**: In-process or single binary â no network hops, no cloud dependency
 - **Memory-mapped storage**: OS manages paging between RAM and disk
 - **WAL durability**: Every write is journaled. Crash-safe by default (`fsync` mode)
 - **ColumnStore**: Typed columns with string interning, RoaringBitmap tombstones, PostgreSQL-inspired auto-vacuum
@@ -596,10 +588,10 @@ The container runs as a non-root `velesdb` user. Data persists via the named vol
 <details>
 <summary>Security</summary>
 
-- **API Key Authentication** — Bearer token auth via `VELESDB_API_KEYS` env var
-- **TLS (HTTPS)** — Built-in via rustls (`VELESDB_TLS_CERT` / `VELESDB_TLS_KEY`)
-- **Graceful Shutdown** — SIGTERM triggers connection drain + WAL flush. Zero data loss
-- **Health Endpoints** — `GET /health` and `GET /ready` always public
+- **API Key Authentication** â Bearer token auth via `VELESDB_API_KEYS` env var
+- **TLS (HTTPS)** â Built-in via rustls (`VELESDB_TLS_CERT` / `VELESDB_TLS_KEY`)
+- **Graceful Shutdown** â SIGTERM triggers connection drain + WAL flush. Zero data loss
+- **Health Endpoints** â `GET /health` and `GET /ready` always public
 
 > [docs/guides/SERVER_SECURITY.md](docs/guides/SERVER_SECURITY.md)
 
@@ -682,6 +674,13 @@ VelesDB's performance is built on peer-reviewed research. Every technique listed
 
 ---
 
+
+## Who's using VelesDB?
+
+VelesDB is used in production for agentic memory, GraphRAG, desktop AI apps, and edge deployments.
+
+> **Building with VelesDB?** [Open a PR](https://github.com/cyberlife-coder/VelesDB/pulls) to add your project here — we love seeing what the community builds.
+
 ## Contributing
 
 ```bash
@@ -706,11 +705,11 @@ If you use VelesDB in your project, add this badge to your README:
 
 We'd love to hear how you're using VelesDB! Share your experience:
 
-- **[GitHub Discussions](https://github.com/cyberlife-coder/VelesDB/discussions)** — tell us about your use case, what works well, and what could be improved
-- **Social media** — mention [@VelesDB](https://github.com/cyberlife-coder/VelesDB) and let the community know how VelesDB compares to your previous stack
-- **[Star the repo](https://github.com/cyberlife-coder/VelesDB)** — it helps others discover VelesDB
+- **[GitHub Discussions](https://github.com/cyberlife-coder/VelesDB/discussions)** â tell us about your use case, what works well, and what could be improved
+- **Social media** â mention [@VelesDB](https://github.com/cyberlife-coder/VelesDB) and let the community know how VelesDB compares to your previous stack
+- **[Star the repo](https://github.com/cyberlife-coder/VelesDB)** â it helps others discover VelesDB
 
-Your feedback shapes the roadmap. Whether it's a RAG pipeline, a knowledge graph, an AI agent, or something we haven't imagined yet — we want to know.
+Your feedback shapes the roadmap. Whether it's a RAG pipeline, a knowledge graph, an AI agent, or something we haven't imagined yet â we want to know.
 
 ---
 
@@ -718,8 +717,8 @@ Your feedback shapes the roadmap. Whether it's a RAG pipeline, a knowledge graph
 
 | Version | Status | Highlights |
 |---------|--------|------------|
-| **v1.10.0** | Released | VelesQL v3.2 — WITH options wiring, component scores, LET clause, Agent Memory VelesQL bridge. All 5 pillars accessible via SQL. |
-| **v1.9.3** | Released | VelesQL ecosystem completion — OFFSET fix, MATCH propagation to Python/CLI/tauri/mobile, aggregation routing, DRY refactoring |
+| **v1.10.0** | Released | VelesQL v3.2 â WITH options wiring, component scores, LET clause, Agent Memory VelesQL bridge. All 5 pillars accessible via SQL. |
+| **v1.9.3** | Released | VelesQL ecosystem completion â OFFSET fix, MATCH propagation to Python/CLI/tauri/mobile, aggregation routing, DRY refactoring |
 | **v1.9.0** | Released | VelesQL ORDER BY arithmetic expressions, MATCH graph documentation, conformance cases P046-P052 |
 | **v1.8.0** | Released | 6 perf optimization phases (software pipelining, RaBitQ, PDX layout, SmallVec, AutoTune, Trigram SIMD) + production wiring across 8 crates. **x55 insert, x4 search vs v0.8.10** |
 | **v1.7.2** | Released | Partial sort search, batch insert fast-path, upsert lock contention fix, Agent Memory SDK |
@@ -731,23 +730,23 @@ Your feedback shapes the roadmap. Whether it's a RAG pipeline, a knowledge graph
 <details>
 <summary>Detailed release history</summary>
 
-**v1.10.0** — VelesQL v3.2: WITH options wired to execution (mode, timeout_ms, rerank were parsed but silently ignored — now functional). Independent component scores (`vector_score`, `bm25_score` resolve independently in ORDER BY arithmetic). LET clause for named score bindings (`LET hybrid = 0.7 * vector_score + 0.3 * bm25_score`). Agent Memory VelesQL bridge (`query_semantic/episodic/procedural()` convenience API). USING FUSION configurable for vector+text hybrid queries. 100+ new tests, grammar v3.2.0 with 7 conformance cases.
+**v1.10.0** â VelesQL v3.2: WITH options wired to execution (mode, timeout_ms, rerank were parsed but silently ignored â now functional). Independent component scores (`vector_score`, `bm25_score` resolve independently in ORDER BY arithmetic). LET clause for named score bindings (`LET hybrid = 0.7 * vector_score + 0.3 * bm25_score`). Agent Memory VelesQL bridge (`query_semantic/episodic/procedural()` convenience API). USING FUSION configurable for vector+text hybrid queries. 100+ new tests, grammar v3.2.0 with 7 conformance cases.
 
-**v1.9.3** — VelesQL ecosystem completion: OFFSET clause now executed (was parsed-only), MATCH start-node discovery includes graph-only nodes, CLI routes MATCH via active collection, tauri-plugin aggregation results preserved, mobile SDK returns payloads. Python GraphCollection gains 4 VelesQL methods (query, match_query, explain, query_ids). DRY refactoring: shared query helpers. 11 new integration tests.
+**v1.9.3** â VelesQL ecosystem completion: OFFSET clause now executed (was parsed-only), MATCH start-node discovery includes graph-only nodes, CLI routes MATCH via active collection, tauri-plugin aggregation results preserved, mobile SDK returns payloads. Python GraphCollection gains 4 VelesQL methods (query, match_query, explain, query_ids). DRY refactoring: shared query helpers. 11 new integration tests.
 
-**v1.9.0** — VelesQL ORDER BY arithmetic expressions (#442): weighted score combinations with operator precedence and parenthesized expressions. New ArithmeticExpr/ArithmeticOp AST types. Conformance cases P046-P052. MATCH documentation: clarified hybrid RRF semantics (#444), documented single-collection graph scope (#445). Graph patterns guide. Closes #442, #443, #444, #445.
+**v1.9.0** â VelesQL ORDER BY arithmetic expressions (#442): weighted score combinations with operator precedence and parenthesized expressions. New ArithmeticExpr/ArithmeticOp AST types. Conformance cases P046-P052. MATCH documentation: clarified hybrid RRF semantics (#444), documented single-collection graph scope (#445). Graph patterns guide. Closes #442, #443, #444, #445.
 
-**v1.8.0** — 6 performance optimization phases from peer-reviewed research: software pipelining (arXiv:2505.07621), RaBitQ 32x compression (arXiv:2405.12497), PDX block-columnar layout (arXiv:2503.04422), SmallVec batch distances, AutoTune adaptive ef, Trigram SIMD fingerprints. Full production wiring: AutoTune via REST/Python, RaBitQ backend (`HnswBackend` enum), PDX auto-build after reordering. Ecosystem propagation to all 8 crates + TypeScript SDK. Bug fixes: bool→int conversion (#412), silent payload data loss (#413). Concurrency fixes: training buffer race, enum cache regression. Closes #404, #408, #410, #412, #413, #416, #417, #421, #422, #425, #430.
+**v1.8.0** â 6 performance optimization phases from peer-reviewed research: software pipelining (arXiv:2505.07621), RaBitQ 32x compression (arXiv:2405.12497), PDX block-columnar layout (arXiv:2503.04422), SmallVec batch distances, AutoTune adaptive ef, Trigram SIMD fingerprints. Full production wiring: AutoTune via REST/Python, RaBitQ backend (`HnswBackend` enum), PDX auto-build after reordering. Ecosystem propagation to all 8 crates + TypeScript SDK. Bug fixes: boolâint conversion (#412), silent payload data loss (#413). Concurrency fixes: training buffer race, enum cache regression. Closes #404, #408, #410, #412, #413, #416, #417, #421, #422, #425, #430.
 
-**v1.7.2** — Partial sort in HNSW search_layer (#373), batch insert fast-path (#375), upsert lock contention elimination (3-phase pipeline, write-to-read lock). Agent Memory SDK with complete Python API.
+**v1.7.2** â Partial sort in HNSW search_layer (#373), batch insert fast-path (#375), upsert lock contention elimination (3-phase pipeline, write-to-read lock). Agent Memory SDK with complete Python API.
 
-**v1.7.0** — HNSW upsert semantics, complete GPU multi-metric pipelines (wgpu), chunked batch insertion, search_layer batch SIMD + deferred indexing.
+**v1.7.0** â HNSW upsert semantics, complete GPU multi-metric pipelines (wgpu), chunked batch insertion, search_layer batch SIMD + deferred indexing.
 
-**v1.6.0** — Server security (API keys, TLS, graceful shutdown), ~150 Codacy complexity violations resolved, WAL replay, atomic index swap, Windows crash recovery, SDK feature parity, migration tooling (Qdrant, Pinecone), VelesDB Core License 1.0.
+**v1.6.0** â Server security (API keys, TLS, graceful shutdown), ~150 Codacy complexity violations resolved, WAL replay, atomic index swap, Windows crash recovery, SDK feature parity, migration tooling (Qdrant, Pinecone), VelesDB Core License 1.0.
 
-**v1.4.0** — VelesQL MATCH queries, EXPLAIN plans, Multi-Score Fusion (RRF, Average, Weighted), parallel graph traversal, VelesQL DISTINCT + Self-JOIN, LangChain/LlamaIndex integrations.
+**v1.4.0** â VelesQL MATCH queries, EXPLAIN plans, Multi-Score Fusion (RRF, Average, Weighted), parallel graph traversal, VelesQL DISTINCT + Self-JOIN, LangChain/LlamaIndex integrations.
 
-**v1.2.0** — 15 EPICs: Knowledge Graph, VelesQL MATCH, Agent Toolkit, Vector-Graph Fusion, ColumnStore CRUD, Cross-Store JOIN, Python SDK, GPU acceleration.
+**v1.2.0** â 15 EPICs: Knowledge Graph, VelesQL MATCH, Agent Toolkit, Vector-Graph Fusion, ColumnStore CRUD, Cross-Store JOIN, Python SDK, GPU acceleration.
 
 </details>
 
