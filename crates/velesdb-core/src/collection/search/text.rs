@@ -125,6 +125,7 @@ impl Collection {
     /// * `text_query` - Text query for BM25 search
     /// * `k` - Maximum number of results to return
     /// * `vector_weight` - Weight for vector results (0.0-1.0, default 0.5)
+    /// * `rrf_k` - RRF constant (default 60). Lower values amplify rank differences.
     ///
     /// # Performance (v0.9+)
     ///
@@ -141,6 +142,7 @@ impl Collection {
         text_query: &str,
         k: usize,
         vector_weight: Option<f32>,
+        rrf_k: Option<u32>,
     ) -> Result<Vec<SearchResult>> {
         use crate::index::VectorIndex;
 
@@ -151,6 +153,9 @@ impl Collection {
 
         let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
         let text_weight = 1.0 - weight;
+        // Reason: RRF k is typically 1–1000; u32→f32 is lossless below 2^24.
+        #[allow(clippy::cast_precision_loss)]
+        let rrf_constant = rrf_k.unwrap_or(60) as f32;
 
         let overfetch_k = k * 2;
         let raw_vector_results = self.index.search(vector_query, overfetch_k);
@@ -163,6 +168,7 @@ impl Collection {
             &text_results,
             weight,
             text_weight,
+            rrf_constant,
         );
 
         let scored_ids = Self::top_k_from_scores(fused_scores, k);
@@ -170,6 +176,9 @@ impl Collection {
     }
 
     /// Computes RRF fused scores and per-component score breakdowns.
+    ///
+    /// The `rrf_k` parameter controls the RRF constant (default 60.0). Lower
+    /// values amplify rank differences; higher values smooth them out.
     ///
     /// Returns `(fused_scores, component_map)` where `component_map` maps each
     /// point ID to its individual `(vector_rrf, bm25_rrf)` contributions.
@@ -179,6 +188,7 @@ impl Collection {
         text_results: &[(u64, f32)],
         vector_weight: f32,
         text_weight: f32,
+        rrf_k: f32,
     ) -> (
         rustc_hash::FxHashMap<u64, f32>,
         rustc_hash::FxHashMap<u64, (f32, f32)>,
@@ -190,12 +200,12 @@ impl Collection {
             rustc_hash::FxHashMap::with_capacity_and_hasher(cap, rustc_hash::FxBuildHasher);
 
         for (rank, sr) in vector_results.iter().enumerate() {
-            let contribution = vector_weight / (rank as f32 + 60.0);
+            let contribution = vector_weight / (rank as f32 + rrf_k);
             *fused.entry(sr.id).or_insert(0.0) += contribution;
             components.entry(sr.id).or_insert((0.0, 0.0)).0 += contribution;
         }
         for (rank, (id, _)) in text_results.iter().enumerate() {
-            let contribution = text_weight / (rank as f32 + 60.0);
+            let contribution = text_weight / (rank as f32 + rrf_k);
             *fused.entry(*id).or_insert(0.0) += contribution;
             components.entry(*id).or_insert((0.0, 0.0)).1 += contribution;
         }
@@ -290,6 +300,7 @@ impl Collection {
             &text_results,
             weight,
             text_weight,
+            60.0,
         );
 
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();

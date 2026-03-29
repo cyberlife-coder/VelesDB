@@ -66,7 +66,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &query,
         "rust programming",
         5,
-        Some(0.7) // 70% vector, 30% text
+        Some(0.7), // 70% vector, 30% text
+        None,       // RRF k=60 (default)
     )?;
 
     // BM25 full-text search only

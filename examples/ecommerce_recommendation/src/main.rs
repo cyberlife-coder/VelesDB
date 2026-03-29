@@ -391,7 +391,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Hybrid search: engine-level RRF fusion of vector similarity + BM25 tag matching
     // weight=0.6 → 60% vector signal, 40% BM25 signal
     let hybrid_candidates = collection
-        .hybrid_search(&query_embedding, &tag_query, 20, Some(0.6))
+        .hybrid_search(&query_embedding, &tag_query, 20, Some(0.6), None)
         .expect("hybrid search failed");
 
     // Post-filter by business rules (in_stock, rating, price)

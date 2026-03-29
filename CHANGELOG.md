@@ -14,8 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `WITH (rerank=true)` were parsed but never executed. Now all WITH options are wired
   to their respective execution paths via new `QuerySearchOptions` struct
 - **USING FUSION ignored for NEAR+text MATCH** — Hybrid vector+text queries always used
-  hardcoded RRF k=60 with equal weights. `USING FUSION (strategy='weighted', vector_weight=0.8)`
-  now configures the text hybrid path
+  hardcoded RRF k=60 with equal weights. `USING FUSION (strategy='rrf', k=10, vector_weight=0.8)`
+  now configures both k parameter and weights in the text hybrid path
+- **WITH options ignored on NEAR+metadata filter path** — `search_with_filter()` bypassed
+  quality mode. New `search_with_filter_and_opts()` applies quality-aware HNSW search
+  with post-filtering when both filter and mode/ef_search are present
+- **LET bindings silently discarded for MATCH queries** — `LET x = 0.5 MATCH ...` now
+  returns a clear error instead of silently ignoring the bindings
 
 ### Added
 - **Component scores in SearchResult** — `SearchResult.component_scores` tracks individual

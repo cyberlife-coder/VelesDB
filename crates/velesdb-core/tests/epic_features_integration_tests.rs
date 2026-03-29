@@ -567,7 +567,7 @@ mod cross_epic_integration {
 
         // Hybrid search
         let hybrid_results = collection
-            .hybrid_search(&query, "programming", 5, Some(0.5))
+            .hybrid_search(&query, "programming", 5, Some(0.5), None)
             .expect("Hybrid search failed");
         assert!(!hybrid_results.is_empty());
     }

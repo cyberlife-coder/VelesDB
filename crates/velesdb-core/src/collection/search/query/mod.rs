@@ -247,6 +247,15 @@ impl Collection {
 
         // Unified VelesQL dispatch: allow Collection::execute_query() to run top-level MATCH queries.
         if let Some(match_clause) = query.match_clause.as_ref() {
+            // LET bindings are not yet supported with MATCH queries (v1.10).
+            // MATCH results are MatchResult, not SearchResult, so the LET
+            // evaluation pipeline does not apply. Return an explicit error
+            // instead of silently discarding the bindings.
+            if !query.let_bindings.is_empty() {
+                return Err(crate::error::Error::Query(
+                    "LET bindings are not supported with MATCH queries in this version".to_string(),
+                ));
+            }
             return self.dispatch_match_query(match_clause, params, &ctx);
         }
 

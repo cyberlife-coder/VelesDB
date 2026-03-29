@@ -398,6 +398,7 @@ pub async fn hybrid_search<R: Runtime>(
                     &request.query,
                     request.top_k,
                     Some(request.vector_weight),
+                    None,
                 )?
             };
             Ok(map_core_results(search_results))

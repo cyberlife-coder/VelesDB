@@ -339,7 +339,7 @@ mod hybrid_e2e {
         assert!(!text_results.is_empty() || text_results.is_empty()); // May be empty if BM25 not indexed
 
         // Hybrid search
-        let hybrid_results = col.hybrid_search(&generate_vector(1, 32), "learning", 3, Some(0.5));
+        let hybrid_results = col.hybrid_search(&generate_vector(1, 32), "learning", 3, Some(0.5), None);
         if let Ok(results) = hybrid_results {
             // Results may be empty if no text indexed
             let _ = results;

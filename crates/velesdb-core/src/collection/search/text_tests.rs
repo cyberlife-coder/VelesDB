@@ -140,7 +140,7 @@ fn test_hybrid_search_combines_vector_and_text() {
     // Vector query close to point 1 ([1,0,0,0]) + text query "rust"
     let vector_query = vec![0.9, 0.1, 0.0, 0.0];
     let results = col
-        .hybrid_search(&vector_query, "rust", 5, None)
+        .hybrid_search(&vector_query, "rust", 5, None, None)
         .expect("hybrid search");
 
     // Point 1 should rank high (close vector + "rust" in title).
@@ -157,6 +157,6 @@ fn test_hybrid_search_dimension_mismatch_error() {
     let (_dir, col) = setup_text_collection();
 
     let bad_vec = vec![1.0, 0.0]; // dim=2, expected=4
-    let result = col.hybrid_search(&bad_vec, "rust", 5, None);
+    let result = col.hybrid_search(&bad_vec, "rust", 5, None, None);
     assert!(result.is_err(), "wrong dimension should error");
 }

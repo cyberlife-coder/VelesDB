@@ -344,6 +344,56 @@ fn test_evaluate_let_bindings_similarity() {
     assert!((result[0].1 - 0.77).abs() < 1e-5);
 }
 
+// ============================================================================
+// I. FIX 2: LET with MATCH returns clear error
+// ============================================================================
+
+/// `LET x = 0.5 MATCH (a)-[r]->(b) RETURN a LIMIT 5` must return an error
+/// explaining that LET bindings are not supported with MATCH queries.
+/// Before the fix, MATCH dispatch happened before LET evaluation, silently
+/// discarding the bindings.
+#[test]
+fn test_let_with_match_returns_clear_error() {
+    use crate::collection::graph::GraphEdge;
+
+    let (_dir, col) = setup_let_collection();
+
+    // Add graph edges so MATCH has something to traverse.
+    let edge1 = GraphEdge::new(1, 0, 1, "RELATED").expect("edge");
+    let edge2 = GraphEdge::new(2, 1, 2, "RELATED").expect("edge");
+    col.add_edge(edge1).expect("add edge");
+    col.add_edge(edge2).expect("add edge");
+
+    let params = HashMap::new();
+    let result = col.execute_query_str(
+        "LET x = 0.5 MATCH (a)-[r:RELATED]->(b) RETURN a LIMIT 5",
+        &params,
+    );
+
+    // Must be an error, not silently ignored.
+    assert!(result.is_err(), "LET + MATCH should return an error");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("LET") && err_msg.contains("MATCH"),
+        "Error should mention LET and MATCH, got: {err_msg}"
+    );
+}
+
+/// MATCH without LET should still work fine (backward compat).
+#[test]
+fn test_match_without_let_still_works() {
+    use crate::collection::graph::GraphEdge;
+
+    let (_dir, col) = setup_let_collection();
+    let edge = GraphEdge::new(1, 0, 1, "RELATED").expect("edge");
+    col.add_edge(edge).expect("add edge");
+
+    let params = HashMap::new();
+    let result = col.execute_query_str("MATCH (a)-[r:RELATED]->(b) RETURN a LIMIT 5", &params);
+    // Should succeed (no LET bindings).
+    assert!(result.is_ok(), "MATCH without LET should succeed");
+}
+
 /// Empty bindings produce empty result.
 #[test]
 fn test_evaluate_let_bindings_empty() {

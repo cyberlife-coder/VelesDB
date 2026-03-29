@@ -168,17 +168,15 @@ impl Collection {
         cbo_over_fetch: usize,
     ) -> Result<Vec<SearchResult>> {
         if let Some(text_query) = Self::extract_match_query(cond) {
-            let vector_weight = search_opts
-                .fusion_clause
-                .as_ref()
-                .and_then(|fc| fc.vector_weight)
-                .map(|w| {
-                    // Reason: f64 → f32 for API compat; weight is clamped 0.0–1.0.
-                    #[allow(clippy::cast_possible_truncation)]
-                    let w_f32 = w as f32;
-                    w_f32
-                });
-            return self.hybrid_search(vector, &text_query, execution_limit, vector_weight);
+            let fusion = search_opts.fusion_clause.as_ref();
+            let vector_weight = fusion.and_then(|fc| fc.vector_weight).map(|w| {
+                // Reason: f64 → f32 for API compat; weight is clamped 0.0–1.0.
+                #[allow(clippy::cast_possible_truncation)]
+                let w_f32 = w as f32;
+                w_f32
+            });
+            let rrf_k = fusion.and_then(|fc| fc.k);
+            return self.hybrid_search(vector, &text_query, execution_limit, vector_weight, rrf_k);
         }
         let cbo_search_k = execution_limit
             .saturating_mul(cbo_over_fetch)
@@ -192,7 +190,7 @@ impl Collection {
                 crate::velesql::ExecutionStrategy::GraphFirst => {
                     Ok(self.scan_and_score_by_vector(&filter, vector, execution_limit))
                 }
-                _ => self.search_with_filter(vector, cbo_search_k, &filter),
+                _ => self.search_with_filter_and_opts(vector, cbo_search_k, &filter, search_opts),
             };
         }
         self.search_with_opts(vector, execution_limit, search_opts)

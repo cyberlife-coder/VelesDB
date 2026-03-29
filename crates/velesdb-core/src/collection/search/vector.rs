@@ -417,14 +417,83 @@ impl Collection {
         let candidates_k = (k_f64 / selectivity).ceil().clamp(lower, 10_000.0) as usize;
         let index_results = self.search_ids_with_adc_if_pq(query, candidates_k);
 
+        Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
+    }
+
+    /// Searches with metadata filtering AND quality options from a WITH clause.
+    ///
+    /// Combines the candidate-retrieval strategy of [`search_with_opts`] with the
+    /// post-filtering of [`search_with_filter`]. When quality options are present,
+    /// uses quality-aware HNSW search (higher ef_search) for candidates before
+    /// applying the metadata filter. Falls back to [`search_with_filter`] when no
+    /// quality options are set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match the collection.
+    pub(crate) fn search_with_filter_and_opts(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: &crate::filter::Filter,
+        opts: &crate::collection::search::query::QuerySearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        // No quality options: delegate to the standard filter path.
+        if opts.quality.is_none() && opts.ef_search.is_none() && opts.force_rerank.is_none() {
+            return self.search_with_filter(query, k, filter);
+        }
+
+        let config = self.config.read();
+        validate_dimension_match(config.dimension, query.len())?;
+        let higher_is_better = config.metric.higher_is_better();
+        let metric = config.metric;
+        drop(config);
+
+        let quality = opts.quality.unwrap_or_else(|| {
+            opts.ef_search
+                .map_or(crate::SearchQuality::Balanced, |ef| match ef {
+                    0..=64 => crate::SearchQuality::Fast,
+                    65..=128 => crate::SearchQuality::Balanced,
+                    129..=512 => crate::SearchQuality::Accurate,
+                    _ => crate::SearchQuality::Perfect,
+                })
+        });
+
+        // Over-fetch for filtering: retrieve more candidates than needed.
+        let selectivity = estimate_filter_selectivity(filter);
+        // Reason: k is a small search count (typically <1000); f64 has 52-bit mantissa.
+        #[allow(clippy::cast_precision_loss)]
+        let k_f64 = k as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let lower = (k + 10) as f64;
+        // Reason: result is clamped to [k+10, 10_000] so no truncation risk.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let candidates_k = (k_f64 / selectivity).ceil().clamp(lower, 10_000.0) as usize;
+
+        let index_results = self.index.search_with_quality(query, candidates_k, quality);
+        let index_results = self.merge_delta(index_results, query, candidates_k, metric);
+
+        let results = self.filter_and_hydrate(index_results, filter, k, higher_is_better);
+        Ok(results)
+    }
+
+    /// Filters scored results by metadata and hydrates matching points.
+    ///
+    /// Shared logic for `search_with_filter` and `search_with_filter_and_opts`
+    /// to avoid duplicating the filter-then-hydrate pipeline.
+    fn filter_and_hydrate(
+        &self,
+        index_results: Vec<ScoredResult>,
+        filter: &crate::filter::Filter,
+        k: usize,
+        higher_is_better: bool,
+    ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
         let mut results: Vec<SearchResult> = index_results
             .into_iter()
             .filter_map(|sr| {
-                // Filter-then-hydrate: test payload filter BEFORE retrieving the vector
-                // to avoid expensive vector reads for non-matching candidates.
                 let payload = payload_storage.retrieve(sr.id).ok().flatten();
                 let matches = match payload.as_ref() {
                     Some(p) => filter.matches(p),
@@ -449,7 +518,7 @@ impl Collection {
         resolve::sort_results_by_metric(&mut results, higher_is_better);
         results.truncate(k);
         tag_vector_component_scores(&mut results);
-        Ok(results)
+        results
     }
 }
 

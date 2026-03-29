@@ -150,7 +150,7 @@ fn bench_collection_hybrid_search(c: &mut Criterion) {
             b.iter(|| {
                 black_box(
                     collection
-                        .hybrid_search(&query_vector, "rust programming", 10, Some(0.5))
+                        .hybrid_search(&query_vector, "rust programming", 10, Some(0.5), None)
                         .unwrap(),
                 )
             });

@@ -154,7 +154,7 @@ impl VectorCollection {
         k: usize,
         alpha: Option<f32>,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.hybrid_search(vector, text, k, alpha)
+        self.inner.hybrid_search(vector, text, k, alpha, None)
     }
 
     /// Performs hybrid search (vector + BM25) with a metadata filter.

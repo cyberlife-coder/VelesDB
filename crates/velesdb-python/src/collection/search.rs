@@ -223,8 +223,13 @@ impl Collection {
                     &f,
                 )
             } else {
-                self.inner
-                    .hybrid_search(&query_vector, &query_owned, top_k, Some(vector_weight))
+                self.inner.hybrid_search(
+                    &query_vector,
+                    &query_owned,
+                    top_k,
+                    Some(vector_weight),
+                    None,
+                )
             }
             .map_err(core_err)
         })?;

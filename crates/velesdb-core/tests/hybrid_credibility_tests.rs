@@ -158,7 +158,7 @@ fn test_hyb02_fusion_ranking_differs_from_pure_vector() {
 
     // Hybrid fusion: must differ from pure vector ranking
     let hybrid_results = collection
-        .hybrid_search(&[1.0, 0.0, 0.0, 0.0_f32], "rust", 3, Some(0.5))
+        .hybrid_search(&[1.0, 0.0, 0.0, 0.0_f32], "rust", 3, Some(0.5), None)
         .expect("hybrid search");
 
     let vector_ids: Vec<u64> = vector_results.iter().map(|r| r.point.id).collect();

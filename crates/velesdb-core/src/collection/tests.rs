@@ -327,7 +327,7 @@ fn test_collection_hybrid_search() {
     // Doc 3 matches text only
     let query = vec![1.0, 0.0, 0.0];
     let results = collection
-        .hybrid_search(&query, "rust", 3, Some(0.5))
+        .hybrid_search(&query, "rust", 3, Some(0.5), None)
         .unwrap();
 
     assert!(!results.is_empty());
@@ -407,7 +407,7 @@ fn test_hybrid_search_text_weight_zero() {
     // vector_weight=1.0 means text_weight=0.0 (pure vector search)
     let query = vec![0.9, 0.1, 0.0];
     let results = collection
-        .hybrid_search(&query, "rust", 2, Some(1.0))
+        .hybrid_search(&query, "rust", 2, Some(1.0), None)
         .unwrap();
 
     // Doc 2 should be first (closest vector) even though "rust" matches doc 1
@@ -438,7 +438,7 @@ fn test_hybrid_search_vector_weight_zero() {
     // vector_weight=0.0 means text_weight=1.0 (pure text search)
     let query = vec![0.99, 0.01, 0.0];
     let results = collection
-        .hybrid_search(&query, "rust", 2, Some(0.0))
+        .hybrid_search(&query, "rust", 2, Some(0.0), None)
         .unwrap();
 
     // Doc 1 should be first (matches "rust") even though doc 2 has closer vector
