@@ -2,15 +2,23 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.9.2** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.10.0** | Node.js >= 18 | Browser (WASM) | MIT License
 
-## What's New in v1.9.2
+## What's New in v1.10.0
 
-- **SearchQuality type** -- new `SearchQuality` type and `quality` field in `SearchOptions` for per-query recall/latency control (`fast`, `balanced`, `accurate`, `perfect`, `custom:N`, `adaptive:min:max`)
+- **VelesQL LET clause** -- named score bindings for custom scoring formulas
+- **Component scores** -- `vector_score`, `bm25_score`, `graph_score` resolve independently in ORDER BY
+- **WITH options functional** -- `mode`, `timeout_ms`, `rerank` now wired to execution (were parsed but ignored)
+- **Agent Memory VelesQL** -- query semantic/episodic/procedural memory via standard VelesQL
+- **USING FUSION k parameter** -- configurable RRF constant for hybrid text search
+
+### Previous (v1.9.2)
+
+- **SearchQuality type** -- `SearchQuality` type and `quality` field in `SearchOptions`
 - **StorageMode in HnswParams** -- `storageMode` field in HNSW configuration
-- **Relative score fusion** -- `'relative_score'` fusion strategy in `MultiQuerySearchOptions`
-- **DistanceMetric "ip" alias** -- `"ip"` accepted as an alias for `"dot"` (inner product)
-- **StorageMode aliases** -- `"f32"`, `"int8"`, `"bit"` accepted as aliases for `"full"`, `"sq8"`, `"binary"`
+- **Relative score fusion** -- `'relative_score'` fusion strategy
+- **DistanceMetric "ip" alias** -- `"ip"` accepted as alias for `"dot"`
+- **StorageMode aliases** -- `"f32"`, `"int8"`, `"bit"` accepted
 
 ### Previous (v1.9.1)
 
