@@ -96,16 +96,21 @@ impl SelectColumns {
         match self {
             Self::All => vec!["*".to_string()],
             Self::Columns(cols) => cols.iter().map(|c| c.name.clone()).collect(),
-            Self::Aggregations(aggs) => {
-                aggs.iter().map(|a| format!("{:?}", a.function_type)).collect()
-            }
+            Self::Aggregations(aggs) => aggs
+                .iter()
+                .map(|a| format!("{:?}", a.function_type))
+                .collect(),
             Self::Mixed {
                 columns,
                 aggregations,
                 ..
             } => {
                 let mut result: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
-                result.extend(aggregations.iter().map(|a| format!("{:?}", a.function_type)));
+                result.extend(
+                    aggregations
+                        .iter()
+                        .map(|a| format!("{:?}", a.function_type)),
+                );
                 result
             }
             Self::SimilarityScore(expr) => {
@@ -171,9 +176,7 @@ impl SelectOrderBy {
         let dir = if self.descending { "DESC" } else { "ASC" };
         let col = match &self.expr {
             OrderByExpr::Field(f) => f.clone(),
-            OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => {
-                "similarity()".to_string()
-            }
+            OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => "similarity()".to_string(),
             OrderByExpr::Aggregate(agg) => format!("{:?}", agg.function_type),
             OrderByExpr::Arithmetic(expr) => format!("{expr}"),
         };
