@@ -259,6 +259,47 @@ fn test_let_with_offset_and_limit() {
     assert_eq!(results.len(), 3);
 }
 
+/// LET + NOT similarity() returns explicit error (not silent wrong results).
+#[test]
+fn test_let_with_not_similarity_returns_error() {
+    let (_dir, col) = setup_let_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+
+    let result = col.execute_query_str(
+        "LET s = 1.0 SELECT * FROM docs WHERE NOT similarity(vector, $v) > 0.8 LIMIT 5",
+        &params,
+    );
+
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("NOT similarity()"),
+        "expected NOT similarity() error, got: {msg}"
+    );
+}
+
+/// LET + OR/union query returns explicit error.
+#[test]
+fn test_let_with_union_query_returns_error() {
+    let (_dir, col) = setup_let_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+
+    let result = col.execute_query_str(
+        "LET s = 1.0 SELECT * FROM docs \
+         WHERE similarity(vector, $v) > 0.5 OR category = 'tech' LIMIT 5",
+        &params,
+    );
+
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("OR/union"),
+        "expected OR/union error, got: {msg}"
+    );
+}
+
 /// LET + WITH (mode='fast') combined.
 #[test]
 fn test_let_with_with_clause() {

@@ -276,6 +276,22 @@ impl Collection {
             {
                 return Ok(results);
             }
+        } else {
+            // Guard: LET + unsupported query shapes → explicit error (not silent fallthrough).
+            let unsupported = if extracted.sparse_vector_search.is_some() {
+                Some("SPARSE_NEAR")
+            } else if extracted.is_not_similarity_query {
+                Some("NOT similarity()")
+            } else if extracted.is_union_query {
+                Some("OR/union")
+            } else {
+                None
+            };
+            if let Some(shape) = unsupported {
+                return Err(crate::error::Error::Query(format!(
+                    "LET bindings are not supported with {shape} queries in this version"
+                )));
+            }
         }
 
         // Phase 2: Main dispatch.
