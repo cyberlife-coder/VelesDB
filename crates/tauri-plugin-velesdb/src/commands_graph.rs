@@ -4,6 +4,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::{CommandError, Error};
+use crate::helpers::require_graph_collection;
 use crate::state::VelesDbState;
 use crate::types::{
     AddEdgeRequest, EdgeOutput, GetEdgesRequest, GetNodeDegreeRequest, NodeDegreeOutput,
@@ -21,9 +22,7 @@ pub async fn add_edge<R: Runtime>(
 ) -> std::result::Result<(), CommandError> {
     state
         .with_db(|db| {
-            let coll = db
-                .get_graph_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_graph_collection(&db, &request.collection)?;
 
             // Convert properties to HashMap
             let properties: std::collections::HashMap<String, serde_json::Value> =
@@ -57,9 +56,7 @@ pub async fn get_edges<R: Runtime>(
 ) -> std::result::Result<Vec<EdgeOutput>, CommandError> {
     state
         .with_db(|db| {
-            let coll = db
-                .get_graph_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_graph_collection(&db, &request.collection)?;
 
             let edges = if let Some(label) = &request.label {
                 coll.get_edges(Some(label.as_str()))
@@ -94,9 +91,7 @@ pub async fn traverse_graph<R: Runtime>(
 ) -> std::result::Result<Vec<TraversalOutput>, CommandError> {
     state
         .with_db(|db| {
-            let coll = db
-                .get_graph_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_graph_collection(&db, &request.collection)?;
 
             let config = TraversalConfig::with_range(1, request.max_depth)
                 .with_limit(request.limit)
@@ -129,9 +124,7 @@ pub async fn get_node_degree<R: Runtime>(
 ) -> std::result::Result<NodeDegreeOutput, CommandError> {
     state
         .with_db(|db| {
-            let coll = db
-                .get_graph_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_graph_collection(&db, &request.collection)?;
 
             let (in_degree, out_degree) = coll.node_degree(request.node_id);
 

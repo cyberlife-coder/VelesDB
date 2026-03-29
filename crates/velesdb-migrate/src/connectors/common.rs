@@ -181,6 +181,65 @@ pub fn detect_fields_from_sample(
         .collect()
 }
 
+/// Checks an HTTP response status and returns an error on failure.
+///
+/// This eliminates the repeated pattern of:
+/// ```text
+/// if !resp.status().is_success() {
+///     let status = resp.status();
+///     let body = resp.text().await.unwrap_or_default();
+///     return Err(Error::...(format!("... {status} - {body}")));
+/// }
+/// ```
+///
+/// The error message always includes the status code and body text so that
+/// downstream retry logic (which pattern-matches on "429", "500", etc.) works
+/// identically to the hand-written checks it replaces.
+///
+/// # Errors
+///
+/// Returns `Error::SourceConnection` with a message containing the HTTP status
+/// and response body when the response is not 2xx.
+pub async fn check_response(
+    response: reqwest::Response,
+    source_name: &str,
+    operation: &str,
+) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Err(Error::SourceConnection(format!(
+        "{source_name} {operation} failed: {status} - {body}"
+    )))
+}
+
+/// Builds an [`ExtractedBatch`] from collected points using numeric offset pagination.
+///
+/// Computes `has_more` by comparing `points.len()` to `batch_size`, and
+/// produces `next_offset = current + points.len()` when there are more results.
+///
+/// Use this for connectors that paginate with a simple numeric skip/offset
+/// (MongoDB, Redis, Elasticsearch scroll_after excluded, Supabase, Milvus, ChromaDB).
+pub fn build_numeric_offset_batch(
+    points: Vec<crate::connectors::ExtractedPoint>,
+    batch_size: usize,
+    current_offset: u64,
+) -> crate::connectors::ExtractedBatch {
+    let has_more = points.len() == batch_size;
+    let next_offset = if has_more {
+        Some(serde_json::json!(current_offset + points.len() as u64))
+    } else {
+        None
+    };
+    crate::connectors::ExtractedBatch {
+        points,
+        next_offset,
+        has_more,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

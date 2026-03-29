@@ -140,16 +140,11 @@ impl QuerySearchOptions {
 
 /// Maps a mode string from `WITH (mode='...')` to a [`SearchQuality`](crate::SearchQuality).
 ///
-/// Returns `None` for unrecognized mode strings (caller preserves default behavior).
+/// Delegates to [`crate::api_types::mode_to_search_quality`] which also handles
+/// advanced modes (`custom:<ef>`, `adaptive:<min>:<max>`).
+#[cfg(feature = "persistence")]
 fn parse_mode_to_quality(mode: &str) -> Option<crate::SearchQuality> {
-    match mode.to_lowercase().as_str() {
-        "fast" => Some(crate::SearchQuality::Fast),
-        "balanced" => Some(crate::SearchQuality::Balanced),
-        "accurate" => Some(crate::SearchQuality::Accurate),
-        "perfect" => Some(crate::SearchQuality::Perfect),
-        "autotune" | "auto_tune" | "auto" => Some(crate::SearchQuality::AutoTune),
-        _ => None,
-    }
+    crate::api_types::mode_to_search_quality(mode)
 }
 
 /// Context for early-return query paths (NOT-similarity, union).

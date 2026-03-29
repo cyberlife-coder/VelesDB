@@ -5,6 +5,26 @@ from __future__ import annotations
 from typing import Any, List
 
 
+def parse_graph_traverse_response(response: Any) -> List[int]:
+    """Parse a VelesDB REST graph traversal HTTP response into neighbour IDs.
+
+    Centralises the response-inspection logic shared by the LangChain and
+    LlamaIndex ``_traverse_graph_rest`` implementations.
+
+    Args:
+        response: The ``requests.Response`` object returned by the
+            ``/graph/traverse`` endpoint.
+
+    Returns:
+        List of integer ``target_id`` values from successful responses,
+        or an empty list when the server returns any non-200 status.
+    """
+    if response.status_code == 200:
+        data = response.json()
+        return [r["target_id"] for r in data.get("results", [])]
+    return []
+
+
 def build_graph_rest_payload(
     source_id: int,
     max_depth: int,

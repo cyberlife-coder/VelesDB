@@ -8,8 +8,8 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::collection::query::{
-    build_explain_dict, convert_params, match_result_to_dict, parse_velesql,
-    search_results_to_id_score,
+    build_explain_dict, parse_velesql, run_velesql_match, run_velesql_select,
+    run_velesql_select_ids,
 };
 use crate::collection_helpers::{core_err, search_result_to_dict};
 use crate::graph::{dict_to_edge, edge_to_dict, traversal_to_dict};
@@ -390,16 +390,8 @@ impl PyGraphCollection {
         query_str: &str,
         params: Option<HashMap<String, PyObject>>,
     ) -> PyResult<Vec<PyObject>> {
-        let parsed = parse_velesql(query_str)?;
-        let rust_params = convert_params(py, params)?;
-
-        let results = py.allow_threads(|| {
-            self.inner
-                .execute_query(&parsed, &rust_params)
-                .map_err(core_err)
-        })?;
-
-        Ok(crate::collection_helpers::search_results_to_multimodel_dicts(py, results))
+        let inner = &self.inner;
+        run_velesql_select(py, query_str, params, |q, p| inner.execute_query(q, p))
     }
 
     /// Execute a MATCH graph traversal query.
@@ -429,32 +421,14 @@ impl PyGraphCollection {
         vector: Option<PyObject>,
         threshold: f32,
     ) -> PyResult<Vec<PyObject>> {
-        let parsed = parse_velesql(query_str)?;
-        let match_clause = parsed
-            .match_clause
-            .as_ref()
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Query is not a MATCH query"))?
-            .clone();
-
-        let rust_params = convert_params(py, params)?;
-        let query_vector = vector.map(|v| extract_vector(py, &v)).transpose()?;
-
-        let results = py.allow_threads(|| {
-            if let Some(ref qv) = query_vector {
-                self.inner
-                    .execute_match_with_similarity(&match_clause, qv, threshold, &rust_params)
-                    .map_err(core_err)
+        let inner = &self.inner;
+        run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
+            if let Some(ref qv) = qv {
+                inner.execute_match_with_similarity(&mc, qv, threshold, &p)
             } else {
-                self.inner
-                    .execute_match(&match_clause, &rust_params)
-                    .map_err(core_err)
+                inner.execute_match(&mc, &p)
             }
-        })?;
-
-        Ok(results
-            .into_iter()
-            .map(|r| match_result_to_dict(py, r))
-            .collect())
+        })
     }
 
     /// Return query execution plan (EXPLAIN).
@@ -485,16 +459,8 @@ impl PyGraphCollection {
         velesql: &str,
         params: Option<HashMap<String, PyObject>>,
     ) -> PyResult<Vec<PyObject>> {
-        let parsed_query = parse_velesql(velesql)?;
-        let json_params = convert_params(py, params)?;
-
-        let results = py.allow_threads(|| {
-            self.inner
-                .execute_query(&parsed_query, &json_params)
-                .map_err(core_err)
-        })?;
-
-        Ok(search_results_to_id_score(py, results))
+        let inner = &self.inner;
+        run_velesql_select_ids(py, velesql, params, |q, p| inner.execute_query(q, p))
     }
 }
 

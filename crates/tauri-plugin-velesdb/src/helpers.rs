@@ -126,6 +126,40 @@ pub fn map_core_results(
     results.into_iter().map(map_core_result).collect()
 }
 
+/// Looks up a collection by name, returning a typed error on miss.
+///
+/// Eliminates the repeated `db.get_collection(name).ok_or_else(|| ...)` pattern
+/// used by every command that operates on a collection.
+///
+/// Uses the deprecated `Collection` type for backward compatibility with commands
+/// that have not yet migrated to typed collection APIs.
+#[allow(deprecated)]
+pub fn require_collection(
+    db: &velesdb_core::Database,
+    name: &str,
+) -> Result<velesdb_core::Collection> {
+    db.get_collection(name)
+        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+}
+
+/// Looks up a `VectorCollection` by name, returning a typed error on miss.
+pub fn require_vector_collection(
+    db: &velesdb_core::Database,
+    name: &str,
+) -> Result<velesdb_core::VectorCollection> {
+    db.get_vector_collection(name)
+        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+}
+
+/// Looks up a `GraphCollection` by name, returning a typed error on miss.
+pub fn require_graph_collection(
+    db: &velesdb_core::Database,
+    name: &str,
+) -> Result<velesdb_core::GraphCollection> {
+    db.get_graph_collection(name)
+        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+}
+
 /// Parses an optional JSON filter value into a core `Filter`.
 ///
 /// Returns `Ok(None)` when the filter is absent.

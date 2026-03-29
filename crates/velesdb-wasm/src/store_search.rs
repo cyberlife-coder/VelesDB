@@ -15,6 +15,38 @@ fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
     serde_wasm_bindgen::to_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Converts scored triples `(id, score, payload)` to a JSON array of objects.
+///
+/// Shared by `hybrid_search_impl`, `search_with_filter_impl`, and
+/// `hybrid_search_quantized` in `lib.rs`.
+pub(crate) fn scored_triples_to_js(
+    results: Vec<(u64, f32, Option<&serde_json::Value>)>,
+) -> Result<JsValue, JsValue> {
+    let output: Vec<serde_json::Value> = results
+        .into_iter()
+        .map(|(id, score, payload)| {
+            serde_json::json!({
+                "id": id,
+                "score": score,
+                "payload": payload
+            })
+        })
+        .collect();
+    to_js(&output)
+}
+
+/// Sorts `(id, score, payload)` triples by score according to metric ordering.
+///
+/// Reuses the same comparison logic as [`vector_ops::sort_results`] but operates
+/// on triples that carry an optional payload reference.
+pub(crate) fn sort_scored_triples<T>(results: &mut [(u64, f32, T)], higher_is_better: bool) {
+    if higher_is_better {
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    } else {
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    }
+}
+
 /// Validates query dimension matches store dimension.
 #[inline]
 pub fn validate_dimension(query_len: usize, store_dim: usize) -> Result<(), JsValue> {
@@ -139,21 +171,10 @@ pub fn hybrid_search_impl(
         })
         .collect();
 
-    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    sort_scored_triples(&mut results, true);
     results.truncate(k);
 
-    let output: Vec<serde_json::Value> = results
-        .into_iter()
-        .map(|(id, score, payload)| {
-            serde_json::json!({
-                "id": id,
-                "score": score,
-                "payload": payload
-            })
-        })
-        .collect();
-
-    to_js(&output)
+    scored_triples_to_js(results)
 }
 
 /// Multi-query search with fusion.
@@ -247,27 +268,10 @@ where
         filter_fn,
     );
 
-    results.sort_by(|a, b| {
-        if metric.higher_is_better() {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        } else {
-            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-        }
-    });
+    sort_scored_triples(&mut results, metric.higher_is_better());
     results.truncate(k);
 
-    let output: Vec<serde_json::Value> = results
-        .into_iter()
-        .map(|(id, score, payload)| {
-            serde_json::json!({
-                "id": id,
-                "score": score,
-                "payload": payload
-            })
-        })
-        .collect();
-
-    to_js(&output)
+    scored_triples_to_js(results)
 }
 
 /// Similarity search with threshold filtering.

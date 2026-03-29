@@ -216,21 +216,15 @@ pub(crate) fn cmd_browse(db: &Database, parts: &[&str]) -> CommandResult {
 
     match collection_helpers::resolve_collection(db, name) {
         Some(collection_helpers::TypedCollection::Vector(col)) => {
-            let all_ids = col.all_ids();
-            let total = all_ids.len();
-            let total_pages = total.div_ceil(page_size);
-
-            let page_ids: Vec<u64> = all_ids.into_iter().skip(offset).take(page_size).collect();
-            let points = col.get(&page_ids);
-
-            let rows: Vec<_> = points
-                .into_iter()
-                .flatten()
-                .take(page_size)
-                .map(|p| helpers::point_payload_to_browse_row(p.id, &p.payload))
-                .collect();
-
-            print_browse_page(name, "", page, total_pages, total, &rows);
+            browse_id_based(
+                col.all_ids(),
+                |ids| col.get(ids),
+                name,
+                "",
+                page,
+                page_size,
+                offset,
+            );
         }
         Some(collection_helpers::TypedCollection::Graph(col)) => {
             let node_page = match graph_display::paginate_graph_nodes(&col, page, page_size) {
@@ -259,21 +253,15 @@ pub(crate) fn cmd_browse(db: &Database, parts: &[&str]) -> CommandResult {
             }
         }
         Some(collection_helpers::TypedCollection::Metadata(col)) => {
-            let all_ids = col.all_ids();
-            let total = all_ids.len();
-            let total_pages = total.div_ceil(page_size);
-
-            let page_ids: Vec<u64> = all_ids.into_iter().skip(offset).take(page_size).collect();
-            let points = col.get(&page_ids);
-
-            let rows: Vec<_> = points
-                .into_iter()
-                .flatten()
-                .take(page_size)
-                .map(|p| helpers::point_payload_to_browse_row(p.id, &p.payload))
-                .collect();
-
-            print_browse_page(name, " (Metadata)", page, total_pages, total, &rows);
+            browse_id_based(
+                col.all_ids(),
+                |ids| col.get(ids),
+                name,
+                " (Metadata)",
+                page,
+                page_size,
+                offset,
+            );
         }
         None => {
             return CommandResult::Error(format!("Collection '{name}' not found"));
@@ -418,6 +406,29 @@ fn print_sample_rows(rows: &[HashMap<String, serde_json::Value>], name: &str, ty
 }
 
 /// Prints a browse page with a consistent header and navigation hint.
+/// Paginate and display an ID-based collection (Vector or Metadata).
+fn browse_id_based(
+    all_ids: Vec<u64>,
+    get_fn: impl Fn(&[u64]) -> Vec<Option<velesdb_core::Point>>,
+    name: &str,
+    suffix: &str,
+    page: usize,
+    page_size: usize,
+    offset: usize,
+) {
+    let total = all_ids.len();
+    let total_pages = total.div_ceil(page_size);
+    let page_ids: Vec<u64> = all_ids.into_iter().skip(offset).take(page_size).collect();
+    let points = get_fn(&page_ids);
+    let rows: Vec<_> = points
+        .into_iter()
+        .flatten()
+        .take(page_size)
+        .map(|p| helpers::point_payload_to_browse_row(p.id, &p.payload))
+        .collect();
+    print_browse_page(name, suffix, page, total_pages, total, &rows);
+}
+
 fn print_browse_page(
     name: &str,
     type_suffix: &str,

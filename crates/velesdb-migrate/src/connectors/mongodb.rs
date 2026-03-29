@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::connectors::common::{
-    create_http_client, detect_fields_from_sample, extract_payload_from_object, handle_http_error,
-    parse_vector_from_json, validate_url,
+    build_numeric_offset_batch, check_response, create_http_client, detect_fields_from_sample,
+    extract_payload_from_object, parse_vector_from_json, validate_url,
 };
 use crate::connectors::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
@@ -134,17 +134,9 @@ impl MongoDBConnector {
             .await
             .map_err(|e| Error::SourceConnection(format!("MongoDB API request failed: {}", e)))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+        let checked = check_response(response, "MongoDB", action).await?;
 
-            return Err(handle_http_error(status.as_u16(), &body, "MongoDB"));
-        }
-
-        response
+        checked
             .json()
             .await
             .map_err(|e| Error::Extraction(format!("Failed to parse MongoDB response: {}", e)))
@@ -305,19 +297,7 @@ impl SourceConnector for MongoDBConnector {
             });
         }
 
-        let fetched = points.len() as u64;
-        let has_more = fetched == batch_size as u64;
-        let next_offset = if has_more {
-            Some(serde_json::json!(skip + fetched))
-        } else {
-            None
-        };
-
-        Ok(ExtractedBatch {
-            points,
-            next_offset,
-            has_more,
-        })
+        Ok(build_numeric_offset_batch(points, batch_size, skip))
     }
 
     async fn close(&mut self) -> Result<()> {

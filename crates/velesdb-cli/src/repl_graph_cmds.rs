@@ -10,6 +10,13 @@ use velesdb_core::Database;
 use crate::graph_display;
 use crate::repl_commands::{parse_flag, CommandResult};
 
+/// Parse a node/source ID from command parts, returning a `CommandResult::Error` on failure.
+fn parse_node_id(parts: &[&str], idx: usize) -> Result<u64, CommandResult> {
+    parts[idx]
+        .parse()
+        .map_err(|_| CommandResult::Error(format!("Invalid node ID: {}", parts[idx])))
+}
+
 pub(crate) fn cmd_graph(db: &Database, parts: &[&str]) -> CommandResult {
     if parts.len() < 2 {
         print_graph_help();
@@ -111,9 +118,9 @@ fn cmd_graph_degree(db: &Database, parts: &[&str]) -> CommandResult {
         Ok(c) => c,
         Err(r) => return r,
     };
-    let node_id: u64 = match parts[3].parse() {
+    let node_id: u64 = match parse_node_id(parts, 3) {
         Ok(v) => v,
-        Err(_) => return CommandResult::Error(format!("Invalid node ID: {}", parts[3])),
+        Err(r) => return r,
     };
 
     let (in_deg, out_deg) = col.node_degree(node_id);
@@ -130,9 +137,9 @@ fn cmd_graph_traverse(db: &Database, parts: &[&str]) -> CommandResult {
         Ok(c) => c,
         Err(r) => return r,
     };
-    let source: u64 = match parts[3].parse() {
+    let source: u64 = match parse_node_id(parts, 3) {
         Ok(v) => v,
-        Err(_) => return CommandResult::Error(format!("Invalid source ID: {}", parts[3])),
+        Err(r) => return r,
     };
 
     let algo = parse_flag(parts, "--algo").unwrap_or_else(|| "bfs".to_string());
@@ -173,9 +180,9 @@ fn cmd_graph_neighbors(db: &Database, parts: &[&str]) -> CommandResult {
         Ok(c) => c,
         Err(r) => return r,
     };
-    let node_id: u64 = match parts[3].parse() {
+    let node_id: u64 = match parse_node_id(parts, 3) {
         Ok(v) => v,
-        Err(_) => return CommandResult::Error(format!("Invalid node ID: {}", parts[3])),
+        Err(r) => return r,
     };
 
     let dir = parse_flag(parts, "--direction").unwrap_or_else(|| "out".to_string());

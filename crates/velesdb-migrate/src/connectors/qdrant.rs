@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
-use super::common::create_http_client;
+use super::common::{check_response, create_http_client};
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::QdrantConfig;
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 /// Qdrant source connector.
 pub struct QdrantConnector {
@@ -200,14 +200,7 @@ impl SourceConnector for QdrantConnector {
         info!("Connecting to Qdrant at {}", self.config.url);
 
         let resp = self.request(reqwest::Method::GET, "").send().await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::SourceConnection(format!(
-                "Qdrant connection failed: {status} - {body}"
-            )));
-        }
+        check_response(resp, "Qdrant", "connect").await?;
 
         info!("Connected to Qdrant collection: {}", self.config.collection);
         Ok(())
@@ -215,16 +208,9 @@ impl SourceConnector for QdrantConnector {
 
     async fn get_schema(&self) -> Result<SourceSchema> {
         let resp = self.request(reqwest::Method::GET, "").send().await?;
+        let checked = check_response(resp, "Qdrant", "get_schema").await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "Failed to get schema: {status} - {body}"
-            )));
-        }
-
-        let info: QdrantCollectionInfo = resp.json().await?;
+        let info: QdrantCollectionInfo = checked.json().await?;
 
         let dimension = match info.result.config.params.vectors {
             QdrantVectorConfig::Single { size } => size,
@@ -268,15 +254,9 @@ impl SourceConnector for QdrantConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "Qdrant scroll failed: {status} - {body}"
-            )));
-        }
+        let checked = check_response(resp, "Qdrant", "scroll").await?;
 
-        let scroll_resp: ScrollResponse = resp.json().await?;
+        let scroll_resp: ScrollResponse = checked.json().await?;
 
         let points: Vec<ExtractedPoint> = scroll_resp
             .result

@@ -37,6 +37,7 @@ from llamaindex_velesdb._common import (
     build_graph_rest_payload,
     is_timeout_exception,
     open_native_graph,
+    parse_graph_traverse_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -407,12 +408,7 @@ class GraphRetriever(BaseRetriever):
         )
         timeout_sec = self._timeout_ms / 1000.0
         response = requests.post(url, json=payload, timeout=timeout_sec)
-
-        if response.status_code == 200:
-            data = response.json()
-            return [r["target_id"] for r in data.get("results", [])]
-
-        return []
+        return parse_graph_traverse_response(response)
 
     def _fetch_node(self, node_id: int) -> Optional[TextNode]:
         """Fetch a node by ID from the vector store.

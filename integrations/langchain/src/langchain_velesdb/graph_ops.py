@@ -10,11 +10,12 @@ from typing import Any, List, Optional
 
 from langchain_core.documents import Document
 
+from velesdb_common.graph_ops_base import GraphOpsBase
 from langchain_velesdb._common import payload_to_doc_parts
 from langchain_velesdb.security import validate_query
 
 
-class GraphOpsMixin:
+class GraphOpsMixin(GraphOpsBase):
     """Mixin providing VelesQL query and graph operations for VelesDBVectorStore.
 
     Expects the host class to provide:
@@ -53,19 +54,6 @@ class GraphOpsMixin:
             text, metadata = payload_to_doc_parts(result)
             documents.append(Document(page_content=text, metadata=metadata))
         return documents
-
-    def explain(
-        self,
-        query_str: str,
-        **kwargs: Any,
-    ) -> dict:
-        """Get the query execution plan for a VelesQL query."""
-        validate_query(query_str)
-
-        if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
-
-        return self._collection.explain(query_str)
 
     def match_query(
         self,

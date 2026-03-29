@@ -1,8 +1,9 @@
 //! Auto-discovery of collections and tables from source databases.
 
 use crate::config::SourceConfig;
-use crate::connectors::{create_connector, SourceSchema};
+use crate::connectors::SourceSchema;
 use crate::error::Result;
+use crate::source_config_builder;
 
 use super::SourceType;
 
@@ -31,12 +32,7 @@ impl SourceDiscovery {
         api_key: Option<&str>,
         collection: &str,
     ) -> Result<Vec<DiscoveredCollection>> {
-        let source_config = Self::build_config(source_type, url, api_key, collection)?;
-        let mut connector = create_connector(&source_config)?;
-
-        connector.connect().await?;
-        let schema = connector.get_schema().await?;
-        connector.close().await?;
+        let schema = Self::get_schema(source_type, url, api_key, collection).await?;
 
         Ok(vec![DiscoveredCollection {
             name: schema.collection.clone(),
@@ -53,18 +49,12 @@ impl SourceDiscovery {
         collection: &str,
     ) -> Result<SourceSchema> {
         let source_config = Self::build_config(source_type, url, api_key, collection)?;
-        let mut connector = create_connector(&source_config)?;
-
-        connector.connect().await?;
-        let schema = connector.get_schema().await?;
-        connector.close().await?;
-
-        Ok(schema)
+        source_config_builder::fetch_schema(&source_config).await
     }
 
     /// Builds source config for discovery.
     ///
-    /// Delegates to [`crate::source_config_builder::build_source_config`]
+    /// Delegates to [`source_config_builder::build_source_config`]
     /// to avoid duplicating the per-source match block.
     fn build_config(
         source_type: SourceType,
@@ -72,12 +62,12 @@ impl SourceDiscovery {
         api_key: Option<&str>,
         collection: &str,
     ) -> Result<SourceConfig> {
-        let params = crate::source_config_builder::SourceParams {
+        let params = source_config_builder::SourceParams {
             source_type,
             url,
             api_key,
             collection,
         };
-        crate::source_config_builder::build_source_config(&params)
+        source_config_builder::build_source_config(&params)
     }
 }

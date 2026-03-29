@@ -51,6 +51,7 @@ mod fusion;
 mod graph;
 mod graph_persistence;
 mod graph_worker;
+mod idb_helpers;
 mod parsing;
 mod persistence;
 mod serialization;
@@ -769,21 +770,10 @@ fn hybrid_search_quantized(
         .collect();
 
     // Sort descending by combined score (hybrid always uses higher-is-better).
-    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    store_search::sort_scored_triples(&mut results, true);
     results.truncate(k);
 
-    let output: Vec<serde_json::Value> = results
-        .into_iter()
-        .map(|(id, score, payload)| {
-            serde_json::json!({
-                "id": id,
-                "score": score,
-                "payload": payload
-            })
-        })
-        .collect();
-
-    serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
+    store_search::scored_triples_to_js(results)
 }
 
 /// Search result containing ID and score.

@@ -107,12 +107,8 @@ impl EpisodicMemory {
         timestamp: i64,
         embedding: Option<&[f32]>,
     ) -> Result<(), AgentMemoryError> {
-        if let Some(emb) = embedding {
-            memory_helpers::validate_dimension(self.dimension, emb.len())?;
-        }
-
+        let vector = memory_helpers::resolve_embedding(self.dimension, embedding)?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        let vector = embedding.map_or_else(|| vec![0.0; self.dimension], <[f32]>::to_vec);
 
         let point = Point::new(
             event_id,
@@ -199,20 +195,22 @@ impl EpisodicMemory {
     ///
     /// Returns an error when the embedding dimension is invalid, when the collection
     /// is unavailable, or when vector search fails.
-    #[allow(deprecated)]
     pub fn recall_similar(
         &self,
         query_embedding: &[f32],
         k: usize,
     ) -> Result<Vec<(u64, String, i64, f32)>, AgentMemoryError> {
-        memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
-
-        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        let results = memory_helpers::search_collection(&collection, query_embedding, k)?;
+        let results = memory_helpers::search_filtered(
+            &self.db,
+            &self.collection_name,
+            self.dimension,
+            query_embedding,
+            k,
+            &self.ttl,
+        )?;
 
         Ok(results
             .into_iter()
-            .filter(|r| !self.ttl.is_expired(r.point.id))
             .filter_map(|r| {
                 let (desc, ts) = extract_event_fields(&r.point)?;
                 Some((r.point.id, desc, ts, r.score))

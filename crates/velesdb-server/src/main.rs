@@ -223,24 +223,24 @@ fn warn_if_exposed(host: &str) {
     }
 }
 
-/// Returns a future that resolves when SIGINT (Ctrl+C) or SIGTERM is received.
-async fn shutdown_signal() {
-    let ctrl_c = tokio::signal::ctrl_c();
-
+/// Returns a future that resolves when SIGTERM is received (Unix) or never (non-Unix).
+async fn sigterm() {
     #[cfg(unix)]
-    let terminate = async {
+    {
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("failed to install SIGTERM handler")
             .recv()
             .await;
-    };
-
+    }
     #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    std::future::pending::<()>().await;
+}
 
+/// Returns a future that resolves when SIGINT (Ctrl+C) or SIGTERM is received.
+async fn shutdown_signal() {
     tokio::select! {
-        _ = ctrl_c => tracing::info!("Received SIGINT (Ctrl+C), initiating graceful shutdown..."),
-        () = terminate => tracing::info!("Received SIGTERM, initiating graceful shutdown..."),
+        _ = tokio::signal::ctrl_c() => tracing::info!("Received SIGINT (Ctrl+C), initiating graceful shutdown..."),
+        () = sigterm() => tracing::info!("Received SIGTERM, initiating graceful shutdown..."),
     }
 }
 
@@ -302,17 +302,7 @@ async fn tls_accept_loop(
     active_conns: Arc<std::sync::atomic::AtomicUsize>,
 ) {
     let shutdown = tokio::signal::ctrl_c();
-
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    let terminate = sigterm();
 
     tokio::pin!(shutdown);
     tokio::pin!(terminate);

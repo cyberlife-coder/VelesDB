@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-use super::common::create_http_client;
+use super::common::{check_response, create_http_client};
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::ChromaDBConfig;
 use crate::error::{Error, Result};
@@ -89,15 +89,9 @@ impl SourceConnector for ChromaDBConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::SourceConnection(format!(
-                "ChromaDB connection failed: {status} - {body}"
-            )));
-        }
+        let checked = check_response(resp, "ChromaDB", "connect").await?;
 
-        let collection: CollectionInfo = resp.json().await?;
+        let collection: CollectionInfo = checked.json().await?;
         self.collection_id = Some(collection.id.clone());
 
         info!(
@@ -197,16 +191,9 @@ impl SourceConnector for ChromaDBConnector {
         );
 
         let resp = self.client.post(&url).json(&req).send().await?;
+        let checked = check_response(resp, "ChromaDB", "get").await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "ChromaDB get failed: {status} - {body}"
-            )));
-        }
-
-        let data: GetResponse = resp.json().await?;
+        let data: GetResponse = checked.json().await?;
 
         let embeddings = data.embeddings.unwrap_or_default();
         let metadatas = data.metadatas.unwrap_or_default();
@@ -237,20 +224,13 @@ impl SourceConnector for ChromaDBConnector {
             });
         }
 
-        let has_more = points.len() == batch_size;
-        let next_offset = if has_more {
-            Some(serde_json::json!(current_offset + points.len()))
-        } else {
-            None
-        };
-
         debug!("Extracted {} documents from ChromaDB", points.len());
 
-        Ok(ExtractedBatch {
+        Ok(super::common::build_numeric_offset_batch(
             points,
-            next_offset,
-            has_more,
-        })
+            batch_size,
+            current_offset as u64,
+        ))
     }
 
     async fn close(&mut self) -> Result<()> {

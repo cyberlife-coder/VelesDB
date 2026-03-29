@@ -99,6 +99,84 @@ pub(crate) fn convert_params(
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Shared VelesQL execution helpers (used by Collection + PyGraphCollection)
+// ---------------------------------------------------------------------------
+
+/// Execute a VelesQL SELECT query and convert results to multimodel dicts.
+pub(crate) fn run_velesql_select<F>(
+    py: Python<'_>,
+    query_str: &str,
+    params: Option<HashMap<String, PyObject>>,
+    execute: F,
+) -> PyResult<Vec<PyObject>>
+where
+    F: FnOnce(
+            &velesdb_core::velesql::Query,
+            &HashMap<String, serde_json::Value>,
+        ) -> velesdb_core::error::Result<Vec<velesdb_core::SearchResult>>
+        + Send,
+{
+    let parsed = parse_velesql(query_str)?;
+    let rust_params = convert_params(py, params)?;
+    let results = py.allow_threads(move || execute(&parsed, &rust_params).map_err(core_err))?;
+    Ok(crate::collection_helpers::search_results_to_multimodel_dicts(py, results))
+}
+
+/// Execute a VelesQL SELECT query and return only IDs and scores.
+pub(crate) fn run_velesql_select_ids<F>(
+    py: Python<'_>,
+    query_str: &str,
+    params: Option<HashMap<String, PyObject>>,
+    execute: F,
+) -> PyResult<Vec<PyObject>>
+where
+    F: FnOnce(
+            &velesdb_core::velesql::Query,
+            &HashMap<String, serde_json::Value>,
+        ) -> velesdb_core::error::Result<Vec<velesdb_core::SearchResult>>
+        + Send,
+{
+    let parsed = parse_velesql(query_str)?;
+    let rust_params = convert_params(py, params)?;
+    let results = py.allow_threads(move || execute(&parsed, &rust_params).map_err(core_err))?;
+    Ok(search_results_to_id_score(py, results))
+}
+
+/// Execute a VelesQL MATCH query and convert results to dicts.
+pub(crate) fn run_velesql_match<F>(
+    py: Python<'_>,
+    query_str: &str,
+    params: Option<HashMap<String, PyObject>>,
+    vector: Option<PyObject>,
+    execute: F,
+) -> PyResult<Vec<PyObject>>
+where
+    F: FnOnce(
+            velesdb_core::velesql::MatchClause,
+            HashMap<String, serde_json::Value>,
+            Option<Vec<f32>>,
+        ) -> velesdb_core::error::Result<
+            Vec<velesdb_core::collection::search::query::match_exec::MatchResult>,
+        > + Send,
+{
+    let parsed = parse_velesql(query_str)?;
+    let match_clause = parsed
+        .match_clause
+        .as_ref()
+        .ok_or_else(|| PyValueError::new_err("Query is not a MATCH query"))?
+        .clone();
+    let rust_params = convert_params(py, params)?;
+    let query_vector = vector.map(|v| extract_vector(py, &v)).transpose()?;
+    let results = py.allow_threads(move || {
+        execute(match_clause, rust_params, query_vector).map_err(core_err)
+    })?;
+    Ok(results
+        .into_iter()
+        .map(|r| match_result_to_dict(py, r))
+        .collect())
+}
+
 #[pymethods]
 impl Collection {
     /// Execute a VelesQL query (EPIC-031 US-008).
@@ -123,16 +201,8 @@ impl Collection {
         query_str: &str,
         params: Option<HashMap<String, PyObject>>,
     ) -> PyResult<Vec<PyObject>> {
-        let parsed = parse_velesql(query_str)?;
-        let rust_params = convert_params(py, params)?;
-
-        let results = py.allow_threads(|| {
-            self.inner
-                .execute_query(&parsed, &rust_params)
-                .map_err(core_err)
-        })?;
-
-        Ok(crate::collection_helpers::search_results_to_multimodel_dicts(py, results))
+        let inner = &self.inner;
+        run_velesql_select(py, query_str, params, |q, p| inner.execute_query(q, p))
     }
 
     /// Execute a MATCH graph traversal query.
@@ -154,33 +224,14 @@ impl Collection {
         vector: Option<PyObject>,
         threshold: f32,
     ) -> PyResult<Vec<PyObject>> {
-        let parsed = parse_velesql(query_str)?;
-        let match_clause = parsed
-            .match_clause
-            .as_ref()
-            .ok_or_else(|| PyValueError::new_err("Query is not a MATCH query"))?
-            .clone();
-
-        let rust_params = convert_params(py, params)?;
-        let query_vector = vector.map(|v| extract_vector(py, &v)).transpose()?;
-
-        let results = py.allow_threads(|| {
-            if let Some(ref qv) = query_vector {
-                self.inner
-                    .execute_match_with_similarity(&match_clause, qv, threshold, &rust_params)
-                    .map_err(core_err)
+        let inner = &self.inner;
+        run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
+            if let Some(ref qv) = qv {
+                inner.execute_match_with_similarity(&mc, qv, threshold, &p)
             } else {
-                self.inner
-                    .execute_match(&match_clause, &rust_params)
-                    .map_err(core_err)
+                inner.execute_match(&mc, &p)
             }
-        })?;
-
-        let py_results: Vec<PyObject> = results
-            .into_iter()
-            .map(|r| match_result_to_dict(py, r))
-            .collect();
-        Ok(py_results)
+        })
     }
 
     /// Return query execution plan (EXPLAIN).
@@ -210,15 +261,7 @@ impl Collection {
         velesql: &str,
         params: Option<HashMap<String, PyObject>>,
     ) -> PyResult<Vec<PyObject>> {
-        let parsed_query = parse_velesql(velesql)?;
-        let json_params = convert_params(py, params)?;
-
-        let results = py.allow_threads(|| {
-            self.inner
-                .execute_query(&parsed_query, &json_params)
-                .map_err(core_err)
-        })?;
-
-        Ok(search_results_to_id_score(py, results))
+        let inner = &self.inner;
+        run_velesql_select_ids(py, velesql, params, |q, p| inner.execute_query(q, p))
     }
 }

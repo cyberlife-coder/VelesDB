@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::connectors::common::{
-    create_http_client, detect_fields_from_sample, extract_payload_from_object, handle_http_error,
+    check_response, create_http_client, detect_fields_from_sample, extract_payload_from_object,
     parse_vector_from_json,
 };
 use crate::connectors::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
@@ -111,30 +111,25 @@ impl ElasticsearchConnector {
         }
     }
 
+    /// Builds an index-scoped URL with the given action suffix.
+    fn build_index_url(&self, action: &str) -> String {
+        let base = self.config.url.trim_end_matches('/');
+        let index_path = if self.config.index.starts_with('/') {
+            self.config.index.clone()
+        } else {
+            format!("/{}", self.config.index)
+        };
+        format!("{base}{index_path}/{action}")
+    }
+
     /// Builds the search URL for the index.
     fn build_search_url(&self) -> String {
-        format!(
-            "{}{}/_search",
-            self.config.url.trim_end_matches('/'),
-            if self.config.index.starts_with('/') {
-                self.config.index.clone()
-            } else {
-                format!("/{}", self.config.index)
-            }
-        )
+        self.build_index_url("_search")
     }
 
     /// Builds the count URL for the index.
     fn build_count_url(&self) -> String {
-        format!(
-            "{}{}/_count",
-            self.config.url.trim_end_matches('/'),
-            if self.config.index.starts_with('/') {
-                self.config.index.clone()
-            } else {
-                format!("/{}", self.config.index)
-            }
-        )
+        self.build_index_url("_count")
     }
 
     /// Makes an authenticated request.
@@ -168,24 +163,14 @@ impl ElasticsearchConnector {
             .await
             .map_err(|e| Error::SourceConnection(format!("Elasticsearch request failed: {}", e)))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(Error::SourceConnection(format!(
-                "Elasticsearch error {}: {}",
-                status, body
-            )));
-        }
+        let checked = check_response(response, "Elasticsearch", "count").await?;
 
         #[derive(Deserialize)]
         struct CountResponse {
             count: u64,
         }
 
-        let count_resp: CountResponse = response
+        let count_resp: CountResponse = checked
             .json()
             .await
             .map_err(|e| Error::Extraction(format!("Failed to parse count response: {}", e)))?;
@@ -242,17 +227,9 @@ impl SourceConnector for ElasticsearchConnector {
             .await
             .map_err(|e| Error::SourceConnection(format!("Elasticsearch request failed: {}", e)))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+        let checked = check_response(response, "Elasticsearch", "connect").await?;
 
-            return Err(handle_http_error(status.as_u16(), &body, "Elasticsearch"));
-        }
-
-        let search_resp: SearchResponse = response
+        let search_resp: SearchResponse = checked
             .json()
             .await
             .map_err(|e| Error::Extraction(format!("Failed to parse search response: {}", e)))?;
@@ -319,23 +296,9 @@ impl SourceConnector for ElasticsearchConnector {
             .await
             .map_err(|e| Error::SourceConnection(format!("Elasticsearch request failed: {}", e)))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+        let checked = check_response(response, "Elasticsearch", "search").await?;
 
-            if status.as_u16() == 429 {
-                return Err(Error::RateLimit(60));
-            }
-            return Err(Error::SourceConnection(format!(
-                "Elasticsearch error {}: {}",
-                status, body
-            )));
-        }
-
-        let search_resp: SearchResponse = response
+        let search_resp: SearchResponse = checked
             .json()
             .await
             .map_err(|e| Error::Extraction(format!("Failed to parse search response: {}", e)))?;

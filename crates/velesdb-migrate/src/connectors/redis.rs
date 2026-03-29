@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::connectors::common::{
-    create_http_client, extract_payload_from_object, handle_http_error, parse_vector_from_json,
+    build_numeric_offset_batch, check_response, create_http_client, extract_payload_from_object,
+    parse_vector_from_json,
 };
 use crate::connectors::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
@@ -128,16 +129,9 @@ impl RedisConnector {
             .await
             .map_err(|e| Error::SourceConnection(format!("Redis request failed: {}", e)))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(handle_http_error(status.as_u16(), &body, "Redis"));
-        }
+        let checked = check_response(response, "Redis", command).await?;
 
-        response
+        checked
             .json()
             .await
             .map_err(|e| Error::Extraction(format!("Failed to parse Redis response: {}", e)))
@@ -318,18 +312,7 @@ impl SourceConnector for RedisConnector {
             });
         }
 
-        let has_more = points.len() == batch_size;
-        let next_offset = if has_more {
-            Some(serde_json::json!(offset_num + batch_size as u64))
-        } else {
-            None
-        };
-
-        Ok(ExtractedBatch {
-            points,
-            next_offset,
-            has_more,
-        })
+        Ok(build_numeric_offset_batch(points, batch_size, offset_num))
     }
 
     async fn close(&mut self) -> Result<()> {

@@ -5,10 +5,15 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-use super::common::{create_http_client, extract_id_from_value, json_type_name};
+use super::common::{
+    build_numeric_offset_batch, check_response, create_http_client, extract_id_from_value,
+    json_type_name,
+};
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::{PgVectorConfig, SupabaseConfig};
-use crate::error::{Error, Result};
+#[cfg(not(feature = "postgres"))]
+use crate::error::Error;
+use crate::error::Result;
 
 /// pgvector (`PostgreSQL`) source connector.
 pub struct PgVectorConnector {
@@ -167,13 +172,7 @@ impl SourceConnector for SupabaseConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::SourceConnection(format!(
-                "Supabase connection failed: {status} - {body}"
-            )));
-        }
+        check_response(resp, "Supabase", "connect").await?;
 
         info!("Connected to Supabase table: {}", self.config.table);
         Ok(())
@@ -264,15 +263,9 @@ impl SourceConnector for SupabaseConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "Supabase query failed: {status} - {body}"
-            )));
-        }
+        let checked = check_response(resp, "Supabase", "extract_batch").await?;
 
-        let rows: Vec<HashMap<String, serde_json::Value>> = resp.json().await?;
+        let rows: Vec<HashMap<String, serde_json::Value>> = checked.json().await?;
 
         let mut points = Vec::with_capacity(rows.len());
 
@@ -292,20 +285,13 @@ impl SourceConnector for SupabaseConnector {
             });
         }
 
-        let has_more = points.len() == batch_size;
-        let next_offset = if has_more {
-            Some(serde_json::json!(current_offset + points.len() as u64))
-        } else {
-            None
-        };
-
         debug!("Extracted {} rows from Supabase", points.len());
 
-        Ok(ExtractedBatch {
+        Ok(build_numeric_offset_batch(
             points,
-            next_offset,
-            has_more,
-        })
+            batch_size,
+            current_offset,
+        ))
     }
 
     async fn close(&mut self) -> Result<()> {

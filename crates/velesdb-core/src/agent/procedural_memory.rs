@@ -111,15 +111,13 @@ impl ProceduralMemory {
         dimension: usize,
         ttl: Arc<MemoryTtl>,
     ) -> Result<Self, AgentMemoryError> {
-        let collection_name = Self::COLLECTION_NAME.to_string();
-        let actual_dimension =
-            memory_helpers::open_or_create_collection(&db, &collection_name, dimension)?;
-        let stored_ids = RwLock::new(memory_helpers::load_stored_ids(&db, &collection_name));
+        let (collection_name, dimension, stored_ids) =
+            memory_helpers::init_tracked_memory(&db, Self::COLLECTION_NAME, dimension)?;
 
         Ok(Self {
             collection_name,
             db,
-            dimension: actual_dimension,
+            dimension,
             ttl,
             reinforcement_strategy: Arc::new(FixedRate::default()),
             stored_ids,
@@ -148,12 +146,8 @@ impl ProceduralMemory {
         embedding: Option<&[f32]>,
         confidence: f32,
     ) -> Result<(), AgentMemoryError> {
-        if let Some(emb) = embedding {
-            memory_helpers::validate_dimension(self.dimension, emb.len())?;
-        }
-
+        let vector = memory_helpers::resolve_embedding(self.dimension, embedding)?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        let vector = embedding.map_or_else(|| vec![0.0; self.dimension], <[f32]>::to_vec);
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -205,21 +199,23 @@ impl ProceduralMemory {
     ///
     /// Returns an error when embedding dimension is invalid, collection access fails,
     /// or vector search fails.
-    #[allow(deprecated)]
     pub fn recall(
         &self,
         query_embedding: &[f32],
         k: usize,
         min_confidence: f32,
     ) -> Result<Vec<ProcedureMatch>, AgentMemoryError> {
-        memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
-
-        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        let results = memory_helpers::search_collection(&collection, query_embedding, k)?;
+        let results = memory_helpers::search_filtered(
+            &self.db,
+            &self.collection_name,
+            self.dimension,
+            query_embedding,
+            k,
+            &self.ttl,
+        )?;
 
         Ok(results
             .into_iter()
-            .filter(|r| !self.ttl.is_expired(r.point.id))
             .filter_map(|r| {
                 let pm = extract_procedure_match(&r.point, r.score)?;
                 if pm.confidence < min_confidence {
@@ -363,14 +359,14 @@ impl ProceduralMemory {
     /// # Errors
     ///
     /// Returns an error when collection access or deletion fails.
-    #[allow(deprecated)]
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
-        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        memory_helpers::delete_from_collection(&collection, &[id])?;
-
-        self.stored_ids.write().remove(&id);
-        self.ttl.remove(id);
-        Ok(())
+        memory_helpers::delete_tracked_point(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.stored_ids,
+            &self.ttl,
+        )
     }
 
     /// Serializes all procedures into snapshot bytes.
@@ -378,11 +374,8 @@ impl ProceduralMemory {
     /// # Errors
     ///
     /// Returns an error when collection access or JSON encoding fails.
-    #[allow(deprecated)]
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
-        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        let all_ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();
-        memory_helpers::serialize_points(&collection, &all_ids)
+        memory_helpers::serialize_tracked_points(&self.db, &self.collection_name, &self.stored_ids)
     }
 
     /// Replaces procedural memory state from serialized snapshot bytes.
@@ -391,13 +384,13 @@ impl ProceduralMemory {
     ///
     /// Returns an error when JSON decoding fails, collection access fails,
     /// or persistence operations fail.
-    #[allow(deprecated)]
     pub fn deserialize(&self, data: &[u8]) -> Result<(), AgentMemoryError> {
-        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        if let Some(points) = memory_helpers::deserialize_into_collection(data, &collection)? {
-            memory_helpers::rebuild_stored_ids(&self.stored_ids, &points);
-        }
-        Ok(())
+        memory_helpers::deserialize_tracked_points(
+            &self.db,
+            &self.collection_name,
+            data,
+            &self.stored_ids,
+        )
     }
 }
 

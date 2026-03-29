@@ -89,35 +89,7 @@ impl ParsedQuery {
     /// Get the list of selected columns as JSON array.
     #[wasm_bindgen(getter)]
     pub fn columns(&self) -> JsValue {
-        use velesdb_core::velesql::SelectColumns;
-        let cols: Vec<String> = match &self.inner.select.columns {
-            SelectColumns::All => vec!["*".to_string()],
-            SelectColumns::Columns(cols) => cols.iter().map(|c| c.name.clone()).collect(),
-            SelectColumns::Aggregations(aggs) => aggs
-                .iter()
-                .map(|a| format!("{:?}", a.function_type))
-                .collect(),
-            SelectColumns::Mixed {
-                columns,
-                aggregations,
-                ..
-            } => {
-                let mut result: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
-                result.extend(
-                    aggregations
-                        .iter()
-                        .map(|a| format!("{:?}", a.function_type)),
-                );
-                result
-            }
-            SelectColumns::SimilarityScore(expr) => {
-                vec![expr
-                    .alias
-                    .clone()
-                    .unwrap_or_else(|| "similarity".to_string())]
-            }
-            SelectColumns::QualifiedWildcard(alias) => vec![format!("{alias}.*")],
-        };
+        let cols = self.inner.select.columns.to_display_names();
         serde_wasm_bindgen::to_value(&cols).unwrap_or(JsValue::NULL)
     }
 
@@ -185,30 +157,15 @@ impl ParsedQuery {
     /// Get the ORDER BY columns and directions as JSON array.
     #[wasm_bindgen(getter, js_name = orderBy)]
     pub fn order_by(&self) -> JsValue {
-        let order_by: Vec<(String, String)> = match &self.inner.select.order_by {
-            Some(order_items) => order_items
-                .iter()
-                .map(|item| {
-                    let dir = if item.descending { "DESC" } else { "ASC" };
-                    let col = match &item.expr {
-                        velesdb_core::velesql::OrderByExpr::Field(f) => f.clone(),
-                        velesdb_core::velesql::OrderByExpr::Similarity(_)
-                        | velesdb_core::velesql::OrderByExpr::SimilarityBare => {
-                            "similarity()".to_string()
-                        }
-                        velesdb_core::velesql::OrderByExpr::Aggregate(agg) => {
-                            format!("{:?}", agg.function_type)
-                        }
-                        velesdb_core::velesql::OrderByExpr::Arithmetic(expr) => {
-                            format!("{expr}")
-                        }
-                    };
-                    (col, dir.to_string())
-                })
-                .collect(),
-            None => Vec::new(),
-        };
-        serde_wasm_bindgen::to_value(&order_by).unwrap_or(JsValue::NULL)
+        let pairs: Vec<(String, String)> = self
+            .inner
+            .select
+            .order_by
+            .as_deref()
+            .map_or_else(Vec::new, |items| {
+                items.iter().map(|item| item.to_display_pair()).collect()
+            });
+        serde_wasm_bindgen::to_value(&pairs).unwrap_or(JsValue::NULL)
     }
 
     /// Get the GROUP BY columns as JSON array.

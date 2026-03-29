@@ -168,34 +168,7 @@ impl ParsedStatement {
     ///     ['id', 'name']
     #[getter]
     fn columns(&self) -> Vec<String> {
-        match &self.inner.select.columns {
-            SelectColumns::All => vec!["*".to_string()],
-            SelectColumns::Columns(cols) => cols.iter().map(|c| c.name.clone()).collect(),
-            SelectColumns::Aggregations(aggs) => aggs
-                .iter()
-                .map(|a| format!("{:?}", a.function_type))
-                .collect(),
-            SelectColumns::Mixed {
-                columns,
-                aggregations,
-                ..
-            } => {
-                let mut result: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
-                result.extend(
-                    aggregations
-                        .iter()
-                        .map(|a| format!("{:?}", a.function_type)),
-                );
-                result
-            }
-            SelectColumns::SimilarityScore(expr) => {
-                vec![expr
-                    .alias
-                    .clone()
-                    .unwrap_or_else(|| "similarity".to_string())]
-            }
-            SelectColumns::QualifiedWildcard(alias) => vec![format!("{alias}.*")],
-        }
+        self.inner.select.columns.to_display_names()
     }
 
     /// Check if DISTINCT modifier is present.
@@ -298,29 +271,13 @@ impl ParsedStatement {
     ///     [('date', 'DESC'), ('name', 'ASC')]
     #[getter]
     fn order_by(&self) -> Vec<(String, String)> {
-        match &self.inner.select.order_by {
-            Some(order_items) => order_items
-                .iter()
-                .map(|item| {
-                    let dir = if item.descending { "DESC" } else { "ASC" };
-                    let col = match &item.expr {
-                        velesdb_core::velesql::OrderByExpr::Field(f) => f.clone(),
-                        velesdb_core::velesql::OrderByExpr::Similarity(_)
-                        | velesdb_core::velesql::OrderByExpr::SimilarityBare => {
-                            "similarity()".to_string()
-                        }
-                        velesdb_core::velesql::OrderByExpr::Aggregate(agg) => {
-                            format!("{:?}", agg.function_type)
-                        }
-                        velesdb_core::velesql::OrderByExpr::Arithmetic(expr) => {
-                            format!("{expr}")
-                        }
-                    };
-                    (col, dir.to_string())
-                })
-                .collect(),
-            None => Vec::new(),
-        }
+        self.inner
+            .select
+            .order_by
+            .as_deref()
+            .map_or_else(Vec::new, |items| {
+                items.iter().map(|item| item.to_display_pair()).collect()
+            })
     }
 
     /// Get the GROUP BY columns.

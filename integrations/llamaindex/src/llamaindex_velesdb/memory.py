@@ -20,12 +20,27 @@ from typing import Any, Dict, List, Optional
 import velesdb
 
 from llamaindex_velesdb._common import make_initial_id_counter
-from velesdb_common.memory import format_procedural_results
+from velesdb_common.memory import format_procedural_results, store_procedure
 
 logger = logging.getLogger(__name__)
 
 
-class VelesDBSemanticMemory:
+class _VelesDBMemoryBase:
+    """Internal base providing common VelesDB database + memory initialisation.
+
+    Shared by all three LlamaIndex memory classes to avoid repeating the
+    ``db_path`` validation and ``agent_memory`` setup in every ``__init__``.
+    """
+
+    def __init__(self, db_path: str, dimension: int = 384) -> None:
+        if not db_path:
+            raise ValueError("db_path must not be empty")
+        self._db = velesdb.Database(db_path)
+        self._dimension = dimension
+        self._memory = self._db.agent_memory(dimension=dimension)
+
+
+class VelesDBSemanticMemory(_VelesDBMemoryBase):
     """Semantic memory backed by VelesDB for LlamaIndex agent workflows.
 
     Stores named knowledge facts with embedding vectors and retrieves them
@@ -40,13 +55,6 @@ class VelesDBSemanticMemory:
         >>> memory.add_fact(1, "Paris is the capital of France", embedding)
         >>> results = memory.query(query_embedding, top_k=3)
     """
-
-    def __init__(self, db_path: str, dimension: int = 384) -> None:
-        if not db_path:
-            raise ValueError("db_path must not be empty")
-        self._db = velesdb.Database(db_path)
-        self._dimension = dimension
-        self._memory = self._db.agent_memory(dimension=dimension)
 
     def add_fact(
         self,
@@ -104,7 +112,7 @@ class VelesDBSemanticMemory:
         self._memory = self._db.agent_memory(dimension=self._dimension)
 
 
-class VelesDBEpisodicMemory:
+class VelesDBEpisodicMemory(_VelesDBMemoryBase):
     """Episodic memory backed by VelesDB for LlamaIndex agent workflows.
 
     Records timestamped events and retrieves them by recency or embedding
@@ -121,11 +129,7 @@ class VelesDBEpisodicMemory:
     """
 
     def __init__(self, db_path: str, dimension: int = 384) -> None:
-        if not db_path:
-            raise ValueError("db_path must not be empty")
-        self._db = velesdb.Database(db_path)
-        self._dimension = dimension
-        self._memory = self._db.agent_memory(dimension=dimension)
+        super().__init__(db_path, dimension)
         self._event_counter = make_initial_id_counter()
 
     def record_event(
@@ -200,7 +204,7 @@ class VelesDBEpisodicMemory:
         self._memory = self._db.agent_memory(dimension=self._dimension)
 
 
-class VelesDBProceduralMemory:
+class VelesDBProceduralMemory(_VelesDBMemoryBase):
     """Procedural memory backed by VelesDB for LlamaIndex agent workflows.
 
     Stores named procedures (ordered step sequences) with confidence
@@ -220,11 +224,7 @@ class VelesDBProceduralMemory:
     """
 
     def __init__(self, db_path: str, dimension: int = 384) -> None:
-        if not db_path:
-            raise ValueError("db_path must not be empty")
-        self._db = velesdb.Database(db_path)
-        self._dimension = dimension
-        self._memory = self._db.agent_memory(dimension=dimension)
+        super().__init__(db_path, dimension)
         self._name_to_id: Dict[str, int] = {}
         self._id_counter = make_initial_id_counter()
 
@@ -248,20 +248,14 @@ class VelesDBProceduralMemory:
         Raises:
             ValueError: If ``name`` or ``steps`` is empty.
         """
-        if not name:
-            raise ValueError("Procedure name must not be empty")
-        if not steps:
-            raise ValueError("Procedure steps must not be empty")
-
-        self._id_counter += 1
-        proc_id = self._id_counter
-        self._name_to_id[name] = proc_id
-        self._memory.procedural.learn(
-            proc_id,
+        self._id_counter = store_procedure(
+            self._memory.procedural,
             name,
             steps,
-            embedding=embedding,
-            confidence=confidence,
+            self._id_counter,
+            self._name_to_id,
+            embedding,
+            confidence,
         )
 
     def recall(

@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 import time
 
 from langchain_velesdb._common import make_initial_id_counter, parse_event_entry
-from velesdb_common.memory import format_procedural_results
+from velesdb_common.memory import format_procedural_results, store_procedure
 
 try:
     from langchain.memory.chat_memory import BaseChatMemory
@@ -320,24 +320,17 @@ class VelesDBProceduralMemory:
                 omitted, the name is embedded automatically.
             confidence: Initial confidence score in [0.0, 1.0].
         """
-        if not name:
-            raise ValueError("Procedure name must not be empty")
-        if not steps:
-            raise ValueError("Procedure steps must not be empty")
-
         emb = embedding
         if emb is None and self._embeddings is not None:
             emb = self._embeddings.embed_query(name)
-
-        self._id_counter += 1
-        proc_id = self._id_counter
-        self._name_to_id[name] = proc_id
-        self._procedural.learn(
-            proc_id,
+        self._id_counter = store_procedure(
+            self._procedural,
             name,
             steps,
-            embedding=emb,
-            confidence=confidence,
+            self._id_counter,
+            self._name_to_id,
+            emb,
+            confidence,
         )
 
     def recall(

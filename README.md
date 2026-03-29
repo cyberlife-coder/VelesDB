@@ -694,6 +694,26 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ---
 
+## Using VelesDB?
+
+If you use VelesDB in your project, add this badge to your README:
+
+```markdown
+[![Built with VelesDB](https://img.shields.io/badge/Built_with-VelesDB-blue?style=flat-square)](https://github.com/cyberlife-coder/VelesDB)
+```
+
+[![Built with VelesDB](https://img.shields.io/badge/Built_with-VelesDB-blue?style=flat-square)](https://github.com/cyberlife-coder/VelesDB)
+
+We'd love to hear how you're using VelesDB! Share your experience:
+
+- **[GitHub Discussions](https://github.com/cyberlife-coder/VelesDB/discussions)** — tell us about your use case, what works well, and what could be improved
+- **Social media** — mention [@VelesDB](https://github.com/cyberlife-coder/VelesDB) and let the community know how VelesDB compares to your previous stack
+- **[Star the repo](https://github.com/cyberlife-coder/VelesDB)** — it helps others discover VelesDB
+
+Your feedback shapes the roadmap. Whether it's a RAG pipeline, a knowledge graph, an AI agent, or something we haven't imagined yet — we want to know.
+
+---
+
 ## Roadmap
 
 | Version | Status | Highlights |

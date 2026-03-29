@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-use super::common::create_http_client;
+use super::common::{check_response, create_http_client};
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::WeaviateConfig;
 use crate::error::{Error, Result};
@@ -142,15 +142,9 @@ impl SourceConnector for WeaviateConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "Failed to get Weaviate schema: {status} - {body}"
-            )));
-        }
+        let checked = check_response(resp, "Weaviate", "get_schema").await?;
 
-        let schema: SchemaResponse = resp.json().await?;
+        let schema: SchemaResponse = checked.json().await?;
 
         let class = schema
             .classes
@@ -281,15 +275,9 @@ impl SourceConnector for WeaviateConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "Weaviate GraphQL failed: {status} - {body}"
-            )));
-        }
+        let checked = check_response(resp, "Weaviate", "extract_batch").await?;
 
-        let gql_resp: GraphQLResponse = resp.json().await?;
+        let gql_resp: GraphQLResponse = checked.json().await?;
 
         if let Some(errors) = gql_resp.errors {
             let msg = errors

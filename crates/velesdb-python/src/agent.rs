@@ -16,6 +16,37 @@ use velesdb_core::agent::{
 };
 use velesdb_core::Database as CoreDatabase;
 
+/// Convert procedural memory matches to a Python list of dicts.
+fn procedures_to_pylist(
+    py: Python<'_>,
+    results: Vec<velesdb_core::agent::ProcedureMatch>,
+) -> PyResult<PyObject> {
+    let list = pyo3::types::PyList::empty(py);
+    for m in results {
+        let dict = PyDict::new(py);
+        let _ = dict.set_item(PyString::intern(py, "id"), m.id);
+        let _ = dict.set_item(PyString::intern(py, "name"), &m.name);
+        let _ = dict.set_item(PyString::intern(py, "steps"), &m.steps);
+        let _ = dict.set_item(PyString::intern(py, "confidence"), m.confidence);
+        let _ = dict.set_item(PyString::intern(py, "score"), m.score);
+        list.append(dict)?;
+    }
+    Ok(list.into())
+}
+
+/// Convert episodic event tuples to a Python list of dicts.
+fn events_to_pylist(py: Python<'_>, events: Vec<(u64, String, i64)>) -> PyResult<PyObject> {
+    let list = pyo3::types::PyList::empty(py);
+    for (id, description, timestamp) in events {
+        let dict = PyDict::new(py);
+        let _ = dict.set_item(PyString::intern(py, "id"), id);
+        let _ = dict.set_item(PyString::intern(py, "description"), description);
+        let _ = dict.set_item(PyString::intern(py, "timestamp"), timestamp);
+        list.append(dict)?;
+    }
+    Ok(list.into())
+}
+
 /// Convert `AgentMemoryError` to `PyErr`.
 fn to_py_err(e: AgentMemoryError) -> PyErr {
     PyRuntimeError::new_err(format!("{e}"))
@@ -247,16 +278,7 @@ impl PyEpisodicMemory {
     #[pyo3(signature = (limit = 10, since = None))]
     fn recent(&self, py: Python<'_>, limit: usize, since: Option<i64>) -> PyResult<PyObject> {
         let results = py.allow_threads(|| self.inner.recent(limit, since).map_err(to_py_err))?;
-
-        let list = pyo3::types::PyList::empty(py);
-        for (id, description, timestamp) in results {
-            let dict = PyDict::new(py);
-            let _ = dict.set_item(PyString::intern(py, "id"), id);
-            let _ = dict.set_item(PyString::intern(py, "description"), description);
-            let _ = dict.set_item(PyString::intern(py, "timestamp"), timestamp);
-            list.append(dict)?;
-        }
-        Ok(list.into())
+        events_to_pylist(py, results)
     }
 
     /// Find similar events by embedding.
@@ -307,16 +329,7 @@ impl PyEpisodicMemory {
     fn older_than(&self, py: Python<'_>, before: i64, limit: usize) -> PyResult<PyObject> {
         let results =
             py.allow_threads(|| self.inner.older_than(before, limit).map_err(to_py_err))?;
-
-        let list = pyo3::types::PyList::empty(py);
-        for (id, description, timestamp) in results {
-            let dict = PyDict::new(py);
-            let _ = dict.set_item(PyString::intern(py, "id"), id);
-            let _ = dict.set_item(PyString::intern(py, "description"), description);
-            let _ = dict.set_item(PyString::intern(py, "timestamp"), timestamp);
-            list.append(dict)?;
-        }
-        Ok(list.into())
+        events_to_pylist(py, results)
     }
 
     /// Delete an event by ID.
@@ -407,18 +420,7 @@ impl PyProceduralMemory {
                 .recall(&embedding, top_k, min_confidence)
                 .map_err(to_py_err)
         })?;
-
-        let list = pyo3::types::PyList::empty(py);
-        for m in results {
-            let dict = PyDict::new(py);
-            let _ = dict.set_item(PyString::intern(py, "id"), m.id);
-            let _ = dict.set_item(PyString::intern(py, "name"), &m.name);
-            let _ = dict.set_item(PyString::intern(py, "steps"), &m.steps);
-            let _ = dict.set_item(PyString::intern(py, "confidence"), m.confidence);
-            let _ = dict.set_item(PyString::intern(py, "score"), m.score);
-            list.append(dict)?;
-        }
-        Ok(list.into())
+        procedures_to_pylist(py, results)
     }
 
     /// Reinforce a procedure based on success/failure.
@@ -449,18 +451,7 @@ impl PyProceduralMemory {
     ///     >>> all_procs = memory.procedural.list_all()
     fn list_all(&self, py: Python<'_>) -> PyResult<PyObject> {
         let results = py.allow_threads(|| self.inner.list_all().map_err(to_py_err))?;
-
-        let list = pyo3::types::PyList::empty(py);
-        for m in results {
-            let dict = PyDict::new(py);
-            let _ = dict.set_item(PyString::intern(py, "id"), m.id);
-            let _ = dict.set_item(PyString::intern(py, "name"), &m.name);
-            let _ = dict.set_item(PyString::intern(py, "steps"), &m.steps);
-            let _ = dict.set_item(PyString::intern(py, "confidence"), m.confidence);
-            let _ = dict.set_item(PyString::intern(py, "score"), m.score);
-            list.append(dict)?;
-        }
-        Ok(list.into())
+        procedures_to_pylist(py, results)
     }
 
     /// Delete a procedure by ID.

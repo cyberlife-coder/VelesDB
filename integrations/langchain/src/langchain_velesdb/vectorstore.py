@@ -30,6 +30,7 @@ from langchain_velesdb.security import (
     validate_collection_name,
     validate_sparse_vector,
 )
+from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
 from langchain_velesdb._common import payload_to_doc_parts
 from langchain_velesdb.search_ops import SearchOpsMixin
@@ -61,7 +62,7 @@ def _build_point(
     return point
 
 
-class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
+class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, VectorStore):
     """VelesDB vector store for LangChain.
 
     A high-performance vector store backed by VelesDB, designed for
@@ -130,6 +131,11 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
         self._embedding = embedding
         self._db: Optional[velesdb.Database] = None
         self._collection: Optional[velesdb.Collection] = None
+
+    @property
+    def collection_name(self) -> str:
+        """Return the collection name (satisfies CollectionAdminMixin contract)."""
+        return self._collection_name
 
     @property
     def embeddings(self) -> Embeddings:
@@ -426,43 +432,6 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
         if self._collection is None:
             return True
         return self._collection.is_empty()
-
-    def create_metadata_collection(self, name: str) -> None:
-        """Create a metadata-only collection (no vectors).
-
-        Useful for storing reference data that can be JOINed with
-        vector collections (VelesDB Premium feature).
-
-        Args:
-            name: Collection name.
-        """
-        db = self._get_db()
-        db.create_metadata_collection(name)
-
-    def is_metadata_only(self) -> bool:
-        """Check if the current collection is metadata-only.
-
-        Returns:
-            True if metadata-only, False if vector collection.
-        """
-        if self._collection is None:
-            return False
-        return self._collection.is_metadata_only()
-
-    def train_pq(self, m: int = 8, k: int = 256, opq: bool = False) -> str:
-        """Train Product Quantization on the collection.
-
-        PQ training is a Database-level operation (not Collection-level).
-
-        Args:
-            m: Number of subspaces. Defaults to 8.
-            k: Number of centroids per subspace. Defaults to 256.
-            opq: Enable Optimized PQ pre-rotation. Defaults to False.
-
-        Returns:
-            Training result message.
-        """
-        return self._get_db().train_pq(self._collection_name, m=m, k=k, opq=opq)
 
     def stream_insert(
         self,

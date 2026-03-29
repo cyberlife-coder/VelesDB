@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-use super::common::{create_http_client, extract_id_from_value};
+use super::common::{
+    build_numeric_offset_batch, check_response, create_http_client, extract_id_from_value,
+};
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::MilvusConfig;
 use crate::error::{Error, Result};
@@ -117,15 +119,9 @@ impl SourceConnector for MilvusConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::SourceConnection(format!(
-                "Milvus connection failed: {status} - {body}"
-            )));
-        }
+        let checked = check_response(resp, "Milvus", "connect").await?;
 
-        let result: MilvusResponse<bool> = resp.json().await?;
+        let result: MilvusResponse<bool> = checked.json().await?;
 
         if result.code != 0 {
             return Err(Error::SourceConnection(
@@ -154,13 +150,7 @@ impl SourceConnector for MilvusConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "Failed to get Milvus schema: {status} - {body}"
-            )));
-        }
+        let resp = check_response(resp, "Milvus", "describe").await?;
 
         let result: MilvusResponse<CollectionSchema> = resp.json().await?;
 
@@ -242,13 +232,7 @@ impl SourceConnector for MilvusConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "Milvus query failed: {status} - {body}"
-            )));
-        }
+        let resp = check_response(resp, "Milvus", "query").await?;
 
         let result: MilvusResponse<Vec<HashMap<String, serde_json::Value>>> = resp.json().await?;
 
@@ -280,20 +264,13 @@ impl SourceConnector for MilvusConnector {
             });
         }
 
-        let has_more = points.len() == batch_size;
-        let next_offset = if has_more {
-            Some(serde_json::json!(current_offset + points.len()))
-        } else {
-            None
-        };
-
         debug!("Extracted {} rows from Milvus", points.len());
 
-        Ok(ExtractedBatch {
+        Ok(build_numeric_offset_batch(
             points,
-            next_offset,
-            has_more,
-        })
+            batch_size,
+            current_offset as u64,
+        ))
     }
 
     async fn close(&mut self) -> Result<()> {

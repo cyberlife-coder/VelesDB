@@ -2,7 +2,48 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+
+def store_procedure(
+    procedural: Any,
+    name: str,
+    steps: List[str],
+    id_counter: int,
+    name_to_id: Dict[str, int],
+    embedding: Optional[List[float]],
+    confidence: float,
+) -> int:
+    """Validate and store a named procedure in the procedural memory store.
+
+    Centralises the validation + ID-counter logic shared by the LangChain and
+    LlamaIndex ``VelesDBProceduralMemory.learn`` implementations.
+
+    Args:
+        procedural: The VelesDB procedural memory object (exposes ``.learn()``).
+        name: Human-readable identifier for the procedure.
+        steps: Ordered list of action steps.
+        id_counter: Current counter value; incremented to derive the new ID.
+        name_to_id: Mutable mapping updated with ``{name: new_proc_id}``.
+        embedding: Optional vector representation.
+        confidence: Initial confidence score in [0.0, 1.0].
+
+    Returns:
+        The new ``id_counter`` value (caller should save it back to ``self``).
+
+    Raises:
+        ValueError: If ``name`` or ``steps`` is empty.
+    """
+    if not name:
+        raise ValueError("Procedure name must not be empty")
+    if not steps:
+        raise ValueError("Procedure steps must not be empty")
+
+    id_counter += 1
+    proc_id = id_counter
+    name_to_id[name] = proc_id
+    procedural.learn(proc_id, name, steps, embedding=embedding, confidence=confidence)
+    return id_counter
 
 
 def format_procedural_results(results: List[Any]) -> List[Dict[str, Any]]:

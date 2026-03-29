@@ -4,10 +4,10 @@
 //! Enables offline-first PWA with persistent knowledge graphs.
 
 use crate::graph::{GraphEdge, GraphNode, GraphStore};
+use crate::idb_helpers::{idb_factory, open_with_stores, wait_for_request};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::JsFuture;
-use web_sys::{Event, IdbDatabase, IdbRequest, IdbTransactionMode};
+use web_sys::{IdbDatabase, IdbTransactionMode};
 
 const DB_NAME: &str = "velesdb_graphs";
 const DB_VERSION: u32 = 1;
@@ -213,62 +213,13 @@ impl GraphPersistence {
     }
 }
 
+const GRAPH_STORES: &[&str] = &[NODES_STORE, EDGES_STORE, META_STORE];
+
 /// Opens or creates the graph database.
 async fn open_graph_db() -> Result<IdbDatabase, JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window object"))?;
-    let idb_factory = window
-        .indexed_db()?
-        .ok_or_else(|| JsValue::from_str("IndexedDB not available"))?;
-
-    let request = idb_factory.open_with_u32(DB_NAME, DB_VERSION)?;
-
-    // Set up upgrade handler to create object stores
-    let request_clone = request.clone();
-    let onupgradeneeded = Closure::once(move |_event: Event| {
-        let result = match request_clone.result() {
-            Ok(result) => result,
-            Err(err) => {
-                web_sys::console::error_2(
-                    &JsValue::from_str("Failed to access graph DB result"),
-                    &err,
-                );
-                return;
-            }
-        };
-        let db: IdbDatabase = result.unchecked_into();
-
-        let store_names = db.object_store_names();
-
-        // Create nodes store
-        if !contains_store(&store_names, NODES_STORE) {
-            if let Err(err) = db.create_object_store(NODES_STORE) {
-                web_sys::console::error_2(&JsValue::from_str("Failed to create nodes store"), &err);
-            }
-        }
-
-        // Create edges store
-        if !contains_store(&store_names, EDGES_STORE) {
-            if let Err(err) = db.create_object_store(EDGES_STORE) {
-                web_sys::console::error_2(&JsValue::from_str("Failed to create edges store"), &err);
-            }
-        }
-
-        // Create metadata store
-        if !contains_store(&store_names, META_STORE) {
-            if let Err(err) = db.create_object_store(META_STORE) {
-                web_sys::console::error_2(
-                    &JsValue::from_str("Failed to create metadata store"),
-                    &err,
-                );
-            }
-        }
-    });
-    request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
-    // Standard WASM pattern: Closure::forget leaks into JS GC (unavoidable without wasm_bindgen_futures)
-    onupgradeneeded.forget();
-
-    let result = wait_for_request(&request).await?;
-    Ok(result.unchecked_into())
+    let factory = idb_factory()?;
+    let request = factory.open_with_u32(DB_NAME, DB_VERSION)?;
+    open_with_stores(&request, GRAPH_STORES, "Failed to access graph DB result").await
 }
 
 /// Builds a JS array of all three object store names (nodes, edges, metadata).
@@ -285,41 +236,6 @@ fn graph_key_range(graph_name: &str) -> Result<web_sys::IdbKeyRange, JsValue> {
     let lower = JsValue::from_str(&format!("{graph_name}:"));
     let upper = JsValue::from_str(&format!("{graph_name}:\u{ffff}"));
     web_sys::IdbKeyRange::bound(&lower, &upper)
-}
-
-/// Checks if a store name exists in the list.
-fn contains_store(store_names: &web_sys::DomStringList, name: &str) -> bool {
-    for i in 0..store_names.length() {
-        if let Some(n) = store_names.get(i) {
-            if n == name {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Waits for an IDB request to complete.
-async fn wait_for_request(request: &IdbRequest) -> Result<JsValue, JsValue> {
-    let promise = js_sys::Promise::new(&mut |resolve, reject| {
-        let resolve_clone = resolve.clone();
-        let onsuccess = Closure::once(move |_event: Event| {
-            let _ = resolve_clone.call0(&JsValue::UNDEFINED);
-        });
-        request.set_onsuccess(Some(onsuccess.as_ref().unchecked_ref()));
-        // Standard WASM pattern: Closure::forget leaks into JS GC (unavoidable without wasm_bindgen_futures)
-        onsuccess.forget();
-
-        let onerror = Closure::once(move |_event: Event| {
-            let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str("Request failed"));
-        });
-        request.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-        // Standard WASM pattern: Closure::forget leaks into JS GC (unavoidable without wasm_bindgen_futures)
-        onerror.forget();
-    });
-
-    JsFuture::from(promise).await?;
-    request.result()
 }
 
 #[cfg(test)]

@@ -87,6 +87,38 @@ pub enum SelectColumns {
     QualifiedWildcard(String),
 }
 
+impl SelectColumns {
+    /// Returns human-readable column names for display.
+    ///
+    /// Used by Python/WASM bindings to expose column metadata.
+    #[must_use]
+    pub fn to_display_names(&self) -> Vec<String> {
+        match self {
+            Self::All => vec!["*".to_string()],
+            Self::Columns(cols) => cols.iter().map(|c| c.name.clone()).collect(),
+            Self::Aggregations(aggs) => {
+                aggs.iter().map(|a| format!("{:?}", a.function_type)).collect()
+            }
+            Self::Mixed {
+                columns,
+                aggregations,
+                ..
+            } => {
+                let mut result: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
+                result.extend(aggregations.iter().map(|a| format!("{:?}", a.function_type)));
+                result
+            }
+            Self::SimilarityScore(expr) => {
+                vec![expr
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| "similarity".to_string())]
+            }
+            Self::QualifiedWildcard(alias) => vec![format!("{alias}.*")],
+        }
+    }
+}
+
 /// A `similarity()` zero-arg expression in SELECT, with optional alias.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimilarityScoreExpr {
@@ -130,6 +162,23 @@ pub struct SelectOrderBy {
     pub expr: OrderByExpr,
     /// Sort direction (true = DESC).
     pub descending: bool,
+}
+
+impl SelectOrderBy {
+    /// Returns a `(column_name, direction)` pair for display.
+    #[must_use]
+    pub fn to_display_pair(&self) -> (String, String) {
+        let dir = if self.descending { "DESC" } else { "ASC" };
+        let col = match &self.expr {
+            OrderByExpr::Field(f) => f.clone(),
+            OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => {
+                "similarity()".to_string()
+            }
+            OrderByExpr::Aggregate(agg) => format!("{:?}", agg.function_type),
+            OrderByExpr::Arithmetic(expr) => format!("{expr}"),
+        };
+        (col, dir.to_string())
+    }
 }
 
 /// Expression types supported in ORDER BY clause.

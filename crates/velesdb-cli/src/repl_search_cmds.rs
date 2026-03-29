@@ -7,6 +7,36 @@ use velesdb_core::Database;
 
 use crate::repl_commands::{parse_flag, CommandResult};
 
+/// Display search results with a title header.
+fn print_search_results(results: &[velesdb_core::SearchResult], title: &str, extra: &str) {
+    if results.is_empty() {
+        println!("No results found.\n");
+    } else {
+        println!(
+            "\n{} ({} results{})\n",
+            title.bold().underline(),
+            results.len(),
+            extra
+        );
+        for r in results {
+            println!(
+                "  id={} score={:.6}",
+                r.point.id.to_string().cyan(),
+                r.score
+            );
+        }
+        println!();
+    }
+}
+
+/// Parse a JSON string into a `SparseVector`, returning a `CommandResult::Error` on failure.
+fn parse_sparse_json(json: &str) -> Result<velesdb_core::sparse_index::SparseVector, String> {
+    let pairs: Vec<(u32, f32)> = serde_json::from_str(json).map_err(|e| {
+        format!("Invalid sparse vector JSON: {e}\nExpected format: [[index, weight], ...]")
+    })?;
+    Ok(velesdb_core::sparse_index::SparseVector::new(pairs))
+}
+
 pub(crate) fn cmd_sparse_search(db: &Database, parts: &[&str]) -> CommandResult {
     if parts.len() < 4 {
         println!("Usage: .sparse-search <collection> <index_name> <json_sparse_vector> [k]\n");
@@ -25,37 +55,14 @@ pub(crate) fn cmd_sparse_search(db: &Database, parts: &[&str]) -> CommandResult 
     let sparse_json = parts[3];
     let k: usize = parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(10);
 
-    let pairs: Vec<(u32, f32)> = match serde_json::from_str(sparse_json) {
-        Ok(p) => p,
-        Err(e) => {
-            return CommandResult::Error(format!(
-                "Invalid sparse vector JSON: {e}\nExpected format: [[index, weight], ...]"
-            ));
-        }
+    let sparse_vec = match parse_sparse_json(sparse_json) {
+        Ok(v) => v,
+        Err(e) => return CommandResult::Error(e),
     };
-    let sparse_vec = velesdb_core::sparse_index::SparseVector::new(pairs);
 
     match db.get_vector_collection(name) {
         Some(col) => match col.sparse_search(&sparse_vec, k, index_name) {
-            Ok(results) => {
-                if results.is_empty() {
-                    println!("No results found.\n");
-                } else {
-                    println!(
-                        "\n{} ({} results)\n",
-                        "Sparse Search Results".bold().underline(),
-                        results.len()
-                    );
-                    for r in &results {
-                        println!(
-                            "  id={} score={:.6}",
-                            r.point.id.to_string().cyan(),
-                            r.score
-                        );
-                    }
-                    println!();
-                }
-            }
+            Ok(results) => print_search_results(&results, "Sparse Search Results", ""),
             Err(e) => return CommandResult::Error(format!("Sparse search error: {e}")),
         },
         None => {
@@ -100,15 +107,10 @@ pub(crate) fn cmd_hybrid_sparse(db: &Database, parts: &[&str]) -> CommandResult 
         }
     };
 
-    let sparse_pairs: Vec<(u32, f32)> = match serde_json::from_str(sparse_json) {
-        Ok(p) => p,
-        Err(e) => {
-            return CommandResult::Error(format!(
-                "Invalid sparse vector JSON: {e}\nExpected format: [[index, weight], ...]"
-            ));
-        }
+    let sparse_vec = match parse_sparse_json(sparse_json) {
+        Ok(v) => v,
+        Err(e) => return CommandResult::Error(e),
     };
-    let sparse_vec = velesdb_core::sparse_index::SparseVector::new(sparse_pairs);
 
     let strategy = match strategy_str.as_str() {
         "rrf" => velesdb_core::FusionStrategy::rrf_default(),
@@ -125,24 +127,8 @@ pub(crate) fn cmd_hybrid_sparse(db: &Database, parts: &[&str]) -> CommandResult 
         Some(col) => {
             match col.hybrid_sparse_search(&dense_vector, &sparse_vec, k, &index_name, &strategy) {
                 Ok(results) => {
-                    if results.is_empty() {
-                        println!("No results found.\n");
-                    } else {
-                        println!(
-                            "\n{} ({} results, strategy={})\n",
-                            "Hybrid Sparse Search Results".bold().underline(),
-                            results.len(),
-                            strategy_str.cyan()
-                        );
-                        for r in &results {
-                            println!(
-                                "  id={} score={:.6}",
-                                r.point.id.to_string().cyan(),
-                                r.score
-                            );
-                        }
-                        println!();
-                    }
+                    let extra = format!(", strategy={}", strategy_str.cyan());
+                    print_search_results(&results, "Hybrid Sparse Search Results", &extra);
                 }
                 Err(e) => return CommandResult::Error(format!("Hybrid search error: {e}")),
             }

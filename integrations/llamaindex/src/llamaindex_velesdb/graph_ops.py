@@ -11,10 +11,11 @@ from typing import Any, List, Optional
 from llama_index.core.schema import TextNode
 from llama_index.core.vector_stores.types import VectorStoreQueryResult
 
+from velesdb_common.graph_ops_base import GraphOpsBase
 from llamaindex_velesdb.security import validate_query
 
 
-class GraphOpsMixin:
+class GraphOpsMixin(GraphOpsBase):
     """Mixin providing VelesQL query and graph operations for VelesDBVectorStore.
 
     Expects the host class to provide:
@@ -45,29 +46,6 @@ class GraphOpsMixin:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
         results = self._collection.query(query_str, params)
         return self._build_query_result(results)
-
-    def explain(
-        self,
-        query_str: str,
-        **kwargs: Any,
-    ) -> dict:
-        """Get the query execution plan for a VelesQL query.
-
-        Args:
-            query_str: VelesQL query string.
-            **kwargs: Additional arguments.
-
-        Returns:
-            Query execution plan dict.
-
-        Raises:
-            SecurityError: If query fails validation.
-            ValueError: If the collection is not initialized.
-        """
-        validate_query(query_str)
-        if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
-        return self._collection.explain(query_str)
 
     def match_query(
         self,

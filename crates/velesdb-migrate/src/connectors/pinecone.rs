@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-use super::common::create_http_client;
+use super::common::{check_response, create_http_client};
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::PineconeConfig;
 use crate::error::{Error, Result};
@@ -124,16 +124,9 @@ impl SourceConnector for PineconeConnector {
         let url = format!("{base}/indexes/{}", self.config.index);
 
         let resp = self.api_request(reqwest::Method::GET, &url).send().await?;
+        let checked = check_response(resp, "Pinecone", "connect").await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::SourceConnection(format!(
-                "Pinecone connection failed: {status} - {body}"
-            )));
-        }
-
-        let desc: IndexDescription = resp.json().await?;
+        let desc: IndexDescription = checked.json().await?;
 
         if !desc.status.ready {
             return Err(Error::SourceConnection(
@@ -164,15 +157,9 @@ impl SourceConnector for PineconeConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "Pinecone stats failed: {status} - {body}"
-            )));
-        }
+        let checked = check_response(resp, "Pinecone", "stats").await?;
 
-        let stats: IndexStats = resp.json().await?;
+        let stats: IndexStats = checked.json().await?;
 
         let count = if stats.total_vector_count > 0 {
             Some(stats.total_vector_count)
@@ -224,15 +211,9 @@ impl SourceConnector for PineconeConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body: String = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "Pinecone error {status}: {body}"
-            )));
-        }
+        let checked = check_response(resp, "Pinecone", "list").await?;
 
-        let list_resp: ListResponse = resp.json().await?;
+        let list_resp: ListResponse = checked.json().await?;
 
         let ids: Vec<String> = list_resp
             .vectors
@@ -262,15 +243,9 @@ impl SourceConnector for PineconeConnector {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body: String = resp.text().await.unwrap_or_default();
-            return Err(Error::Extraction(format!(
-                "Pinecone error {status}: {body}"
-            )));
-        }
+        let checked = check_response(resp, "Pinecone", "fetch").await?;
 
-        let fetch_resp: FetchResponse = resp.json().await?;
+        let fetch_resp: FetchResponse = checked.json().await?;
 
         let points: Vec<ExtractedPoint> = fetch_resp
             .vectors

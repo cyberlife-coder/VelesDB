@@ -5,7 +5,8 @@ use crate::error::{CommandError, Error};
 use crate::events::{emit_collection_created, emit_collection_deleted, emit_collection_updated};
 use crate::helpers::{
     map_core_results, metric_to_string, parse_filter, parse_fusion_strategy, parse_metric,
-    parse_sparse_vector, parse_storage_mode, storage_mode_to_string, timed_search_response,
+    parse_sparse_vector, parse_storage_mode, require_collection, require_vector_collection,
+    storage_mode_to_string, timed_search_response,
 };
 use crate::state::VelesDbState;
 #[cfg(feature = "persistence")]
@@ -134,9 +135,7 @@ pub async fn get_collection<R: Runtime>(
 ) -> std::result::Result<CollectionInfo, CommandError> {
     state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&name)
-                .ok_or_else(|| Error::CollectionNotFound(name.clone()))?;
+            let coll = require_collection(&db, &name)?;
             let config = coll.config();
             Ok(CollectionInfo {
                 name,
@@ -159,9 +158,7 @@ pub async fn upsert<R: Runtime>(
     let collection_name = request.collection.clone();
     let count = state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let points: Vec<velesdb_core::Point> = request
                 .points
@@ -189,9 +186,7 @@ pub async fn upsert_metadata<R: Runtime>(
     let collection_name = request.collection.clone();
     let count = state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let points: Vec<velesdb_core::Point> = request
                 .points
@@ -218,9 +213,7 @@ pub async fn get_points<R: Runtime>(
 ) -> std::result::Result<Vec<Option<PointOutput>>, CommandError> {
     state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let points = coll.get(&request.ids);
             Ok(points
@@ -246,9 +239,7 @@ pub async fn delete_points<R: Runtime>(
 ) -> std::result::Result<(), CommandError> {
     state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_collection(&db, &request.collection)?;
 
             coll.delete(&request.ids)?;
             Ok(())
@@ -268,9 +259,7 @@ pub async fn search<R: Runtime>(
 
     let results = state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let search_results = if let Some(ref f) = parsed_filter {
                 coll.search_with_filter(&request.vector, request.top_k, f)?
@@ -295,9 +284,7 @@ pub async fn batch_search<R: Runtime>(
 
     let batch_results = state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let query_refs: Vec<&[f32]> = request
                 .searches
@@ -352,9 +339,7 @@ pub async fn text_search<R: Runtime>(
 
     let results = state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let search_results = if let Some(ref f) = parsed_filter {
                 coll.text_search_with_filter(&request.query, request.top_k, f)?
@@ -380,9 +365,7 @@ pub async fn hybrid_search<R: Runtime>(
 
     let results = state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let search_results = if let Some(ref f) = parsed_filter {
                 coll.hybrid_search_with_filter(
@@ -451,9 +434,7 @@ pub async fn query<R: Runtime>(
         // Aggregation path: returns JSON result instead of HybridResult rows.
         let agg_json = state
             .with_db(|db| {
-                let coll = db
-                    .get_collection(collection_name)
-                    .ok_or_else(|| Error::CollectionNotFound(collection_name.clone()))?;
+                let coll = require_collection(&db, collection_name)?;
                 coll.execute_aggregate(&parsed, &request.params)
                     .map_err(|e| Error::InvalidConfig(format!("Aggregation error: {e}")))
             })
@@ -476,9 +457,7 @@ pub async fn query<R: Runtime>(
 
     let results = state
         .with_db(|db| {
-            let coll = db
-                .get_collection(collection_name)
-                .ok_or_else(|| Error::CollectionNotFound(collection_name.clone()))?;
+            let coll = require_collection(&db, collection_name)?;
 
             let search_results = coll
                 .execute_query(&parsed, &request.params)
@@ -513,9 +492,7 @@ pub async fn is_empty<R: Runtime>(
 ) -> std::result::Result<bool, CommandError> {
     state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&name)
-                .ok_or_else(|| Error::CollectionNotFound(name.clone()))?;
+            let coll = require_collection(&db, &name)?;
             Ok(coll.is_empty())
         })
         .map_err(CommandError::from)
@@ -530,9 +507,7 @@ pub async fn flush<R: Runtime>(
 ) -> std::result::Result<(), CommandError> {
     state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&name)
-                .ok_or_else(|| Error::CollectionNotFound(name.clone()))?;
+            let coll = require_collection(&db, &name)?;
             coll.flush()?;
             Ok(())
         })
@@ -552,9 +527,7 @@ pub async fn multi_query_search<R: Runtime>(
 
     let results = state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let vector_refs: Vec<&[f32]> = request.vectors.iter().map(Vec::as_slice).collect();
 
@@ -587,9 +560,7 @@ pub async fn sparse_search<R: Runtime>(
 
     let results = state
         .with_db(|db| {
-            let coll = db
-                .get_vector_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_vector_collection(&db, &request.collection)?;
 
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
             let idx_name = request.index_name.unwrap_or_default();
@@ -613,9 +584,7 @@ pub async fn hybrid_sparse_search<R: Runtime>(
 
     let results = state
         .with_db(|db| {
-            let coll = db
-                .get_vector_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_vector_collection(&db, &request.collection)?;
 
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
             let strategy = velesdb_core::fusion::FusionStrategy::RRF { k: 60 };
@@ -639,9 +608,7 @@ pub async fn sparse_upsert<R: Runtime>(
     let collection_name = request.collection.clone();
     let count = state
         .with_db(|db| {
-            let coll = db
-                .get_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let mut points = Vec::with_capacity(request.points.len());
             for p in request.points {
@@ -732,9 +699,7 @@ pub async fn stream_insert<R: Runtime>(
     let collection_name = request.collection.clone();
     let count = state
         .with_db(|db| {
-            let coll = db
-                .get_vector_collection(&request.collection)
-                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+            let coll = require_vector_collection(&db, &request.collection)?;
 
             let mut inserted = 0;
             for p in request.points {

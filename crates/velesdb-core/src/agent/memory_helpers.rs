@@ -149,6 +149,138 @@ pub(super) fn search_collection(
         .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))
 }
 
+/// Deletes a point by ID, removes it from the `stored_ids` tracking set, and
+/// clears its TTL entry.
+///
+/// This is the common delete pattern shared by `SemanticMemory` and
+/// `ProceduralMemory`. `EpisodicMemory` has additional temporal-index cleanup.
+#[allow(deprecated)]
+pub(super) fn delete_tracked_point(
+    db: &Database,
+    collection_name: &str,
+    id: u64,
+    stored_ids: &RwLock<HashSet<u64>>,
+    ttl: &super::ttl::MemoryTtl,
+) -> Result<(), AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    delete_from_collection(&collection, &[id])?;
+    stored_ids.write().remove(&id);
+    ttl.remove(id);
+    Ok(())
+}
+
+/// Serializes all tracked points from a collection using the `stored_ids` set.
+///
+/// Shared by `SemanticMemory` and `ProceduralMemory`.
+/// `EpisodicMemory` uses temporal-index IDs instead.
+#[allow(deprecated)]
+pub(super) fn serialize_tracked_points(
+    db: &Database,
+    collection_name: &str,
+    stored_ids: &RwLock<HashSet<u64>>,
+) -> Result<Vec<u8>, AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    let all_ids: Vec<u64> = stored_ids.read().iter().copied().collect();
+    serialize_points(&collection, &all_ids)
+}
+
+/// Replaces collection contents from serialized bytes and rebuilds the
+/// `stored_ids` tracking set.
+///
+/// Shared by `SemanticMemory` and `ProceduralMemory`.
+/// `EpisodicMemory` rebuilds its temporal index instead.
+#[allow(deprecated)]
+pub(super) fn deserialize_tracked_points(
+    db: &Database,
+    collection_name: &str,
+    data: &[u8],
+    stored_ids: &RwLock<HashSet<u64>>,
+) -> Result<(), AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    if let Some(points) = deserialize_into_collection(data, &collection)? {
+        rebuild_stored_ids(stored_ids, &points);
+    }
+    Ok(())
+}
+
+/// Validates the query embedding, searches the collection, and filters out
+/// expired results.
+///
+/// This is the common search preamble shared by `SemanticMemory::query`,
+/// `EpisodicMemory::recall_similar`, and `ProceduralMemory::recall`. Each
+/// caller then maps the returned `SearchResult` items into its own return
+/// type.
+#[allow(deprecated)]
+pub(super) fn search_filtered(
+    db: &Database,
+    collection_name: &str,
+    dimension: usize,
+    query_embedding: &[f32],
+    k: usize,
+    ttl: &super::ttl::MemoryTtl,
+) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
+    validate_dimension(dimension, query_embedding.len())?;
+    let collection = get_collection(db, collection_name)?;
+    let results = search_collection(&collection, query_embedding, k)?;
+    Ok(results
+        .into_iter()
+        .filter(|r| !ttl.is_expired(r.point.id))
+        .collect())
+}
+
+/// Validates a count-prefixed binary buffer and returns the entry count.
+///
+/// The expected format is `[count: u64 LE][entries: count * entry_size bytes]`.
+/// Returns `None` if the buffer is too small, the count cannot be read, or the
+/// total length does not match the declared count.
+///
+/// Used by `TemporalIndex::deserialize` (16-byte entries) and
+/// `MemoryTtl::deserialize` (24-byte entries).
+#[allow(clippy::cast_possible_truncation)] // count validated against buffer length
+pub(super) fn validate_binary_header(data: &[u8], entry_size: usize) -> Option<usize> {
+    if data.len() < 8 {
+        return None;
+    }
+    let count = u64::from_le_bytes(data[0..8].try_into().ok()?) as usize;
+    if data.len() != 8 + count * entry_size {
+        return None;
+    }
+    Some(count)
+}
+
+/// Initializes the common fields shared by `SemanticMemory` and `ProceduralMemory`.
+///
+/// Opens or creates the backing collection, resolves the actual dimension,
+/// and loads the set of stored point IDs. Returns a tuple of
+/// `(collection_name, actual_dimension, stored_ids)` ready for struct
+/// construction.
+pub(super) fn init_tracked_memory(
+    db: &Database,
+    collection_name: &str,
+    dimension: usize,
+) -> Result<(String, usize, RwLock<HashSet<u64>>), AgentMemoryError> {
+    let name = collection_name.to_string();
+    let actual_dimension = open_or_create_collection(db, &name, dimension)?;
+    let stored_ids = RwLock::new(load_stored_ids(db, &name));
+    Ok((name, actual_dimension, stored_ids))
+}
+
+/// Validates an optional embedding dimension and returns a concrete vector.
+///
+/// If `embedding` is `Some`, validates that its length matches `dimension`
+/// and returns a clone. If `None`, returns a zero-vector of the given
+/// dimension. This is the common setup shared by `EpisodicMemory::record`
+/// and `ProceduralMemory::learn`.
+pub(super) fn resolve_embedding(
+    dimension: usize,
+    embedding: Option<&[f32]>,
+) -> Result<Vec<f32>, AgentMemoryError> {
+    if let Some(emb) = embedding {
+        validate_dimension(dimension, emb.len())?;
+    }
+    Ok(embedding.map_or_else(|| vec![0.0; dimension], <[f32]>::to_vec))
+}
+
 /// Executes a `VelesQL` query string against a named collection.
 ///
 /// Resolves the collection from the database by name, then delegates to

@@ -366,6 +366,48 @@ class SearchOpsMixin:
 
         return _results_to_docs_with_score(results)
 
+    def _validate_and_embed_queries(
+        self,
+        queries: List[str],
+        k: int,
+    ) -> tuple[List[List[float]], Any]:
+        """Validate query batch, embed all queries, and return the collection.
+
+        Centralises the validate → embed → get_collection steps shared by
+        ``_run_batch_search`` and ``_run_multi_query``.
+
+        Args:
+            queries: Non-empty list of query strings.
+            k: Top-k value to validate.
+
+        Returns:
+            A ``(query_embeddings, collection)`` tuple.
+        """
+        validate_queries_batch(
+            queries,
+            validate_k_fn=validate_k,
+            validate_batch_size_fn=validate_batch_size,
+            validate_text_fn=validate_text,
+            k=k,
+        )
+        query_embeddings = [self._embedding.embed_query(q) for q in queries]
+        collection = self._get_collection(len(query_embeddings[0]))
+        return query_embeddings, collection
+
+    def _run_batch_search(self, queries: List[str], k: int) -> List[List[dict]]:
+        """Validate, embed, and execute a batch search, returning raw results.
+
+        Args:
+            queries: Non-empty list of query strings (caller guarantees non-empty).
+            k: Number of results per query.
+
+        Returns:
+            Raw list-of-lists of result dicts from the collection.
+        """
+        query_embeddings, collection = self._validate_and_embed_queries(queries, k)
+        searches = [{"vector": emb, "top_k": k} for emb in query_embeddings]
+        return collection.batch_search(searches)
+
     def batch_search(
         self,
         queries: List[str],
@@ -386,18 +428,7 @@ class SearchOpsMixin:
         """
         if not queries:
             return []
-        validate_queries_batch(
-            queries,
-            validate_k_fn=validate_k,
-            validate_batch_size_fn=validate_batch_size,
-            validate_text_fn=validate_text,
-            k=k,
-        )
-        query_embeddings = [self._embedding.embed_query(q) for q in queries]
-        collection = self._get_collection(len(query_embeddings[0]))
-        searches = [{"vector": emb, "top_k": k} for emb in query_embeddings]
-        batch_results = collection.batch_search(searches)
-        return [_results_to_docs(results) for results in batch_results]
+        return [_results_to_docs(r) for r in self._run_batch_search(queries, k)]
 
     def batch_search_with_score(
         self,
@@ -417,18 +448,7 @@ class SearchOpsMixin:
         """
         if not queries:
             return []
-        validate_queries_batch(
-            queries,
-            validate_k_fn=validate_k,
-            validate_batch_size_fn=validate_batch_size,
-            validate_text_fn=validate_text,
-            k=k,
-        )
-        query_embeddings = [self._embedding.embed_query(q) for q in queries]
-        collection = self._get_collection(len(query_embeddings[0]))
-        searches = [{"vector": emb, "top_k": k} for emb in query_embeddings]
-        batch_results = collection.batch_search(searches)
-        return [_results_to_docs_with_score(results) for results in batch_results]
+        return [_results_to_docs_with_score(r) for r in self._run_batch_search(queries, k)]
 
     def _run_multi_query(
         self,
@@ -450,15 +470,7 @@ class SearchOpsMixin:
         Returns:
             Raw list of search result dicts from the collection.
         """
-        validate_queries_batch(
-            queries,
-            validate_k_fn=validate_k,
-            validate_batch_size_fn=validate_batch_size,
-            validate_text_fn=validate_text,
-            k=k,
-        )
-        query_embeddings = [self._embedding.embed_query(q) for q in queries]
-        collection = self._get_collection(len(query_embeddings[0]))
+        query_embeddings, collection = self._validate_and_embed_queries(queries, k)
         fusion_strategy = self._build_fusion_strategy(fusion, fusion_params)
         return collection.multi_query_search(
             vectors=query_embeddings,

@@ -2,84 +2,19 @@
 //!
 //! Provides async save/load operations for offline-first applications.
 
+use crate::idb_helpers::{idb_factory, open_with_stores, wait_for_request};
 use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::JsFuture;
-use web_sys::{Event, IdbDatabase, IdbObjectStore, IdbRequest, IdbTransactionMode};
+use web_sys::{IdbDatabase, IdbObjectStore, IdbTransactionMode};
 
 const STORE_NAME: &str = "vectors";
+const STORES: &[&str] = &[STORE_NAME];
 const DATA_KEY: &str = "data";
 
 /// Opens or creates an `IndexedDB` database.
 async fn open_db(db_name: &str) -> Result<IdbDatabase, JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window object"))?;
-    let idb_factory = window
-        .indexed_db()?
-        .ok_or_else(|| JsValue::from_str("IndexedDB not available"))?;
-
-    let request = idb_factory.open(db_name)?;
-
-    // Set up upgrade handler to create object store
-    let request_clone = request.clone();
-    let onupgradeneeded = Closure::once(move |_event: Event| {
-        let result = match request_clone.result() {
-            Ok(result) => result,
-            Err(err) => {
-                web_sys::console::error_2(
-                    &JsValue::from_str("Failed to access IndexedDB result"),
-                    &err,
-                );
-                return;
-            }
-        };
-        let db: IdbDatabase = result.unchecked_into();
-
-        // Create object store if it doesn't exist
-        let store_names = db.object_store_names();
-        let mut found = false;
-        for i in 0..store_names.length() {
-            if let Some(name) = store_names.get(i) {
-                if name == STORE_NAME {
-                    found = true;
-                    break;
-                }
-            }
-        }
-        if !found {
-            if let Err(err) = db.create_object_store(STORE_NAME) {
-                web_sys::console::error_2(
-                    &JsValue::from_str("Failed to create object store"),
-                    &err,
-                );
-            }
-        }
-    });
-    request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
-    onupgradeneeded.forget();
-
-    // Wait for request to complete
-    let result = wait_for_request(&request).await?;
-    Ok(result.unchecked_into())
-}
-
-/// Waits for an IDB request to complete.
-async fn wait_for_request(request: &IdbRequest) -> Result<JsValue, JsValue> {
-    let promise = js_sys::Promise::new(&mut |resolve, reject| {
-        let resolve_clone = resolve.clone();
-        let onsuccess = Closure::once(move |_event: Event| {
-            let _ = resolve_clone.call0(&JsValue::UNDEFINED);
-        });
-        request.set_onsuccess(Some(onsuccess.as_ref().unchecked_ref()));
-        onsuccess.forget();
-
-        let onerror = Closure::once(move |_event: Event| {
-            let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str("Request failed"));
-        });
-        request.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-        onerror.forget();
-    });
-
-    JsFuture::from(promise).await?;
-    request.result()
+    let factory = idb_factory()?;
+    let request = factory.open(db_name)?;
+    open_with_stores(&request, STORES, "Failed to access IndexedDB result").await
 }
 
 /// Saves bytes to `IndexedDB`.
@@ -118,12 +53,8 @@ pub async fn load_from_indexeddb(db_name: &str) -> Result<Vec<u8>, JsValue> {
 
 /// Deletes the `IndexedDB` database.
 pub async fn delete_database(db_name: &str) -> Result<(), JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window object"))?;
-    let idb_factory = window
-        .indexed_db()?
-        .ok_or_else(|| JsValue::from_str("IndexedDB not available"))?;
-
-    let request = idb_factory.delete_database(db_name)?;
+    let factory = idb_factory()?;
+    let request = factory.delete_database(db_name)?;
     wait_for_request(&request).await?;
     Ok(())
 }

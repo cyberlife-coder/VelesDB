@@ -208,17 +208,7 @@ impl MemoryTtl {
     /// Returns `None` if the data is malformed.
     #[must_use]
     pub fn deserialize(data: &[u8]) -> Option<Self> {
-        if data.len() < 8 {
-            return None;
-        }
-
-        let count = u64::from_le_bytes(data[0..8].try_into().ok()?) as usize;
-        let expected_len = 8 + count * 24;
-
-        if data.len() != expected_len {
-            return None;
-        }
-
+        let count = super::memory_helpers::validate_binary_header(data, 24)?;
         let mut entries = FxHashMap::default();
         entries.reserve(count);
 
