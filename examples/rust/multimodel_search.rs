@@ -141,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 7. Example 4: Hybrid search (vector + text)
     println!("--- Example 4: Hybrid Search ---");
 
-    let hybrid_results = collection.hybrid_search(&query_vector, "rust", 5, Some(0.7), None)?;
+    let hybrid_results = collection.hybrid_search(&query_vector, "rust", 5, Some(0.7))?;
     println!("  Hybrid search results (vector + text 'rust'):");
     for result in &hybrid_results {
         println!(
