@@ -29,11 +29,13 @@ use velesdb_server::{
     batch_search, collection_sanity,
     config::{parse_api_keys_env, CliOverrides, ServerConfig},
     create_collection, create_index, delete_collection, delete_index, delete_point, explain,
-    flush_collection, get_collection, get_collection_config, get_collection_stats, get_edges,
-    get_guardrails, get_node_degree, get_point, health_check, hybrid_search, is_empty,
-    list_collections, list_indexes, match_query, multi_query_search, query, readiness_check,
-    search, search_ids, stream_insert, stream_traverse, stream_upsert_points, text_search,
-    traverse_graph, update_guardrails, upsert_points, AppState, OnboardingMetrics,
+    flush_collection, get_collection, get_collection_config, get_collection_stats, get_edge_count,
+    get_edges, get_guardrails, get_node_degree, get_node_edges, get_node_payload, get_point,
+    graph_search, health_check, hybrid_search, is_empty, list_collections, list_indexes,
+    list_nodes, match_query, multi_query_search, query, readiness_check, remove_edge, search,
+    search_ids, stream_insert, stream_traverse, stream_upsert_points, text_search, traverse_graph,
+    traverse_parallel, update_guardrails, upsert_node_payload, upsert_points, AppState,
+    OnboardingMetrics,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -172,15 +174,34 @@ fn graph_routes() -> Router<Arc<AppState>> {
             "/collections/{name}/graph/edges",
             get(get_edges).post(add_edge),
         )
-        .route("/collections/{name}/graph/traverse", post(traverse_graph))
         .route(
-            "/collections/{name}/graph/traverse/stream",
-            get(stream_traverse),
+            "/collections/{name}/graph/edges/{edge_id}",
+            delete(remove_edge),
+        )
+        .route("/collections/{name}/graph/edges/count", get(get_edge_count))
+        .route("/collections/{name}/graph/nodes", get(list_nodes))
+        .route(
+            "/collections/{name}/graph/nodes/{node_id}/edges",
+            get(get_node_edges),
+        )
+        .route(
+            "/collections/{name}/graph/nodes/{node_id}/payload",
+            get(get_node_payload).put(upsert_node_payload),
         )
         .route(
             "/collections/{name}/graph/nodes/{node_id}/degree",
             get(get_node_degree),
         )
+        .route("/collections/{name}/graph/traverse", post(traverse_graph))
+        .route(
+            "/collections/{name}/graph/traverse/parallel",
+            post(traverse_parallel),
+        )
+        .route(
+            "/collections/{name}/graph/traverse/stream",
+            get(stream_traverse),
+        )
+        .route("/collections/{name}/graph/search", post(graph_search))
 }
 
 fn api_routes() -> Router<Arc<AppState>> {

@@ -165,6 +165,39 @@ pub fn print_help() {
     println!("  {}        Show query guard-rails", ".guardrails".yellow());
     println!("  {}   Agent memory (preview)", ".agent [cmd]".yellow());
     println!();
+    println!("{}", "Graph Commands:".bold().underline());
+    println!();
+    println!(
+        "  {} Add edge",
+        ".graph add-edge <col> <id> <src> <tgt> <label>".yellow()
+    );
+    println!(
+        "  {}       List edges",
+        ".graph edges <col> [--label X]".yellow()
+    );
+    println!(
+        "  {}         Node degree",
+        ".graph degree <col> <node>".yellow()
+    );
+    println!(
+        "  {}   Traverse graph",
+        ".graph traverse <col> <src> [--algo bfs|dfs]".yellow()
+    );
+    println!(
+        "  {} Neighbors",
+        ".graph neighbors <col> <node> [--direction in|out|both]".yellow()
+    );
+    println!(
+        "  {}  Remove edge",
+        ".graph remove-edge <col> <edge_id>".yellow()
+    );
+    println!("  {}          Graph stats", ".graph count <col>".yellow());
+    println!(
+        "  {} Embedding search",
+        ".graph search <col> <vector> [k]".yellow()
+    );
+    println!("  {}           Full graph help", ".graph help".yellow());
+    println!();
     println!("{}", "Session Commands:".bold().underline());
     println!();
     println!(

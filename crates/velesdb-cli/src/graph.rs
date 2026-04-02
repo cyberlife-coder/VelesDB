@@ -169,6 +169,51 @@ pub enum GraphAction {
         node_id: u64,
     },
 
+    /// Remove an edge by ID
+    RemoveEdge {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Edge ID to remove
+        edge_id: u64,
+    },
+
+    /// Count total edges in the graph
+    Count {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
+
+    /// Search graph nodes by embedding similarity
+    Search {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Query vector as JSON array (e.g., '[0.1, 0.2, 0.3]')
+        vector: String,
+
+        /// Number of results to return
+        #[arg(short = 'k', long, default_value = "10")]
+        top_k: usize,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
+
     /// List all nodes with stored payloads (paginated)
     Nodes {
         /// Path to database directory
@@ -258,6 +303,26 @@ pub fn handle(action: GraphAction) -> anyhow::Result<()> {
             collection,
             node_id,
         } => handle_get_payload(&path, &collection, node_id),
+
+        GraphAction::RemoveEdge {
+            path,
+            collection,
+            edge_id,
+        } => handle_remove_edge(&path, &collection, edge_id),
+
+        GraphAction::Count {
+            path,
+            collection,
+            format,
+        } => handle_count(&path, &collection, &format),
+
+        GraphAction::Search {
+            path,
+            collection,
+            vector,
+            top_k,
+            format,
+        } => handle_graph_search(&path, &collection, &vector, top_k, &format),
 
         GraphAction::Nodes {
             path,
@@ -476,6 +541,104 @@ fn handle_get_payload(path: &PathBuf, collection: &str, node_id: u64) -> anyhow:
     match payload {
         Some(val) => println!("{}", serde_json::to_string_pretty(&val)?),
         None => println!("null"),
+    }
+    Ok(())
+}
+
+fn handle_remove_edge(path: &PathBuf, collection: &str, edge_id: u64) -> anyhow::Result<()> {
+    let col = open_graph(path, collection)?;
+    if col.remove_edge(edge_id) {
+        col.flush()
+            .map_err(|e| anyhow::anyhow!("Flush failed: {e}"))?;
+        println!(
+            "{} Edge {} removed",
+            "✅".green(),
+            edge_id.to_string().green(),
+        );
+    } else {
+        println!(
+            "{} Edge {} not found",
+            "⚠️".yellow(),
+            edge_id.to_string().yellow(),
+        );
+    }
+    Ok(())
+}
+
+fn handle_count(path: &PathBuf, collection: &str, format: &str) -> anyhow::Result<()> {
+    let col = open_graph(path, collection)?;
+    let count = col.edge_count();
+    let node_count = col.all_node_ids().len();
+
+    if format == "json" {
+        helpers::print_json(&serde_json::json!({
+            "edge_count": count,
+            "node_count": node_count
+        }))?;
+    } else {
+        println!(
+            "\n{} '{}'\n",
+            "Graph Stats".bold().underline(),
+            collection.green()
+        );
+        println!("  {} {}", "Edges:".cyan(), count);
+        println!("  {} {}", "Nodes:".cyan(), node_count);
+        println!();
+    }
+    Ok(())
+}
+
+fn handle_graph_search(
+    path: &PathBuf,
+    collection: &str,
+    vector_json: &str,
+    top_k: usize,
+    format: &str,
+) -> anyhow::Result<()> {
+    let col = open_graph(path, collection)?;
+
+    if !col.has_embeddings() {
+        anyhow::bail!(
+            "Graph collection '{}' has no embeddings. Create with embeddings to enable search.",
+            collection
+        );
+    }
+
+    let query: Vec<f32> = serde_json::from_str(vector_json)
+        .map_err(|e| anyhow::anyhow!("Invalid vector JSON: {e}"))?;
+
+    let results = col
+        .search_by_embedding(&query, top_k)
+        .map_err(|e| anyhow::anyhow!("Search failed: {e}"))?;
+
+    if format == "json" {
+        let data: Vec<_> = results
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "id": r.point.id,
+                    "score": r.score,
+                    "payload": r.point.payload
+                })
+            })
+            .collect();
+        helpers::print_json(&serde_json::Value::Array(data))?;
+    } else if results.is_empty() {
+        println!("No results found.\n");
+    } else {
+        println!(
+            "\n{} ({} results)\n",
+            "Graph Search Results".bold().underline(),
+            results.len()
+        );
+        for r in &results {
+            println!(
+                "  id={} score={:.6}",
+                r.point.id.to_string().cyan(),
+                r.score
+            );
+        }
+        println!();
     }
     Ok(())
 }

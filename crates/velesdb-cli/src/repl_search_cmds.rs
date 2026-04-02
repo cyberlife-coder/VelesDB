@@ -197,5 +197,11 @@ pub(crate) fn cmd_guardrails() -> CommandResult {
         limits.circuit_recovery_seconds
     );
     println!();
+    println!(
+        "  {}",
+        "Use '.guardrails set <key> <value>' to modify (server restart required for persistence)."
+            .dimmed()
+    );
+    println!();
     CommandResult::Continue
 }

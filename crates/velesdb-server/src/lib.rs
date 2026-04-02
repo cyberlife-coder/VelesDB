@@ -50,9 +50,13 @@ pub use handlers::{
 
 // Graph handlers (EPIC-016/US-031)
 pub use handlers::graph::{
-    add_edge, get_edges, get_node_degree, stream_traverse, traverse_graph, DegreeResponse,
-    StreamDoneEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams, TraversalResultItem,
-    TraversalStats, TraverseRequest, TraverseResponse,
+    add_edge, get_edge_count, get_edges, get_node_degree, get_node_edges, get_node_payload,
+    graph_search, list_nodes, remove_edge, stream_traverse, traverse_graph, traverse_parallel,
+    upsert_node_payload, DegreeResponse, EdgeCountResponse, GraphSearchRequest,
+    GraphSearchResponse, NodeEdgeQueryParams, NodeListResponse, NodePayloadResponse,
+    ParallelTraverseRequest, StreamDoneEvent, StreamNodeEvent, StreamStatsEvent,
+    StreamTraverseParams, TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+    UpsertNodePayloadRequest,
 };
 
 // FLAG-3 FIX: Re-export metrics handlers conditionally (EPIC-016/US-034,035)
