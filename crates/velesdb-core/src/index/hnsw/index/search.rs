@@ -126,6 +126,50 @@ impl HnswIndex {
         results
     }
 
+    /// Quality-aware HNSW search with bitmap pre-filter.
+    ///
+    /// Adapts `ef_search` based on `SearchQuality`, then filters results
+    /// keeping only IDs present in the bitmap or exceeding `u32::MAX`.
+    ///
+    /// Over-fetches candidates (4× `k`) from the HNSW graph to compensate
+    /// for bitmap filtering, then retains only matching results.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DimensionMismatch`] if query dimension is wrong.
+    #[allow(dead_code)] // Wired in Task 4
+    pub fn search_with_quality_and_bitmap(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: SearchQuality,
+        allowed_ids: &roaring::RoaringBitmap,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
+
+        let ef_search = quality.ef_search_for_scale(k, self.len());
+        // Over-fetch to compensate for bitmap filtering
+        let candidates_k = k.saturating_mul(4).max(ef_search);
+        let inner = self.inner.read();
+        let neighbours = inner.search(query, candidates_k, ef_search);
+
+        let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
+        for &(node_id, raw_dist) in &neighbours {
+            if let Some(id) = self.mappings.get_id(node_id) {
+                let in_bitmap = u32::try_from(id).is_ok_and(|id32| allowed_ids.contains(id32));
+                let exceeds_bitmap_range = u32::try_from(id).is_err();
+                if in_bitmap || exceeds_bitmap_range {
+                    let score = inner.transform_score(raw_dist);
+                    results.push(ScoredResult::new(id, score));
+                }
+            }
+        }
+
+        self.metric.sort_scored_results(&mut results);
+        results.truncate(k);
+        Ok(results)
+    }
+
     /// Determines whether two-stage reranking should be used.
     ///
     /// Returns `Some(rerank_k)` if reranking is beneficial, `None` otherwise.
