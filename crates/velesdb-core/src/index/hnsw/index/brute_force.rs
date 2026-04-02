@@ -38,7 +38,7 @@ impl HnswIndex {
                 usize::try_from(allowed_ids.len()).unwrap_or(k),
             );
 
-            for id32 in allowed_ids.iter() {
+            for id32 in allowed_ids {
                 let id = u64::from(id32);
                 if let Some(idx) = self.mappings.get_idx(id) {
                     if let Some(vec) = vectors.get(idx) {

@@ -330,3 +330,44 @@ mod selectivity_property_tests {
         }
     }
 }
+
+#[test]
+fn test_search_with_filter_and_opts_bitmap_empty_returns_empty() {
+    let (col, _temp) = create_indexed_collection();
+    let filter = crate::filter::Filter::new(crate::filter::Condition::Eq {
+        field: "category".to_string(),
+        value: serde_json::Value::String("nonexistent".to_string()),
+    });
+    let opts = crate::collection::search::query::QuerySearchOptions {
+        quality: Some(crate::SearchQuality::Balanced), ef_search: None, force_rerank: None, fusion_clause: None,
+    };
+    let results = col.search_with_filter_and_opts(&[0.5, 0.5, 0.5, 0.5], 10, &filter, &opts)
+        .expect("search should succeed");
+    assert!(results.is_empty(), "nonexistent category with opts should return empty");
+}
+
+#[test]
+fn test_search_with_filter_and_opts_no_bitmap_falls_back_to_post_filter() {
+    let temp_dir = TempDir::new().expect("test: temp dir");
+    let col = Collection::create(temp_dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+    let points: Vec<crate::point::Point> = (0u64..20).map(|id| {
+        let payload = serde_json::json!({"tag": if id < 10 { "A" } else { "B" }});
+        let mut vector = vec![0.1_f32; 4];
+        #[allow(clippy::cast_precision_loss)]
+        { vector[0] += (id as f32) * 0.01; }
+        let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+        for x in &mut vector { *x /= norm; }
+        crate::point::Point { id, vector, payload: Some(payload), sparse_vectors: None }
+    }).collect();
+    col.upsert(points).expect("upsert");
+    let filter = crate::filter::Filter::new(crate::filter::Condition::Eq {
+        field: "tag".to_string(), value: serde_json::Value::String("A".to_string()),
+    });
+    let opts = crate::collection::search::query::QuerySearchOptions {
+        quality: Some(crate::SearchQuality::Accurate), ef_search: None, force_rerank: None, fusion_clause: None,
+    };
+    let results = col.search_with_filter_and_opts(&[0.5, 0.5, 0.5, 0.5], 5, &filter, &opts)
+        .expect("search should succeed");
+    for r in &results { assert!(r.point.id < 10, "expected tag=A, got id={}", r.point.id); }
+    assert!(!results.is_empty(), "should find tag=A results via post-filter fallback");
+}

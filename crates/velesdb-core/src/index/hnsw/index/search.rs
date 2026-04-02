@@ -137,7 +137,6 @@ impl HnswIndex {
     /// # Errors
     ///
     /// Returns [`Error::DimensionMismatch`] if query dimension is wrong.
-    #[allow(dead_code)] // Wired in Task 4
     pub fn search_with_quality_and_bitmap(
         &self,
         query: &[f32],
