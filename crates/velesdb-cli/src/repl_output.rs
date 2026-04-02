@@ -140,6 +140,10 @@ pub fn print_help() {
         ".delete <name> <id> [id2..]".yellow()
     );
     println!(
+        "  {} Upsert a point (vector + payload)",
+        ".upsert <col> <id> <vector> [payload]".yellow()
+    );
+    println!(
         "  {}      Flush collection to disk",
         ".flush <name>".yellow()
     );
@@ -275,7 +279,7 @@ pub fn print_help() {
     println!();
     println!(
         "  {}",
-        "Tip: Use 'velesdb upsert' CLI to insert vectors (INSERT needs $params).".dimmed()
+        "Tip: Use '.upsert <col> <id> <vector> [payload]' to insert vectors.".dimmed()
     );
     println!(
         "  {}",

@@ -558,3 +558,86 @@ fn test_repl_graph_no_subcommand_shows_help() {
     // Shows help, returns Continue
     assert_continue(&result);
 }
+
+// =========================================================================
+// R. .upsert — Nominal (data command, tested here for completeness)
+// =========================================================================
+
+#[test]
+fn test_repl_upsert_creates_point() {
+    // GIVEN: a database with a vector collection
+    let dir = TempDir::new().expect("test: create temp dir");
+    let db = Database::open(dir.path()).expect("test: open database");
+    db.create_vector_collection("docs", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create vector collection");
+
+    // WHEN: .upsert docs 1 [1.0,0.0,0.0,0.0] {"title":"hello"}
+    let parts: Vec<&str> = vec![
+        ".upsert",
+        "docs",
+        "1",
+        "[1.0,0.0,0.0,0.0]",
+        r#"{"title":"hello"}"#,
+    ];
+    let result = crate::repl_data_cmds::cmd_upsert(&db, &parts);
+
+    // THEN: success, point exists
+    assert_continue(&result);
+    let col = db.get_vector_collection("docs").expect("get col");
+    let points = col.get(&[1]);
+    assert!(points[0].is_some());
+    assert_eq!(points[0].as_ref().unwrap().id, 1);
+}
+
+#[test]
+fn test_repl_upsert_without_payload() {
+    // GIVEN: a vector collection
+    let dir = TempDir::new().expect("test: create temp dir");
+    let db = Database::open(dir.path()).expect("test: open database");
+    db.create_vector_collection("docs", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create vector collection");
+
+    // WHEN: .upsert docs 2 [0.0,1.0,0.0,0.0] (no payload)
+    let parts: Vec<&str> = vec![".upsert", "docs", "2", "[0.0,1.0,0.0,0.0]"];
+    let result = crate::repl_data_cmds::cmd_upsert(&db, &parts);
+
+    // THEN: success
+    assert_continue(&result);
+    let col = db.get_vector_collection("docs").expect("get col");
+    let points = col.get(&[2]);
+    assert!(points[0].is_some());
+}
+
+#[test]
+fn test_repl_upsert_invalid_vector_returns_error() {
+    let dir = TempDir::new().expect("test: create temp dir");
+    let db = Database::open(dir.path()).expect("test: open database");
+    db.create_vector_collection("docs", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create vector collection");
+
+    let parts: Vec<&str> = vec![".upsert", "docs", "1", "not_json"];
+    let result = crate::repl_data_cmds::cmd_upsert(&db, &parts);
+
+    assert_error(&result);
+}
+
+#[test]
+fn test_repl_upsert_nonexistent_collection_returns_error() {
+    let dir = TempDir::new().expect("test: create temp dir");
+    let db = Database::open(dir.path()).expect("test: open database");
+
+    let parts: Vec<&str> = vec![".upsert", "ghost", "1", "[1.0]"];
+    let result = crate::repl_data_cmds::cmd_upsert(&db, &parts);
+
+    assert_error(&result);
+}
+
+#[test]
+fn test_repl_upsert_missing_args_shows_usage() {
+    let (_dir, db) = setup_db();
+
+    let parts: Vec<&str> = vec![".upsert"];
+    let result = crate::repl_data_cmds::cmd_upsert(&db, &parts);
+
+    assert_continue(&result); // shows usage
+}

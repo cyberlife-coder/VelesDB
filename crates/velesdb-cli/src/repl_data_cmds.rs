@@ -168,3 +168,65 @@ fn finish_export(records: &[serde_json::Value], filename: &str) -> Result<(), St
     );
     Ok(())
 }
+
+pub(crate) fn cmd_upsert(db: &Database, parts: &[&str]) -> CommandResult {
+    if parts.len() < 4 {
+        println!("Usage: .upsert <collection> <id> <vector_json> [payload_json]\n");
+        println!(
+            "  Example: {} docs 1 [0.1,0.2,0.3,0.4] {{\"title\":\"hello\"}}\n",
+            ".upsert".yellow()
+        );
+        return CommandResult::Continue;
+    }
+    let name = parts[1];
+    let id: u64 = match parts[2].parse() {
+        Ok(v) => v,
+        Err(_) => return CommandResult::Error(format!("Invalid ID: {}", parts[2])),
+    };
+    let vector_json = parts[3];
+
+    let vector: Vec<f32> = match serde_json::from_str(vector_json) {
+        Ok(v) => v,
+        Err(e) => {
+            return CommandResult::Error(format!(
+                "Invalid vector JSON: {e}\nExpected format: [0.1, 0.2, ...]"
+            ));
+        }
+    };
+
+    // Payload is optional — rejoin remaining parts (may contain spaces in JSON)
+    let payload: Option<serde_json::Value> = if parts.len() > 4 {
+        let payload_str = parts[4..].join(" ");
+        match serde_json::from_str(&payload_str) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                return CommandResult::Error(format!(
+                    "Invalid payload JSON: {e}\nExpected format: {{\"key\": \"value\"}}"
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    match db.get_vector_collection(name) {
+        Some(col) => {
+            let point = velesdb_core::Point::new(id, vector, payload);
+            match col.upsert(vec![point]) {
+                Ok(()) => {
+                    println!(
+                        "{} Upserted point {} into '{}'\n",
+                        "\u{2713}".green(),
+                        id.to_string().cyan(),
+                        name.green()
+                    );
+                }
+                Err(e) => return CommandResult::Error(format!("Upsert error: {e}")),
+            }
+        }
+        None => {
+            return CommandResult::Error(format!("Vector collection '{name}' not found"));
+        }
+    }
+    CommandResult::Continue
+}
