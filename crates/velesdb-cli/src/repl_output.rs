@@ -249,16 +249,11 @@ pub fn print_help() {
     );
     println!(
         "  {}",
-        "INSERT INTO docs VALUES (1, [0.1, 0.2], '{\"title\": \"hello\"}');"
-            .italic()
-            .white()
-    );
-    println!(
-        "  {}",
         "CREATE COLLECTION test (dimension = 4, metric = 'cosine');"
             .italic()
             .white()
     );
+    println!("  {}", "DROP COLLECTION test;".italic().white());
     println!(
         "  {}",
         "SELECT EDGES FROM kg WHERE label = 'KNOWS';"
@@ -280,7 +275,11 @@ pub fn print_help() {
     println!();
     println!(
         "  {}",
-        "Note: $parameter vectors require REST API. Use literal [0.1, 0.2, ...] in REPL.".dimmed()
+        "Tip: Use 'velesdb upsert' CLI to insert vectors (INSERT needs $params).".dimmed()
+    );
+    println!(
+        "  {}",
+        "Note: $parameter vectors require REST API. Use literal [0.1, ...] in REPL.".dimmed()
     );
     println!();
 }

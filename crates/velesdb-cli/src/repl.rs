@@ -99,11 +99,8 @@ pub fn run(path: PathBuf) -> Result<()> {
     let mut config = ReplConfig::default();
 
     loop {
-        // Wrap ANSI escape codes in \x01..\x02 so rustyline can compute
-        // the visible prompt width correctly (cursor positioning fix).
-        let styled = "velesdb> ".bold().blue().to_string();
-        let prompt = format!("\x01{styled}\x02");
-        match rl.readline(&prompt) {
+        let prompt = "velesdb> ";
+        match rl.readline(prompt) {
             Ok(line) => {
                 let line = line.trim();
                 if line.is_empty() {
