@@ -702,3 +702,7 @@ fn print_node_page_table(node_page: &graph_display::NodePage) {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "graph_bdd_tests.rs"]
+mod graph_bdd_tests;

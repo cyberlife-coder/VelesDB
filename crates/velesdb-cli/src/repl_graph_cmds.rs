@@ -472,3 +472,7 @@ fn print_graph_help() {
     println!("  {} List nodes", ".graph nodes <col> [--page N]".yellow());
     println!();
 }
+
+#[cfg(test)]
+#[path = "repl_graph_bdd_tests.rs"]
+mod repl_graph_bdd_tests;
