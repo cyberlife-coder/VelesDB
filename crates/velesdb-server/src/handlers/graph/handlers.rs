@@ -30,7 +30,7 @@ use super::types::{
 /// preserving backward compatibility with workflows that drive graph ops without
 /// an explicit `create_graph_collection` call.
 #[allow(deprecated)]
-fn get_graph_collection_or_404(
+pub(super) fn get_graph_collection_or_404(
     state: &AppState,
     name: &str,
 ) -> Result<velesdb_core::GraphCollection, (StatusCode, Json<ErrorResponse>)> {
@@ -283,7 +283,6 @@ pub async fn get_node_degree(
     }))
 }
 
-/// Remove an edge by ID.
 #[utoipa::path(
     delete,
     path = "/collections/{name}/graph/edges/{edge_id}",

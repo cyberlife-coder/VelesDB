@@ -596,7 +596,6 @@
         "tags": [
           "graph"
         ],
-        "summary": "Remove an edge by ID.",
         "operationId": "remove_edge",
         "parameters": [
           {
