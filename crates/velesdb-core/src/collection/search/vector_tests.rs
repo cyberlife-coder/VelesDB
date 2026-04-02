@@ -207,3 +207,59 @@ fn test_search_with_filter_bitmap_empty_result_for_nonexistent_value() {
 
     assert!(results.is_empty(), "no points match nonexistent category");
 }
+
+// =============================================================================
+// estimate_real_selectivity unit tests
+// =============================================================================
+
+/// Unit tests for `estimate_real_selectivity` and `SELECTIVITY_THRESHOLD`.
+/// These are pure function tests that don't require persistence.
+#[cfg(test)]
+mod selectivity_tests {
+    use crate::collection::search::vector::{
+        estimate_real_selectivity, SELECTIVITY_THRESHOLD,
+    };
+
+    #[test]
+    fn test_estimate_real_selectivity_nominal() {
+        let mut bitmap = roaring::RoaringBitmap::new();
+        for id in 0..100_u32 {
+            bitmap.insert(id);
+        }
+        let selectivity = estimate_real_selectivity(&bitmap, 10_000);
+        let expected = 100.0_f64 / 10_000.0;
+        assert!(
+            (selectivity - expected).abs() < f64::EPSILON,
+            "expected {expected}, got {selectivity}"
+        );
+    }
+
+    #[test]
+    fn test_estimate_real_selectivity_empty_collection_returns_zero() {
+        let mut bitmap = roaring::RoaringBitmap::new();
+        bitmap.insert(42);
+        let selectivity = estimate_real_selectivity(&bitmap, 0);
+        assert!(
+            selectivity == 0.0,
+            "empty collection should return 0.0, got {selectivity}"
+        );
+    }
+
+    #[test]
+    fn test_estimate_real_selectivity_empty_bitmap_returns_zero() {
+        let bitmap = roaring::RoaringBitmap::new();
+        let selectivity = estimate_real_selectivity(&bitmap, 1_000);
+        assert!(
+            selectivity == 0.0,
+            "empty bitmap should return 0.0, got {selectivity}"
+        );
+    }
+
+    #[test]
+    fn test_selectivity_threshold_default_is_one_percent() {
+        assert!(
+            (SELECTIVITY_THRESHOLD - 0.01).abs() < f64::EPSILON,
+            "SELECTIVITY_THRESHOLD should be 0.01, got {SELECTIVITY_THRESHOLD}"
+        );
+    }
+}
