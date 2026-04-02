@@ -182,9 +182,13 @@ All graph REPL commands operate on graph collections via `.graph <subcommand>`:
 | `.graph degree <col> <node_id>` | Show in-degree, out-degree, and total degree |
 | `.graph traverse <col> <source> [--algo bfs\|dfs] [--depth N] [--limit N]` | BFS/DFS traversal from a source node |
 | `.graph neighbors <col> <node_id> [--direction in\|out\|both]` | List neighbors of a node (default: out) |
-| `.nodes <col> [page]` | Paginated browsing of all nodes referenced in edges (with payload if stored) |
-
-> **Note:** `store-payload` and `get-payload` are available as **CLI subcommands only** (`velesdb graph store-payload`, `velesdb graph get-payload`), not as REPL dot-commands.
+| `.graph remove-edge <col> <edge_id>` | Remove an edge by ID |
+| `.graph count <col>` | Show edge and node count |
+| `.graph search <col> <vector_json> [k]` | Search by embedding similarity (requires embeddings) |
+| `.graph store-payload <col> <node_id> <json>` | Store JSON payload on a node |
+| `.graph get-payload <col> <node_id>` | Retrieve node payload |
+| `.graph nodes <col> [--page N]` | Paginated node browsing (20 per page) |
+| `.nodes <col> [page]` | Paginated node browsing for Graph collections (10 per page, includes payload). |
 
 > **Naming note:** The REPL uses `.graph edges` while the CLI subcommand uses `graph get-edges`. Both do the same thing.
 
@@ -436,6 +440,17 @@ velesdb graph store-payload ./data my_graph 100 '{"name": "Alice", "role": "auth
 
 # Retrieve node payload
 velesdb graph get-payload ./data my_graph 100
+
+# Remove an edge by ID
+velesdb graph remove-edge ./data my_graph 1
+
+# Count edges and nodes
+velesdb graph count ./data my_graph
+velesdb graph count ./data my_graph --format json
+
+# Search graph nodes by embedding similarity (requires graph with embeddings)
+velesdb graph search ./data my_graph '[0.1, 0.2, 0.3]' -k 10
+velesdb graph search ./data my_graph '[0.1, 0.2, 0.3]' --format json
 
 # List all nodes (paginated, 20 per page)
 velesdb graph nodes ./data my_graph
