@@ -6,6 +6,7 @@
 
 use std::io;
 
+use super::codec_helpers::{serialize_with_header, validate_and_split_header};
 use super::QuantizationCodec;
 
 /// A quantized vector using 8-bit scalar quantization.
@@ -92,26 +93,24 @@ impl QuantizedVector {
     }
 }
 
+/// SQ8 header: `[min: f32 LE][max: f32 LE]` = 8 bytes.
+const SQ8_HEADER_SIZE: usize = 8;
+
 impl QuantizationCodec for QuantizedVector {
     fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(8 + self.data.len());
-        bytes.extend_from_slice(&self.min.to_le_bytes());
-        bytes.extend_from_slice(&self.max.to_le_bytes());
-        bytes.extend_from_slice(&self.data);
-        bytes
+        let mut header = [0u8; SQ8_HEADER_SIZE];
+        header[..4].copy_from_slice(&self.min.to_le_bytes());
+        header[4..].copy_from_slice(&self.max.to_le_bytes());
+        serialize_with_header(&header, &self.data)
     }
 
     fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
-        if bytes.len() < 8 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Not enough bytes for QuantizedVector header",
-            ));
-        }
+        let (header, payload) =
+            validate_and_split_header(bytes, SQ8_HEADER_SIZE, "QuantizedVector")?;
 
-        let min = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        let max = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-        let data = bytes[8..].to_vec();
+        let min = f32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+        let max = f32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+        let data = payload.to_vec();
 
         Ok(Self { data, min, max })
     }

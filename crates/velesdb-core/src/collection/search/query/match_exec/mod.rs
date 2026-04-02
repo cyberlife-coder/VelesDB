@@ -14,11 +14,11 @@
 mod similarity;
 mod where_eval;
 
-use crate::collection::graph::{bfs_stream, StreamingConfig};
+use crate::collection::graph::{concurrent_bfs_stream, StreamingConfig};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::guardrails::QueryContext;
-use crate::storage::{PayloadStorage, VectorStorage};
+use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 use crate::velesql::{GraphPattern, MatchClause};
 use std::collections::HashMap;
 
@@ -69,32 +69,81 @@ impl MatchResult {
     }
 }
 
+/// A parsed RETURN clause projection item (Fix #489).
+///
+/// Replaces the former `parse_property_path()` that silently returned `None`
+/// for wildcards, function calls, and bare aliases — leaving `projected` empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionItem<'a> {
+    /// `RETURN *` — project all properties from all bound aliases.
+    Wildcard,
+    /// `RETURN similarity()` — a function call expression.
+    /// The inner `&str` is the function name (e.g., `"similarity"`).
+    FunctionCall(&'a str),
+    /// `RETURN n.name` — a dotted property path.
+    PropertyPath {
+        /// The alias portion (e.g., `"n"`).
+        alias: &'a str,
+        /// The property portion (e.g., `"name"` or `"metadata.category"`).
+        property: &'a str,
+    },
+    /// `RETURN n` — a bare alias referring to a bound node.
+    BareAlias(&'a str),
+}
+
+/// Parses a RETURN clause expression into a [`ProjectionItem`] (Fix #489).
+///
+/// Handles four patterns:
+/// - `"*"` → [`ProjectionItem::Wildcard`]
+/// - `"similarity()"` → [`ProjectionItem::FunctionCall("similarity")`]
+/// - `"n.name"` → [`ProjectionItem::PropertyPath { alias: "n", property: "name" }`]
+/// - `"n"` → [`ProjectionItem::BareAlias("n")`]
+#[must_use]
+pub fn parse_projection_item(expression: &str) -> ProjectionItem<'_> {
+    if expression == "*" {
+        return ProjectionItem::Wildcard;
+    }
+
+    // Function calls contain '(' — extract the name before the parenthesis.
+    if let Some(paren_pos) = expression.find('(') {
+        let name = &expression[..paren_pos];
+        return ProjectionItem::FunctionCall(name);
+    }
+
+    // Dotted property path: split on first dot (both halves must be non-empty).
+    if let Some(dot_pos) = expression.find('.') {
+        let alias = &expression[..dot_pos];
+        let property = &expression[dot_pos + 1..];
+        if !alias.is_empty() && !property.is_empty() {
+            return ProjectionItem::PropertyPath { alias, property };
+        }
+    }
+
+    // Everything else is a bare alias (including edge cases like ".x" or "x.").
+    ProjectionItem::BareAlias(expression)
+}
+
 /// Parses a property path expression like "alias.property" (EPIC-058 US-007).
 ///
 /// Returns `Some((alias, property))` if valid, `None` otherwise.
 /// For nested paths like "doc.metadata.category", returns `("doc", "metadata.category")`.
+///
+/// **Prefer [`parse_projection_item`]** for RETURN clause projection — this function
+/// only handles `PropertyPath` cases and returns `None` for wildcards, function calls,
+/// and bare aliases.
 #[must_use]
 pub fn parse_property_path(expression: &str) -> Option<(&str, &str)> {
-    // Skip special cases
-    if expression == "*" || expression.contains('(') {
-        return None;
+    match parse_projection_item(expression) {
+        ProjectionItem::PropertyPath { alias, property } => Some((alias, property)),
+        _ => None,
     }
-
-    // Split on first dot
-    let dot_pos = expression.find('.')?;
-    if dot_pos == 0 || dot_pos == expression.len() - 1 {
-        return None;
-    }
-
-    let alias = &expression[..dot_pos];
-    let property = &expression[dot_pos + 1..];
-    Some((alias, property))
 }
 
 /// Context for collecting single-node pattern results (no relationships).
 struct SingleNodeCtx<'a> {
     match_clause: &'a MatchClause,
     params: &'a HashMap<String, serde_json::Value>,
+    payload_guard: &'a LogPayloadStorage,
     seen_pairs: &'a mut std::collections::HashSet<(u64, u64)>,
     all_results: &'a mut Vec<MatchResult>,
     limit: usize,
@@ -104,6 +153,7 @@ struct SingleNodeCtx<'a> {
 struct TraversalCtx<'a> {
     match_clause: &'a MatchClause,
     params: &'a HashMap<String, serde_json::Value>,
+    payload_guard: &'a LogPayloadStorage,
     guardrail: Option<&'a QueryContext>,
     seen_pairs: &'a mut std::collections::HashSet<(u64, u64)>,
     all_results: &'a mut Vec<MatchResult>,
@@ -144,23 +194,17 @@ impl Collection {
 
     /// Executes a MATCH query on this collection (EPIC-045 US-002, EPIC-048).
     ///
-    /// This method performs graph pattern matching by:
-    /// 1. Finding start nodes matching the first node pattern
-    /// 2. Traversing relationships according to the pattern
-    /// 3. Enforcing guard-rail limits (depth, cardinality, timeout) if a context is provided
-    /// 4. Filtering results by WHERE clause conditions
-    /// 5. Returning results according to RETURN clause
+    /// Performs graph pattern matching: finds start nodes, traverses
+    /// relationships, enforces guard-rail limits, filters by WHERE, and
+    /// projects RETURN properties.
     ///
-    /// # Arguments
-    ///
-    /// * `match_clause` - The parsed MATCH clause
-    /// * `params` - Query parameters for resolving placeholders
-    /// * `ctx` - Optional guard-rail context for enforcing limits
+    /// Hoists `payload_storage.read()` once before the traversal loop to avoid
+    /// per-node lock acquisitions. The `ConcurrentEdgeStore` manages its own
+    /// internal shard locks — no outer lock is needed.
     ///
     /// # Errors
     ///
     /// Returns an error if the query cannot be executed or a guard-rail is violated.
-    /// Executes a MATCH query on this collection (EPIC-045 US-002, EPIC-048).
     pub fn execute_match_with_context(
         &self,
         match_clause: &MatchClause,
@@ -177,7 +221,9 @@ impl Collection {
         let mut all_results: Vec<MatchResult> = Vec::new();
         let mut iteration_count: u32 = 0;
         let mut reported_cardinality: usize = 0;
-        let edge_store = self.edge_store.read();
+
+        // Hoist payload_storage lock once for the entire query.
+        let payload_guard = self.payload_storage.read();
 
         for pattern in &match_clause.patterns {
             if all_results.len() >= limit {
@@ -188,7 +234,8 @@ impl Collection {
                 match_clause,
                 params,
                 ctx,
-                &edge_store,
+                &payload_guard,
+                &self.edge_store,
                 limit,
                 &mut all_results,
                 &mut iteration_count,
@@ -208,7 +255,8 @@ impl Collection {
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
-        edge_store: &crate::collection::graph::EdgeStore,
+        payload_guard: &LogPayloadStorage,
+        edge_store: &crate::collection::graph::ConcurrentEdgeStore,
         limit: usize,
         all_results: &mut Vec<MatchResult>,
         iteration_count: &mut u32,
@@ -226,6 +274,7 @@ impl Collection {
             let mut sn_ctx = SingleNodeCtx {
                 match_clause,
                 params,
+                payload_guard,
                 seen_pairs: &mut seen_pairs,
                 all_results,
                 limit,
@@ -236,6 +285,7 @@ impl Collection {
         let mut trav_ctx = TraversalCtx {
             match_clause,
             params,
+            payload_guard,
             guardrail: ctx,
             seen_pairs: &mut seen_pairs,
             all_results,
@@ -251,7 +301,7 @@ impl Collection {
         &self,
         pattern: &GraphPattern,
         start_nodes: &[(u64, HashMap<String, u64>)],
-        edge_store: &crate::collection::graph::EdgeStore,
+        edge_store: &crate::collection::graph::ConcurrentEdgeStore,
         ctx: &mut TraversalCtx<'_>,
     ) -> Result<()> {
         let max_depth = Self::compute_max_depth(pattern);
@@ -267,7 +317,7 @@ impl Collection {
                 .with_max_depth(max_depth)
                 .with_rel_types(rel_types.clone());
 
-            for traversal_result in bfs_stream(edge_store, *start_id, config) {
+            for traversal_result in concurrent_bfs_stream(edge_store, *start_id, config) {
                 if ctx.all_results.len() >= ctx.limit {
                     break;
                 }
@@ -294,7 +344,8 @@ impl Collection {
 
     /// Evaluates a single BFS hit: guard-rails, WHERE filter, dedup, and projection.
     ///
-    /// Pushes the result into `ctx.all_results` when all checks pass.
+    /// Uses the pre-acquired `payload_guard` from the traversal context
+    /// to avoid per-node lock acquisitions.
     fn accept_traversal_hit(
         &self,
         start_id: u64,
@@ -316,6 +367,7 @@ impl Collection {
                 Some(&match_result.bindings),
                 where_clause,
                 ctx.params,
+                ctx.payload_guard,
             )? {
                 return Ok(());
             }
@@ -327,14 +379,20 @@ impl Collection {
         }
 
         let mut final_result = match_result;
-        final_result.projected =
-            self.project_properties(&final_result.bindings, &ctx.match_clause.return_clause);
+        final_result.projected = self.project_properties(
+            &final_result.bindings,
+            &ctx.match_clause.return_clause,
+            ctx.payload_guard,
+        );
 
         ctx.all_results.push(final_result);
         Ok(())
     }
 
     /// Collects results for single-node patterns (no relationships).
+    ///
+    /// Uses the pre-acquired `payload_guard` from the context to avoid
+    /// per-node lock acquisitions.
     fn collect_single_node_results(
         &self,
         start_nodes: &[(u64, HashMap<String, u64>)],
@@ -350,6 +408,7 @@ impl Collection {
                     Some(bindings),
                     where_clause,
                     ctx.params,
+                    ctx.payload_guard,
                 )? {
                     continue;
                 }
@@ -361,7 +420,11 @@ impl Collection {
 
             let mut result = MatchResult::new(*node_id, 0, Vec::new());
             result.bindings.clone_from(bindings);
-            result.projected = self.project_properties(bindings, &ctx.match_clause.return_clause);
+            result.projected = self.project_properties(
+                bindings,
+                &ctx.match_clause.return_clause,
+                ctx.payload_guard,
+            );
             ctx.all_results.push(result);
         }
         Ok(())
@@ -425,17 +488,119 @@ impl Collection {
 
     /// Finds start nodes matching the first node pattern.
     ///
-    /// Enumerates the union of vector storage IDs and payload storage IDs so
-    /// that graph-only nodes (no embedding) are also discoverable by MATCH.
+    /// When the pattern specifies labels (e.g., `(n:Person)`), uses the
+    /// `LabelIndex` bitmap intersection for O(k) lookup instead of scanning
+    /// all N nodes. Falls back to full scan when no labels are specified
+    /// or when the label index contains large IDs that could not be indexed
+    /// in the `RoaringBitmap` (u32 limitation).
+    ///
+    /// # Lock note
+    ///
+    /// The caller (`execute_match_with_context`) already holds a
+    /// `payload_storage.read()` guard. This method (and its delegates
+    /// `find_start_nodes_indexed`, `find_start_nodes_full_scan`) may acquire
+    /// a second concurrent read lock on the same `payload_storage`. This is
+    /// safe because `parking_lot::RwLock` allows unlimited concurrent readers
+    /// with no poisoning or deadlock risk. Refactoring to pass the existing
+    /// guard down would require changing 4+ function signatures for minimal
+    /// runtime benefit (read locks are non-blocking).
     fn find_start_nodes(&self, pattern: &GraphPattern) -> Result<Vec<(u64, HashMap<String, u64>)>> {
         let first_node = pattern
             .nodes
             .first()
             .ok_or_else(|| Error::Config("Pattern must have at least one node".to_string()))?;
 
+        // Fast path: use label index when labels are specified.
+        if !first_node.labels.is_empty() {
+            let has_large = self.label_index.read().has_large_ids();
+            let indexed = self.find_start_nodes_indexed(first_node);
+
+            if has_large {
+                // RoaringBitmap cannot index IDs > u32::MAX, so the bitmap
+                // result may be incomplete. Fall back to a full scan and
+                // merge the results to avoid silently missing large-ID nodes.
+                return Ok(self.merge_with_full_scan(indexed, first_node));
+            }
+            return Ok(indexed);
+        }
+
+        // Slow path: full scan (no labels in pattern).
+        Ok(self.find_start_nodes_full_scan(first_node))
+    }
+
+    /// Merges indexed bitmap results with a full scan to capture nodes whose
+    /// IDs exceed `u32::MAX` (not representable in `RoaringBitmap`).
+    ///
+    /// Collects IDs already present in `indexed` into a set, then appends
+    /// any full-scan results that are not already covered.
+    fn merge_with_full_scan(
+        &self,
+        indexed: Vec<(u64, HashMap<String, u64>)>,
+        first_node: &crate::velesql::NodePattern,
+    ) -> Vec<(u64, HashMap<String, u64>)> {
+        let full = self.find_start_nodes_full_scan(first_node);
+        if indexed.is_empty() {
+            return full;
+        }
+        let existing: std::collections::HashSet<u64> = indexed.iter().map(|(id, _)| *id).collect();
+        let mut merged = indexed;
+        for entry in full {
+            if !existing.contains(&entry.0) {
+                merged.push(entry);
+            }
+        }
+        merged
+    }
+
+    /// O(k) label-indexed lookup for start nodes.
+    ///
+    /// Intersects label bitmaps from `LabelIndex`, then filters by properties
+    /// if needed. Only reads payload storage for nodes that pass the label
+    /// filter, avoiding the O(N) full scan.
+    fn find_start_nodes_indexed(
+        &self,
+        first_node: &crate::velesql::NodePattern,
+    ) -> Vec<(u64, HashMap<String, u64>)> {
+        let label_idx = self.label_index.read();
+        let bitmap = label_idx.lookup_intersection(&first_node.labels);
+        drop(label_idx);
+
+        let Some(bitmap) = bitmap else {
+            // No nodes match the required labels.
+            return Vec::new();
+        };
+
+        if first_node.properties.is_empty() {
+            // Labels-only: every bitmap entry is a match.
+            return bitmap
+                .iter()
+                .map(|id| Self::build_start_binding(u64::from(id), first_node))
+                .collect();
+        }
+
+        // Labels + properties: filter bitmap entries by property match.
+        let payload_storage = self.payload_storage.read();
+        bitmap
+            .iter()
+            .filter(|&id| {
+                Self::node_matches_properties_by_id(
+                    u64::from(id),
+                    &first_node.properties,
+                    &payload_storage,
+                )
+            })
+            .map(|id| Self::build_start_binding(u64::from(id), first_node))
+            .collect()
+    }
+
+    /// O(N) full scan fallback for start nodes (no labels, or large-ID fallback).
+    fn find_start_nodes_full_scan(
+        &self,
+        first_node: &crate::velesql::NodePattern,
+    ) -> Vec<(u64, HashMap<String, u64>)> {
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
-        let needs_payload = !first_node.labels.is_empty() || !first_node.properties.is_empty();
+        let needs_payload = !first_node.properties.is_empty() || !first_node.labels.is_empty();
 
         // Union of vector IDs and payload IDs — graph-only nodes have no vector.
         let mut all_ids: std::collections::HashSet<u64> =
@@ -444,15 +609,23 @@ impl Collection {
             all_ids.insert(id);
         }
 
-        let results = all_ids
+        all_ids
             .into_iter()
             .filter(|id| {
                 Self::node_matches_pattern(*id, first_node, needs_payload, &payload_storage)
             })
             .map(|id| Self::build_start_binding(id, first_node))
-            .collect();
+            .collect()
+    }
 
-        Ok(results)
+    /// Checks if a node's payload satisfies property filters (label already verified).
+    fn node_matches_properties_by_id(
+        id: u64,
+        properties: &HashMap<String, crate::velesql::Value>,
+        payload_storage: &crate::storage::LogPayloadStorage,
+    ) -> bool {
+        let payload_opt = payload_storage.retrieve(id).ok().flatten();
+        Self::node_matches_properties(payload_opt.as_ref(), properties)
     }
 
     /// Returns true if a node matches the label and property filters of a pattern.
@@ -547,6 +720,9 @@ impl Collection {
             (Value::String(s), serde_json::Value::String(js)) => s == js,
             (Value::Integer(i), serde_json::Value::Number(n)) => {
                 n.as_i64().is_some_and(|ni| *i == ni)
+            }
+            (Value::UnsignedInteger(u), serde_json::Value::Number(n)) => {
+                n.as_u64().is_some_and(|nu| *u == nu)
             }
             (Value::Float(f), serde_json::Value::Number(n)) => {
                 n.as_f64().is_some_and(|nf| (*f - nf).abs() < 0.001)

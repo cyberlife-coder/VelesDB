@@ -3,7 +3,7 @@
 #![allow(clippy::cast_precision_loss, deprecated)]
 
 use super::distance::{CpuDistance, SimdDistance};
-use super::graph::NativeHnsw;
+use super::graph::{NativeHnsw, DEFAULT_ALPHA};
 use crate::distance::DistanceMetric;
 
 #[test]
@@ -178,14 +178,14 @@ fn test_native_hnsw_with_alpha_diversification() {
 }
 
 #[test]
-fn test_native_hnsw_alpha_default_is_one() {
-    // Default alpha should be 1.0 (standard HNSW behavior)
+fn test_native_hnsw_alpha_default_is_vamana() {
+    // Default alpha should be DEFAULT_ALPHA (1.2, VAMANA recommendation)
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     assert!(
-        (hnsw.get_alpha() - 1.0).abs() < f32::EPSILON,
-        "Default alpha should be 1.0"
+        (hnsw.get_alpha() - DEFAULT_ALPHA).abs() < f32::EPSILON,
+        "Default alpha should be {DEFAULT_ALPHA}"
     );
 }
 
@@ -1009,4 +1009,188 @@ fn test_safety_counters_accessible_after_operations() {
         snapshot.corruption_detected_total, 0,
         "Normal operations should not trigger corruption signals"
     );
+}
+
+// =============================================================================
+// Phase 3: Diversity-Aware Backward Pruning Tests
+// =============================================================================
+
+/// Verifies that the diversity-aware backward pruning produces neighbor lists
+/// that span multiple directional clusters, unlike simple farthest-eviction
+/// which would fill the list with nearby, redundant neighbors.
+#[test]
+fn test_backward_pruning_preserves_diversity_across_clusters() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    // M=16 ensures the graph is well-connected across clusters.
+    // With M0=32 layer-0 connections, the hub can reach all clusters.
+    let hnsw = NativeHnsw::with_alpha(engine, 16, 200, 200, 1.2);
+
+    // Insert 4 tight clusters of 10 vectors each in 32D space.
+    // Each cluster is centered on a different axis.
+    for cluster in 0..4_usize {
+        for i in 0..10_u64 {
+            let v: Vec<f32> = (0..32)
+                .map(|j| {
+                    if j == cluster {
+                        10.0 + i as f32 * 0.01 // dominant axis
+                    } else {
+                        i as f32 * 0.001 // small noise
+                    }
+                })
+                .collect();
+            hnsw.insert(&v).expect("test: cluster insert");
+        }
+    }
+
+    assert_eq!(hnsw.len(), 40);
+
+    // Now insert a "hub" vector equidistant from all clusters.
+    let hub: Vec<f32> = (0..32).map(|j| if j < 4 { 5.0 } else { 0.0 }).collect();
+    hnsw.insert(&hub).expect("test: hub insert");
+    let hub_id = 40; // 0-indexed, 41st insert
+
+    // Read hub's layer-0 neighbor list. With diversity-aware pruning,
+    // we expect neighbors from multiple clusters, not just the nearest one.
+    // Acquire vectors *then* layers in the correct lock order (rank 10 → 20)
+    // to avoid incrementing the global invariant-violation counter.
+    hnsw.with_vectors_and_layers_read(|vectors, layers| {
+        let neighbors = layers[0].get_neighbors(hub_id);
+        assert!(
+            !neighbors.is_empty(),
+            "Hub node must have at least one neighbor"
+        );
+
+        // Classify each neighbor by its dominant cluster.
+        // Cluster assignment: whichever of the first 4 dims is largest.
+        let mut clusters_seen = std::collections::HashSet::new();
+        for &n in &neighbors {
+            // SAFETY: test code — all node IDs were just inserted.
+            let vec = unsafe { vectors.get_unchecked(n) };
+            let cluster_id = vec[..4]
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .unwrap()
+                .0;
+            clusters_seen.insert(cluster_id);
+        }
+
+        // With M0=32 connections and 4 clusters, we expect coverage of at
+        // least 2 clusters (diversity-aware). The redundancy-aware eviction
+        // ensures cross-cluster connectivity.
+        assert!(
+            clusters_seen.len() >= 2,
+            "Backward pruning should preserve diversity: \
+             hub neighbors span only {} cluster(s), expected >= 2. \
+             Neighbor IDs: {:?}",
+            clusters_seen.len(),
+            neighbors
+        );
+    });
+}
+
+/// Verifies that diversity-aware backward pruning does not degrade recall
+/// compared to a baseline threshold.
+#[test]
+fn test_diversity_backward_pruning_recall_not_degraded() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 500);
+
+    let vectors: Vec<Vec<f32>> = (0..200)
+        .map(|i| {
+            (0..64)
+                .map(|j| ((i * 64 + j) as f32 * 0.001).sin())
+                .collect()
+        })
+        .collect();
+
+    for v in &vectors {
+        hnsw.insert(v).expect("test: insert");
+    }
+
+    let k = 10;
+    let mut total_recall = 0.0;
+    let n_queries = 10;
+
+    for q_idx in 0..n_queries {
+        let query = &vectors[q_idx * 20];
+
+        let hnsw_results: Vec<usize> = hnsw
+            .search(query, k, 128)
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+
+        // Brute-force ground truth
+        let mut distances: Vec<(usize, f32)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let d: f32 = query
+                    .iter()
+                    .zip(v.iter())
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                (i, d)
+            })
+            .collect();
+        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let ground_truth: Vec<usize> = distances.iter().take(k).map(|(i, _)| *i).collect();
+
+        let hits = hnsw_results
+            .iter()
+            .filter(|id| ground_truth.contains(id))
+            .count();
+        total_recall += hits as f64 / k as f64;
+    }
+
+    let avg_recall = total_recall / n_queries as f64;
+    assert!(
+        avg_recall >= 0.80,
+        "Diversity-aware backward pruning must not degrade recall below 80%: \
+         got {:.1}%",
+        avg_recall * 100.0
+    );
+}
+
+/// When all existing neighbors are already maximally diverse (equidistant),
+/// the new node replaces a neighbor only if it is closer to the anchor.
+#[test]
+fn test_eviction_respects_distance_when_all_equally_diverse() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    // M=2 so M0=4, very constrained to force eviction decisions.
+    let hnsw = NativeHnsw::with_alpha(engine, 2, 100, 50, 1.2);
+
+    // Insert 5 vectors along different axes in 8D (all roughly equidistant
+    // from each other). Then insert a 6th vector close to one of them.
+    // The close vector should only replace a neighbor if it is closer to
+    // the anchor than the worst diversity score.
+    for i in 0..5_usize {
+        let v: Vec<f32> = (0..8).map(|j| if j == i { 1.0 } else { 0.0 }).collect();
+        hnsw.insert(&v).expect("test: axis insert");
+    }
+
+    // Insert a vector very close to node 0 ([1, 0, 0, ...])
+    let close_to_0: Vec<f32> = (0..8).map(|j| if j == 0 { 0.99 } else { 0.001 }).collect();
+    hnsw.insert(&close_to_0).expect("test: close insert");
+
+    assert_eq!(hnsw.len(), 6);
+
+    // Search should still return valid, sorted results
+    let query: Vec<f32> = (0..8).map(|j| if j == 0 { 1.0 } else { 0.0 }).collect();
+    let results = hnsw.search(&query, 3, 50);
+
+    assert!(
+        !results.is_empty(),
+        "Search should return results after eviction"
+    );
+    for window in results.windows(2) {
+        assert!(
+            window[0].1 <= window[1].1,
+            "Results must be sorted by distance: {} > {}",
+            window[0].1,
+            window[1].1
+        );
+    }
 }

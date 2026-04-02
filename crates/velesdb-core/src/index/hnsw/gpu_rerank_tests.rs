@@ -106,8 +106,12 @@ fn test_gpu_rerank_end_to_end_balanced_vs_fast() {
 
     let query: Vec<f32> = (0..dim).map(|j| (j as f32 * 0.031).cos()).collect();
 
-    let fast_results = index.search_with_quality(&query, 10, SearchQuality::Fast);
-    let balanced_results = index.search_with_quality(&query, 10, SearchQuality::Balanced);
+    let fast_results = index
+        .search_with_quality(&query, 10, SearchQuality::Fast)
+        .unwrap();
+    let balanced_results = index
+        .search_with_quality(&query, 10, SearchQuality::Balanced)
+        .unwrap();
 
     // Both should return results
     assert!(
@@ -175,7 +179,9 @@ fn test_gpu_rerank_fallback_below_threshold() {
     index.insert(5, &[0.5, 0.5, 0.5, 0.0]);
 
     let query = [1.0, 0.0, 0.0, 0.0];
-    let results = index.search_with_quality(&query, 3, SearchQuality::Balanced);
+    let results = index
+        .search_with_quality(&query, 3, SearchQuality::Balanced)
+        .unwrap();
 
     assert!(!results.is_empty(), "Should return results via SIMD path");
     assert_eq!(
@@ -263,12 +269,18 @@ fn test_batch_search_gpu_rerank_matches_cpu() {
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
     // Batch search (may use GPU reranking if available + threshold met)
-    let batch_results = index.search_batch_parallel(&query_refs, k, SearchQuality::Balanced);
+    let batch_results = index
+        .search_batch_parallel(&query_refs, k, SearchQuality::Balanced)
+        .unwrap();
 
     // Individual searches as baseline
     let individual_results: Vec<Vec<crate::scored_result::ScoredResult>> = queries
         .iter()
-        .map(|q| index.search_with_quality(q, k, SearchQuality::Balanced))
+        .map(|q| {
+            index
+                .search_with_quality(q, k, SearchQuality::Balanced)
+                .unwrap()
+        })
         .collect();
 
     assert_eq!(batch_results.len(), individual_results.len());
@@ -328,7 +340,9 @@ fn test_batch_search_fallback_without_gpu() {
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
     // Fast quality = no reranking, pure HNSW
-    let results = index.search_batch_parallel(&query_refs, 5, SearchQuality::Fast);
+    let results = index
+        .search_batch_parallel(&query_refs, 5, SearchQuality::Fast)
+        .unwrap();
 
     assert_eq!(results.len(), 5, "Should return one result set per query");
     for (i, result) in results.iter().enumerate() {
@@ -375,10 +389,12 @@ fn test_batch_search_adaptive_matches_individual() {
     let queries: Vec<Vec<f32>> = (0..8).map(|_| lcg_vector(&mut seed, dim)).collect();
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
-    let batch_results = index.search_batch_parallel(&query_refs, k, adaptive);
+    let batch_results = index
+        .search_batch_parallel(&query_refs, k, adaptive)
+        .unwrap();
     let individual_results: Vec<Vec<crate::scored_result::ScoredResult>> = queries
         .iter()
-        .map(|q| index.search_with_quality(q, k, adaptive))
+        .map(|q| index.search_with_quality(q, k, adaptive).unwrap())
         .collect();
 
     assert_eq!(batch_results.len(), individual_results.len());
@@ -430,7 +446,7 @@ fn test_brute_force_gpu_matches_rayon() {
     let query = lcg_vector(&mut seed, dim);
 
     // Rayon path (always available)
-    let rayon_results = index.brute_force_search_parallel(&query, k);
+    let rayon_results = index.brute_force_search_parallel(&query, k).unwrap();
 
     // GPU path (may return None if GPU unavailable)
     if let Some(gpu_results) = index.brute_force_search_gpu_dispatch(&query, k) {

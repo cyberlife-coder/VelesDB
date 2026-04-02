@@ -216,7 +216,7 @@ impl Collection {
         };
 
         let metric = self.config.read().metric;
-        let index_results = self.index.search_with_quality(query, k, quality);
+        let index_results = self.index.search_with_quality(query, k, quality)?;
         let index_results = self.merge_delta(index_results, query, k, metric);
 
         let vector_storage = self.vector_storage.read();
@@ -247,7 +247,7 @@ impl Collection {
         let metric = config.metric;
         drop(config);
 
-        let index_results = self.index.search_with_quality(query, k, quality);
+        let index_results = self.index.search_with_quality(query, k, quality)?;
         let index_results = self.merge_delta(index_results, query, k, metric);
 
         let vector_storage = self.vector_storage.read();
@@ -313,7 +313,7 @@ impl Collection {
         let rerank_k = k.saturating_mul(4).max(k + 32);
         let index_results = self
             .index
-            .search_with_rerank_quality(query, k, rerank_k, quality);
+            .search_with_rerank_quality(query, k, rerank_k, quality)?;
         let index_results = self.merge_delta(index_results, query, k, metric);
 
         let vector_storage = self.vector_storage.read();
@@ -404,18 +404,14 @@ impl Collection {
         let config = self.config.read();
         validate_dimension_match(config.dimension, query.len())?;
         let higher_is_better = config.metric.higher_is_better();
+        let metric = config.metric;
         drop(config);
 
-        let selectivity = estimate_filter_selectivity(filter);
-        // Reason: k is a small search count (typically <1000); f64 has 52-bit mantissa.
-        #[allow(clippy::cast_precision_loss)]
-        let k_f64 = k as f64;
-        #[allow(clippy::cast_precision_loss)]
-        let lower = (k + 10) as f64;
-        // Reason: result is clamped to [k+10, 10_000] so no truncation risk.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let candidates_k = (k_f64 / selectivity).ceil().clamp(lower, 10_000.0) as usize;
-        let index_results = self.search_ids_with_adc_if_pq(query, candidates_k);
+        let candidates_k = compute_oversampled_k(k, filter);
+
+        // Attempt bitmap pre-filter from secondary indexes.
+        let index_results =
+            self.search_with_optional_bitmap(query, k, candidates_k, filter, metric);
 
         Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
     }
@@ -427,6 +423,18 @@ impl Collection {
     /// uses quality-aware HNSW search (higher ef_search) for candidates before
     /// applying the metadata filter. Falls back to [`search_with_filter`] when no
     /// quality options are set.
+    ///
+    /// # Note on bitmap pre-filter
+    ///
+    /// Unlike [`search_with_filter`], this method does not use
+    /// [`search_with_optional_bitmap`] because `search_with_quality` and
+    /// `search_hnsw_only_filtered` are separate code paths on `HnswIndex`.
+    /// Combining quality-aware ef_search with bitmap pre-filtering would
+    /// require a new `HnswIndex` method.
+    // TODO #issue: Wire bitmap pre-filter into quality-aware search path.
+    // This requires a `search_with_quality_and_bitmap` method on `HnswIndex`
+    // that combines `search_with_quality`'s ef_search adaptation with
+    // `search_hnsw_only_filtered`'s bitmap exclusion.
     ///
     /// # Errors
     ///
@@ -460,21 +468,42 @@ impl Collection {
         });
 
         // Over-fetch for filtering: retrieve more candidates than needed.
-        let selectivity = estimate_filter_selectivity(filter);
-        // Reason: k is a small search count (typically <1000); f64 has 52-bit mantissa.
-        #[allow(clippy::cast_precision_loss)]
-        let k_f64 = k as f64;
-        #[allow(clippy::cast_precision_loss)]
-        let lower = (k + 10) as f64;
-        // Reason: result is clamped to [k+10, 10_000] so no truncation risk.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let candidates_k = (k_f64 / selectivity).ceil().clamp(lower, 10_000.0) as usize;
+        let candidates_k = compute_oversampled_k(k, filter);
 
-        let index_results = self.index.search_with_quality(query, candidates_k, quality);
+        let index_results = self
+            .index
+            .search_with_quality(query, candidates_k, quality)?;
         let index_results = self.merge_delta(index_results, query, candidates_k, metric);
 
         let results = self.filter_and_hydrate(index_results, filter, k, higher_is_better);
         Ok(results)
+    }
+
+    /// Searches HNSW with an optional bitmap pre-filter from secondary indexes.
+    ///
+    /// When a bitmap can be built from the filter's equality conditions (i.e.,
+    /// the filter references indexed fields), the HNSW search over-fetches
+    /// candidates and keeps only those whose external ID is in the bitmap.
+    /// This eliminates expensive payload retrieval for non-matching points.
+    ///
+    /// Falls back to the standard unfiltered HNSW search when no bitmap is
+    /// available (non-indexed fields, NOT/Neq conditions).
+    fn search_with_optional_bitmap(
+        &self,
+        query: &[f32],
+        k: usize,
+        candidates_k: usize,
+        filter: &crate::filter::Filter,
+        metric: DistanceMetric,
+    ) -> Vec<ScoredResult> {
+        if let Some(bitmap) = self.build_prefilter_bitmap(filter) {
+            let ef_search = candidates_k.max(k * 10);
+            let results =
+                self.index
+                    .search_hnsw_only_filtered(query, candidates_k, ef_search, &bitmap);
+            return self.merge_delta(results, query, candidates_k, metric);
+        }
+        self.search_ids_with_adc_if_pq(query, candidates_k)
     }
 
     /// Filters scored results by metadata and hydrates matching points.
@@ -520,6 +549,23 @@ impl Collection {
         tag_vector_component_scores(&mut results);
         results
     }
+}
+
+/// Computes the oversampled candidate count for filtered search.
+///
+/// Uses heuristic selectivity to determine how many extra candidates to
+/// retrieve from HNSW so that enough survive post-filtering.
+fn compute_oversampled_k(k: usize, filter: &crate::filter::Filter) -> usize {
+    let selectivity = estimate_filter_selectivity(filter);
+    // Reason: k is a small search count (typically <1000); f64 has 52-bit mantissa.
+    #[allow(clippy::cast_precision_loss)]
+    let k_f64 = k as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let lower = (k + 10) as f64;
+    // Reason: result is clamped to [k+10, 10_000] so no truncation risk.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let clamped = (k_f64 / selectivity).ceil().clamp(lower, 10_000.0) as usize;
+    clamped
 }
 
 /// Heuristic selectivity estimate based on filter structure.

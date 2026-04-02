@@ -17,6 +17,12 @@ fn with_value_from_scalar(value: Value) -> Result<WithValue, ParseError> {
     match value {
         Value::String(s) => Ok(WithValue::String(s)),
         Value::Integer(v) => Ok(WithValue::Integer(v)),
+        Value::UnsignedInteger(v) => {
+            // WITH clause options use i64; values exceeding i64::MAX are rejected.
+            let i = i64::try_from(v)
+                .map_err(|_| ParseError::syntax(0, "", "WITH value exceeds i64::MAX"))?;
+            Ok(WithValue::Integer(i))
+        }
         Value::Float(v) => Ok(WithValue::Float(v)),
         Value::Boolean(b) => Ok(WithValue::Boolean(b)),
         _ => Err(ParseError::syntax(0, "", "Invalid WITH value type")),

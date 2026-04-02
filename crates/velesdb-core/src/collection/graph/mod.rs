@@ -42,6 +42,9 @@ mod degree_router;
 mod edge;
 mod edge_concurrent;
 pub(crate) mod helpers;
+mod label_index;
+#[cfg(test)]
+mod label_index_tests;
 mod label_table;
 #[cfg(test)]
 mod label_table_tests;
@@ -79,8 +82,9 @@ pub use degree_router::{
     DegreeAdaptiveStorage, DegreeRouter, EdgeIndex, HashSetEdgeIndex, VecEdgeIndex,
     DEFAULT_DEGREE_THRESHOLD,
 };
-pub use edge::{EdgeStore, GraphEdge};
+pub use edge::{CsrSnapshot, EdgeStore, GraphEdge};
 pub use edge_concurrent::ConcurrentEdgeStore;
+pub use label_index::LabelIndex;
 pub use label_table::{LabelId, LabelTable};
 pub use memory_pool::{ConcurrentMemoryPool, ConcurrentPoolHandle, MemoryPool, PoolIndex};
 pub use metrics::{GraphMetrics, LatencyHistogram};
@@ -88,5 +92,7 @@ pub use node::{Element, GraphNode};
 pub use property_index::PropertyIndex;
 pub use range_index::{OrderedValue, RangeIndex};
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
-pub use streaming::{bfs_stream, BfsIterator, StreamingConfig};
-pub use traversal::{TraversalConfig, TraversalResult, DEFAULT_MAX_DEPTH};
+pub use streaming::{
+    bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,
+};
+pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH};

@@ -17,6 +17,7 @@
 //! eliminating null pointer checks and making invariants explicit. Memory is managed
 //! via RAII with `AllocGuard` for panic-safe resize operations.
 
+use crate::validation::validate_dimension_match;
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::fmt;
 use std::ptr::{self, NonNull};
@@ -239,6 +240,22 @@ impl ContiguousVectors {
         Ok(())
     }
 
+    /// Pre-allocates capacity for `additional` more vectors beyond the current length.
+    ///
+    /// Analogous to [`Vec::reserve`]: ensures the buffer can hold
+    /// `self.len() + additional` vectors without reallocating. No-op if
+    /// sufficient capacity already exists.
+    ///
+    /// Call before a batch push to guarantee `push_batch` won't resize.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AllocationFailed`] if reallocation fails.
+    pub fn reserve_additional(&mut self, additional: usize) -> crate::error::Result<()> {
+        let required = self.count.saturating_add(additional);
+        self.ensure_capacity(required)
+    }
+
     /// Inserts a vector at a specific index.
     ///
     /// Automatically grows capacity if needed.
@@ -253,12 +270,7 @@ impl ContiguousVectors {
     /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub fn insert_at(&mut self, index: usize, vector: &[f32]) -> crate::error::Result<()> {
-        if vector.len() != self.dimension {
-            return Err(crate::error::Error::DimensionMismatch {
-                expected: self.dimension,
-                actual: vector.len(),
-            });
-        }
+        validate_dimension_match(self.dimension, vector.len())?;
 
         self.ensure_capacity(index + 1)?;
 
@@ -318,12 +330,7 @@ impl ContiguousVectors {
         }
         // Validate all dimensions upfront to prevent partial writes on error.
         for vector in vectors {
-            if vector.len() != self.dimension {
-                return Err(crate::error::Error::DimensionMismatch {
-                    expected: self.dimension,
-                    actual: vector.len(),
-                });
-            }
+            validate_dimension_match(self.dimension, vector.len())?;
         }
         self.ensure_capacity(self.count + vectors.len())?;
         for vector in vectors {
@@ -412,14 +419,6 @@ impl ContiguousVectors {
                 std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension)
             };
             crate::simd_native::prefetch_vector_multi_cache_line(vector);
-        }
-    }
-
-    /// Prefetches multiple vectors for batch processing.
-    #[inline]
-    pub fn prefetch_batch(&self, indices: &[usize]) {
-        for &idx in indices {
-            self.prefetch(idx);
         }
     }
 

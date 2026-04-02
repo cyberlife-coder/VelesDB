@@ -12,11 +12,12 @@
 
 mod query;
 
+use super::clustered_index::ClusteredIndex;
 use super::edge::{EdgeStore, GraphEdge};
 use crate::error::{Error, Result};
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// Default number of shards for concurrent edge store.
 /// Increased from 64 to 256 for better scalability with 10M+ edges (EPIC-019 US-001).
@@ -53,6 +54,13 @@ pub struct ConcurrentEdgeStore {
     /// Maps edge_id -> source_node_id for O(1) shard lookup during removal.
     /// F-19: FxHashMap ~2x faster than std HashMap for u64 keys (no SipHash).
     pub(super) edge_ids: RwLock<FxHashMap<u64, u64>>,
+    /// CSR-like read snapshot for zero-copy neighbor lookups during BFS/DFS.
+    ///
+    /// Built on demand via [`build_read_snapshot()`](Self::build_read_snapshot).
+    /// Invalidated to `None` on every write (`add_edge`, `remove_edge`,
+    /// `remove_node_edges`). Read methods fall back to shard lookup when
+    /// the snapshot is absent.
+    clustered_snapshot: RwLock<Option<ClusteredIndex>>,
 }
 
 impl ConcurrentEdgeStore {
@@ -77,6 +85,7 @@ impl ConcurrentEdgeStore {
             shards,
             num_shards,
             edge_ids: RwLock::new(FxHashMap::default()),
+            clustered_snapshot: RwLock::new(None),
         }
     }
 
@@ -163,6 +172,7 @@ impl ConcurrentEdgeStore {
             }
             ids.insert(edge_id, source_id);
         }
+        self.invalidate_snapshot();
         Ok(())
     }
 
@@ -171,11 +181,11 @@ impl ConcurrentEdgeStore {
     /// # Concurrency Safety
     ///
     /// Lock ordering: edge_ids FIRST, then shards in ascending order.
-    pub fn remove_edge(&self, edge_id: u64) {
+    pub fn remove_edge(&self, edge_id: u64) -> bool {
         let mut ids = self.edge_ids.write();
 
         let Some(&source_id) = ids.get(&edge_id) else {
-            return;
+            return false;
         };
 
         let source_shard_idx = self.shard_index(source_id);
@@ -185,7 +195,7 @@ impl ConcurrentEdgeStore {
                 edge.target()
             } else {
                 ids.remove(&edge_id);
-                return;
+                return false;
             }
         };
 
@@ -212,6 +222,8 @@ impl ConcurrentEdgeStore {
         }
 
         ids.remove(&edge_id);
+        self.invalidate_snapshot();
+        true
     }
 
     /// Removes all edges connected to a node (cascade delete, thread-safe).
@@ -277,7 +289,7 @@ impl ConcurrentEdgeStore {
         }
 
         // Phase 5: Remove edge IDs from global registry
-        let mut removed: HashSet<u64> = HashSet::new();
+        let mut removed: FxHashSet<u64> = FxHashSet::default();
         for (edge_id, _) in &outgoing_edges {
             if removed.insert(*edge_id) {
                 ids.remove(edge_id);
@@ -288,6 +300,139 @@ impl ConcurrentEdgeStore {
                 ids.remove(edge_id);
             }
         }
+        self.invalidate_snapshot();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CSR snapshot (read-only `ClusteredIndex` for zero-copy neighbor lookups)
+// ---------------------------------------------------------------------------
+
+impl ConcurrentEdgeStore {
+    /// Invalidates the CSR read snapshot.
+    ///
+    /// Called by every write method so that stale data is never served.
+    /// Readers fall back to per-shard lookup when the snapshot is absent.
+    #[inline]
+    fn invalidate_snapshot(&self) {
+        // Fast path: skip write lock if snapshot is already absent.
+        if self.clustered_snapshot.read().is_none() {
+            return;
+        }
+        *self.clustered_snapshot.write() = None;
+    }
+
+    /// Builds a CSR-like read snapshot from current shard state.
+    ///
+    /// The snapshot stores only outgoing neighbor **target node IDs** per source
+    /// node in contiguous memory, enabling [`with_neighbors()`](Self::with_neighbors)
+    /// to provide zero-copy `&[u64]` access without shard locking.
+    ///
+    /// # Limitation — target IDs only
+    ///
+    /// The snapshot does **not** store edge IDs, labels, or properties.
+    /// It is optimized for BFS neighbor expansion where only connectivity
+    /// matters. To retrieve full edge metadata (edge ID, label, properties),
+    /// use [`get_outgoing()`](Self::get_outgoing) which reads from the
+    /// authoritative shard data.
+    ///
+    /// Call this after bulk inserts, after `flush()`, or after loading
+    /// from disk. The snapshot is automatically invalidated on any write.
+    pub fn build_read_snapshot(&self) {
+        let ids = self.edge_ids.read();
+        let edge_count = ids.len();
+        // Rough estimate: each edge contributes one outgoing target entry.
+        let mut snapshot = ClusteredIndex::with_capacity(edge_count, edge_count);
+
+        for (&edge_id, &source_id) in ids.iter() {
+            let shard_idx = self.shard_index(source_id);
+            let guard = self.shards[shard_idx].read();
+            if let Some(edge) = guard.get_edge(edge_id) {
+                snapshot.insert(source_id, edge.target());
+            }
+        }
+
+        // Compact once to eliminate any fragmentation from insert order.
+        snapshot.compact();
+
+        *self.clustered_snapshot.write() = Some(snapshot);
+    }
+
+    /// Returns `true` if a CSR read snapshot is currently available.
+    #[must_use]
+    pub fn has_read_snapshot(&self) -> bool {
+        self.clustered_snapshot.read().is_some()
+    }
+}
+
+impl ConcurrentEdgeStore {
+    /// Builds a `ConcurrentEdgeStore` from a persisted `EdgeStore`.
+    ///
+    /// Re-distributes edges across shards based on source node ID.
+    /// Backward-compatible: old `edge_store.bin` files contain a single
+    /// `EdgeStore`; this constructor shards them on load.
+    #[must_use]
+    pub fn from_edge_store(store: &EdgeStore) -> Self {
+        let edges = store.all_edges();
+        let concurrent = Self::with_estimated_edges(edges.len());
+
+        for edge in edges {
+            // Loaded data has already been validated; duplicates cannot occur
+            // in a correctly persisted store. If the file is corrupted, the
+            // duplicate is silently skipped — the first occurrence wins.
+            if concurrent.add_edge(edge.clone()).is_err() {
+                #[cfg(debug_assertions)]
+                eprintln!("[velesdb] WARNING: skipped duplicate edge during CES reconstruction");
+            }
+        }
+
+        // Build CSR snapshot for fast reads after bulk load.
+        concurrent.build_read_snapshot();
+        concurrent
+    }
+
+    /// Saves the concurrent edge store to a file.
+    ///
+    /// Merges all shards into a single `EdgeStore` for postcard serialization,
+    /// maintaining backward-compatible persistence format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization or file I/O fails.
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        self.to_merged_edge_store().save_to_file(path)
+    }
+
+    /// Loads a concurrent edge store from a persisted file.
+    ///
+    /// The file must contain a postcard-serialized `EdgeStore` (backward
+    /// compatible). Edges are re-sharded on load.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if file I/O or deserialization fails.
+    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
+        let store = EdgeStore::load_from_file(path)?;
+        Ok(Self::from_edge_store(&store))
+    }
+
+    /// Merges all shards into a single `EdgeStore` for serialization.
+    ///
+    /// Uses only the outgoing-indexed edges from each shard to avoid
+    /// double-counting cross-shard edges.
+    fn to_merged_edge_store(&self) -> EdgeStore {
+        let ids = self.edge_ids.read();
+        let mut merged = EdgeStore::with_capacity(ids.len(), ids.len());
+
+        for (&edge_id, &source_id) in ids.iter() {
+            let shard_idx = self.shard_index(source_id);
+            let guard = self.shards[shard_idx].read();
+            if let Some(edge) = guard.get_edge(edge_id) {
+                // Loaded data; ignore duplicate errors (cannot happen here).
+                let _ = merged.add_edge(edge.clone());
+            }
+        }
+        merged
     }
 }
 

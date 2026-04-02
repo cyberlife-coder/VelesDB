@@ -368,6 +368,93 @@ mod tests {
     }
 
     // =========================================================================
+    // Parallel BFS traversal
+    // =========================================================================
+
+    #[test]
+    fn test_traverse_bfs_parallel_single_start() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let config = TraversalConfig {
+            max_depth: 3,
+            min_depth: 1,
+            rel_types: vec![],
+            limit: 100,
+        };
+        let results = collection.traverse_bfs_parallel(&[1], &config);
+        assert!(!results.is_empty(), "parallel BFS should find neighbors");
+        // Chain: 1->2->3->4, so we should get nodes 2, 3, 4
+        let target_ids: std::collections::HashSet<u64> =
+            results.iter().map(|r| r.target_id).collect();
+        assert!(target_ids.contains(&2), "should reach node 2");
+        assert!(target_ids.contains(&3), "should reach node 3");
+        assert!(target_ids.contains(&4), "should reach node 4");
+    }
+
+    #[test]
+    fn test_traverse_bfs_parallel_multiple_starts() {
+        let (collection, _temp) = create_test_collection();
+        // Two separate chains: 1->2->3 and 10->20->30
+        collection.add_edge(make_edge(1, 1, 2, "NEXT")).unwrap();
+        collection.add_edge(make_edge(2, 2, 3, "NEXT")).unwrap();
+        collection.add_edge(make_edge(10, 10, 20, "NEXT")).unwrap();
+        collection.add_edge(make_edge(20, 20, 30, "NEXT")).unwrap();
+
+        let config = TraversalConfig {
+            max_depth: 2,
+            min_depth: 1,
+            rel_types: vec![],
+            limit: 100,
+        };
+        let results = collection.traverse_bfs_parallel(&[1, 10], &config);
+
+        let target_ids: std::collections::HashSet<u64> =
+            results.iter().map(|r| r.target_id).collect();
+        assert!(target_ids.contains(&2), "should reach node 2 from start 1");
+        assert!(target_ids.contains(&3), "should reach node 3 from start 1");
+        assert!(
+            target_ids.contains(&20),
+            "should reach node 20 from start 10"
+        );
+        assert!(
+            target_ids.contains(&30),
+            "should reach node 30 from start 10"
+        );
+    }
+
+    #[test]
+    fn test_traverse_bfs_parallel_empty_graph() {
+        let (collection, _temp) = create_test_collection();
+        let config = TraversalConfig::default();
+        let results = collection.traverse_bfs_parallel(&[1], &config);
+        // Start node itself has depth 0 (filtered by min_depth=1), so no results
+        assert!(
+            results.is_empty(),
+            "empty graph parallel BFS should return no results"
+        );
+    }
+
+    #[test]
+    fn test_traverse_bfs_parallel_depth_limit() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let config = TraversalConfig {
+            max_depth: 1,
+            min_depth: 1,
+            rel_types: vec![],
+            limit: 100,
+        };
+        let results = collection.traverse_bfs_parallel(&[1], &config);
+        assert!(results.iter().all(|r| r.depth <= 1));
+        let target_ids: std::collections::HashSet<u64> =
+            results.iter().map(|r| r.target_id).collect();
+        assert!(target_ids.contains(&2), "should reach depth-1 neighbor");
+        assert!(!target_ids.contains(&3), "should not reach depth-2 node");
+    }
+
+    // =========================================================================
     // Graph schema / metadata
     // =========================================================================
 

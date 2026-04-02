@@ -1,6 +1,8 @@
 //! Collection types and configuration.
 
-use crate::collection::graph::{EdgeStore, GraphSchema, PropertyIndex, RangeIndex};
+use crate::collection::graph::{
+    ConcurrentEdgeStore, GraphSchema, LabelIndex, PropertyIndex, RangeIndex,
+};
 use crate::collection::stats::CollectionStats;
 #[cfg(feature = "persistence")]
 use crate::collection::streaming::delta::DeltaBuffer;
@@ -207,7 +209,7 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 //   5. pq_quantizer → pq_training_buffer
 //   6. secondary_indexes
 //   7. property_index / range_index         (any order among themselves)
-//   8. edge_store
+//   8. (reserved — edge_store now uses internal sharded locking)
 //   9. sparse_indexes
 //  10. delta_buffer
 //  11. deferred_indexer (internal locks)
@@ -256,11 +258,23 @@ pub struct Collection {
     /// Property index for O(1) equality lookups on graph nodes (EPIC-009).
     pub(super) property_index: Arc<RwLock<PropertyIndex>>,
 
+    /// Label index for O(1) label-based node lookups (Issue #486).
+    ///
+    /// Maps label names to `RoaringBitmap` of node IDs, enabling
+    /// `find_start_nodes()` to skip the O(N) full scan when a MATCH
+    /// pattern specifies node labels like `(n:Person)`.
+    ///
+    /// Lock order position: **7** (same as `property_index` / `range_index`).
+    pub(super) label_index: Arc<RwLock<LabelIndex>>,
+
     /// Range index for O(log n) range queries on graph nodes (EPIC-009).
     pub(super) range_index: Arc<RwLock<RangeIndex>>,
 
-    /// Edge store for knowledge graph relationships (EPIC-015).
-    pub(super) edge_store: Arc<RwLock<EdgeStore>>,
+    /// Concurrent edge store for knowledge graph relationships (EPIC-015).
+    ///
+    /// Uses sharded internal locking (256 shards) — no outer `RwLock` needed.
+    /// Lock order position **8** is now managed internally by `ConcurrentEdgeStore`.
+    pub(super) edge_store: Arc<ConcurrentEdgeStore>,
 
     /// Named sparse inverted indexes for sparse vector search (EPIC-062).
     /// Key is the sparse vector name (e.g., `""` for default, `"title"`, `"body"`).

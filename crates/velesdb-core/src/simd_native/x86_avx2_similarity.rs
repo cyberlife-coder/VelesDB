@@ -21,6 +21,65 @@ use super::reduction::hsum_avx256;
 use super::scalar::cosine_finish_fast;
 
 // =============================================================================
+// Cosine Similarity (Fused) — shared remainder helper
+// =============================================================================
+
+/// Processes the remainder elements after a cosine main loop: 8-wide vectorized
+/// chunks then a scalar tail, followed by the final cosine computation.
+///
+/// Shared by both 2-acc and 4-acc cosine variants to eliminate duplication.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2+FMA (enforced by `#[target_feature]`)
+/// - `a_ptr..end_ptr` and matching `b_ptr` range are valid readable memory
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[inline]
+unsafe fn cosine_avx2_remainder(
+    mut a_ptr: *const f32,
+    mut b_ptr: *const f32,
+    end_ptr: *const f32,
+    mut dot_acc: std::arch::x86_64::__m256,
+    mut na_acc: std::arch::x86_64::__m256,
+    mut nb_acc: std::arch::x86_64::__m256,
+) -> f32 {
+    // SAFETY: AVX2+FMA guaranteed by #[target_feature]; unaligned loads are safe.
+    // Loop guards ensure pointer arithmetic stays within the original slice bounds.
+    use std::arch::x86_64::*;
+
+    // Vectorized 8-wide remainder to reduce scalar tail to at most 7 elements
+    while a_ptr.add(8) <= end_ptr {
+        let va = _mm256_loadu_ps(a_ptr);
+        let vb = _mm256_loadu_ps(b_ptr);
+        dot_acc = _mm256_fmadd_ps(va, vb, dot_acc);
+        na_acc = _mm256_fmadd_ps(va, va, na_acc);
+        nb_acc = _mm256_fmadd_ps(vb, vb, nb_acc);
+        a_ptr = a_ptr.add(8);
+        b_ptr = b_ptr.add(8);
+    }
+
+    let mut dot = hsum_avx256(dot_acc);
+    let mut norm_a_sq = hsum_avx256(na_acc);
+    let mut norm_b_sq = hsum_avx256(nb_acc);
+
+    // Scalar tail for 0-7 remaining elements
+    while a_ptr < end_ptr {
+        // SAFETY: Loop guard ensures pointers are within slice bounds.
+        let x = *a_ptr;
+        let y = *b_ptr;
+        dot += x * y;
+        norm_a_sq += x * x;
+        norm_b_sq += y * y;
+        a_ptr = a_ptr.add(1);
+        b_ptr = b_ptr.add(1);
+    }
+
+    cosine_finish_fast(dot, norm_a_sq, norm_b_sq)
+}
+
+// =============================================================================
 // Cosine Similarity (Fused)
 // =============================================================================
 
@@ -61,87 +120,68 @@ pub(crate) unsafe fn cosine_fused_avx2_2acc(a: &[f32], b: &[f32]) -> f32 {
         b_ptr = b_ptr.add(16);
     }
 
-    let mut dot_acc = _mm256_add_ps(dot0, dot1);
-    let mut na_acc = _mm256_add_ps(na0, na1);
-    let mut nb_acc = _mm256_add_ps(nb0, nb1);
+    let dot_acc = _mm256_add_ps(dot0, dot1);
+    let na_acc = _mm256_add_ps(na0, na1);
+    let nb_acc = _mm256_add_ps(nb0, nb1);
 
-    // Vectorized 8-wide remainder to reduce scalar tail from up to 15 to at most 7
-    while a_ptr.add(8) <= end_ptr {
-        let va = _mm256_loadu_ps(a_ptr);
-        let vb = _mm256_loadu_ps(b_ptr);
-        dot_acc = _mm256_fmadd_ps(va, vb, dot_acc);
-        na_acc = _mm256_fmadd_ps(va, va, na_acc);
-        nb_acc = _mm256_fmadd_ps(vb, vb, nb_acc);
-        a_ptr = a_ptr.add(8);
-        b_ptr = b_ptr.add(8);
-    }
-
-    let mut dot = hsum_avx256(dot_acc);
-    let mut norm_a_sq = hsum_avx256(na_acc);
-    let mut norm_b_sq = hsum_avx256(nb_acc);
-
-    // Scalar tail for 0-7 remaining elements
-    while a_ptr < end_ptr {
-        let x = *a_ptr;
-        let y = *b_ptr;
-        dot += x * y;
-        norm_a_sq += x * x;
-        norm_b_sq += y * y;
-        a_ptr = a_ptr.add(1);
-        b_ptr = b_ptr.add(1);
-    }
-
-    cosine_finish_fast(dot, norm_a_sq, norm_b_sq)
+    cosine_avx2_remainder(a_ptr, b_ptr, end_ptr, dot_acc, na_acc, nb_acc)
 }
 
-/// AVX2 fused cosine similarity - computes dot product and norms in single SIMD pass.
+/// 4-accumulator main loop for cosine: computes dot(a,b), norm(a), norm(b) in
+/// a single pass with 4-way ILP unrolling (32 floats per iteration).
+///
+/// Returns `(dot_acc, na_acc, nb_acc, updated_a_ptr, updated_b_ptr)` with the
+/// 4 accumulators already reduced to 1 each via binary-tree addition.
+///
+/// # Safety
+///
+/// Caller must ensure AVX2+FMA and that `a_ptr..end_main` (and matching `b_ptr`
+/// range) are readable with length aligned to 32 floats.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
-pub(crate) unsafe fn cosine_fused_avx2(a: &[f32], b: &[f32]) -> f32 {
-    // SAFETY: runtime feature detection ensures AVX2+FMA; loads are unaligned-safe.
+unsafe fn cosine_4acc_main_loop(
+    mut a_ptr: *const f32,
+    mut b_ptr: *const f32,
+    end_main: *const f32,
+) -> (
+    std::arch::x86_64::__m256,
+    std::arch::x86_64::__m256,
+    std::arch::x86_64::__m256,
+    *const f32,
+    *const f32,
+) {
+    // SAFETY: AVX2+FMA guaranteed by #[target_feature]; unaligned loads are safe.
+    // Loop guard `a_ptr < end_main` ensures 32 floats remain at each iteration.
     use std::arch::x86_64::*;
-
-    let len = a.len();
-    let mut a_ptr = a.as_ptr();
-    let mut b_ptr = b.as_ptr();
-    let end_main = a.as_ptr().add(len / 32 * 32);
-    let end_ptr = a.as_ptr().add(len);
-
-    let mut dot0 = _mm256_setzero_ps();
-    let mut dot1 = _mm256_setzero_ps();
-    let mut dot2 = _mm256_setzero_ps();
-    let mut dot3 = _mm256_setzero_ps();
-    let mut na0 = _mm256_setzero_ps();
-    let mut na1 = _mm256_setzero_ps();
-    let mut na2 = _mm256_setzero_ps();
-    let mut na3 = _mm256_setzero_ps();
-    let mut nb0 = _mm256_setzero_ps();
-    let mut nb1 = _mm256_setzero_ps();
-    let mut nb2 = _mm256_setzero_ps();
-    let mut nb3 = _mm256_setzero_ps();
+    let z = _mm256_setzero_ps();
+    let (mut dot0, mut dot1, mut dot2, mut dot3) = (z, z, z, z);
+    let (mut na0, mut na1, mut na2, mut na3) = (z, z, z, z);
+    let (mut nb0, mut nb1, mut nb2, mut nb3) = (z, z, z, z);
 
     while a_ptr < end_main {
-        let va0 = _mm256_loadu_ps(a_ptr);
-        let vb0 = _mm256_loadu_ps(b_ptr);
+        let (va0, vb0) = (_mm256_loadu_ps(a_ptr), _mm256_loadu_ps(b_ptr));
         dot0 = _mm256_fmadd_ps(va0, vb0, dot0);
         na0 = _mm256_fmadd_ps(va0, va0, na0);
         nb0 = _mm256_fmadd_ps(vb0, vb0, nb0);
 
-        let va1 = _mm256_loadu_ps(a_ptr.add(8));
-        let vb1 = _mm256_loadu_ps(b_ptr.add(8));
+        let (va1, vb1) = (_mm256_loadu_ps(a_ptr.add(8)), _mm256_loadu_ps(b_ptr.add(8)));
         dot1 = _mm256_fmadd_ps(va1, vb1, dot1);
         na1 = _mm256_fmadd_ps(va1, va1, na1);
         nb1 = _mm256_fmadd_ps(vb1, vb1, nb1);
 
-        let va2 = _mm256_loadu_ps(a_ptr.add(16));
-        let vb2 = _mm256_loadu_ps(b_ptr.add(16));
+        let (va2, vb2) = (
+            _mm256_loadu_ps(a_ptr.add(16)),
+            _mm256_loadu_ps(b_ptr.add(16)),
+        );
         dot2 = _mm256_fmadd_ps(va2, vb2, dot2);
         na2 = _mm256_fmadd_ps(va2, va2, na2);
         nb2 = _mm256_fmadd_ps(vb2, vb2, nb2);
 
-        let va3 = _mm256_loadu_ps(a_ptr.add(24));
-        let vb3 = _mm256_loadu_ps(b_ptr.add(24));
+        let (va3, vb3) = (
+            _mm256_loadu_ps(a_ptr.add(24)),
+            _mm256_loadu_ps(b_ptr.add(24)),
+        );
         dot3 = _mm256_fmadd_ps(va3, vb3, dot3);
         na3 = _mm256_fmadd_ps(va3, va3, na3);
         nb3 = _mm256_fmadd_ps(vb3, vb3, nb3);
@@ -150,45 +190,28 @@ pub(crate) unsafe fn cosine_fused_avx2(a: &[f32], b: &[f32]) -> f32 {
         b_ptr = b_ptr.add(32);
     }
 
-    let dot01 = _mm256_add_ps(dot0, dot1);
-    let dot23 = _mm256_add_ps(dot2, dot3);
-    let mut dot_acc = _mm256_add_ps(dot01, dot23);
+    let dot_acc = _mm256_add_ps(_mm256_add_ps(dot0, dot1), _mm256_add_ps(dot2, dot3));
+    let na_acc = _mm256_add_ps(_mm256_add_ps(na0, na1), _mm256_add_ps(na2, na3));
+    let nb_acc = _mm256_add_ps(_mm256_add_ps(nb0, nb1), _mm256_add_ps(nb2, nb3));
 
-    let na01 = _mm256_add_ps(na0, na1);
-    let na23 = _mm256_add_ps(na2, na3);
-    let mut na_acc = _mm256_add_ps(na01, na23);
+    (dot_acc, na_acc, nb_acc, a_ptr, b_ptr)
+}
 
-    let nb01 = _mm256_add_ps(nb0, nb1);
-    let nb23 = _mm256_add_ps(nb2, nb3);
-    let mut nb_acc = _mm256_add_ps(nb01, nb23);
+/// AVX2 fused cosine similarity - computes dot product and norms in single SIMD pass.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[inline]
+pub(crate) unsafe fn cosine_fused_avx2(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: runtime feature detection ensures AVX2+FMA; loads are unaligned-safe.
+    let len = a.len();
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+    let end_main = a.as_ptr().add(len / 32 * 32);
+    let end_ptr = a.as_ptr().add(len);
 
-    // Vectorized 8-wide remainder to reduce scalar tail from up to 31 to at most 7
-    while a_ptr.add(8) <= end_ptr {
-        let va = _mm256_loadu_ps(a_ptr);
-        let vb = _mm256_loadu_ps(b_ptr);
-        dot_acc = _mm256_fmadd_ps(va, vb, dot_acc);
-        na_acc = _mm256_fmadd_ps(va, va, na_acc);
-        nb_acc = _mm256_fmadd_ps(vb, vb, nb_acc);
-        a_ptr = a_ptr.add(8);
-        b_ptr = b_ptr.add(8);
-    }
+    let (dot_acc, na_acc, nb_acc, a_p, b_p) = cosine_4acc_main_loop(a_ptr, b_ptr, end_main);
 
-    let mut dot = hsum_avx256(dot_acc);
-    let mut norm_a_sq = hsum_avx256(na_acc);
-    let mut norm_b_sq = hsum_avx256(nb_acc);
-
-    // Scalar tail for 0-7 remaining elements
-    while a_ptr < end_ptr {
-        let x = *a_ptr;
-        let y = *b_ptr;
-        dot += x * y;
-        norm_a_sq += x * x;
-        norm_b_sq += y * y;
-        a_ptr = a_ptr.add(1);
-        b_ptr = b_ptr.add(1);
-    }
-
-    cosine_finish_fast(dot, norm_a_sq, norm_b_sq)
+    cosine_avx2_remainder(a_p, b_p, end_ptr, dot_acc, na_acc, nb_acc)
 }
 
 // =============================================================================
@@ -352,6 +375,59 @@ pub(crate) unsafe fn hamming_binary_avx2(a: &[u64], b: &[u64]) -> u32 {
 // Jaccard Similarity
 // =============================================================================
 
+/// Processes Jaccard remainder elements: 8-wide vectorized chunks with min/max,
+/// then a scalar tail, followed by the final intersection/union ratio.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2 (enforced by `#[target_feature]`)
+/// - `a_ptr..end_ptr` and matching `b_ptr` range are valid readable memory
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+unsafe fn jaccard_avx2_remainder(
+    mut a_ptr: *const f32,
+    mut b_ptr: *const f32,
+    end_ptr: *const f32,
+    mut acc_inter: std::arch::x86_64::__m256,
+    mut acc_union: std::arch::x86_64::__m256,
+) -> f32 {
+    // SAFETY: AVX2 guaranteed by #[target_feature]; unaligned loads are safe.
+    // Loop guards ensure pointer arithmetic stays within the original slice bounds.
+    use std::arch::x86_64::*;
+
+    // Vectorized 8-wide remainder to reduce scalar tail to at most 7 elements
+    while a_ptr.add(8) <= end_ptr {
+        let va = _mm256_loadu_ps(a_ptr);
+        let vb = _mm256_loadu_ps(b_ptr);
+        acc_inter = _mm256_add_ps(acc_inter, _mm256_min_ps(va, vb));
+        acc_union = _mm256_add_ps(acc_union, _mm256_max_ps(va, vb));
+        a_ptr = a_ptr.add(8);
+        b_ptr = b_ptr.add(8);
+    }
+
+    let mut inter_sum = hsum_avx256(acc_inter);
+    let mut union_sum = hsum_avx256(acc_union);
+
+    // Scalar tail for 0-7 remaining elements
+    while a_ptr < end_ptr {
+        // SAFETY: Loop guard ensures pointers are within slice bounds.
+        let x = *a_ptr;
+        let y = *b_ptr;
+        inter_sum += x.min(y);
+        union_sum += x.max(y);
+        a_ptr = a_ptr.add(1);
+        b_ptr = b_ptr.add(1);
+    }
+
+    if union_sum == 0.0 {
+        1.0
+    } else {
+        inter_sum / union_sum
+    }
+}
+
 /// AVX2 Jaccard with 4 accumulators for ILP optimization (EPIC-052/US-008).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
@@ -406,34 +482,5 @@ pub(crate) unsafe fn jaccard_avx2(a: &[f32], b: &[f32]) -> f32 {
     let union23 = _mm256_add_ps(union2, union3);
     let acc_union = _mm256_add_ps(union01, union23);
 
-    // Vectorized 8-wide remainder to reduce scalar tail from up to 31 to at most 7
-    let mut acc_inter_r = acc_inter;
-    let mut acc_union_r = acc_union;
-    while a_ptr.add(8) <= end_ptr {
-        let va = _mm256_loadu_ps(a_ptr);
-        let vb = _mm256_loadu_ps(b_ptr);
-        acc_inter_r = _mm256_add_ps(acc_inter_r, _mm256_min_ps(va, vb));
-        acc_union_r = _mm256_add_ps(acc_union_r, _mm256_max_ps(va, vb));
-        a_ptr = a_ptr.add(8);
-        b_ptr = b_ptr.add(8);
-    }
-
-    let mut inter_sum = hsum_avx256(acc_inter_r);
-    let mut union_sum = hsum_avx256(acc_union_r);
-
-    // Scalar tail for 0-7 remaining elements
-    while a_ptr < end_ptr {
-        let x = *a_ptr;
-        let y = *b_ptr;
-        inter_sum += x.min(y);
-        union_sum += x.max(y);
-        a_ptr = a_ptr.add(1);
-        b_ptr = b_ptr.add(1);
-    }
-
-    if union_sum == 0.0 {
-        1.0
-    } else {
-        inter_sum / union_sum
-    }
+    jaccard_avx2_remainder(a_ptr, b_ptr, end_ptr, acc_inter, acc_union)
 }

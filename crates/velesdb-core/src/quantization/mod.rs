@@ -15,6 +15,7 @@ use std::io;
 use serde::{Deserialize, Serialize};
 
 mod binary;
+pub(crate) mod codec_helpers;
 mod pq;
 pub(crate) mod pq_kmeans;
 pub(crate) mod pq_opq;

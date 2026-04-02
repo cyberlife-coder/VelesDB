@@ -1,9 +1,13 @@
 //! Secondary index types for metadata payload fields.
 
+#[cfg(test)]
+mod bitmap_tests;
+
 use parking_lot::RwLock;
 use serde_json::Number;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::ops::Bound;
 
 /// Orderable JSON primitive value used as a key in secondary indexes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -73,11 +77,14 @@ impl JsonValue {
     pub fn from_ast_value(value: &crate::velesql::Value) -> Option<Self> {
         match value {
             crate::velesql::Value::String(s) => Some(Self::String(s.clone())),
-            crate::velesql::Value::Integer(i) => i
-                .to_string()
-                .parse::<f64>()
-                .ok()
-                .map(|v| Self::Number(F64Key::from(v))),
+            #[allow(clippy::cast_precision_loss)]
+            // Reason: index keys normalize all numerics to f64 for ordering.
+            crate::velesql::Value::Integer(i) => Some(Self::Number(F64Key::from(*i as f64))),
+            #[allow(clippy::cast_precision_loss)]
+            // Reason: index keys normalize all numerics to f64 for ordering.
+            crate::velesql::Value::UnsignedInteger(u) => {
+                Some(Self::Number(F64Key::from(*u as f64)))
+            }
             crate::velesql::Value::Float(f) => Some(Self::Number(F64Key::from(*f))),
             crate::velesql::Value::Boolean(b) => Some(Self::Bool(*b)),
             _ => None,
@@ -94,4 +101,67 @@ impl JsonValue {
 pub enum SecondaryIndex {
     /// B-tree index mapping JSON primitive values to point IDs.
     BTree(RwLock<BTreeMap<JsonValue, Vec<u64>>>),
+}
+
+impl SecondaryIndex {
+    /// Returns a [`RoaringBitmap`] of all point IDs matching the given value.
+    ///
+    /// The bitmap is built on-the-fly from the B-tree leaf. Returns an empty
+    /// bitmap when the value has no entries. Callers should check
+    /// [`RoaringBitmap::is_empty`] before using the result as a pre-filter.
+    #[must_use]
+    pub fn to_bitmap(&self, value: &JsonValue) -> roaring::RoaringBitmap {
+        match self {
+            Self::BTree(tree) => {
+                let guard = tree.read();
+                guard
+                    .get(value)
+                    .map(|ids| ids_to_bitmap(ids))
+                    .unwrap_or_default()
+            }
+        }
+    }
+
+    /// Returns a [`RoaringBitmap`] of all point IDs whose key falls within
+    /// the given range bounds.
+    ///
+    /// Uses `BTreeMap::range()` for efficient ordered iteration. This powers
+    /// Gt, Gte, Lt, Lte, and BETWEEN pre-filters. Returns an empty bitmap
+    /// when no keys fall within the range.
+    #[must_use]
+    pub fn range_bitmap(
+        &self,
+        from: Bound<&JsonValue>,
+        to: Bound<&JsonValue>,
+    ) -> roaring::RoaringBitmap {
+        match self {
+            Self::BTree(tree) => {
+                let guard = tree.read();
+                let mut bm = roaring::RoaringBitmap::new();
+                for ids in guard.range((from, to)).map(|(_, v)| v) {
+                    for &id in ids {
+                        if let Ok(id32) = u32::try_from(id) {
+                            bm.insert(id32);
+                        }
+                    }
+                }
+                bm
+            }
+        }
+    }
+}
+
+/// Converts a slice of `u64` point IDs into a [`RoaringBitmap`].
+///
+/// `RoaringBitmap` stores `u32` values. IDs exceeding `u32::MAX` are silently
+/// skipped because the bitmap is a best-effort optimization hint — the
+/// post-filter still catches all matches.
+fn ids_to_bitmap(ids: &[u64]) -> roaring::RoaringBitmap {
+    let mut bm = roaring::RoaringBitmap::new();
+    for &id in ids {
+        if let Ok(id32) = u32::try_from(id) {
+            bm.insert(id32);
+        }
+    }
+    bm
 }

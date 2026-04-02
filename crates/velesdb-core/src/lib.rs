@@ -186,6 +186,8 @@ pub use collection::{
     IndexInfo,
     MetadataCollection,
     NodeType,
+    TraversalConfig,
+    TraversalPath,
     TraversalResult,
     ValueType,
     VectorCollection,

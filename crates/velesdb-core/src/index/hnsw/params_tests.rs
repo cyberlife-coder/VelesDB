@@ -152,8 +152,8 @@ fn test_hnsw_params_storage_mode_default() {
 
 #[test]
 fn test_search_quality_ef_search() {
-    assert_eq!(SearchQuality::Fast.ef_search(10), 64);
-    assert_eq!(SearchQuality::Balanced.ef_search(10), 128);
+    assert_eq!(SearchQuality::Fast.ef_search(10), 96);
+    assert_eq!(SearchQuality::Balanced.ef_search(10), 160);
     // Updated: Accurate now uses 512 base (was 256) for 100K+ scale
     assert_eq!(SearchQuality::Accurate.ef_search(10), 512);
     assert_eq!(SearchQuality::Custom(50).ef_search(10), 50);
@@ -170,8 +170,8 @@ fn test_search_quality_perfect_ef_search() {
 #[test]
 fn test_search_quality_ef_search_high_k() {
     // Test that ef_search scales with k (updated for 100K+ scale)
-    assert_eq!(SearchQuality::Fast.ef_search(100), 200); // 100 * 2
-    assert_eq!(SearchQuality::Balanced.ef_search(50), 200); // 50 * 4
+    assert_eq!(SearchQuality::Fast.ef_search(100), 300); // 100 * 3
+    assert_eq!(SearchQuality::Balanced.ef_search(50), 250); // 50 * 5
     assert_eq!(SearchQuality::Accurate.ef_search(40), 640); // 40 * 16 (was 40 * 8)
     assert_eq!(SearchQuality::Perfect.ef_search(50), 5000); // max(4096, 50*100=5000)
 }
@@ -232,9 +232,9 @@ fn test_search_quality_serialize_deserialize() {
 #[test]
 fn test_search_quality_autotune_ef_search_fallback() {
     // AutoTune falls back to Balanced when ef_search() is called without
-    // collection context (same as Balanced: 128 base, k*4 scaling).
-    assert_eq!(SearchQuality::AutoTune.ef_search(10), 128);
-    assert_eq!(SearchQuality::AutoTune.ef_search(50), 200); // 50 * 4
+    // collection context (same as Balanced: 160 base, k*5 scaling).
+    assert_eq!(SearchQuality::AutoTune.ef_search(10), 160);
+    assert_eq!(SearchQuality::AutoTune.ef_search(50), 250); // 50 * 5
 }
 
 #[test]
@@ -275,10 +275,166 @@ fn test_hnsw_params_for_dataset_size_100k_768d() {
     assert_eq!(params.ef_construction, 1600);
 }
 
+// =============================================================================
+// ef_search_for_scale: auto-adaptive to dataset size
+// =============================================================================
+
+#[test]
+fn test_ef_search_for_scale_no_scaling_at_10k() {
+    // Datasets <= 10K use base ef_search unchanged
+    assert_eq!(SearchQuality::Fast.ef_search_for_scale(10, 5_000), 96);
+    assert_eq!(SearchQuality::Balanced.ef_search_for_scale(10, 10_000), 160);
+}
+
+#[test]
+fn test_ef_search_for_scale_100k() {
+    // At 100K: sqrt(10) ≈ 3.16 → capped at 2.0
+    let ef = SearchQuality::Balanced.ef_search_for_scale(10, 100_000);
+    // 160 * 2.0 = 320, capped at 160*2=320
+    assert!(ef > 160, "ef should scale up at 100K, got {ef}");
+    assert!(ef <= 320, "ef should be capped at 2x base, got {ef}");
+}
+
+#[test]
+fn test_ef_search_for_scale_1m() {
+    // At 1M: sqrt(100) = 10 → capped at 2x
+    let ef = SearchQuality::Fast.ef_search_for_scale(10, 1_000_000);
+    assert_eq!(ef, 96 * 2, "ef should be capped at 2x for 1M dataset");
+}
+
+#[test]
+fn test_ef_search_for_scale_custom_passes_through() {
+    // Custom ef should also scale
+    let ef = SearchQuality::Custom(200).ef_search_for_scale(10, 100_000);
+    assert!(ef > 200, "custom ef should scale at 100K, got {ef}");
+    assert!(ef <= 400, "custom ef should be capped at 2x, got {ef}");
+}
+
 #[test]
 fn test_hnsw_params_for_dataset_size_500k_768d() {
     // 500K vectors at 768D should use M=128, ef=2000 for ≥95% recall
     let params = HnswParams::for_dataset_size(768, 500_000);
     assert_eq!(params.max_connections, 128);
     assert_eq!(params.ef_construction, 2000);
+}
+
+// =============================================================================
+// Alpha (VAMANA diversification) parameter tests
+// =============================================================================
+
+#[test]
+fn test_hnsw_params_alpha_default() {
+    // All constructors should default alpha to 1.2 (VAMANA recommendation)
+    let params = HnswParams::auto(768);
+    assert!(
+        (params.alpha - 1.2).abs() < f32::EPSILON,
+        "auto() alpha should be 1.2, got {}",
+        params.alpha
+    );
+}
+
+#[test]
+fn test_hnsw_params_alpha_default_all_constructors() {
+    // Every constructor must produce alpha = 1.2 by default
+    let constructors: Vec<(&str, HnswParams)> = vec![
+        ("default", HnswParams::default()),
+        ("auto(128)", HnswParams::auto(128)),
+        ("auto(768)", HnswParams::auto(768)),
+        ("fast", HnswParams::fast()),
+        ("turbo", HnswParams::turbo()),
+        ("high_recall", HnswParams::high_recall(768)),
+        ("max_recall(128)", HnswParams::max_recall(128)),
+        ("max_recall(512)", HnswParams::max_recall(512)),
+        ("max_recall(1024)", HnswParams::max_recall(1024)),
+        ("fast_indexing", HnswParams::fast_indexing(768)),
+        ("custom", HnswParams::custom(32, 400, 50_000)),
+        ("with_sq8", HnswParams::with_sq8(768)),
+        ("with_binary", HnswParams::with_binary(768)),
+        (
+            "for_dataset_size(5K)",
+            HnswParams::for_dataset_size(768, 5_000),
+        ),
+        (
+            "for_dataset_size(50K)",
+            HnswParams::for_dataset_size(768, 50_000),
+        ),
+        ("large_dataset", HnswParams::large_dataset(768)),
+        ("million_scale", HnswParams::million_scale(768)),
+    ];
+    for (name, params) in &constructors {
+        assert!(
+            (params.alpha - 1.2).abs() < f32::EPSILON,
+            "{name}() alpha should be 1.2, got {}",
+            params.alpha
+        );
+    }
+}
+
+#[test]
+fn test_hnsw_params_with_alpha_custom() {
+    let params = HnswParams::auto(768).with_alpha(1.0);
+    assert!(
+        (params.alpha - 1.0).abs() < f32::EPSILON,
+        "with_alpha(1.0) should set alpha to 1.0, got {}",
+        params.alpha
+    );
+}
+
+#[test]
+fn test_hnsw_params_with_alpha_preserves_other_fields() {
+    let base = HnswParams::auto(768);
+    let modified = base.with_alpha(1.5);
+    assert_eq!(modified.max_connections, base.max_connections);
+    assert_eq!(modified.ef_construction, base.ef_construction);
+    assert_eq!(modified.max_elements, base.max_elements);
+    assert_eq!(modified.storage_mode, base.storage_mode);
+    assert!(
+        (modified.alpha - 1.5).abs() < f32::EPSILON,
+        "alpha should be 1.5, got {}",
+        modified.alpha
+    );
+}
+
+#[test]
+fn test_hnsw_params_alpha_serde_roundtrip() {
+    let params = HnswParams::auto(768).with_alpha(1.5);
+    let json = serde_json::to_string(&params).expect("test: serialize");
+    let deserialized: HnswParams = serde_json::from_str(&json).expect("test: deserialize");
+    assert!(
+        (deserialized.alpha - 1.5).abs() < f32::EPSILON,
+        "roundtrip alpha should be 1.5, got {}",
+        deserialized.alpha
+    );
+}
+
+#[test]
+fn test_hnsw_params_implements_eq() {
+    // HnswParams has a manual Eq impl (alpha is f32, but always finite).
+    // Verify Eq reflexivity and that equal values work as HashMap keys.
+    let a = HnswParams::auto(768);
+    let b = HnswParams::auto(768);
+    // PartialEq + Eq: reflexive, symmetric
+    assert_eq!(a, b);
+    assert_eq!(b, a);
+    assert_eq!(a, a); // reflexive
+
+    // Verify Eq is usable in contexts that require it.
+    // Storing in a slice and using contains() exercises PartialEq;
+    // the manual Eq impl on HnswParams enables use as HashMap key
+    // or in Eq-bounded generic contexts.
+    let params_list = [a];
+    assert!(params_list.contains(&b));
+}
+
+#[test]
+fn test_hnsw_params_alpha_backward_compat_missing_field() {
+    // Persisted configs from before alpha was added won't have the field.
+    // Deserialization must default to 1.2.
+    let json = r#"{"max_connections":32,"ef_construction":400,"max_elements":100000}"#;
+    let params: HnswParams = serde_json::from_str(json).expect("test: backward compat deserialize");
+    assert!(
+        (params.alpha - 1.2).abs() < f32::EPSILON,
+        "missing alpha field should default to 1.2, got {}",
+        params.alpha
+    );
 }

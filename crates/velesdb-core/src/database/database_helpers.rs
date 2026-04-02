@@ -10,6 +10,7 @@ impl Database {
     ) -> Result<serde_json::Value> {
         match value {
             crate::velesql::Value::Integer(v) => Ok(serde_json::json!(v)),
+            crate::velesql::Value::UnsignedInteger(v) => Ok(serde_json::json!(v)),
             crate::velesql::Value::Float(v) => Ok(serde_json::json!(v)),
             crate::velesql::Value::String(v) => Ok(serde_json::json!(v)),
             crate::velesql::Value::Boolean(v) => Ok(serde_json::json!(v)),
@@ -26,6 +27,10 @@ impl Database {
     }
 
     pub(super) fn json_to_u64_id(value: &serde_json::Value) -> Result<u64> {
+        // Try u64 first (covers full range), fall back to i64 for negative error.
+        if let Some(u) = value.as_u64() {
+            return Ok(u);
+        }
         value
             .as_i64()
             .ok_or_else(|| Error::Query("id must be an integer".to_string()))

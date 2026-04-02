@@ -353,7 +353,7 @@ impl IndexIntersection {
         // Use the smaller set for lookup
         let (smaller, larger) = if a.len() < b.len() { (a, b) } else { (b, a) };
 
-        let larger_set: std::collections::HashSet<_> = larger.iter().collect();
+        let larger_set: rustc_hash::FxHashSet<_> = larger.iter().collect();
         smaller
             .iter()
             .filter(|id| larger_set.contains(id))

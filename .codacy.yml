@@ -241,9 +241,13 @@ engines:
       # --- Explain formatter (tree rendering with prefix tracking) ---
       - "crates/velesdb-core/src/velesql/explain/formatter.rs"
 
-      # --- Collection helpers (quantization cache, statistics) ---
+      # --- Collection helpers (quantization cache, statistics, upsert pipeline) ---
       - "crates/velesdb-core/src/collection/core/crud_helpers.rs"
       - "crates/velesdb-core/src/collection/core/statistics.rs"
+      # Lizard false positive: per_point_sequential_updates is 34 NLOC (lizard local)
+      # but Codacy online merges adjacent helper fns in the same impl block,
+      # reporting 106 NLOC. Same pattern as match_exec/mod.rs above.
+      - "crates/velesdb-core/src/collection/core/crud.rs"
 
       # --- HNSW backend adapter (linear I/O serialization, CC from chained ?) ---
       - "crates/velesdb-core/src/index/hnsw/native/backend_adapter.rs"

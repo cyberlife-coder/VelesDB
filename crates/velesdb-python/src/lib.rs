@@ -261,29 +261,71 @@ impl Database {
     ///     >>> quantized = db.create_collection("embeddings", dimension=768, storage_mode="sq8")
     ///     >>> # With custom HNSW parameters:
     ///     >>> custom = db.create_collection("docs", dimension=768, m=48, ef_construction=600)
-    #[pyo3(signature = (name, dimension, metric = "cosine", storage_mode = "full", m = None, ef_construction = None))]
+    ///     >>> # Auto-tuned for expected dataset size (optimizes M and ef_construction):
+    ///     >>> large = db.create_collection("big", dimension=128, expected_vectors=1_000_000)
+    #[pyo3(signature = (name, dimension, metric = "cosine", storage_mode = "full", m = None, ef_construction = None, expected_vectors = None))]
     #[allow(deprecated)]
+    #[allow(clippy::too_many_arguments)] // Reason: `py` is an injected PyO3 token, not a user-facing argument
     fn create_collection(
         &self,
+        py: Python<'_>,
         name: &str,
         dimension: usize,
         metric: &str,
         storage_mode: &str,
         m: Option<usize>,
         ef_construction: Option<usize>,
+        expected_vectors: Option<usize>,
     ) -> PyResult<Collection> {
         let distance_metric = parse_metric(metric)?;
         let mode = parse_storage_mode(storage_mode)?;
 
+        // Priority: explicit m/ef > expected_vectors > auto(dimension)
         if m.is_some() || ef_construction.is_some() {
+            // Warn when expected_vectors is also set: explicit values override
+            // the adaptive defaults, so expected_vectors only fills in gaps.
+            if expected_vectors.is_some() {
+                let _ = PyErr::warn(
+                    py,
+                    &py.get_type::<pyo3::exceptions::PyUserWarning>(),
+                    c"expected_vectors is set alongside explicit m/ef_construction; \
+                      explicit values take priority and override adaptive defaults",
+                    1,
+                );
+            }
+            // If expected_vectors is set alongside explicit params, use
+            // for_dataset_size as base then override with explicit values.
+            let (m_val, ef_val) = if let Some(n) = expected_vectors {
+                let base = velesdb_core::index::hnsw::HnswParams::for_dataset_size(dimension, n);
+                (
+                    m.or(Some(base.max_connections)),
+                    ef_construction.or(Some(base.ef_construction)),
+                )
+            } else {
+                (m, ef_construction)
+            };
             self.inner
                 .create_vector_collection_with_hnsw(
                     name,
                     dimension,
                     distance_metric,
                     mode,
-                    m,
-                    ef_construction,
+                    m_val,
+                    ef_val,
+                )
+                .map_err(|e| {
+                    PyRuntimeError::new_err(format!("Failed to create collection: {e}"))
+                })?;
+        } else if let Some(n) = expected_vectors {
+            let params = velesdb_core::index::hnsw::HnswParams::for_dataset_size(dimension, n);
+            self.inner
+                .create_vector_collection_with_hnsw(
+                    name,
+                    dimension,
+                    distance_metric,
+                    mode,
+                    Some(params.max_connections),
+                    Some(params.ef_construction),
                 )
                 .map_err(|e| {
                     PyRuntimeError::new_err(format!("Failed to create collection: {e}"))

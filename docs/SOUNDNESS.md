@@ -1,7 +1,7 @@
 # VelesDB Soundness Documentation
 
 > **Purpose**: Enable Rust senior reviewers to audit unsafe code without reading the entire codebase.
-> **Last Updated**: 2026-03-27 (EPIC-022/US-001 + RaBitQ soundness)
+> **Last Updated**: 2026-04-02 (EPIC-022/US-001 + RaBitQ soundness + CAS entry-point)
 
 ## Table of Contents
 
@@ -348,9 +348,9 @@ let ret = unsafe { libc::fallocate(fd, mode, offset as libc::off_t, len as libc:
 
 ### Atomic Operations
 
-**Used In**: `storage/mmap.rs`, `perf_optimizations.rs`
+**Used In**: `storage/mmap.rs`, `perf_optimizations.rs`, `index/hnsw/native/graph/`
 
-**Pattern**: Epoch-based invalidation
+**Pattern 1**: Epoch-based invalidation
 ```rust
 // Writer side (during remap)
 self.remap_epoch.fetch_add(1, Ordering::Release);
@@ -364,6 +364,33 @@ assert!(current == self.epoch_at_creation, "Mmap was remapped");
 - Release/Acquire ordering ensures visibility
 - Guard panics if epoch mismatches (fail-safe)
 - No data race: old pointers are never dereferenced after epoch change
+
+**Pattern 2**: CAS entry-point promotion (HNSW)
+
+`NativeHnsw` stores `entry_point` and `max_layer` as `AtomicUsize`. During
+batch insert, `promote_entry_point()` uses `compare_exchange(AcqRel/Acquire)`
+to atomically update the entry point without a mutex.
+
+```rust
+// First insert: CAS from NO_ENTRY_POINT to node_id
+self.entry_point.compare_exchange(
+    NO_ENTRY_POINT, node_id, Ordering::AcqRel, Ordering::Acquire
+);
+// Layer promotion: CAS on max_layer, then store entry_point
+self.max_layer.compare_exchange(
+    current_max, node_layer, Ordering::AcqRel, Ordering::Acquire
+);
+self.entry_point.store(node_id, Ordering::Release);
+```
+
+**Why It's Sound**:
+- AcqRel on the CAS ensures that the winner's store is visible to all
+  subsequent Acquire loads.
+- The transient window between `max_layer` CAS and `entry_point` store is
+  safe: readers seeing the old entry point at the new max layer encounter
+  empty neighbor lists and perform a no-op descent.
+- Entry-point promotion occurs O(log_M(N)) times per index lifetime,
+  so the CAS loop almost never retries.
 
 ### HNSW Batch Insertion Ordering
 

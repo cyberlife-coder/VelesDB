@@ -12,7 +12,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use super::native::rabitq_precision::RaBitQPrecisionHnsw;
-use super::native::{CachedSimdDistance, NativeHnsw, NativeNeighbour};
+use super::native::{CachedSimdDistance, NativeHnsw, NativeNeighbour, DEFAULT_ALPHA};
 use crate::distance::DistanceMetric;
 use std::path::Path;
 
@@ -49,6 +49,8 @@ pub struct NativeHnswInner {
 impl NativeHnswInner {
     /// Creates a new `NativeHnswInner` with the specified metric and parameters.
     ///
+    /// Uses the default VAMANA alpha (1.2) for neighbor diversification.
+    ///
     /// # Errors
     ///
     /// Returns an error if vector storage pre-allocation fails.
@@ -59,13 +61,14 @@ impl NativeHnswInner {
         ef_construction: usize,
         dimension: usize,
     ) -> crate::error::Result<Self> {
-        Self::new_with_storage_mode(
+        Self::new_with_options(
             metric,
             max_connections,
             max_elements,
             ef_construction,
             dimension,
             crate::StorageMode::Full,
+            DEFAULT_ALPHA,
         )
     }
 
@@ -85,28 +88,64 @@ impl NativeHnswInner {
         dimension: usize,
         storage_mode: crate::StorageMode,
     ) -> crate::error::Result<Self> {
+        Self::new_with_options(
+            metric,
+            max_connections,
+            max_elements,
+            ef_construction,
+            dimension,
+            storage_mode,
+            DEFAULT_ALPHA,
+        )
+    }
+
+    /// Creates a new `NativeHnswInner` with full configuration options.
+    ///
+    /// This is the canonical constructor; all other `new*` methods delegate here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_options(
+        metric: DistanceMetric,
+        max_connections: usize,
+        max_elements: usize,
+        ef_construction: usize,
+        dimension: usize,
+        storage_mode: crate::StorageMode,
+        alpha: f32,
+    ) -> crate::error::Result<Self> {
         let backend = if matches!(storage_mode, crate::StorageMode::RaBitQ) {
             let distance = CachedSimdDistance::new(metric, dimension);
-            let rabitq = RaBitQPrecisionHnsw::new(
+            let rabitq = RaBitQPrecisionHnsw::new_with_alpha(
                 distance,
                 dimension,
                 max_connections,
                 ef_construction,
                 max_elements,
+                alpha,
             )?;
             HnswBackend::RaBitQ(Box::new(rabitq))
         } else {
             let distance = CachedSimdDistance::new(metric, dimension);
             let inner = if dimension > 0 {
-                NativeHnsw::new_with_dimension(
+                NativeHnsw::new_with_dimension_and_alpha(
                     distance,
                     max_connections,
                     ef_construction,
                     max_elements,
                     dimension,
+                    alpha,
                 )?
             } else {
-                NativeHnsw::new(distance, max_connections, ef_construction, max_elements)
+                NativeHnsw::with_alpha(
+                    distance,
+                    max_connections,
+                    ef_construction,
+                    max_elements,
+                    alpha,
+                )
             };
             HnswBackend::Standard(inner)
         };
@@ -220,6 +259,24 @@ impl NativeHnswInner {
         match &mut self.backend {
             HnswBackend::Standard(hnsw) => hnsw.set_searching_mode(mode),
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.set_searching_mode(mode),
+        }
+    }
+
+    /// Reorders graph nodes in BFS traversal order for improved cache locality.
+    ///
+    /// After reordering, vectors that are close in the graph are also close
+    /// in memory, reducing cache misses during search traversal.
+    ///
+    /// Skips reordering for small indices (< 1000 vectors) where the entire
+    /// working set fits in L2 cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage reordering fails.
+    pub fn reorder_for_locality(&self) -> crate::error::Result<()> {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.reorder_for_locality(),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.reorder_for_locality(),
         }
     }
 }

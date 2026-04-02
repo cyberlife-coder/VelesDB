@@ -159,3 +159,159 @@ fn test_streaming_config_defaults() {
     assert_eq!(config.max_visited_size, 100_000);
     assert!(config.rel_types.is_empty());
 }
+
+// =============================================================================
+// G1: CSR snapshot BFS — verify identical results via zero-copy path
+// =============================================================================
+
+/// Creates a test store and builds its CSR snapshot for zero-copy BFS.
+fn create_test_edge_store_with_csr() -> EdgeStore {
+    let mut store = create_test_edge_store();
+    store.build_read_snapshot();
+    store
+}
+
+#[test]
+fn test_bfs_csr_basic_same_as_legacy() {
+    let legacy_store = create_test_edge_store();
+    let csr_store = create_test_edge_store_with_csr();
+
+    let config = StreamingConfig::default().with_max_depth(3);
+    let legacy: Vec<_> = BfsIterator::new(&legacy_store, 1, config.clone()).collect();
+    let csr: Vec<_> = BfsIterator::new(&csr_store, 1, config).collect();
+
+    // Same number of results
+    assert_eq!(legacy.len(), csr.len(), "CSR and legacy yield same count");
+
+    // Same set of (target_id, depth) pairs
+    let mut legacy_set: Vec<(u64, u32)> = legacy.iter().map(|r| (r.target_id, r.depth)).collect();
+    let mut csr_set: Vec<(u64, u32)> = csr.iter().map(|r| (r.target_id, r.depth)).collect();
+    legacy_set.sort_unstable();
+    csr_set.sort_unstable();
+    assert_eq!(legacy_set, csr_set, "CSR and legacy produce same targets");
+}
+
+#[test]
+fn test_bfs_csr_rel_type_filter() {
+    let mut store = create_test_edge_store();
+    store.build_read_snapshot();
+
+    let config = StreamingConfig::default()
+        .with_max_depth(5)
+        .with_rel_types(vec!["KNOWS".to_string()]);
+
+    let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+
+    // Node 5 is via WROTE edge, should be filtered out
+    assert!(!results.iter().any(|r| r.target_id == 5));
+    // Node 4 is via KNOWS chain: 1->2->3->4
+    assert!(results.iter().any(|r| r.target_id == 4));
+}
+
+#[test]
+fn test_bfs_csr_cyclic_graph() {
+    let mut store = create_cyclic_edge_store();
+    store.build_read_snapshot();
+
+    let config = StreamingConfig::default().with_max_depth(5).with_limit(10);
+    let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+
+    assert!(results.len() <= 10);
+    assert!(results.iter().any(|r| r.target_id == 2));
+    assert!(results.iter().any(|r| r.target_id == 3));
+}
+
+#[test]
+fn test_bfs_csr_with_limit() {
+    let mut store = create_test_edge_store();
+    store.build_read_snapshot();
+
+    let config = StreamingConfig::default().with_max_depth(5).with_limit(2);
+    let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+    assert_eq!(results.len(), 2);
+}
+
+#[test]
+fn test_bfs_csr_path_contains_edge_ids() {
+    let mut store = create_test_edge_store();
+    store.build_read_snapshot();
+
+    let config = StreamingConfig::default().with_max_depth(3);
+    let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+
+    // Node 2 at depth 1 should have path [100] (edge ID 100: 1->2)
+    let node2 = results.iter().find(|r| r.target_id == 2).expect("node 2");
+    assert_eq!(node2.path.len(), 1);
+    assert_eq!(node2.path[0], 100, "path through edge 100 (1->2)");
+
+    // Node 3 at depth 2 should have path [100, 101] (1->2->3)
+    let node3 = results.iter().find(|r| r.target_id == 3).expect("node 3");
+    assert_eq!(node3.path.len(), 2);
+    assert_eq!(node3.path[0], 100, "first hop via edge 100");
+    assert_eq!(node3.path[1], 101, "second hop via edge 101");
+}
+
+// =============================================================================
+// G2: Parent-pointer path reconstruction — streaming BFS
+// =============================================================================
+
+#[test]
+fn test_streaming_parent_pointer_full_path() {
+    // GIVEN: a graph 1->2->3->4 with branch 2->5
+    let store = create_test_edge_store();
+    let config = StreamingConfig::default().with_max_depth(3);
+
+    // WHEN: streaming BFS from node 1
+    let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+
+    // THEN: all paths reconstructed correctly via parent pointers
+    let node2 = results
+        .iter()
+        .find(|r| r.target_id == 2)
+        .expect("test: node 2");
+    assert_eq!(node2.path, vec![100], "1->2 via edge 100");
+
+    let node3 = results
+        .iter()
+        .find(|r| r.target_id == 3)
+        .expect("test: node 3");
+    assert_eq!(node3.path, vec![100, 101], "1->2->3 via edges 100,101");
+
+    let node5 = results
+        .iter()
+        .find(|r| r.target_id == 5)
+        .expect("test: node 5");
+    assert_eq!(node5.path, vec![100, 103], "1->2->5 via edges 100,103");
+
+    let node4 = results
+        .iter()
+        .find(|r| r.target_id == 4)
+        .expect("test: node 4");
+    assert_eq!(
+        node4.path,
+        vec![100, 101, 102],
+        "1->2->3->4 via edges 100,101,102"
+    );
+}
+
+#[test]
+fn test_streaming_parent_pointer_csr_path() {
+    // GIVEN: same graph with CSR snapshot
+    let mut store = create_test_edge_store();
+    store.build_read_snapshot();
+    let config = StreamingConfig::default().with_max_depth(3);
+
+    // WHEN: streaming BFS via CSR path
+    let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+
+    // THEN: parent-pointer paths match expected values
+    let node4 = results
+        .iter()
+        .find(|r| r.target_id == 4)
+        .expect("test: node 4");
+    assert_eq!(
+        node4.path,
+        vec![100, 101, 102],
+        "CSR path: 1->2->3->4 via edges 100,101,102"
+    );
+}

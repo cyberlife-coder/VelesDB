@@ -26,7 +26,7 @@ mod tests;
 
 pub use concurrent::{ConcurrentMemoryPool, ConcurrentPoolHandle};
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::mem::MaybeUninit;
 
 /// Default chunk size for memory pool (number of items per chunk).
@@ -40,10 +40,10 @@ pub struct MemoryPool<T> {
     chunks: Vec<Box<[MaybeUninit<T>]>>,
     free_indices: Vec<usize>,
     /// O(1) membership check for free slots to keep deallocate idempotent.
-    free_lookup: HashSet<usize>,
+    free_lookup: FxHashSet<usize>,
     /// Tracks which slots have been initialized via `store()`.
     /// Only initialized slots should be dropped.
-    initialized: HashSet<usize>,
+    initialized: FxHashSet<usize>,
     chunk_size: usize,
     total_allocated: usize,
 }
@@ -55,8 +55,8 @@ impl<T> MemoryPool<T> {
         Self {
             chunks: Vec::new(),
             free_indices: Vec::new(),
-            free_lookup: HashSet::new(),
-            initialized: HashSet::new(),
+            free_lookup: FxHashSet::default(),
+            initialized: FxHashSet::default(),
             chunk_size: chunk_size.max(1),
             total_allocated: 0,
         }

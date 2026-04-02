@@ -48,6 +48,56 @@ fn write_wal_store_entry(
     wal.write_all(&crc.to_le_bytes())
 }
 
+/// Per-entry WAL overhead: op(1) + id(8) + len(4) + crc(4) = 17 bytes.
+const WAL_STORE_ENTRY_OVERHEAD: usize = 17;
+
+/// Serializes multiple CRC32-framed store entries into `group_buf` and
+/// writes them to the WAL in a single `write_all` call.
+///
+/// Each entry retains the standard per-entry CRC32 frame for backward
+/// compatibility with [`wal_replay`]. The only difference from calling
+/// [`write_wal_store_entry`] in a loop is that the I/O is coalesced:
+/// one syscall instead of 2N.
+///
+/// `entry_buf` is a scratch buffer reused for CRC computation per entry.
+fn write_wal_store_entries_grouped(
+    wal: &mut io::BufWriter<File>,
+    vectors: &[(u64, &[f32])],
+    vector_byte_size: usize,
+    entry_buf: &mut Vec<u8>,
+    group_buf: &mut Vec<u8>,
+) -> io::Result<()> {
+    let entry_size = vector_byte_size + WAL_STORE_ENTRY_OVERHEAD;
+    group_buf.clear();
+    group_buf.reserve(vectors.len() * entry_size);
+
+    for &(id, vector) in vectors {
+        let data = vector_to_bytes(vector);
+        serialize_wal_store_entry(id, data, entry_buf);
+        let crc = crc32_hash(entry_buf);
+        group_buf.extend_from_slice(entry_buf);
+        group_buf.extend_from_slice(&crc.to_le_bytes());
+    }
+
+    wal.write_all(group_buf)
+}
+
+/// Serializes a single WAL store frame (without CRC suffix) into `buf`.
+///
+/// After this call, `buf` contains `[op:1][id:8][len:4][data:N]` which is
+/// the payload that CRC32 covers.
+fn serialize_wal_store_entry(id: u64, data: &[u8], buf: &mut Vec<u8>) {
+    buf.clear();
+    buf.push(1u8);
+    buf.extend_from_slice(&id.to_le_bytes());
+    // Reason: Vector byte length is dimension * 4. With max dimension 65536,
+    // max bytes = 262144 which fits in u32 (max 4,294,967,295).
+    #[allow(clippy::cast_possible_truncation)]
+    let len_u32 = data.len() as u32;
+    buf.extend_from_slice(&len_u32.to_le_bytes());
+    buf.extend_from_slice(data);
+}
+
 /// Writes a CRC32-framed delete entry to the WAL.
 ///
 /// Format: `[op:1][id:8][crc32:4]`
@@ -159,17 +209,21 @@ impl VectorStorage for MmapStorage {
             self.next_offset.fetch_add(total_new_size, Ordering::AcqRel);
         }
 
-        // 3. WAL append with CRC32 framing per entry (Issue #317)
-        // Issue #423: Allocate WAL frame buffer once and reuse across entries
-        // to avoid per-entry heap allocation (mirrors LogPayloadStorage pattern).
-        // Issue #423 Component 4: Skip WAL when DurabilityMode::None.
+        // 3. WAL group write: serialize all entries into one buffer, single
+        //    write_all() call. Each entry keeps its own CRC32 frame for backward
+        //    compatibility with wal_replay. Reduces syscalls from ~N to 1.
+        //    Issue #423 Component 4: Skip WAL when DurabilityMode::None.
         if self.durability != DurabilityMode::None {
             let mut wal = self.wal.write();
-            let mut buf = Vec::with_capacity(1 + 8 + 4 + vector_size);
-            for &(id, vector) in vectors {
-                let vector_bytes = vector_to_bytes(vector);
-                write_wal_store_entry(&mut wal, id, vector_bytes, &mut buf)?;
-            }
+            let mut entry_buf = Vec::with_capacity(1 + 8 + 4 + vector_size);
+            let mut group_buf = Vec::new();
+            write_wal_store_entries_grouped(
+                &mut wal,
+                vectors,
+                vector_size,
+                &mut entry_buf,
+                &mut group_buf,
+            )?;
             // Note: no fsync here, caller controls durability via `flush()`.
         }
 

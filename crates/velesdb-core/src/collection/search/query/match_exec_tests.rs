@@ -80,6 +80,99 @@ fn test_parse_property_path_function() {
 }
 
 // ============================================================================
+// Fix #489: ProjectionItem parsing tests
+// ============================================================================
+
+#[test]
+fn test_parse_projection_wildcard() {
+    let item = parse_projection_item("*");
+    assert!(
+        matches!(item, ProjectionItem::Wildcard),
+        "Expected Wildcard, got {item:?}"
+    );
+}
+
+#[test]
+fn test_parse_projection_similarity_function() {
+    let item = parse_projection_item("similarity()");
+    assert!(
+        matches!(item, ProjectionItem::FunctionCall("similarity")),
+        "Expected FunctionCall(\"similarity\"), got {item:?}"
+    );
+}
+
+#[test]
+fn test_parse_projection_count_function() {
+    let item = parse_projection_item("count()");
+    assert!(
+        matches!(item, ProjectionItem::FunctionCall("count")),
+        "Expected FunctionCall(\"count\"), got {item:?}"
+    );
+}
+
+#[test]
+fn test_parse_projection_bare_alias() {
+    let item = parse_projection_item("n");
+    assert!(
+        matches!(item, ProjectionItem::BareAlias("n")),
+        "Expected BareAlias(\"n\"), got {item:?}"
+    );
+}
+
+#[test]
+fn test_parse_projection_bare_alias_longer_name() {
+    let item = parse_projection_item("author");
+    assert!(
+        matches!(item, ProjectionItem::BareAlias("author")),
+        "Expected BareAlias(\"author\"), got {item:?}"
+    );
+}
+
+#[test]
+fn test_parse_projection_property_path() {
+    let item = parse_projection_item("n.name");
+    match item {
+        ProjectionItem::PropertyPath { alias, property } => {
+            assert_eq!(alias, "n");
+            assert_eq!(property, "name");
+        }
+        other => panic!("Expected PropertyPath, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_projection_nested_path() {
+    let item = parse_projection_item("doc.metadata.category");
+    match item {
+        ProjectionItem::PropertyPath { alias, property } => {
+            assert_eq!(alias, "doc");
+            assert_eq!(property, "metadata.category");
+        }
+        other => panic!("Expected PropertyPath, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_projection_edge_leading_dot() {
+    // ".name" — invalid, leading dot with no alias
+    let item = parse_projection_item(".name");
+    assert!(
+        matches!(item, ProjectionItem::BareAlias(_)),
+        "Leading dot with no valid split should fall through to BareAlias, got {item:?}"
+    );
+}
+
+#[test]
+fn test_parse_projection_edge_trailing_dot() {
+    // "alias." — trailing dot with no property
+    let item = parse_projection_item("alias.");
+    assert!(
+        matches!(item, ProjectionItem::BareAlias(_)),
+        "Trailing dot with no property should fall through to BareAlias, got {item:?}"
+    );
+}
+
+// ============================================================================
 // EPIC-052 US-007: OR/NOT with Similarity Conditions Tests
 // ============================================================================
 

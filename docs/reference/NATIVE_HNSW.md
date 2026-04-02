@@ -64,8 +64,10 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 │                     NativeHnsw<D>                               │
 ├─────────────────────────────────────────────────────────────────┤
 │  distance: SimdDistance      (AVX2/SSE/NEON optimized)          │
-│  vectors: RwLock<Vec<f32>>   (stored vectors)                   │
+│  vectors: RwLock<ContiguousVectors>  (64-byte aligned storage)  │
 │  layers: RwLock<Vec<Layer>>  (hierarchical graph)               │
+│  entry_point: AtomicUsize    (lock-free CAS promotion)          │
+│  max_layer: AtomicUsize      (lock-free CAS promotion)          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -100,6 +102,50 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 |--------|-------------|
 | `save(path)` | Save index to disk |
 | `load(path, dim, metric)` | Load index from disk |
+
+## Batch Insert Internals
+
+### Two-Phase Allocation
+
+`allocate_batch()` uses two separate lock scopes to minimize write-lock
+contention on vector storage:
+
+1. **`reserve_vector_capacity()`** (cold path): Acquires a write lock,
+   initializes storage if needed, and pre-reserves capacity for the entire
+   batch. This may trigger a buffer resize (reallocation), but it happens
+   at most once per batch.
+2. **`bulk_push_vectors()`** (hot path): Acquires a write lock and performs
+   a bulk `push_batch()` into the pre-reserved space. No reallocation
+   occurs, so the lock is held only for fast memcpy operations.
+
+### Graduated ef_construction
+
+For batches >= 1000 vectors, `BatchEfSchedule` applies a 3-phase VAMANA/
+DiskANN-inspired schedule that reduces total construction work while
+preserving graph quality:
+
+- **Scaffold** (first 10%): Full `ef_construction` -- builds a high-quality
+  backbone that guides subsequent insertions.
+- **Bulk** (middle 80%): 0.5x `ef_construction` -- leverages the existing
+  scaffold for efficient navigation with reduced candidate evaluation.
+- **Finalize** (last 10%): 0.75x `ef_construction` -- restores edge quality
+  at the graph periphery.
+
+All reduced ef values are floored at `2 * M` to ensure the candidate pool
+is never smaller than the number of neighbors to select.
+
+### Lock-Free Entry-Point Promotion
+
+Entry-point updates use atomic CAS (`compare_exchange`) instead of a mutex.
+Two CAS operations handle the two cases:
+
+1. **Empty index**: CAS on `entry_point` from `NO_ENTRY_POINT` to the
+   inserting node's ID.
+2. **Layer promotion**: CAS on `max_layer` to claim the new maximum,
+   then store the new `entry_point`.
+
+This eliminates a serialization point during concurrent batch insert.
+Entry-point promotion is rare (O(log_M(N)) times per index lifetime).
 
 ## Dual-Precision Search
 

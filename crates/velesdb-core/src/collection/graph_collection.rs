@@ -256,28 +256,32 @@ impl GraphCollection {
         self.inner.traverse_dfs_config(source_id, config)
     }
 
-    /// Performs parallel BFS traversal from multiple source nodes.
+    /// Performs parallel BFS traversal from multiple start nodes.
     ///
-    /// Each source is traversed independently and results are merged,
-    /// deduplicating by `target_id` (first occurrence wins).
+    /// When `start_nodes` exceeds the parallel threshold (100 nodes), rayon
+    /// distributes independent per-start-node BFS traversals across CPU cores.
+    /// Results are deduplicated by path signature and truncated to `config.limit`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{GraphCollection, GraphSchema, DistanceMetric};
+    /// # use velesdb_core::collection::graph::TraversalConfig;
+    /// # let coll = GraphCollection::create("./data/kg".into(), "kg", None, DistanceMetric::Cosine, GraphSchema::schemaless())?;
+    /// let config = TraversalConfig { max_depth: 3, ..TraversalConfig::default() };
+    /// let results = coll.traverse_bfs_parallel(&[100, 200, 300], &config);
+    /// for r in &results {
+    ///     println!("node={} depth={}", r.target_id, r.depth);
+    /// }
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     #[must_use]
     pub fn traverse_bfs_parallel(
         &self,
         start_nodes: &[u64],
         config: &TraversalConfig,
     ) -> Vec<TraversalResult> {
-        use std::collections::HashSet;
-        let mut seen = HashSet::new();
-        let mut merged = Vec::new();
-        for &source in start_nodes {
-            let results = self.traverse_bfs(source, config);
-            for r in results {
-                if seen.insert(r.target_id) {
-                    merged.push(r);
-                }
-            }
-        }
-        merged
+        self.inner.traverse_bfs_parallel(start_nodes, config)
     }
 
     // -------------------------------------------------------------------------
@@ -455,6 +459,36 @@ mod tests {
         let edge2 = crate::collection::graph::GraphEdge::new(2, 20, 30, "likes").unwrap();
         col.add_edge(edge2).unwrap();
         assert_eq!(col.edge_count(), 2);
+    }
+
+    #[test]
+    fn test_traverse_bfs_parallel_through_graph_collection() {
+        let dir = tempdir().unwrap();
+        let col = GraphCollection::create(
+            dir.path().to_path_buf(),
+            "kg",
+            None,
+            DistanceMetric::Cosine,
+            GraphSchema::schemaless(),
+        )
+        .unwrap();
+
+        // Build chain: 1->2->3
+        col.add_edge(GraphEdge::new(1, 1, 2, "NEXT").unwrap())
+            .unwrap();
+        col.add_edge(GraphEdge::new(2, 2, 3, "NEXT").unwrap())
+            .unwrap();
+
+        let config = TraversalConfig {
+            max_depth: 3,
+            min_depth: 1,
+            ..TraversalConfig::default()
+        };
+        let results = col.traverse_bfs_parallel(&[1], &config);
+        let target_ids: std::collections::HashSet<u64> =
+            results.iter().map(|r| r.target_id).collect();
+        assert!(target_ids.contains(&2), "should reach node 2");
+        assert!(target_ids.contains(&3), "should reach node 3");
     }
 
     #[test]

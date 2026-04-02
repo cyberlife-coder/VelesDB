@@ -22,7 +22,7 @@
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use super::cart::CARTEdgeIndex;
 
@@ -126,7 +126,7 @@ impl EdgeIndex for VecEdgeIndex {
 /// - Better scaling for high-degree hubs
 #[derive(Debug, Clone, Default)]
 pub struct HashSetEdgeIndex {
-    pub(crate) targets: HashSet<u64>,
+    pub(crate) targets: FxHashSet<u64>,
 }
 
 impl HashSetEdgeIndex {
@@ -134,7 +134,7 @@ impl HashSetEdgeIndex {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            targets: HashSet::new(),
+            targets: FxHashSet::default(),
         }
     }
 
@@ -142,7 +142,7 @@ impl HashSetEdgeIndex {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            targets: HashSet::with_capacity(capacity),
+            targets: FxHashSet::with_capacity_and_hasher(capacity, rustc_hash::FxBuildHasher),
         }
     }
 

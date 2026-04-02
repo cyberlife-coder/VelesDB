@@ -265,6 +265,7 @@ fn value_to_u64(val: &crate::velesql::Value) -> Result<u64> {
         crate::velesql::Value::Integer(v) => {
             u64::try_from(*v).map_err(|_| Error::Query(format!("ID must be non-negative, got {v}")))
         }
+        crate::velesql::Value::UnsignedInteger(v) => Ok(*v),
         _ => Err(Error::Query("ID values must be integers".to_string())),
     }
 }

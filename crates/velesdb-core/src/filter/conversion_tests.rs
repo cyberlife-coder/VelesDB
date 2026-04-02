@@ -287,3 +287,38 @@ fn test_like_case_insensitive() {
         matches!(result, Condition::ILike { field, pattern } if field == "title" && pattern == "%search%")
     );
 }
+
+// ============================================================================
+// Issue #486: Value::UnsignedInteger filter conversion
+// ============================================================================
+
+#[test]
+fn test_comparison_eq_unsigned_integer() {
+    let cmp = Comparison {
+        column: "big_id".to_string(),
+        operator: CompareOp::Eq,
+        value: VelesValue::UnsignedInteger(9_223_372_036_854_775_808),
+    };
+    let cond = crate::velesql::Condition::Comparison(cmp);
+    let result: Condition = cond.into();
+    // UnsignedInteger should convert to a JSON Number with the same u64 value
+    if let Condition::Eq { field, value } = &result {
+        assert_eq!(field, "big_id");
+        assert_eq!(value.as_u64(), Some(9_223_372_036_854_775_808));
+    } else {
+        panic!("expected Condition::Eq, got {result:?}");
+    }
+}
+
+#[test]
+fn test_unsigned_integer_numeric_to_json() {
+    // UnsignedInteger in BETWEEN should produce valid JSON numbers
+    let btw = BetweenCondition {
+        column: "id".to_string(),
+        low: VelesValue::UnsignedInteger(10_000_000_000_000_000_000),
+        high: VelesValue::UnsignedInteger(u64::MAX),
+    };
+    let cond = crate::velesql::Condition::Between(btw);
+    let result: Condition = cond.into();
+    assert!(matches!(result, Condition::And { conditions } if conditions.len() == 2));
+}

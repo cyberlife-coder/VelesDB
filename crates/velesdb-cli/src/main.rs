@@ -52,6 +52,20 @@ struct Cli {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Clap's derive-macro help generation for our 22-variant Commands enum
+    // exceeds the default ~2 MB stack in unoptimized (debug/test) builds.
+    // Spawn the real entry point on an 8 MB stack to accommodate this.
+    const STACK_SIZE: usize = 8 * 1024 * 1024;
+    let handler = std::thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(cli_main)?;
+    match handler.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn cli_main() -> anyhow::Result<()> {
     // Non-blocking update check (background thread, 2s timeout).
     // Disable: VELESDB_NO_UPDATE_CHECK=1 or [update_check] enabled=false in config.
     #[cfg(feature = "update-check")]

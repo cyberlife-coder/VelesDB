@@ -6,6 +6,8 @@ use crate::point::Point;
 use crate::quantization::{
     BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
 };
+#[cfg(feature = "persistence")]
+use rayon::prelude::*;
 
 const PQ_TRAINING_SAMPLES: usize = 128;
 
@@ -143,6 +145,43 @@ impl Collection {
                     }
                 }
             }
+        }
+    }
+
+    /// Batch-quantizes SQ8 vectors in parallel and inserts into cache.
+    ///
+    /// Issue #486: `QuantizedVector::from_f32()` is a pure function (no shared
+    /// state), so the computation can run in parallel via rayon. Only the final
+    /// cache insertion requires the write lock, held briefly for a batch insert.
+    ///
+    /// Uses last-writer-wins dedup: for intra-batch duplicate IDs, only the
+    /// last occurrence's quantized vector is cached (matching the WAL dedup
+    /// semantics in `write_deduped_vectors`).
+    #[cfg(feature = "persistence")]
+    pub(super) fn batch_quantize_sq8_parallel(&self, points: &[Point]) {
+        let quantized: Vec<(u64, QuantizedVector)> = points
+            .par_iter()
+            .map(|p| (p.id, QuantizedVector::from_f32(&p.vector)))
+            .collect();
+        let mut cache = self.sq8_cache.write();
+        for (id, qv) in quantized {
+            cache.insert(id, qv);
+        }
+    }
+
+    /// Batch-quantizes Binary vectors in parallel and inserts into cache.
+    ///
+    /// Issue #486: Same parallel strategy as SQ8 — `BinaryQuantizedVector::from_f32()`
+    /// is a pure function, parallelized via rayon.
+    #[cfg(feature = "persistence")]
+    pub(super) fn batch_quantize_binary_parallel(&self, points: &[Point]) {
+        let quantized: Vec<(u64, BinaryQuantizedVector)> = points
+            .par_iter()
+            .map(|p| (p.id, BinaryQuantizedVector::from_f32(&p.vector)))
+            .collect();
+        let mut cache = self.binary_cache.write();
+        for (id, bqv) in quantized {
+            cache.insert(id, bqv);
         }
     }
 }

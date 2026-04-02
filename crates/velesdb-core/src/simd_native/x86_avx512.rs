@@ -20,7 +20,10 @@
 
 use crate::simd_4acc_dot_loop;
 use crate::simd_4acc_l2_loop;
+use crate::simd_8acc_dot_loop;
+use crate::simd_8acc_l2_loop;
 
+use super::reduction::hsum_avx512;
 use super::scalar;
 use super::scalar::cosine_finish_fast;
 
@@ -80,7 +83,7 @@ pub(crate) unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
         sum = _mm512_fmadd_ps(va, vb, sum);
     }
 
-    _mm512_reduce_add_ps(sum)
+    hsum_avx512(sum)
 }
 
 /// Optimized 4-accumulator version without prefetch overhead
@@ -143,7 +146,7 @@ pub(crate) unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
         acc = _mm512_fmadd_ps(va, vb, acc);
     }
 
-    _mm512_reduce_add_ps(acc)
+    hsum_avx512(acc)
 }
 
 /// AVX-512 dot product with 8 independent accumulators for very large vectors.
@@ -174,7 +177,17 @@ pub(crate) unsafe fn dot_product_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
     let end_main = a_ptr.add(len / 128 * 128);
     let end_ptr = a_ptr.add(len);
 
-    let (mut acc, mut a_p, mut b_p) = dot_8acc_main_loop(a_ptr, b_ptr, end_main);
+    // SAFETY: 8-accumulator ILP loop. Pointer bounds guaranteed by end_main.
+    let (mut acc, mut a_p, mut b_p) = simd_8acc_dot_loop!(
+        a_ptr,
+        b_ptr,
+        end_main,
+        _mm512_setzero_ps(),
+        _mm512_loadu_ps,
+        _mm512_fmadd_ps,
+        _mm512_add_ps,
+        16
+    );
 
     // Process remaining 16-element chunks with single accumulator
     while a_p.add(16) <= end_ptr {
@@ -193,61 +206,7 @@ pub(crate) unsafe fn dot_product_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
         acc = _mm512_fmadd_ps(va, vb, acc);
     }
 
-    _mm512_reduce_add_ps(acc)
-}
-
-/// Main loop for 8-accumulator dot product: processes 128 floats per iteration.
-///
-/// # Safety
-///
-/// Caller must ensure AVX-512F is available and `end_main` is aligned to 128 floats.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-#[inline]
-unsafe fn dot_8acc_main_loop(
-    a_ptr: *const f32,
-    b_ptr: *const f32,
-    end_main: *const f32,
-) -> (std::arch::x86_64::__m512, *const f32, *const f32) {
-    use std::arch::x86_64::*;
-
-    let mut s0 = _mm512_setzero_ps();
-    let mut s1 = _mm512_setzero_ps();
-    let mut s2 = _mm512_setzero_ps();
-    let mut s3 = _mm512_setzero_ps();
-    let mut s4 = _mm512_setzero_ps();
-    let mut s5 = _mm512_setzero_ps();
-    let mut s6 = _mm512_setzero_ps();
-    let mut s7 = _mm512_setzero_ps();
-    let mut pa = a_ptr;
-    let mut pb = b_ptr;
-
-    // SAFETY: Loop guard ensures 128 elements remain for all eight 16-element loads
-    while pa < end_main {
-        s0 = _mm512_fmadd_ps(_mm512_loadu_ps(pa), _mm512_loadu_ps(pb), s0);
-        s1 = _mm512_fmadd_ps(_mm512_loadu_ps(pa.add(16)), _mm512_loadu_ps(pb.add(16)), s1);
-        s2 = _mm512_fmadd_ps(_mm512_loadu_ps(pa.add(32)), _mm512_loadu_ps(pb.add(32)), s2);
-        s3 = _mm512_fmadd_ps(_mm512_loadu_ps(pa.add(48)), _mm512_loadu_ps(pb.add(48)), s3);
-        s4 = _mm512_fmadd_ps(_mm512_loadu_ps(pa.add(64)), _mm512_loadu_ps(pb.add(64)), s4);
-        s5 = _mm512_fmadd_ps(_mm512_loadu_ps(pa.add(80)), _mm512_loadu_ps(pb.add(80)), s5);
-        s6 = _mm512_fmadd_ps(_mm512_loadu_ps(pa.add(96)), _mm512_loadu_ps(pb.add(96)), s6);
-        s7 = _mm512_fmadd_ps(
-            _mm512_loadu_ps(pa.add(112)),
-            _mm512_loadu_ps(pb.add(112)),
-            s7,
-        );
-        pa = pa.add(128);
-        pb = pb.add(128);
-    }
-
-    // Reduce 8 accumulators to 1 via binary tree
-    s0 = _mm512_add_ps(s0, s4);
-    s1 = _mm512_add_ps(s1, s5);
-    s2 = _mm512_add_ps(s2, s6);
-    s3 = _mm512_add_ps(s3, s7);
-    let sum01 = _mm512_add_ps(s0, s1);
-    let sum23 = _mm512_add_ps(s2, s3);
-    (_mm512_add_ps(sum01, sum23), pa, pb)
+    hsum_avx512(acc)
 }
 
 // =============================================================================
@@ -311,7 +270,7 @@ pub(crate) unsafe fn squared_l2_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
         acc = _mm512_fmadd_ps(diff, diff, acc);
     }
 
-    _mm512_reduce_add_ps(acc)
+    hsum_avx512(acc)
 }
 
 /// AVX-512 squared L2 distance (1-acc fallback for small vectors).
@@ -353,7 +312,7 @@ pub(crate) unsafe fn squared_l2_avx512(a: &[f32], b: &[f32]) -> f32 {
         sum = _mm512_fmadd_ps(diff, diff, sum);
     }
 
-    _mm512_reduce_add_ps(sum)
+    hsum_avx512(sum)
 }
 
 /// AVX-512 squared L2 distance with 8 independent accumulators for very large vectors.
@@ -379,7 +338,18 @@ pub(crate) unsafe fn squared_l2_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
     let end_main = a_ptr.add(len / 128 * 128);
     let end_ptr = a_ptr.add(len);
 
-    let (mut acc, mut a_p, mut b_p) = l2_8acc_main_loop(a_ptr, b_ptr, end_main);
+    // SAFETY: 8-accumulator ILP loop. Pointer bounds guaranteed by end_main.
+    let (mut acc, mut a_p, mut b_p) = simd_8acc_l2_loop!(
+        a_ptr,
+        b_ptr,
+        end_main,
+        _mm512_setzero_ps(),
+        _mm512_loadu_ps,
+        _mm512_sub_ps,
+        _mm512_fmadd_ps,
+        _mm512_add_ps,
+        16
+    );
 
     // Process remaining 16-element chunks
     while a_p.add(16) <= end_ptr {
@@ -400,65 +370,7 @@ pub(crate) unsafe fn squared_l2_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
         acc = _mm512_fmadd_ps(diff, diff, acc);
     }
 
-    _mm512_reduce_add_ps(acc)
-}
-
-/// Main loop for 8-accumulator squared L2: processes 128 floats per iteration.
-///
-/// # Safety
-///
-/// Caller must ensure AVX-512F is available and `end_main` is aligned to 128 floats.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-#[inline]
-unsafe fn l2_8acc_main_loop(
-    a_ptr: *const f32,
-    b_ptr: *const f32,
-    end_main: *const f32,
-) -> (std::arch::x86_64::__m512, *const f32, *const f32) {
-    use std::arch::x86_64::*;
-
-    let mut s0 = _mm512_setzero_ps();
-    let mut s1 = _mm512_setzero_ps();
-    let mut s2 = _mm512_setzero_ps();
-    let mut s3 = _mm512_setzero_ps();
-    let mut s4 = _mm512_setzero_ps();
-    let mut s5 = _mm512_setzero_ps();
-    let mut s6 = _mm512_setzero_ps();
-    let mut s7 = _mm512_setzero_ps();
-    let mut pa = a_ptr;
-    let mut pb = b_ptr;
-
-    // SAFETY: Loop guard ensures 128 elements remain for all eight 16-element loads
-    while pa < end_main {
-        let d0 = _mm512_sub_ps(_mm512_loadu_ps(pa), _mm512_loadu_ps(pb));
-        s0 = _mm512_fmadd_ps(d0, d0, s0);
-        let d1 = _mm512_sub_ps(_mm512_loadu_ps(pa.add(16)), _mm512_loadu_ps(pb.add(16)));
-        s1 = _mm512_fmadd_ps(d1, d1, s1);
-        let d2 = _mm512_sub_ps(_mm512_loadu_ps(pa.add(32)), _mm512_loadu_ps(pb.add(32)));
-        s2 = _mm512_fmadd_ps(d2, d2, s2);
-        let d3 = _mm512_sub_ps(_mm512_loadu_ps(pa.add(48)), _mm512_loadu_ps(pb.add(48)));
-        s3 = _mm512_fmadd_ps(d3, d3, s3);
-        let d4 = _mm512_sub_ps(_mm512_loadu_ps(pa.add(64)), _mm512_loadu_ps(pb.add(64)));
-        s4 = _mm512_fmadd_ps(d4, d4, s4);
-        let d5 = _mm512_sub_ps(_mm512_loadu_ps(pa.add(80)), _mm512_loadu_ps(pb.add(80)));
-        s5 = _mm512_fmadd_ps(d5, d5, s5);
-        let d6 = _mm512_sub_ps(_mm512_loadu_ps(pa.add(96)), _mm512_loadu_ps(pb.add(96)));
-        s6 = _mm512_fmadd_ps(d6, d6, s6);
-        let d7 = _mm512_sub_ps(_mm512_loadu_ps(pa.add(112)), _mm512_loadu_ps(pb.add(112)));
-        s7 = _mm512_fmadd_ps(d7, d7, s7);
-        pa = pa.add(128);
-        pb = pb.add(128);
-    }
-
-    // Reduce 8 accumulators to 1 via binary tree
-    s0 = _mm512_add_ps(s0, s4);
-    s1 = _mm512_add_ps(s1, s5);
-    s2 = _mm512_add_ps(s2, s6);
-    s3 = _mm512_add_ps(s3, s7);
-    let sum01 = _mm512_add_ps(s0, s1);
-    let sum23 = _mm512_add_ps(s2, s3);
-    (_mm512_add_ps(sum01, sum23), pa, pb)
+    hsum_avx512(acc)
 }
 
 // =============================================================================
@@ -541,9 +453,9 @@ pub(crate) unsafe fn cosine_fused_avx512(a: &[f32], b: &[f32]) -> f32 {
         }
     }
 
-    let dot = _mm512_reduce_add_ps(_mm512_add_ps(dot0, dot1));
-    let norm_a_sq = _mm512_reduce_add_ps(_mm512_add_ps(na0, na1));
-    let norm_b_sq = _mm512_reduce_add_ps(_mm512_add_ps(nb0, nb1));
+    let dot = hsum_avx512(_mm512_add_ps(dot0, dot1));
+    let norm_a_sq = hsum_avx512(_mm512_add_ps(na0, na1));
+    let norm_b_sq = hsum_avx512(_mm512_add_ps(nb0, nb1));
 
     cosine_finish_fast(dot, norm_a_sq, norm_b_sq)
 }
@@ -645,9 +557,9 @@ pub(crate) unsafe fn cosine_fused_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
         nb_acc = _mm512_fmadd_ps(vb, vb, nb_acc);
     }
 
-    let dot = _mm512_reduce_add_ps(rem_dot);
-    let norm_a_sq = _mm512_reduce_add_ps(na_acc);
-    let norm_b_sq = _mm512_reduce_add_ps(nb_acc);
+    let dot = hsum_avx512(rem_dot);
+    let norm_a_sq = hsum_avx512(na_acc);
+    let norm_b_sq = hsum_avx512(nb_acc);
 
     cosine_finish_fast(dot, norm_a_sq, norm_b_sq)
 }
@@ -668,8 +580,6 @@ pub(crate) unsafe fn cosine_fused_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 pub(crate) unsafe fn cosine_fused_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: runtime feature detection confirms AVX-512F.
-    use std::arch::x86_64::*;
-
     let len = a.len();
     let a_ptr = a.as_ptr();
     let b_ptr = b.as_ptr();
@@ -689,9 +599,9 @@ pub(crate) unsafe fn cosine_fused_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
         &mut nb_acc,
     );
 
-    let dot = _mm512_reduce_add_ps(dot_acc);
-    let norm_a_sq = _mm512_reduce_add_ps(na_acc);
-    let norm_b_sq = _mm512_reduce_add_ps(nb_acc);
+    let dot = hsum_avx512(dot_acc);
+    let norm_a_sq = hsum_avx512(na_acc);
+    let norm_b_sq = hsum_avx512(nb_acc);
     cosine_finish_fast(dot, norm_a_sq, norm_b_sq)
 }
 
@@ -983,8 +893,8 @@ pub(crate) unsafe fn jaccard_avx512(a: &[f32], b: &[f32]) -> f32 {
     }
 
     // Horizontal sum
-    let inter_sum = _mm512_reduce_add_ps(acc_inter);
-    let union_sum = _mm512_reduce_add_ps(acc_union);
+    let inter_sum = hsum_avx512(acc_inter);
+    let union_sum = hsum_avx512(acc_union);
 
     // Handle remaining elements
     let (scalar_inter, scalar_union) = scalar::jaccard_scalar_accum(&a[i..], &b[i..]);
@@ -1156,8 +1066,8 @@ pub(crate) unsafe fn jaccard_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     // Remainder: 16-element full chunks then masked tail
     jaccard_4acc_remainder(cur_a, cur_b, end_ptr, &mut inter_acc, &mut union_acc);
 
-    let total_inter = _mm512_reduce_add_ps(inter_acc);
-    let total_union = _mm512_reduce_add_ps(union_acc);
+    let total_inter = hsum_avx512(inter_acc);
+    let total_union = hsum_avx512(union_acc);
 
     if total_union == 0.0 {
         1.0
@@ -1185,8 +1095,6 @@ pub(crate) unsafe fn jaccard_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
     // - `_mm512_loadu_ps` handles unaligned loads safely
     // - Pointer arithmetic: stays within bounds, checked by end_main comparison
     // - Masked loads only read elements within bounds
-    use std::arch::x86_64::*;
-
     let len = a.len();
     let a_ptr = a.as_ptr();
     let b_ptr = b.as_ptr();
@@ -1199,8 +1107,8 @@ pub(crate) unsafe fn jaccard_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
     // Remainder: 16-element full chunks then masked tail
     jaccard_8acc_remainder(cur_a, cur_b, end_ptr, &mut inter_acc, &mut union_acc);
 
-    let total_inter = _mm512_reduce_add_ps(inter_acc);
-    let total_union = _mm512_reduce_add_ps(union_acc);
+    let total_inter = hsum_avx512(inter_acc);
+    let total_union = hsum_avx512(union_acc);
 
     if total_union == 0.0 {
         1.0

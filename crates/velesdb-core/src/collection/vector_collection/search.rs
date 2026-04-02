@@ -209,6 +209,35 @@ impl VectorCollection {
         self.inner.search_batch_with_filters(queries, k, filters)
     }
 
+    /// Performs batch kNN search without filters, optimized for throughput.
+    ///
+    /// Uses rayon-parallelized HNSW search and result resolution for maximum
+    /// queries-per-second. Prefer this over calling [`search`](Self::search)
+    /// in a loop.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if any query dimension does not match the collection.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{VectorCollection, DistanceMetric, StorageMode};
+    /// # let coll = VectorCollection::create("./data/v".into(), "v", 128, DistanceMetric::Cosine, StorageMode::Full)?;
+    /// let q1 = vec![0.1; 128];
+    /// let q2 = vec![0.2; 128];
+    /// let results = coll.search_batch_parallel(&[q1.as_slice(), q2.as_slice()], 10)?;
+    /// assert_eq!(results.len(), 2);
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
+    pub fn search_batch_parallel(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+    ) -> Result<Vec<Vec<SearchResult>>> {
+        self.inner.search_batch_parallel(queries, k)
+    }
+
     /// Performs multi-query search fusing results from multiple query vectors.
     ///
     /// # Errors

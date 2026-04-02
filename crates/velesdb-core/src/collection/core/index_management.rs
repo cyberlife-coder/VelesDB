@@ -60,6 +60,138 @@ impl Collection {
         }
     }
 
+    /// Builds a pre-filter bitmap from a [`Filter`] using secondary indexes.
+    ///
+    /// Supports `Eq`, `Gt`/`Gte`/`Lt`/`Lte` (range scan), `And` (intersection),
+    /// and `Or` (union, only when all children resolve). Returns `None` when the
+    /// condition cannot be resolved via indexes (e.g., `Not`, `Neq`, non-indexed
+    /// fields), signalling the caller to fall back to post-filter.
+    #[must_use]
+    pub(crate) fn build_prefilter_bitmap(
+        &self,
+        filter: &crate::filter::Filter,
+    ) -> Option<roaring::RoaringBitmap> {
+        Self::bitmap_from_condition(&self.secondary_indexes, &filter.condition)
+    }
+
+    /// Recursively extracts bitmaps from conditions backed by secondary indexes.
+    ///
+    /// Supported conditions:
+    /// - `Eq`: exact-match lookup
+    /// - `Gt`, `Gte`, `Lt`, `Lte`: range scan via `BTreeMap::range()`
+    /// - `And`: intersection of child bitmaps
+    /// - `Or`: union of child bitmaps (all children must resolve)
+    ///
+    /// Returns `None` for `Not`, `Neq`, and unsupported conditions
+    /// (these require a universe bitmap that is not yet implemented).
+    fn bitmap_from_condition(
+        indexes: &std::sync::Arc<
+            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
+        >,
+        cond: &crate::filter::Condition,
+    ) -> Option<roaring::RoaringBitmap> {
+        match cond {
+            crate::filter::Condition::Eq { field, value } => {
+                Self::bitmap_for_eq_field(indexes, field, value)
+            }
+            crate::filter::Condition::Gt { field, value }
+            | crate::filter::Condition::Gte { field, value }
+            | crate::filter::Condition::Lt { field, value }
+            | crate::filter::Condition::Lte { field, value } => {
+                Self::bitmap_for_range_field(indexes, field, value, cond)
+            }
+            crate::filter::Condition::And { conditions } => {
+                Self::bitmap_from_and(indexes, conditions)
+            }
+            crate::filter::Condition::Or { conditions } => {
+                Self::bitmap_from_or(indexes, conditions)
+            }
+            // TODO #487: NOT and Neq need a universe bitmap to invert.
+            // Post-filter handles these correctly until then.
+            _ => None,
+        }
+    }
+
+    /// Looks up a single equality field in the secondary indexes.
+    fn bitmap_for_eq_field(
+        indexes: &std::sync::Arc<
+            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
+        >,
+        field: &str,
+        value: &serde_json::Value,
+    ) -> Option<roaring::RoaringBitmap> {
+        let key = JsonValue::from_json(value)?;
+        let guard = indexes.read();
+        let index = guard.get(field)?;
+        let bm = index.to_bitmap(&key);
+        if bm.is_empty() {
+            return Some(bm); // Empty bitmap = no matches (valid pre-filter)
+        }
+        Some(bm)
+    }
+
+    /// Builds a range bitmap for Gt/Gte/Lt/Lte using `SecondaryIndex::range_bitmap`.
+    fn bitmap_for_range_field(
+        indexes: &std::sync::Arc<
+            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
+        >,
+        field: &str,
+        value: &serde_json::Value,
+        cond: &crate::filter::Condition,
+    ) -> Option<roaring::RoaringBitmap> {
+        use std::ops::Bound;
+
+        let key = JsonValue::from_json(value)?;
+        let guard = indexes.read();
+        let index = guard.get(field)?;
+        let (from, to) = match cond {
+            crate::filter::Condition::Gt { .. } => (Bound::Excluded(&key), Bound::Unbounded),
+            crate::filter::Condition::Gte { .. } => (Bound::Included(&key), Bound::Unbounded),
+            crate::filter::Condition::Lt { .. } => (Bound::Unbounded, Bound::Excluded(&key)),
+            crate::filter::Condition::Lte { .. } => (Bound::Unbounded, Bound::Included(&key)),
+            _ => return None,
+        };
+        Some(index.range_bitmap(from, to))
+    }
+
+    /// Intersects bitmaps from AND-ed conditions.
+    fn bitmap_from_and(
+        indexes: &std::sync::Arc<
+            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
+        >,
+        conditions: &[crate::filter::Condition],
+    ) -> Option<roaring::RoaringBitmap> {
+        let mut result: Option<roaring::RoaringBitmap> = None;
+        for cond in conditions {
+            if let Some(bm) = Self::bitmap_from_condition(indexes, cond) {
+                result = Some(match result {
+                    Some(existing) => existing & &bm,
+                    None => bm,
+                });
+            }
+        }
+        result
+    }
+
+    /// Unions bitmaps from OR-ed conditions.
+    ///
+    /// If ANY child returns `None` (cannot be pre-filtered), the entire OR
+    /// must return `None` because the union would be incomplete -- the
+    /// post-filter must evaluate the full OR instead.
+    fn bitmap_from_or(
+        indexes: &std::sync::Arc<
+            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
+        >,
+        conditions: &[crate::filter::Condition],
+    ) -> Option<roaring::RoaringBitmap> {
+        let mut result = roaring::RoaringBitmap::new();
+        for cond in conditions {
+            let bm = Self::bitmap_from_condition(indexes, cond)?;
+            result |= bm;
+        }
+        Some(result)
+    }
+
     /// Create a property index for O(1) equality lookups.
     ///
     /// # Arguments

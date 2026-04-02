@@ -566,6 +566,24 @@
       "id": "P112",
       "query": "FLUSH docs",
       "should_parse": true
+    },
+    {
+      "id": "P113",
+      "query": "INSERT INTO docs (id, title) VALUES (9223372036854775808, 'large-id')",
+      "should_parse": true,
+      "comment": "Issue #486: i64::MAX + 1 must parse as unsigned integer"
+    },
+    {
+      "id": "P114",
+      "query": "INSERT INTO docs (id, title) VALUES (18446744073709551615, 'u64-max')",
+      "should_parse": true,
+      "comment": "Issue #486: u64::MAX must parse successfully"
+    },
+    {
+      "id": "P115",
+      "query": "SELECT * FROM docs WHERE count = 9223372036854775808 LIMIT 10",
+      "should_parse": true,
+      "comment": "Issue #486: large uint64 in WHERE clause"
     }
   ]
 }

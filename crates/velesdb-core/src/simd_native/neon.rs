@@ -371,10 +371,26 @@ fn finalize_cosine(dot: f32, norm_a_sq: f32, norm_b_sq: f32) -> f32 {
 // Squared L2 Distance
 // =============================================================================
 
-/// ARM NEON squared L2 distance.
+/// ARM NEON squared L2 distance with adaptive accumulator selection.
+///
+/// For vectors with >= 64 elements, delegates to [`squared_l2_neon_4acc`]
+/// which uses 4 independent accumulators to hide FMA latency through ILP.
+/// Smaller vectors use a single-accumulator loop.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 pub(crate) fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() >= 64 {
+        return squared_l2_neon_4acc(a, b);
+    }
+    // SAFETY: `squared_l2_neon_1acc` requires NEON (guaranteed on aarch64).
+    // Reason: Single-accumulator variant for small/medium vectors.
+    unsafe { squared_l2_neon_1acc(a, b) }
+}
+
+/// Single-accumulator NEON squared L2 distance for vectors with < 64 elements.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn squared_l2_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
     let len = a.len();
@@ -384,7 +400,7 @@ pub(crate) fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
     // - Condition 1: NEON is always present on aarch64; no runtime detection needed.
     // - Condition 2: Immediate value 0.0 is a valid f32 constant accepted by the instruction.
     // Reason: Initialise the SIMD accumulator register to zero before the squared-diff loop.
-    let mut sum = unsafe { vdupq_n_f32(0.0) };
+    let mut sum = vdupq_n_f32(0.0);
 
     let a_ptr = a.as_ptr();
     let b_ptr = b.as_ptr();
@@ -395,24 +411,81 @@ pub(crate) fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
         // - Condition 1: `offset + 4 <= simd_len * 4 <= len`, so both pointers stay within slice bounds.
         // - Condition 2: `vld1q_f32` is documented to support unaligned loads on ARM64.
         // Reason: Compute squared element-wise differences for the L2 distance accumulator.
-        unsafe {
-            let va = vld1q_f32(a_ptr.add(offset));
-            let vb = vld1q_f32(b_ptr.add(offset));
-            let diff = vsubq_f32(va, vb);
-            sum = vfmaq_f32(sum, diff, diff);
-        }
+        let va = vld1q_f32(a_ptr.add(offset));
+        let vb = vld1q_f32(b_ptr.add(offset));
+        let diff = vsubq_f32(va, vb);
+        sum = vfmaq_f32(sum, diff, diff);
     }
 
     // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
     // - Condition 1: NEON is always present on aarch64; intrinsic is always available.
     // - Condition 2: `sum` is a valid float32x4_t value set by `vdupq_n_f32`/`vfmaq_f32`.
     // Reason: Horizontal reduction of the squared-difference accumulator to a scalar result.
-    let mut result = unsafe { vaddvq_f32(sum) };
+    let mut result = vaddvq_f32(sum);
 
     let base = simd_len * 4;
     for i in base..len {
         let diff = a[i] - b[i];
         result += diff * diff;
+    }
+
+    result
+}
+
+/// ARM NEON squared L2 distance with 4 accumulators for large vectors.
+///
+/// Uses the [`simd_4acc_l2_loop!`] macro with 4 independent `float32x4_t`
+/// accumulators processing 16 elements per iteration (4 lanes x 4 accumulators).
+/// This hides FMA latency through instruction-level parallelism, following the
+/// same pattern as [`dot_product_neon_4acc`].
+///
+/// Apple M1-M4 use 128-byte cache lines; NEON processes 16 floats (64 bytes)
+/// per iteration, so two iterations fully consume one cache line.
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::aarch64::*;
+
+    let len = a.len();
+    // SAFETY: `add` on a raw pointer derived from a valid slice.
+    // - Condition 1: `len / 16 * 16 <= len`, so `end_main` is within or at the end of the slice.
+    // - Condition 2: `add(len)` yields the one-past-the-end pointer, which is valid for comparison.
+    // Reason: Establish loop bounds for the 16-element-wide main body and scalar tail.
+    let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
+    let end_ptr = unsafe { a.as_ptr().add(len) };
+
+    // SAFETY: 4-accumulator ILP loop using NEON intrinsics. All pointer bounds
+    // guaranteed by `end_main`. `neon_fma_compat` reorders args to match macro convention.
+    // `vsubq_f32` computes element-wise difference before FMA accumulates diff².
+    let (combined, mut a_ptr, mut b_ptr) = unsafe {
+        crate::simd_4acc_l2_loop!(
+            a.as_ptr(),
+            b.as_ptr(),
+            end_main,
+            vdupq_n_f32(0.0),
+            vld1q_f32,
+            vsubq_f32,
+            neon_fma_compat,
+            vaddq_f32,
+            4
+        )
+    };
+
+    // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
+    // Reason: Horizontal reduction of the combined SIMD accumulator to a scalar result.
+    let mut result = unsafe { vaddvq_f32(combined) };
+
+    while a_ptr < end_ptr {
+        // SAFETY: Raw pointer dereference for scalar tail processing.
+        // - Condition 1: Loop condition `a_ptr < end_ptr` guarantees both pointers are within slice bounds.
+        // - Condition 2: `b_ptr` advances in step with `a_ptr` so it remains within the `b` slice.
+        // Reason: Handle the remaining 0-15 elements that the 16-wide SIMD loop did not cover.
+        unsafe {
+            let d = *a_ptr - *b_ptr;
+            result += d * d;
+            a_ptr = a_ptr.add(1);
+            b_ptr = b_ptr.add(1);
+        }
     }
 
     result

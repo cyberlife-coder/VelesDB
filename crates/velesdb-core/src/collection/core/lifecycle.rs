@@ -1,6 +1,6 @@
 //! Collection lifecycle methods (create, open, flush).
 
-use crate::collection::graph::{EdgeStore, PropertyIndex, RangeIndex};
+use crate::collection::graph::{ConcurrentEdgeStore, LabelIndex, PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig, CollectionType};
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
@@ -32,8 +32,9 @@ struct CollectionParts {
     index: Arc<HnswIndex>,
     text_index: Arc<Bm25Index>,
     property_index: PropertyIndex,
+    label_index: LabelIndex,
     range_index: RangeIndex,
-    edge_store: EdgeStore,
+    edge_store: ConcurrentEdgeStore,
     sparse_indexes: BTreeMap<String, SparseInvertedIndex>,
 }
 
@@ -59,8 +60,9 @@ impl CollectionParts {
             index,
             text_index,
             property_index: PropertyIndex::new(),
+            label_index: LabelIndex::new(),
             range_index: RangeIndex::new(),
-            edge_store: EdgeStore::new(),
+            edge_store: ConcurrentEdgeStore::new(),
             sparse_indexes: BTreeMap::new(),
         }
     }
@@ -88,8 +90,9 @@ impl Collection {
             pq_quantizer: Arc::new(RwLock::new(None)),
             pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
             property_index: Arc::new(RwLock::new(parts.property_index)),
+            label_index: Arc::new(RwLock::new(parts.label_index)),
             range_index: Arc::new(RwLock::new(parts.range_index)),
-            edge_store: Arc::new(RwLock::new(parts.edge_store)),
+            edge_store: Arc::new(parts.edge_store),
             sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
@@ -389,6 +392,7 @@ impl Collection {
         Self::rebuild_bm25_index(&payload_storage, &text_index);
 
         let property_index = Self::load_property_index(&path);
+        let label_index = Self::rebuild_label_index(&payload_storage);
         let range_index = Self::load_range_index(&path);
         let edge_store = Self::load_edge_store(&path);
         let sparse_indexes = Self::load_named_sparse_indexes(&path);
@@ -406,6 +410,7 @@ impl Collection {
             index,
             text_index,
             property_index,
+            label_index,
             range_index,
             edge_store,
             sparse_indexes,
@@ -623,12 +628,12 @@ impl Collection {
         default()
     }
 
-    fn load_edge_store(path: &std::path::Path) -> EdgeStore {
+    fn load_edge_store(path: &std::path::Path) -> ConcurrentEdgeStore {
         Self::load_or_default(
             path,
             "edge_store.bin",
-            EdgeStore::load_from_file,
-            EdgeStore::new,
+            ConcurrentEdgeStore::load_from_file,
+            ConcurrentEdgeStore::new,
         )
     }
 
@@ -639,6 +644,23 @@ impl Collection {
             PropertyIndex::load_from_file,
             PropertyIndex::new,
         )
+    }
+
+    /// Rebuilds the label index from payload storage on collection open.
+    ///
+    /// Scans all stored payloads and extracts `_labels` arrays to populate
+    /// the in-memory `LabelIndex`. This is cheap for typical graph workloads
+    /// (label arrays are small) and avoids requiring a separate persistence
+    /// file for the label index.
+    fn rebuild_label_index(payload_storage: &Arc<RwLock<LogPayloadStorage>>) -> LabelIndex {
+        let storage = payload_storage.read();
+        let mut index = LabelIndex::new();
+        for id in storage.ids() {
+            if let Ok(Some(payload)) = storage.retrieve(id) {
+                index.index_from_payload(id, &payload);
+            }
+        }
+        index
     }
 
     fn load_range_index(path: &std::path::Path) -> RangeIndex {
@@ -841,7 +863,10 @@ impl Collection {
         // Save EdgeStore for graph collections (BUG-1: was never persisted)
         if self.config.read().graph_schema.is_some() {
             let edge_store_path = self.path.join("edge_store.bin");
-            self.edge_store.read().save_to_file(&edge_store_path)?;
+            self.edge_store.save_to_file(&edge_store_path)?;
+            // Rebuild CSR read snapshot after flush so that subsequent reads
+            // benefit from zero-copy neighbor lookups (EPIC-020 US-004).
+            self.edge_store.build_read_snapshot();
         }
 
         Ok(())

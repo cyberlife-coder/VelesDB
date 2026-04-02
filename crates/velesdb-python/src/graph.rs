@@ -147,7 +147,7 @@ pub fn edge_to_dict(py: Python<'_>, edge: &GraphEdge) -> PyObject {
 pub fn traversal_to_dict(py: Python<'_>, result: &TraversalResult) -> PyObject {
     let dict = PyDict::new(py);
     let _ = dict.set_item(PyString::intern(py, "target_id"), result.target_id);
-    let _ = dict.set_item(PyString::intern(py, "path"), result.path.clone());
+    let _ = dict.set_item(PyString::intern(py, "path"), result.path.to_vec());
     let _ = dict.set_item(PyString::intern(py, "depth"), result.depth);
     dict.into_any().unbind()
 }

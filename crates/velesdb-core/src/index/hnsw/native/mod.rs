@@ -57,7 +57,7 @@ pub use distance::{
     SimdDistance,
 };
 pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
-pub use graph::{NativeHnsw, NO_ENTRY_POINT};
+pub use graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
 pub use layer::{Layer, NodeId};
 pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};
 pub use rabitq_precision::{RaBitQPrecisionConfig, RaBitQPrecisionHnsw};

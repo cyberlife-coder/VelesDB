@@ -27,6 +27,8 @@ mod index_management;
 mod introspection;
 #[path = "bdd/operators.rs"]
 mod operators;
+#[path = "bdd/recall_contract.rs"]
+mod recall_contract;
 #[path = "bdd/regression.rs"]
 mod regression;
 #[path = "bdd/set_operations.rs"]

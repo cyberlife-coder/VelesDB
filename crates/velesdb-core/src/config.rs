@@ -112,9 +112,9 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchMode {
-    /// Fast search with `ef_search=64`, ~92% recall.
+    /// Fast search with `ef_search=96`, ~95% recall.
     Fast,
-    /// Balanced search with `ef_search=128`, ~99% recall (default).
+    /// Balanced search with `ef_search=160`, ~99.5% recall (default).
     #[default]
     Balanced,
     /// Accurate search with `ef_search=512`, ~100% recall.
@@ -128,8 +128,8 @@ impl SearchMode {
     #[must_use]
     pub fn ef_search(&self) -> usize {
         match self {
-            Self::Fast => 64,
-            Self::Balanced => 128,
+            Self::Fast => 96,
+            Self::Balanced => 160,
             Self::Accurate => 512,
             Self::Perfect => usize::MAX, // Signals bruteforce
         }

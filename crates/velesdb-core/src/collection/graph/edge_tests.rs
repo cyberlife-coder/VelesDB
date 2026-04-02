@@ -599,3 +599,252 @@ fn test_remove_node_edges_cleans_label_index() {
     assert!(store.get_edges_by_label("KNOWS").is_empty());
     assert!(store.get_edges_by_label("FOLLOWS").is_empty());
 }
+
+// =============================================================================
+// G1: CSR Snapshot — zero-copy BFS via contiguous memory layout
+// =============================================================================
+
+#[test]
+fn test_csr_snapshot_build_and_neighbors() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(10, 1, 2, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(11, 1, 3, "FOLLOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(12, 2, 4, "KNOWS").expect("valid"))
+        .expect("add");
+
+    assert!(!store.has_csr_snapshot(), "no snapshot before build");
+
+    store.build_read_snapshot();
+    assert!(store.has_csr_snapshot(), "snapshot exists after build");
+
+    let snapshot = store.csr_snapshot().expect("snapshot exists");
+    let neighbors = snapshot.neighbors(1);
+    assert_eq!(neighbors.len(), 2, "node 1 has 2 outgoing edges");
+    assert!(neighbors.contains(&2));
+    assert!(neighbors.contains(&3));
+
+    let neighbors_2 = snapshot.neighbors(2);
+    assert_eq!(neighbors_2, &[4]);
+
+    // Non-existent node returns empty slice
+    assert!(snapshot.neighbors(999).is_empty());
+}
+
+#[test]
+fn test_csr_snapshot_edge_ids_parallel() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(100, 1, 2, "A").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(101, 1, 3, "B").expect("valid"))
+        .expect("add");
+
+    store.build_read_snapshot();
+    let snapshot = store.csr_snapshot().expect("snapshot");
+
+    let targets = snapshot.neighbors(1);
+    let eids = snapshot.edge_ids(1);
+    assert_eq!(targets.len(), eids.len(), "parallel arrays same length");
+
+    // Each edge_id corresponds to the correct target
+    for (i, &target) in targets.iter().enumerate() {
+        let edge = store.get_edge(eids[i]).expect("edge exists");
+        assert_eq!(
+            edge.target(),
+            target,
+            "edge_id at position {i} maps to matching target"
+        );
+    }
+}
+
+#[test]
+fn test_csr_snapshot_label_at() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(10, 1, 2, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(11, 1, 3, "FOLLOWS").expect("valid"))
+        .expect("add");
+
+    store.build_read_snapshot();
+    let snapshot = store.csr_snapshot().expect("snapshot");
+    let targets = snapshot.neighbors(1);
+
+    // Each neighbor should have a label
+    for (i, &target) in targets.iter().enumerate() {
+        let label = snapshot
+            .label_at(1, i)
+            .expect("label exists for each neighbor");
+        let edge = store.get_edge(snapshot.edge_ids(1)[i]).expect("edge");
+        assert_eq!(label, edge.label(), "label matches for target {target}");
+    }
+
+    // Out of range returns None
+    assert!(snapshot.label_at(1, 10).is_none());
+    assert!(snapshot.label_at(999, 0).is_none());
+}
+
+#[test]
+fn test_csr_snapshot_invalidated_on_add() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(10, 1, 2, "A").expect("valid"))
+        .expect("add");
+
+    store.build_read_snapshot();
+    assert!(store.has_csr_snapshot());
+
+    // Adding a new edge invalidates the snapshot
+    store
+        .add_edge(GraphEdge::new(11, 1, 3, "B").expect("valid"))
+        .expect("add");
+    assert!(
+        !store.has_csr_snapshot(),
+        "snapshot invalidated after add_edge"
+    );
+}
+
+#[test]
+fn test_csr_snapshot_invalidated_on_remove() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(10, 1, 2, "A").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(11, 2, 3, "B").expect("valid"))
+        .expect("add");
+
+    store.build_read_snapshot();
+    assert!(store.has_csr_snapshot());
+
+    store.remove_edge(10);
+    assert!(
+        !store.has_csr_snapshot(),
+        "snapshot invalidated after remove_edge"
+    );
+}
+
+#[test]
+fn test_csr_snapshot_invalidated_on_remove_node() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(10, 1, 2, "A").expect("valid"))
+        .expect("add");
+
+    store.build_read_snapshot();
+    assert!(store.has_csr_snapshot());
+
+    store.remove_node_edges(1);
+    assert!(
+        !store.has_csr_snapshot(),
+        "snapshot invalidated after remove_node_edges"
+    );
+}
+
+#[test]
+fn test_with_neighbors_uses_csr_when_available() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(10, 1, 2, "A").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(11, 1, 3, "B").expect("valid"))
+        .expect("add");
+
+    // Without CSR: falls back to get_outgoing
+    let neighbors_no_csr = store.with_neighbors(1, <[u64]>::to_vec);
+    assert_eq!(neighbors_no_csr.len(), 2);
+
+    // Build CSR
+    store.build_read_snapshot();
+
+    // With CSR: uses contiguous snapshot
+    let neighbors_csr = store.with_neighbors(1, <[u64]>::to_vec);
+    assert_eq!(neighbors_csr.len(), 2);
+
+    // Both paths produce the same set of neighbors
+    let mut s1: Vec<u64> = neighbors_no_csr;
+    let mut s2: Vec<u64> = neighbors_csr;
+    s1.sort_unstable();
+    s2.sort_unstable();
+    assert_eq!(s1, s2, "CSR and legacy paths return same neighbors");
+}
+
+#[test]
+fn test_with_neighbor_edges_parallel_access() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(100, 1, 2, "X").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(101, 1, 3, "Y").expect("valid"))
+        .expect("add");
+
+    store.build_read_snapshot();
+
+    store.with_neighbor_edges(1, |targets, eids| {
+        assert_eq!(targets.len(), 2);
+        assert_eq!(eids.len(), 2);
+        for (i, &t) in targets.iter().enumerate() {
+            let edge = store.get_edge(eids[i]).expect("edge exists");
+            assert_eq!(edge.target(), t);
+        }
+    });
+}
+
+#[test]
+fn test_csr_snapshot_empty_store() {
+    let mut store = EdgeStore::new();
+    store.build_read_snapshot();
+    assert!(store.has_csr_snapshot());
+
+    let snapshot = store.csr_snapshot().expect("snapshot");
+    assert!(snapshot.neighbors(1).is_empty());
+    assert!(snapshot.edge_ids(1).is_empty());
+}
+
+#[test]
+fn test_csr_snapshot_rebuild_after_mutation() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(10, 1, 2, "A").expect("valid"))
+        .expect("add");
+
+    store.build_read_snapshot();
+    assert_eq!(store.csr_snapshot().expect("s").neighbors(1).len(), 1);
+
+    // Mutate: add another edge (invalidates snapshot)
+    store
+        .add_edge(GraphEdge::new(11, 1, 3, "B").expect("valid"))
+        .expect("add");
+    assert!(!store.has_csr_snapshot());
+
+    // Rebuild: should reflect new edge
+    store.build_read_snapshot();
+    assert_eq!(store.csr_snapshot().expect("s").neighbors(1).len(), 2);
+}
+
+#[test]
+fn test_csr_has_label() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(10, 1, 2, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(11, 2, 3, "FOLLOWS").expect("valid"))
+        .expect("add");
+
+    store.build_read_snapshot();
+    let snapshot = store.csr_snapshot().expect("snapshot");
+
+    assert!(snapshot.has_label("KNOWS"));
+    assert!(snapshot.has_label("FOLLOWS"));
+    assert!(!snapshot.has_label("LIKES"));
+}

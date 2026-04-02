@@ -61,7 +61,11 @@ fn bench_batch_search(c: &mut Criterion) {
             b.iter(|| {
                 let results: Vec<Vec<velesdb_core::ScoredResult>> = queries
                     .iter()
-                    .map(|q| index.search_with_quality(q, k, SearchQuality::Balanced))
+                    .map(|q| {
+                        index
+                            .search_with_quality(q, k, SearchQuality::Balanced)
+                            .unwrap()
+                    })
                     .collect();
                 black_box(results)
             });
@@ -108,7 +112,7 @@ fn bench_brute_force(c: &mut Criterion) {
         // Parallel brute force
         group.bench_function(BenchmarkId::new("parallel", format!("{n}v")), |b| {
             b.iter(|| {
-                let results = index.brute_force_search_parallel(&query, k);
+                let results = index.brute_force_search_parallel(&query, k).unwrap();
                 black_box(results)
             });
         });
@@ -220,7 +224,7 @@ fn bench_thread_scaling(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     pool.install(|| {
-                        let results = index.brute_force_search_parallel(&query, k);
+                        let results = index.brute_force_search_parallel(&query, k).unwrap();
                         black_box(results)
                     })
                 });

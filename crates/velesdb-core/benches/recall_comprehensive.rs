@@ -120,7 +120,7 @@ fn bench_comprehensive(c: &mut Criterion) {
 
             for (query, ground_truth) in queries.iter().zip(&ground_truths) {
                 let start = Instant::now();
-                let results = index.search_with_quality(query, 10, quality);
+                let results = index.search_with_quality(query, 10, quality).unwrap();
                 let elapsed = start.elapsed().as_secs_f64() * 1000.0; // ms
                 latencies.push(elapsed);
 
@@ -152,7 +152,9 @@ fn bench_comprehensive(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("search_accurate", label), |b| {
             b.iter(|| {
                 for query in &queries {
-                    let results = index.search_with_quality(query, 10, SearchQuality::Accurate);
+                    let results = index
+                        .search_with_quality(query, 10, SearchQuality::Accurate)
+                        .unwrap();
                     black_box(results);
                 }
             });

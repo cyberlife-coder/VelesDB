@@ -10,6 +10,7 @@ use serde_json::Value;
 fn velesql_value_to_json(v: crate::velesql::Value) -> Value {
     match v {
         crate::velesql::Value::Integer(i) => Value::Number(i.into()),
+        crate::velesql::Value::UnsignedInteger(u) => Value::Number(u.into()),
         crate::velesql::Value::Float(f) => Value::from(f),
         crate::velesql::Value::String(s) => Value::String(s),
         crate::velesql::Value::Boolean(b) => Value::Bool(b),
@@ -26,6 +27,7 @@ fn velesql_value_to_json(v: crate::velesql::Value) -> Value {
 fn velesql_numeric_to_json(v: &crate::velesql::Value) -> Value {
     match *v {
         crate::velesql::Value::Integer(i) => Value::Number(i.into()),
+        crate::velesql::Value::UnsignedInteger(u) => Value::Number(u.into()),
         crate::velesql::Value::Float(f) => Value::from(f),
         _ => Value::Null,
     }

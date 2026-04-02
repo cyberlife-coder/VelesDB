@@ -77,7 +77,7 @@ pub struct RaBitQPrecisionHnsw<D: DistanceEngine> {
 }
 
 impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
-    /// Creates a new `RaBitQ`-precision HNSW index.
+    /// Creates a new `RaBitQ`-precision HNSW index with default alpha (1.2).
     ///
     /// # Errors
     ///
@@ -89,13 +89,38 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
         ef_construction: usize,
         max_elements: usize,
     ) -> crate::error::Result<Self> {
+        Self::new_with_alpha(
+            distance,
+            dimension,
+            max_connections,
+            ef_construction,
+            max_elements,
+            super::graph::DEFAULT_ALPHA,
+        )
+    }
+
+    /// Creates a new `RaBitQ`-precision HNSW index with a custom alpha.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_alpha(
+        distance: D,
+        dimension: usize,
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+        alpha: f32,
+    ) -> crate::error::Result<Self> {
         Ok(Self {
-            inner: NativeHnsw::new_with_dimension(
+            inner: NativeHnsw::new_with_dimension_and_alpha(
                 distance,
                 max_connections,
                 ef_construction,
                 max_elements,
                 dimension,
+                alpha,
             )?,
             rabitq_index: RwLock::new(None),
             rabitq_store: RwLock::new(None),

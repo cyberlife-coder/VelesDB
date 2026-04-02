@@ -1027,3 +1027,232 @@ fn test_same_source_always_same_shard() {
     // Verify the shard index is what we expect.
     assert_eq!(store.shard_index(source_id), expected_shard);
 }
+
+// =============================================================================
+// CSR read snapshot tests (EPIC-020 US-004)
+// =============================================================================
+
+/// Snapshot is absent by default — no snapshot until explicitly built.
+#[test]
+fn test_snapshot_absent_by_default() {
+    let store = ConcurrentEdgeStore::new();
+    assert!(!store.has_read_snapshot());
+}
+
+/// `build_read_snapshot()` populates the snapshot; `has_read_snapshot()` returns true.
+#[test]
+fn test_build_snapshot_populates_index() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "LIKES").expect("valid"))
+        .expect("add");
+
+    store.build_read_snapshot();
+    assert!(store.has_read_snapshot());
+}
+
+/// After snapshot build, `get_neighbors()` returns the same result as without snapshot.
+#[test]
+fn test_snapshot_get_neighbors_matches_shard_path() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "A").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "B").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 10, 40, "C").expect("valid"))
+        .expect("add");
+
+    // Capture shard-path result before snapshot.
+    let mut before: Vec<u64> = store.get_neighbors(10);
+    before.sort_unstable();
+
+    store.build_read_snapshot();
+
+    // Snapshot-path result must match.
+    let mut after: Vec<u64> = store.get_neighbors(10);
+    after.sort_unstable();
+
+    assert_eq!(before, after);
+    assert_eq!(after, vec![20, 30, 40]);
+}
+
+/// `with_neighbors()` provides zero-copy access through the snapshot.
+#[test]
+fn test_with_neighbors_closure_receives_correct_data() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "R").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "R").expect("valid"))
+        .expect("add");
+
+    store.build_read_snapshot();
+
+    let mut collected = Vec::new();
+    store.with_neighbors(100, |neighbors| {
+        collected.extend_from_slice(neighbors);
+    });
+    collected.sort_unstable();
+    assert_eq!(collected, vec![200, 300]);
+}
+
+/// `with_neighbors()` falls back to shard lookup when snapshot is absent.
+#[test]
+fn test_with_neighbors_fallback_without_snapshot() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 5, 10, "R").expect("valid"))
+        .expect("add");
+
+    // No snapshot built.
+    let mut result = Vec::new();
+    store.with_neighbors(5, |neighbors| {
+        result.extend_from_slice(neighbors);
+    });
+    assert_eq!(result, vec![10]);
+}
+
+/// `add_edge` invalidates the snapshot.
+#[test]
+fn test_add_edge_invalidates_snapshot() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "R").expect("valid"))
+        .expect("add");
+    store.build_read_snapshot();
+    assert!(store.has_read_snapshot());
+
+    // Adding another edge must invalidate.
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "R").expect("valid"))
+        .expect("add");
+    assert!(!store.has_read_snapshot());
+}
+
+/// `remove_edge` invalidates the snapshot.
+#[test]
+fn test_remove_edge_invalidates_snapshot() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "R").expect("valid"))
+        .expect("add");
+    store.build_read_snapshot();
+    assert!(store.has_read_snapshot());
+
+    store.remove_edge(1);
+    assert!(!store.has_read_snapshot());
+}
+
+/// `remove_node_edges` invalidates the snapshot.
+#[test]
+fn test_remove_node_edges_invalidates_snapshot() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "R").expect("valid"))
+        .expect("add");
+    store.build_read_snapshot();
+    assert!(store.has_read_snapshot());
+
+    store.remove_node_edges(10);
+    assert!(!store.has_read_snapshot());
+}
+
+/// `outgoing_degree()` uses snapshot when available.
+#[test]
+fn test_outgoing_degree_uses_snapshot() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "R").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "R").expect("valid"))
+        .expect("add");
+
+    // Without snapshot.
+    assert_eq!(store.outgoing_degree(10), 2);
+
+    // With snapshot — same result.
+    store.build_read_snapshot();
+    assert_eq!(store.outgoing_degree(10), 2);
+}
+
+/// `traverse_bfs` yields the same reachable nodes with and without snapshot.
+#[test]
+fn test_traverse_bfs_snapshot_matches_shard_path() {
+    let store = ConcurrentEdgeStore::new();
+    // Chain: 1 -> 2 -> 3 -> 4
+    store
+        .add_edge(GraphEdge::new(1, 1, 2, "R").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 2, 3, "R").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 3, 4, "R").expect("valid"))
+        .expect("add");
+
+    let mut without_snapshot: Vec<u64> = store.traverse_bfs(1, 10);
+    without_snapshot.sort_unstable();
+
+    store.build_read_snapshot();
+
+    let mut with_snapshot: Vec<u64> = store.traverse_bfs(1, 10);
+    with_snapshot.sort_unstable();
+
+    assert_eq!(without_snapshot, with_snapshot);
+    // Must include all nodes 1..=4
+    assert!(with_snapshot.contains(&1));
+    assert!(with_snapshot.contains(&2));
+    assert!(with_snapshot.contains(&3));
+    assert!(with_snapshot.contains(&4));
+}
+
+/// Rebuild snapshot after mutation restores correct data.
+#[test]
+fn test_rebuild_snapshot_after_mutation() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "R").expect("valid"))
+        .expect("add");
+    store.build_read_snapshot();
+
+    // Mutate — snapshot invalidated.
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "R").expect("valid"))
+        .expect("add");
+    assert!(!store.has_read_snapshot());
+
+    // Rebuild.
+    store.build_read_snapshot();
+    assert!(store.has_read_snapshot());
+
+    let mut neighbors: Vec<u64> = store.get_neighbors(10);
+    neighbors.sort_unstable();
+    assert_eq!(neighbors, vec![20, 30]);
+}
+
+/// `from_edge_store()` builds snapshot automatically.
+#[test]
+fn test_from_edge_store_builds_snapshot() {
+    use super::edge::EdgeStore;
+
+    let mut es = EdgeStore::new();
+    es.add_edge(GraphEdge::new(1, 10, 20, "R").expect("valid"))
+        .expect("add");
+    es.add_edge(GraphEdge::new(2, 10, 30, "R").expect("valid"))
+        .expect("add");
+
+    let store = ConcurrentEdgeStore::from_edge_store(&es);
+    assert!(store.has_read_snapshot());
+
+    let mut neighbors: Vec<u64> = store.get_neighbors(10);
+    neighbors.sort_unstable();
+    assert_eq!(neighbors, vec![20, 30]);
+}

@@ -4,6 +4,7 @@ use super::HnswIndex;
 use crate::index::hnsw::params::SearchQuality;
 use crate::index::hnsw::upsert::{self, UpsertResult};
 use crate::scored_result::ScoredResult;
+use crate::validation::validate_dimension_match;
 use rayon::prelude::*;
 
 /// Prepared batch of vectors ready for HNSW graph insertion.
@@ -28,8 +29,13 @@ impl HnswIndex {
     ///
     /// Dimension validation runs to completion **before** any call to
     /// `upsert_mapping_batch`. This prevents orphaned mappings when a
-    /// dimension mismatch panic would otherwise leave partially-mutated
+    /// dimension mismatch would otherwise leave partially-mutated
     /// state. See `docs/SOUNDNESS.md` "HNSW Batch Insertion Ordering".
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DimensionMismatch`] if any vector has a dimension
+    /// different from the index dimension.
     ///
     /// # Performance
     ///
@@ -38,22 +44,19 @@ impl HnswIndex {
     /// - Inline dimension validation
     /// - Zero-copy: stores borrowed slices, no cloning
     #[inline]
-    pub(crate) fn prepare_batch_insert<'a, I>(&self, vectors: I) -> PreparedBatch<'a>
+    pub(crate) fn prepare_batch_insert<'a, I>(
+        &self,
+        vectors: I,
+    ) -> crate::error::Result<PreparedBatch<'a>>
     where
         I: IntoIterator<Item = (u64, &'a [f32])>,
     {
         let items: Vec<(u64, &'a [f32])> = vectors.into_iter().collect();
 
         // Validate ALL dimensions upfront before any destructive upsert_mapping
-        // calls. A panic after partial upsert_mapping would leave orphaned mappings.
+        // calls. An error after partial upsert_mapping would leave orphaned mappings.
         for (_, vector) in &items {
-            assert_eq!(
-                vector.len(),
-                self.dimension,
-                "Vector dimension mismatch: expected {}, got {}",
-                self.dimension,
-                vector.len()
-            );
+            validate_dimension_match(self.dimension, vector.len())?;
         }
 
         let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
@@ -72,10 +75,10 @@ impl HnswIndex {
             rollback_info.push((id, result));
         }
 
-        PreparedBatch {
+        Ok(PreparedBatch {
             to_insert,
             rollback_info,
-        }
+        })
     }
 
     /// Inserts multiple vectors in parallel using rayon.
@@ -126,7 +129,13 @@ impl HnswIndex {
     where
         I: IntoIterator<Item = (u64, &'a [f32])>,
     {
-        let batch = self.prepare_batch_insert(vectors);
+        let batch = match self.prepare_batch_insert(vectors) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!("insert_batch_parallel: dimension validation failed: {e}");
+                return 0;
+            }
+        };
         let count = batch.to_insert.len();
 
         if count == 0 {
@@ -221,63 +230,60 @@ impl HnswIndex {
     /// - GPU reranking batches all candidates per query for efficient dispatch
     /// - Falls back to SIMD reranking below GPU threshold
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if any query dimension doesn't match the index dimension.
-    #[must_use]
+    /// Returns [`Error::DimensionMismatch`] if any query dimension does not
+    /// match the index dimension.
     pub fn search_batch_parallel(
         &self,
         queries: &[&[f32]],
         k: usize,
         quality: SearchQuality,
-    ) -> Vec<Vec<ScoredResult>> {
-        self.validate_batch_dimensions(queries);
+    ) -> crate::error::Result<Vec<Vec<ScoredResult>>> {
+        self.validate_batch_dimensions(queries)?;
 
         // Perfect, Adaptive, or very small collections: delegate to search_with_quality
         // per-query to match single-query behavior.
         // - Perfect: uses brute-force for 100% recall
         // - Adaptive: uses spread-based two-phase escalation (not batch-compatible)
-        // - Small (≤100): uses brute-force for fully-connected graph safety
+        // - Small (<=100): uses brute-force for fully-connected graph safety
         if matches!(
             quality,
             SearchQuality::Perfect | SearchQuality::Adaptive { .. }
         ) || (self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty())
         {
-            return queries
+            let results: crate::error::Result<Vec<Vec<ScoredResult>>> = queries
                 .par_iter()
                 .map(|query| self.search_with_quality(query, k, quality))
                 .collect();
+            return results;
         }
 
         let ef_search = quality.ef_search(k);
 
         // Two-stage GPU/SIMD reranking for Balanced/Accurate/Custom qualities.
         if let Some(rerank_k) = self.should_two_stage_rerank(quality, k, ef_search) {
-            return self.search_batch_with_rerank(queries, k, rerank_k, ef_search);
+            return Ok(self.search_batch_with_rerank(queries, k, rerank_k, ef_search));
         }
 
         // Fast path: HNSW-only search for each query (rayon parallel)
-        queries
+        Ok(queries
             .par_iter()
             .map(|query| self.search_hnsw_only(query, k, ef_search))
-            .collect()
+            .collect())
     }
 
     /// Validates that all query vectors have the correct dimension.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if any query dimension doesn't match the index dimension.
-    fn validate_batch_dimensions(&self, queries: &[&[f32]]) {
-        for (i, query) in queries.iter().enumerate() {
-            assert_eq!(
-                query.len(),
-                self.dimension,
-                "Query {i} dimension mismatch: expected {}, got {}",
-                self.dimension,
-                query.len()
-            );
+    /// Returns [`Error::DimensionMismatch`] on the first query whose dimension
+    /// does not match the index dimension.
+    fn validate_batch_dimensions(&self, queries: &[&[f32]]) -> crate::error::Result<()> {
+        for query in queries {
+            validate_dimension_match(self.dimension, query.len())?;
         }
+        Ok(())
     }
 
     /// Batch search with two-stage reranking for all queries.
@@ -335,22 +341,26 @@ impl HnswIndex {
     /// - **Latency**: O(n/cores) on CPU, O(n/GPU-threads) on GPU
     /// - **GPU threshold**: 100K vectors (below this, rayon is faster)
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the query dimension doesn't match the index dimension.
-    #[must_use]
-    pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
-        self.validate_dimension(query, "Query");
+    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// match the index dimension.
+    pub fn brute_force_search_parallel(
+        &self,
+        query: &[f32],
+        k: usize,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
 
         // Try GPU path for large datasets where GPU upload overhead is amortized
         #[cfg(feature = "gpu")]
         if self.len() > Self::GPU_BRUTE_FORCE_THRESHOLD {
             if let Some(results) = self.search_brute_force_gpu_inner(query, k) {
-                return results;
+                return Ok(results);
             }
         }
 
-        self.brute_force_search_rayon(query, k)
+        Ok(self.brute_force_search_rayon(query, k))
     }
 
     /// GPU brute-force dispatch accessible from tests.
@@ -372,8 +382,9 @@ impl HnswIndex {
     /// Rayon-based brute-force search over `ShardedVectors`.
     ///
     /// Extracted from `brute_force_search_parallel` so the GPU gate in that
-    /// method stays compact.
-    fn brute_force_search_rayon(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
+    /// method stays compact. Also used by `search_brute_force` as the default
+    /// compute path (RF-DEDUP: single parallel implementation).
+    pub(super) fn brute_force_search_rayon(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         let vectors_snapshot = self.vectors.collect_for_parallel();
 
         let mut results: Vec<ScoredResult> = vectors_snapshot

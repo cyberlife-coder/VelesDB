@@ -9,51 +9,152 @@
 #![allow(clippy::cast_precision_loss)]
 
 use super::parse_property_path;
-use super::MatchResult;
+use super::{parse_projection_item, MatchResult, ProjectionItem};
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::point::SearchResult;
-use crate::storage::{PayloadStorage, VectorStorage};
+use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
+use crate::validation::validate_dimension_match;
 use std::collections::HashMap;
 
 impl Collection {
-    /// Projects properties from RETURN clause for a match result (EPIC-058 US-007).
+    /// Projects properties from RETURN clause for a match result (Fix #489).
     ///
-    /// Resolves property paths like "author.name" by:
-    /// 1. Looking up the alias in bindings to get `node_id`
-    /// 2. Fetching the payload for that node
-    /// 3. Extracting the property value
+    /// Dispatches each RETURN item to variant-specific projection logic:
+    /// - `Wildcard`: all properties from all bound nodes
+    /// - `FunctionCall("similarity")`: injects the similarity score if available
+    /// - `PropertyPath`: a single dotted property from one bound node
+    /// - `BareAlias`: all properties from a single bound node
+    ///
+    /// The caller must pass a pre-acquired `payload_guard` to avoid
+    /// per-node lock acquisitions during traversal.
+    #[allow(clippy::unused_self)] // Method on Collection for API consistency
     pub(crate) fn project_properties(
         &self,
         bindings: &HashMap<String, u64>,
         return_clause: &crate::velesql::ReturnClause,
+        payload_guard: &LogPayloadStorage,
     ) -> HashMap<String, serde_json::Value> {
-        let payload_storage = self.payload_storage.read();
+        self.project_properties_with_score(bindings, return_clause, None, payload_guard)
+    }
+
+    /// Projects properties with an optional similarity score (Fix #489).
+    ///
+    /// Uses the pre-acquired `payload_guard` instead of locking per-call.
+    /// When `score` is `Some`, `RETURN similarity()` injects it into the
+    /// projected map. All other variants work identically to
+    /// [`project_properties`].
+    #[allow(clippy::unused_self)] // Method on Collection for API consistency
+    pub(crate) fn project_properties_with_score(
+        &self,
+        bindings: &HashMap<String, u64>,
+        return_clause: &crate::velesql::ReturnClause,
+        score: Option<f32>,
+        payload_guard: &LogPayloadStorage,
+    ) -> HashMap<String, serde_json::Value> {
         let mut projected = HashMap::new();
 
         for item in &return_clause.items {
-            // Parse property path (e.g., "author.name" -> ("author", "name"))
-            if let Some((alias, property)) = parse_property_path(&item.expression) {
-                // Get node_id for this alias
-                if let Some(&node_id) = bindings.get(alias) {
-                    // Get payload for this node
-                    if let Ok(Some(payload)) = payload_storage.retrieve(node_id) {
-                        // Extract property value (support nested paths)
-                        if let Some(payload_map) = payload.as_object() {
-                            if let Some(value) = Self::get_nested_property(payload_map, property) {
-                                let key = item
-                                    .alias
-                                    .clone()
-                                    .unwrap_or_else(|| item.expression.clone());
-                                projected.insert(key, value.clone());
-                            }
+            match parse_projection_item(&item.expression) {
+                ProjectionItem::Wildcard => {
+                    Self::project_wildcard(bindings, payload_guard, &mut projected);
+                }
+                ProjectionItem::FunctionCall(name) => {
+                    if name == "similarity" {
+                        if let Some(s) = score {
+                            projected.insert(
+                                "similarity()".to_string(),
+                                serde_json::Value::from(f64::from(s)),
+                            );
                         }
                     }
+                }
+                ProjectionItem::PropertyPath { alias, property } => {
+                    Self::project_property_path(
+                        alias,
+                        property,
+                        item,
+                        bindings,
+                        payload_guard,
+                        &mut projected,
+                    );
+                }
+                ProjectionItem::BareAlias(alias) => {
+                    Self::project_bare_alias(alias, bindings, payload_guard, &mut projected);
                 }
             }
         }
 
         projected
+    }
+
+    /// Projects ALL properties from ALL bound nodes into the result (RETURN *).
+    fn project_wildcard(
+        bindings: &HashMap<String, u64>,
+        payload_storage: &crate::storage::LogPayloadStorage,
+        projected: &mut HashMap<String, serde_json::Value>,
+    ) {
+        for (alias, &node_id) in bindings {
+            Self::project_all_node_properties(alias, node_id, payload_storage, projected);
+        }
+    }
+
+    /// Inserts all payload properties of a single node into `projected`,
+    /// prefixed with `alias.` (shared by `project_wildcard` and `project_bare_alias`).
+    fn project_all_node_properties(
+        alias: &str,
+        node_id: u64,
+        payload_storage: &crate::storage::LogPayloadStorage,
+        projected: &mut HashMap<String, serde_json::Value>,
+    ) {
+        let Ok(Some(payload)) = payload_storage.retrieve(node_id) else {
+            return;
+        };
+        if let Some(map) = payload.as_object() {
+            for (key, value) in map {
+                projected.insert(format!("{alias}.{key}"), value.clone());
+            }
+        }
+    }
+
+    /// Projects a single dotted property (e.g., `n.name`) from a bound node.
+    fn project_property_path(
+        alias: &str,
+        property: &str,
+        item: &crate::velesql::ReturnItem,
+        bindings: &HashMap<String, u64>,
+        payload_storage: &crate::storage::LogPayloadStorage,
+        projected: &mut HashMap<String, serde_json::Value>,
+    ) {
+        let Some(&node_id) = bindings.get(alias) else {
+            return;
+        };
+        let Ok(Some(payload)) = payload_storage.retrieve(node_id) else {
+            return;
+        };
+        let Some(payload_map) = payload.as_object() else {
+            return;
+        };
+        if let Some(value) = Self::get_nested_property(payload_map, property) {
+            let key = item
+                .alias
+                .clone()
+                .unwrap_or_else(|| item.expression.clone());
+            projected.insert(key, value.clone());
+        }
+    }
+
+    /// Projects ALL properties from a single bound node (RETURN n).
+    fn project_bare_alias(
+        alias: &str,
+        bindings: &HashMap<String, u64>,
+        payload_storage: &crate::storage::LogPayloadStorage,
+        projected: &mut HashMap<String, serde_json::Value>,
+    ) {
+        let Some(&node_id) = bindings.get(alias) else {
+            return;
+        };
+        Self::project_all_node_properties(alias, node_id, payload_storage, projected);
     }
 
     /// Gets a nested property from a JSON object (EPIC-058 US-007).
@@ -91,25 +192,16 @@ impl Collection {
 
     /// Executes a MATCH query with similarity scoring (EPIC-045 US-003).
     ///
-    /// This method combines graph pattern matching with vector similarity,
-    /// enabling hybrid queries like:
-    /// `MATCH (n:Article)-[:CITED]->(m) WHERE similarity(m.embedding, $query) > 0.8 RETURN m`
+    /// Combines graph pattern matching with vector similarity, enabling queries
+    /// like `MATCH (n:Article)-[:CITED]->(m) WHERE similarity(...) > 0.8`.
     ///
-    /// # Arguments
-    ///
-    /// * `match_clause` - The parsed MATCH clause
-    /// * `query_vector` - The query vector for similarity scoring
-    /// * `similarity_threshold` - Minimum similarity score (0.0 to 1.0)
-    /// * `params` - Query parameters
-    ///
-    /// # Returns
-    ///
-    /// Vector of `MatchResult` with similarity scores and projected properties.
+    /// Acquires `payload_storage` and `vector_storage` once for the entire
+    /// scoring loop to avoid per-node lock acquisitions.
     ///
     /// # Errors
     ///
-    /// Returns an error on dimension mismatch, underlying storage/search errors,
-    /// or `ORDER BY` failures.
+    /// Returns an error on dimension mismatch or underlying storage errors.
+    #[allow(clippy::too_many_lines)]
     pub fn execute_match_with_similarity(
         &self,
         match_clause: &crate::velesql::MatchClause,
@@ -117,48 +209,65 @@ impl Collection {
         similarity_threshold: f32,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
-        // First, execute the basic MATCH query
         let results = self.execute_match(match_clause, params)?;
 
         if results.is_empty() {
             return Ok(results);
         }
 
-        // Get the metric from config
         let config = self.config.read();
         let metric = config.metric;
         let expected_dimension = config.dimension;
         drop(config);
 
-        if query_vector.len() != expected_dimension {
-            return Err(Error::DimensionMismatch {
-                expected: expected_dimension,
-                actual: query_vector.len(),
-            });
-        }
+        validate_dimension_match(expected_dimension, query_vector.len())?;
 
-        // Score each result by similarity/distance
+        // Hoist both storage locks once for the entire scoring loop.
+        let payload_guard = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
-        let mut scored_results = Vec::new();
         let higher_is_better = metric.higher_is_better();
 
-        for mut result in results {
-            // Get vector for this node
-            if let Ok(Some(node_vector)) = vector_storage.retrieve(result.node_id) {
-                // Storage invariant: vectors must match collection dimension.
-                if node_vector.len() != expected_dimension {
-                    return Err(Error::DimensionMismatch {
-                        expected: expected_dimension,
-                        actual: node_vector.len(),
-                    });
-                }
+        let mut scored_results = self.score_match_results(
+            results,
+            &vector_storage,
+            &payload_guard,
+            match_clause,
+            query_vector,
+            expected_dimension,
+            metric,
+            similarity_threshold,
+            higher_is_better,
+        )?;
 
-                // Calculate similarity/distance
+        Self::sort_by_score(&mut scored_results, higher_is_better);
+
+        Ok(scored_results)
+    }
+
+    /// Scores each match result by vector similarity against the query vector.
+    ///
+    /// Filters results below the threshold and projects RETURN properties.
+    #[allow(clippy::too_many_arguments)]
+    fn score_match_results(
+        &self,
+        results: Vec<MatchResult>,
+        vector_storage: &crate::storage::MmapStorage,
+        payload_guard: &LogPayloadStorage,
+        match_clause: &crate::velesql::MatchClause,
+        query_vector: &[f32],
+        expected_dimension: usize,
+        metric: crate::distance::DistanceMetric,
+        similarity_threshold: f32,
+        higher_is_better: bool,
+    ) -> Result<Vec<MatchResult>> {
+        let mut scored_results = Vec::new();
+
+        for mut result in results {
+            if let Ok(Some(node_vector)) = vector_storage.retrieve(result.node_id) {
+                validate_dimension_match(expected_dimension, node_vector.len())?;
+
                 let score = metric.calculate(&node_vector, query_vector);
 
-                // Filter by threshold - metric-aware comparison
-                // For similarity metrics (Cosine, DotProduct, Jaccard): higher >= threshold
-                // For distance metrics (Euclidean, Hamming): lower <= threshold
                 let passes_threshold = if higher_is_better {
                     score >= similarity_threshold
                 } else {
@@ -167,31 +276,32 @@ impl Collection {
 
                 if passes_threshold {
                     result.score = Some(score);
-
-                    // Project properties from RETURN clause (EPIC-058 US-007)
-                    result.projected =
-                        self.project_properties(&result.bindings, &match_clause.return_clause);
-
+                    result.projected = self.project_properties_with_score(
+                        &result.bindings,
+                        &match_clause.return_clause,
+                        Some(score),
+                        payload_guard,
+                    );
                     scored_results.push(result);
                 }
             }
         }
 
-        // Sort by score - metric-aware ordering
-        // For similarity: descending (higher = more similar)
-        // For distance: ascending (lower = more similar)
+        Ok(scored_results)
+    }
+
+    /// Sorts scored results by similarity — descending for similarity metrics,
+    /// ascending for distance metrics.
+    fn sort_by_score(results: &mut [MatchResult], higher_is_better: bool) {
         if higher_is_better {
-            scored_results
-                .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+            results.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
         } else {
-            scored_results.sort_by(|a, b| {
+            results.sort_by(|a, b| {
                 a.score
                     .unwrap_or(f32::MAX)
                     .total_cmp(&b.score.unwrap_or(f32::MAX))
             });
         }
-
-        Ok(scored_results)
     }
 
     /// Applies ORDER BY to match results (EPIC-045 US-005).

@@ -195,6 +195,15 @@ VelesDB core architecture is explicitly **hybrid by design**:
 - 2-shard removal: O(1) instead of O(256) lock acquisitions
 - Label indices: O(k) edge lookup by relationship type
 - String interning: ~60% memory reduction for labels
+- **CsrSnapshot**: Zero-copy CSR (Compressed Sparse Row) snapshot for
+  cache-friendly BFS/DFS traversal. Built on-demand after load or
+  `build_read_snapshot()`, auto-invalidated by writes. Returns neighbor
+  IDs as contiguous `&[u64]` slices instead of per-shard edge lookups.
+- **Parent-pointer BFS**: BFS/DFS uses a `FxHashMap` parent-pointer map
+  instead of cloning path vectors at every edge expansion. Paths are
+  reconstructed on-demand via `reconstruct_path()` only when emitting
+  results. Uses `FxHashSet` visited sets (via `rustc_hash`) for faster
+  hashing than `std::HashSet`.
 
 ### 5. Index Layer
 
@@ -217,7 +226,9 @@ VelesDB core architecture is explicitly **hybrid by design**:
   - `ef_search`: Query-time search width (default: 128, Balanced mode)
 
 - **Features**:
-  - Thread-safe parallel insertions
+  - Thread-safe parallel insertions with lock-free CAS entry-point promotion
+  - Graduated ef_construction (3-phase VAMANA/DiskANN schedule for batches >= 1000)
+  - Pre-allocated vector storage (reserve + bulk push to minimize lock contention)
   - Automatic level assignment
   - Persistent storage with WAL recovery
 

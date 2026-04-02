@@ -271,6 +271,10 @@ harness = false
 name = "smoke_test"
 harness = false
 
+[[bench]]
+name = "scale_benchmark"
+harness = false
+
 # ============================================================================
 # Target-specific dependencies (WASM compatibility)
 # ============================================================================

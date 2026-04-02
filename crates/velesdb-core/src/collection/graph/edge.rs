@@ -3,6 +3,7 @@
 //! This module provides:
 //! - `GraphEdge`: A typed relationship between nodes with properties
 //! - `EdgeStore`: Bidirectional index for efficient edge traversal
+//! - `CsrSnapshot`: Zero-copy CSR snapshot for cache-friendly BFS traversal
 //!
 //! # Edge Removal Semantics
 //!
@@ -12,6 +13,7 @@
 
 use super::helpers::PostcardPersistence;
 use crate::error::{Error, Result};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -108,6 +110,92 @@ impl GraphEdge {
     }
 }
 
+/// Compressed Sparse Row (CSR) snapshot for zero-copy BFS traversal.
+///
+/// Stores outgoing neighbor target IDs and their corresponding edge IDs
+/// in two parallel contiguous arrays, indexed by `(offset, len)` per source node.
+/// This eliminates per-edge `GraphEdge` cloning during BFS frontier expansion.
+///
+/// # Memory layout
+///
+/// ```text
+/// index: { node_1 -> (0, 3), node_2 -> (3, 2), ... }
+/// targets: [t1, t2, t3, t4, t5, ...]
+/// edge_ids: [e1, e2, e3, e4, e5, ...]
+/// ```
+///
+/// `targets[offset..offset+len]` are the neighbor target IDs for a source node,
+/// and `edge_ids[offset..offset+len]` are the corresponding edge IDs.
+#[derive(Debug, Clone)]
+pub struct CsrSnapshot {
+    /// Maps source_node_id -> (offset, length) into `targets`/`edge_ids`.
+    index: FxHashMap<u64, (usize, usize)>,
+    /// Contiguous storage of target node IDs for all outgoing edges.
+    targets: Vec<u64>,
+    /// Contiguous storage of edge IDs, parallel to `targets`.
+    edge_ids: Vec<u64>,
+    /// Contiguous storage of label indices, parallel to `targets`.
+    /// Each label index maps to a string in `label_table`.
+    label_indices: Vec<u32>,
+    /// Interned label strings for memory-efficient rel-type filtering.
+    label_table: Vec<String>,
+    /// Reverse map: label string -> label index for O(1) lookup.
+    label_to_idx: FxHashMap<String, u32>,
+}
+
+impl CsrSnapshot {
+    /// Returns neighbor target IDs for a source node as a zero-copy slice.
+    #[must_use]
+    #[inline]
+    pub fn neighbors(&self, source_id: u64) -> &[u64] {
+        if let Some(&(offset, len)) = self.index.get(&source_id) {
+            &self.targets[offset..offset + len]
+        } else {
+            &[]
+        }
+    }
+
+    /// Returns edge IDs for a source node as a zero-copy slice.
+    ///
+    /// Parallel to `neighbors()`: `edge_ids[i]` is the edge connecting
+    /// `source_id` to `neighbors[i]`.
+    #[must_use]
+    #[inline]
+    pub fn edge_ids(&self, source_id: u64) -> &[u64] {
+        if let Some(&(offset, len)) = self.index.get(&source_id) {
+            &self.edge_ids[offset..offset + len]
+        } else {
+            &[]
+        }
+    }
+
+    /// Returns the label string for a neighbor at position `idx` relative
+    /// to the source's offset.
+    ///
+    /// Returns `None` if `source_id` has no CSR entry or `neighbor_idx`
+    /// is out of range.
+    #[must_use]
+    #[inline]
+    pub fn label_at(&self, source_id: u64, neighbor_idx: usize) -> Option<&str> {
+        let &(offset, len) = self.index.get(&source_id)?;
+        if neighbor_idx >= len {
+            return None;
+        }
+        let label_idx = self.label_indices[offset + neighbor_idx] as usize;
+        self.label_table.get(label_idx).map(String::as_str)
+    }
+
+    /// Checks whether a label string exists in the interned table.
+    ///
+    /// Used for fast pre-filtering: if a rel-type filter contains labels
+    /// not present in the snapshot, those branches can be skipped entirely.
+    #[must_use]
+    #[inline]
+    pub fn has_label(&self, label: &str) -> bool {
+        self.label_to_idx.contains_key(label)
+    }
+}
+
 /// Storage for graph edges with bidirectional indexing.
 ///
 /// Provides O(1) access to edges by ID and O(degree) access to
@@ -117,6 +205,12 @@ impl GraphEdge {
 ///
 /// - `by_label`: Secondary index for O(k) label-based queries
 /// - `outgoing_by_label`: Composite index (source, label) for O(k) filtered traversal
+///
+/// # CSR Snapshot (G1)
+///
+/// After loading from disk or after explicit `build_read_snapshot()`, the
+/// `csr_snapshot` field provides zero-copy `&[u64]` access to neighbor
+/// target IDs and edge IDs. Writes invalidate the snapshot automatically.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct EdgeStore {
     /// All edges indexed by ID
@@ -129,6 +223,10 @@ pub struct EdgeStore {
     by_label: HashMap<String, Vec<u64>>,
     /// Composite index: (source_id, label) -> Vec<edge_id> for fast filtered traversal
     outgoing_by_label: HashMap<(u64, String), Vec<u64>>,
+    /// Zero-copy CSR snapshot for BFS traversal (G1).
+    /// Built on-demand via `build_read_snapshot()`, invalidated by writes.
+    #[serde(skip)]
+    csr_snapshot: Option<CsrSnapshot>,
 }
 
 impl EdgeStore {
@@ -168,6 +266,7 @@ impl EdgeStore {
             incoming: HashMap::with_capacity(expected_nodes),
             by_label: HashMap::with_capacity(expected_labels),
             outgoing_by_label: HashMap::with_capacity(outgoing_by_label_cap),
+            csr_snapshot: None,
         }
     }
 
@@ -242,6 +341,8 @@ impl EdgeStore {
         }
 
         self.edges.insert(id, edge);
+        // Invalidate CSR snapshot — writes make it stale (G1).
+        self.csr_snapshot = None;
         Ok(())
     }
 
@@ -267,6 +368,35 @@ impl EdgeStore {
     #[must_use]
     pub fn get_outgoing(&self, node_id: u64) -> Vec<&GraphEdge> {
         self.resolve_edge_ids(self.outgoing.get(&node_id))
+    }
+
+    /// Invokes `f` for each outgoing edge from `node_id` without allocating a `Vec`.
+    ///
+    /// Prefer this over [`get_outgoing`](Self::get_outgoing) in hot loops (e.g. BFS
+    /// frontiers) where the caller processes edges inline rather than collecting them.
+    #[inline]
+    pub fn for_each_outgoing<F: FnMut(&GraphEdge)>(&self, node_id: u64, mut f: F) {
+        if let Some(ids) = self.outgoing.get(&node_id) {
+            for id in ids {
+                if let Some(edge) = self.edges.get(id) {
+                    f(edge);
+                }
+            }
+        }
+    }
+
+    /// Returns the number of outgoing edges from `node_id` without materializing them.
+    #[must_use]
+    #[inline]
+    pub fn outgoing_degree(&self, node_id: u64) -> usize {
+        self.outgoing.get(&node_id).map_or(0, Vec::len)
+    }
+
+    /// Returns the number of incoming edges to `node_id` without materializing them.
+    #[must_use]
+    #[inline]
+    pub fn incoming_degree(&self, node_id: u64) -> usize {
+        self.incoming.get(&node_id).map_or(0, Vec::len)
     }
 
     /// Gets all incoming edges to a node.
@@ -344,6 +474,8 @@ impl EdgeStore {
             self.purge_outgoing_index(edge_id, source);
             self.purge_incoming_index(edge_id, edge.target());
             self.purge_label_indices(edge_id, source, edge.label());
+            // Invalidate CSR snapshot (G1).
+            self.csr_snapshot = None;
         }
     }
 
@@ -356,6 +488,8 @@ impl EdgeStore {
             let source = edge.source();
             self.purge_outgoing_index(edge_id, source);
             self.purge_label_indices(edge_id, source, edge.label());
+            // Invalidate CSR snapshot (G1).
+            self.csr_snapshot = None;
         }
     }
 
@@ -365,6 +499,8 @@ impl EdgeStore {
     pub fn remove_edge_incoming_only(&mut self, edge_id: u64) {
         if let Some(edge) = self.edges.remove(&edge_id) {
             self.purge_incoming_index(edge_id, edge.target());
+            // Invalidate CSR snapshot (G1).
+            self.csr_snapshot = None;
         }
     }
 
@@ -395,6 +531,9 @@ impl EdgeStore {
                 self.purge_label_indices(edge_id, source, edge.label());
             }
         }
+
+        // Invalidate CSR snapshot (G1).
+        self.csr_snapshot = None;
     }
 
     /// Removes `edge_id` from the incoming index of `target_node`.
@@ -424,6 +563,131 @@ impl EdgeStore {
             .get_mut(&(source_node, label.to_string()))
         {
             ids.retain(|&id| id != edge_id);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CSR snapshot methods (G1: zero-copy BFS)
+// ---------------------------------------------------------------------------
+impl EdgeStore {
+    /// Builds a CSR snapshot from the current outgoing index.
+    ///
+    /// This pre-computes contiguous arrays of target IDs, edge IDs, and
+    /// interned labels for all source nodes. After calling this, BFS
+    /// traversal uses `with_neighbors()` for zero-copy `&[u64]` access
+    /// instead of cloning full `GraphEdge` objects.
+    ///
+    /// # When to call
+    ///
+    /// - After loading from disk (graph is ready for reads)
+    /// - After a batch of mutations, before a read-heavy phase
+    ///
+    /// The snapshot is automatically invalidated by any write operation.
+    pub fn build_read_snapshot(&mut self) {
+        let total_edges: usize = self.outgoing.values().map(Vec::len).sum();
+
+        let mut index =
+            FxHashMap::with_capacity_and_hasher(self.outgoing.len(), rustc_hash::FxBuildHasher);
+        let mut targets = Vec::with_capacity(total_edges);
+        let mut edge_ids_buf = Vec::with_capacity(total_edges);
+        let mut label_indices = Vec::with_capacity(total_edges);
+        let mut label_table: Vec<String> = Vec::new();
+        let mut label_to_idx: FxHashMap<String, u32> =
+            FxHashMap::with_capacity_and_hasher(16, rustc_hash::FxBuildHasher);
+
+        for (&source_id, out_edge_ids) in &self.outgoing {
+            let offset = targets.len();
+            for &eid in out_edge_ids {
+                if let Some(edge) = self.edges.get(&eid) {
+                    targets.push(edge.target());
+                    edge_ids_buf.push(eid);
+                    let label = edge.label();
+                    let lidx = *label_to_idx.entry(label.to_string()).or_insert_with(|| {
+                        let idx = label_table.len();
+                        label_table.push(label.to_string());
+                        // Reason: label count bounded by schema size, never exceeds u32::MAX
+                        #[allow(clippy::cast_possible_truncation)]
+                        let idx_u32 = idx as u32;
+                        idx_u32
+                    });
+                    label_indices.push(lidx);
+                }
+            }
+            let len = targets.len() - offset;
+            if len > 0 {
+                index.insert(source_id, (offset, len));
+            }
+        }
+
+        self.csr_snapshot = Some(CsrSnapshot {
+            index,
+            targets,
+            edge_ids: edge_ids_buf,
+            label_indices,
+            label_table,
+            label_to_idx,
+        });
+    }
+
+    /// Returns a reference to the CSR snapshot, if built.
+    #[must_use]
+    #[inline]
+    pub fn csr_snapshot(&self) -> Option<&CsrSnapshot> {
+        self.csr_snapshot.as_ref()
+    }
+
+    /// Returns `true` if a CSR snapshot is available for zero-copy reads.
+    #[must_use]
+    #[inline]
+    pub fn has_csr_snapshot(&self) -> bool {
+        self.csr_snapshot.is_some()
+    }
+
+    /// Provides zero-copy access to neighbor target IDs via a callback.
+    ///
+    /// When a CSR snapshot is available, the callback receives a `&[u64]`
+    /// slice directly from the contiguous snapshot buffer (zero allocation).
+    /// When no snapshot exists, falls back to building a temporary `Vec<u64>`
+    /// from the outgoing edge index.
+    ///
+    /// # Returns
+    ///
+    /// The value returned by `f`.
+    #[inline]
+    pub fn with_neighbors<F, R>(&self, source_id: u64, f: F) -> R
+    where
+        F: FnOnce(&[u64]) -> R,
+    {
+        if let Some(snapshot) = &self.csr_snapshot {
+            f(snapshot.neighbors(source_id))
+        } else {
+            let ids: Vec<u64> = self
+                .get_outgoing(source_id)
+                .iter()
+                .map(|e| e.target())
+                .collect();
+            f(&ids)
+        }
+    }
+
+    /// Provides zero-copy access to `(target_id, edge_id)` pairs via callback.
+    ///
+    /// When a CSR snapshot exists, both slices come from contiguous memory.
+    /// The callback receives `(targets: &[u64], edge_ids: &[u64])` where
+    /// `targets[i]` is the neighbor reached by `edge_ids[i]`.
+    #[inline]
+    pub fn with_neighbor_edges<F, R>(&self, source_id: u64, f: F) -> R
+    where
+        F: FnOnce(&[u64], &[u64]) -> R,
+    {
+        if let Some(snapshot) = &self.csr_snapshot {
+            f(snapshot.neighbors(source_id), snapshot.edge_ids(source_id))
+        } else {
+            let edges = self.get_outgoing(source_id);
+            let targets: Vec<u64> = edges.iter().map(|e| e.target()).collect();
+            let eids: Vec<u64> = edges.iter().map(|e| e.id()).collect();
+            f(&targets, &eids)
         }
     }
 }
@@ -460,9 +724,14 @@ impl EdgeStore {
 
     /// Loads an edge store from a file.
     ///
+    /// Automatically builds a CSR snapshot after loading for zero-copy
+    /// BFS traversal (G1).
+    ///
     /// # Errors
     /// Returns an error if file I/O or deserialization fails.
     pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
-        <Self as PostcardPersistence>::load_from_file(path)
+        let mut store = <Self as PostcardPersistence>::load_from_file(path)?;
+        store.build_read_snapshot();
+        Ok(store)
     }
 }

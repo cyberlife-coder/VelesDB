@@ -35,6 +35,19 @@ impl<'a> QuantizationGuards<'a> {
                 .then(|| collection.pq_cache.write()),
         }
     }
+
+    /// Acquires only the PQ cache guard (for when SQ8/Binary were handled in parallel).
+    ///
+    /// Issue #486: After parallel quantization for SQ8/Binary, only PQ mode
+    /// still needs a guard for sequential processing.
+    fn acquire_pq_only(collection: &'a Collection, mode: StorageMode) -> Self {
+        Self {
+            sq8: None,
+            binary: None,
+            pq: matches!(mode, StorageMode::ProductQuantization)
+                .then(|| collection.pq_cache.write()),
+        }
+    }
 }
 
 impl Collection {
@@ -302,6 +315,12 @@ impl Collection {
             return false;
         }
 
+        // Label index: when populated, old payloads may contain `_labels`
+        // that need cleanup. Phase 2 must run to call `apply_label_updates`.
+        if !self.label_index.read().is_empty() {
+            return false;
+        }
+
         // Sparse vectors require collection into the sparse batch buffer
         let any_sparse = points.iter().any(Point::has_sparse_vectors);
         !any_sparse
@@ -316,6 +335,9 @@ impl Collection {
     ///
     /// Issue #425: Fast-path skips the entire loop when no secondary
     /// processing is needed (see `can_skip_phase2`).
+    ///
+    /// Issue #486: For SQ8/Binary modes with rayon, quantization runs in
+    /// parallel before the main loop, avoiding the per-point lock overhead.
     fn per_point_updates(
         &self,
         points: &[Point],
@@ -329,40 +351,49 @@ impl Collection {
             return Vec::new();
         }
 
-        let mut quant_guards = QuantizationGuards::acquire(self, storage_mode);
-        let mut sparse_batch = Vec::new();
-        // Track effective old payload per ID for within-batch duplicate handling.
-        // When id=5 appears twice, the second occurrence uses the first's payload
-        // as "old" — not the pre-batch original — so secondary indexes stay correct.
-        //
-        // Uses `Option<Option<&Value>>`: outer Option = "seen this ID?",
-        // inner Option = "had a payload?". This distinguishes "seen with None"
-        // from "not seen" — `.flatten()` would collapse both to None.
-        let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::new();
+        // Issue #486: Parallel quantization for SQ8/Binary — compute all
+        // quantized vectors via rayon, then batch-insert under a single
+        // write lock. PQ mode is handled sequentially (shared training state).
+        let quant_done = self.try_parallel_quantize(points, storage_mode);
 
-        // Issue #425: BM25 skip — pre-check whether any point carries a payload
-        // or the BM25 index has existing documents. When both are false, the
-        // text index loop body is a no-op (add_document never called, remove_document
-        // on non-existent docs is free). Skip to avoid per-point function call overhead.
+        let mut quant_guards = if quant_done {
+            // Quantization already applied — no guards needed for SQ8/Binary
+            QuantizationGuards::acquire_pq_only(self, storage_mode)
+        } else {
+            QuantizationGuards::acquire(self, storage_mode)
+        };
+
+        self.per_point_sequential_updates(
+            points,
+            old_payloads,
+            storage_mode,
+            &mut quant_guards,
+            quant_done,
+        )
+    }
+
+    /// Runs the sequential per-point loop for secondary indexes, BM25, sparse
+    /// vectors, labels, and (when not pre-computed) quantization.
+    ///
+    /// Extracted from `per_point_updates` to keep each function under 50 NLOC.
+    fn per_point_sequential_updates(
+        &self,
+        points: &[Point],
+        old_payloads: &[Option<serde_json::Value>],
+        storage_mode: StorageMode,
+        quant_guards: &mut QuantizationGuards<'_>,
+        quant_done: bool,
+    ) -> Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> {
+        let mut sparse_batch = Vec::new();
+        let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::new();
         let skip_bm25 = self.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
+        let needs_label_updates = Self::needs_label_updates(points, old_payloads);
+        let mut label_updates = Self::alloc_label_buffer(needs_label_updates, points.len());
 
         for (point, pre_batch_old) in points.iter().zip(old_payloads) {
-            let effective_old: Option<&serde_json::Value> =
-                if let Some(&inner) = seen_payloads.get(&point.id) {
-                    // ID was seen earlier in this batch — use that point's payload as "old"
-                    inner
-                } else {
-                    // First occurrence — use the pre-batch original
-                    pre_batch_old.as_ref()
-                };
-
-            let (sq8, binary, pq) = (
-                quant_guards.sq8.as_deref_mut(),
-                quant_guards.binary.as_deref_mut(),
-                quant_guards.pq.as_deref_mut(),
-            );
-            self.cache_quantized_vector(point, storage_mode, sq8, binary, pq);
-
+            let effective_old =
+                Self::resolve_effective_old(&seen_payloads, point.id, pre_batch_old.as_ref());
+            Self::maybe_quantize(self, point, storage_mode, quant_guards, quant_done);
             self.update_secondary_indexes_on_upsert(
                 point.id,
                 effective_old,
@@ -372,12 +403,134 @@ impl Collection {
                 Self::update_text_index(&self.text_index, point);
             }
             Self::collect_sparse_vectors(point, &mut sparse_batch);
-
-            // Record this point's payload ref — zero-cost for the common case (no clone)
+            if needs_label_updates {
+                label_updates.push((point.id, effective_old.cloned(), point.payload.clone()));
+            }
             seen_payloads.insert(point.id, point.payload.as_ref());
         }
 
+        Self::apply_label_updates(&self.label_index, &label_updates);
         sparse_batch
+    }
+
+    /// Checks whether label index updates are needed for this batch.
+    ///
+    /// Returns `true` when either new or old payloads contain `_labels`,
+    /// ensuring stale labels are removed when a point drops its labels.
+    fn needs_label_updates(points: &[Point], old_payloads: &[Option<serde_json::Value>]) -> bool {
+        Self::any_point_has_labels(points)
+            || old_payloads
+                .iter()
+                .any(|opt| opt.as_ref().is_some_and(|v| v.get("_labels").is_some()))
+    }
+
+    /// Pre-allocates the label update buffer when needed.
+    fn alloc_label_buffer(
+        needed: bool,
+        capacity: usize,
+    ) -> Vec<(u64, Option<serde_json::Value>, Option<serde_json::Value>)> {
+        if needed {
+            Vec::with_capacity(capacity)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Returns `true` if any point carries `_labels` in its payload.
+    pub(super) fn any_point_has_labels(points: &[Point]) -> bool {
+        points.iter().any(|p| {
+            p.payload
+                .as_ref()
+                .is_some_and(|v| v.get("_labels").is_some())
+        })
+    }
+
+    /// Resolves the effective "old payload" for a point, accounting for
+    /// within-batch duplicate IDs.
+    fn resolve_effective_old<'a>(
+        seen: &HashMap<u64, Option<&'a serde_json::Value>>,
+        id: u64,
+        pre_batch_old: Option<&'a serde_json::Value>,
+    ) -> Option<&'a serde_json::Value> {
+        if let Some(&inner) = seen.get(&id) {
+            inner
+        } else {
+            pre_batch_old
+        }
+    }
+
+    /// Conditionally caches a quantized vector for a single point.
+    ///
+    /// Skipped when parallel quantization already handled SQ8/Binary.
+    /// PQ always runs sequentially (shared training state).
+    fn maybe_quantize(
+        collection: &Collection,
+        point: &Point,
+        storage_mode: StorageMode,
+        quant_guards: &mut QuantizationGuards<'_>,
+        quant_done: bool,
+    ) {
+        if !quant_done {
+            let (sq8, binary, pq) = (
+                quant_guards.sq8.as_deref_mut(),
+                quant_guards.binary.as_deref_mut(),
+                quant_guards.pq.as_deref_mut(),
+            );
+            collection.cache_quantized_vector(point, storage_mode, sq8, binary, pq);
+        } else if matches!(storage_mode, StorageMode::ProductQuantization) {
+            let pq = quant_guards.pq.as_deref_mut();
+            collection.cache_quantized_vector(point, storage_mode, None, None, pq);
+        }
+    }
+
+    /// Applies buffered label index updates in a single write lock scope.
+    ///
+    /// LOCK ORDER: label_index(7) — after secondary_indexes(6), before edge_store(8).
+    fn apply_label_updates(
+        label_index: &parking_lot::RwLock<crate::collection::graph::LabelIndex>,
+        label_updates: &[(u64, Option<serde_json::Value>, Option<serde_json::Value>)],
+    ) {
+        if label_updates.is_empty() {
+            return;
+        }
+        let mut label_idx = label_index.write();
+        for (id, old, new) in label_updates {
+            if let Some(old_val) = old {
+                label_idx.remove_from_payload(*id, old_val);
+            }
+            if let Some(new_val) = new {
+                label_idx.index_from_payload(*id, new_val);
+            }
+        }
+    }
+
+    /// Attempts parallel quantization for SQ8/Binary modes.
+    ///
+    /// Returns `true` if quantization was handled (caller should skip per-point
+    /// quantization in the main loop). Returns `false` for PQ, Full, or RaBitQ
+    /// modes (which need the original sequential path).
+    ///
+    /// Issue #486: `from_f32()` is a pure function for SQ8 and Binary, so
+    /// computation can run in parallel via rayon. Only the final cache
+    /// insertion requires a write lock, held briefly for batch insert.
+    fn try_parallel_quantize(&self, points: &[Point], storage_mode: StorageMode) -> bool {
+        #[cfg(feature = "persistence")]
+        match storage_mode {
+            StorageMode::SQ8 => {
+                self.batch_quantize_sq8_parallel(points);
+                true
+            }
+            StorageMode::Binary => {
+                self.batch_quantize_binary_parallel(points);
+                true
+            }
+            _ => false,
+        }
+        #[cfg(not(feature = "persistence"))]
+        {
+            let _ = (points, storage_mode);
+            false
+        }
     }
 
     fn collect_sparse_vectors(
@@ -502,7 +655,10 @@ impl Collection {
             return count;
         }
         let inserted = self.index.insert_batch_parallel(vector_refs);
-        self.index.set_searching_mode();
+        // NOTE: set_searching_mode() removed — it was a no-op on the native HNSW
+        // backend but acquired inner.write() (exclusive lock), serializing against
+        // rayon readers. Removing it eliminates 20+ unnecessary lock cycles for
+        // multi-batch bulk imports (Issue #486).
         // Issue #423 Component 3: Track inserts for periodic HNSW save.
         // Reason: count fits in u64 (vector batch size bounded by memory).
         #[allow(clippy::cast_possible_truncation)]
@@ -522,7 +678,9 @@ impl Collection {
     pub fn upsert_metadata(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
 
+        // LOCK ORDER: payload_storage(3) → label_index(7).
         let mut payload_storage = self.payload_storage.write();
+        let mut label_idx = self.label_index.write();
 
         for point in &points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
@@ -537,6 +695,14 @@ impl Collection {
                 old_payload.as_ref(),
                 point.payload.as_ref(),
             );
+
+            // Maintain label index for _labels-bearing payloads.
+            if let Some(ref old) = old_payload {
+                label_idx.remove_from_payload(point.id, old);
+            }
+            if let Some(ref payload) = point.payload {
+                label_idx.index_from_payload(point.id, payload);
+            }
         }
 
         // LOCK ORDER: flush while payload_storage(3) still held, then drop before acquiring config(1).

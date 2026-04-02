@@ -64,6 +64,19 @@ pub async fn upsert_bulk_async(collection: Arc<Collection>, points: Vec<Point>) 
 /// Processes points in chunks to provide progress updates and
 /// avoid memory pressure for very large imports.
 ///
+/// # Performance — Deferred WAL fsync
+///
+/// Intermediate batches use [`Collection::upsert_bulk_deferred_sync`] which
+/// skips `sync_all()` after each batch, replacing it with a buffer-only
+/// `flush()`. This eliminates the 1-5ms per-batch fsync overhead on Windows.
+/// For 1M vectors at 5K/batch, this saves 200 batches x 2 fsyncs x 1-5ms
+/// = 400-2000ms of pure I/O overhead.
+///
+/// A single `Collection::flush()` after the final batch ensures full
+/// durability. In case of a crash before that final flush, data since the
+/// last synced point is lost but the database remains consistent (WAL
+/// replay recovers to the last fsync boundary).
+///
 /// # Arguments
 ///
 /// * `collection` - Arc-wrapped collection instance
@@ -90,14 +103,24 @@ where
     let total = points.len();
     let chunk_size = chunk_size.max(100); // Minimum 100 per chunk
     let mut inserted = 0;
+    let num_chunks = total.div_ceil(chunk_size);
 
     for (chunk_idx, chunk) in points.chunks(chunk_size).enumerate() {
         let chunk_vec: Vec<Point> = chunk.to_vec();
         let coll = Arc::clone(&collection);
+        let is_last = chunk_idx + 1 == num_chunks;
 
-        let count = tokio::task::spawn_blocking(move || coll.upsert_bulk(&chunk_vec))
-            .await
-            .map_err(|e| Error::Internal(format!("Task join error: {e}")))?;
+        // H3: Intermediate batches skip fsync (deferred sync).
+        // The final batch uses the standard path with full fsync.
+        let count = if is_last {
+            tokio::task::spawn_blocking(move || coll.upsert_bulk(&chunk_vec))
+                .await
+                .map_err(|e| Error::Internal(format!("Task join error: {e}")))?
+        } else {
+            tokio::task::spawn_blocking(move || coll.upsert_bulk_deferred_sync(&chunk_vec))
+                .await
+                .map_err(|e| Error::Internal(format!("Task join error: {e}")))?
+        };
 
         inserted += count?;
 
@@ -111,6 +134,15 @@ where
             tokio::task::yield_now().await;
         }
     }
+
+    // H3: Final durability barrier — ensures all deferred WAL data is fsynced.
+    // Even though the last batch used upsert_bulk (with fsync), an explicit
+    // flush guarantees the entire pipeline is durable.
+    let coll = Arc::clone(&collection);
+    tokio::task::spawn_blocking(move || coll.flush())
+        .await
+        .map_err(|e| Error::Internal(format!("Task join error: {e}")))?
+        .map_err(|e| Error::Internal(format!("Final flush error: {e}")))?;
 
     Ok(inserted)
 }

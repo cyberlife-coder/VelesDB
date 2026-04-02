@@ -6,11 +6,25 @@
 use crate::quantization::StorageMode;
 use serde::{Deserialize, Serialize};
 
+/// Default VAMANA alpha for neighbor diversification (1.2).
+///
+/// Used as serde default when deserializing configs that predate the alpha field.
+const fn default_alpha() -> f32 {
+    1.2
+}
+
 /// HNSW index parameters for tuning performance and recall.
 ///
 /// Use [`HnswParams::auto`] for automatic tuning based on vector dimension,
 /// or create custom parameters for specific workloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// # Alpha (VAMANA diversification)
+///
+/// The `alpha` parameter controls neighbor selection diversification.
+/// Values > 1.0 bias toward graph navigability (more diverse neighbors),
+/// while 1.0 selects purely by proximity. The default (1.2) follows the
+/// VAMANA paper recommendation (Subramanya et al., 2019).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct HnswParams {
     /// Number of bi-directional links per node (M parameter).
     /// Higher = better recall, more memory, slower insert.
@@ -24,7 +38,20 @@ pub struct HnswParams {
     /// SQ8 provides 4x memory reduction with ~1% recall loss.
     #[serde(default)]
     pub storage_mode: StorageMode,
+    /// VAMANA alpha for neighbor diversification (default: 1.2).
+    ///
+    /// Alpha > 1.0 biases `select_neighbors` toward diversity over proximity,
+    /// producing a more navigable graph with better recall. Set to 1.0 for
+    /// strict nearest-neighbor selection.
+    #[serde(default = "default_alpha")]
+    pub alpha: f32,
 }
+
+// Eq is safe because alpha values are always finite: they come from
+// `default_alpha()` (1.2), `with_alpha()` (caller-chosen), or serde
+// deserialization which rejects NaN/Inf for f32. No code path produces
+// NaN, so reflexivity (a == a) always holds.
+impl Eq for HnswParams {}
 
 impl Default for HnswParams {
     fn default() -> Self {
@@ -45,6 +72,7 @@ impl HnswParams {
                 ef_construction: 300,
                 max_elements: 100_000,
                 storage_mode: StorageMode::Full,
+                alpha: default_alpha(),
             },
             // 257+ dimensions: aggressive params targeting high recall
             _ => Self {
@@ -52,6 +80,7 @@ impl HnswParams {
                 ef_construction: 400,
                 max_elements: 100_000,
                 storage_mode: StorageMode::Full,
+                alpha: default_alpha(),
             },
         }
     }
@@ -86,6 +115,7 @@ impl HnswParams {
             ef_construction: ef,
             max_elements: max_elems,
             storage_mode: StorageMode::Full,
+            alpha: default_alpha(),
         }
     }
 
@@ -115,6 +145,7 @@ impl HnswParams {
             ef_construction: 150,
             max_elements: 100_000,
             storage_mode: StorageMode::Full,
+            alpha: default_alpha(),
         }
     }
 
@@ -141,6 +172,7 @@ impl HnswParams {
             ef_construction: 100,
             max_elements: 100_000,
             storage_mode: StorageMode::Full,
+            alpha: default_alpha(),
         }
     }
 
@@ -164,18 +196,21 @@ impl HnswParams {
                 ef_construction: 500,
                 max_elements: 100_000,
                 storage_mode: StorageMode::Full,
+                alpha: default_alpha(),
             },
             257..=768 => Self {
                 max_connections: 48,
                 ef_construction: 800,
                 max_elements: 100_000,
                 storage_mode: StorageMode::Full,
+                alpha: default_alpha(),
             },
             _ => Self {
                 max_connections: 64,
                 ef_construction: 1000,
                 max_elements: 100_000,
                 storage_mode: StorageMode::Full,
+                alpha: default_alpha(),
             },
         }
     }
@@ -191,7 +226,7 @@ impl HnswParams {
         }
     }
 
-    /// Creates custom parameters.
+    /// Creates custom parameters with default alpha (1.2).
     #[must_use]
     pub const fn custom(
         max_connections: usize,
@@ -203,6 +238,7 @@ impl HnswParams {
             ef_construction,
             max_elements,
             storage_mode: StorageMode::Full,
+            alpha: 1.2,
         }
     }
 
@@ -229,14 +265,34 @@ impl HnswParams {
         params.storage_mode = StorageMode::Binary;
         params
     }
+
+    /// Returns a copy of these parameters with a custom alpha value.
+    ///
+    /// Alpha controls VAMANA neighbor diversification:
+    /// - `1.0`: strict nearest-neighbor selection (no diversification)
+    /// - `1.2`: recommended default (VAMANA paper)
+    /// - `>1.2`: more diverse neighbors, better recall, slower insert
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use velesdb_core::HnswParams;
+    ///
+    /// let params = HnswParams::auto(768).with_alpha(1.0);
+    /// assert!((params.alpha - 1.0).abs() < f32::EPSILON);
+    /// ```
+    #[must_use]
+    pub const fn with_alpha(self, alpha: f32) -> Self {
+        Self { alpha, ..self }
+    }
 }
 
 /// Search quality profile controlling the recall/latency tradeoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SearchQuality {
-    /// Fast search with `ef_search=64`. ~92% recall, lowest latency.
+    /// Fast search with `ef_search=96`. ~95% recall, lowest latency.
     Fast,
-    /// Balanced search with `ef_search=128`. ~99% recall, production default.
+    /// Balanced search with `ef_search=160`. ~99.5% recall, production default.
     #[default]
     Balanced,
     /// Accurate search with `ef_search=512`. ~100% recall.
@@ -295,10 +351,10 @@ impl SearchQuality {
     #[must_use]
     pub fn ef_search(&self, k: usize) -> usize {
         match self {
-            Self::Fast => 64.max(k * 2),
+            Self::Fast => 96.max(k * 3),
             // AutoTune: resolved at search time via auto_ef_range(); fallback
             // to Balanced for contexts that call ef_search() without collection info.
-            Self::Balanced | Self::AutoTune => 128.max(k * 4),
+            Self::Balanced | Self::AutoTune => 160.max(k * 5),
             // Increased from 256 to 512 for better recall at 100K+ scale
             Self::Accurate => 512.max(k * 16),
             // Increased from 2048 to 4096 for guaranteed 100% recall at 100K+
@@ -307,6 +363,35 @@ impl SearchQuality {
             // Adaptive: start with min_ef (first phase)
             Self::Adaptive { min_ef, .. } => (*min_ef).max(k),
         }
+    }
+
+    /// Returns `ef_search` scaled to dataset size.
+    ///
+    /// For datasets > 10K, the HNSW graph is deeper and requires a slightly
+    /// larger search budget. Uses sqrt-based scaling (gentler than log2) to
+    /// avoid excessive latency when the graph is already well-constructed
+    /// with appropriate M and `ef_construction` parameters.
+    ///
+    /// Capped at 2x the base ef to prevent latency explosion.
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    pub fn ef_search_for_scale(&self, k: usize, dataset_size: usize) -> usize {
+        let base = self.ef_search(k);
+        if dataset_size <= 10_000 {
+            return base;
+        }
+        // sqrt scaling: gentle increase that doesn't destroy latency.
+        // At 100K: sqrt(10) ≈ 3.16 → capped at 2.0 → ef * 2.
+        // At 1M: sqrt(100) = 10 → capped at 2.0 → ef * 2.
+        // Reason: dataset_size and base are small enough that f64 is exact.
+        let ratio = dataset_size as f64 / 10_000.0;
+        let scale = ratio.sqrt().min(2.0);
+        let scaled = (base as f64 * scale) as usize;
+        scaled.min(base * 2)
     }
 
     /// Returns `true` if this quality profile uses two-phase adaptive search.

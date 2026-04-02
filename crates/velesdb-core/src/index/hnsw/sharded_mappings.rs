@@ -19,6 +19,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Uses `DashMap` internally for concurrent access without global locks.
 /// This enables linear scaling on multi-core systems.
 ///
+/// # Tombstone slots
+///
+/// When `batch_insert_fast_path` detects a concurrent race on a pre-reserved
+/// index range, the colliding slot becomes an orphaned "tombstone" that is
+/// never reused. These are harmless (the monotonic counter never wraps) but
+/// can be monitored via [`Self::tombstone_count`].
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -36,6 +43,9 @@ pub struct ShardedMappings {
     idx_to_id: DashMap<usize, u64>,
     /// Next available internal index (atomic for lock-free increment).
     next_idx: AtomicUsize,
+    /// Number of orphaned index slots created by race conditions in
+    /// `batch_insert_fast_path`. Monotonically increasing.
+    tombstone_slots: AtomicUsize,
 }
 
 impl Default for ShardedMappings {
@@ -52,6 +62,7 @@ impl ShardedMappings {
             id_to_idx: DashMap::new(),
             idx_to_id: DashMap::new(),
             next_idx: AtomicUsize::new(0),
+            tombstone_slots: AtomicUsize::new(0),
         }
     }
 
@@ -64,6 +75,7 @@ impl ShardedMappings {
             id_to_idx: DashMap::with_capacity(capacity),
             idx_to_id: DashMap::with_capacity(capacity),
             next_idx: AtomicUsize::new(0),
+            tombstone_slots: AtomicUsize::new(0),
         }
     }
 
@@ -127,16 +139,69 @@ impl ShardedMappings {
         idx
     }
 
-    /// Batch version of `register_or_replace` using a single `entry()` per ID.
+    /// Batch version of `register_or_replace` with a fast path for pure inserts.
     ///
-    /// For each ID, acquires one shard-level write lock via `DashMap::entry()`:
-    /// - **Vacant**: allocates a new index and inserts bidirectional mappings.
-    /// - **Occupied**: replaces the forward mapping, removes the stale reverse
-    ///   mapping, and inserts the new reverse mapping.
+    /// **Fast path** (all IDs are new — common for batch-insert workloads):
+    /// reserves a contiguous index range with a single `fetch_add(N)` instead
+    /// of N individual atomic increments. Each ID is still verified via
+    /// `DashMap::entry()` to handle concurrent races; if a race is detected
+    /// the method falls back to per-ID allocation for that entry.
     ///
-    /// This eliminates the triple-lock pattern (`contains_key` + `register` +
-    /// `register_or_replace` fallback) from the previous implementation.
+    /// **Slow path** (at least one ID already exists): processes each ID
+    /// individually with one `entry()` call per ID, replacing stale mappings.
     pub fn register_or_replace_batch(&self, ids: &[u64]) -> Vec<(usize, Option<usize>)> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+
+        let all_vacant = ids.iter().all(|id| !self.id_to_idx.contains_key(id));
+
+        if all_vacant {
+            self.batch_insert_fast_path(ids)
+        } else {
+            self.batch_replace_slow_path(ids)
+        }
+    }
+
+    /// Fast path: all IDs are new. Reserves `[start, start+N)` with one atomic op.
+    ///
+    /// If a concurrent insert races between the vacancy check and `entry()`,
+    /// the affected ID falls back to individual `fetch_add(1)` allocation.
+    fn batch_insert_fast_path(&self, ids: &[u64]) -> Vec<(usize, Option<usize>)> {
+        use dashmap::mapref::entry::Entry;
+
+        let n = ids.len();
+        let start = self.next_idx.fetch_add(n, Ordering::Relaxed);
+
+        let mut results = Vec::with_capacity(n);
+        for (i, &id) in ids.iter().enumerate() {
+            let result = match self.id_to_idx.entry(id) {
+                Entry::Vacant(entry) => {
+                    let idx = start + i;
+                    entry.insert(idx);
+                    self.idx_to_id.insert(idx, id);
+                    (idx, None)
+                }
+                Entry::Occupied(mut entry) => {
+                    // Race: another thread inserted this ID after our vacancy check.
+                    // Use individual allocation (the range slot `start+i` becomes a
+                    // tombstone — harmless, as next_idx is monotonic and never reused).
+                    self.tombstone_slots.fetch_add(1, Ordering::Relaxed);
+                    let old_idx = *entry.get();
+                    let new_idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
+                    entry.insert(new_idx);
+                    self.idx_to_id.remove(&old_idx);
+                    self.idx_to_id.insert(new_idx, id);
+                    (new_idx, Some(old_idx))
+                }
+            };
+            results.push(result);
+        }
+        results
+    }
+
+    /// Slow path: at least one ID exists. Processes each ID individually.
+    fn batch_replace_slow_path(&self, ids: &[u64]) -> Vec<(usize, Option<usize>)> {
         use dashmap::mapref::entry::Entry;
 
         let mut results = Vec::with_capacity(ids.len());
@@ -255,17 +320,28 @@ impl ShardedMappings {
     /// Returns the next available internal index (total inserted count).
     ///
     /// This is a monotonic counter that never decreases, even after removals.
-    /// Useful for calculating tombstone count.
     #[must_use]
     pub fn next_idx(&self) -> usize {
         self.next_idx.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Clears all mappings and resets the index counter.
+    /// Returns the number of orphaned index slots created by race conditions
+    /// in [`Self::register_or_replace_batch`]'s fast path.
+    ///
+    /// These slots are harmless (monotonic counter, never reused) but this
+    /// metric is useful for monitoring contention in concurrent batch inserts.
+    #[must_use]
+    #[allow(dead_code)] // API completeness — used in tests and available for monitoring
+    pub fn tombstone_count(&self) -> usize {
+        self.tombstone_slots.load(Ordering::Relaxed)
+    }
+
+    /// Clears all mappings and resets the index and tombstone counters.
     pub fn clear(&self) {
         self.id_to_idx.clear();
         self.idx_to_id.clear();
         self.next_idx.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.tombstone_slots.store(0, Ordering::Relaxed);
     }
 
     /// Creates mappings from existing data (for deserialization).
@@ -295,6 +371,7 @@ impl ShardedMappings {
             id_to_idx: sharded_id_to_idx,
             idx_to_id: sharded_idx_to_id,
             next_idx: AtomicUsize::new(next_idx),
+            tombstone_slots: AtomicUsize::new(0),
         }
     }
 

@@ -3,9 +3,11 @@
 //! This module provides lazy iterators that yield traversal results one at a time,
 //! avoiding the need to load all visited nodes into memory at once.
 
-use super::traversal::BfsState;
+use super::edge_concurrent::ConcurrentEdgeStore;
+use super::traversal::{reconstruct_path, BfsState};
 use super::{EdgeStore, TraversalResult, DEFAULT_MAX_DEPTH};
-use std::collections::{HashSet, VecDeque};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 
 /// Configuration for streaming traversal.
 ///
@@ -30,7 +32,7 @@ impl Default for StreamingConfig {
         Self {
             max_depth: DEFAULT_MAX_DEPTH,
             limit: None,
-            max_visited_size: 100_000, // ~800KB for HashSet<u64>
+            max_visited_size: 100_000, // ~800KB for FxHashSet<u64>
             rel_types: Vec::new(),
         }
     }
@@ -99,37 +101,50 @@ impl StreamingConfig {
 pub struct BfsIterator<'a> {
     edge_store: &'a EdgeStore,
     queue: VecDeque<BfsState>,
-    visited: HashSet<u64>,
+    visited: FxHashSet<u64>,
     config: StreamingConfig,
+    /// Pre-built set for O(1) relationship-type filtering without per-edge allocation.
+    /// Empty when no filter is configured (all edge types accepted).
+    rel_types_set: FxHashSet<String>,
     yielded: usize,
     visited_overflow: bool,
     /// Buffer for pending results from current node being processed.
     /// This ensures all edges from a node are yielded before moving to next node.
     pending_results: VecDeque<TraversalResult>,
+    /// Parent-pointer map: target_node -> (parent_node, edge_id).
+    /// Replaces per-state path cloning with O(visited_nodes) memory.
+    parent_map: FxHashMap<u64, (u64, u64)>,
+    /// Source node ID for path reconstruction.
+    source_id: u64,
 }
 
 impl<'a> BfsIterator<'a> {
     /// Creates a new BFS iterator starting from the given node.
     #[must_use]
     pub fn new(edge_store: &'a EdgeStore, start_id: u64, config: StreamingConfig) -> Self {
-        let mut visited = HashSet::new();
+        let mut visited = FxHashSet::default();
         visited.insert(start_id);
 
         let mut queue = VecDeque::new();
         queue.push_back(BfsState {
             node_id: start_id,
-            path: Vec::new(),
             depth: 0,
         });
+
+        // Pre-build FxHashSet from Vec<String> once, not per-edge.
+        let rel_types_set: FxHashSet<String> = config.rel_types.iter().cloned().collect();
 
         Self {
             edge_store,
             queue,
             visited,
             config,
+            rel_types_set,
             yielded: 0,
             visited_overflow: false,
             pending_results: VecDeque::new(),
+            parent_map: FxHashMap::default(),
+            source_id: start_id,
         }
     }
 
@@ -153,6 +168,103 @@ impl<'a> BfsIterator<'a> {
     pub fn visited_size(&self) -> usize {
         self.visited.len()
     }
+
+    /// Checks whether the given label passes the rel-type filter.
+    ///
+    /// Empty filter = accept all labels.
+    #[inline]
+    fn label_passes_filter(&self, label: &str) -> bool {
+        self.rel_types_set.is_empty() || self.rel_types_set.contains(label)
+    }
+
+    /// Records a visited target, handling overflow when the visited set
+    /// exceeds `max_visited_size`.
+    ///
+    /// Returns `true` if the target should be processed (not already visited).
+    #[inline]
+    fn try_visit(&mut self, target: u64) -> bool {
+        if self.visited_overflow {
+            return true;
+        }
+        if self.visited.contains(&target) {
+            return false;
+        }
+        if self.visited.len() >= self.config.max_visited_size {
+            self.visited_overflow = true;
+            self.visited.clear();
+            return true;
+        }
+        self.visited.insert(target);
+        true
+    }
+
+    /// Processes outgoing edges using CSR zero-copy path.
+    ///
+    /// Uses `CsrSnapshot` for contiguous `&[u64]` access to target IDs,
+    /// edge IDs, and interned labels — no `GraphEdge` cloning.
+    /// Uses parent-pointer insertion instead of path cloning.
+    fn expand_node_csr(&mut self, state: &BfsState) {
+        let snapshot = self
+            .edge_store
+            .csr_snapshot()
+            .expect("invariant: CSR snapshot checked before calling expand_node_csr");
+        let targets = snapshot.neighbors(state.node_id);
+        let edge_ids = snapshot.edge_ids(state.node_id);
+
+        for (i, (&target, &eid)) in targets.iter().zip(edge_ids.iter()).enumerate() {
+            let new_depth = state.depth + 1;
+            if new_depth > self.config.max_depth {
+                continue;
+            }
+            if let Some(label) = snapshot.label_at(state.node_id, i) {
+                if !self.label_passes_filter(label) {
+                    continue;
+                }
+            }
+            if !self.try_visit(target) {
+                continue;
+            }
+            self.parent_map.insert(target, (state.node_id, eid));
+            if new_depth < self.config.max_depth {
+                self.queue.push_back(BfsState {
+                    node_id: target,
+                    depth: new_depth,
+                });
+            }
+            let path = reconstruct_path(target, self.source_id, &self.parent_map);
+            self.pending_results
+                .push_back(TraversalResult::new(target, path, new_depth));
+        }
+    }
+
+    /// Processes outgoing edges using the legacy path (clones `GraphEdge`).
+    /// Uses parent-pointer insertion instead of path cloning.
+    fn expand_node_legacy(&mut self, state: &BfsState) {
+        let edges = self.edge_store.get_outgoing(state.node_id);
+        for edge in edges {
+            if !self.label_passes_filter(edge.label()) {
+                continue;
+            }
+            let target = edge.target();
+            let new_depth = state.depth + 1;
+            if new_depth > self.config.max_depth {
+                continue;
+            }
+            if !self.try_visit(target) {
+                continue;
+            }
+            self.parent_map.insert(target, (state.node_id, edge.id()));
+            if new_depth < self.config.max_depth {
+                self.queue.push_back(BfsState {
+                    node_id: target,
+                    depth: new_depth,
+                });
+            }
+            let path = reconstruct_path(target, self.source_id, &self.parent_map);
+            self.pending_results
+                .push_back(TraversalResult::new(target, path, new_depth));
+        }
+    }
 }
 
 impl Iterator for BfsIterator<'_> {
@@ -174,61 +286,11 @@ impl Iterator for BfsIterator<'_> {
 
         // Process nodes from queue until we have results to yield
         while let Some(state) = self.queue.pop_front() {
-            // Get outgoing edges
-            let edges = self.edge_store.get_outgoing(state.node_id);
-
-            // Process ALL edges from this node, collecting results
-            for edge in edges {
-                // Filter by relationship type
-                if !self.config.rel_types.is_empty()
-                    && !self.config.rel_types.contains(&edge.label().to_string())
-                {
-                    continue;
-                }
-
-                let target = edge.target();
-                let new_depth = state.depth + 1;
-
-                // Skip if exceeds max depth
-                if new_depth > self.config.max_depth {
-                    continue;
-                }
-
-                // Check visited (with overflow handling)
-                // When visited_overflow is true, cycle detection is disabled but traversal
-                // is still bounded by max_depth, preventing infinite loops in cyclic graphs.
-                if !self.visited_overflow && self.visited.contains(&target) {
-                    continue;
-                }
-
-                // Track visited if not overflowed
-                // Note: When overflow occurs, we trade cycle detection for memory efficiency.
-                // The max_depth limit ensures termination even without visited tracking.
-                if !self.visited_overflow {
-                    if self.visited.len() >= self.config.max_visited_size {
-                        self.visited_overflow = true;
-                        self.visited.clear(); // Free memory
-                    } else {
-                        self.visited.insert(target);
-                    }
-                }
-
-                // Build path
-                let mut new_path = state.path.clone();
-                new_path.push(edge.id());
-
-                // Queue for further traversal
-                if new_depth < self.config.max_depth {
-                    self.queue.push_back(BfsState {
-                        node_id: target,
-                        path: new_path.clone(),
-                        depth: new_depth,
-                    });
-                }
-
-                // Buffer the result (don't return immediately - process all edges first)
-                self.pending_results
-                    .push_back(TraversalResult::new(target, new_path, new_depth));
+            // Dispatch: CSR zero-copy path when snapshot exists, legacy otherwise.
+            if self.edge_store.has_csr_snapshot() {
+                self.expand_node_csr(&state);
+            } else {
+                self.expand_node_legacy(&state);
             }
 
             // After processing all edges from this node, yield first pending result if any
@@ -250,6 +312,146 @@ pub fn bfs_stream(
     config: StreamingConfig,
 ) -> BfsIterator<'_> {
     BfsIterator::new(edge_store, start_id, config)
+}
+
+// ---------------------------------------------------------------------------
+// ConcurrentBfsIterator — BFS over ConcurrentEdgeStore (sharded)
+// ---------------------------------------------------------------------------
+
+/// Streaming BFS iterator that works with [`ConcurrentEdgeStore`].
+///
+/// Unlike [`BfsIterator`] (which borrows `&EdgeStore` and returns edge
+/// references), this iterator acquires per-shard read locks on each
+/// `get_outgoing()` call and works with owned `GraphEdge` values.
+/// No shard lock is held across iterations, maximising concurrency.
+/// Uses parent-pointer map for zero-clone path reconstruction.
+pub struct ConcurrentBfsIterator<'a> {
+    edge_store: &'a ConcurrentEdgeStore,
+    queue: VecDeque<BfsState>,
+    visited: FxHashSet<u64>,
+    config: StreamingConfig,
+    rel_types_set: FxHashSet<String>,
+    yielded: usize,
+    visited_overflow: bool,
+    pending_results: VecDeque<TraversalResult>,
+    /// Parent-pointer map: target_node -> (parent_node, edge_id).
+    parent_map: FxHashMap<u64, (u64, u64)>,
+    /// Source node ID for path reconstruction.
+    source_id: u64,
+}
+
+impl<'a> ConcurrentBfsIterator<'a> {
+    /// Creates a new concurrent BFS iterator starting from the given node.
+    #[must_use]
+    pub fn new(
+        edge_store: &'a ConcurrentEdgeStore,
+        start_id: u64,
+        config: StreamingConfig,
+    ) -> Self {
+        let mut visited = FxHashSet::default();
+        visited.insert(start_id);
+
+        let mut queue = VecDeque::new();
+        queue.push_back(BfsState {
+            node_id: start_id,
+            depth: 0,
+        });
+
+        let rel_types_set: FxHashSet<String> = config.rel_types.iter().cloned().collect();
+
+        Self {
+            edge_store,
+            queue,
+            visited,
+            config,
+            rel_types_set,
+            yielded: 0,
+            visited_overflow: false,
+            pending_results: VecDeque::new(),
+            parent_map: FxHashMap::default(),
+            source_id: start_id,
+        }
+    }
+}
+
+impl Iterator for ConcurrentBfsIterator<'_> {
+    type Item = TraversalResult;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(limit) = self.config.limit {
+            if self.yielded >= limit {
+                return None;
+            }
+        }
+
+        if let Some(result) = self.pending_results.pop_front() {
+            self.yielded += 1;
+            return Some(result);
+        }
+
+        while let Some(state) = self.queue.pop_front() {
+            // Per-node shard lock: acquired and released within this call.
+            let edges = self.edge_store.get_outgoing(state.node_id);
+
+            for edge in &edges {
+                if !self.rel_types_set.is_empty() && !self.rel_types_set.contains(edge.label()) {
+                    continue;
+                }
+
+                let target = edge.target();
+                let new_depth = state.depth + 1;
+
+                if new_depth > self.config.max_depth {
+                    continue;
+                }
+
+                if !self.visited_overflow && self.visited.contains(&target) {
+                    continue;
+                }
+
+                if !self.visited_overflow {
+                    if self.visited.len() >= self.config.max_visited_size {
+                        self.visited_overflow = true;
+                        self.visited.clear();
+                    } else {
+                        self.visited.insert(target);
+                    }
+                }
+
+                // Record parent pointer; path reconstructed lazily for results.
+                self.parent_map.insert(target, (state.node_id, edge.id()));
+
+                if new_depth < self.config.max_depth {
+                    self.queue.push_back(BfsState {
+                        node_id: target,
+                        depth: new_depth,
+                    });
+                }
+
+                let path = reconstruct_path(target, self.source_id, &self.parent_map);
+                self.pending_results
+                    .push_back(TraversalResult::new(target, path, new_depth));
+            }
+
+            if let Some(result) = self.pending_results.pop_front() {
+                self.yielded += 1;
+                return Some(result);
+            }
+        }
+
+        None
+    }
+}
+
+/// Convenience function to create a streaming BFS iterator over a
+/// [`ConcurrentEdgeStore`].
+#[must_use]
+pub fn concurrent_bfs_stream(
+    edge_store: &ConcurrentEdgeStore,
+    start_id: u64,
+    config: StreamingConfig,
+) -> ConcurrentBfsIterator<'_> {
+    ConcurrentBfsIterator::new(edge_store, start_id, config)
 }
 
 // Tests moved to streaming_tests.rs per project rules

@@ -370,3 +370,56 @@ fn test_native_batch_upsert_mapping_consistency() {
         );
     }
 }
+
+// =============================================================================
+// Alpha wiring tests
+// =============================================================================
+
+#[test]
+fn test_native_index_with_params_uses_custom_alpha() {
+    use super::params::HnswParams;
+
+    // GIVEN: params with a custom alpha
+    let params = HnswParams::auto(32).with_alpha(1.0);
+
+    // WHEN: create index with those params
+    let index =
+        NativeHnswIndex::with_params(32, DistanceMetric::Cosine, params).expect("test: create");
+
+    // THEN: insert and search should work (alpha affects graph structure, not API)
+    for i in 0..20u64 {
+        let vec: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32 * 0.01).collect();
+        index.insert(i, &vec).expect("test: insert");
+    }
+
+    let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.01).collect();
+    let results = index.search(&query, 5);
+    assert!(!results.is_empty(), "search should return results");
+    assert_eq!(results[0].id, 0, "nearest neighbor should be point 0");
+}
+
+#[test]
+fn test_native_index_default_alpha_search_works() {
+    use super::params::HnswParams;
+
+    // GIVEN: default params (alpha = 1.2)
+    let params = HnswParams::auto(32);
+    assert!(
+        (params.alpha - 1.2).abs() < f32::EPSILON,
+        "default alpha should be 1.2"
+    );
+
+    // WHEN: create index and insert data
+    let index =
+        NativeHnswIndex::with_params(32, DistanceMetric::Cosine, params).expect("test: create");
+
+    for i in 0..20u64 {
+        let vec: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32 * 0.01).collect();
+        index.insert(i, &vec).expect("test: insert");
+    }
+
+    // THEN: search works correctly
+    let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.01).collect();
+    let results = index.search(&query, 5);
+    assert!(!results.is_empty(), "search should return results");
+}

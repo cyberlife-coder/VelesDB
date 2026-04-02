@@ -499,3 +499,86 @@ fn test_contiguous_vectors_gather_flat_all() {
     let gathered = cv.gather_flat(&[0, 1]);
     assert_eq!(gathered, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 }
+
+// =========================================================================
+// I2: Pre-Allocated Vector Storage for Batch Insert
+// =========================================================================
+
+#[test]
+fn test_reserve_additional_grows_capacity() {
+    let mut cv = ContiguousVectors::new(4, 16).expect("test");
+    cv.push(&[1.0, 2.0, 3.0, 4.0]).expect("test");
+
+    cv.reserve_additional(1000)
+        .expect("test: reserve should succeed");
+
+    // reserve_additional guarantees capacity >= len + additional
+    assert!(
+        cv.capacity() >= cv.len() + 1000,
+        "capacity should be >= len + 1000: len={}, capacity={}",
+        cv.len(),
+        cv.capacity()
+    );
+    // Data must remain intact after capacity growth
+    assert_eq!(cv.len(), 1);
+    assert_eq!(cv.get(0).expect("test"), &[1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn test_reserve_additional_noop_when_sufficient() {
+    let mut cv = ContiguousVectors::new(4, 1000).expect("test");
+    cv.push(&[1.0, 2.0, 3.0, 4.0]).expect("test");
+
+    let cap_before = cv.capacity();
+    // Already has 999 slots free, asking for 100 more should be a no-op
+    cv.reserve_additional(100)
+        .expect("test: reserve should succeed");
+
+    assert_eq!(cv.capacity(), cap_before, "capacity should not change");
+    assert_eq!(cv.len(), 1);
+}
+
+#[test]
+fn test_reserve_additional_zero_is_noop() {
+    let mut cv = ContiguousVectors::new(4, 16).expect("test");
+    let cap_before = cv.capacity();
+
+    cv.reserve_additional(0)
+        .expect("test: reserve zero should succeed");
+    assert_eq!(cv.capacity(), cap_before);
+}
+
+#[allow(clippy::cast_precision_loss)]
+#[test]
+fn test_reserve_additional_then_push_batch_no_resize() {
+    let mut cv = ContiguousVectors::new(32, 16).expect("test");
+
+    // Pre-reserve space for 500 vectors
+    cv.reserve_additional(500)
+        .expect("test: reserve should succeed");
+    let cap_after_reserve = cv.capacity();
+
+    // Push 500 vectors — should NOT trigger any resize
+    let vectors: Vec<Vec<f32>> = (0..500)
+        .map(|i| (0..32).map(|j| (i * 32 + j) as f32 * 0.001).collect())
+        .collect();
+    let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+    let added = cv
+        .push_batch(&refs)
+        .expect("test: push_batch should succeed");
+
+    assert_eq!(added, 500);
+    assert_eq!(cv.len(), 500);
+    // Capacity should be unchanged — no resize was triggered
+    assert_eq!(
+        cv.capacity(),
+        cap_after_reserve,
+        "push_batch should not trigger resize after reserve_additional"
+    );
+
+    // Verify data integrity
+    for (i, expected) in vectors.iter().enumerate() {
+        let actual = cv.get(i).expect("test: vector should exist");
+        assert_eq!(actual, expected.as_slice(), "vector {i} data mismatch");
+    }
+}

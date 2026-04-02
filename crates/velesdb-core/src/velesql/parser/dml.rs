@@ -503,6 +503,7 @@ fn extract_optional_u64(fields: &[(String, Value)], key: &str) -> Option<u64> {
         .find(|(k, _)| k == key)
         .and_then(|(_, v)| match v {
             Value::Integer(i) => u64::try_from(*i).ok(),
+            Value::UnsignedInteger(u) => Some(*u),
             _ => None,
         })
 }
@@ -512,6 +513,7 @@ fn extract_edge_id(value: &Value) -> Result<u64, ParseError> {
     match value {
         Value::Integer(i) => u64::try_from(*i)
             .map_err(|_| ParseError::syntax(0, "", "Edge ID must be a non-negative integer")),
+        Value::UnsignedInteger(u) => Ok(*u),
         _ => Err(ParseError::syntax(0, "", "Edge ID must be an integer")),
     }
 }

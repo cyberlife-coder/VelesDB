@@ -555,7 +555,7 @@ INSERT                      INDEX                       SEARCH
 **Key design choices:**
 - **Local-first**: In-process or single binary — no network hops, no cloud dependency
 - **Memory-mapped storage**: OS manages paging between RAM and disk
-- **WAL durability**: Every write is journaled. Crash-safe by default (`fsync` mode)
+- **WAL durability**: Every write is journaled. Crash-safe by default (`fsync` mode). Deferred sync during bulk insert for throughput
 - **ColumnStore**: Typed columns with string interning, RoaringBitmap tombstones, PostgreSQL-inspired auto-vacuum
 
 <details>
@@ -653,7 +653,7 @@ VelesDB's performance is built on peer-reviewed research. Every technique listed
 | Technique | Paper | What it does in VelesDB |
 |-----------|-------|------------------------|
 | **HNSW** | [Malkov & Yashunin, 2016](https://arxiv.org/abs/1603.09320) | Hierarchical navigable small-world graph for approximate nearest neighbor search |
-| **VAMANA Diversification** | [Subramanya et al. (DiskANN), 2019](https://arxiv.org/abs/1907.05024) | Alpha-based neighbor selection for graph quality and recall |
+| **VAMANA Diversification** | [Subramanya et al. (DiskANN), 2019](https://arxiv.org/abs/1907.05024) | Alpha-based neighbor selection for graph quality and recall. Graduated ef_construction (3-phase schedule) during batch insert |
 | **Graph Reordering** | [Chen et al., NeurIPS 2022](https://arxiv.org/abs/2104.03221) | BFS-based node reordering for 15-30% cache miss reduction |
 
 ### Quantization & Compression
@@ -682,6 +682,10 @@ VelesDB's performance is built on peer-reviewed research. Every technique listed
 | Technique | Reference | What it does in VelesDB |
 |-----------|-----------|------------------------|
 | **BitVec Visited Set** | ANN best practice | 1-bit-per-node tracking (1.25 KB for 10K nodes vs 80 KB HashSet). Thread-local pooling |
+| **FxHashSet** | [rustc-hash](https://crates.io/crates/rustc-hash) | Non-cryptographic hash for integer node IDs in graph traversal visited sets |
+| **CSR Snapshot** | Sparse matrix literature | Compressed Sparse Row snapshot of edge store for zero-copy BFS/DFS without lock contention |
+| **Parent-Pointer Path** | Graph algorithms | Parent-pointer backtracking replaces per-path cloning in BFS/DFS traversal |
+| **Lock-Free CAS Entry** | ANN best practice | AtomicUsize CAS for HNSW entry-point promotion, eliminating mutex contention during parallel inserts |
 | **Partial Sort** | `select_nth_unstable_by` | O(n + k log k) top-k extraction instead of O(n log n) full sort |
 | **Two-Tier Cache** | [LRU + DashMap] | Lock-free L1 (DashMap, ~50ns) + LRU L2 for distance and query caching |
 | **AutoTune ef** | Adaptive search (VelesDB) | Auto-computed ef_search from collection size + dimension. Two-phase adaptive: low-ef first, escalate on hard queries |

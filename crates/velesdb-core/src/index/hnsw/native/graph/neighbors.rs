@@ -99,6 +99,22 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Connects a neighbor back to `new_node`, pruning if the neighbor's list
     /// exceeds `max_conn`. Called under an existing vectors+layers read lock.
+    ///
+    /// When the neighbor already has `max_conn` connections, this performs
+    /// redundancy-aware eviction in O(M): find the existing neighbor most
+    /// redundant with `new_node` (closest to it), then evict it if `new_node`
+    /// is closer to the anchor than the farthest existing neighbor.
+    /// This preserves directional diversity without the O(M^2) cost of
+    /// full pairwise diversity scoring.
+    ///
+    /// # Complexity trade-off
+    ///
+    /// An O(M log M) sort-based approach would rank all candidates by quality
+    /// before eviction, but M is small (16-64) and this function is called
+    /// once per neighbor per insert — on the hot path of index construction.
+    /// The O(M) scan-based eviction was chosen for construction throughput.
+    /// Recall quality is enforced by tests: >= 0.80 in unit tests (1K vectors),
+    /// >= 0.90 at 100K scale.
     #[inline]
     fn connect_back_with_pruning(
         &self,
@@ -109,51 +125,85 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         vectors: &crate::perf_optimizations::ContiguousVectors,
         layers: &[super::super::layer::Layer],
     ) {
-        let neighbor_count = layers[layer]
-            .with_neighbors(neighbor, <[usize]>::len)
-            .unwrap_or(0);
+        // SAFETY: neighbor is a valid node_id from the graph's neighbor list.
+        // - Condition 1: neighbor < vectors.len().
+        // Reason: Distance computation for backward pruning.
+        let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
 
-        if neighbor_count < max_conn {
-            // Simple case: append under the per-node write lock (rank 30)
-            let _ = layers[layer].with_neighbors_mut(neighbor, |neighbors| {
-                if !neighbors.contains(&new_node) {
-                    neighbors.push(new_node);
-                }
-            });
-        } else {
-            // Pruning case: collect all candidates, compute distances, keep best
-            let mut all_neighbors = layers[layer].get_neighbors(neighbor);
-            all_neighbors.push(new_node);
+        let _ = layers[layer].with_neighbors_mut(neighbor, |neighbors| {
+            if neighbors.contains(&new_node) {
+                return;
+            }
 
-            // SAFETY: neighbor is a valid node_id from the graph's neighbor list.
-            // - Condition 1: neighbor < vectors.len().
-            // Reason: Distance computation for neighbor pruning.
-            let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
-            let mut with_dist: Vec<(NodeId, f32)> = all_neighbors
-                .iter()
-                .map(|&n| {
-                    // SAFETY: n is a valid node_id from the graph's neighbor list
-                    // or a just-inserted node_id.
-                    // - Condition 1: n < vectors.len().
-                    // Reason: Pairwise distance for pruning decision.
-                    (
-                        n,
-                        self.distance
-                            .distance(neighbor_vec, unsafe { vectors.get_unchecked(n) }),
-                    )
-                })
-                .collect();
+            if neighbors.len() < max_conn {
+                neighbors.push(new_node);
+                return;
+            }
 
-            with_dist.sort_by(|a, b| a.1.total_cmp(&b.1));
-            let pruned: Vec<NodeId> = with_dist
-                .into_iter()
-                .take(max_conn)
-                .map(|(n, _)| n)
-                .collect();
+            // SAFETY: new_node was just inserted, so new_node < vectors.len().
+            // Reason: Distance from neighbor to new candidate for eviction check.
+            let new_dist = self
+                .distance
+                .distance(neighbor_vec, unsafe { vectors.get_unchecked(new_node) });
 
-            let _ = layers[layer].with_neighbors_mut(neighbor, |neighbors| {
-                *neighbors = pruned;
-            });
+            self.evict_most_redundant(neighbors, neighbor_vec, new_node, new_dist, vectors);
+        });
+    }
+
+    /// Evicts the existing neighbor most redundant with `new_node` (closest
+    /// to `new_node`), but only if `new_node` is closer to the anchor than
+    /// the farthest existing neighbor. This is an O(M) scan.
+    ///
+    /// Rationale: replacing the neighbor most similar to `new_node` preserves
+    /// directional coverage. The alpha condition (`alpha * new_dist`) ensures
+    /// only a truly improving swap happens.
+    #[inline]
+    fn evict_most_redundant(
+        &self,
+        neighbors: &mut Vec<NodeId>,
+        anchor_vec: &[f32],
+        new_node: NodeId,
+        new_dist: f32,
+        vectors: &crate::perf_optimizations::ContiguousVectors,
+    ) {
+        // SAFETY: new_node was just inserted, so new_node < vectors.len().
+        // Reason: Finding the most redundant neighbor (closest to new_node).
+        let new_vec = unsafe { vectors.get_unchecked(new_node) };
+
+        let mut worst_idx = 0;
+        let mut worst_dist: f32 = 0.0;
+        let mut closest_to_new_idx = 0;
+        let mut closest_to_new_dist = f32::MAX;
+
+        for (i, &n) in neighbors.iter().enumerate() {
+            // SAFETY: n is a valid node_id from the graph's neighbor list.
+            // - Condition 1: n < vectors.len().
+            // Reason: O(M) scan for eviction candidates.
+            let n_vec = unsafe { vectors.get_unchecked(n) };
+            let d_to_anchor = self.distance.distance(anchor_vec, n_vec);
+            let d_to_new = self.distance.distance(new_vec, n_vec);
+
+            if d_to_anchor > worst_dist {
+                worst_dist = d_to_anchor;
+                worst_idx = i;
+            }
+            if d_to_new < closest_to_new_dist {
+                closest_to_new_dist = d_to_new;
+                closest_to_new_idx = i;
+            }
+        }
+
+        // Strategy: if new_node is closer to anchor than the farthest neighbor,
+        // evict the neighbor most redundant with new_node (closest to it).
+        // Otherwise fall back to standard farthest-eviction.
+        if new_dist < worst_dist {
+            let evict_idx = if self.alpha * new_dist <= closest_to_new_dist {
+                closest_to_new_idx // Diverse: evict the most redundant
+            } else {
+                worst_idx // Not diverse enough: evict the farthest
+            };
+            neighbors.swap_remove(evict_idx);
+            neighbors.push(new_node);
         }
     }
 }

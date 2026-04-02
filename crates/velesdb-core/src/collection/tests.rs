@@ -1468,12 +1468,12 @@ fn test_legacy_traverse_paths_use_edge_ids() {
         .iter()
         .find(|r| r.target_id == 3 && r.depth == 2)
         .expect("BFS must reach node 3 at depth 2");
-    assert_eq!(bfs_to_3.path, vec![100, 101]);
+    assert_eq!(bfs_to_3.path.as_slice(), &[100, 101]);
 
     let dfs = collection.traverse_dfs(1, 3, None, 10).unwrap();
     let dfs_to_3 = dfs
         .iter()
         .find(|r| r.target_id == 3 && r.depth == 2)
         .expect("DFS must reach node 3 at depth 2");
-    assert_eq!(dfs_to_3.path, vec![100, 101]);
+    assert_eq!(dfs_to_3.path.as_slice(), &[100, 101]);
 }

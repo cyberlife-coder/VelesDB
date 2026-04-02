@@ -155,3 +155,43 @@ fn test_arithmetic_expr_display_similarity_parameterized() {
     })));
     assert_eq!(format!("{expr}"), "similarity(embedding, $alt_vec)");
 }
+
+// ============================================================================
+// Issue #486: Value::UnsignedInteger support
+// ============================================================================
+
+#[test]
+fn test_value_from_u64() {
+    let v: Value = 42u64.into();
+    assert_eq!(v, Value::UnsignedInteger(42));
+}
+
+#[test]
+fn test_value_unsigned_integer_to_json() {
+    let v = Value::UnsignedInteger(42);
+    assert_eq!(v.to_json(), serde_json::json!(42));
+}
+
+#[test]
+fn test_value_unsigned_integer_to_json_large() {
+    // i64::MAX + 1 — must not lose precision
+    let large = 9_223_372_036_854_775_808_u64;
+    let v = Value::UnsignedInteger(large);
+    let json = v.to_json();
+    assert_eq!(json.as_u64(), Some(large));
+}
+
+#[test]
+fn test_value_unsigned_integer_to_json_max() {
+    let v = Value::UnsignedInteger(u64::MAX);
+    let json = v.to_json();
+    assert_eq!(json.as_u64(), Some(u64::MAX));
+}
+
+#[test]
+fn test_value_unsigned_integer_serialization_roundtrip() {
+    let v = Value::UnsignedInteger(9_223_372_036_854_775_808);
+    let json_str = serde_json::to_string(&v).expect("test: serialize");
+    let parsed: Value = serde_json::from_str(&json_str).expect("test: deserialize");
+    assert_eq!(v, parsed);
+}

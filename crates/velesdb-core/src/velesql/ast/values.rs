@@ -19,6 +19,8 @@ pub enum VectorExpr {
 pub enum Value {
     /// Integer value.
     Integer(i64),
+    /// Unsigned integer value for values exceeding `i64::MAX` (issue #486).
+    UnsignedInteger(u64),
     /// Float value.
     Float(f64),
     /// String value.
@@ -38,6 +40,12 @@ pub enum Value {
 impl From<i64> for Value {
     fn from(v: i64) -> Self {
         Self::Integer(v)
+    }
+}
+
+impl From<u64> for Value {
+    fn from(v: u64) -> Self {
+        Self::UnsignedInteger(v)
     }
 }
 
@@ -156,6 +164,7 @@ impl Value {
     pub fn to_json(&self) -> serde_json::Value {
         match self {
             Self::Integer(i) => serde_json::json!(i),
+            Self::UnsignedInteger(u) => serde_json::json!(u),
             Self::Float(f) => serde_json::json!(f),
             Self::String(s) => serde_json::json!(s),
             Self::Boolean(b) => serde_json::json!(b),

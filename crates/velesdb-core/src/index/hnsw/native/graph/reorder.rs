@@ -166,9 +166,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Updates the entry point to its new ID after permutation.
+    ///
+    /// Called during `reorder_for_locality()` which runs single-threaded
+    /// after all inserts complete. No concurrent promotions are possible,
+    /// so a direct atomic store with `Release` ordering is sufficient.
     fn update_entry_point(&self, old_to_new: &[usize], count: usize) {
-        let _guard = self.entry_point_promote_lock.lock();
-        let old_ep = self.entry_point.load(Ordering::Relaxed);
+        let old_ep = self.entry_point.load(Ordering::Acquire);
         if old_ep != NO_ENTRY_POINT && old_ep < count {
             self.entry_point
                 .store(old_to_new[old_ep], Ordering::Release);

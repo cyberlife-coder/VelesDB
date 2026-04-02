@@ -5,6 +5,7 @@
 
 use std::io;
 
+use super::codec_helpers::{serialize_with_header, validate_and_split_header};
 use super::QuantizationCodec;
 
 /// A binary quantized vector using 1-bit per dimension.
@@ -124,6 +125,9 @@ impl BinaryQuantizedVector {
     }
 }
 
+/// Binary header: `[dimension: u32 LE]` = 4 bytes.
+const BINARY_HEADER_SIZE: usize = 4;
+
 impl QuantizationCodec for BinaryQuantizedVector {
     /// # Panics
     ///
@@ -135,39 +139,33 @@ impl QuantizationCodec for BinaryQuantizedVector {
             self.dimension
         );
 
-        let mut bytes = Vec::with_capacity(4 + self.data.len());
-        // Store dimension as u32 (4 bytes)
-        // SAFETY: dimension validated above to fit in u32
+        // Reason: dimension validated above to fit in u32
         #[allow(clippy::cast_possible_truncation)]
-        bytes.extend_from_slice(&(self.dimension as u32).to_le_bytes());
-        bytes.extend_from_slice(&self.data);
-        bytes
+        let header = (self.dimension as u32).to_le_bytes();
+        serialize_with_header(&header, &self.data)
     }
 
     fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
-        if bytes.len() < 4 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Not enough bytes for BinaryQuantizedVector header",
-            ));
-        }
+        let (header, payload) =
+            validate_and_split_header(bytes, BINARY_HEADER_SIZE, "BinaryQuantizedVector")?;
 
         #[allow(clippy::cast_possible_truncation)]
-        let dimension = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        // Reason: u32 always fits in usize on 32-bit and 64-bit platforms
+        let dimension = u32::from_le_bytes([header[0], header[1], header[2], header[3]]) as usize;
         let expected_data_len = dimension.div_ceil(8);
 
-        if bytes.len() < 4 + expected_data_len {
+        if payload.len() < expected_data_len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "Not enough bytes for BinaryQuantizedVector data: expected {}, got {}",
-                    4 + expected_data_len,
+                    BINARY_HEADER_SIZE + expected_data_len,
                     bytes.len()
                 ),
             ));
         }
 
-        let data = bytes[4..4 + expected_data_len].to_vec();
+        let data = payload[..expected_data_len].to_vec();
 
         Ok(Self { data, dimension })
     }

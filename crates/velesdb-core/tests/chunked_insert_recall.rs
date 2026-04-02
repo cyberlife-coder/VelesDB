@@ -91,7 +91,9 @@ fn chunked_insert_recall_parity() {
     let mut recalls = Vec::with_capacity(NUM_QUERIES);
 
     for query in &queries {
-        let results = index.search_with_quality(query, K, SearchQuality::Balanced);
+        let results = index
+            .search_with_quality(query, K, SearchQuality::Balanced)
+            .unwrap();
         let result_ids: Vec<u64> = results.iter().map(|r| r.id).collect();
         let ground_truth = brute_force_knn(&vectors, query, K);
 

@@ -1,10 +1,13 @@
 //! WHERE clause evaluation for MATCH queries (EPIC-045 US-002).
 //!
 //! Handles condition evaluation, parameter resolution, and comparison operations.
+//! Fix #492: metadata conditions (IN, BETWEEN, LIKE, IS NULL) are now evaluated
+//! against node payloads instead of being silently ignored by a catch-all arm.
 
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
-use crate::storage::{PayloadStorage, VectorStorage};
+use crate::filter;
+use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 use std::collections::HashMap;
 
 /// Applies an ordering comparison operator to an `Ord` pair.
@@ -100,52 +103,97 @@ fn resolve_query_vector(
 impl Collection {
     /// Evaluates a WHERE condition against a node's payload (EPIC-045 US-002).
     ///
-    /// Supports basic comparisons: =, <>, <, >, <=, >=
+    /// Supports comparisons, logical operators, similarity, and metadata
+    /// conditions (IN, BETWEEN, LIKE, ILIKE, IS NULL, IS NOT NULL, MATCH).
     /// Parameters are resolved from the `params` map.
+    ///
+    /// The caller must pass a pre-acquired `payload_guard` to avoid
+    /// per-node lock acquisitions during BFS traversal.
+    ///
+    /// Fix #492: metadata conditions are now evaluated via the filter engine
+    /// instead of being silently ignored by a catch-all arm.
     pub(crate) fn evaluate_where_condition(
         &self,
         node_id: u64,
         bindings: Option<&HashMap<String, u64>>,
         condition: &crate::velesql::Condition,
         params: &HashMap<String, serde_json::Value>,
+        payload_guard: &LogPayloadStorage,
     ) -> Result<bool> {
         use crate::velesql::Condition;
 
         match condition {
             Condition::Comparison(cmp) => {
-                self.evaluate_comparison_condition(node_id, bindings, cmp, params)
+                Self::evaluate_comparison_condition(node_id, bindings, cmp, params, payload_guard)
             }
-            Condition::And(left, right) => Ok(self
-                .evaluate_where_condition(node_id, bindings, left, params)?
-                && self.evaluate_where_condition(node_id, bindings, right, params)?),
-            Condition::Or(left, right) => Ok(self
-                .evaluate_where_condition(node_id, bindings, left, params)?
-                || self.evaluate_where_condition(node_id, bindings, right, params)?),
-            Condition::Not(inner) => {
-                Ok(!self.evaluate_where_condition(node_id, bindings, inner, params)?)
+            Condition::And(left, right) => {
+                Ok(
+                    self.evaluate_where_condition(node_id, bindings, left, params, payload_guard)?
+                        && self.evaluate_where_condition(
+                            node_id,
+                            bindings,
+                            right,
+                            params,
+                            payload_guard,
+                        )?,
+                )
             }
+            Condition::Or(left, right) => {
+                Ok(
+                    self.evaluate_where_condition(node_id, bindings, left, params, payload_guard)?
+                        || self.evaluate_where_condition(
+                            node_id,
+                            bindings,
+                            right,
+                            params,
+                            payload_guard,
+                        )?,
+                )
+            }
+            Condition::Not(inner) => Ok(!self.evaluate_where_condition(
+                node_id,
+                bindings,
+                inner,
+                params,
+                payload_guard,
+            )?),
             Condition::Group(inner) => {
-                self.evaluate_where_condition(node_id, bindings, inner, params)
+                self.evaluate_where_condition(node_id, bindings, inner, params, payload_guard)
             }
             Condition::Similarity(sim) => self.evaluate_similarity_condition(node_id, sim, params),
-            // Other condition types (VectorSearch, VectorFusedSearch, etc.)
-            // handled separately in `execute_match_with_similarity`.
-            _ => Ok(true),
+            // Fix #492: metadata conditions converted to filter engine evaluation.
+            Condition::In(_)
+            | Condition::Between(_)
+            | Condition::Like(_)
+            | Condition::IsNull(_)
+            | Condition::Match(_) => Self::evaluate_metadata_condition_for_node(
+                node_id,
+                bindings,
+                condition,
+                payload_guard,
+            ),
+            // VectorSearch, VectorFusedSearch, SparseVectorSearch, and GraphMatch
+            // are handled separately in `execute_match_with_similarity`.
+            Condition::VectorSearch(_)
+            | Condition::VectorFusedSearch(_)
+            | Condition::SparseVectorSearch(_)
+            | Condition::GraphMatch(_) => Ok(true),
         }
     }
 
     /// Evaluates a single comparison condition against a node's payload.
+    ///
+    /// Uses the pre-acquired `payload_guard` instead of locking per-node.
     fn evaluate_comparison_condition(
-        &self,
         node_id: u64,
         bindings: Option<&HashMap<String, u64>>,
         cmp: &crate::velesql::Comparison,
         params: &HashMap<String, serde_json::Value>,
+        payload_guard: &LogPayloadStorage,
     ) -> Result<bool> {
         let target_id = resolve_target_id(&cmp.column, bindings, node_id);
 
-        let payload_storage = self.payload_storage.read();
-        let Some(target_payload) = payload_storage.retrieve(target_id).ok().flatten() else {
+        let Some(target_payload) = payload_guard.retrieve(target_id).ok().flatten() else {
             return Ok(false);
         };
 
@@ -156,6 +204,37 @@ impl Collection {
 
         let resolved_value = Self::resolve_where_param(&cmp.value, params)?;
         Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
+    }
+
+    /// Evaluates a metadata condition (IN, BETWEEN, LIKE, IS NULL, MATCH)
+    /// against a node's payload by converting to the filter engine (Fix #492).
+    ///
+    /// Uses the pre-acquired `payload_guard` instead of locking per-node.
+    /// The column name may be alias-prefixed (e.g. `n.category`); the alias
+    /// is resolved to the correct node ID via bindings, and stripped before
+    /// building the filter condition so the filter engine sees the bare field
+    /// path.
+    #[allow(clippy::unnecessary_wraps)] // Consistent with other evaluate_* methods
+    fn evaluate_metadata_condition_for_node(
+        node_id: u64,
+        bindings: Option<&HashMap<String, u64>>,
+        condition: &crate::velesql::Condition,
+        payload_guard: &LogPayloadStorage,
+    ) -> Result<bool> {
+        // Fix #486: Resolve the target node ID from the condition's column
+        // alias, mirroring what evaluate_comparison_condition does. Without
+        // this, `WHERE a.category IN (...)` would evaluate against node_id
+        // (the traversal target) instead of the node bound to alias `a`.
+        let target_id = column_of_metadata_condition(condition)
+            .map_or(node_id, |col| resolve_target_id(col, bindings, node_id));
+
+        let Some(payload) = payload_guard.retrieve(target_id).ok().flatten() else {
+            return Ok(false);
+        };
+
+        let rewritten = rewrite_condition_aliases(condition.clone(), bindings);
+        let filter_cond: filter::Condition = rewritten.into();
+        Ok(filter_cond.matches(&payload))
     }
 
     /// Evaluates a similarity condition against a node's vector (EPIC-052 US-007).
@@ -221,6 +300,8 @@ impl Collection {
                     serde_json::Value::Number(n) => {
                         if let Some(i) = n.as_i64() {
                             Value::Integer(i)
+                        } else if let Some(u) = n.as_u64() {
+                            Value::UnsignedInteger(u)
                         } else if let Some(f) = n.as_f64() {
                             Value::Float(f)
                         } else {
@@ -254,6 +335,9 @@ impl Collection {
             (serde_json::Value::Number(n), Value::Integer(i)) => n
                 .as_i64()
                 .is_some_and(|actual_i| apply_ord_op(operator, &actual_i, i)),
+            (serde_json::Value::Number(n), Value::UnsignedInteger(u)) => n
+                .as_u64()
+                .is_some_and(|actual_u| apply_ord_op(operator, &actual_u, u)),
             (serde_json::Value::Number(n), Value::Float(f)) => n
                 .as_f64()
                 .is_some_and(|actual_f| compare_floats(operator, actual_f, *f)),
@@ -305,5 +389,67 @@ fn strip_alias<'a>(column: &'a str, bindings: Option<&HashMap<String, u64>>) -> 
     match column.split_once('.') {
         Some((alias, rest)) if bindings.and_then(|b| b.get(alias)).is_some() => rest,
         _ => column,
+    }
+}
+
+/// Strips the alias prefix from a column name string.
+///
+/// Returns the bare field path (e.g. `"n.category"` → `"category"`) when the
+/// prefix matches a bound alias, or the original string if no alias matches.
+fn strip_alias_owned(column: &str, bindings: Option<&HashMap<String, u64>>) -> String {
+    strip_alias(column, bindings).to_string()
+}
+
+/// Extracts the column name from a metadata condition variant.
+///
+/// Returns `Some(&str)` for condition types that carry a `column` field
+/// (In, Between, Like, IsNull, Match). Non-metadata variants return `None`.
+fn column_of_metadata_condition(condition: &crate::velesql::Condition) -> Option<&str> {
+    use crate::velesql::Condition;
+    match condition {
+        Condition::In(ic) => Some(&ic.column),
+        Condition::Between(btw) => Some(&btw.column),
+        Condition::Like(lk) => Some(&lk.column),
+        Condition::IsNull(isn) => Some(&isn.column),
+        Condition::Match(m) => Some(&m.column),
+        _ => None,
+    }
+}
+
+/// Rewrites alias-prefixed column names in metadata conditions so the filter
+/// engine receives bare field paths (Fix #492).
+///
+/// Only rewrites the leaf conditions that carry a `column` field; logical
+/// combinators (And, Or, Not, Group) are not reachable here because the
+/// caller dispatches them before reaching this function.
+fn rewrite_condition_aliases(
+    condition: crate::velesql::Condition,
+    bindings: Option<&HashMap<String, u64>>,
+) -> crate::velesql::Condition {
+    use crate::velesql::Condition;
+
+    match condition {
+        Condition::In(mut ic) => {
+            ic.column = strip_alias_owned(&ic.column, bindings);
+            Condition::In(ic)
+        }
+        Condition::Between(mut btw) => {
+            btw.column = strip_alias_owned(&btw.column, bindings);
+            Condition::Between(btw)
+        }
+        Condition::Like(mut lk) => {
+            lk.column = strip_alias_owned(&lk.column, bindings);
+            Condition::Like(lk)
+        }
+        Condition::IsNull(mut isn) => {
+            isn.column = strip_alias_owned(&isn.column, bindings);
+            Condition::IsNull(isn)
+        }
+        Condition::Match(mut m) => {
+            m.column = strip_alias_owned(&m.column, bindings);
+            Condition::Match(m)
+        }
+        // Non-metadata conditions pass through unchanged.
+        other => other,
     }
 }

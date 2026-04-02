@@ -3,6 +3,7 @@
 use super::super::distance::DistanceEngine;
 use super::super::layer::{Layer, NodeId};
 use super::{NativeHnsw, NO_ENTRY_POINT};
+use crate::perf_optimizations::ContiguousVectors;
 use std::borrow::Cow;
 use std::sync::atomic::Ordering;
 
@@ -110,23 +111,53 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Atomically updates the entry point if the index is empty or the node
     /// reaches a higher layer than the current maximum.
     ///
-    /// Serializes concurrent promotions via `entry_point_promote_lock` so that
-    /// `entry_point` and `max_layer` are updated together. The mutex is only
-    /// contended during insert (rare); search reads use a lock-free
-    /// `Acquire` load on the `AtomicUsize` (Issue #422).
+    /// Uses lock-free CAS loops instead of a mutex. Entry-point promotion is
+    /// extremely rare (O(log_M(N)) times per index lifetime), so the CAS loop
+    /// almost never retries. Two separate CAS operations handle the two cases:
+    ///
+    /// 1. **Empty index**: CAS on `entry_point` from `NO_ENTRY_POINT` to `node_id`.
+    /// 2. **Layer promotion**: CAS on `max_layer` from `current_max` to `node_layer`.
+    ///    Only the CAS winner updates `entry_point`, ensuring consistency.
+    ///
+    /// Between `max_layer` CAS success and `entry_point` store, a concurrent
+    /// reader may see the new `max_layer` with the old `entry_point`. This is
+    /// safe: `search_layer_single` returns `None` (via `with_neighbors`) for
+    /// layers where the old EP has no edges, causing a no-op greedy descent.
     pub(in crate::index::hnsw::native) fn promote_entry_point(
         &self,
         node_id: NodeId,
         node_layer: usize,
     ) {
-        let _guard = self.entry_point_promote_lock.lock();
-        let current_ep = self.entry_point.load(Ordering::Relaxed);
-        let current_max = self.max_layer.load(Ordering::Relaxed);
-        if current_ep == NO_ENTRY_POINT || node_layer > current_max {
-            if node_layer > current_max {
-                self.max_layer.store(node_layer, Ordering::Relaxed);
+        // Case 1: First insert — race to set entry_point from NO_ENTRY_POINT.
+        if self.entry_point.load(Ordering::Acquire) == NO_ENTRY_POINT {
+            // CAS: only one thread wins the first-insert race.
+            if self
+                .entry_point
+                .compare_exchange(NO_ENTRY_POINT, node_id, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                self.max_layer.store(node_layer, Ordering::Release);
+                return;
             }
-            self.entry_point.store(node_id, Ordering::Release);
+            // Another thread won — fall through to layer promotion check.
+        }
+
+        // Case 2: Layer promotion — CAS loop on max_layer.
+        loop {
+            let current_max = self.max_layer.load(Ordering::Acquire);
+            if node_layer <= current_max {
+                break; // No promotion needed — most common case.
+            }
+            // Try to atomically claim the new max_layer. Only the CAS
+            // winner updates entry_point; losers retry the loop.
+            if self
+                .max_layer
+                .compare_exchange(current_max, node_layer, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                self.entry_point.store(node_id, Ordering::Release);
+                break;
+            }
         }
     }
 
@@ -140,6 +171,14 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// and layers expanded in single lock scopes. The caller is responsible for
     /// connecting nodes (Phase B) and updating `entry_point`/`count` (Phase C).
     ///
+    /// # Lock Strategy (I2 optimization)
+    ///
+    /// The vector write lock is acquired in two separate scopes:
+    /// 1. **Capacity reservation** — initializes storage and pre-grows the buffer
+    ///    if needed. May trigger an expensive realloc+copy on the cold path.
+    /// 2. **Bulk push** — copies vectors into pre-reserved space. Guaranteed
+    ///    fast memcpy with no reallocation.
+    ///
     /// # Errors
     ///
     /// Returns an error if vector storage allocation fails.
@@ -151,37 +190,64 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             return Ok((Vec::new(), Vec::new()));
         }
 
-        // Normalize cosine vectors (Cow::Borrowed for non-cosine = zero-alloc)
         let processed: Vec<Cow<'a, [f32]>> =
             vectors.iter().map(|v| self.prepare_query(v)).collect();
 
-        // Batch-store all vectors (single write lock)
-        let first_id = {
-            let mut guard = self.vectors.write();
-            if guard.is_none() {
-                *guard = Some(crate::perf_optimizations::ContiguousVectors::new(
-                    processed[0].len(),
-                    vectors.len().max(16),
-                )?);
-            }
-            let storage = guard.as_mut().ok_or_else(|| {
-                crate::error::Error::Internal("Vector storage missing after init".to_string())
-            })?;
-            let first = storage.len();
-            let slices: Vec<&[f32]> = processed.iter().map(AsRef::as_ref).collect();
-            storage.push_batch(&slices)?;
-            first
-        };
+        // Pre-expand layers before vectors (lock ordering safe: layers only)
+        let current_len = self
+            .vectors
+            .read()
+            .as_ref()
+            .map_or(0, ContiguousVectors::len);
+        self.pre_expand_layers(current_len + vectors.len());
 
-        // Assign random layers and expand (single write lock via pre_expand_layers)
-        let total = first_id + vectors.len();
-        self.pre_expand_layers(total);
+        // Scope 1: Initialize storage and reserve capacity (may resize — cold path)
+        self.reserve_vector_capacity(&processed, vectors.len())?;
+
+        // Scope 2: Bulk push into pre-reserved space (fast memcpy — no resize)
+        let first_id = self.bulk_push_vectors(&processed)?;
 
         let assignments: Vec<(NodeId, usize)> = (0..vectors.len())
             .map(|i| (first_id + i, self.random_layer()))
             .collect();
 
         Ok((assignments, processed))
+    }
+
+    /// Initializes vector storage if needed and pre-reserves capacity.
+    ///
+    /// Cold path: the write lock may be held during a buffer resize.
+    fn reserve_vector_capacity(
+        &self,
+        processed: &[Cow<'_, [f32]>],
+        batch_size: usize,
+    ) -> crate::error::Result<()> {
+        let mut guard = self.vectors.write();
+        if guard.is_none() {
+            *guard = Some(ContiguousVectors::new(
+                processed[0].len(),
+                batch_size.max(16),
+            )?);
+        }
+        let storage = guard.as_mut().ok_or_else(|| {
+            crate::error::Error::Internal("Vector storage missing after init".to_string())
+        })?;
+        storage.reserve_additional(batch_size)?;
+        Ok(())
+    }
+
+    /// Pushes all processed vectors into pre-reserved storage.
+    ///
+    /// Fast path: write lock held only for bulk memcpy, no reallocation.
+    fn bulk_push_vectors(&self, processed: &[Cow<'_, [f32]>]) -> crate::error::Result<NodeId> {
+        let mut guard = self.vectors.write();
+        let storage = guard.as_mut().ok_or_else(|| {
+            crate::error::Error::Internal("Vector storage missing after reserve".to_string())
+        })?;
+        let first = storage.len();
+        let slices: Vec<&[f32]> = processed.iter().map(AsRef::as_ref).collect();
+        storage.push_batch(&slices)?;
+        Ok(first)
     }
 
     /// Greedy descent through upper HNSW layers above `node_layer` to find
@@ -208,7 +274,31 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         node_id: NodeId,
         query: &[f32],
         node_layer: usize,
+        entry_point: NodeId,
+    ) {
+        self.connect_node_with_ef(
+            node_id,
+            query,
+            node_layer,
+            entry_point,
+            self.ef_construction,
+            0,
+        );
+    }
+
+    /// Connects a node into the HNSW graph using a caller-specified ef budget.
+    ///
+    /// Used by `connect_batch_chunked` to apply adaptive `ef_construction`
+    /// reduction during bulk insert (lower search budget for large batches)
+    /// without affecting single-vector insert or the stored `ef_construction`.
+    pub(in crate::index::hnsw::native) fn connect_node_with_ef(
+        &self,
+        node_id: NodeId,
+        query: &[f32],
+        node_layer: usize,
         mut entry_point: NodeId,
+        effective_ef: usize,
+        stagnation: usize,
     ) {
         for layer_idx in (0..=node_layer).rev() {
             let max_conn = if layer_idx == 0 {
@@ -216,14 +306,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             } else {
                 self.max_connections
             };
-            // Stagnation disabled during construction (0) to ensure
-            // optimal neighbor selection — see Devin review PR #336.
             let neighbors = self.search_layer(
                 query,
                 &[entry_point],
-                self.ef_construction,
+                effective_ef,
                 layer_idx,
-                0,
+                stagnation,
                 None,
             );
             let selected = self.select_neighbors(&neighbors, max_conn);

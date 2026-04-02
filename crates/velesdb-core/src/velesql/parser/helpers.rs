@@ -53,10 +53,18 @@ pub(crate) fn parse_value_from_str(input: &str) -> Result<Value, ParseError> {
     parse_numeric_value(input)
 }
 
-/// Attempts to parse a string as an integer or float value.
+/// Tries to parse a string as `i64` then `u64` (issue #486).
+fn try_parse_integer(s: &str) -> Option<Value> {
+    s.parse::<i64>()
+        .map(Value::Integer)
+        .ok()
+        .or_else(|| s.parse::<u64>().map(Value::UnsignedInteger).ok())
+}
+
+/// Attempts to parse a string as an integer (i64 or u64) or float value.
 fn parse_numeric_value(input: &str) -> Result<Value, ParseError> {
-    if let Ok(i) = input.parse::<i64>() {
-        return Ok(Value::Integer(i));
+    if let Some(int_val) = try_parse_integer(input) {
+        return Ok(int_val);
     }
     if let Ok(f) = input.parse::<f64>() {
         return Ok(Value::Float(f));
@@ -93,11 +101,12 @@ pub(crate) fn parse_scalar_from_rule(
     }
 }
 
-/// Parses an integer literal string into a [`Value::Integer`].
+/// Parses an integer literal string into [`Value::Integer`] or [`Value::UnsignedInteger`].
+///
+/// Tries `i64` first (covers most integers). Falls back to `u64` for values
+/// in the range `(i64::MAX, u64::MAX]` (issue #486).
 fn parse_integer_literal(s: &str) -> Result<Value, ParseError> {
-    s.parse::<i64>()
-        .map(Value::Integer)
-        .map_err(|_| ParseError::syntax(0, s, "Invalid integer"))
+    try_parse_integer(s).ok_or_else(|| ParseError::syntax(0, s, "Invalid integer"))
 }
 
 /// Parses a float literal string into a [`Value::Float`].
@@ -285,5 +294,35 @@ mod tests {
     #[test]
     fn test_unescape_string_literal_empty() {
         assert_eq!(unescape_string_literal("''"), "");
+    }
+
+    // --- Issue #486: large uint64 parsing ---
+
+    #[test]
+    fn test_parse_integer_i64_max() {
+        // i64::MAX should still parse as Value::Integer
+        let result = parse_value_from_str("9223372036854775807").unwrap();
+        assert_eq!(result, Value::Integer(i64::MAX));
+    }
+
+    #[test]
+    fn test_parse_integer_u64_value() {
+        // i64::MAX + 1 should parse as Value::UnsignedInteger
+        let result = parse_value_from_str("9223372036854775808").unwrap();
+        assert_eq!(result, Value::UnsignedInteger(9_223_372_036_854_775_808));
+    }
+
+    #[test]
+    fn test_parse_integer_u64_max() {
+        // u64::MAX should parse as Value::UnsignedInteger
+        let result = parse_value_from_str("18446744073709551615").unwrap();
+        assert_eq!(result, Value::UnsignedInteger(u64::MAX));
+    }
+
+    #[test]
+    fn test_parse_integer_overflow_to_float() {
+        // u64::MAX + 1 should fall through to float parsing
+        let result = parse_value_from_str("18446744073709551616").unwrap();
+        assert!(matches!(result, Value::Float(_)));
     }
 }

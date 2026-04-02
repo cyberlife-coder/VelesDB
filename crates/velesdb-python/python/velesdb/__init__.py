@@ -32,63 +32,6 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
 )
 
 
-def _compile_like_pattern(pattern: str, case_insensitive: bool) -> Any:
-    parts: list[str] = []
-    for ch in pattern:
-        if ch == "%":
-            parts.append(".*")
-        elif ch == "_":
-            parts.append(".")
-        else:
-            parts.append(re.escape(ch))
-    regex = "^" + "".join(parts) + "$"
-    flags = re.IGNORECASE if case_insensitive else 0
-    return re.compile(regex, flags)
-
-
-def _extract_filter_condition(
-    filter_dict: dict[str, Any],
-) -> tuple[str, str, str] | None:
-    """Return (cond_type, field, pattern) from a filter dict, or None if invalid."""
-    condition = filter_dict.get("condition")
-    if not isinstance(condition, dict):
-        return None
-    cond_type = str(condition.get("type", "")).lower()
-    field = condition.get("field")
-    if not isinstance(field, str):
-        return None
-    pattern = condition.get("pattern")
-    if not isinstance(pattern, str):
-        return None
-    return cond_type, field, pattern
-
-
-def _apply_string_condition(
-    value: str, cond_type: str, pattern: str
-) -> bool:
-    """Evaluate a LIKE/ILIKE condition against a string value."""
-    if cond_type == "like":
-        return bool(_compile_like_pattern(pattern, False).match(value))
-    if cond_type == "ilike":
-        return bool(_compile_like_pattern(pattern, True).match(value))
-    return True
-
-
-def _matches_filter(payload: Any, filter_dict: dict[str, Any] | None) -> bool:
-    if not filter_dict:
-        return True
-    condition_parts = _extract_filter_condition(filter_dict)
-    if condition_parts is None:
-        return True
-    cond_type, field, pattern = condition_parts
-    if not isinstance(payload, dict):
-        return False
-    value = payload.get(field)
-    if not isinstance(value, str):
-        return False
-    return _apply_string_condition(value, cond_type, pattern)
-
-
 class GraphStore:
     """Compatibility adapter for GraphStore call shapes."""
 
@@ -187,14 +130,13 @@ class Collection:
         kwargs: dict[str, Any] = {"top_k": top_k}
         if vector is not None:
             kwargs["vector"] = list(vector)
+        if filter is not None:
+            kwargs["filter"] = filter
         if sparse_vector is not None:
             kwargs["sparse_vector"] = sparse_vector
         if sparse_index_name is not None:
             kwargs["sparse_index_name"] = sparse_index_name
-        results = self._inner.search(**kwargs)
-        if not filter:
-            return results
-        return [r for r in results if _matches_filter(r.get("payload"), filter)]
+        return self._inner.search(**kwargs)
 
     def batch_search(
         self,
@@ -257,8 +199,13 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
+        m: int | None = None,
+        ef_construction: int | None = None,
+        expected_vectors: int | None = None,
     ) -> "Collection":
-        col = self._inner.create_collection(name, dimension, metric, storage_mode)
+        col = self._inner.create_collection(
+            name, dimension, metric, storage_mode, m, ef_construction, expected_vectors
+        )
         return Collection(col)
 
     def get_collection(self, name: str) -> "Collection | None":
@@ -273,12 +220,16 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
+        m: int | None = None,
+        ef_construction: int | None = None,
+        expected_vectors: int | None = None,
     ) -> "Collection":
         existing = self.get_collection(name)
         if existing is not None:
             return existing
         return self.create_collection(
-            name, dimension=dimension, metric=metric, storage_mode=storage_mode
+            name, dimension=dimension, metric=metric, storage_mode=storage_mode,
+            m=m, ef_construction=ef_construction, expected_vectors=expected_vectors,
         )
 
     def create_metadata_collection(self, name: str) -> "Collection":

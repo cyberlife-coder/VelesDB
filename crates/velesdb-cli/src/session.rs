@@ -250,7 +250,7 @@ mod tests {
     fn test_session_defaults() {
         let session = SessionSettings::new();
         assert_eq!(session.mode(), SearchMode::Balanced);
-        assert_eq!(session.effective_ef_search(), 128);
+        assert_eq!(session.effective_ef_search(), 160);
         assert_eq!(session.timeout_ms(), 30000);
         assert!(session.rerank());
         assert_eq!(session.max_results(), 100);
@@ -262,7 +262,7 @@ mod tests {
         let mut session = SessionSettings::new();
         session.set("mode", "fast").unwrap();
         assert_eq!(session.mode(), SearchMode::Fast);
-        assert_eq!(session.effective_ef_search(), 64);
+        assert_eq!(session.effective_ef_search(), 96);
     }
 
     #[test]

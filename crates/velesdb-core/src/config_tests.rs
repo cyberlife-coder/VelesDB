@@ -11,8 +11,8 @@ mod tests {
     #[test]
     fn test_search_mode_ef_search_values() {
         // Arrange & Act & Assert
-        assert_eq!(SearchMode::Fast.ef_search(), 64);
-        assert_eq!(SearchMode::Balanced.ef_search(), 128);
+        assert_eq!(SearchMode::Fast.ef_search(), 96);
+        assert_eq!(SearchMode::Balanced.ef_search(), 160);
         assert_eq!(SearchMode::Accurate.ef_search(), 512);
         assert_eq!(SearchMode::Perfect.ef_search(), usize::MAX);
     }
@@ -68,7 +68,7 @@ mod tests {
         let ef = config.effective_ef_search();
 
         // Assert
-        assert_eq!(ef, 128); // Balanced mode
+        assert_eq!(ef, 160); // Balanced mode
     }
 
     #[test]

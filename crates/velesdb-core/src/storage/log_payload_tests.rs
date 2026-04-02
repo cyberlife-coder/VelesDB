@@ -674,3 +674,105 @@ fn test_no_auto_snapshot_below_threshold() {
         "Snapshot file should NOT be created when WAL is below threshold"
     );
 }
+
+// -------------------------------------------------------------------------
+// H3: store_batch_deferred tests
+// -------------------------------------------------------------------------
+
+/// `store_batch_deferred` writes data that is readable in the same process.
+#[test]
+fn test_store_batch_deferred_readable_in_process() {
+    let temp = TempDir::new().expect("test: temp dir");
+    let mut storage = LogPayloadStorage::new(temp.path()).expect("test: create");
+
+    let entries: Vec<(u64, &serde_json::Value)> = vec![];
+    let v1 = json!({"a": 1});
+    let v2 = json!({"b": 2});
+    let v3 = json!({"c": 3});
+    let batch: Vec<(u64, &serde_json::Value)> = vec![(1, &v1), (2, &v2), (3, &v3)];
+
+    storage
+        .store_batch_deferred(&batch)
+        .expect("test: store_batch_deferred");
+
+    // Data should be readable in the same process
+    assert_eq!(
+        storage.retrieve(1).expect("test: retrieve"),
+        Some(json!({"a": 1}))
+    );
+    assert_eq!(
+        storage.retrieve(2).expect("test: retrieve"),
+        Some(json!({"b": 2}))
+    );
+    assert_eq!(
+        storage.retrieve(3).expect("test: retrieve"),
+        Some(json!({"c": 3}))
+    );
+
+    // Suppress unused variable warning
+    let _ = entries;
+}
+
+/// `store_batch_deferred` followed by `flush()` produces durable data.
+#[test]
+fn test_store_batch_deferred_durable_after_flush() {
+    let temp = TempDir::new().expect("test: temp dir");
+
+    {
+        let mut storage = LogPayloadStorage::new(temp.path()).expect("test: create");
+
+        let v1 = json!({"durable": true});
+        let batch: Vec<(u64, &serde_json::Value)> = vec![(42, &v1)];
+
+        storage
+            .store_batch_deferred(&batch)
+            .expect("test: store_batch_deferred");
+
+        // Force full durability
+        storage.flush().expect("test: flush");
+    }
+
+    // Reopen and verify data survived
+    let reopened = LogPayloadStorage::new(temp.path()).expect("test: reopen");
+    assert_eq!(
+        reopened.retrieve(42).expect("test: retrieve"),
+        Some(json!({"durable": true}))
+    );
+}
+
+/// Multiple `store_batch_deferred` calls accumulate correctly.
+#[test]
+fn test_store_batch_deferred_multiple_batches() {
+    let temp = TempDir::new().expect("test: temp dir");
+    let mut storage = LogPayloadStorage::new(temp.path()).expect("test: create");
+
+    let v1 = json!({"batch": 1});
+    let v2 = json!({"batch": 2});
+    let v3 = json!({"batch": 3});
+
+    storage
+        .store_batch_deferred(&[(1, &v1)])
+        .expect("test: batch 1");
+    storage
+        .store_batch_deferred(&[(2, &v2)])
+        .expect("test: batch 2");
+    storage
+        .store_batch_deferred(&[(3, &v3)])
+        .expect("test: batch 3");
+
+    assert_eq!(storage.ids().len(), 3);
+}
+
+/// Empty `store_batch_deferred` is a no-op.
+#[test]
+fn test_store_batch_deferred_empty() {
+    let temp = TempDir::new().expect("test: temp dir");
+    let mut storage = LogPayloadStorage::new(temp.path()).expect("test: create");
+
+    let empty: Vec<(u64, &serde_json::Value)> = vec![];
+    storage
+        .store_batch_deferred(&empty)
+        .expect("test: empty deferred batch");
+
+    assert_eq!(storage.ids().len(), 0);
+}

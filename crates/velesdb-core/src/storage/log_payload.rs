@@ -529,6 +529,39 @@ impl LogPayloadStorage {
     /// Returns an error if serialization or WAL write fails. On partial failure,
     /// entries written before the error are durable (WAL is append-only).
     pub fn store_batch(&mut self, entries: &[(u64, &serde_json::Value)]) -> io::Result<()> {
+        self.store_batch_inner(entries, true)
+    }
+
+    /// Stores multiple payloads without forcing an fsync at the end.
+    ///
+    /// Identical to [`store_batch`](Self::store_batch) except the final
+    /// `sync_all()` is replaced by a buffer-only `flush()`. WAL entries are
+    /// written and the `BufWriter` is flushed to the OS kernel, but not
+    /// fsynced to disk.
+    ///
+    /// Use this for intermediate batches in a streaming bulk import, where
+    /// only the final batch needs full durability. Call
+    /// [`PayloadStorage::flush()`] after the last batch to force fsync.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization or WAL write fails.
+    pub fn store_batch_deferred(
+        &mut self,
+        entries: &[(u64, &serde_json::Value)],
+    ) -> io::Result<()> {
+        self.store_batch_inner(entries, false)
+    }
+
+    /// Shared implementation for [`store_batch`] and [`store_batch_deferred`].
+    ///
+    /// When `fsync` is `true`, the configured durability mode is applied.
+    /// When `false`, only a buffer flush is performed (no `sync_all`).
+    fn store_batch_inner(
+        &mut self,
+        entries: &[(u64, &serde_json::Value)],
+        fsync: bool,
+    ) -> io::Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
@@ -550,7 +583,14 @@ impl LogPayloadStorage {
                 )?;
             }
 
-            Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
+            if fsync {
+                Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
+            } else {
+                // Buffer-only flush: data reaches OS kernel but is not fsynced.
+                // Safe for intermediate batches — caller must fsync after the
+                // final batch.
+                wal.flush()?;
+            }
         }
 
         self.maybe_auto_snapshot();

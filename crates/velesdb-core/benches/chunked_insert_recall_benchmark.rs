@@ -77,7 +77,9 @@ fn measure_recall(index: &HnswIndex, queries: &[Vec<f32>], ground_truths: &[Vec<
         .iter()
         .zip(ground_truths)
         .map(|(query, gt)| {
-            let results = index.search_with_quality(query, K, SearchQuality::Balanced);
+            let results = index
+                .search_with_quality(query, K, SearchQuality::Balanced)
+                .unwrap();
             let result_ids: Vec<u64> = results.iter().map(|sr| sr.id).collect();
             recall_at_k(gt, &result_ids)
         })

@@ -20,7 +20,8 @@ High-performance vector database engine written in Rust.
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
 - **ColumnStore Filtering**: Up to 130x faster than JSON filtering at scale (integer equality, 100K rows; string equality up to 75x)
 - **VelesQL**: SQL-like query language with MATCH support for graph pattern queries
-- **Bulk Operations**: Optimized batch insert with turbo/fast modes and parallel HNSW indexing
+- **Bulk Operations**: Optimized batch insert with turbo/fast modes, parallel HNSW indexing, graduated ef_construction (VAMANA 3-phase), and lock-free CAS entry-point promotion
+- **Graph Traversal**: CSR snapshot for zero-copy BFS/DFS, FxHashSet visited sets, parent-pointer path reconstruction
 - **Quantization**: SQ8 (4x), Binary (32x), Product Quantization (8-32x), RaBitQ compression
 
 ## Installation

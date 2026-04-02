@@ -10,53 +10,36 @@ use crate::index::hnsw::params::SearchQuality;
 use crate::scored_result::ScoredResult;
 
 impl HnswIndex {
-    /// Performs brute-force SIMD search for guaranteed 100% recall.
+    /// Performs brute-force search for guaranteed 100% recall.
     ///
-    /// This method computes exact distances to all vectors using SIMD-optimized
-    /// functions and returns the top k results.
+    /// Uses rayon-parallelized distance computation across all stored vectors.
+    /// Falls back to HNSW graph search when vector storage is disabled.
     ///
     /// # Performance
     ///
-    /// O(n) where n = number of vectors. Best for small indices (<10k vectors)
-    /// or when perfect recall is required.
+    /// O(n / cores) where n = number of vectors. Best for small indices
+    /// (<10k vectors) or when perfect recall is required.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the query dimension doesn't match the index dimension.
-    #[must_use]
-    pub fn search_brute_force(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
-        self.validate_dimension(query, "Query");
+    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// match the index dimension.
+    pub fn search_brute_force(
+        &self,
+        query: &[f32],
+        k: usize,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
 
         // If vector storage is disabled, fall back to HNSW graph search.
         // RF-DEDUP: reuse search_hnsw_only instead of duplicating neighbour mapping.
         if !self.enable_vector_storage || self.vectors.is_empty() {
             let ef_search = SearchQuality::Accurate.ef_search(k);
-            return self.search_hnsw_only(query, k, ef_search);
+            return Ok(self.search_hnsw_only(query, k, ef_search));
         }
 
-        // Compute distances to all vectors
-        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
-        let vectors_snapshot: Vec<(usize, Vec<f32>)> = self.vectors.collect_for_parallel();
-
-        let mut results: Vec<ScoredResult> = Vec::with_capacity(vectors_snapshot.len());
-
-        for (i, (idx, v)) in vectors_snapshot.iter().enumerate() {
-            // Prefetch upcoming vectors
-            if i + prefetch_distance < vectors_snapshot.len() {
-                crate::simd_native::prefetch_vector(&vectors_snapshot[i + prefetch_distance].1);
-            }
-
-            if let Some(id) = self.mappings.get_id(*idx) {
-                let score = self.compute_distance(query, v);
-                results.push(ScoredResult::new(id, score));
-            }
-        }
-
-        // Sort by distance (metric-dependent ordering)
-        self.metric.sort_scored_results(&mut results);
-
-        results.truncate(k);
-        results
+        // RF-DEDUP: delegate to rayon-parallelized implementation
+        Ok(self.brute_force_search_rayon(query, k))
     }
 
     /// Performs GPU-accelerated brute-force search if available.
@@ -67,22 +50,26 @@ impl HnswIndex {
     ///
     /// Returns `None` if GPU feature is not enabled or GPU is not available.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the query dimension doesn't match the index dimension.
-    #[must_use]
-    pub fn search_brute_force_gpu(&self, query: &[f32], k: usize) -> Option<Vec<ScoredResult>> {
-        self.validate_dimension(query, "Query");
+    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// match the index dimension.
+    pub fn search_brute_force_gpu(
+        &self,
+        query: &[f32],
+        k: usize,
+    ) -> crate::error::Result<Option<Vec<ScoredResult>>> {
+        self.validate_dimension(query)?;
 
         #[cfg(feature = "gpu")]
         {
-            self.search_brute_force_gpu_inner(query, k)
+            Ok(self.search_brute_force_gpu_inner(query, k))
         }
 
         #[cfg(not(feature = "gpu"))]
         {
             let _ = (query, k); // Suppress unused warnings
-            None
+            Ok(None)
         }
     }
 
@@ -176,11 +163,15 @@ impl HnswIndex {
     /// O(n) where n = number of vectors. Best for small indices (<10k vectors)
     /// or when perfect recall is required.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the query dimension doesn't match the index dimension.
-    #[must_use]
-    pub fn search_brute_force_buffered(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
+    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// match the index dimension.
+    pub fn search_brute_force_buffered(
+        &self,
+        query: &[f32],
+        k: usize,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
         // Currently identical to search_brute_force - buffer reuse is internal optimization
         self.search_brute_force(query, k)
     }

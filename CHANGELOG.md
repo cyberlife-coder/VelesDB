@@ -22,6 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OpenAPI** — all new graph endpoints registered in API documentation
 - **Tests** — 13 new server tests covering all new graph operations
 
+### Performance
+- **HNSW graduated ef_construction** -- 3-phase VAMANA schedule (low/mid/full ef) during
+  batch insert reduces graph construction cost while preserving recall quality
+- **Lock-free CAS entry-point promotion** -- replaced mutex-based HNSW entry-point
+  updates with `AtomicUsize` compare-and-swap, eliminating contention during parallel inserts
+- **Pre-allocated vector storage** -- `allocate_batch` split into `reserve` + `bulk-push`
+  to reduce per-vector allocation overhead during batch inserts
+- **CsrSnapshot zero-copy BFS** -- CSR (Compressed Sparse Row) snapshot of the edge store
+  enables zero-copy graph traversal without holding locks during BFS/DFS
+- **FxHashSet visited sets** -- replaced `std::collections::HashSet` with `rustc_hash::FxHashSet`
+  in graph traversal for faster hashing on integer node IDs
+- **Parent-pointer path reconstruction** -- replaced per-path cloning with parent-pointer
+  backtracking in BFS/DFS, reducing memory allocations during graph traversal
+- **WAL deferred sync for streaming bulk insert** -- WAL fsync is deferred during bulk
+  insert streams and flushed once at completion, reducing I/O overhead
+
 ## [1.11.0] - 2026-03-31
 
 ### Added

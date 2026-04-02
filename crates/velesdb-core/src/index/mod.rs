@@ -57,6 +57,18 @@ where
 pub trait VectorIndex: Send + Sync {
     /// Inserts a vector into the index.
     ///
+    /// # Fire-and-forget semantics
+    ///
+    /// This method is intentionally infallible (`-> ()`). Implementations
+    /// log errors (e.g., dimension mismatch) and return silently rather
+    /// than propagating failures. This design matches the trait's role as
+    /// a low-level index primitive where callers validate dimensions
+    /// before insertion (see `Collection::upsert`).
+    ///
+    /// Callers that need error feedback should use type-specific methods
+    /// (e.g., `HnswIndex::insert_batch_parallel`) instead of this trait
+    /// method.
+    ///
     /// # Arguments
     ///
     /// * `id` - Unique identifier for the vector

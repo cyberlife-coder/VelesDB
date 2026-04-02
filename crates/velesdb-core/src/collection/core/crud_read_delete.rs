@@ -69,14 +69,20 @@ impl Collection {
 
     /// Deletes metadata-only points.
     fn delete_metadata_only(&self, ids: &[u64]) -> Result<()> {
+        // LOCK ORDER: payload_storage(3) → label_index(7).
         let mut payload_storage = self.payload_storage.write();
+        let mut label_idx = self.label_index.write();
         for &id in ids {
             let old_payload = payload_storage.retrieve(id).ok().flatten();
             payload_storage.delete(id)?;
             self.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
+            if let Some(ref old) = old_payload {
+                label_idx.remove_from_payload(id, old);
+            }
         }
         let point_count = payload_storage.ids().len();
+        drop(label_idx);
         drop(payload_storage);
         self.config.write().point_count = point_count;
         Ok(())
@@ -84,11 +90,13 @@ impl Collection {
 
     /// Deletes vector points from all stores (vector, payload, index, caches, sparse, delta).
     fn delete_vector_points(&self, ids: &[u64]) -> Result<()> {
-        let mut payload_storage = self.payload_storage.write();
+        // LOCK ORDER: vector_storage(2) → payload_storage(3) → caches(4) → label_index(7).
         let mut vector_storage = self.vector_storage.write();
+        let mut payload_storage = self.payload_storage.write();
         let mut sq8_cache = self.sq8_cache.write();
         let mut binary_cache = self.binary_cache.write();
         let mut pq_cache = self.pq_cache.write();
+        let mut label_idx = self.label_index.write();
 
         for &id in ids {
             let old_payload = payload_storage.retrieve(id).ok().flatten();
@@ -100,9 +108,13 @@ impl Collection {
             pq_cache.remove(&id);
             self.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
+            if let Some(ref old) = old_payload {
+                label_idx.remove_from_payload(id, old);
+            }
         }
 
         let point_count = vector_storage.len();
+        drop(label_idx);
         drop(vector_storage);
         drop(payload_storage);
         drop(sq8_cache);

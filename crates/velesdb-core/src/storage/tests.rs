@@ -1158,3 +1158,86 @@ fn test_store_batch_multiple_batches_no_cross_contamination() {
     assert_eq!(storage2.retrieve(0).unwrap(), Some(vec![1.0, 2.0, 3.0]));
     assert_eq!(storage2.retrieve(12).unwrap(), Some(vec![70.0, 80.0, 90.0]));
 }
+
+// =============================================================================
+// WAL Group Write Tests
+// =============================================================================
+
+/// Verifies that a large batch written via WAL group write (single write_all)
+/// produces a WAL that replays correctly. This covers the critical path where
+/// the grouped buffer exceeds the BufWriter capacity (8KB), ensuring the
+/// coalesced write produces byte-identical entries to the per-entry path.
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_wal_group_write_large_batch_recovery() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 128; // 512 bytes per vector, ~529 bytes per WAL entry
+
+    // 100 vectors at 128d = ~52KB of WAL data (well above 8KB BufWriter threshold)
+    let count = 100u64;
+    let vectors: Vec<(u64, Vec<f32>)> = (0..count)
+        .map(|i| {
+            let v: Vec<f32> = (0..dim).map(|j| (i * 1000 + j as u64) as f32).collect();
+            (i, v)
+        })
+        .collect();
+
+    // Write via store_batch (group write), then crash (no flush)
+    {
+        let mut storage = MmapStorage::new(&path, dim).unwrap();
+        let refs: Vec<(u64, &[f32])> = vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+        storage.store_batch(&refs).unwrap();
+        // Intentional: NO flush() — simulate crash
+    }
+
+    // Reopen — WAL replay must recover all 100 vectors
+    let storage = MmapStorage::new(&path, dim).unwrap();
+    assert_eq!(
+        storage.len(),
+        count as usize,
+        "WAL group write recovery must restore all {count} vectors"
+    );
+
+    for (id, expected) in &vectors {
+        let retrieved = storage
+            .retrieve(*id)
+            .unwrap_or_else(|e| panic!("test: retrieve({id}) failed: {e}"));
+        assert_eq!(
+            retrieved.as_ref(),
+            Some(expected),
+            "WAL group write recovery data mismatch for ID {id}"
+        );
+    }
+}
+
+/// Verifies that WAL group write followed by individual store() calls
+/// produces a valid WAL that replays both correctly.
+#[test]
+fn test_wal_group_write_then_individual_stores_interleave() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 4;
+
+    {
+        let mut storage = MmapStorage::new(&path, dim).unwrap();
+
+        // Batch write (group path)
+        let batch: Vec<(u64, &[f32])> =
+            vec![(1, &[1.0, 2.0, 3.0, 4.0]), (2, &[5.0, 6.0, 7.0, 8.0])];
+        storage.store_batch(&batch).unwrap();
+
+        // Individual write (per-entry path)
+        storage.store(3, &[9.0, 10.0, 11.0, 12.0]).unwrap();
+        // No flush — crash
+    }
+
+    let storage = MmapStorage::new(&path, dim).unwrap();
+    assert_eq!(storage.len(), 3);
+    assert_eq!(storage.retrieve(1).unwrap(), Some(vec![1.0, 2.0, 3.0, 4.0]));
+    assert_eq!(storage.retrieve(2).unwrap(), Some(vec![5.0, 6.0, 7.0, 8.0]));
+    assert_eq!(
+        storage.retrieve(3).unwrap(),
+        Some(vec![9.0, 10.0, 11.0, 12.0])
+    );
+}

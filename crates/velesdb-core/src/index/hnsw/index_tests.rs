@@ -366,24 +366,33 @@ fn test_hnsw_dot_product_metric() {
 }
 
 #[test]
-#[should_panic(expected = "Vector dimension mismatch")]
-fn test_hnsw_insert_wrong_dimension_panics() {
+fn test_hnsw_insert_wrong_dimension_is_noop() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
 
-    // Act - should panic
+    // Act - dimension mismatch is silently rejected via VectorIndex trait
     index.insert(1, &[1.0, 0.0]); // Wrong dimension
+
+    // Assert - no vector was inserted
+    assert_eq!(index.len(), 0, "Wrong-dimension insert should be a no-op");
 }
 
 #[test]
-#[should_panic(expected = "Query dimension mismatch")]
-fn test_hnsw_search_wrong_dimension_panics() {
+fn test_hnsw_search_wrong_dimension_returns_error() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
 
-    // Act - should panic
-    let _ = index.search(&[1.0, 0.0], 10); // Wrong dimension
+    // Act - dimension mismatch returns DimensionMismatch error
+    let result = index.search_with_quality(&[1.0, 0.0], 10, SearchQuality::Balanced);
+    assert!(result.is_err(), "Should return error on dimension mismatch");
+
+    // The VectorIndex::search trait adapter returns empty Vec on error
+    let results = index.search(&[1.0, 0.0], 10);
+    assert!(
+        results.is_empty(),
+        "Trait search should return empty on mismatch"
+    );
 }
 
 #[test]
@@ -593,14 +602,15 @@ fn test_hnsw_insert_batch_parallel_empty() {
 }
 
 #[test]
-#[should_panic(expected = "Vector dimension mismatch")]
-fn test_hnsw_insert_batch_parallel_wrong_dimension() {
+fn test_hnsw_insert_batch_parallel_wrong_dimension_returns_zero() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     let vectors: Vec<(u64, &[f32])> = vec![(1, &[1.0, 0.0])]; // Wrong dim
 
-    // Act - should panic
-    index.insert_batch_parallel(vectors);
+    // Act - dimension mismatch returns 0 inserted
+    let inserted = index.insert_batch_parallel(vectors);
+    assert_eq!(inserted, 0, "Wrong-dimension batch should insert nothing");
+    assert_eq!(index.len(), 0, "Index should remain empty");
 }
 
 // =========================================================================
@@ -632,7 +642,7 @@ fn test_search_with_rerank_returns_k_results() {
     index.insert(5, &[0.0, 0.0, 1.0]);
 
     // Act
-    let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 3, 5);
+    let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 3, 5).unwrap();
 
     // Assert
     assert_eq!(results.len(), 3, "Should return exactly k results");
@@ -662,7 +672,7 @@ fn test_search_with_rerank_improves_ranking() {
     index.insert(3, &v3);
 
     // Act
-    let results = index.search_with_rerank(&base, 3, 3);
+    let results = index.search_with_rerank(&base, 3, 3).unwrap();
 
     // Assert - ID 1 should be closest (highest similarity)
     assert_eq!(results[0].id, 1, "Most similar vector should be first");
@@ -679,7 +689,7 @@ fn test_search_with_rerank_handles_rerank_k_greater_than_index_size() {
     index.insert(5, &[0.5, 0.0, 0.5]);
 
     // Act - rerank_k > index size
-    let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 3, 100);
+    let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 3, 100).unwrap();
 
     // Assert - should return at least some results
     assert!(!results.is_empty(), "Should return results");
@@ -703,7 +713,7 @@ fn test_search_with_rerank_uses_simd_distances() {
     let query: Vec<f32> = (0..768).map(|j| (j as f32 * 0.01).sin()).collect();
 
     // Act
-    let results = index.search_with_rerank(&query, 10, 50);
+    let results = index.search_with_rerank(&query, 10, 50).unwrap();
 
     // Assert - results should have valid distances (SIMD computed)
     // Note: HNSW may return fewer results if graph not fully connected
@@ -733,7 +743,7 @@ fn test_search_with_rerank_euclidean_metric() {
     index.insert(3, &[2.0, 0.0, 0.0]);
 
     // Act
-    let results = index.search_with_rerank(&[0.0, 0.0, 0.0], 3, 3);
+    let results = index.search_with_rerank(&[0.0, 0.0, 0.0], 3, 3).unwrap();
 
     // Assert - ID 1 should be closest (smallest distance)
     assert_eq!(results[0].id, 1, "Origin should be closest to itself");
@@ -896,7 +906,9 @@ fn test_search_quality_fast() {
     index.insert(4, &[0.7, 0.3, 0.0]);
     index.insert(5, &[0.0, 1.0, 0.0]);
 
-    let results = index.search_with_quality(&[1.0, 0.0, 0.0], 2, SearchQuality::Fast);
+    let results = index
+        .search_with_quality(&[1.0, 0.0, 0.0], 2, SearchQuality::Fast)
+        .unwrap();
     // Fast mode may return fewer results with very small ef_search
     assert!(!results.is_empty(), "Should return at least one result");
     assert!(results.len() <= 2, "Should not exceed requested k");
@@ -909,7 +921,9 @@ fn test_search_quality_balanced() {
     index.insert(2, &[0.9, 0.1, 0.0]);
 
     // Test Balanced quality mode
-    let results = index.search_with_quality(&[1.0, 0.0, 0.0], 2, SearchQuality::Balanced);
+    let results = index
+        .search_with_quality(&[1.0, 0.0, 0.0], 2, SearchQuality::Balanced)
+        .unwrap();
     // HNSW may return fewer results for very small indices
     assert!(!results.is_empty(), "Should return at least one result");
     assert_eq!(
@@ -928,7 +942,9 @@ fn test_search_quality_custom_ef() {
     index.insert(4, &[0.0, 1.0, 0.0]);
     index.insert(5, &[0.0, 0.0, 1.0]);
 
-    let results = index.search_with_quality(&[1.0, 0.0, 0.0], 3, SearchQuality::Custom(512));
+    let results = index
+        .search_with_quality(&[1.0, 0.0, 0.0], 3, SearchQuality::Custom(512))
+        .unwrap();
     assert_eq!(results.len(), 3);
 }
 
@@ -947,7 +963,7 @@ fn test_hnsw_load_nonexistent_path() {
 #[test]
 fn test_hnsw_search_with_rerank_empty_index() {
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
-    let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 10, 50);
+    let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 10, 50).unwrap();
     assert!(
         results.is_empty(),
         "Empty index should return empty results"
@@ -961,7 +977,7 @@ fn test_hnsw_search_with_rerank_dot_product() {
     index.insert(2, &[0.5, 0.5, 0.0]);
     index.insert(3, &[0.0, 1.0, 0.0]);
 
-    let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 3, 3);
+    let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 3, 3).unwrap();
 
     // HNSW may return fewer results for very small indices
     assert!(!results.is_empty(), "Should return at least one result");
@@ -1025,7 +1041,7 @@ fn test_search_with_rerank_768d_prefetch() {
     }
 
     let query: Vec<f32> = (0..768).map(|j| (j as f32 * 0.001).sin()).collect();
-    let results = index.search_with_rerank(&query, 10, 50);
+    let results = index.search_with_rerank(&query, 10, 50).unwrap();
 
     assert!(!results.is_empty(), "Should return results");
     assert!(results.len() <= 10, "Should not exceed k");
@@ -1046,7 +1062,7 @@ fn test_search_with_rerank_small_dim_prefetch() {
     }
 
     let query: Vec<f32> = (0..32).map(|j| (j as f32 * 0.01).sin()).collect();
-    let results = index.search_with_rerank(&query, 5, 20);
+    let results = index.search_with_rerank(&query, 5, 20).unwrap();
 
     assert!(!results.is_empty(), "Should return results");
 }
@@ -1079,12 +1095,18 @@ fn test_search_batch_parallel_consistency() {
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
     // Batch search
-    let batch_results = index.search_batch_parallel(&query_refs, 5, SearchQuality::Balanced);
+    let batch_results = index
+        .search_batch_parallel(&query_refs, 5, SearchQuality::Balanced)
+        .unwrap();
 
     // Individual searches for comparison
     let individual_results: Vec<Vec<crate::scored_result::ScoredResult>> = queries
         .iter()
-        .map(|q| index.search_with_quality(q, 5, SearchQuality::Balanced))
+        .map(|q| {
+            index
+                .search_with_quality(q, 5, SearchQuality::Balanced)
+                .unwrap()
+        })
         .collect();
 
     // Results should match (same IDs, though order might vary slightly)
@@ -1100,7 +1122,9 @@ fn test_search_batch_parallel_empty_queries() {
     index.insert(1, &[1.0, 0.0, 0.0]);
 
     let queries: Vec<&[f32]> = vec![];
-    let results = index.search_batch_parallel(&queries, 5, SearchQuality::Fast);
+    let results = index
+        .search_batch_parallel(&queries, 5, SearchQuality::Fast)
+        .unwrap();
 
     assert!(
         results.is_empty(),
@@ -1133,7 +1157,9 @@ fn test_search_batch_parallel_large_batch() {
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
     // Use Balanced for faster test execution
-    let results = index.search_batch_parallel(&query_refs, 10, SearchQuality::Balanced);
+    let results = index
+        .search_batch_parallel(&query_refs, 10, SearchQuality::Balanced)
+        .unwrap();
 
     assert_eq!(results.len(), 20, "Should return 20 result sets");
     for result in &results {
@@ -1190,7 +1216,9 @@ fn test_recall_quality_minimum_threshold() {
     let ground_truth: Vec<u64> = distances.iter().take(k).map(|sr| sr.id).collect();
 
     // HNSW search
-    let results = index.search_with_quality(&query, k, SearchQuality::Accurate);
+    let results = index
+        .search_with_quality(&query, k, SearchQuality::Accurate)
+        .unwrap();
     let result_ids: std::collections::HashSet<u64> = results.iter().map(|sr| sr.id).collect();
     let gt_set: std::collections::HashSet<u64> = ground_truth.iter().copied().collect();
 
@@ -1225,7 +1253,9 @@ fn test_rerank_latency_ema_updates_after_two_stage_search() {
     }
 
     let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.009).cos()).collect();
-    let _ = index.search_with_quality(&query, 20, SearchQuality::Accurate);
+    let _ = index
+        .search_with_quality(&query, 20, SearchQuality::Accurate)
+        .unwrap();
 
     assert!(index.rerank_latency_ema_us() > 0);
 }
@@ -1246,7 +1276,9 @@ fn test_update_rerank_latency_ema_large_current_does_not_overflow() {
         .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
 
     let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.011).cos()).collect();
-    let results = index.search_with_quality(&query, 20, SearchQuality::Accurate);
+    let results = index
+        .search_with_quality(&query, 20, SearchQuality::Accurate)
+        .unwrap();
 
     assert!(!results.is_empty());
 
@@ -1267,7 +1299,9 @@ fn test_search_with_quality_custom_ef_uses_high_recall_path_without_regression()
     }
 
     let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.013).cos()).collect();
-    let results = index.search_with_quality(&query, 20, SearchQuality::Custom(512));
+    let results = index
+        .search_with_quality(&query, 20, SearchQuality::Custom(512))
+        .unwrap();
 
     assert!(!results.is_empty());
     assert!(results.len() <= 20);
@@ -1285,7 +1319,9 @@ fn test_search_with_quality_accurate_stays_stable_on_medium_dataset() {
     }
 
     let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.007).sin()).collect();
-    let results = index.search_with_quality(&query, 15, SearchQuality::Accurate);
+    let results = index
+        .search_with_quality(&query, 15, SearchQuality::Accurate)
+        .unwrap();
 
     assert!(!results.is_empty());
     assert!(results.len() <= 15);
@@ -1310,8 +1346,8 @@ fn test_brute_force_buffered_same_results_as_original() {
     let query: Vec<f32> = (0..32).map(|j| (j as f32 * 0.02).cos()).collect();
 
     // Compare results
-    let original = index.search_brute_force(&query, 10);
-    let buffered = index.search_brute_force_buffered(&query, 10);
+    let original = index.search_brute_force(&query, 10).unwrap();
+    let buffered = index.search_brute_force_buffered(&query, 10).unwrap();
 
     assert_eq!(original.len(), buffered.len());
     for (orig, buf) in original.iter().zip(buffered.iter()) {
@@ -1328,7 +1364,7 @@ fn test_brute_force_buffered_empty_index() {
     let index = HnswIndex::new(16, DistanceMetric::Euclidean).unwrap();
     let query: Vec<f32> = vec![0.0; 16];
 
-    let results = index.search_brute_force_buffered(&query, 5);
+    let results = index.search_brute_force_buffered(&query, 5).unwrap();
     assert!(results.is_empty());
 }
 
@@ -1346,8 +1382,9 @@ fn test_brute_force_buffered_all_metrics() {
         index.insert(2, &[0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
         index.insert(3, &[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
 
-        let results =
-            index.search_brute_force_buffered(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 3);
+        let results = index
+            .search_brute_force_buffered(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 3)
+            .unwrap();
         assert_eq!(results.len(), 3, "Should return 3 results for {metric:?}");
     }
 }
@@ -1366,9 +1403,9 @@ fn test_brute_force_buffered_repeated_calls_stable() {
     let query: Vec<f32> = vec![0.5; 16];
 
     // Multiple calls should return identical results
-    let r1 = index.search_brute_force_buffered(&query, 5);
-    let r2 = index.search_brute_force_buffered(&query, 5);
-    let r3 = index.search_brute_force_buffered(&query, 5);
+    let r1 = index.search_brute_force_buffered(&query, 5).unwrap();
+    let r2 = index.search_brute_force_buffered(&query, 5).unwrap();
+    let r3 = index.search_brute_force_buffered(&query, 5).unwrap();
 
     assert_eq!(r1, r2);
     assert_eq!(r2, r3);
@@ -1429,7 +1466,9 @@ fn test_all_distance_metrics_search_with_rerank() {
         index.insert(2, &[0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
         index.insert(3, &[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
 
-        let results = index.search_with_rerank(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 3, 3);
+        let results = index
+            .search_with_rerank(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 3, 3)
+            .unwrap();
 
         assert!(
             !results.is_empty(),
@@ -1553,7 +1592,9 @@ fn test_drop_safety_search_after_partial_operations() {
         .map(|i| (0..8).map(|j| (i + j) as f32 * 0.1).collect())
         .collect();
     let query_refs: Vec<&[f32]> = queries.iter().map(|v| v.as_slice()).collect();
-    let batch_results = loaded.search_batch_parallel(&query_refs, 3, SearchQuality::Balanced);
+    let batch_results = loaded
+        .search_batch_parallel(&query_refs, 3, SearchQuality::Balanced)
+        .unwrap();
     assert_eq!(batch_results.len(), 5);
 
     // Drop happens here - all borrowed data must still be valid
@@ -1700,10 +1741,10 @@ fn test_search_brute_force_gpu_returns_same_results_as_cpu() {
     let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.02).cos()).collect();
 
     // CPU brute force
-    let cpu_results = index.search_brute_force(&query, 10);
+    let cpu_results = index.search_brute_force(&query, 10).unwrap();
 
     // GPU brute force (if available)
-    if let Some(gpu_results) = index.search_brute_force_gpu(&query, 10) {
+    if let Some(gpu_results) = index.search_brute_force_gpu(&query, 10).unwrap() {
         assert_eq!(
             cpu_results.len(),
             gpu_results.len(),
@@ -1730,8 +1771,8 @@ fn test_search_brute_force_gpu_fallback_to_none_without_gpu() {
 
     let query = vec![0.5; 64];
 
-    // Should not panic, returns None if GPU unavailable
-    let _result = index.search_brute_force_gpu(&query, 5);
+    // Should not panic, returns Ok(None) if GPU unavailable
+    let _result = index.search_brute_force_gpu(&query, 5).unwrap();
 
     #[cfg(not(feature = "gpu"))]
     assert!(_result.is_none(), "Should return None without GPU feature");
@@ -1751,7 +1792,7 @@ fn test_brute_force_gpu_euclidean() {
 
     let query = [0.0, 0.0, 0.0, 0.0]; // closest to vec0
 
-    if let Some(results) = index.search_brute_force_gpu(&query, 3) {
+    if let Some(results) = index.search_brute_force_gpu(&query, 3).unwrap() {
         assert_eq!(results.len(), 3, "Should return 3 results");
 
         // Euclidean: ascending order (lower distance = better).
@@ -1787,7 +1828,7 @@ fn test_brute_force_gpu_dot_product() {
 
     let query = [1.0, 0.0, 0.0, 0.0];
 
-    if let Some(results) = index.search_brute_force_gpu(&query, 3) {
+    if let Some(results) = index.search_brute_force_gpu(&query, 3).unwrap() {
         assert_eq!(results.len(), 3, "Should return 3 results");
 
         // DotProduct: descending order (higher = better).
@@ -1917,7 +1958,7 @@ mod proptest_tests {
             }
 
             let query = vec![0.0f32; dim];
-            let results = index.search_brute_force(&query, 3);
+            let results = index.search_brute_force(&query, 3).unwrap();
 
             // First result should be id=0 (exact match at origin)
             if !results.is_empty() {
@@ -2097,14 +2138,16 @@ fn test_adaptive_search_spread_positive_for_distance_metrics() {
     // If spread calculation is correct and positive, the adaptive path will
     // either escalate or return valid results — either way, the search must
     // complete successfully and return sensible results.
-    let results = index.search_with_quality(
-        &query,
-        10,
-        SearchQuality::Adaptive {
-            min_ef: 32,
-            max_ef: 256,
-        },
-    );
+    let results = index
+        .search_with_quality(
+            &query,
+            10,
+            SearchQuality::Adaptive {
+                min_ef: 32,
+                max_ef: 256,
+            },
+        )
+        .unwrap();
 
     assert!(
         !results.is_empty(),
@@ -2149,14 +2192,16 @@ fn test_adaptive_search_spread_works_for_similarity_metrics() {
 
     let query: Vec<f32> = (0..dim).map(|j| (j as f32 * 0.013).sin()).collect();
 
-    let results = index.search_with_quality(
-        &query,
-        10,
-        SearchQuality::Adaptive {
-            min_ef: 32,
-            max_ef: 256,
-        },
-    );
+    let results = index
+        .search_with_quality(
+            &query,
+            10,
+            SearchQuality::Adaptive {
+                min_ef: 32,
+                max_ef: 256,
+            },
+        )
+        .unwrap();
 
     assert!(
         !results.is_empty(),

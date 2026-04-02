@@ -3,18 +3,92 @@
 //! This module provides:
 //! - `NativeNeighbour`: Drop-in replacement for `hnsw_rs::prelude::Neighbour`
 //! - `NativeHnswBackend`: Trait for HNSW operations without hnsw_rs dependency
+//! - `BatchEfSchedule`: Graduated ef\_construction for 3-phase batch insert
 //! - Additional methods for `NativeHnsw` to match backend trait
 //! - Parallel insertion using rayon
 //! - Persistence (file dump/load)
 
 use super::distance::DistanceEngine;
-use super::graph::{NativeHnsw, NO_ENTRY_POINT};
+use super::graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
 use super::layer::{Layer, NodeId};
 use crate::distance::DistanceMetric;
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
+
+/// Graduated ef\_construction schedule for 3-phase batch insertion.
+///
+/// Based on the VAMANA/DiskANN pattern: the first 10% of a batch uses full
+/// `ef_construction` to build a quality scaffold while the graph is sparse,
+/// the middle 80% uses a reduced ef (0.5x) since the graph is dense enough
+/// for fast convergence, and the final 10% uses moderate ef (0.75x) to
+/// finalize connections with reasonable quality.
+///
+/// For small batches (< 1000), all phases use full `ef_construction`.
+#[derive(Debug, Clone)]
+pub(in crate::index::hnsw::native) struct BatchEfSchedule {
+    /// Phase 1 ef: full `ef_construction` for the scaffold.
+    pub scaffold_ef: usize,
+    /// Phase 2 ef: reduced (0.5x) for the dense bulk.
+    pub bulk_ef: usize,
+    /// Phase 3 ef: moderate (0.75x) for finalization.
+    pub finalize_ef: usize,
+    /// Number of nodes in the scaffold phase (first 10%).
+    pub scaffold_count: usize,
+    /// Index at which the finalize phase begins (90% of batch).
+    pub finalize_start: usize,
+}
+
+impl BatchEfSchedule {
+    /// Returns the appropriate ef for a node at the given position in the batch.
+    #[inline]
+    #[must_use]
+    pub fn ef_for_position(&self, position: usize) -> usize {
+        if position < self.scaffold_count {
+            self.scaffold_ef
+        } else if position >= self.finalize_start {
+            self.finalize_ef
+        } else {
+            self.bulk_ef
+        }
+    }
+}
+
+/// Computes a graduated ef schedule for batch insertion.
+///
+/// For batches < 1000, returns uniform full ef (no reduction).
+/// For larger batches, applies the 3-phase graduated schedule with
+/// a floor of `2 * m` to guarantee minimum graph connectivity.
+#[must_use]
+pub(in crate::index::hnsw::native) fn compute_batch_ef_schedule(
+    base_ef: usize,
+    batch_size: usize,
+    m: usize,
+) -> BatchEfSchedule {
+    let floor = 2 * m;
+
+    if batch_size < 1000 {
+        return BatchEfSchedule {
+            scaffold_ef: base_ef,
+            bulk_ef: base_ef,
+            finalize_ef: base_ef,
+            scaffold_count: batch_size,
+            finalize_start: batch_size,
+        };
+    }
+
+    let scaffold_count = batch_size / 10;
+    let finalize_start = batch_size - (batch_size / 10);
+
+    BatchEfSchedule {
+        scaffold_ef: base_ef,
+        bulk_ef: (base_ef / 2).max(floor),
+        finalize_ef: (base_ef * 3 / 4).max(floor),
+        scaffold_count,
+        finalize_start,
+    }
+}
 
 struct LoadedGraph {
     layers: Vec<Layer>,
@@ -235,6 +309,56 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         (batch_len / 50).clamp(DEFAULT_CHUNK, MAX_CHUNK)
     }
 
+    /// Computes the effective `ef_construction` for a batch of the given size.
+    ///
+    /// For large batches, the full `ef_construction` search budget is wasteful
+    /// because the graph scaffold built by earlier vectors already provides
+    /// sufficient connectivity for neighbor discovery. Reducing the beam width
+    /// proportionally to batch size matches the strategy used by Qdrant and
+    /// hnswlib for bulk loading.
+    ///
+    /// The returned value is always >= `max_connections` to guarantee that
+    /// each inserted node can discover enough neighbors for a well-connected
+    /// graph.
+    ///
+    /// Returns `(effective_ef, stagnation_limit)`.
+    #[must_use]
+    pub(in crate::index::hnsw::native) fn adaptive_ef_for_batch(
+        &self,
+        batch_size: usize,
+    ) -> (usize, usize) {
+        let base = self.ef_construction;
+
+        // Conservative scaling: the original 0.25/0.50 reduction destroyed
+        // graph quality at 100K+ (recall dropped from 97% to 64%).
+        // Malkov & Yashunin 2018 recommends ef_construction >= 2*M;
+        // these floors keep ef well above that while still accelerating
+        // bulk loads vs single-insert.
+        let scale = if batch_size > 50_000 {
+            0.60
+        } else if batch_size > 10_000 {
+            0.75
+        } else if batch_size > 1_000 {
+            0.85
+        } else {
+            return (base, 0);
+        };
+
+        // Reason: f64 product of two small positive values fits in usize.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let scaled = (base as f64 * scale) as usize;
+
+        // Floor at 4*M to guarantee adequate neighbor diversity budget.
+        let effective_ef = scaled.max(self.max_connections * 4);
+
+        // Stagnation-based early termination: ef/2 gives the beam search
+        // enough runway to escape local clusters at scale (was ef/3, which
+        // caused premature termination at 100K+).
+        let stagnation = effective_ef / 2;
+
+        (effective_ef, stagnation)
+    }
+
     /// Connects nodes in chunks, refreshing the entry point between chunks.
     ///
     /// Each chunk runs `par_iter` over its assignments, then promotes the
@@ -242,9 +366,19 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// point fresher than a single monolithic `par_iter` over the entire
     /// batch, improving recall for large insertions.
     ///
+    /// For batches > 1K vectors, uses adaptive `ef_construction` reduction
+    /// to lower the search budget proportionally, matching the bulk-loading
+    /// strategies of Qdrant and hnswlib. Single-vector insert is unaffected.
+    ///
     /// # Errors
     ///
     /// Returns an error if any node connection fails.
+    /// Connects nodes in chunks with graduated ef\_construction.
+    ///
+    /// Uses a 3-phase schedule (VAMANA/DiskANN pattern):
+    /// - **Phase 1** (first 10%): full ef — builds a quality scaffold
+    /// - **Phase 2** (10%-90%): reduced ef (0.5x) — graph is dense enough
+    /// - **Phase 3** (last 10%): moderate ef (0.75x) — finalizes connections
     fn connect_batch_chunked(
         &self,
         assignments: &[(NodeId, usize)],
@@ -252,6 +386,12 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         first_node: NodeId,
     ) -> crate::error::Result<()> {
         let chunk_size = Self::compute_chunk_size(assignments.len());
+        let schedule = compute_batch_ef_schedule(
+            self.ef_construction,
+            assignments.len(),
+            self.max_connections,
+        );
+        let mut nodes_connected: usize = 0;
 
         for chunk in assignments.chunks(chunk_size) {
             let loaded = self.entry_point.load(std::sync::atomic::Ordering::Acquire);
@@ -261,23 +401,26 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                 loaded
             };
 
-            chunk
-                .par_iter()
-                .try_for_each(|(node_id, layer)| -> crate::error::Result<()> {
-                    // Invariant: node_id >= first_node (allocate_batch assigns sequential IDs from first_node)
+            let chunk_offset = nodes_connected;
+
+            chunk.par_iter().enumerate().try_for_each(
+                |(i, (node_id, layer))| -> crate::error::Result<()> {
                     let batch_idx = node_id - first_node;
                     let query: &[f32] = &processed[batch_idx];
                     let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
-                    self.connect_node(*node_id, query, *layer, current_ep);
+                    let ef = schedule.ef_for_position(chunk_offset + i);
+                    let stagnation = ef / 2;
+                    self.connect_node_with_ef(*node_id, query, *layer, current_ep, ef, stagnation);
                     Ok(())
-                })?;
+                },
+            )?;
 
-            // Inter-chunk: promote best entry point and increment count
             if let Some(best) = chunk.iter().max_by_key(|(_, layer)| *layer) {
                 self.promote_entry_point(best.0, best.1);
             }
             self.count
                 .fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
+            nodes_connected += chunk.len();
         }
         Ok(())
     }
@@ -503,7 +646,6 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             vectors: parking_lot::RwLock::new(vectors),
             layers: parking_lot::RwLock::new(graph.layers),
             entry_point: std::sync::atomic::AtomicUsize::new(entry_point),
-            entry_point_promote_lock: parking_lot::Mutex::new(()),
             max_layer: std::sync::atomic::AtomicUsize::new(graph.max_layer),
             count: std::sync::atomic::AtomicUsize::new(count),
             rng_state: std::sync::atomic::AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
@@ -511,8 +653,8 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             max_connections_0: graph.max_connections_0,
             ef_construction: graph.ef_construction,
             level_mult,
-            alpha: 1.0,
-            stagnation_limit: graph.ef_construction / 4,
+            alpha: DEFAULT_ALPHA,
+            stagnation_limit: graph.ef_construction / 2,
             pre_allocated_capacity: std::sync::atomic::AtomicUsize::new(0),
             columnar: parking_lot::RwLock::new(None),
         })

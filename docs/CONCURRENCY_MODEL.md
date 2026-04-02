@@ -7,7 +7,7 @@
 VelesDB utilise un modèle de concurrence basé sur:
 - **Sharding**: Partitionnement des données pour réduire la contention
 - **RwLock**: Lecture parallèle, écriture exclusive (parking_lot)
-- **Lock-free atomics**: Pour compteurs et métriques
+- **Lock-free atomics**: Pour compteurs, métriques, and HNSW entry-point promotion
 - **Lock ordering**: Ordre déterministe pour prévenir les deadlocks
 
 ## Architecture
@@ -41,8 +41,11 @@ VelesDB utilise un modèle de concurrence basé sur:
 | HNSW layers | `parking_lot::RwLock` | Medium | Global, read-heavy |
 | HNSW neighbors | `parking_lot::RwLock` | Medium | Per-node |
 | PropertyIndex | `parking_lot::RwLock` | Low | Per-property |
+| HNSW entry point | `AtomicUsize` | None | Lock-free CAS promotion |
+| HNSW max layer | `AtomicUsize` | None | Lock-free CAS promotion |
 | Metrics counters | `AtomicU64` | None | Lock-free |
 | Edge ID registry | `RwLock<HashMap>` | Low | Global, for existence checks |
+| CsrSnapshot | `Option<CsrSnapshot>` | None (after build) | Built on-demand, invalidated by writes |
 | RaBitQ index | `parking_lot::RwLock` | None (after training) | Write-once then read-only |
 | RaBitQ store | `parking_lot::RwLock` | Low | Write per insert (~10ns hold) |
 | RaBitQ training buffer | `parking_lot::Mutex` | Low | Pre-training only |
@@ -211,6 +214,60 @@ vectors already encoded.
 - `reorder_for_locality()` is documented as offline-only and is not exposed
   through any concurrent API path.
 
+## HNSW Entry-Point CAS Promotion
+
+### Lock-Free Entry-Point Updates
+
+HNSW entry-point promotion (selecting which node is the graph entry) uses
+lock-free atomic CAS (compare-and-swap) instead of a mutex. The entry point
+and max layer are stored as `AtomicUsize` fields in `NativeHnsw`:
+
+```rust
+entry_point: AtomicUsize,  // NO_ENTRY_POINT (usize::MAX) when empty
+max_layer: AtomicUsize,    // Current maximum layer
+```
+
+`promote_entry_point()` handles two cases with CAS:
+
+1. **Empty index**: CAS on `entry_point` from `NO_ENTRY_POINT` to the new
+   node ID. Only one thread wins the first-insert race.
+2. **Layer promotion**: CAS on `max_layer` from `current_max` to `node_layer`.
+   Only the CAS winner updates `entry_point`, ensuring consistency.
+
+**Transient inconsistency window**: Between the `max_layer` CAS success and
+the subsequent `entry_point` store, a concurrent reader may see the new
+`max_layer` with the old `entry_point`. This is safe: `search_layer_single`
+returns `None` (via `with_neighbors`) for layers where the old EP has no
+edges, causing a no-op greedy descent.
+
+Entry-point promotion is extremely rare (O(log_M(N)) times per index
+lifetime), so the CAS loop almost never retries.
+
+## CsrSnapshot Invalidation Pattern
+
+### Graph Edge CSR Read Snapshot
+
+`EdgeStore` and `ConcurrentEdgeStore` maintain an optional `CsrSnapshot` --
+a Compressed Sparse Row representation of outgoing edges for zero-copy
+neighbor access during BFS/DFS traversal.
+
+**Lifecycle**:
+
+1. **Build**: `build_read_snapshot()` materializes edges into contiguous
+   arrays (`targets: Vec<u64>`, `edge_ids: Vec<u64>`) with a
+   `FxHashMap<u64, (offset, len)>` index. Auto-built after loading from
+   disk and after `flush()`.
+2. **Read**: `csr_snapshot().neighbors(source_id)` returns `&[u64]` -- a
+   zero-copy slice into the contiguous target array.
+3. **Invalidate**: Every write operation (`add_edge`, `remove_edge`,
+   `remove_node_edges`) sets `csr_snapshot = None`. Subsequent reads fall
+   back to per-shard edge lookup until the snapshot is rebuilt.
+
+**Thread safety** (ConcurrentEdgeStore): The snapshot is stored under the
+same `RwLock` as the shard data. A read lock on the snapshot shard is
+sufficient for BFS access. Write operations acquire write locks and
+invalidate the snapshot as part of the same critical section.
+
 ## Performance vs Safety Tradeoffs
 
 ### Read-Heavy Workloads
@@ -242,6 +299,17 @@ for neighbor in neighbors {
     // Process without holding lock
 }
 ```
+
+- **CsrSnapshot fast-path**: When a CSR read snapshot is available (built
+  after load or after `build_read_snapshot()`), BFS/DFS reads neighbors via
+  a contiguous `&[u64]` slice instead of per-shard edge lookup. Falls back
+  to the shard-based path when the snapshot is invalidated by writes.
+
+- **Parent-pointer path reconstruction**: BFS traversal uses a
+  `FxHashMap<u64, (u64, u64)>` parent-pointer map instead of cloning path
+  vectors at every edge expansion. Paths are reconstructed on-demand via
+  `reconstruct_path()` only when a result is emitted, avoiding O(depth)
+  allocations per expansion step.
 
 ## Known Limitations
 
@@ -354,4 +422,4 @@ invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-
 
 ---
 
-*Last updated: 2026-03-27 (EPIC-023 + RaBitQ concurrency)*
+*Last updated: 2026-04-02 (EPIC-023 + RaBitQ concurrency + CAS entry-point + CsrSnapshot + parent-pointer BFS)*

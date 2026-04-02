@@ -160,7 +160,7 @@ This applies to both single inserts and batch operations. No configuration chang
 
 ### Batch Insert Optimization (v1.7+)
 
-Large batch inserts are automatically optimized with two techniques:
+Large batch inserts are automatically optimized with several techniques:
 
 1. **Chunked Phase B** — Batches are split into optimal chunks (computed by `compute_chunk_size()`). Each chunk updates the global entry point, improving graph connectivity for subsequent chunks. This is particularly effective for batches > 1000 vectors.
 
@@ -171,6 +171,22 @@ Both optimizations are automatic and require no configuration. Use `insert_batch
 3. **Batch Upsert Fast-Path (v1.7.2)** — Pure-insert workloads (all new IDs) now skip the expensive `DashMap::entry()` write lock introduced by upsert semantics in v1.7.0. A read-lock `contains_key()` check routes new IDs to a cheaper allocation path. This eliminates the ~14% overhead observed on pure-insert workloads. Mixed workloads (some new, some existing IDs) automatically fall back to the full upsert path for correctness.
 
 4. **Upsert Lock Contention Fix (v1.7.2)** — `Collection::upsert()` was previously bottlenecked by three sources of lock contention: (a) a write lock on the HNSW index for each insert (changed to a read lock since `NativeHnswInner::insert` uses internal per-node synchronization), (b) per-point `insert_or_defer()` calls replaced by a single `bulk_index_or_defer()` batch call, and (c) per-point I/O replaced by `store_batch()` with 1 fsync per storage. The result is a 3-phase pipeline: batch storage, per-point secondary updates (no storage locks held), then batch HNSW insert. On local benchmarks (i9-14900KF, 10K/384D), this closed the throughput gap between `upsert()` and `upsert_bulk()` from ~19x to ~1x.
+
+5. **Graduated ef_construction (v1.9.3)** — For batches >= 1000 vectors, `ef_construction` is varied across three phases following a VAMANA/DiskANN-inspired pattern (`BatchEfSchedule`):
+
+   | Phase | Fraction | ef_construction | Purpose |
+   |-------|----------|-----------------|---------|
+   | Scaffold | First 10% | Full ef | Build a high-quality backbone graph |
+   | Bulk | Middle 80% | 0.5x ef (floor: 2*M) | Fast insertion leveraging existing scaffold |
+   | Finalize | Last 10% | 0.75x ef (floor: 2*M) | Restore edge quality at graph periphery |
+
+   The `2*M` floor ensures the candidate pool is never smaller than the number of neighbors to select, preserving graph connectivity. For small batches (< 1000), all nodes use full `ef_construction` unchanged.
+
+6. **Pre-allocated vector storage (v1.9.3)** — `allocate_batch()` splits into two lock scopes: `reserve_vector_capacity()` (cold path -- may resize the buffer under a write lock) followed by `bulk_push_vectors()` (hot path -- bulk memcpy into pre-reserved space). This reduces write-lock contention during batch insert because the expensive reallocation only happens once.
+
+7. **Lock-free entry-point promotion (v1.9.3)** — HNSW entry-point updates during batch insert use atomic CAS (`compare_exchange`) instead of a mutex, eliminating a serialization point for concurrent inserters.
+
+8. **WAL deferred sync (v1.9.3)** — `upsert_bulk_streaming()` skips intermediate `fsync` calls between streaming batches, syncing only on the final batch. This improves bulk import throughput when data can be re-derived on crash.
 
 ---
 

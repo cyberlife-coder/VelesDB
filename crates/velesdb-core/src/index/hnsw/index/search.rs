@@ -6,6 +6,7 @@ use super::HnswIndex;
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::params::SearchQuality;
 use crate::scored_result::ScoredResult;
+use crate::validation::validate_dimension_match;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -32,18 +33,12 @@ impl HnswIndex {
 
     /// Validates that the query/vector dimension matches the index dimension.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the dimension doesn't match.
+    /// Returns [`Error::DimensionMismatch`] if `data.len() != self.dimension`.
     #[inline]
-    pub(crate) fn validate_dimension(&self, data: &[f32], data_type: &str) {
-        assert_eq!(
-            data.len(),
-            self.dimension,
-            "{data_type} dimension mismatch: expected {}, got {}",
-            self.dimension,
-            data.len()
-        );
+    pub(crate) fn validate_dimension(&self, data: &[f32]) -> crate::error::Result<()> {
+        validate_dimension_match(self.dimension, data.len())
     }
 
     /// Computes exact SIMD distance between query and vector based on metric.
@@ -94,20 +89,70 @@ impl HnswIndex {
         results
     }
 
+    /// Performs HNSW search with a pre-filter bitmap.
+    ///
+    /// Over-fetches candidates from the HNSW graph (using `ef_search` as the
+    /// candidate pool size), then retains only results whose external ID is
+    /// present in `allowed_ids`. This avoids the expensive payload-level
+    /// post-filter for points that cannot match.
+    ///
+    /// Graph connectivity is preserved: the HNSW traversal explores all
+    /// nodes for navigation, but only bitmap-matching nodes appear in the
+    /// output. This maintains recall quality.
+    pub(crate) fn search_hnsw_only_filtered(
+        &self,
+        query: &[f32],
+        candidates_k: usize,
+        ef_search: usize,
+        allowed_ids: &roaring::RoaringBitmap,
+    ) -> Vec<ScoredResult> {
+        let inner = self.inner.read();
+        let neighbours = inner.search(query, candidates_k, ef_search);
+
+        let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
+        for &(node_id, raw_dist) in &neighbours {
+            if let Some(id) = self.mappings.get_id(node_id) {
+                // Bitmap uses u32 keys. IDs in the bitmap must match.
+                // IDs > u32::MAX cannot be represented in the bitmap, so they
+                // are passed through unconditionally to the post-filter.
+                let in_bitmap = u32::try_from(id).is_ok_and(|id32| allowed_ids.contains(id32));
+                let exceeds_bitmap_range = u32::try_from(id).is_err();
+                if in_bitmap || exceeds_bitmap_range {
+                    let score = inner.transform_score(raw_dist);
+                    results.push(ScoredResult::new(id, score));
+                }
+            }
+        }
+        results
+    }
+
     /// Determines whether two-stage reranking should be used.
     ///
     /// Returns `Some(rerank_k)` if reranking is beneficial, `None` otherwise.
+    ///
+    /// # Fast mode behavior
+    ///
+    /// `SearchQuality::Fast` enables reranking with `min_rerank_k = k` (no
+    /// oversampling). This performs rank correction — re-scoring the top-k
+    /// HNSW candidates with exact SIMD distances — without the latency
+    /// penalty of a larger candidate pool. The result is better rank ordering
+    /// at negligible cost, since the HNSW search itself already fetched these
+    /// candidates.
+    ///
+    /// Higher quality modes (`Balanced`, `Accurate`) use progressively larger
+    /// oversampling factors (3x, 4x) to pull in candidates that HNSW's greedy
+    /// search might miss, at the cost of additional distance computations.
     pub(super) fn should_two_stage_rerank(
         &self,
         quality: SearchQuality,
         k: usize,
         ef_search: usize,
     ) -> Option<usize> {
-        // Skip reranking for Fast, Adaptive, or AutoTune quality (these handle
+        // Skip reranking for Adaptive or AutoTune quality (these handle
         // their own exploration strategy) or if vector storage is disabled.
         if matches!(
             quality,
-            SearchQuality::Fast | SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
+            SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
         ) || !self.enable_vector_storage
         {
             return None;
@@ -115,13 +160,13 @@ impl HnswIndex {
 
         // Two-stage reranking: use a larger candidate pool for initial HNSW search,
         // then rerank with exact SIMD distances for better precision.
+        // Fast mode uses k-only reranking (no oversampling, just re-score for
+        // rank correction). Balanced uses 3x for 0.995+ recall.
         let min_rerank_k = match quality {
-            SearchQuality::Balanced => k * 2,
+            SearchQuality::Fast => k,
+            SearchQuality::Balanced => k * 3,
             SearchQuality::Accurate | SearchQuality::Custom(_) => k * 4,
-            SearchQuality::Fast
-            | SearchQuality::Perfect
-            | SearchQuality::Adaptive { .. }
-            | SearchQuality::AutoTune => {
+            SearchQuality::Perfect | SearchQuality::Adaptive { .. } | SearchQuality::AutoTune => {
                 return None;
             }
         };
@@ -187,24 +232,24 @@ impl HnswIndex {
     /// Uses the specified `SearchQuality` to determine ef_search and
     /// whether to apply two-stage SIMD reranking for improved precision.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the query dimension doesn't match the index dimension.
-    #[must_use]
+    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// match the index dimension.
     pub fn search_with_quality(
         &self,
         query: &[f32],
         k: usize,
         quality: SearchQuality,
-    ) -> Vec<ScoredResult> {
-        self.validate_dimension(query, "Query");
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
 
         // Perfect mode uses brute-force SIMD for guaranteed 100% recall
         if matches!(quality, SearchQuality::Perfect) {
             return self.search_brute_force(query, k);
         }
 
-        // For very small collections (≤100 vectors), use brute-force to guarantee 100% recall
+        // For very small collections (<=100 vectors), use brute-force to guarantee 100% recall
         // HNSW graph may not be fully connected with so few nodes, causing missed results
         // Only use brute-force if vector storage is enabled (not in fast-insert mode)
         if self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty() {
@@ -213,7 +258,7 @@ impl HnswIndex {
 
         // Adaptive two-phase: start with min_ef, escalate if query is hard
         if let SearchQuality::Adaptive { min_ef, max_ef } = quality {
-            return self.search_adaptive(query, k, min_ef.max(k), max_ef);
+            return Ok(self.search_adaptive(query, k, min_ef.max(k), max_ef));
         }
 
         // AutoTune: compute ef range from collection statistics, then delegate
@@ -221,17 +266,17 @@ impl HnswIndex {
         if matches!(quality, SearchQuality::AutoTune) {
             let (min_ef, max_ef) =
                 crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k);
-            return self.search_adaptive(query, k, min_ef, max_ef);
+            return Ok(self.search_adaptive(query, k, min_ef, max_ef));
         }
 
-        let ef_search = quality.ef_search(k);
+        let ef_search = quality.ef_search_for_scale(k, self.len());
 
         // Two-stage mode: larger candidate pool + exact SIMD reranking.
         if let Some(rerank_k) = self.should_two_stage_rerank(quality, k, ef_search) {
             return self.search_with_rerank_with_ef(query, k, rerank_k, ef_search);
         }
 
-        self.search_hnsw_only(query, k, ef_search)
+        Ok(self.search_hnsw_only(query, k, ef_search))
     }
 
     /// Two-phase adaptive search that starts with a low ef and escalates if needed.
@@ -253,7 +298,7 @@ impl HnswIndex {
         }
 
         // Check result spread to determine if this is a hard query.
-        // Use first/last scores — ordering differs by metric (similarity=desc,
+        // Use first/last scores -- ordering differs by metric (similarity=desc,
         // distance=asc) so we take the absolute spread.
         let score_a = results.first().map_or(0.0, |r| r.score);
         let score_b = results.last().map_or(0.0, |r| r.score);
@@ -289,16 +334,16 @@ impl HnswIndex {
     /// then re-ranks them using our SIMD-optimized distance functions for
     /// exact distance computation, returning the top `k` results.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the query dimension doesn't match the index dimension.
-    #[must_use]
+    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// match the index dimension.
     pub fn search_with_rerank(
         &self,
         query: &[f32],
         k: usize,
         rerank_k: usize,
-    ) -> Vec<ScoredResult> {
+    ) -> crate::error::Result<Vec<ScoredResult>> {
         let ef_search = SearchQuality::Accurate.ef_search(rerank_k);
         let adaptive_rerank_k = self
             .should_two_stage_rerank(SearchQuality::Accurate, k, ef_search)
@@ -312,27 +357,27 @@ impl HnswIndex {
         k: usize,
         rerank_k: usize,
         ef_search: usize,
-    ) -> Vec<ScoredResult> {
-        self.validate_dimension(query, "Query");
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
         let candidates = self.search_hnsw_only(query, rerank_k, ef_search);
 
-        self.rerank_sort_and_truncate(query, &candidates, k)
+        Ok(self.rerank_sort_and_truncate(query, &candidates, k))
     }
 
     /// Searches with SIMD-based re-ranking using a custom quality for initial search.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the query dimension doesn't match the index dimension.
-    #[must_use]
+    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// match the index dimension.
     pub fn search_with_rerank_quality(
         &self,
         query: &[f32],
         k: usize,
         rerank_k: usize,
         initial_quality: SearchQuality,
-    ) -> Vec<ScoredResult> {
-        self.validate_dimension(query, "Query");
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
 
         // Avoid recursion if initial_quality is Perfect
         let actual_quality = if matches!(initial_quality, SearchQuality::Perfect) {
@@ -340,9 +385,9 @@ impl HnswIndex {
         } else {
             initial_quality
         };
-        let candidates = self.search_with_quality(query, rerank_k, actual_quality);
+        let candidates = self.search_with_quality(query, rerank_k, actual_quality)?;
 
-        self.rerank_sort_and_truncate(query, &candidates, k)
+        Ok(self.rerank_sort_and_truncate(query, &candidates, k))
     }
 
     /// Reranks candidates with SIMD, sorts, truncates, and updates latency EMA.

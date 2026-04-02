@@ -151,6 +151,10 @@ impl Collection {
 
         let thresh = match threshold {
             Value::Integer(i) => *i as f64,
+            #[allow(clippy::cast_precision_loss)]
+            // Reason: aggregate comparison converts to f64; precision loss is
+            // acceptable for large u64 values in HAVING threshold context.
+            Value::UnsignedInteger(u) => *u as f64,
             Value::Float(f) => *f,
             _ => return false,
         };
@@ -266,6 +270,8 @@ impl Collection {
                         serde_json::Value::Number(n) => {
                             if let Some(i) = n.as_i64() {
                                 Value::Integer(i)
+                            } else if let Some(u) = n.as_u64() {
+                                Value::UnsignedInteger(u)
                             } else if let Some(f) = n.as_f64() {
                                 Value::Float(f)
                             } else {
