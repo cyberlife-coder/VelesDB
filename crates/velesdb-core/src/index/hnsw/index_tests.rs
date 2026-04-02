@@ -3053,3 +3053,145 @@ mod bitmap_property_tests {
         }
     }
 }
+
+// =========================================================================
+// Full-scan with bitmap tests
+// =========================================================================
+
+#[test]
+fn test_full_scan_empty_bitmap_returns_empty() {
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
+    index.insert(1, &[1.0, 0.0, 0.0]);
+    index.insert(2, &[0.0, 1.0, 0.0]);
+
+    let bitmap = roaring::RoaringBitmap::new();
+    let results = index
+        .full_scan_with_bitmap(&[1.0, 0.0, 0.0], 5, &bitmap)
+        .unwrap();
+    assert!(results.is_empty(), "empty bitmap should return empty results");
+}
+
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_full_scan_returns_exact_results() {
+    let dim = 8;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    // Insert 20 vectors with distinct patterns
+    for i in 0u64..20 {
+        let v: Vec<f32> = (0..dim)
+            .map(|d| ((i + d as u64) as f32 * 0.1).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    // Bitmap: only IDs 0..5
+    let mut bitmap = roaring::RoaringBitmap::new();
+    for i in 0u32..5 {
+        bitmap.insert(i);
+    }
+
+    let query: Vec<f32> = (0..dim).map(|d| (d as f32 * 0.1).sin()).collect();
+    let results = index
+        .full_scan_with_bitmap(&query, 3, &bitmap)
+        .unwrap();
+
+    // Should return at most 3 results, all from bitmap
+    assert!(!results.is_empty(), "should return results");
+    assert!(results.len() <= 3, "should return at most k results");
+    for sr in &results {
+        assert!(sr.id < 5, "all results should be from bitmap, got id={}", sr.id);
+    }
+
+    // First result should be id=0 (exact match with query pattern)
+    assert_eq!(results[0].id, 0, "closest vector should be id=0");
+}
+
+#[cfg(test)]
+mod full_scan_property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        /// **Validates: Requirements 3.5, 5.2, 3.2**
+        ///
+        /// Feature: bitmap-prefilter-v2, Property 4: Full-scan exactness
+        ///
+        /// For any set of vectors and any bitmap, the full-scan results are
+        /// identical to a naive exhaustive distance computation on the same
+        /// bitmap vectors, sorted by the metric.
+        #[test]
+        fn prop_full_scan_exactness(
+            n_vectors in 5u64..50,
+            bitmap_ids in proptest::collection::vec(0u32..50, 1..20),
+            k in 1usize..10,
+        ) {
+            let dim = 4;
+            let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+            // Insert vectors
+            for i in 0..n_vectors {
+                #[allow(clippy::cast_precision_loss)]
+                let v: Vec<f32> = (0..dim)
+                    .map(|d| ((i + d as u64) as f32 * 0.07).sin())
+                    .collect();
+                index.insert(i, &v);
+            }
+
+            let mut bitmap = roaring::RoaringBitmap::new();
+            for &id in &bitmap_ids {
+                if u64::from(id) < n_vectors {
+                    bitmap.insert(id);
+                }
+            }
+
+            if bitmap.is_empty() {
+                // Skip: empty bitmap always returns empty
+                return Ok(());
+            }
+
+            #[allow(clippy::cast_precision_loss)]
+            let query: Vec<f32> = (0..dim).map(|d| (d as f32 * 0.05).cos()).collect();
+
+            let results = index
+                .full_scan_with_bitmap(&query, k, &bitmap)
+                .unwrap();
+
+            // Naive exhaustive computation
+            let mut naive: Vec<(u64, f32)> = Vec::new();
+            for id32 in bitmap.iter() {
+                let id = u64::from(id32);
+                if let Some(idx) = index.mappings.get_idx(id) {
+                    let inner = index.inner.read();
+                    let score = inner.with_contiguous_vectors(|vectors| {
+                        vectors.get(idx).map(|v| index.compute_distance(&query, v))
+                    });
+                    if let Some(s) = score {
+                        naive.push((id, s));
+                    }
+                }
+            }
+
+            // Sort naive by cosine (higher is better → descending)
+            naive.sort_by(|a, b| b.1.total_cmp(&a.1));
+            naive.truncate(k);
+
+            // Compare IDs and scores
+            prop_assert_eq!(
+                results.len(),
+                naive.len(),
+                "result count mismatch"
+            );
+            for (sr, (expected_id, expected_score)) in results.iter().zip(naive.iter()) {
+                prop_assert_eq!(sr.id, *expected_id, "ID mismatch");
+                prop_assert!(
+                    (sr.score - expected_score).abs() < 1e-6,
+                    "score mismatch for id={}: got {}, expected {}",
+                    sr.id, sr.score, expected_score
+                );
+            }
+        }
+    }
+}
