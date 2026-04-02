@@ -400,7 +400,7 @@ pub async fn get_node_edges(
             params
                 .label
                 .as_ref()
-                .map_or(true, |lbl| e.label() == lbl.as_str())
+                .is_none_or(|lbl| e.label() == lbl.as_str())
         })
         .map(|e| EdgeResponse {
             id: e.id(),
