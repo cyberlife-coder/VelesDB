@@ -50,9 +50,13 @@ pub use handlers::{
 
 // Graph handlers (EPIC-016/US-031)
 pub use handlers::graph::{
-    add_edge, get_edges, get_node_degree, stream_traverse, traverse_graph, DegreeResponse,
-    StreamDoneEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams, TraversalResultItem,
-    TraversalStats, TraverseRequest, TraverseResponse,
+    add_edge, get_edge_count, get_edges, get_node_degree, get_node_edges, get_node_payload,
+    graph_search, list_nodes, remove_edge, stream_traverse, traverse_graph, traverse_parallel,
+    upsert_node_payload, DegreeResponse, EdgeCountResponse, GraphSearchRequest,
+    GraphSearchResponse, NodeEdgeQueryParams, NodeListResponse, NodePayloadResponse,
+    ParallelTraverseRequest, StreamDoneEvent, StreamNodeEvent, StreamStatsEvent,
+    StreamTraverseParams, TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+    UpsertNodePayloadRequest,
 };
 
 // FLAG-3 FIX: Re-export metrics handlers conditionally (EPIC-016/US-034,035)
@@ -127,8 +131,16 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::indexes::delete_index,
         handlers::graph::handlers::get_edges,
         handlers::graph::handlers::add_edge,
+        handlers::graph::handlers_extended::remove_edge,
+        handlers::graph::handlers_extended::get_edge_count,
+        handlers::graph::handlers_extended::list_nodes,
+        handlers::graph::handlers_extended::get_node_edges,
+        handlers::graph::handlers_extended::get_node_payload,
+        handlers::graph::handlers_extended::upsert_node_payload,
         handlers::graph::handlers::traverse_graph,
+        handlers::graph::handlers_extended::traverse_parallel,
         handlers::graph::handlers::get_node_degree,
+        handlers::graph::handlers_extended::graph_search,
         handlers::graph::stream::stream_traverse,
         handlers::match_query::match_query
     ),
@@ -180,6 +192,14 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             handlers::graph::AddEdgeRequest,
             handlers::graph::EdgesResponse,
             handlers::graph::EdgeResponse,
+            handlers::graph::EdgeCountResponse,
+            handlers::graph::NodeListResponse,
+            handlers::graph::NodePayloadResponse,
+            handlers::graph::UpsertNodePayloadRequest,
+            handlers::graph::ParallelTraverseRequest,
+            handlers::graph::GraphSearchRequest,
+            handlers::graph::GraphSearchResponse,
+            handlers::graph::GraphSearchResultItem,
             handlers::graph::StreamNodeEvent,
             handlers::graph::StreamStatsEvent,
             handlers::graph::StreamDoneEvent,

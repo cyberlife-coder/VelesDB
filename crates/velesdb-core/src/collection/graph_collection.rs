@@ -256,6 +256,30 @@ impl GraphCollection {
         self.inner.traverse_dfs_config(source_id, config)
     }
 
+    /// Performs parallel BFS traversal from multiple source nodes.
+    ///
+    /// Each source is traversed independently and results are merged,
+    /// deduplicating by `target_id` (first occurrence wins).
+    #[must_use]
+    pub fn traverse_bfs_parallel(
+        &self,
+        start_nodes: &[u64],
+        config: &TraversalConfig,
+    ) -> Vec<TraversalResult> {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        let mut merged = Vec::new();
+        for &source in start_nodes {
+            let results = self.traverse_bfs(source, config);
+            for r in results {
+                if seen.insert(r.target_id) {
+                    merged.push(r);
+                }
+            }
+        }
+        merged
+    }
+
     // -------------------------------------------------------------------------
     // Payload / node properties
     // -------------------------------------------------------------------------

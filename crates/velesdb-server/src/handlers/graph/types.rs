@@ -129,6 +129,106 @@ pub struct AddEdgeRequest {
 }
 
 // ============================================================================
+// Edge Count, Node List, Node Payload, Parallel Traversal, Graph Search
+// ============================================================================
+
+/// Response for edge count query.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EdgeCountResponse {
+    /// Total number of edges in the graph.
+    pub count: usize,
+}
+
+/// Query parameters for node-scoped edge queries.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct NodeEdgeQueryParams {
+    /// Filter by direction: "in", "out", or "both".
+    #[serde(default = "default_direction")]
+    #[param(example = "out")]
+    pub direction: String,
+    /// Filter edges by label.
+    #[param(example = "KNOWS")]
+    pub label: Option<String>,
+}
+
+fn default_direction() -> String {
+    "out".to_string()
+}
+
+/// Response containing all node IDs in the graph.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NodeListResponse {
+    /// List of node IDs.
+    pub node_ids: Vec<u64>,
+    /// Total count of nodes.
+    pub count: usize,
+}
+
+/// Request to upsert a node payload.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpsertNodePayloadRequest {
+    /// JSON payload to store on the node.
+    pub payload: serde_json::Value,
+}
+
+/// Response for a node payload retrieval.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NodePayloadResponse {
+    /// Node ID.
+    pub node_id: u64,
+    /// Stored payload (null if none).
+    pub payload: Option<serde_json::Value>,
+}
+
+/// Request for parallel multi-source BFS traversal.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ParallelTraverseRequest {
+    /// Source node IDs to start traversal from.
+    pub sources: Vec<u64>,
+    /// Maximum traversal depth.
+    #[serde(default = "default_max_depth")]
+    pub max_depth: u32,
+    /// Maximum number of results per source.
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Filter by relationship types (empty = all types).
+    #[serde(default)]
+    pub rel_types: Vec<String>,
+}
+
+/// Request for graph embedding search.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct GraphSearchRequest {
+    /// Query vector for similarity search.
+    pub vector: Vec<f32>,
+    /// Number of results to return.
+    #[serde(default = "default_graph_search_k")]
+    pub top_k: usize,
+}
+
+fn default_graph_search_k() -> usize {
+    10
+}
+
+/// Response for graph embedding search.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GraphSearchResponse {
+    /// Search results with node ID and similarity score.
+    pub results: Vec<GraphSearchResultItem>,
+}
+
+/// A single graph search result.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GraphSearchResultItem {
+    /// Node ID.
+    pub id: u64,
+    /// Similarity score.
+    pub score: f32,
+    /// Node payload (if any).
+    pub payload: Option<serde_json::Value>,
+}
+
+// ============================================================================
 // SSE Streaming Types (EPIC-058 US-003)
 // ============================================================================
 

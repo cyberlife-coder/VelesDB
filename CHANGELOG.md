@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Graph API parity** — 7 new REST endpoints for complete graph operations:
+  - `DELETE /collections/{name}/graph/edges/{id}` — remove edge by ID
+  - `GET /collections/{name}/graph/edges/count` — total edge count
+  - `GET /collections/{name}/graph/nodes` — list all node IDs
+  - `GET /collections/{name}/graph/nodes/{id}/edges` — node edges with direction filter (in/out/both)
+  - `GET/PUT /collections/{name}/graph/nodes/{id}/payload` — get/upsert node payload
+  - `POST /collections/{name}/graph/traverse/parallel` — multi-source BFS traversal
+  - `POST /collections/{name}/graph/search` — embedding similarity search on graph nodes
+- **CLI graph commands** — `graph remove-edge`, `graph count`, `graph search`
+- **REPL graph commands** — `.graph remove-edge`, `.graph count`, `.graph search`, `.graph store-payload`, `.graph get-payload`, `.graph nodes` with full help documentation
+- **Core** — `GraphCollection::traverse_bfs_parallel()` for multi-source BFS with deduplication
+- **OpenAPI** — all new graph endpoints registered in API documentation
+- **Tests** — 13 new server tests covering all new graph operations
+
 ## [1.11.0] - 2026-03-31
 
 ### Added
