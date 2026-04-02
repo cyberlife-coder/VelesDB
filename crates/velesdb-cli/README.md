@@ -209,12 +209,31 @@ Session commands use the backslash prefix (dot prefix also accepted):
 
 ### VelesQL Queries
 
-Any input not starting with `.` or `\` is executed as a VelesQL query:
+Any input not starting with `.` or `\` is executed as a VelesQL query through the full pipeline (parse → validate → execute). The REPL supports the complete VelesQL surface:
 
 ```
-velesdb> SELECT * FROM documents WHERE category = 'tech' LIMIT 10;
+velesdb> SELECT * FROM docs WHERE category = 'tech' LIMIT 10;
 velesdb> SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3] LIMIT 5;
+velesdb> SELECT * FROM docs WHERE similarity(vector, [0.1, 0.2]) > 0.8 LIMIT 10;
+velesdb> SELECT * FROM docs WHERE content MATCH 'rust programming' LIMIT 10;
+velesdb> INSERT INTO docs VALUES (1, [0.1, 0.2, 0.3], '{"title": "hello"}');
+velesdb> CREATE COLLECTION test (dimension = 4, metric = 'cosine');
+velesdb> DROP COLLECTION test;
+velesdb> SELECT EDGES FROM kg WHERE label = 'KNOWS';
+velesdb> MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b LIMIT 10;
+velesdb> SELECT category, COUNT(*) FROM docs GROUP BY category HAVING COUNT(*) > 5;
+velesdb> TRAIN QUANTIZER ON docs WITH (m = 8, k = 256);
 ```
+
+**Supported VelesQL statements:** SELECT, INSERT, UPSERT, UPDATE, DELETE, CREATE/DROP COLLECTION, CREATE/DROP INDEX, TRUNCATE, FLUSH, ANALYZE, SHOW COLLECTIONS, DESCRIBE COLLECTION, EXPLAIN, TRAIN QUANTIZER, INSERT EDGE, DELETE EDGE, INSERT NODE, SELECT EDGES, MATCH (graph patterns), UNION/INTERSECT/EXCEPT, JOIN.
+
+**Supported WHERE clauses:** `=`, `!=`, `>`, `<`, `>=`, `<=`, `IN`, `NOT IN`, `BETWEEN`, `IS NULL`, `IS NOT NULL`, `LIKE`, `ILIKE`, `NOT`, `AND`, `OR`, `NEAR` (vector), `NEAR_FUSED` (multi-vector), `SPARSE_NEAR`, `MATCH` (BM25), `similarity()` threshold.
+
+**Supported modifiers:** `LIMIT`, `OFFSET`, `ORDER BY`, `GROUP BY`, `HAVING`, `DISTINCT`, `WITH (mode, ef_search, timeout_ms, rerank, quantization)`, `USING FUSION (rrf, rsf, weighted, maximum)`.
+
+> **Limitation:** Bind parameters (`$v`, `$query`) are not supported in the REPL because there is no mechanism to pass external values. Use literal vectors `[0.1, 0.2, ...]` instead. Bind parameters work via the REST API (`POST /query` with `params`).
+
+> **MATCH queries** require an active collection set via `\use <collection_name>`. The REPL tries graph collections first, then vector collections.
 
 ## CLI Subcommands
 

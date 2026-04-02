@@ -221,20 +221,66 @@ pub fn print_help() {
     println!("  {} Enable reranking (true/false)", "rerank".cyan());
     println!("  {} Max results per query", "max_results".cyan());
     println!();
-    println!("{}", "VelesQL Examples:".bold().underline());
+    println!("{}", "VelesQL (type any SQL directly):".bold().underline());
     println!();
-    println!("  {}", "SELECT * FROM documents LIMIT 10;".italic().white());
     println!(
         "  {}",
-        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (mode = 'fast');"
+        "SELECT * FROM docs WHERE category = 'tech' LIMIT 10;"
             .italic()
             .white()
     );
     println!(
         "  {}",
-        "SELECT * FROM items WHERE category = 'tech' LIMIT 20;"
+        "SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3] LIMIT 5;"
             .italic()
             .white()
+    );
+    println!(
+        "  {}",
+        "SELECT * FROM docs WHERE similarity(vector, [0.1, 0.2]) > 0.8 LIMIT 10;"
+            .italic()
+            .white()
+    );
+    println!(
+        "  {}",
+        "SELECT * FROM docs WHERE content MATCH 'rust' LIMIT 10;"
+            .italic()
+            .white()
+    );
+    println!(
+        "  {}",
+        "INSERT INTO docs VALUES (1, [0.1, 0.2], '{\"title\": \"hello\"}');"
+            .italic()
+            .white()
+    );
+    println!(
+        "  {}",
+        "CREATE COLLECTION test (dimension = 4, metric = 'cosine');"
+            .italic()
+            .white()
+    );
+    println!(
+        "  {}",
+        "SELECT EDGES FROM kg WHERE label = 'KNOWS';"
+            .italic()
+            .white()
+    );
+    println!(
+        "  {}",
+        "MATCH (a)-[:KNOWS]->(b) RETURN a, b LIMIT 10;  (needs \\use <col>)"
+            .italic()
+            .white()
+    );
+    println!(
+        "  {}",
+        "SELECT category, COUNT(*) FROM docs GROUP BY category;"
+            .italic()
+            .white()
+    );
+    println!();
+    println!(
+        "  {}",
+        "Note: $parameter vectors require REST API. Use literal [0.1, 0.2, ...] in REPL.".dimmed()
     );
     println!();
 }
