@@ -211,9 +211,19 @@ pub(crate) fn cmd_upsert(db: &Database, parts: &[&str]) -> CommandResult {
 
     match db.get_vector_collection(name) {
         Some(col) => {
+            let expected_dim = col.config().dimension;
+            if vector.len() != expected_dim {
+                return CommandResult::Error(format!(
+                    "Dimension mismatch: collection '{}' expects {} dimensions, got {}",
+                    name,
+                    expected_dim,
+                    vector.len()
+                ));
+            }
             let point = velesdb_core::Point::new(id, vector, payload);
             match col.upsert(vec![point]) {
                 Ok(()) => {
+                    let _ = col.flush();
                     println!(
                         "{} Upserted point {} into '{}'\n",
                         "\u{2713}".green(),

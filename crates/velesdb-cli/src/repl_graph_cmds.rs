@@ -1,7 +1,9 @@
 //! REPL commands for graph operations.
 //!
 //! Covers: `.graph` (dispatcher), `.graph add-edge`, `.graph edges`,
-//! `.graph degree`, `.graph traverse`, `.graph neighbors`.
+//! `.graph degree`, `.graph traverse`, `.graph neighbors`,
+//! `.graph remove-edge`, `.graph count`, `.graph search`,
+//! `.graph store-payload`, `.graph get-payload`, `.graph nodes`.
 
 use colored::Colorize;
 use velesdb_core::collection::graph::TraversalConfig;
@@ -136,7 +138,7 @@ fn cmd_graph_degree(db: &Database, parts: &[&str]) -> CommandResult {
 
 fn cmd_graph_traverse(db: &Database, parts: &[&str]) -> CommandResult {
     if parts.len() < 4 {
-        println!("Usage: .graph traverse <collection> <source> [--algo bfs|dfs] [--depth N] [--limit N]\n");
+        println!("Usage: .graph traverse <collection> <source> [--algo bfs|dfs] [--depth N] [--limit N] [--rel-types X,Y]\n");
         return CommandResult::Continue;
     }
     let col = match resolve_graph_collection(db, parts, 2) {
@@ -155,12 +157,15 @@ fn cmd_graph_traverse(db: &Database, parts: &[&str]) -> CommandResult {
     let limit: usize = parse_flag(parts, "--limit")
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
+    let rel_types: Vec<String> = parse_flag(parts, "--rel-types")
+        .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
+        .unwrap_or_default();
 
     let config = TraversalConfig {
         min_depth: 1,
         max_depth,
         limit,
-        rel_types: Vec::new(),
+        rel_types,
     };
 
     let algo_label = match algo.as_str() {
@@ -254,11 +259,13 @@ fn cmd_graph_count(db: &Database, parts: &[&str]) -> CommandResult {
     };
 
     let edge_count = col.edge_count();
-    let node_count = col.all_node_ids().len();
+    let stored_nodes = col.all_node_ids().len();
+    let total_points = col.len();
 
     println!("\n{}\n", "Graph Stats".bold().underline(),);
     println!("  {} {}", "Edges:".cyan(), edge_count);
-    println!("  {} {}", "Nodes:".cyan(), node_count);
+    println!("  {} {}", "Stored nodes:".cyan(), stored_nodes);
+    println!("  {} {}", "Total points:".cyan(), total_points);
     println!();
     CommandResult::Continue
 }
@@ -344,6 +351,7 @@ fn cmd_graph_store_payload(db: &Database, parts: &[&str]) -> CommandResult {
     if let Err(e) = col.upsert_node_payload(node_id, &payload) {
         return CommandResult::Error(format!("{e}"));
     }
+    let _ = col.flush();
 
     println!(
         "{} Payload stored on node {}",
@@ -369,9 +377,11 @@ fn cmd_graph_get_payload(db: &Database, parts: &[&str]) -> CommandResult {
 
     match col.get_node_payload(node_id) {
         Ok(Some(val)) => {
+            // SAFETY invariant: serde_json::Value always serializes successfully.
             println!(
                 "{}",
-                serde_json::to_string_pretty(&val).unwrap_or_else(|_| "null".to_string())
+                serde_json::to_string_pretty(&val)
+                    .expect("invariant: serde_json::Value serializes")
             );
         }
         Ok(None) => println!("null"),

@@ -200,6 +200,18 @@ pub fn print_help() {
         "  {} Embedding search",
         ".graph search <col> <vector> [k]".yellow()
     );
+    println!(
+        "  {} Store payload",
+        ".graph store-payload <col> <node> <json>".yellow()
+    );
+    println!(
+        "  {}  Get payload",
+        ".graph get-payload <col> <node>".yellow()
+    );
+    println!(
+        "  {}    List nodes",
+        ".graph nodes <col> [--page N]".yellow()
+    );
     println!("  {}           Full graph help", ".graph help".yellow());
     println!();
     println!("{}", "Session Commands:".bold().underline());
