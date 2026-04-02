@@ -11,6 +11,31 @@ use crate::scored_result::ScoredResult;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 
+/// Default selectivity threshold (1%).
+///
+/// When the ratio of bitmap-matching vectors to total vectors falls at or
+/// below this value, a brute-force full-scan is preferred over HNSW graph
+/// traversal because the graph would explore too many non-matching nodes.
+#[allow(dead_code)] // Wired in Task 4
+pub(crate) const SELECTIVITY_THRESHOLD: f64 = 0.01;
+
+/// Estimates the real selectivity from a pre-filter bitmap.
+///
+/// Returns the ratio `bitmap.len() / collection_len` as an `f64` in
+/// `[0.0, 1.0]`. Returns `0.0` when `collection_len` is zero.
+#[allow(dead_code)] // Wired in Task 4
+#[allow(clippy::cast_precision_loss)]
+#[inline]
+pub(crate) fn estimate_real_selectivity(
+    bitmap: &roaring::RoaringBitmap,
+    collection_len: usize,
+) -> f64 {
+    if collection_len == 0 {
+        return 0.0;
+    }
+    bitmap.len() as f64 / collection_len as f64
+}
+
 /// Tags each `SearchResult` with a `vector_score` component equal to its score.
 ///
 /// For pure vector search, the HNSW/PQ score IS the vector component.
