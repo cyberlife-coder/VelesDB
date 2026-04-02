@@ -497,7 +497,11 @@ impl Collection {
                 selectivity = selectivity,
                 bitmap_len = bitmap.len(),
                 collection_len = self.index.len(),
-                strategy = if selectivity <= SELECTIVITY_THRESHOLD { "full_scan" } else { "hnsw_bitmap" },
+                strategy = if selectivity <= SELECTIVITY_THRESHOLD {
+                    "full_scan"
+                } else {
+                    "hnsw_bitmap"
+                },
                 "bitmap prefilter strategy selected"
             );
 
@@ -507,8 +511,12 @@ impl Collection {
             } else {
                 // HNSW + bitmap pre-filter
                 let candidates_k = compute_oversampled_k(k, filter);
-                let results = self.index
-                    .search_with_quality_and_bitmap(query, candidates_k, quality, &bitmap)?;
+                let results = self.index.search_with_quality_and_bitmap(
+                    query,
+                    candidates_k,
+                    quality,
+                    &bitmap,
+                )?;
                 self.merge_delta(results, query, candidates_k, metric)
             };
 

@@ -34,9 +34,8 @@ impl HnswIndex {
 
         let inner = self.inner.read();
         let results = inner.with_contiguous_vectors(|vectors| {
-            let mut scored: Vec<ScoredResult> = Vec::with_capacity(
-                usize::try_from(allowed_ids.len()).unwrap_or(k),
-            );
+            let mut scored: Vec<ScoredResult> =
+                Vec::with_capacity(usize::try_from(allowed_ids.len()).unwrap_or(k));
 
             for id32 in allowed_ids {
                 let id = u64::from(id32);

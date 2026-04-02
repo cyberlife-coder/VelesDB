@@ -2990,7 +2990,11 @@ fn test_ids_exceeding_u32_max_pass_through() {
     // All results should have id=1 (the only one in bitmap)
     // IDs 2 and 3 are valid u32 but NOT in bitmap, so they're excluded
     for sr in &results {
-        assert_eq!(sr.id, 1, "only id=1 should pass bitmap filter, got {}", sr.id);
+        assert_eq!(
+            sr.id, 1,
+            "only id=1 should pass bitmap filter, got {}",
+            sr.id
+        );
     }
 }
 
@@ -3068,7 +3072,10 @@ fn test_full_scan_empty_bitmap_returns_empty() {
     let results = index
         .full_scan_with_bitmap(&[1.0, 0.0, 0.0], 5, &bitmap)
         .unwrap();
-    assert!(results.is_empty(), "empty bitmap should return empty results");
+    assert!(
+        results.is_empty(),
+        "empty bitmap should return empty results"
+    );
 }
 
 #[test]
@@ -3092,15 +3099,17 @@ fn test_full_scan_returns_exact_results() {
     }
 
     let query: Vec<f32> = (0..dim).map(|d| (d as f32 * 0.1).sin()).collect();
-    let results = index
-        .full_scan_with_bitmap(&query, 3, &bitmap)
-        .unwrap();
+    let results = index.full_scan_with_bitmap(&query, 3, &bitmap).unwrap();
 
     // Should return at most 3 results, all from bitmap
     assert!(!results.is_empty(), "should return results");
     assert!(results.len() <= 3, "should return at most k results");
     for sr in &results {
-        assert!(sr.id < 5, "all results should be from bitmap, got id={}", sr.id);
+        assert!(
+            sr.id < 5,
+            "all results should be from bitmap, got id={}",
+            sr.id
+        );
     }
 
     // First result should be id=0 (exact match with query pattern)
