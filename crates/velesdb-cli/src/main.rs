@@ -18,6 +18,7 @@ mod collection_helpers;
 mod commands;
 mod graph;
 mod graph_display;
+mod graph_handlers;
 mod handlers;
 mod helpers;
 mod import;
