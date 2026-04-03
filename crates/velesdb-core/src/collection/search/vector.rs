@@ -18,6 +18,13 @@ use crate::validation::validate_dimension_match;
 /// traversal because the graph would explore too many non-matching nodes.
 pub(crate) const SELECTIVITY_THRESHOLD: f64 = 0.01;
 
+/// High selectivity threshold (30%).
+///
+/// When the ratio of bitmap-matching vectors to total vectors exceeds this
+/// value, the bitmap pre-filter overhead (4x over-fetch) outweighs its
+/// benefit. Falls back to the standard post-filter path instead.
+pub(crate) const SELECTIVITY_HIGH_THRESHOLD: f64 = 0.30;
+
 /// Estimates the real selectivity from a pre-filter bitmap.
 ///
 /// Returns the ratio `bitmap.len() / collection_len` as an `f64` in
@@ -499,11 +506,32 @@ impl Collection {
                 collection_len = self.index.len(),
                 strategy = if selectivity <= SELECTIVITY_THRESHOLD {
                     "full_scan"
+                } else if selectivity > SELECTIVITY_HIGH_THRESHOLD {
+                    "post_filter"
                 } else {
                     "hnsw_bitmap"
                 },
                 "bitmap prefilter strategy selected"
             );
+
+            // High selectivity: bitmap overhead > benefit, use post-filter.
+            if selectivity > SELECTIVITY_HIGH_THRESHOLD {
+                tracing::debug!(
+                    selectivity = selectivity,
+                    threshold = SELECTIVITY_HIGH_THRESHOLD,
+                    "high selectivity — skipping bitmap, using post-filter path"
+                );
+                let candidates_k = compute_oversampled_k(k, filter);
+                let index_results =
+                    self.index.search_with_quality(query, candidates_k, quality)?;
+                let index_results = self.merge_delta(index_results, query, candidates_k, metric);
+                return Ok(self.filter_and_hydrate(
+                    index_results,
+                    filter,
+                    k,
+                    higher_is_better,
+                ));
+            }
 
             let index_results = if selectivity <= SELECTIVITY_THRESHOLD {
                 // Full-scan brute-force for very selective filters
