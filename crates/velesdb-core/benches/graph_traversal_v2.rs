@@ -53,7 +53,7 @@ fn bench_bfs_edgestore_vs_csr(c: &mut Criterion) {
     let degree = 5u64;
     let depth = 3u32;
 
-    for &num_nodes in &[1_000u64, 10_000] {
+    for &num_nodes in &[1_000u64, 10_000, 100_000] {
         let (snapshot, store) = build_snapshot(num_nodes, degree);
         let config = TraversalConfig::with_range(1, depth);
 
@@ -158,10 +158,47 @@ fn bench_csr_build_time(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Benchmark: BFS on dense graph (degree 20)
+// ---------------------------------------------------------------------------
+
+fn bench_bfs_dense_graph(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bfs_dense_graph");
+    let num_nodes = 10_000u64;
+    let degree = 20u64;
+    let depth = 3u32;
+
+    let (snapshot, _store) = build_snapshot(num_nodes, degree);
+    let config = TraversalConfig::with_range(1, depth);
+
+    group.bench_function("csr_10k_deg20", |b| {
+        b.iter(|| bfs_traverse_csr(black_box(&snapshot), 0, black_box(&config)));
+    });
+
+    // Filtered traversal on dense graph (1-of-5 selectivity)
+    let mut allowed = FxHashSet::default();
+    allowed.insert(LabelId::from_u32(0));
+    let predicate = LabelFilter::new(allowed);
+
+    group.bench_function("filtered_10k_deg20_1of5", |b| {
+        b.iter(|| {
+            bfs_traverse_csr_filtered(
+                black_box(&snapshot),
+                0,
+                black_box(&config),
+                black_box(&predicate),
+            )
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bfs_edgestore_vs_csr,
     bench_bfs_csr_with_predicate,
     bench_csr_build_time,
+    bench_bfs_dense_graph,
 );
 criterion_main!(benches);
