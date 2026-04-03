@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: March 27, 2026 (v1.7.2 — sequential benchmarks on idle machine)*
+*Last updated: April 3, 2026 (v1.11.0 — includes competitive benchmarks vs Qdrant, Memgraph, ClickHouse)*
 
 ---
 
@@ -272,31 +272,65 @@ Local measurement (i9-14900KF, 10K vectors, 384D): upsert throughput ~808 vec/s 
 
 ---
 
-## 9. Competitive Analysis
+## 9. Competitive Analysis (April 3, 2026)
 
-### Graph Traversal — VelesDB vs Memgraph (Issue #491)
+*All measurements via `bench_full_audit.py` and `bench_graph_quick.py` on the same machine.*
+*Competitors: Qdrant 1.17.1, Memgraph 3.9.0, ClickHouse 26.3.2.3 (all Docker, localhost).*
 
-*Measured April 2026 via `bench_graph_quick.py` — 5K nodes, 50K edges, LDBC-style social network.*
-*Previous benchmark (v1.10.0): Memgraph was 100-25000x faster.*
+### Vector Search — VelesDB vs Qdrant (SIFT1M, 1M × 128D)
 
-| Query | Memgraph p50 | VelesDB p50 | Ratio | Results |
+| Metric | VelesDB 1.11.0 | Qdrant 1.17.1 | Ratio |
+|--------|----------------|---------------|-------|
+| **kNN@10 p50** | **348 µs** | 6.8 ms | VelesDB **19.7x faster** |
+| **kNN@100 p50** | **1.9 ms** | 6.9 ms | VelesDB **3.6x faster** |
+| **Insert 1M** | 19.0K vec/s | ~15.5K vec/s | VelesDB **1.2x faster** |
+| **Recall@10** | 0.992 | 0.998 | −0.6% |
+| **Recall@100** | 0.995 | 0.996 | −0.1% |
+
+### Graph Traversal — VelesDB vs Memgraph (5K nodes, 55K edges)
+
+| Query | VelesDB p50 | Memgraph p50 | Ratio | Results |
 |-------|-------------|-------------|-------|---------|
-| **BFS 1-hop** | 479 µs | **5 µs** | VelesDB **94x faster** | 10 = 10 |
-| **BFS 2-hop** | 1.4 ms | **31 µs** | VelesDB **45x faster** | 110 = 110 |
-| **BFS 3-hop (limit 200)** | 2.6 ms | **50 µs** | VelesDB **52x faster** | 200 = 200 |
+| **BFS 1-hop** | **2 µs** | 441 µs | VelesDB **189x faster** | 10 = 10 |
+| **BFS 2-hop** | **23 µs** | 2.2 ms | VelesDB **97x faster** | 110 = 110 |
+| **BFS 3-hop (limit 200)** | **44 µs** | 2.2 ms | VelesDB **50x faster** | 200 = 200 |
+| **Multi KNOWS→WORKS_AT** | **27 µs** | 525 µs | VelesDB **19x faster** | 10 = 10 |
+| **Edge loading** | 1.03M edges/s | — | — | — |
 
-**Improvement**: from 100-25000x slower → 45-94x faster (reversal).
+### Columnar Queries — VelesDB vs ClickHouse (1M rows, ClickBench)
 
-#### Known Limitation — Edge Loading
+*Measured via `bench_clickbench.py` with metadata-only queries (no forced vector NEAR).*
 
-| Operation | Memgraph | VelesDB | Gap |
-|-----------|----------|---------|-----|
-| **50K edges batch load** | ~0.05s | ~0.05s | Parity (batch API) |
-| **374K edges (50K nodes)** | 7s | 60s | Memgraph **9x faster** |
+| Query | VelesDB p50 | ClickHouse p50 | Ratio | Results |
+|-------|-------------|---------------|-------|---------|
+| **Q37 dashboard (4 predicates)** | **5.3 ms** | 5.4 ms | **Parity** | 100 = 100 |
+| **Q38 dashboard + Title** | 5.8 ms | 4.9 ms | CH 1.2x | 100 = 100 |
+| **Q41 traffic source** | 5.3 ms | 4.5 ms | CH 1.2x | 100 = 100 |
+| **Q21 URL LIKE '%google%'** | 38.6 ms | 8.3 ms | CH 4.6x | 3 vs 98* |
+| **Q39 links (IsLink!=0)** | 21.0 ms | 4.8 ms | CH 4.4x | 100 = 100 |
+| **Qx mobile (IsMobile=1)** | 15.9 ms | 5.1 ms | CH 3.1x | 100 = 100 |
+| **Q20 point lookup** | 4.2 s | 2.6 ms | CH 1616x | 74 = 74 |
 
-Root cause: per-edge `edge_ids` write lock + shard lock in `ConcurrentEdgeStore::add_edge`.
-Planned fix: bulk `add_edges_batch` at the Rust core level with deferred shard locking
-and single CSR rebuild at the end of the batch.
+*\*Q21: BM25 text index returns fewer results than LIKE pattern match on URL strings.*
+
+### Improvement vs v1.10.0
+
+| Metric | v1.10.0 | v1.11.0 | Change |
+|--------|---------|---------|--------|
+| vs Qdrant search | 17.7x faster | **19.7x faster** | Improved |
+| vs Qdrant insert | **23x slower** | **1.2x faster** | **Reversed** |
+| vs Memgraph BFS 1-hop | **100x slower** | **189x faster** | **Reversed** |
+| vs Memgraph BFS 3-hop | **25,000x slower** | **50x faster** | **Reversed** |
+| vs ClickHouse Q37 | **345x slower** | **Parity** | **Reversed** |
+| vs ClickHouse Q39 | **200x slower** | **4.4x slower** | **45x improved** |
+
+### Known Limitations
+
+| Issue | Current | Root Cause | Planned Fix |
+|-------|---------|-----------|-------------|
+| Q20 point lookup (1616x) | Full scan 1M rows | No hash index for high-cardinality Eq | Hash index on secondary indexes |
+| Q21 LIKE result count (3 vs 98) | BM25 tokenization mismatch | URL strings tokenize differently | Trigram index for LIKE patterns |
+| Bulk load with many indexes | Slow at 1M+ with >3 indexes | Per-point B-tree insert | Deferred index build (implemented) |
 
 ### SIMD Distance Kernels
 

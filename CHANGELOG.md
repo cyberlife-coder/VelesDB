@@ -24,28 +24,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 - **Bitmap pre-filter for filtered search (#487)** — adaptive strategy selection based on
-  real selectivity: full-scan brute-force for ≤1% selectivity (26µs), HNSW+bitmap for
-  1-30%, post-filter fallback for >30%. Eliminates massive over-fetching on selective filters
+  real selectivity: full-scan brute-force for ≤1% selectivity, HNSW+bitmap for 1-30%,
+  post-filter fallback for >30%. Eliminates massive over-fetching on selective filters
 - **CSR graph traversal v2 (#491)** — CsrSnapshot with edge IDs + labels, ArcSwap lock-free
   adjacency, EdgePredicate pushdown (290ns for label-filtered BFS vs 3.4µs unfiltered = 12x),
   lazy CSR rebuild on read instead of every mutation
 - **Bulk insert v2 pipeline (#488)** — DirectVectorWriter bypasses ShardedVectors overhead,
   AsyncIndexBuilder with background thread for deferred HNSW construction,
   HnswSegmentBuilder for parallel segment-based index building
-- **HNSW graduated ef_construction** -- 3-phase VAMANA schedule (low/mid/full ef) during
-  batch insert reduces graph construction cost while preserving recall quality
-- **Lock-free CAS entry-point promotion** -- replaced mutex-based HNSW entry-point
-  updates with `AtomicUsize` compare-and-swap, eliminating contention during parallel inserts
-- **Pre-allocated vector storage** -- `allocate_batch` split into `reserve` + `bulk-push`
-  to reduce per-vector allocation overhead during batch inserts
-- **CsrSnapshot zero-copy BFS** -- CSR (Compressed Sparse Row) snapshot of the edge store
-  enables zero-copy graph traversal without holding locks during BFS/DFS
-- **FxHashSet visited sets** -- replaced `std::collections::HashSet` with `rustc_hash::FxHashSet`
-  in graph traversal for faster hashing on integer node IDs
-- **Parent-pointer path reconstruction** -- replaced per-path cloning with parent-pointer
-  backtracking in BFS/DFS, reducing memory allocations during graph traversal
-- **WAL deferred sync for streaming bulk insert** -- WAL fsync is deferred during bulk
-  insert streams and flushed once at completion, reducing I/O overhead
+- **Bitmap NEQ support** — `Neq` conditions now use universe bitmap subtraction for
+  pre-filtering, enabling indexed queries like `AdvEngineID != 0`
+- **Secondary index backfill** — `create_index` now scans existing payloads to populate
+  the index, and `upsert_bulk_from_raw` maintains indexes during bulk insert
+- **LIKE→BM25 fallback** — metadata-only LIKE queries use the BM25 text index for
+  candidate narrowing before full scan
+- **AND-aware index lookup** — compound AND conditions extract the first indexed Eq
+  sub-condition for bitmap pre-filtering
+- **Bitmap-based metadata dispatch** — `dispatch_metadata_only` uses `build_prefilter_bitmap`
+  for indexed conditions, avoiding full sequential scans
+- **Native batch edge loading** — `add_edges_batch` on ConcurrentEdgeStore with single
+  lock acquisition cycle (1M+ edges/s)
+- **Python `create_index`** — exposed secondary index creation in Python bindings
+- **Python `upsert_bulk_numpy_json`** — fast bulk insert with pre-serialized JSON payloads
+- **CSR wiring in traverse_bfs_config** — all BFS paths (Python, WASM, Server) now use
+  the lock-free CSR snapshot automatically
+- **HNSW graduated ef_construction** — 3-phase VAMANA schedule during batch insert
+- **Lock-free CAS entry-point promotion** — AtomicUsize CAS for HNSW entry-point
+- **Pre-allocated vector storage** — allocate_batch split into reserve + bulk-push
+- **FxHashSet visited sets** — faster hashing on integer node IDs
+- **Parent-pointer path reconstruction** — eliminates per-path cloning in BFS/DFS
+- **WAL deferred sync** — fsync deferred during bulk insert streams
+
+### Changed
+- **License** — added Attribution clause for public-facing applications (visible link
+  to velesdb.com required, Enterprise license waives requirement)
+- **Rate limit** — increased default from 100 to 100K QPS for local-first deployment
 
 ## [1.11.0] - 2026-03-31
 
