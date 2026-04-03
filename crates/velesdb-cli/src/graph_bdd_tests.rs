@@ -341,11 +341,12 @@ fn test_traverse_bfs_parallel_multiple_sources_deduplicates() {
     let config = velesdb_core::collection::graph::TraversalConfig::with_range(1, 3).with_limit(100);
     let results = col.traverse_bfs_parallel(&[1, 3], &config);
 
-    // THEN: key nodes are reachable from the respective sources
+    // THEN: node 4 appears (reachable from 3), node 2 appears (from 1)
+    // Deduplication is by path signature (not target_id), so the same node
+    // may appear multiple times if reached via different paths.
     let ids: Vec<u64> = results.iter().map(|r| r.target_id).collect();
     assert!(ids.contains(&2), "node 2 reachable from source 1");
     assert!(ids.contains(&4), "node 4 reachable from source 3");
-    assert!(!results.is_empty(), "should have results");
 }
 
 #[test]

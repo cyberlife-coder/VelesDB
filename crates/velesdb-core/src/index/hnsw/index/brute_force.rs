@@ -10,6 +10,51 @@ use crate::index::hnsw::params::SearchQuality;
 use crate::scored_result::ScoredResult;
 
 impl HnswIndex {
+    /// Brute-force scan restricted to vectors in the bitmap.
+    ///
+    /// Iterates over bitmap IDs, resolves each to an internal index via
+    /// `mappings`, retrieves the vector from `ContiguousVectors`, computes
+    /// the exact SIMD distance, and returns the top-k results sorted by
+    /// the index metric.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DimensionMismatch`] if query dimension is wrong.
+    pub fn full_scan_with_bitmap(
+        &self,
+        query: &[f32],
+        k: usize,
+        allowed_ids: &roaring::RoaringBitmap,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
+
+        if allowed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let inner = self.inner.read();
+        let results = inner.with_contiguous_vectors(|vectors| {
+            let mut scored: Vec<ScoredResult> =
+                Vec::with_capacity(usize::try_from(allowed_ids.len()).unwrap_or(k));
+
+            for id32 in allowed_ids {
+                let id = u64::from(id32);
+                if let Some(idx) = self.mappings.get_idx(id) {
+                    if let Some(vec) = vectors.get(idx) {
+                        let dist = self.compute_distance(query, vec);
+                        scored.push(ScoredResult::new(id, dist));
+                    }
+                }
+            }
+
+            self.metric.sort_scored_results(&mut scored);
+            scored.truncate(k);
+            scored
+        });
+
+        Ok(results)
+    }
+
     /// Performs brute-force search for guaranteed 100% recall.
     ///
     /// Uses rayon-parallelized distance computation across all stored vectors.

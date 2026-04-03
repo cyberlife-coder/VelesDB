@@ -11,6 +11,36 @@ use crate::scored_result::ScoredResult;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 
+/// Default selectivity threshold (1%).
+///
+/// When the ratio of bitmap-matching vectors to total vectors falls at or
+/// below this value, a brute-force full-scan is preferred over HNSW graph
+/// traversal because the graph would explore too many non-matching nodes.
+pub(crate) const SELECTIVITY_THRESHOLD: f64 = 0.01;
+
+/// High selectivity threshold (30%).
+///
+/// When the ratio of bitmap-matching vectors to total vectors exceeds this
+/// value, the bitmap pre-filter overhead (4x over-fetch) outweighs its
+/// benefit. Falls back to the standard post-filter path instead.
+pub(crate) const SELECTIVITY_HIGH_THRESHOLD: f64 = 0.30;
+
+/// Estimates the real selectivity from a pre-filter bitmap.
+///
+/// Returns the ratio `bitmap.len() / collection_len` as an `f64` in
+/// `[0.0, 1.0]`. Returns `0.0` when `collection_len` is zero.
+#[allow(clippy::cast_precision_loss)]
+#[inline]
+pub(crate) fn estimate_real_selectivity(
+    bitmap: &roaring::RoaringBitmap,
+    collection_len: usize,
+) -> f64 {
+    if collection_len == 0 {
+        return 0.0;
+    }
+    bitmap.len() as f64 / collection_len as f64
+}
+
 /// Tags each `SearchResult` with a `vector_score` component equal to its score.
 ///
 /// For pure vector search, the HNSW/PQ score IS the vector component.
@@ -424,17 +454,11 @@ impl Collection {
     /// applying the metadata filter. Falls back to [`search_with_filter`] when no
     /// quality options are set.
     ///
-    /// # Note on bitmap pre-filter
-    ///
-    /// Unlike [`search_with_filter`], this method does not use
-    /// [`search_with_optional_bitmap`] because `search_with_quality` and
-    /// `search_hnsw_only_filtered` are separate code paths on `HnswIndex`.
-    /// Combining quality-aware ef_search with bitmap pre-filtering would
-    /// require a new `HnswIndex` method.
-    // TODO #issue: Wire bitmap pre-filter into quality-aware search path.
-    // This requires a `search_with_quality_and_bitmap` method on `HnswIndex`
-    // that combines `search_with_quality`'s ef_search adaptation with
-    // `search_hnsw_only_filtered`'s bitmap exclusion.
+    /// When a bitmap pre-filter is available from secondary indexes, the method
+    /// estimates real selectivity and chooses between:
+    /// - Full-scan brute-force (selectivity ≤ 1%) for exact results
+    /// - HNSW + bitmap pre-filter (selectivity > 1%) for fast approximate results
+    /// - Post-filter fallback when no bitmap can be built
     ///
     /// # Errors
     ///
@@ -467,9 +491,68 @@ impl Collection {
                 })
         });
 
-        // Over-fetch for filtering: retrieve more candidates than needed.
-        let candidates_k = compute_oversampled_k(k, filter);
+        // Attempt bitmap pre-filter from secondary indexes.
+        if let Some(bitmap) = self.build_prefilter_bitmap(filter) {
+            // Empty bitmap → no vectors match, short-circuit.
+            if bitmap.is_empty() {
+                return Ok(Vec::new());
+            }
 
+            let selectivity = estimate_real_selectivity(&bitmap, self.index.len());
+
+            tracing::debug!(
+                selectivity = selectivity,
+                bitmap_len = bitmap.len(),
+                collection_len = self.index.len(),
+                strategy = if selectivity <= SELECTIVITY_THRESHOLD {
+                    "full_scan"
+                } else if selectivity > SELECTIVITY_HIGH_THRESHOLD {
+                    "post_filter"
+                } else {
+                    "hnsw_bitmap"
+                },
+                "bitmap prefilter strategy selected"
+            );
+
+            // High selectivity: bitmap overhead > benefit, use post-filter.
+            if selectivity > SELECTIVITY_HIGH_THRESHOLD {
+                tracing::debug!(
+                    selectivity = selectivity,
+                    threshold = SELECTIVITY_HIGH_THRESHOLD,
+                    "high selectivity — skipping bitmap, using post-filter path"
+                );
+                let candidates_k = compute_oversampled_k(k, filter);
+                let index_results =
+                    self.index.search_with_quality(query, candidates_k, quality)?;
+                let index_results = self.merge_delta(index_results, query, candidates_k, metric);
+                return Ok(self.filter_and_hydrate(
+                    index_results,
+                    filter,
+                    k,
+                    higher_is_better,
+                ));
+            }
+
+            let index_results = if selectivity <= SELECTIVITY_THRESHOLD {
+                // Full-scan brute-force for very selective filters
+                self.index.full_scan_with_bitmap(query, k, &bitmap)?
+            } else {
+                // HNSW + bitmap pre-filter
+                let candidates_k = compute_oversampled_k(k, filter);
+                let results = self.index.search_with_quality_and_bitmap(
+                    query,
+                    candidates_k,
+                    quality,
+                    &bitmap,
+                )?;
+                self.merge_delta(results, query, candidates_k, metric)
+            };
+
+            return Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better));
+        }
+
+        // No bitmap available → fallback to post-filter with quality-aware search.
+        let candidates_k = compute_oversampled_k(k, filter);
         let index_results = self
             .index
             .search_with_quality(query, candidates_k, quality)?;

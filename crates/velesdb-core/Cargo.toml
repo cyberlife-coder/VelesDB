@@ -366,3 +366,7 @@ harness = false
 [[bench]]
 name = "search_layer_benchmark"
 harness = false
+
+[[bench]]
+name = "bitmap_prefilter_benchmark"
+harness = false

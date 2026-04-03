@@ -126,6 +126,79 @@ impl HnswIndex {
         results
     }
 
+    /// Quality-aware HNSW search with bitmap pre-filter.
+    ///
+    /// Adapts `ef_search` based on `SearchQuality`, then filters results
+    /// keeping only IDs present in the bitmap or exceeding `u32::MAX`.
+    ///
+    /// Over-fetches candidates (4× `k`) from the HNSW graph to compensate
+    /// for bitmap filtering. If the initial search yields fewer than `k`
+    /// bitmap-matching results, retries once with doubled `candidates_k`
+    /// (capped at 10 000) to explore deeper into the HNSW graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DimensionMismatch`] if query dimension is wrong.
+    pub fn search_with_quality_and_bitmap(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: SearchQuality,
+        allowed_ids: &roaring::RoaringBitmap,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
+
+        let ef_search = quality.ef_search_for_scale(k, self.len());
+        // Over-fetch to compensate for bitmap filtering
+        let candidates_k = k.saturating_mul(4).max(ef_search);
+
+        let mut results = self.search_bitmap_filtered_inner(query, candidates_k, ef_search, allowed_ids);
+
+        // Adaptive retry: if too few results survived the bitmap filter,
+        // double the candidate pool and retry once to find more matches.
+        if results.len() < k && candidates_k < 10_000 {
+            let retry_k = (candidates_k.saturating_mul(2)).min(10_000);
+            let retry_results = self.search_bitmap_filtered_inner(query, retry_k, ef_search, allowed_ids);
+            // Merge retry results, deduplicating by ID
+            let existing_ids: rustc_hash::FxHashSet<u64> =
+                results.iter().map(|r| r.id).collect();
+            for r in retry_results {
+                if !existing_ids.contains(&r.id) {
+                    results.push(r);
+                }
+            }
+        }
+
+        self.metric.sort_scored_results(&mut results);
+        results.truncate(k);
+        Ok(results)
+    }
+
+    /// Inner bitmap-filtered HNSW search (shared by initial + retry paths).
+    fn search_bitmap_filtered_inner(
+        &self,
+        query: &[f32],
+        candidates_k: usize,
+        ef_search: usize,
+        allowed_ids: &roaring::RoaringBitmap,
+    ) -> Vec<ScoredResult> {
+        let inner = self.inner.read();
+        let neighbours = inner.search(query, candidates_k, ef_search);
+
+        let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
+        for &(node_id, raw_dist) in &neighbours {
+            if let Some(id) = self.mappings.get_id(node_id) {
+                let in_bitmap = u32::try_from(id).is_ok_and(|id32| allowed_ids.contains(id32));
+                let exceeds_bitmap_range = u32::try_from(id).is_err();
+                if in_bitmap || exceeds_bitmap_range {
+                    let score = inner.transform_score(raw_dist);
+                    results.push(ScoredResult::new(id, score));
+                }
+            }
+        }
+        results
+    }
+
     /// Determines whether two-stage reranking should be used.
     ///
     /// Returns `Some(rerank_k)` if reranking is beneficial, `None` otherwise.

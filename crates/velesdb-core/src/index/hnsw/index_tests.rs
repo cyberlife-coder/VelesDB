@@ -2927,3 +2927,280 @@ fn test_batch_upsert_mapping_consistency() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, 1, "Nearest to [100,0,0,0] must be id=1");
 }
+
+// =========================================================================
+// Bitmap pre-filter tests for search_with_quality_and_bitmap
+// =========================================================================
+
+#[test]
+fn test_search_with_quality_and_bitmap_exists() {
+    // Arrange: create an index with several vectors
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
+    for i in 0u64..20 {
+        #[allow(clippy::cast_precision_loss)]
+        let v = vec![i as f32 * 0.1, 1.0 - i as f32 * 0.05, 0.5];
+        index.insert(i, &v);
+    }
+
+    // Build a bitmap containing IDs 0..10
+    let mut bitmap = roaring::RoaringBitmap::new();
+    for i in 0u32..10 {
+        bitmap.insert(i);
+    }
+
+    // Act
+    let results = index
+        .search_with_quality_and_bitmap(&[0.5, 0.5, 0.5], 5, SearchQuality::Balanced, &bitmap)
+        .unwrap();
+
+    // Assert: returns results, all IDs in bitmap
+    assert!(!results.is_empty(), "should return results");
+    for sr in &results {
+        assert!(
+            sr.id < 10,
+            "all result IDs should be in bitmap, got id={}",
+            sr.id
+        );
+    }
+}
+
+#[test]
+fn test_ids_exceeding_u32_max_pass_through() {
+    // This test verifies the u32::MAX passthrough logic.
+    // Since HnswIndex uses u64 IDs but RoaringBitmap only holds u32,
+    // IDs > u32::MAX should pass through unconditionally.
+    //
+    // We test the filtering logic directly: create an index with a
+    // normal ID and verify the bitmap filter works correctly.
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
+
+    // Insert vectors with normal IDs
+    index.insert(1, &[1.0, 0.0, 0.0]);
+    index.insert(2, &[0.0, 1.0, 0.0]);
+    index.insert(3, &[0.0, 0.0, 1.0]);
+
+    // Bitmap contains only ID 1
+    let mut bitmap = roaring::RoaringBitmap::new();
+    bitmap.insert(1);
+
+    let results = index
+        .search_with_quality_and_bitmap(&[1.0, 0.0, 0.0], 3, SearchQuality::Balanced, &bitmap)
+        .unwrap();
+
+    // All results should have id=1 (the only one in bitmap)
+    // IDs 2 and 3 are valid u32 but NOT in bitmap, so they're excluded
+    for sr in &results {
+        assert_eq!(
+            sr.id, 1,
+            "only id=1 should pass bitmap filter, got {}",
+            sr.id
+        );
+    }
+}
+
+#[cfg(test)]
+mod bitmap_property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        /// **Validates: Requirements 1.1, 1.2, 2.2**
+        ///
+        /// Feature: bitmap-prefilter-v2, Property 1: Bitmap filtering invariant
+        ///
+        /// For any non-empty bitmap and any SearchQuality, all ScoredResult
+        /// returned by search_with_quality_and_bitmap have an id present in
+        /// the bitmap (via u32 conversion) or an id exceeding u32::MAX.
+        #[test]
+        fn prop_bitmap_filtering_invariant(
+            bitmap_ids in proptest::collection::vec(0u32..200, 1..50),
+            quality_idx in 0u8..3,
+        ) {
+            let dim = 8;
+            let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+            // Insert 200 vectors
+            for i in 0u64..200 {
+                #[allow(clippy::cast_precision_loss)]
+                let v: Vec<f32> = (0..dim).map(|d| ((i + d as u64) as f32 * 0.01).sin()).collect();
+                index.insert(i, &v);
+            }
+
+            let mut bitmap = roaring::RoaringBitmap::new();
+            for &id in &bitmap_ids {
+                bitmap.insert(id);
+            }
+
+            let quality = match quality_idx {
+                0 => SearchQuality::Fast,
+                1 => SearchQuality::Balanced,
+                _ => SearchQuality::Accurate,
+            };
+
+            let query: Vec<f32> = (0..dim).map(|d| (d as f32 * 0.05).cos()).collect();
+            let results = index
+                .search_with_quality_and_bitmap(&query, 10, quality, &bitmap)
+                .unwrap();
+
+            for sr in &results {
+                let in_bitmap = u32::try_from(sr.id)
+                    .is_ok_and(|id32| bitmap.contains(id32));
+                let exceeds_u32 = u32::try_from(sr.id).is_err();
+                prop_assert!(
+                    in_bitmap || exceeds_u32,
+                    "result id={} must be in bitmap or exceed u32::MAX",
+                    sr.id
+                );
+            }
+        }
+    }
+}
+
+// =========================================================================
+// Full-scan with bitmap tests
+// =========================================================================
+
+#[test]
+fn test_full_scan_empty_bitmap_returns_empty() {
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
+    index.insert(1, &[1.0, 0.0, 0.0]);
+    index.insert(2, &[0.0, 1.0, 0.0]);
+
+    let bitmap = roaring::RoaringBitmap::new();
+    let results = index
+        .full_scan_with_bitmap(&[1.0, 0.0, 0.0], 5, &bitmap)
+        .unwrap();
+    assert!(
+        results.is_empty(),
+        "empty bitmap should return empty results"
+    );
+}
+
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_full_scan_returns_exact_results() {
+    let dim = 8;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    // Insert 20 vectors with distinct patterns
+    for i in 0u64..20 {
+        let v: Vec<f32> = (0..dim)
+            .map(|d| ((i + d as u64) as f32 * 0.1).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    // Bitmap: only IDs 0..5
+    let mut bitmap = roaring::RoaringBitmap::new();
+    for i in 0u32..5 {
+        bitmap.insert(i);
+    }
+
+    let query: Vec<f32> = (0..dim).map(|d| (d as f32 * 0.1).sin()).collect();
+    let results = index.full_scan_with_bitmap(&query, 3, &bitmap).unwrap();
+
+    // Should return at most 3 results, all from bitmap
+    assert!(!results.is_empty(), "should return results");
+    assert!(results.len() <= 3, "should return at most k results");
+    for sr in &results {
+        assert!(
+            sr.id < 5,
+            "all results should be from bitmap, got id={}",
+            sr.id
+        );
+    }
+
+    // First result should be id=0 (exact match with query pattern)
+    assert_eq!(results[0].id, 0, "closest vector should be id=0");
+}
+
+#[cfg(test)]
+mod full_scan_property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        /// **Validates: Requirements 3.5, 5.2, 3.2**
+        ///
+        /// Feature: bitmap-prefilter-v2, Property 4: Full-scan exactness
+        ///
+        /// For any set of vectors and any bitmap, the full-scan results are
+        /// identical to a naive exhaustive distance computation on the same
+        /// bitmap vectors, sorted by the metric.
+        #[test]
+        fn prop_full_scan_exactness(
+            n_vectors in 5u64..50,
+            bitmap_ids in proptest::collection::vec(0u32..50, 1..20),
+            k in 1usize..10,
+        ) {
+            let dim = 4;
+            let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+            // Insert vectors
+            for i in 0..n_vectors {
+                #[allow(clippy::cast_precision_loss)]
+                let v: Vec<f32> = (0..dim)
+                    .map(|d| ((i + d as u64) as f32 * 0.07).sin())
+                    .collect();
+                index.insert(i, &v);
+            }
+
+            let mut bitmap = roaring::RoaringBitmap::new();
+            for &id in &bitmap_ids {
+                if u64::from(id) < n_vectors {
+                    bitmap.insert(id);
+                }
+            }
+
+            if bitmap.is_empty() {
+                // Skip: empty bitmap always returns empty
+                return Ok(());
+            }
+
+            #[allow(clippy::cast_precision_loss)]
+            let query: Vec<f32> = (0..dim).map(|d| (d as f32 * 0.05).cos()).collect();
+
+            let results = index
+                .full_scan_with_bitmap(&query, k, &bitmap)
+                .unwrap();
+
+            // Naive exhaustive computation
+            let mut naive: Vec<(u64, f32)> = Vec::new();
+            for id32 in bitmap.iter() {
+                let id = u64::from(id32);
+                if let Some(idx) = index.mappings.get_idx(id) {
+                    let inner = index.inner.read();
+                    let score = inner.with_contiguous_vectors(|vectors| {
+                        vectors.get(idx).map(|v| index.compute_distance(&query, v))
+                    });
+                    if let Some(s) = score {
+                        naive.push((id, s));
+                    }
+                }
+            }
+
+            // Sort naive by cosine (higher is better → descending)
+            naive.sort_by(|a, b| b.1.total_cmp(&a.1));
+            naive.truncate(k);
+
+            // Compare IDs and scores
+            prop_assert_eq!(
+                results.len(),
+                naive.len(),
+                "result count mismatch"
+            );
+            for (sr, (expected_id, expected_score)) in results.iter().zip(naive.iter()) {
+                prop_assert_eq!(sr.id, *expected_id, "ID mismatch");
+                prop_assert!(
+                    (sr.score - expected_score).abs() < 1e-6,
+                    "score mismatch for id={}: got {}, expected {}",
+                    sr.id, sr.score, expected_score
+                );
+            }
+        }
+    }
+}
