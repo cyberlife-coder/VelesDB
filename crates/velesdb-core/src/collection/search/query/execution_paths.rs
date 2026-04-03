@@ -272,10 +272,75 @@ impl Collection {
             {
                 return Ok(indexed);
             }
+
+            // Try BM25 text search for LIKE conditions before falling back to full scan.
+            // When a LIKE pattern contains a word-like substring (e.g. `%google%`),
+            // BM25 can narrow candidates significantly faster than a sequential scan.
+            if let Some(like_results) = self.try_like_via_text_index(cond, execution_limit) {
+                return Ok(like_results);
+            }
+
             let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
             return Ok(self.execute_scan_query(&filter, execution_limit));
         }
         Ok(self.execute_scan_query(&empty_filter(), execution_limit))
+    }
+
+    /// Attempts to accelerate a LIKE condition using the BM25 text index.
+    ///
+    /// Extracts the word-like core from a `%word%` pattern and queries BM25
+    /// for candidate document IDs. The full condition is then post-filtered
+    /// over those candidates instead of scanning the entire collection.
+    ///
+    /// Returns `None` when:
+    /// - No LIKE condition is found in the condition tree
+    /// - The extracted word is too short (< 3 chars) for meaningful BM25 lookup
+    /// - BM25 returns no candidates (fall through to sequential scan)
+    fn try_like_via_text_index(
+        &self,
+        cond: &crate::velesql::Condition,
+        limit: usize,
+    ) -> Option<Vec<SearchResult>> {
+        let pattern = Self::extract_like_pattern(cond)?;
+
+        // Extract the word-like core from the pattern (strip leading/trailing %).
+        let word = pattern.trim_matches('%');
+        if word.is_empty() || word.len() < 3 {
+            return None;
+        }
+
+        // Use BM25 text index to find candidates (over-fetch 10× for post-filter headroom).
+        let text_results = self.text_index.search(word, limit.saturating_mul(10));
+        if text_results.is_empty() {
+            return None;
+        }
+
+        let candidate_ids: Vec<u64> = text_results.iter().map(|(id, _)| *id).collect();
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+
+        let mut results = Vec::new();
+        for point in self.get(&candidate_ids).into_iter().flatten() {
+            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
+            if filter.matches(&payload) {
+                results.push(SearchResult::new(point, 1.0));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Some(results)
+    }
+
+    /// Recursively extracts the first LIKE pattern from a condition tree.
+    fn extract_like_pattern(cond: &crate::velesql::Condition) -> Option<String> {
+        match cond {
+            crate::velesql::Condition::Like(like) => Some(like.pattern.clone()),
+            crate::velesql::Condition::And(left, right) => {
+                Self::extract_like_pattern(left).or_else(|| Self::extract_like_pattern(right))
+            }
+            crate::velesql::Condition::Group(inner) => Self::extract_like_pattern(inner),
+            _ => None,
+        }
     }
 
     #[allow(clippy::too_many_arguments)] // All arguments come from query extraction in the caller.
