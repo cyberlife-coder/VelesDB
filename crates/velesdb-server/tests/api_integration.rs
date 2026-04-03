@@ -3007,10 +3007,10 @@ async fn test_guardrails_rate_limit_429() {
     assert_eq!(response.status(), StatusCode::CREATED);
 
     // Drain all rate-limiter tokens for the default client ("anonymous").
-    // Default rate_limit_qps is 100, so 100 check() calls consume all tokens.
+    // Default rate_limit_qps is 100_000, so we drain all tokens.
     let collection = state.db.get_vector_collection("rate_coll").unwrap();
     let guard_rails = collection.guard_rails();
-    for _ in 0..100 {
+    for _ in 0..100_000 {
         let _ = guard_rails.rate_limiter.check("anonymous");
     }
 
