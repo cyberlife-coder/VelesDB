@@ -105,10 +105,7 @@ impl HnswSegmentBuilder {
             .map(|(idx, vec)| {
                 // Use internal index as external ID for the insert path.
                 // The caller (AsyncIndexBuilder) has already registered mappings.
-                let ext_id = target_index
-                    .mappings
-                    .get_id(*idx)
-                    .unwrap_or(*idx as u64);
+                let ext_id = target_index.mappings.get_id(*idx).unwrap_or(*idx as u64);
                 (ext_id, *vec)
             })
             .collect();
@@ -143,10 +140,7 @@ impl HnswSegmentBuilder {
             let pairs: Vec<(u64, &[f32])> = segment
                 .iter()
                 .map(|(idx, vec)| {
-                    let ext_id = target_index
-                        .mappings
-                        .get_id(*idx)
-                        .unwrap_or(*idx as u64);
+                    let ext_id = target_index.mappings.get_id(*idx).unwrap_or(*idx as u64);
                     (ext_id, *vec)
                 })
                 .collect();
@@ -167,10 +161,7 @@ impl HnswSegmentBuilder {
     /// Partitions vectors into `min(segment_count, N)` non-empty segments.
     ///
     /// Each segment size differs from `N / S` by at most 1.
-    fn partition<'a>(
-        &self,
-        vectors: &'a [(usize, &'a [f32])],
-    ) -> Vec<&'a [(usize, &'a [f32])]> {
+    fn partition<'a>(&self, vectors: &'a [(usize, &'a [f32])]) -> Vec<&'a [(usize, &'a [f32])]> {
         let n = vectors.len();
         let s = self.segment_count.min(n).max(1);
         let base_size = n / s;

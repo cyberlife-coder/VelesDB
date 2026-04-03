@@ -115,10 +115,7 @@ impl<'a> DirectVectorWriter<'a> {
     ///
     /// [`Error::Internal`]: crate::error::Error::Internal
     #[allow(clippy::unnecessary_wraps)] // Returns Result for API consistency with Task 4
-    pub(crate) fn sync_to_sharded(
-        &self,
-        results: &[UpsertResult],
-    ) -> crate::error::Result<()> {
+    pub(crate) fn sync_to_sharded(&self, results: &[UpsertResult]) -> crate::error::Result<()> {
         if !self.hnsw_index.enable_vector_storage || results.is_empty() {
             return Ok(());
         }

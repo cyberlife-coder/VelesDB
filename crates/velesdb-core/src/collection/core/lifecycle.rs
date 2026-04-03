@@ -77,6 +77,8 @@ impl Collection {
         #[cfg(feature = "persistence")]
         let deferred_indexer = Self::build_deferred_indexer(&parts.config);
 
+        let async_index_builder = Self::build_async_index_builder(&parts.config);
+
         Self {
             path: parts.path,
             config: Arc::new(RwLock::new(parts.config)),
@@ -107,6 +109,7 @@ impl Collection {
             delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
             #[cfg(feature = "persistence")]
             deferred_indexer,
+            async_index_builder,
         }
     }
 
@@ -127,6 +130,20 @@ impl Collection {
                     cfg.clone(),
                 ))
             })
+    }
+
+    /// Builds the optional `AsyncIndexBuilder` from config.
+    ///
+    /// Returns `Some(Arc<AsyncIndexBuilder>)` when `async_index_builder` is
+    /// configured; `None` otherwise.
+    fn build_async_index_builder(
+        config: &CollectionConfig,
+    ) -> Option<Arc<crate::collection::streaming::AsyncIndexBuilder>> {
+        config.async_index_builder.as_ref().map(|cfg| {
+            Arc::new(crate::collection::streaming::AsyncIndexBuilder::new(
+                cfg.clone(),
+            ))
+        })
     }
 
     /// Initialises persistent storages and indexes for a new collection.
@@ -247,6 +264,7 @@ impl Collection {
             hnsw_params: None,
             #[cfg(feature = "persistence")]
             deferred_indexing: None,
+            async_index_builder: None,
         };
         Self::create_from_config(path, config, None)
     }
@@ -288,6 +306,7 @@ impl Collection {
             hnsw_params: Some(hnsw_params),
             #[cfg(feature = "persistence")]
             deferred_indexing: None,
+            async_index_builder: None,
         };
         Self::create_from_config(path, config, Some(hnsw_params))
     }
@@ -348,6 +367,7 @@ impl Collection {
             hnsw_params: None,
             #[cfg(feature = "persistence")]
             deferred_indexing: None,
+            async_index_builder: None,
         };
         Self::create_from_config(path, config, None)
     }
@@ -497,6 +517,7 @@ impl Collection {
             hnsw_params: None,
             #[cfg(feature = "persistence")]
             deferred_indexing: None,
+            async_index_builder: None,
         };
         // NOTE: create_from_config validates dimension only when > 0,
         // so embedding_dim=None (dimension=0) skips validation correctly.

@@ -79,7 +79,12 @@ fn test_bitmap_prefilter_tech_category_50pct() {
             .as_ref()
             .and_then(|p| p.get("category"))
             .and_then(|v| v.as_str());
-        assert_eq!(cat, Some("tech"), "all results must be tech, got id={}", r.point.id);
+        assert_eq!(
+            cat,
+            Some("tech"),
+            "all results must be tech, got id={}",
+            r.point.id
+        );
     }
 }
 
@@ -109,7 +114,12 @@ fn test_bitmap_prefilter_science_category_30pct() {
             .as_ref()
             .and_then(|p| p.get("category"))
             .and_then(|v| v.as_str());
-        assert_eq!(cat, Some("science"), "all results must be science, got id={}", r.point.id);
+        assert_eq!(
+            cat,
+            Some("science"),
+            "all results must be science, got id={}",
+            r.point.id
+        );
     }
 }
 
@@ -139,7 +149,12 @@ fn test_bitmap_prefilter_art_category_20pct() {
             .as_ref()
             .and_then(|p| p.get("category"))
             .and_then(|v| v.as_str());
-        assert_eq!(cat, Some("art"), "all results must be art, got id={}", r.point.id);
+        assert_eq!(
+            cat,
+            Some("art"),
+            "all results must be art, got id={}",
+            r.point.id
+        );
     }
 }
 
@@ -161,7 +176,10 @@ fn test_bitmap_prefilter_nonexistent_category_returns_empty() {
         .search_with_filter(&query, 10, &filter)
         .expect("filtered search should succeed");
 
-    assert!(results.is_empty(), "nonexistent category should return empty");
+    assert!(
+        results.is_empty(),
+        "nonexistent category should return empty"
+    );
 }
 
 // =========================================================================

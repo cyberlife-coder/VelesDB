@@ -218,9 +218,7 @@ fn test_search_with_filter_bitmap_empty_result_for_nonexistent_value() {
 #[cfg(test)]
 #[cfg(any())] // Disabled: estimate_real_selectivity was renamed to estimate_filter_selectivity
 mod selectivity_tests {
-    use crate::collection::search::vector::{
-        estimate_real_selectivity, SELECTIVITY_THRESHOLD,
-    };
+    use crate::collection::search::vector::{estimate_real_selectivity, SELECTIVITY_THRESHOLD};
 
     #[test]
     fn test_estimate_real_selectivity_nominal() {

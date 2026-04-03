@@ -49,10 +49,7 @@ fn test_enqueue_returns_true_at_threshold() {
 #[test]
 fn test_drain_buffer_returns_all_and_empties() {
     let builder = AsyncIndexBuilder::new(default_config());
-    builder.enqueue(vec![
-        (1, vec![1.0, 0.0]),
-        (2, vec![0.0, 1.0]),
-    ]);
+    builder.enqueue(vec![(1, vec![1.0, 0.0]), (2, vec![0.0, 1.0])]);
     assert_eq!(builder.buffer_len(), 2);
 
     let drained = builder.drain_buffer();
@@ -133,8 +130,7 @@ fn test_config_serde_roundtrip() {
         sync_mode: true,
     };
     let json = serde_json::to_string(&config).expect("serialize");
-    let restored: AsyncIndexBuilderConfig =
-        serde_json::from_str(&json).expect("deserialize");
+    let restored: AsyncIndexBuilderConfig = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(restored.merge_threshold, 5000);
     assert_eq!(restored.segment_count, Some(8));
     assert!(restored.sync_mode);
@@ -143,8 +139,7 @@ fn test_config_serde_roundtrip() {
 #[test]
 fn test_config_serde_defaults() {
     let json = "{}";
-    let config: AsyncIndexBuilderConfig =
-        serde_json::from_str(json).expect("deserialize empty");
+    let config: AsyncIndexBuilderConfig = serde_json::from_str(json).expect("deserialize empty");
     assert_eq!(config.merge_threshold, 10_000);
     assert!(config.segment_count.is_none());
     assert!(!config.sync_mode);

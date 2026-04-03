@@ -25,9 +25,9 @@ pub use delta::{merge_with_delta, merge_with_delta_scored};
 #[cfg(feature = "persistence")]
 pub use ingester::{BackpressureError, StreamIngester, StreamingConfig};
 
+#[cfg(test)]
+mod async_index_builder_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod delta_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod ingester_tests;
-#[cfg(test)]
-mod async_index_builder_tests;
