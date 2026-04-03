@@ -31,6 +31,7 @@ mod native_index_tests;
 mod native_inner;
 mod params;
 pub(crate) mod persistence;
+pub(crate) mod segment_builder;
 mod sharded_mappings;
 mod sharded_vectors;
 pub(crate) mod upsert;
@@ -51,6 +52,8 @@ mod index_tests;
 mod mappings_tests;
 #[cfg(test)]
 mod params_tests;
+#[cfg(test)]
+mod segment_builder_tests;
 #[cfg(test)]
 mod sharded_mappings_tests;
 #[cfg(test)]
