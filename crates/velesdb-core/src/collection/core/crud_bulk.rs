@@ -88,10 +88,8 @@ impl Collection {
             let results = writer.write_batch_direct(&vector_refs)?;
 
             // Enqueue for deferred HNSW construction.
-            let tuples: Vec<(u64, Vec<f32>)> = points
-                .iter()
-                .map(|p| (p.id, p.vector.clone()))
-                .collect();
+            let tuples: Vec<(u64, Vec<f32>)> =
+                points.iter().map(|p| (p.id, p.vector.clone())).collect();
 
             if aib.enqueue(tuples) {
                 // Buffer reached merge_threshold — flush synchronously.

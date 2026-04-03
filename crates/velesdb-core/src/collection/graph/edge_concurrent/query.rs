@@ -5,9 +5,11 @@
 //! - BFS traversal
 //! - Edge count
 
-use super::{ConcurrentEdgeStore, GraphEdge};
 use super::super::edge::{CsrSnapshot, EdgePredicate};
-use super::super::traversal::{bfs_traverse_csr, bfs_traverse_csr_filtered, TraversalConfig, TraversalResult};
+use super::super::traversal::{
+    bfs_traverse_csr, bfs_traverse_csr_filtered, TraversalConfig, TraversalResult,
+};
+use super::{ConcurrentEdgeStore, GraphEdge};
 use arc_swap::Guard;
 use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
@@ -248,10 +250,14 @@ impl ConcurrentEdgeStore {
     /// readers see the stale-but-valid snapshot until the swap completes.
     #[inline]
     fn ensure_csr_fresh(&self) {
-        if self.csr_dirty.swap(false, std::sync::atomic::Ordering::AcqRel) {
+        if self
+            .csr_dirty
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
             if let Err(e) = self.rebuild_snapshot() {
                 // Restore dirty flag so the next caller retries the rebuild.
-                self.csr_dirty.store(true, std::sync::atomic::Ordering::Release);
+                self.csr_dirty
+                    .store(true, std::sync::atomic::Ordering::Release);
                 #[cfg(debug_assertions)]
                 eprintln!("[velesdb] WARNING: lazy CSR snapshot rebuild failed: {e}");
             }

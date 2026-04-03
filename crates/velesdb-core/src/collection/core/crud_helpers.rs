@@ -121,7 +121,12 @@ impl Collection {
     // These methods take `&self` for consistency with the impl block calling convention,
     // but the operations are logically index-directed and do not need instance state.
     #[allow(clippy::unused_self)]
-    pub(crate) fn insert_into_secondary_index(&self, index: &SecondaryIndex, key: JsonValue, id: u64) {
+    pub(crate) fn insert_into_secondary_index(
+        &self,
+        index: &SecondaryIndex,
+        key: JsonValue,
+        id: u64,
+    ) {
         match index {
             SecondaryIndex::BTree(tree) => {
                 let mut tree = tree.write();

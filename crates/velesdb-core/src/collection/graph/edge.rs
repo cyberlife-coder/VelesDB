@@ -290,7 +290,9 @@ impl CsrSnapshot {
             return None;
         }
         let label_id = self.label_ids[start + neighbor_idx];
-        self.label_table.get(label_id.as_u32() as usize).map(String::as_str)
+        self.label_table
+            .get(label_id.as_u32() as usize)
+            .map(String::as_str)
     }
 
     /// Returns the outgoing degree of a node.
@@ -395,10 +397,8 @@ impl SnapshotBuilder {
         let total_edges: usize = edge_store.outgoing.values().map(Vec::len).sum();
 
         // 3. Build node_to_index and index_to_node
-        let mut node_to_index = FxHashMap::with_capacity_and_hasher(
-            node_count,
-            rustc_hash::FxBuildHasher,
-        );
+        let mut node_to_index =
+            FxHashMap::with_capacity_and_hasher(node_count, rustc_hash::FxBuildHasher);
         for (idx, &nid) in node_ids.iter().enumerate() {
             node_to_index.insert(nid, idx);
         }
@@ -423,15 +423,18 @@ impl SnapshotBuilder {
                         // Always use local interning for label_ids stored in CSR.
                         // label_at() resolves against the local label_table vec.
                         let label_str = edge.label();
-                        let local_idx = *label_to_idx
-                            .entry(label_str.to_string())
-                            .or_insert_with(|| {
-                                let idx = label_table_vec.len();
-                                label_table_vec.push(label_str.to_string());
-                                #[allow(clippy::cast_possible_truncation)]
-                                // Reason: label count bounded by schema size
-                                { idx as u32 }
-                            });
+                        let local_idx =
+                            *label_to_idx
+                                .entry(label_str.to_string())
+                                .or_insert_with(|| {
+                                    let idx = label_table_vec.len();
+                                    label_table_vec.push(label_str.to_string());
+                                    #[allow(clippy::cast_possible_truncation)]
+                                    // Reason: label count bounded by schema size
+                                    {
+                                        idx as u32
+                                    }
+                                });
                         label_ids_buf.push(LabelId::from_u32(local_idx));
                     }
                 }

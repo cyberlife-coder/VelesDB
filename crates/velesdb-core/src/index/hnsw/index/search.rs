@@ -152,16 +152,17 @@ impl HnswIndex {
         // Over-fetch to compensate for bitmap filtering
         let candidates_k = k.saturating_mul(4).max(ef_search);
 
-        let mut results = self.search_bitmap_filtered_inner(query, candidates_k, ef_search, allowed_ids);
+        let mut results =
+            self.search_bitmap_filtered_inner(query, candidates_k, ef_search, allowed_ids);
 
         // Adaptive retry: if too few results survived the bitmap filter,
         // double the candidate pool and retry once to find more matches.
         if results.len() < k && candidates_k < 10_000 {
             let retry_k = (candidates_k.saturating_mul(2)).min(10_000);
-            let retry_results = self.search_bitmap_filtered_inner(query, retry_k, ef_search, allowed_ids);
+            let retry_results =
+                self.search_bitmap_filtered_inner(query, retry_k, ef_search, allowed_ids);
             // Merge retry results, deduplicating by ID
-            let existing_ids: rustc_hash::FxHashSet<u64> =
-                results.iter().map(|r| r.id).collect();
+            let existing_ids: rustc_hash::FxHashSet<u64> = results.iter().map(|r| r.id).collect();
             for r in retry_results {
                 if !existing_ids.contains(&r.id) {
                     results.push(r);

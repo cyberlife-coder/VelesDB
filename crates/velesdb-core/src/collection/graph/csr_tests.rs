@@ -11,7 +11,7 @@
     clippy::redundant_closure_for_method_calls,
     clippy::useless_vec,
     clippy::similar_names,
-    clippy::module_name_repetitions,
+    clippy::module_name_repetitions
 )]
 
 use super::edge::{EdgeStore, GraphEdge, SnapshotBuilder};
@@ -157,7 +157,12 @@ fn test_csr_label_at_correct() {
     for (i, &eid) in eids.iter().enumerate() {
         let label = snapshot.label_at(1, i).expect("label exists");
         let edge = store.get_edge(eid).expect("edge exists");
-        assert_eq!(label, edge.label(), "label mismatch at position {i} for target {}", targets[i]);
+        assert_eq!(
+            label,
+            edge.label(),
+            "label mismatch at position {i} for target {}",
+            targets[i]
+        );
     }
 
     // Out of range
@@ -409,7 +414,6 @@ mod property_tests {
     }
 }
 
-
 // =============================================================================
 // Unit tests — Task 3.4: bfs_traverse_csr
 // =============================================================================
@@ -505,9 +509,15 @@ fn test_snapshot_rebuild_after_add() {
         .expect("add");
 
     let snapshot = store.get_csr_snapshot();
-    assert!(snapshot.contains_node(10), "snapshot should contain source node");
+    assert!(
+        snapshot.contains_node(10),
+        "snapshot should contain source node"
+    );
     let neighbors: HashSet<u64> = snapshot.neighbors(10).iter().copied().collect();
-    assert!(neighbors.contains(&20), "snapshot should reflect added edge");
+    assert!(
+        neighbors.contains(&20),
+        "snapshot should reflect added edge"
+    );
 }
 
 /// After removing an edge, the CSR snapshot no longer contains it.
@@ -529,7 +539,10 @@ fn test_snapshot_rebuild_after_remove() {
     let snapshot = store.get_csr_snapshot();
     let neighbors: HashSet<u64> = snapshot.neighbors(10).iter().copied().collect();
     assert!(!neighbors.contains(&20), "removed edge should not appear");
-    assert!(neighbors.contains(&30), "remaining edge should still appear");
+    assert!(
+        neighbors.contains(&30),
+        "remaining edge should still appear"
+    );
 }
 
 /// Existing `get_outgoing` API returns the same data as before (backward compat).
@@ -600,7 +613,6 @@ fn test_snapshot_rebuild_after_remove_node_edges() {
     assert_eq!(snapshot.edge_count(), 0, "all edges should be removed");
 }
 
-
 // =============================================================================
 // Unit tests — Task 7.4: Predicate pushdown
 // =============================================================================
@@ -625,9 +637,7 @@ fn test_no_filter_returns_all() {
     let snapshot = SnapshotBuilder::build(&store, &label_table);
 
     let no_filter = NoFilter;
-    let filtered: Vec<(u64, u64, _)> = snapshot
-        .neighbors_filtered(10, &no_filter)
-        .collect();
+    let filtered: Vec<(u64, u64, _)> = snapshot.neighbors_filtered(10, &no_filter).collect();
 
     // NoFilter should return all 3 neighbors
     assert_eq!(filtered.len(), 3);
@@ -675,9 +685,7 @@ fn test_label_filter_selective() {
     allowed.insert(knows_label_id);
     let label_filter = LabelFilter::new(allowed);
 
-    let filtered: Vec<(u64, u64, _)> = snapshot
-        .neighbors_filtered(10, &label_filter)
-        .collect();
+    let filtered: Vec<(u64, u64, _)> = snapshot.neighbors_filtered(10, &label_filter).collect();
 
     // Only KNOWS edges (targets 20 and 40)
     assert_eq!(filtered.len(), 2);
@@ -711,9 +719,7 @@ fn test_bfs_filtered_vs_post_filter() {
     let snapshot = SnapshotBuilder::build(&store, &label_table);
 
     // Find the LabelId for "KNOWS"
-    let all_n: Vec<(u64, u64, _)> = snapshot
-        .neighbors_filtered(1, &NoFilter)
-        .collect();
+    let all_n: Vec<(u64, u64, _)> = snapshot.neighbors_filtered(1, &NoFilter).collect();
     let knows_lid = all_n
         .iter()
         .find(|&&(t, _, _)| t == 2)
@@ -753,7 +759,10 @@ fn test_bfs_filtered_vs_post_filter() {
     // With KNOWS-only filter from node 1, only node 2 is reachable at depth 1
     assert!(filtered_targets.contains(&2), "node 2 reachable via KNOWS");
     // Node 5 is via LIKES, should NOT be in filtered results
-    assert!(!filtered_targets.contains(&5), "node 5 via LIKES should be filtered out");
+    assert!(
+        !filtered_targets.contains(&5),
+        "node 5 via LIKES should be filtered out"
+    );
 }
 
 // =============================================================================
@@ -762,10 +771,10 @@ fn test_bfs_filtered_vs_post_filter() {
 
 mod predicate_property_tests {
     use super::*;
-    use proptest::prelude::*;
-    use rustc_hash::FxHashSet;
     use crate::collection::graph::edge::{EdgePredicate, LabelFilter, NoFilter};
     use crate::collection::graph::label_table::LabelId;
+    use proptest::prelude::*;
+    use rustc_hash::FxHashSet;
 
     /// Generates a random `(EdgeStore, LabelTable)` with 1-50 nodes and 0-200 edges.
     /// (Duplicated from property_tests to keep module self-contained.)
@@ -848,7 +857,6 @@ mod predicate_property_tests {
     }
 }
 
-
 // =============================================================================
 // Unit tests — Task 9: AdjacencySource trait
 // =============================================================================
@@ -874,10 +882,12 @@ fn test_adjacency_source_equivalence() {
 
     // Compare AdjacencySource::neighbors for each source node
     for &nid in &[10u64, 20, 30] {
-        let csr_neighbors: HashSet<u64> =
-            AdjacencySource::neighbors(&snapshot, nid).into_iter().collect();
-        let store_neighbors: HashSet<u64> =
-            AdjacencySource::neighbors(&store, nid).into_iter().collect();
+        let csr_neighbors: HashSet<u64> = AdjacencySource::neighbors(&snapshot, nid)
+            .into_iter()
+            .collect();
+        let store_neighbors: HashSet<u64> = AdjacencySource::neighbors(&store, nid)
+            .into_iter()
+            .collect();
         assert_eq!(
             csr_neighbors, store_neighbors,
             "AdjacencySource mismatch for node {nid}"

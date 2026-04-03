@@ -21,8 +21,7 @@ impl Collection {
                 tracing::debug!("indexed metadata query: too many hits, falling through to scan");
                 return None; // Fall through to scan
             }
-            let filter =
-                crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+            let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
             return Some(self.scan_ids_with_filter(&ids, &filter, execution_limit));
         }
 
@@ -35,9 +34,9 @@ impl Collection {
             for sub in &leaves {
                 if let Some((field_name, key)) = Self::extract_index_lookup_condition(sub) {
                     if let Some(ids) = self.secondary_index_lookup(&field_name, &key) {
-                        let filter = crate::filter::Filter::new(
-                            crate::filter::Condition::from(cond.clone()),
-                        );
+                        let filter = crate::filter::Filter::new(crate::filter::Condition::from(
+                            cond.clone(),
+                        ));
                         return Some(self.scan_ids_with_filter(&ids, &filter, execution_limit));
                     }
                 }
@@ -299,9 +298,8 @@ impl Collection {
             // Fast path: use bitmap from secondary indexes (same mechanism as
             // search_with_filter). This handles AND conditions, Eq lookups, and
             // range queries via the bitmap infrastructure.
-            let filter = crate::filter::Filter::new(
-                crate::filter::Condition::from(metadata_cond.clone()),
-            );
+            let filter =
+                crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond.clone()));
             if let Some(bitmap) = self.build_prefilter_bitmap(&filter) {
                 if bitmap.is_empty() {
                     return Ok(Vec::new());

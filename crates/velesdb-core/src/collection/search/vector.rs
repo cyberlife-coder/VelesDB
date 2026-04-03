@@ -522,15 +522,11 @@ impl Collection {
                     "high selectivity — skipping bitmap, using post-filter path"
                 );
                 let candidates_k = compute_oversampled_k(k, filter);
-                let index_results =
-                    self.index.search_with_quality(query, candidates_k, quality)?;
+                let index_results = self
+                    .index
+                    .search_with_quality(query, candidates_k, quality)?;
                 let index_results = self.merge_delta(index_results, query, candidates_k, metric);
-                return Ok(self.filter_and_hydrate(
-                    index_results,
-                    filter,
-                    k,
-                    higher_is_better,
-                ));
+                return Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better));
             }
 
             let index_results = if selectivity <= SELECTIVITY_THRESHOLD {

@@ -314,13 +314,8 @@ fn v2_path_produces_searchable_results() {
     };
 
     #[allow(deprecated)]
-    let coll = Collection::create_with_async_builder(
-        coll_dir,
-        dim,
-        DistanceMetric::Cosine,
-        config,
-    )
-    .expect("create collection with async builder");
+    let coll = Collection::create_with_async_builder(coll_dir, dim, DistanceMetric::Cosine, config)
+        .expect("create collection with async builder");
 
     // Insert 100 vectors via upsert_bulk (V2 path).
     let points: Vec<Point> = (0..100)
@@ -358,13 +353,9 @@ fn v2_path_maintains_recall() {
         sync_mode: false,
     };
     #[allow(deprecated)]
-    let v2_coll = Collection::create_with_async_builder(
-        v2_dir,
-        dim,
-        DistanceMetric::Cosine,
-        config,
-    )
-    .expect("create V2 collection");
+    let v2_coll =
+        Collection::create_with_async_builder(v2_dir, dim, DistanceMetric::Cosine, config)
+            .expect("create V2 collection");
 
     // Create standard collection for comparison.
     let std_dir = tmp.path().join("std_recall");
@@ -393,10 +384,8 @@ fn v2_path_maintains_recall() {
     assert_eq!(std_results[0].point.id, 0, "std closest must be id=0");
 
     // Compute recall: fraction of std top-k that appear in V2 top-k.
-    let std_ids: std::collections::HashSet<u64> =
-        std_results.iter().map(|r| r.point.id).collect();
-    let v2_ids: std::collections::HashSet<u64> =
-        v2_results.iter().map(|r| r.point.id).collect();
+    let std_ids: std::collections::HashSet<u64> = std_results.iter().map(|r| r.point.id).collect();
+    let v2_ids: std::collections::HashSet<u64> = v2_results.iter().map(|r| r.point.id).collect();
     let overlap = std_ids.intersection(&v2_ids).count();
     let recall = overlap as f64 / k as f64;
     assert!(

@@ -90,10 +90,11 @@ impl Collection {
 
     /// Builds a pre-filter bitmap from a [`Filter`] using secondary indexes.
     ///
-    /// Supports `Eq`, `Gt`/`Gte`/`Lt`/`Lte` (range scan), `And` (intersection),
-    /// and `Or` (union, only when all children resolve). Returns `None` when the
-    /// condition cannot be resolved via indexes (e.g., `Not`, `Neq`, non-indexed
-    /// fields), signalling the caller to fall back to post-filter.
+    /// Supports `Eq`, `Neq` (universe subtraction), `Gt`/`Gte`/`Lt`/`Lte`
+    /// (range scan), `And` (intersection), and `Or` (union, only when all
+    /// children resolve). Returns `None` when the condition cannot be resolved
+    /// via indexes (e.g., `Not`, non-indexed fields), signalling the caller to
+    /// fall back to post-filter.
     #[must_use]
     pub(crate) fn build_prefilter_bitmap(
         &self,
@@ -106,12 +107,12 @@ impl Collection {
     ///
     /// Supported conditions:
     /// - `Eq`: exact-match lookup
+    /// - `Neq`: universe bitmap minus exact-match (all indexed IDs except matches)
     /// - `Gt`, `Gte`, `Lt`, `Lte`: range scan via `BTreeMap::range()`
     /// - `And`: intersection of child bitmaps
     /// - `Or`: union of child bitmaps (all children must resolve)
     ///
-    /// Returns `None` for `Not`, `Neq`, and unsupported conditions
-    /// (these require a universe bitmap that is not yet implemented).
+    /// Returns `None` for `Not` and unsupported conditions.
     fn bitmap_from_condition(
         indexes: &std::sync::Arc<
             parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
@@ -128,8 +129,8 @@ impl Collection {
                 // then subtract the matching IDs. If the value doesn't exist in
                 // the index, eq_bitmap defaults to empty — every indexed ID matches.
                 let universe = Self::bitmap_universe_for_field(indexes, field)?;
-                let eq_bitmap = Self::bitmap_for_eq_field(indexes, field, value)
-                    .unwrap_or_default();
+                let eq_bitmap =
+                    Self::bitmap_for_eq_field(indexes, field, value).unwrap_or_default();
                 Some(universe - eq_bitmap)
             }
             crate::filter::Condition::Gt { field, value }

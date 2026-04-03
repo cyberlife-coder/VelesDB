@@ -59,13 +59,9 @@ fn bench_bfs_edgestore_vs_csr(c: &mut Criterion) {
         let (snapshot, store) = build_snapshot(num_nodes, degree);
         let config = TraversalConfig::with_range(1, depth);
 
-        group.bench_with_input(
-            BenchmarkId::new("csr", num_nodes),
-            &num_nodes,
-            |b, _| {
-                b.iter(|| bfs_traverse_csr(black_box(&snapshot), 0, black_box(&config)));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("csr", num_nodes), &num_nodes, |b, _| {
+            b.iter(|| bfs_traverse_csr(black_box(&snapshot), 0, black_box(&config)));
+        });
 
         // EdgeStore BFS via the CSR snapshot path (store has snapshot built)
         group.bench_with_input(
@@ -146,16 +142,12 @@ fn bench_csr_build_time(c: &mut Criterion) {
     for &num_nodes in &[1_000u64, 10_000] {
         let (mut store, _label_table) = build_stores(num_nodes, degree);
 
-        group.bench_with_input(
-            BenchmarkId::new("build", num_nodes),
-            &num_nodes,
-            |b, _| {
-                b.iter(|| {
-                    store.build_read_snapshot();
-                    black_box(store.csr_snapshot());
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("build", num_nodes), &num_nodes, |b, _| {
+            b.iter(|| {
+                store.build_read_snapshot();
+                black_box(store.csr_snapshot());
+            });
+        });
     }
     group.finish();
 }

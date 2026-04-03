@@ -202,9 +202,7 @@ impl AsyncIndexBuilder {
                 vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
             let _ = index.insert_batch_parallel(pairs);
             flag.store(false, Ordering::Release);
-            tracing::debug!(
-                "AsyncIndexBuilder: background build complete ({count} vectors)"
-            );
+            tracing::debug!("AsyncIndexBuilder: background build complete ({count} vectors)");
         });
     }
 
