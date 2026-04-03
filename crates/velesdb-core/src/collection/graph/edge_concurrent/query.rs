@@ -6,8 +6,12 @@
 //! - Edge count
 
 use super::{ConcurrentEdgeStore, GraphEdge};
+use super::super::edge::CsrSnapshot;
+use super::super::traversal::{bfs_traverse_csr, TraversalConfig, TraversalResult};
+use arc_swap::Guard;
 use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 impl ConcurrentEdgeStore {
     /// Gets all outgoing edges from a node (thread-safe).
@@ -235,5 +239,25 @@ impl ConcurrentEdgeStore {
     pub fn incoming_degree(&self, node_id: u64) -> usize {
         let shard_idx = self.shard_index(node_id);
         self.shards[shard_idx].read().incoming_degree(node_id)
+    }
+
+    /// Returns the current CSR snapshot (lock-free read).
+    ///
+    /// The returned `Guard` dereferences to `Arc<CsrSnapshot>` and keeps
+    /// the snapshot alive for the duration of the borrow. No locks are
+    /// acquired — this is a single atomic load.
+    #[must_use]
+    pub fn get_csr_snapshot(&self) -> Guard<Arc<CsrSnapshot>> {
+        self.csr_snapshot.load()
+    }
+
+    /// BFS traversal on the CSR snapshot (lock-free, zero-copy).
+    ///
+    /// Loads the current snapshot atomically and delegates to
+    /// [`bfs_traverse_csr`] for the actual traversal.
+    #[must_use]
+    pub fn traverse_bfs_csr(&self, source: u64, config: &TraversalConfig) -> Vec<TraversalResult> {
+        let snapshot = self.csr_snapshot.load();
+        bfs_traverse_csr(&snapshot, source, config)
     }
 }

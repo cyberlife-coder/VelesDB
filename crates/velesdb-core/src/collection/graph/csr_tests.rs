@@ -478,3 +478,113 @@ fn test_bfs_csr_limit_respected() {
         results.len()
     );
 }
+
+// =============================================================================
+// Unit tests — Task 5.4: ArcSwap integration in ConcurrentEdgeStore
+// =============================================================================
+
+/// After adding an edge, the CSR snapshot reflects the new edge.
+#[test]
+fn test_snapshot_rebuild_after_add() {
+    use super::edge_concurrent::ConcurrentEdgeStore;
+
+    let store = ConcurrentEdgeStore::with_shards(4);
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("valid"))
+        .expect("add");
+
+    let snapshot = store.get_csr_snapshot();
+    assert!(snapshot.contains_node(10), "snapshot should contain source node");
+    let neighbors: HashSet<u64> = snapshot.neighbors(10).iter().copied().collect();
+    assert!(neighbors.contains(&20), "snapshot should reflect added edge");
+}
+
+/// After removing an edge, the CSR snapshot no longer contains it.
+#[test]
+fn test_snapshot_rebuild_after_remove() {
+    use super::edge_concurrent::ConcurrentEdgeStore;
+
+    let store = ConcurrentEdgeStore::with_shards(4);
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "LIKES").expect("valid"))
+        .expect("add");
+
+    // Remove edge 10→20
+    store.remove_edge(1);
+
+    let snapshot = store.get_csr_snapshot();
+    let neighbors: HashSet<u64> = snapshot.neighbors(10).iter().copied().collect();
+    assert!(!neighbors.contains(&20), "removed edge should not appear");
+    assert!(neighbors.contains(&30), "remaining edge should still appear");
+}
+
+/// Existing `get_outgoing` API returns the same data as before (backward compat).
+#[test]
+fn test_get_outgoing_backward_compat() {
+    use super::edge_concurrent::ConcurrentEdgeStore;
+
+    let store = ConcurrentEdgeStore::with_shards(4);
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "A").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "B").expect("valid"))
+        .expect("add");
+
+    let outgoing = store.get_outgoing(100);
+    assert_eq!(outgoing.len(), 2);
+
+    let targets: HashSet<u64> = outgoing.iter().map(|e| e.target()).collect();
+    assert_eq!(targets, HashSet::from([200, 300]));
+}
+
+/// `traverse_bfs_csr` returns correct results via the lock-free snapshot.
+#[test]
+fn test_traverse_bfs_csr_on_concurrent_store() {
+    use super::edge_concurrent::ConcurrentEdgeStore;
+
+    let store = ConcurrentEdgeStore::with_shards(4);
+    // Chain: 1 -> 2 -> 3
+    store
+        .add_edge(GraphEdge::new(1, 1, 2, "NEXT").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 2, 3, "NEXT").expect("valid"))
+        .expect("add");
+
+    let config = TraversalConfig::with_range(1, 3);
+    let results = store.traverse_bfs_csr(1, &config);
+
+    let targets: HashSet<u64> = results.iter().map(|r| r.target_id).collect();
+    assert!(targets.contains(&2), "should reach node 2");
+    assert!(targets.contains(&3), "should reach node 3");
+}
+
+/// Snapshot reflects `remove_node_edges` cascade delete.
+#[test]
+fn test_snapshot_rebuild_after_remove_node_edges() {
+    use super::edge_concurrent::ConcurrentEdgeStore;
+
+    let store = ConcurrentEdgeStore::with_shards(4);
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "A").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "B").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 40, 10, "C").expect("valid"))
+        .expect("add");
+
+    store.remove_node_edges(10);
+
+    let snapshot = store.get_csr_snapshot();
+    assert!(
+        snapshot.neighbors(10).is_empty(),
+        "node 10 should have no outgoing edges after cascade delete"
+    );
+    assert_eq!(snapshot.edge_count(), 0, "all edges should be removed");
+}
