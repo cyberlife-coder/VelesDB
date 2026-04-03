@@ -20,6 +20,7 @@ use arc_swap::ArcSwap;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Default number of shards for concurrent edge store.
@@ -66,10 +67,17 @@ pub struct ConcurrentEdgeStore {
     clustered_snapshot: RwLock<Option<ClusteredIndex>>,
     /// Lock-free CSR snapshot for zero-copy reads via `ArcSwap`.
     ///
-    /// Rebuilt atomically after every mutation (`add_edge`, `remove_edge`,
-    /// `remove_node_edges`). Readers load the current `Arc<CsrSnapshot>`
-    /// without contention.
+    /// Rebuilt lazily on the next read after a mutation sets `csr_dirty`.
+    /// Readers load the current `Arc<CsrSnapshot>` without contention.
     csr_snapshot: ArcSwap<CsrSnapshot>,
+    /// Dirty flag for lazy CSR snapshot rebuild.
+    ///
+    /// Set to `true` by every mutation (`add_edge`, `remove_edge`,
+    /// `remove_node_edges`). The next read via `get_csr_snapshot()` or
+    /// `traverse_bfs_csr()` rebuilds the snapshot and clears the flag.
+    /// This eliminates O(N+E) rebuilds on every mutation, deferring the
+    /// cost to the next read.
+    csr_dirty: AtomicBool,
     /// Shared label table for interning edge labels during snapshot builds.
     label_table: RwLock<LabelTable>,
 }
@@ -98,6 +106,7 @@ impl ConcurrentEdgeStore {
             edge_ids: RwLock::new(FxHashMap::default()),
             clustered_snapshot: RwLock::new(None),
             csr_snapshot: ArcSwap::from_pointee(SnapshotBuilder::empty()),
+            csr_dirty: AtomicBool::new(false),
             label_table: RwLock::new(LabelTable::new()),
         }
     }
@@ -348,16 +357,12 @@ impl ConcurrentEdgeStore {
 
     /// Best-effort CSR snapshot rebuild after a mutation.
     ///
-    /// Must be called AFTER all `edge_ids` and shard locks are released
-    /// to avoid deadlock. Errors are logged in debug builds but do not
-    /// propagate — the old snapshot remains valid via `ArcSwap` reference
-    /// counting.
+    /// Sets the `csr_dirty` flag so the next read triggers a rebuild.
+    /// This eliminates the O(N+E) rebuild on every `add_edge`/`remove_edge`,
+    /// deferring the cost to the next read.
     #[inline]
     fn rebuild_snapshot_best_effort(&self) {
-        if let Err(_e) = self.rebuild_snapshot() {
-            #[cfg(debug_assertions)]
-            eprintln!("[velesdb] WARNING: CSR snapshot rebuild failed after mutation: {_e}");
-        }
+        self.csr_dirty.store(true, Ordering::Release);
     }
 
     /// Rebuilds the lock-free `CsrSnapshot` from all shards.
