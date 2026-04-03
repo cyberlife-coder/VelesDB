@@ -150,6 +150,25 @@ impl GraphCollection {
         self.inner.add_edge(edge)
     }
 
+    /// Adds multiple edges in batch (much faster than calling add_edge in a loop).
+    ///
+    /// Acquires locks once for the entire batch and rebuilds the CSR snapshot
+    /// once at the end. Duplicate edge IDs are silently skipped.
+    ///
+    /// # Returns
+    ///
+    /// Number of edges successfully added.
+    #[must_use]
+    pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> usize {
+        let count = self.inner.edge_store.add_edges_batch(edges);
+        if count > 0 {
+            self.inner
+                .write_generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        count
+    }
+
     /// Returns edges, optionally filtered by label.
     #[must_use]
     pub fn get_edges(&self, label: Option<&str>) -> Vec<GraphEdge> {

@@ -188,15 +188,7 @@ impl PyGraphCollection {
             .iter()
             .map(|e| dict_to_edge(py, e))
             .collect::<PyResult<Vec<_>>>()?;
-        py.allow_threads(|| {
-            let mut count = 0usize;
-            for edge in graph_edges {
-                if self.inner.add_edge(edge).is_ok() {
-                    count += 1;
-                }
-            }
-            Ok(count)
-        })
+        py.allow_threads(|| Ok(self.inner.add_edges_batch(graph_edges)))
     }
 
     /// Get edges, optionally filtered by label.
