@@ -15,6 +15,7 @@ use crate::index::hnsw::HnswIndex;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Configuration for the async index builder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,8 +61,8 @@ pub struct AsyncIndexBuilder {
     buffer: RwLock<Vec<(u64, Vec<f32>)>>,
     /// Configuration.
     config: AsyncIndexBuilderConfig,
-    /// Whether a build is currently in progress.
-    building: AtomicBool,
+    /// Whether a build is currently in progress (shared with background thread).
+    building: Arc<AtomicBool>,
 }
 
 #[allow(dead_code)] // Wired into Collection pipeline in Task 4
@@ -72,7 +73,7 @@ impl AsyncIndexBuilder {
         Self {
             buffer: RwLock::new(Vec::new()),
             config,
-            building: AtomicBool::new(false),
+            building: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -180,6 +181,38 @@ impl AsyncIndexBuilder {
     #[must_use]
     pub fn is_building(&self) -> bool {
         self.building.load(Ordering::Acquire)
+    }
+
+    /// Triggers a background build if the buffer is non-empty.
+    ///
+    /// Returns immediately — the build runs in a separate thread.
+    /// If a build is already in progress, this is a no-op.
+    /// The background thread calls `insert_batch_parallel` on the
+    /// provided `HnswIndex` and clears the `building` flag on completion.
+    pub fn trigger_build_async(&self, hnsw_index: &Arc<HnswIndex>) {
+        if self.building.swap(true, Ordering::AcqRel) {
+            return; // Already building
+        }
+
+        let vectors = self.drain_buffer();
+        if vectors.is_empty() {
+            self.building.store(false, Ordering::Release);
+            return;
+        }
+
+        let index = Arc::clone(hnsw_index);
+        let flag = Arc::clone(&self.building);
+        let count = vectors.len();
+
+        std::thread::spawn(move || {
+            let pairs: Vec<(u64, &[f32])> =
+                vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+            let _ = index.insert_batch_parallel(pairs);
+            flag.store(false, Ordering::Release);
+            tracing::debug!(
+                "AsyncIndexBuilder: background build complete ({count} vectors)"
+            );
+        });
     }
 
     /// Returns the merge threshold from the configuration.

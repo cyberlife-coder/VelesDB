@@ -144,3 +144,98 @@ fn test_config_serde_defaults() {
     assert!(config.segment_count.is_none());
     assert!(!config.sync_mode);
 }
+
+#[test]
+fn test_trigger_build_async_indexes_in_background() {
+    let dim = 4;
+    let index = std::sync::Arc::new(make_index(dim));
+    let builder = AsyncIndexBuilder::new(default_config());
+
+    // Enqueue vectors
+    let vectors: Vec<(u64, Vec<f32>)> = (0..20)
+        .map(|i| {
+            let mut v = vec![0.0_f32; dim];
+            v[i % dim] = 1.0;
+            (i as u64, v)
+        })
+        .collect();
+
+    builder.enqueue(vectors);
+    assert_eq!(builder.buffer_len(), 20);
+
+    // Trigger async build
+    builder.trigger_build_async(&index);
+
+    // Wait for background thread to finish (poll with timeout)
+    let start = std::time::Instant::now();
+    while builder.is_building() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        if start.elapsed() > std::time::Duration::from_secs(10) {
+            panic!("background build did not complete within 10s");
+        }
+    }
+
+    // Buffer should be drained and index populated
+    assert_eq!(builder.buffer_len(), 0);
+    assert_eq!(index.len(), 20);
+}
+
+#[test]
+fn test_trigger_build_async_noop_when_empty() {
+    let dim = 4;
+    let index = std::sync::Arc::new(make_index(dim));
+    let builder = AsyncIndexBuilder::new(default_config());
+
+    // Trigger on empty buffer — should be a no-op
+    builder.trigger_build_async(&index);
+
+    // Should not be building (empty buffer returns immediately)
+    assert!(!builder.is_building());
+    assert_eq!(index.len(), 0);
+}
+
+#[test]
+fn test_trigger_build_async_skips_when_already_building() {
+    let dim = 4;
+    let index = std::sync::Arc::new(make_index(dim));
+    let builder = AsyncIndexBuilder::new(default_config());
+
+    // Enqueue vectors
+    let vectors: Vec<(u64, Vec<f32>)> = (0..10)
+        .map(|i| {
+            let mut v = vec![0.0_f32; dim];
+            v[i % dim] = 1.0;
+            (i as u64, v)
+        })
+        .collect();
+    builder.enqueue(vectors);
+
+    // Trigger first build
+    builder.trigger_build_async(&index);
+
+    // Enqueue more while building
+    let more: Vec<(u64, Vec<f32>)> = (10..15)
+        .map(|i| {
+            let mut v = vec![0.0_f32; dim];
+            v[i % dim] = 1.0;
+            (i as u64, v)
+        })
+        .collect();
+    builder.enqueue(more);
+
+    // Second trigger should be skipped (building flag is set)
+    builder.trigger_build_async(&index);
+
+    // Wait for first build to complete
+    let start = std::time::Instant::now();
+    while builder.is_building() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        if start.elapsed() > std::time::Duration::from_secs(10) {
+            panic!("background build did not complete within 10s");
+        }
+    }
+
+    // First batch indexed, second batch still in buffer
+    assert_eq!(index.len(), 10);
+    assert_eq!(builder.buffer_len(), 5);
+}
