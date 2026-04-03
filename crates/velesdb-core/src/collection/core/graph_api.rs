@@ -450,6 +450,14 @@ impl Collection {
         config: &TraversalConfig,
     ) -> Vec<TraversalResult> {
         use crate::collection::graph::{concurrent_bfs_stream, StreamingConfig};
+
+        // Prefer the lock-free CSR snapshot path when available (Issue #491).
+        let snapshot = self.edge_store.get_csr_snapshot();
+        if snapshot.node_count() > 0 {
+            return crate::collection::graph::bfs_traverse_csr(&snapshot, source_id, config);
+        }
+
+        // Fallback: streaming BFS via per-shard locks
         let streaming = StreamingConfig {
             max_depth: config.max_depth,
             rel_types: config.rel_types.clone(),
