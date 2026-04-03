@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tests** — 13 new server tests covering all new graph operations
 
 ### Performance
+- **Bitmap pre-filter for filtered search (#487)** — adaptive strategy selection based on
+  real selectivity: full-scan brute-force for ≤1% selectivity (26µs), HNSW+bitmap for
+  1-30%, post-filter fallback for >30%. Eliminates massive over-fetching on selective filters
+- **CSR graph traversal v2 (#491)** — CsrSnapshot with edge IDs + labels, ArcSwap lock-free
+  adjacency, EdgePredicate pushdown (290ns for label-filtered BFS vs 3.4µs unfiltered = 12x),
+  lazy CSR rebuild on read instead of every mutation
+- **Bulk insert v2 pipeline (#488)** — DirectVectorWriter bypasses ShardedVectors overhead,
+  AsyncIndexBuilder with background thread for deferred HNSW construction,
+  HnswSegmentBuilder for parallel segment-based index building
 - **HNSW graduated ef_construction** -- 3-phase VAMANA schedule (low/mid/full ef) during
   batch insert reduces graph construction cost while preserving recall quality
 - **Lock-free CAS entry-point promotion** -- replaced mutex-based HNSW entry-point
