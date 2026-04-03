@@ -18,7 +18,7 @@ use super::limits::GuardRailViolation;
 #[derive(Debug)]
 pub struct RateLimiter {
     /// Tokens per second limit.
-    limit_qps: u32,
+    limit_qps: std::sync::atomic::AtomicU32,
     /// Last check time per client.
     clients: parking_lot::RwLock<HashMap<String, TokenBucket>>,
 }
@@ -34,7 +34,7 @@ impl RateLimiter {
     #[must_use]
     pub fn new(limit_qps: u32) -> Self {
         Self {
-            limit_qps,
+            limit_qps: std::sync::atomic::AtomicU32::new(limit_qps),
             clients: parking_lot::RwLock::new(HashMap::new()),
         }
     }
@@ -48,7 +48,8 @@ impl RateLimiter {
     pub fn check(&self, client_id: &str) -> Result<(), GuardRailViolation> {
         let mut clients = self.clients.write();
         let now = Instant::now();
-        let limit = f64::from(self.limit_qps);
+        let limit_qps = self.limit_qps.load(std::sync::atomic::Ordering::Relaxed);
+        let limit = f64::from(limit_qps);
 
         let bucket = clients.entry(client_id.to_string()).or_insert(TokenBucket {
             tokens: limit,
@@ -65,10 +66,26 @@ impl RateLimiter {
             bucket.tokens -= 1.0;
             Ok(())
         } else {
-            Err(GuardRailViolation::RateLimitExceeded {
-                limit_qps: self.limit_qps,
-            })
+            Err(GuardRailViolation::RateLimitExceeded { limit_qps })
         }
+    }
+
+    /// Exhausts all tokens for a client and sets the refill rate to zero,
+    /// ensuring the next `check()` will fail regardless of elapsed time.
+    ///
+    /// Useful for testing rate-limit rejection paths.
+    pub fn exhaust(&self, client_id: &str) {
+        // Set refill rate to 0 so no tokens are ever added back.
+        self.limit_qps
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let mut clients = self.clients.write();
+        let now = Instant::now();
+        let bucket = clients.entry(client_id.to_string()).or_insert(TokenBucket {
+            tokens: 0.0,
+            last_update: now,
+        });
+        bucket.tokens = 0.0;
+        bucket.last_update = now;
     }
 }
 

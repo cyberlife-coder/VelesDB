@@ -3006,18 +3006,13 @@ async fn test_guardrails_rate_limit_429() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    // Drain all rate-limiter tokens for the default client ("anonymous").
-    // The token bucket refills at `limit_qps` tokens/second, so we must
-    // drain until we actually get a rejection to be sure the bucket is empty.
+    // Exhaust the rate limiter for the default client ("anonymous").
+    // This sets tokens to 0 AND refill rate to 0, so no refill race is possible.
     let collection = state.db.get_vector_collection("rate_coll").unwrap();
-    let guard_rails = collection.guard_rails();
-    loop {
-        if guard_rails.rate_limiter.check("anonymous").is_err() {
-            break;
-        }
-    }
+    collection.guard_rails().rate_limiter.exhaust("anonymous");
 
-    // The next search request should be rejected with 429
+    // The next search request should be rejected with 429.
+    // With refill rate at 0, no tokens will be added back.
     let response = app
         .oneshot(
             Request::builder()
