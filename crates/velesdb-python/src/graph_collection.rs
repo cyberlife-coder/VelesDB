@@ -162,6 +162,43 @@ impl PyGraphCollection {
         py.allow_threads(|| self.inner.add_edge(graph_edge).map_err(core_err))
     }
 
+    /// Add multiple edges in batch (much faster than calling add_edge in a loop).
+    ///
+    /// Defers CSR snapshot rebuild until after all edges are inserted,
+    /// eliminating per-edge rebuild overhead.
+    ///
+    /// Args:
+    ///     edges: List of edge dicts (same format as add_edge)
+    ///
+    /// Returns:
+    ///     Number of edges successfully added
+    ///
+    /// Example:
+    ///     >>> graph.add_edges_batch([
+    ///     ...     {"id": 1, "source": 10, "target": 20, "label": "KNOWS"},
+    ///     ...     {"id": 2, "source": 20, "target": 30, "label": "FOLLOWS"},
+    ///     ... ])
+    #[pyo3(signature = (edges))]
+    fn add_edges_batch(
+        &self,
+        py: Python<'_>,
+        edges: Vec<HashMap<String, PyObject>>,
+    ) -> PyResult<usize> {
+        let graph_edges: Vec<velesdb_core::collection::graph::GraphEdge> = edges
+            .iter()
+            .map(|e| dict_to_edge(py, e))
+            .collect::<PyResult<Vec<_>>>()?;
+        py.allow_threads(|| {
+            let mut count = 0usize;
+            for edge in graph_edges {
+                if self.inner.add_edge(edge).is_ok() {
+                    count += 1;
+                }
+            }
+            Ok(count)
+        })
+    }
+
     /// Get edges, optionally filtered by label.
     ///
     /// Args:
