@@ -6,11 +6,61 @@ impl Collection {
         cond: &crate::velesql::Condition,
         execution_limit: usize,
     ) -> Option<Vec<SearchResult>> {
-        let (field_name, key) = Self::extract_index_lookup_condition(cond)?;
-        let ids = self.secondary_index_lookup(&field_name, &key)?;
-        let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+        // Try simple Eq lookup first (fastest path).
+        if let Some((field_name, key)) = Self::extract_index_lookup_condition(cond) {
+            let ids = self.secondary_index_lookup(&field_name, &key)?;
+            let filter =
+                crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+            return Some(self.scan_ids_with_filter(&ids, &filter, execution_limit));
+        }
+
+        // For AND conditions, find the first Eq sub-condition that has an index,
+        // use it to narrow the candidate set, then post-filter the rest.
+        if let crate::velesql::Condition::And(ref _left, ref _right) = cond {
+            // Flatten the AND tree into a list of leaf conditions.
+            let mut leaves = Vec::new();
+            Self::flatten_and_conditions(cond, &mut leaves);
+            for sub in &leaves {
+                if let Some((field_name, key)) = Self::extract_index_lookup_condition(sub) {
+                    if let Some(ids) = self.secondary_index_lookup(&field_name, &key) {
+                        let filter = crate::filter::Filter::new(
+                            crate::filter::Condition::from(cond.clone()),
+                        );
+                        return Some(self.scan_ids_with_filter(&ids, &filter, execution_limit));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Flattens a binary AND tree into a list of leaf conditions.
+    fn flatten_and_conditions<'a>(
+        cond: &'a crate::velesql::Condition,
+        out: &mut Vec<&'a crate::velesql::Condition>,
+    ) {
+        match cond {
+            crate::velesql::Condition::And(left, right) => {
+                Self::flatten_and_conditions(left, out);
+                Self::flatten_and_conditions(right, out);
+            }
+            crate::velesql::Condition::Group(inner) => {
+                Self::flatten_and_conditions(inner, out);
+            }
+            other => out.push(other),
+        }
+    }
+
+    /// Scans a set of candidate IDs and applies a filter, returning matching results.
+    fn scan_ids_with_filter(
+        &self,
+        ids: &[u64],
+        filter: &crate::filter::Filter,
+        execution_limit: usize,
+    ) -> Vec<SearchResult> {
         let mut results = Vec::new();
-        for point in self.get(&ids).into_iter().flatten() {
+        for point in self.get(ids).into_iter().flatten() {
             let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
             if filter.matches(&payload) {
                 results.push(SearchResult::new(point, 0.0));
@@ -19,7 +69,7 @@ impl Collection {
                 }
             }
         }
-        Some(results)
+        results
     }
 
     fn extract_index_lookup_condition(
