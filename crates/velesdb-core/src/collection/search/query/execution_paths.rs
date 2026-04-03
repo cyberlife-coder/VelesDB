@@ -9,9 +9,16 @@ impl Collection {
         // Try simple Eq lookup first (fastest path).
         if let Some((field_name, key)) = Self::extract_index_lookup_condition(cond) {
             let ids = self.secondary_index_lookup(&field_name, &key)?;
+            tracing::debug!(
+                field = %field_name,
+                ids_count = ids.len(),
+                limit = execution_limit,
+                "indexed metadata query: Eq lookup"
+            );
             // Skip index path when too many hits — sequential scan with early
             // exit is faster than hydrating thousands of index results.
             if ids.len() > execution_limit.saturating_mul(50).max(1000) {
+                tracing::debug!("indexed metadata query: too many hits, falling through to scan");
                 return None; // Fall through to scan
             }
             let filter =
@@ -87,6 +94,26 @@ impl Collection {
             }
         }
         None
+    }
+
+    /// Scans candidate IDs from a bitmap and applies the full filter.
+    fn scan_candidate_ids_metadata(
+        &self,
+        candidate_ids: &[u64],
+        filter: &crate::filter::Filter,
+        limit: usize,
+    ) -> Vec<SearchResult> {
+        let mut results = Vec::new();
+        for point in self.get(candidate_ids).into_iter().flatten() {
+            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
+            if filter.matches(&payload) {
+                results.push(SearchResult::new(point, 1.0));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+        results
     }
 
     pub(crate) fn evaluate_graph_match_anchor_ids(
@@ -267,11 +294,36 @@ impl Collection {
             return Ok(self.execute_scan_query(&empty_filter(), execution_limit));
         }
         if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
+            // Fast path: use bitmap from secondary indexes (same mechanism as
+            // search_with_filter). This handles AND conditions, Eq lookups, and
+            // range queries via the bitmap infrastructure.
+            let filter = crate::filter::Filter::new(
+                crate::filter::Condition::from(metadata_cond.clone()),
+            );
+            if let Some(bitmap) = self.build_prefilter_bitmap(&filter) {
+                if bitmap.is_empty() {
+                    return Ok(Vec::new());
+                }
+                // Convert bitmap to ID list and scan with filter
+                let candidate_ids: Vec<u64> = bitmap.iter().map(u64::from).collect();
+                if candidate_ids.len() <= execution_limit.saturating_mul(50).max(1000) {
+                    return Ok(self.scan_candidate_ids_metadata(
+                        &candidate_ids,
+                        &filter,
+                        execution_limit,
+                    ));
+                }
+                // Too many bitmap hits — fall through to scan with early exit
+            }
+
+            tracing::debug!("dispatch_metadata_only: trying indexed path");
             if let Some(indexed) =
                 self.execute_indexed_metadata_query(&metadata_cond, execution_limit)
             {
+                tracing::debug!("dispatch_metadata_only: indexed path succeeded");
                 return Ok(indexed);
             }
+            tracing::debug!("dispatch_metadata_only: indexed path returned None, trying BM25");
 
             // Try BM25 text search for LIKE conditions before falling back to full scan.
             // When a LIKE pattern contains a word-like substring (e.g. `%google%`),
