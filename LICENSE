@@ -73,6 +73,28 @@ The purpose of this requirement is transparency and reproducibility, not restric
 
 ## Redistribution
 
+### Attribution for Public-Facing Applications
+
+If You distribute, deploy, or make publicly available an Application or Service that embeds or integrates the Software as a component — including SaaS products, web applications, mobile applications, desktop applications, or browser-based applications accessible by external users — You must include a notice that the Software is used, in at least one of the following locations:
+
+(a) the application's About page, credits section, or legal notices;
+(b) the application's documentation, README, or terms of service;
+(c) a footer, copyright notice, or "Powered by" section visible to end users.
+
+The notice must read substantially as follows:
+
+> "Search and retrieval powered by [VelesDB](https://velesdb.com)" or any equivalent form that attributes VelesDB and links to velesdb.com.
+
+This requirement:
+- **applies** to any application or service that is publicly accessible by external users (customers, visitors, or any third party outside your organization);
+- **does not apply** to internal use (use solely within your organization, not exposed to external users);
+- **does not apply** to development, testing, or staging environments;
+- **does not apply** to redistribution of the Software itself (covered by the Redistribution section below).
+
+Failure to comply with this attribution requirement constitutes a violation of this license.
+
+### Redistribution Terms
+
 You may redistribute the Software (in original or modified form), including through container images (e.g., Docker), installers, package managers (e.g., Homebrew, apt, cargo), infrastructure-as-code templates (e.g., Terraform, Helm), or any other distribution mechanism, provided that:
 
 1. a complete copy of this license is included with each distribution,
@@ -309,3 +331,19 @@ The VelesDB Core license covers VelesDB Core. Premium features (such as RBAC, SS
 ### 24) Can I use VelesDB Core's VelesQL query language in my product?
 
 **Yes.** Using VelesQL to query data internally within your product is permitted. However, exposing a general-purpose VelesQL endpoint to third parties (allowing them to run arbitrary queries) would constitute providing access to a Substantial Set of the Software's capabilities and is not permitted without a commercial license.
+
+### 25) Do I need to display "Powered by VelesDB" on my website or app?
+
+**Yes, if your application is publicly accessible.** Any public-facing application or service that uses VelesDB Core as a backend must include an attribution notice (e.g., "Search powered by VelesDB" with a link to velesdb.com) in at least one visible location: About page, footer, credits, or documentation.
+
+This does **not** apply to internal tools, development environments, or private applications used only within your organization.
+
+### 26) What counts as a "public-facing application"?
+
+Any application, website, or service that is accessible by users outside your organization. Examples:
+- A SaaS product with a public login page (e.g., wplink.ai)
+- A mobile app available on app stores
+- A public API with documentation
+- A website with search functionality powered by VelesDB
+
+Internal dashboards, staging environments, and tools used only by your employees are **not** public-facing.
