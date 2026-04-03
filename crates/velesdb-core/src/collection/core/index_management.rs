@@ -119,6 +119,14 @@ impl Collection {
             crate::filter::Condition::Eq { field, value } => {
                 Self::bitmap_for_eq_field(indexes, field, value)
             }
+            crate::filter::Condition::Neq { field, value } => {
+                // NEQ = universe - eq_matches
+                // Build the universe from all keys in the index for this field,
+                // then subtract the matching IDs.
+                let eq_bitmap = Self::bitmap_for_eq_field(indexes, field, value)?;
+                let universe = Self::bitmap_universe_for_field(indexes, field)?;
+                Some(universe - eq_bitmap)
+            }
             crate::filter::Condition::Gt { field, value }
             | crate::filter::Condition::Gte { field, value }
             | crate::filter::Condition::Lt { field, value }
@@ -131,10 +139,20 @@ impl Collection {
             crate::filter::Condition::Or { conditions } => {
                 Self::bitmap_from_or(indexes, conditions)
             }
-            // TODO #487: NOT and Neq need a universe bitmap to invert.
-            // Post-filter handles these correctly until then.
             _ => None,
         }
+    }
+
+    /// Builds a universe bitmap containing ALL IDs indexed for a given field.
+    fn bitmap_universe_for_field(
+        indexes: &std::sync::Arc<
+            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
+        >,
+        field: &str,
+    ) -> Option<roaring::RoaringBitmap> {
+        let guard = indexes.read();
+        let index = guard.get(field)?;
+        Some(index.all_ids_bitmap())
     }
 
     /// Looks up a single equality field in the secondary indexes.

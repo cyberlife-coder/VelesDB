@@ -149,6 +149,27 @@ impl SecondaryIndex {
             }
         }
     }
+
+    /// Returns a [`RoaringBitmap`] containing ALL point IDs in this index.
+    ///
+    /// Used as the "universe" for NEQ operations: `NEQ(field, value) = universe - EQ(field, value)`.
+    #[must_use]
+    pub fn all_ids_bitmap(&self) -> roaring::RoaringBitmap {
+        match self {
+            Self::BTree(tree) => {
+                let guard = tree.read();
+                let mut bm = roaring::RoaringBitmap::new();
+                for ids in guard.values() {
+                    for &id in ids {
+                        if let Ok(id32) = u32::try_from(id) {
+                            bm.insert(id32);
+                        }
+                    }
+                }
+                bm
+            }
+        }
+    }
 }
 
 /// Converts a slice of `u64` point IDs into a [`RoaringBitmap`].
