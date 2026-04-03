@@ -133,6 +133,70 @@ impl Collection {
         })
     }
 
+    /// Bulk insert with pre-serialized JSON payloads (fastest path for payload-heavy data).
+    ///
+    /// Accepts payloads as JSON strings instead of Python dicts, avoiding the
+    /// expensive Python dict → Rust HashMap → serde_json conversion per row.
+    /// Use `json.dumps(payload)` in Python before calling this method.
+    ///
+    /// Args:
+    ///     vectors: numpy float32 array of shape (n, dimension)
+    ///     ids: list of uint64 point IDs
+    ///     json_payloads: list of JSON strings (one per point, or None to skip)
+    ///
+    /// Example:
+    ///     >>> import json, numpy as np
+    ///     >>> vectors = np.random.randn(1000, 384).astype(np.float32)
+    ///     >>> ids = list(range(1000))
+    ///     >>> payloads = [json.dumps({"category": "tech"}) for _ in range(1000)]
+    ///     >>> count = collection.upsert_bulk_numpy_json(vectors, ids, payloads)
+    #[pyo3(signature = (vectors, ids, json_payloads))]
+    fn upsert_bulk_numpy_json(
+        &self,
+        py: Python<'_>,
+        vectors: numpy::PyReadonlyArray2<f32>,
+        ids: Vec<u64>,
+        json_payloads: Vec<Option<String>>,
+    ) -> PyResult<usize> {
+        let array = vectors.as_array();
+        let n = array.nrows();
+        let dimension = array.ncols();
+
+        if ids.len() != n {
+            return Err(PyValueError::new_err(format!(
+                "ids length ({}) must match vectors row count ({n})",
+                ids.len()
+            )));
+        }
+        if json_payloads.len() != n {
+            return Err(PyValueError::new_err(format!(
+                "json_payloads length ({}) must match vectors row count ({n})",
+                json_payloads.len()
+            )));
+        }
+
+        let flat = array
+            .as_slice()
+            .ok_or_else(|| PyValueError::new_err("numpy array must be C-contiguous"))?;
+
+        // Parse JSON strings to serde_json::Value (no GIL needed for this).
+        let parsed_payloads: Vec<Option<serde_json::Value>> = json_payloads
+            .iter()
+            .map(|opt| {
+                opt.as_ref().and_then(|s| serde_json::from_str(s).ok())
+            })
+            .collect();
+
+        let flat_owned: Vec<f32> = flat.to_vec();
+        let payload_vec: Vec<Option<serde_json::Value>> = parsed_payloads;
+
+        py.allow_threads(|| {
+            self.inner
+                .upsert_bulk_from_raw(&flat_owned, &ids, dimension, Some(&payload_vec))
+                .map_err(core_err)
+        })
+    }
+
     /// Get points by their IDs.
     #[pyo3(signature = (ids))]
     fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<PyObject>>> {
