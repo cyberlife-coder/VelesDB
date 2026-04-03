@@ -62,6 +62,8 @@ mod traversal;
 mod traversal_tests;
 
 #[cfg(test)]
+mod csr_tests;
+#[cfg(test)]
 mod clustered_index_tests;
 #[cfg(test)]
 mod edge_concurrent_tests;
@@ -83,6 +85,9 @@ pub use degree_router::{
     DEFAULT_DEGREE_THRESHOLD,
 };
 pub use edge::{CsrSnapshot, EdgeStore, GraphEdge};
+// Re-exported for use by ConcurrentEdgeStore (Task 5) and other internal consumers.
+#[allow(unused_imports)]
+pub(crate) use edge::SnapshotBuilder;
 pub use edge_concurrent::ConcurrentEdgeStore;
 pub use label_index::LabelIndex;
 pub use label_table::{LabelId, LabelTable};
