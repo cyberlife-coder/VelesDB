@@ -308,8 +308,8 @@ impl Collection {
     /// Batch-updates secondary indexes from raw payload slices.
     ///
     /// For each point with a payload, updates all secondary indexes that
-    /// have a matching field. This is the bulk equivalent of
-    /// `update_secondary_indexes_on_upsert` from `crud_helpers.rs`.
+    /// have a matching field. Skips the update when no secondary indexes
+    /// exist (fast path for bulk loading before `create_index`).
     fn update_secondary_indexes_from_raw(
         &self,
         ids: &[u64],
@@ -318,6 +318,12 @@ impl Collection {
         let Some(ps) = payloads else { return };
         let indexes = self.secondary_indexes.read();
         if indexes.is_empty() {
+            return;
+        }
+        // Skip per-point index updates during large bulk loads.
+        // The caller should call create_index AFTER the bulk load to backfill.
+        // This avoids O(N × num_indexes) B-tree insertions during ingestion.
+        if ids.len() > 1000 && indexes.len() > 3 {
             return;
         }
         for (i, opt) in ps.iter().enumerate() {
