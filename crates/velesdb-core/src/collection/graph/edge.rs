@@ -12,8 +12,9 @@
 //! For concurrent access, use `ConcurrentEdgeStore` instead.
 
 use super::helpers::PostcardPersistence;
+use super::label_table::{LabelId, LabelTable};
 use crate::error::{Error, Result};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -110,46 +111,140 @@ impl GraphEdge {
     }
 }
 
-/// Compressed Sparse Row (CSR) snapshot for zero-copy BFS traversal.
+// ---------------------------------------------------------------------------
+// EdgePredicate trait and filters (Task 7: predicate pushdown)
+// ---------------------------------------------------------------------------
+
+/// Trait for predicate pushdown filtering in [`CsrSnapshot`].
 ///
-/// Stores outgoing neighbor target IDs and their corresponding edge IDs
-/// in two parallel contiguous arrays, indexed by `(offset, len)` per source node.
-/// This eliminates per-edge `GraphEdge` cloning during BFS frontier expansion.
+/// Implementations evaluate whether an edge should be included in traversal
+/// results directly at the CSR level, avoiding materialisation of non-matching
+/// edges.
+pub trait EdgePredicate: Send + Sync {
+    /// Returns `true` if the edge `(target, edge_id, label_id)` should be
+    /// included in the result set.
+    fn matches(&self, target: u64, edge_id: u64, label_id: LabelId) -> bool;
+}
+
+/// Filters edges by a set of allowed [`LabelId`]s.
+///
+/// Only edges whose label is in the `allowed` set pass the predicate.
+pub struct LabelFilter {
+    allowed: FxHashSet<LabelId>,
+}
+
+impl LabelFilter {
+    /// Creates a new `LabelFilter` accepting only the given label IDs.
+    #[must_use]
+    pub fn new(allowed: FxHashSet<LabelId>) -> Self {
+        Self { allowed }
+    }
+}
+
+impl EdgePredicate for LabelFilter {
+    #[inline]
+    fn matches(&self, _target: u64, _edge_id: u64, label_id: LabelId) -> bool {
+        self.allowed.contains(&label_id)
+    }
+}
+
+/// Accepts all edges (no-op predicate).
+///
+/// Optimised away by monomorphisation — the compiler inlines the constant
+/// `true` return, producing zero overhead compared to an unfiltered path.
+pub struct NoFilter;
+
+impl EdgePredicate for NoFilter {
+    #[inline]
+    fn matches(&self, _target: u64, _edge_id: u64, _label_id: LabelId) -> bool {
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AdjacencySource trait (Task 9: generic BFS)
+// ---------------------------------------------------------------------------
+
+/// Source of adjacency data for traversal algorithms.
+///
+/// Abstracts neighbor access so that BFS/DFS algorithms can work with
+/// either [`CsrSnapshot`] (zero-copy) or [`EdgeStore`] (legacy) without
+/// code duplication.
+pub trait AdjacencySource {
+    /// Returns the target node IDs reachable from `node_id`.
+    fn neighbors(&self, node_id: u64) -> Vec<u64>;
+}
+
+impl AdjacencySource for CsrSnapshot {
+    /// Returns neighbors from the CSR contiguous array (copies to Vec).
+    #[inline]
+    fn neighbors(&self, node_id: u64) -> Vec<u64> {
+        self.neighbors(node_id).to_vec()
+    }
+}
+
+impl AdjacencySource for EdgeStore {
+    /// Returns outgoing neighbor target IDs from the edge index.
+    #[inline]
+    fn neighbors(&self, node_id: u64) -> Vec<u64> {
+        self.get_outgoing(node_id)
+            .iter()
+            .map(|e| e.target())
+            .collect()
+    }
+}
+
+/// Immutable CSR (Compressed Sparse Row) snapshot of the graph for zero-copy traversals.
+///
+/// All arrays are contiguous in memory for optimal cache locality during BFS/DFS.
 ///
 /// # Memory layout
 ///
 /// ```text
-/// index: { node_1 -> (0, 3), node_2 -> (3, 2), ... }
-/// targets: [t1, t2, t3, t4, t5, ...]
-/// edge_ids: [e1, e2, e3, e4, e5, ...]
+/// offsets[i]..offsets[i+1] = range of neighbors for node at index i
+/// targets[offset]          = target node_id
+/// edge_ids[offset]         = edge ID
+/// label_ids[offset]        = interned LabelId
 /// ```
 ///
-/// `targets[offset..offset+len]` are the neighbor target IDs for a source node,
-/// and `edge_ids[offset..offset+len]` are the corresponding edge IDs.
+/// `offsets` has length `node_count + 1`, where `offsets[node_count] == targets.len()`.
 #[derive(Debug, Clone)]
 pub struct CsrSnapshot {
-    /// Maps source_node_id -> (offset, length) into `targets`/`edge_ids`.
-    index: FxHashMap<u64, (usize, usize)>,
+    /// Offset array: `offsets[i]..offsets[i+1]` = neighbor range for node at index `i`.
+    /// Length = `node_count + 1`. `offsets[node_count] == targets.len()`.
+    offsets: Vec<usize>,
     /// Contiguous storage of target node IDs for all outgoing edges.
     targets: Vec<u64>,
     /// Contiguous storage of edge IDs, parallel to `targets`.
     edge_ids: Vec<u64>,
-    /// Contiguous storage of label indices, parallel to `targets`.
-    /// Each label index maps to a string in `label_table`.
-    label_indices: Vec<u32>,
-    /// Interned label strings for memory-efficient rel-type filtering.
+    /// Contiguous storage of interned label IDs, parallel to `targets`.
+    label_ids: Vec<LabelId>,
+    /// Mapping `node_id → index` in the offsets array for O(1) lookup.
+    node_to_index: FxHashMap<u64, usize>,
+    /// Mapping `index → node_id` (inverse of `node_to_index`).
+    index_to_node: Vec<u64>,
+    /// Interned label strings for label-based filtering.
     label_table: Vec<String>,
-    /// Reverse map: label string -> label index for O(1) lookup.
+    /// Reverse map: label string → label index for O(1) lookup.
     label_to_idx: FxHashMap<String, u32>,
 }
 
 impl CsrSnapshot {
+    /// Returns the `(offset, len)` range for a node, or `None` if absent.
+    #[inline]
+    fn range_of(&self, node_id: u64) -> Option<(usize, usize)> {
+        let &idx = self.node_to_index.get(&node_id)?;
+        let start = self.offsets[idx];
+        let end = self.offsets[idx + 1];
+        Some((start, end))
+    }
+
     /// Returns neighbor target IDs for a source node as a zero-copy slice.
     #[must_use]
     #[inline]
-    pub fn neighbors(&self, source_id: u64) -> &[u64] {
-        if let Some(&(offset, len)) = self.index.get(&source_id) {
-            &self.targets[offset..offset + len]
+    pub fn neighbors(&self, node_id: u64) -> &[u64] {
+        if let Some((start, end)) = self.range_of(node_id) {
+            &self.targets[start..end]
         } else {
             &[]
         }
@@ -158,31 +253,76 @@ impl CsrSnapshot {
     /// Returns edge IDs for a source node as a zero-copy slice.
     ///
     /// Parallel to `neighbors()`: `edge_ids[i]` is the edge connecting
-    /// `source_id` to `neighbors[i]`.
+    /// `node_id` to `neighbors()[i]`.
     #[must_use]
     #[inline]
-    pub fn edge_ids(&self, source_id: u64) -> &[u64] {
-        if let Some(&(offset, len)) = self.index.get(&source_id) {
-            &self.edge_ids[offset..offset + len]
+    pub fn edge_ids(&self, node_id: u64) -> &[u64] {
+        if let Some((start, end)) = self.range_of(node_id) {
+            &self.edge_ids[start..end]
         } else {
             &[]
         }
     }
 
-    /// Returns the label string for a neighbor at position `idx` relative
-    /// to the source's offset.
+    /// Returns interned label IDs for a source node as a zero-copy slice.
     ///
-    /// Returns `None` if `source_id` has no CSR entry or `neighbor_idx`
-    /// is out of range.
+    /// Parallel to `neighbors()`: `label_ids[i]` is the label of the edge
+    /// connecting `node_id` to `neighbors()[i]`.
+    #[must_use]
+    #[inline]
+    pub fn label_ids(&self, node_id: u64) -> &[LabelId] {
+        if let Some((start, end)) = self.range_of(node_id) {
+            &self.label_ids[start..end]
+        } else {
+            &[]
+        }
+    }
+
+    /// Returns the label string for a neighbor at position `neighbor_idx`
+    /// relative to the node's offset.
+    ///
+    /// Returns `None` if `source_id` is absent or `neighbor_idx` is out of range.
     #[must_use]
     #[inline]
     pub fn label_at(&self, source_id: u64, neighbor_idx: usize) -> Option<&str> {
-        let &(offset, len) = self.index.get(&source_id)?;
-        if neighbor_idx >= len {
+        let (start, end) = self.range_of(source_id)?;
+        if neighbor_idx >= end - start {
             return None;
         }
-        let label_idx = self.label_indices[offset + neighbor_idx] as usize;
-        self.label_table.get(label_idx).map(String::as_str)
+        let label_id = self.label_ids[start + neighbor_idx];
+        self.label_table.get(label_id.as_u32() as usize).map(String::as_str)
+    }
+
+    /// Returns the outgoing degree of a node.
+    #[must_use]
+    #[inline]
+    pub fn degree(&self, node_id: u64) -> usize {
+        if let Some((start, end)) = self.range_of(node_id) {
+            end - start
+        } else {
+            0
+        }
+    }
+
+    /// Returns `true` if the node exists in this snapshot.
+    #[must_use]
+    #[inline]
+    pub fn contains_node(&self, node_id: u64) -> bool {
+        self.node_to_index.contains_key(&node_id)
+    }
+
+    /// Returns the number of source nodes in this snapshot.
+    #[must_use]
+    #[inline]
+    pub fn node_count(&self) -> usize {
+        self.index_to_node.len()
+    }
+
+    /// Returns the total number of outgoing edges in this snapshot.
+    #[must_use]
+    #[inline]
+    pub fn edge_count(&self) -> usize {
+        self.targets.len()
     }
 
     /// Checks whether a label string exists in the interned table.
@@ -193,6 +333,139 @@ impl CsrSnapshot {
     #[inline]
     pub fn has_label(&self, label: &str) -> bool {
         self.label_to_idx.contains_key(label)
+    }
+
+    /// Returns an iterator over neighbors that match the given predicate.
+    ///
+    /// Only edges for which `predicate.matches(target, edge_id, label_id)`
+    /// returns `true` are yielded. Non-matching edges are skipped without
+    /// materialisation.
+    ///
+    /// Each yielded item is `(target_id, edge_id, label_id)`.
+    pub fn neighbors_filtered<'a, P: EdgePredicate>(
+        &'a self,
+        node_id: u64,
+        predicate: &'a P,
+    ) -> impl Iterator<Item = (u64, u64, LabelId)> + 'a {
+        let (start, end) = self.range_of(node_id).unwrap_or((0, 0));
+        (start..end).filter_map(move |i| {
+            let target = self.targets[i];
+            let eid = self.edge_ids[i];
+            let lid = self.label_ids[i];
+            if predicate.matches(target, eid, lid) {
+                Some((target, eid, lid))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Returns a reference to the internal offsets array (for testing/validation).
+    #[cfg(test)]
+    pub(crate) fn offsets(&self) -> &[usize] {
+        &self.offsets
+    }
+}
+
+/// Builds a [`CsrSnapshot`] from an [`EdgeStore`] and [`LabelTable`].
+///
+/// This is a stateless namespace — no persistent state is held.
+/// Construction complexity is O(N + E) where N = nodes, E = edges.
+pub(crate) struct SnapshotBuilder;
+
+impl SnapshotBuilder {
+    /// Builds a `CsrSnapshot` from the given `EdgeStore` and `LabelTable`.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Collect all unique source `node_id`s from `edge_store.outgoing`.
+    /// 2. Sort for deterministic layout.
+    /// 3. Build `node_to_index` / `index_to_node`.
+    /// 4. For each node in order, iterate outgoing edges and fill
+    ///    `targets`, `edge_ids`, `label_ids`.
+    /// 5. Accumulate `offsets`.
+    pub fn build(edge_store: &EdgeStore, _label_table: &LabelTable) -> CsrSnapshot {
+        // 1. Collect unique source node_ids
+        let mut node_ids: Vec<u64> = edge_store.outgoing.keys().copied().collect();
+
+        // 2. Sort for deterministic layout
+        node_ids.sort_unstable();
+
+        let node_count = node_ids.len();
+        let total_edges: usize = edge_store.outgoing.values().map(Vec::len).sum();
+
+        // 3. Build node_to_index and index_to_node
+        let mut node_to_index = FxHashMap::with_capacity_and_hasher(
+            node_count,
+            rustc_hash::FxBuildHasher,
+        );
+        for (idx, &nid) in node_ids.iter().enumerate() {
+            node_to_index.insert(nid, idx);
+        }
+
+        // 4 & 5. Fill arrays
+        let mut offsets = Vec::with_capacity(node_count + 1);
+        let mut targets = Vec::with_capacity(total_edges);
+        let mut edge_ids_buf = Vec::with_capacity(total_edges);
+        let mut label_ids_buf: Vec<LabelId> = Vec::with_capacity(total_edges);
+        let mut label_table_vec: Vec<String> = Vec::new();
+        let mut label_to_idx: FxHashMap<String, u32> =
+            FxHashMap::with_capacity_and_hasher(16, rustc_hash::FxBuildHasher);
+
+        for &nid in &node_ids {
+            offsets.push(targets.len());
+            if let Some(out_edge_ids) = edge_store.outgoing.get(&nid) {
+                for &eid in out_edge_ids {
+                    if let Some(edge) = edge_store.edges.get(&eid) {
+                        targets.push(edge.target());
+                        edge_ids_buf.push(eid);
+
+                        // Always use local interning for label_ids stored in CSR.
+                        // label_at() resolves against the local label_table vec.
+                        let label_str = edge.label();
+                        let local_idx = *label_to_idx
+                            .entry(label_str.to_string())
+                            .or_insert_with(|| {
+                                let idx = label_table_vec.len();
+                                label_table_vec.push(label_str.to_string());
+                                #[allow(clippy::cast_possible_truncation)]
+                                // Reason: label count bounded by schema size
+                                { idx as u32 }
+                            });
+                        label_ids_buf.push(LabelId::from_u32(local_idx));
+                    }
+                }
+            }
+        }
+        // Final offset sentinel
+        offsets.push(targets.len());
+
+        CsrSnapshot {
+            offsets,
+            targets,
+            edge_ids: edge_ids_buf,
+            label_ids: label_ids_buf,
+            node_to_index,
+            index_to_node: node_ids,
+            label_table: label_table_vec,
+            label_to_idx,
+        }
+    }
+
+    /// Creates an empty `CsrSnapshot` (no nodes, no edges).
+    #[must_use]
+    #[allow(dead_code)] // Used by tests and ConcurrentEdgeStore (Task 5)
+    pub fn empty() -> CsrSnapshot {
+        CsrSnapshot {
+            offsets: vec![0],
+            targets: Vec::new(),
+            edge_ids: Vec::new(),
+            label_ids: Vec::new(),
+            node_to_index: FxHashMap::default(),
+            index_to_node: Vec::new(),
+            label_table: Vec::new(),
+            label_to_idx: FxHashMap::default(),
+        }
     }
 }
 
@@ -585,49 +858,8 @@ impl EdgeStore {
     ///
     /// The snapshot is automatically invalidated by any write operation.
     pub fn build_read_snapshot(&mut self) {
-        let total_edges: usize = self.outgoing.values().map(Vec::len).sum();
-
-        let mut index =
-            FxHashMap::with_capacity_and_hasher(self.outgoing.len(), rustc_hash::FxBuildHasher);
-        let mut targets = Vec::with_capacity(total_edges);
-        let mut edge_ids_buf = Vec::with_capacity(total_edges);
-        let mut label_indices = Vec::with_capacity(total_edges);
-        let mut label_table: Vec<String> = Vec::new();
-        let mut label_to_idx: FxHashMap<String, u32> =
-            FxHashMap::with_capacity_and_hasher(16, rustc_hash::FxBuildHasher);
-
-        for (&source_id, out_edge_ids) in &self.outgoing {
-            let offset = targets.len();
-            for &eid in out_edge_ids {
-                if let Some(edge) = self.edges.get(&eid) {
-                    targets.push(edge.target());
-                    edge_ids_buf.push(eid);
-                    let label = edge.label();
-                    let lidx = *label_to_idx.entry(label.to_string()).or_insert_with(|| {
-                        let idx = label_table.len();
-                        label_table.push(label.to_string());
-                        // Reason: label count bounded by schema size, never exceeds u32::MAX
-                        #[allow(clippy::cast_possible_truncation)]
-                        let idx_u32 = idx as u32;
-                        idx_u32
-                    });
-                    label_indices.push(lidx);
-                }
-            }
-            let len = targets.len() - offset;
-            if len > 0 {
-                index.insert(source_id, (offset, len));
-            }
-        }
-
-        self.csr_snapshot = Some(CsrSnapshot {
-            index,
-            targets,
-            edge_ids: edge_ids_buf,
-            label_indices,
-            label_table,
-            label_to_idx,
-        });
+        let label_table = LabelTable::new();
+        self.csr_snapshot = Some(SnapshotBuilder::build(self, &label_table));
     }
 
     /// Returns a reference to the CSR snapshot, if built.

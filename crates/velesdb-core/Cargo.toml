@@ -370,3 +370,7 @@ harness = false
 [[bench]]
 name = "bitmap_prefilter_benchmark"
 harness = false
+
+[[bench]]
+name = "graph_traversal_v2"
+harness = false

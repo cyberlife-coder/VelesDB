@@ -13,11 +13,15 @@
 mod query;
 
 use super::clustered_index::ClusteredIndex;
-use super::edge::{EdgeStore, GraphEdge};
+use super::edge::{CsrSnapshot, EdgeStore, GraphEdge, SnapshotBuilder};
+use super::label_table::LabelTable;
 use crate::error::{Error, Result};
+use arc_swap::ArcSwap;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Default number of shards for concurrent edge store.
 /// Increased from 64 to 256 for better scalability with 10M+ edges (EPIC-019 US-001).
@@ -61,6 +65,21 @@ pub struct ConcurrentEdgeStore {
     /// `remove_node_edges`). Read methods fall back to shard lookup when
     /// the snapshot is absent.
     clustered_snapshot: RwLock<Option<ClusteredIndex>>,
+    /// Lock-free CSR snapshot for zero-copy reads via `ArcSwap`.
+    ///
+    /// Rebuilt lazily on the next read after a mutation sets `csr_dirty`.
+    /// Readers load the current `Arc<CsrSnapshot>` without contention.
+    csr_snapshot: ArcSwap<CsrSnapshot>,
+    /// Dirty flag for lazy CSR snapshot rebuild.
+    ///
+    /// Set to `true` by every mutation (`add_edge`, `remove_edge`,
+    /// `remove_node_edges`). The next read via `get_csr_snapshot()` or
+    /// `traverse_bfs_csr()` rebuilds the snapshot and clears the flag.
+    /// This eliminates O(N+E) rebuilds on every mutation, deferring the
+    /// cost to the next read.
+    csr_dirty: AtomicBool,
+    /// Shared label table for interning edge labels during snapshot builds.
+    label_table: RwLock<LabelTable>,
 }
 
 impl ConcurrentEdgeStore {
@@ -86,6 +105,9 @@ impl ConcurrentEdgeStore {
             num_shards,
             edge_ids: RwLock::new(FxHashMap::default()),
             clustered_snapshot: RwLock::new(None),
+            csr_snapshot: ArcSwap::from_pointee(SnapshotBuilder::empty()),
+            csr_dirty: AtomicBool::new(false),
+            label_table: RwLock::new(LabelTable::new()),
         }
     }
 
@@ -129,50 +151,53 @@ impl ConcurrentEdgeStore {
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
         let edge_id = edge.id();
 
-        // CRITICAL: Hold edge_ids lock throughout the entire operation to prevent race
-        // condition where remove_edge could free an ID while we're still inserting.
-        // Lock ordering: edge_ids FIRST, then shards in ascending order.
-        let mut ids = self.edge_ids.write();
-        if ids.contains_key(&edge_id) {
-            return Err(Error::EdgeExists(edge_id));
-        }
-
-        let source_id = edge.source();
-        let source_shard = self.shard_index(source_id);
-        let target_shard = self.shard_index(edge.target());
-
-        if source_shard == target_shard {
-            // Same shard: single lock, EdgeStore handles both indices
-            let mut guard = self.shards[source_shard].write();
-            guard.add_edge(edge)?;
-            ids.insert(edge_id, source_id);
-        } else {
-            // Different shards: acquire locks in ascending order to prevent deadlock
-            let (first_idx, second_idx) = if source_shard < target_shard {
-                (source_shard, target_shard)
-            } else {
-                (target_shard, source_shard)
-            };
-
-            let mut first_guard = self.shards[first_idx].write();
-            let mut second_guard = self.shards[second_idx].write();
-
-            if source_shard < target_shard {
-                first_guard.add_edge_outgoing_only(edge.clone())?;
-                if let Err(e) = second_guard.add_edge_incoming_only(edge) {
-                    first_guard.remove_edge_outgoing_only(edge_id);
-                    return Err(e);
-                }
-            } else {
-                second_guard.add_edge_outgoing_only(edge.clone())?;
-                if let Err(e) = first_guard.add_edge_incoming_only(edge) {
-                    second_guard.remove_edge_outgoing_only(edge_id);
-                    return Err(e);
-                }
+        {
+            // CRITICAL: Hold edge_ids lock throughout the entire operation to prevent race
+            // condition where remove_edge could free an ID while we're still inserting.
+            // Lock ordering: edge_ids FIRST, then shards in ascending order.
+            let mut ids = self.edge_ids.write();
+            if ids.contains_key(&edge_id) {
+                return Err(Error::EdgeExists(edge_id));
             }
-            ids.insert(edge_id, source_id);
-        }
+
+            let source_id = edge.source();
+            let source_shard = self.shard_index(source_id);
+            let target_shard = self.shard_index(edge.target());
+
+            if source_shard == target_shard {
+                // Same shard: single lock, EdgeStore handles both indices
+                let mut guard = self.shards[source_shard].write();
+                guard.add_edge(edge)?;
+                ids.insert(edge_id, source_id);
+            } else {
+                // Different shards: acquire locks in ascending order to prevent deadlock
+                let (first_idx, second_idx) = if source_shard < target_shard {
+                    (source_shard, target_shard)
+                } else {
+                    (target_shard, source_shard)
+                };
+
+                let mut first_guard = self.shards[first_idx].write();
+                let mut second_guard = self.shards[second_idx].write();
+
+                if source_shard < target_shard {
+                    first_guard.add_edge_outgoing_only(edge.clone())?;
+                    if let Err(e) = second_guard.add_edge_incoming_only(edge) {
+                        first_guard.remove_edge_outgoing_only(edge_id);
+                        return Err(e);
+                    }
+                } else {
+                    second_guard.add_edge_outgoing_only(edge.clone())?;
+                    if let Err(e) = first_guard.add_edge_incoming_only(edge) {
+                        second_guard.remove_edge_outgoing_only(edge_id);
+                        return Err(e);
+                    }
+                }
+                ids.insert(edge_id, source_id);
+            }
+        } // All locks dropped here.
         self.invalidate_snapshot();
+        self.rebuild_snapshot_best_effort();
         Ok(())
     }
 
@@ -182,47 +207,50 @@ impl ConcurrentEdgeStore {
     ///
     /// Lock ordering: edge_ids FIRST, then shards in ascending order.
     pub fn remove_edge(&self, edge_id: u64) -> bool {
-        let mut ids = self.edge_ids.write();
+        {
+            let mut ids = self.edge_ids.write();
 
-        let Some(&source_id) = ids.get(&edge_id) else {
-            return false;
-        };
-
-        let source_shard_idx = self.shard_index(source_id);
-        let target_id = {
-            let guard = self.shards[source_shard_idx].read();
-            if let Some(edge) = guard.get_edge(edge_id) {
-                edge.target()
-            } else {
-                ids.remove(&edge_id);
+            let Some(&source_id) = ids.get(&edge_id) else {
                 return false;
-            }
-        };
-
-        let target_shard_idx = self.shard_index(target_id);
-
-        if source_shard_idx == target_shard_idx {
-            self.shards[source_shard_idx].write().remove_edge(edge_id);
-        } else {
-            let (first_idx, second_idx) = if source_shard_idx < target_shard_idx {
-                (source_shard_idx, target_shard_idx)
-            } else {
-                (target_shard_idx, source_shard_idx)
             };
-            let mut first = self.shards[first_idx].write();
-            let mut second = self.shards[second_idx].write();
 
-            if source_shard_idx < target_shard_idx {
-                first.remove_edge(edge_id);
-                second.remove_edge_incoming_only(edge_id);
+            let source_shard_idx = self.shard_index(source_id);
+            let target_id = {
+                let guard = self.shards[source_shard_idx].read();
+                if let Some(edge) = guard.get_edge(edge_id) {
+                    edge.target()
+                } else {
+                    ids.remove(&edge_id);
+                    return false;
+                }
+            };
+
+            let target_shard_idx = self.shard_index(target_id);
+
+            if source_shard_idx == target_shard_idx {
+                self.shards[source_shard_idx].write().remove_edge(edge_id);
             } else {
-                first.remove_edge_incoming_only(edge_id);
-                second.remove_edge(edge_id);
-            }
-        }
+                let (first_idx, second_idx) = if source_shard_idx < target_shard_idx {
+                    (source_shard_idx, target_shard_idx)
+                } else {
+                    (target_shard_idx, source_shard_idx)
+                };
+                let mut first = self.shards[first_idx].write();
+                let mut second = self.shards[second_idx].write();
 
-        ids.remove(&edge_id);
+                if source_shard_idx < target_shard_idx {
+                    first.remove_edge(edge_id);
+                    second.remove_edge_incoming_only(edge_id);
+                } else {
+                    first.remove_edge_incoming_only(edge_id);
+                    second.remove_edge(edge_id);
+                }
+            }
+
+            ids.remove(&edge_id);
+        } // All locks dropped here.
         self.invalidate_snapshot();
+        self.rebuild_snapshot_best_effort();
         true
     }
 
@@ -232,75 +260,78 @@ impl ConcurrentEdgeStore {
     ///
     /// Lock ordering: edge_ids FIRST, then shards in ascending order.
     pub fn remove_node_edges(&self, node_id: u64) {
-        let mut ids = self.edge_ids.write();
+        {
+            let mut ids = self.edge_ids.write();
 
-        let node_shard = self.shard_index(node_id);
+            let node_shard = self.shard_index(node_id);
 
-        // Phase 1: Collect all edges connected to this node (read-only)
-        let (outgoing_edges, incoming_edges): (Vec<_>, Vec<_>) = {
-            let guard = self.shards[node_shard].read();
-            let outgoing: Vec<_> = guard
-                .get_outgoing(node_id)
+            // Phase 1: Collect all edges connected to this node (read-only)
+            let (outgoing_edges, incoming_edges): (Vec<_>, Vec<_>) = {
+                let guard = self.shards[node_shard].read();
+                let outgoing: Vec<_> = guard
+                    .get_outgoing(node_id)
+                    .iter()
+                    .map(|e| (e.id(), e.target()))
+                    .collect();
+                let incoming: Vec<_> = guard
+                    .get_incoming(node_id)
+                    .iter()
+                    .map(|e| (e.id(), e.source()))
+                    .collect();
+                (outgoing, incoming)
+            };
+
+            // Phase 2: Collect all shards that need cleanup (BTreeSet = sorted ascending)
+            let mut shards_to_clean: std::collections::BTreeSet<usize> =
+                std::collections::BTreeSet::new();
+            shards_to_clean.insert(node_shard);
+
+            for (_, target) in &outgoing_edges {
+                shards_to_clean.insert(self.shard_index(*target));
+            }
+            for (_, source) in &incoming_edges {
+                shards_to_clean.insert(self.shard_index(*source));
+            }
+
+            // Phase 3: Acquire shard locks in ascending order and perform cleanup
+            let mut guards: Vec<_> = shards_to_clean
                 .iter()
-                .map(|e| (e.id(), e.target()))
+                .map(|&idx| (idx, self.shards[idx].write()))
                 .collect();
-            let incoming: Vec<_> = guard
-                .get_incoming(node_id)
-                .iter()
-                .map(|e| (e.id(), e.source()))
-                .collect();
-            (outgoing, incoming)
-        };
 
-        // Phase 2: Collect all shards that need cleanup (BTreeSet = sorted ascending)
-        let mut shards_to_clean: std::collections::BTreeSet<usize> =
-            std::collections::BTreeSet::new();
-        shards_to_clean.insert(node_shard);
-
-        for (_, target) in &outgoing_edges {
-            shards_to_clean.insert(self.shard_index(*target));
-        }
-        for (_, source) in &incoming_edges {
-            shards_to_clean.insert(self.shard_index(*source));
-        }
-
-        // Phase 3: Acquire shard locks in ascending order and perform cleanup
-        let mut guards: Vec<_> = shards_to_clean
-            .iter()
-            .map(|&idx| (idx, self.shards[idx].write()))
-            .collect();
-
-        // Phase 4: Clean up edges in all shards
-        for (shard_idx, guard) in &mut guards {
-            if *shard_idx == node_shard {
-                guard.remove_node_edges(node_id);
-            } else {
-                for (edge_id, target) in &outgoing_edges {
-                    if self.shard_index(*target) == *shard_idx {
-                        guard.remove_edge_incoming_only(*edge_id);
+            // Phase 4: Clean up edges in all shards
+            for (shard_idx, guard) in &mut guards {
+                if *shard_idx == node_shard {
+                    guard.remove_node_edges(node_id);
+                } else {
+                    for (edge_id, target) in &outgoing_edges {
+                        if self.shard_index(*target) == *shard_idx {
+                            guard.remove_edge_incoming_only(*edge_id);
+                        }
+                    }
+                    for (edge_id, source) in &incoming_edges {
+                        if self.shard_index(*source) == *shard_idx {
+                            guard.remove_edge_outgoing_only(*edge_id);
+                        }
                     }
                 }
-                for (edge_id, source) in &incoming_edges {
-                    if self.shard_index(*source) == *shard_idx {
-                        guard.remove_edge_outgoing_only(*edge_id);
-                    }
+            }
+
+            // Phase 5: Remove edge IDs from global registry
+            let mut removed: FxHashSet<u64> = FxHashSet::default();
+            for (edge_id, _) in &outgoing_edges {
+                if removed.insert(*edge_id) {
+                    ids.remove(edge_id);
                 }
             }
-        }
-
-        // Phase 5: Remove edge IDs from global registry
-        let mut removed: FxHashSet<u64> = FxHashSet::default();
-        for (edge_id, _) in &outgoing_edges {
-            if removed.insert(*edge_id) {
-                ids.remove(edge_id);
+            for (edge_id, _) in &incoming_edges {
+                if removed.insert(*edge_id) {
+                    ids.remove(edge_id);
+                }
             }
-        }
-        for (edge_id, _) in &incoming_edges {
-            if removed.insert(*edge_id) {
-                ids.remove(edge_id);
-            }
-        }
+        } // All locks dropped here.
         self.invalidate_snapshot();
+        self.rebuild_snapshot_best_effort();
     }
 }
 
@@ -309,17 +340,68 @@ impl ConcurrentEdgeStore {
 // ---------------------------------------------------------------------------
 
 impl ConcurrentEdgeStore {
-    /// Invalidates the CSR read snapshot.
+    /// Invalidates the clustered read snapshot.
     ///
     /// Called by every write method so that stale data is never served.
-    /// Readers fall back to per-shard lookup when the snapshot is absent.
+    /// Readers fall back to per-shard lookup when the clustered snapshot
+    /// is absent.
     #[inline]
     fn invalidate_snapshot(&self) {
         // Fast path: skip write lock if snapshot is already absent.
-        if self.clustered_snapshot.read().is_none() {
-            return;
+        let guard = self.clustered_snapshot.read();
+        if guard.is_some() {
+            drop(guard);
+            *self.clustered_snapshot.write() = None;
         }
-        *self.clustered_snapshot.write() = None;
+    }
+
+    /// Best-effort CSR snapshot rebuild after a mutation.
+    ///
+    /// Sets the `csr_dirty` flag so the next read triggers a rebuild.
+    /// This eliminates the O(N+E) rebuild on every `add_edge`/`remove_edge`,
+    /// deferring the cost to the next read.
+    #[inline]
+    fn rebuild_snapshot_best_effort(&self) {
+        self.csr_dirty.store(true, Ordering::Release);
+    }
+
+    /// Rebuilds the lock-free `CsrSnapshot` from all shards.
+    ///
+    /// Acquires read locks on all shards sequentially, merges outgoing edges
+    /// into a single `EdgeStore`, builds a `CsrSnapshot` via `SnapshotBuilder`,
+    /// and swaps it atomically into `self.csr_snapshot`.
+    ///
+    /// On failure the previous snapshot is retained (readers see stale but
+    /// structurally valid data).
+    ///
+    /// # Note
+    ///
+    /// This method does NOT acquire `edge_ids` — it reads directly from
+    /// shard `EdgeStore`s. This avoids deadlock when called from mutation
+    /// methods that already hold the `edge_ids` write lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SnapshotBuildFailed` if the merge or build fails.
+    #[allow(clippy::unnecessary_wraps)] // Reason: Result kept for future allocation-failure propagation
+    pub(crate) fn rebuild_snapshot(&self) -> Result<()> {
+        // Build a merged EdgeStore from all shards (outgoing edges only).
+        // We iterate shards directly instead of using `to_merged_edge_store()`
+        // to avoid acquiring `edge_ids` (which may already be write-locked
+        // by the calling mutation method).
+        let mut merged = EdgeStore::new();
+        for shard in &self.shards {
+            let guard = shard.read();
+            for edge in guard.all_edges() {
+                // Ignore duplicates — cross-shard edges appear in both shards
+                // but `add_edge` deduplicates by edge ID.
+                let _ = merged.add_edge(edge.clone());
+            }
+        }
+        let label_table = self.label_table.read();
+        let new_snapshot = SnapshotBuilder::build(&merged, &label_table);
+        self.csr_snapshot.store(Arc::new(new_snapshot));
+        Ok(())
     }
 
     /// Builds a CSR-like read snapshot from current shard state.
@@ -356,6 +438,9 @@ impl ConcurrentEdgeStore {
         snapshot.compact();
 
         *self.clustered_snapshot.write() = Some(snapshot);
+
+        // Also rebuild the lock-free CSR snapshot.
+        let _ = self.rebuild_snapshot();
     }
 
     /// Returns `true` if a CSR read snapshot is currently available.
