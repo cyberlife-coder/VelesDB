@@ -215,7 +215,7 @@ mod tests {
         let (coll, _dir) = make_graph();
         add_test_edges(&coll);
         // all_node_ids returns IDs from edge store (source + target)
-        let ids = coll.all_node_ids();
+        let _ids = coll.all_node_ids();
         // With edges: 1->2, 2->3, 3->4, 2->5, we should have nodes 1..5
         // Note: all_node_ids delegates to inner.all_ids() which returns
         // payload-stored IDs. Nodes referenced only by edges may not appear.

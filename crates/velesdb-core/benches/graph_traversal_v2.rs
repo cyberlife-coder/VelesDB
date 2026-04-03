@@ -2,6 +2,8 @@
 //!
 //! Run with: `cargo bench --package velesdb-core --bench graph_traversal_v2`
 
+#![allow(clippy::cast_possible_truncation)]
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use rustc_hash::FxHashSet;
 use velesdb_core::collection::graph::{

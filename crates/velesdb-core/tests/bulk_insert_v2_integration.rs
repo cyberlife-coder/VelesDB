@@ -224,7 +224,7 @@ fn crash_recovery_reindexes_gap_vectors() {
     assert_eq!(coll.len(), 20, "all 20 vectors must be recovered");
 }
 
-/// Validates that flush_full persists everything (WAL + HNSW + vectors.idx),
+/// Validates that `flush_full` persists everything (WAL + HNSW + vectors.idx),
 /// so no recovery is needed on reopen.
 #[test]
 fn flush_full_no_recovery_needed() {
@@ -343,6 +343,7 @@ fn v2_path_produces_searchable_results() {
 }
 
 #[test]
+#[allow(clippy::cast_sign_loss)]
 fn v2_path_maintains_recall() {
     let tmp = TempDir::new().expect("temp dir");
     let dim = 16;

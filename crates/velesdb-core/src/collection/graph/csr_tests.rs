@@ -3,6 +3,17 @@
 //! Unit tests validate specific examples and edge cases.
 //! Property-based tests validate structural invariants across random inputs.
 
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::needless_pass_by_value,
+    clippy::redundant_closure_for_method_calls,
+    clippy::useless_vec,
+    clippy::similar_names,
+    clippy::module_name_repetitions,
+)]
+
 use super::edge::{EdgeStore, GraphEdge, SnapshotBuilder};
 use super::label_table::LabelTable;
 use super::traversal::{bfs_traverse, bfs_traverse_csr, TraversalConfig};

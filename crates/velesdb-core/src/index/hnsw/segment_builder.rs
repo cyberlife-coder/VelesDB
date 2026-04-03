@@ -93,6 +93,7 @@ impl HnswSegmentBuilder {
 
     /// Monolithic insertion for small batches.
     #[allow(clippy::unnecessary_wraps)] // Returns Result for API consistency with full impl
+    #[allow(clippy::unused_self)] // Takes &self for API consistency with build_segmented
     fn build_monolithic(
         &self,
         vectors: &[(usize, &[f32])],

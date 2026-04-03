@@ -43,6 +43,7 @@ fn test_build_and_merge_small_batch_monolithic() {
 }
 
 #[test]
+#[allow(clippy::cast_precision_loss)]
 fn test_build_and_merge_returns_indexed_count() {
     let dim = 4;
     let index = make_index(dim);
@@ -77,6 +78,7 @@ fn test_segment_count_zero_treated_as_one() {
 }
 
 #[test]
+#[allow(clippy::cast_precision_loss)]
 fn test_build_and_merge_preserves_all_vectors() {
     let dim = 4;
     let index = make_index(dim);

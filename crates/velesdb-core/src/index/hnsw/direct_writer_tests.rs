@@ -39,7 +39,7 @@ fn test_write_batch_direct_single_vector() {
     let stored = index
         .inner
         .read()
-        .with_contiguous_vectors_read(|cv| cv.get(results[0].idx).map(|s| s.to_vec()));
+        .with_contiguous_vectors_read(|cv| cv.get(results[0].idx).map(<[f32]>::to_vec));
     assert_eq!(stored, Some(vec.to_vec()));
 
     // Verify ShardedVectors is empty (bypass)

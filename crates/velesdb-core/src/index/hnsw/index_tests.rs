@@ -1772,10 +1772,10 @@ fn test_search_brute_force_gpu_fallback_to_none_without_gpu() {
     let query = vec![0.5; 64];
 
     // Should not panic, returns Ok(None) if GPU unavailable
-    let _result = index.search_brute_force_gpu(&query, 5).unwrap();
+    let result = index.search_brute_force_gpu(&query, 5).unwrap();
 
     #[cfg(not(feature = "gpu"))]
-    assert!(_result.is_none(), "Should return None without GPU feature");
+    assert!(result.is_none(), "Should return None without GPU feature");
 }
 
 #[test]
@@ -3170,7 +3170,7 @@ mod full_scan_property_tests {
 
             // Naive exhaustive computation
             let mut naive: Vec<(u64, f32)> = Vec::new();
-            for id32 in bitmap.iter() {
+            for id32 in &bitmap {
                 let id = u64::from(id32);
                 if let Some(idx) = index.mappings.get_idx(id) {
                     let inner = index.inner.read();
