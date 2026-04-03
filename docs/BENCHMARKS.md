@@ -236,6 +236,40 @@ Local measurement (i9-14900KF, 10K vectors, 384D): upsert throughput ~808 vec/s 
 | **BFS depth 3** | 3.32 µs |
 | **Parallel reads (8 threads)** | 292 µs |
 
+### Graph Traversal V2 — CSR Snapshot (Issue #491)
+
+*Measured April 2026 with Criterion on the same test environment.*
+
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| **BFS CSR 1K nodes (deg 5, depth 3)** | 3.2 µs | Zero-copy slice access |
+| **BFS CSR 10K nodes** | 2.8 µs | Cache-optimal CSR layout |
+| **BFS CSR 100K nodes** | 2.8 µs | Scales perfectly — same latency |
+| **BFS dense 10K (deg 20)** | 4.6 µs | 4x more neighbors, 1.6x slower |
+| **Predicate pushdown 1/5 labels** | 290 ns | 12x faster than unfiltered |
+| **Predicate pushdown 2/5 labels** | 721 ns | Linear with label count |
+| **No filter baseline** | 3.4 µs | Reference |
+| **CSR build 1K nodes** | 262 µs | One-shot construction |
+| **CSR build 10K nodes** | 5.8 ms | O(N+E) |
+| **add_edge (lazy CSR)** | 442 ns/edge | No O(N+E) rebuild per mutation |
+
+### Filtered Search — Bitmap Pre-filter V2 (Issue #487)
+
+| Selectivity | Latency | Strategy |
+|-------------|---------|----------|
+| **1% (rare)** | 32 µs | Full-scan brute-force |
+| **10% (uncommon)** | 65 µs | HNSW + bitmap pre-filter |
+| **50% (common)** | 302 µs | Post-filter fallback (>30% threshold) |
+| **Unfiltered baseline** | 83 µs | Reference |
+
+### Bulk Insert V2 (Issue #488)
+
+| Operation | Latency | Throughput |
+|-----------|---------|------------|
+| **upsert_bulk standard** | 77 ms / 10K | 130K vec/s |
+| **AsyncIndexBuilder enqueue+drain** | 108 µs / 10K | 90M vec/s (buffer only) |
+| **Buffer brute-force search (10K)** | 213 µs | — |
+
 ---
 
 ## 9. Competitive Analysis

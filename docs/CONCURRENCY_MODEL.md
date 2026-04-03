@@ -7,7 +7,8 @@
 VelesDB utilise un modèle de concurrence basé sur:
 - **Sharding**: Partitionnement des données pour réduire la contention
 - **RwLock**: Lecture parallèle, écriture exclusive (parking_lot)
-- **Lock-free atomics**: Pour compteurs, métriques, and HNSW entry-point promotion
+- **Lock-free atomics**: For compteurs, métriques, HNSW entry-point promotion, and CSR snapshot swap
+- **ArcSwap**: Lock-free CSR snapshot reads for graph traversal (zero contention on reads)
 - **Lock ordering**: Ordre déterministe pour prévenir les deadlocks
 
 ## Architecture
@@ -45,7 +46,7 @@ VelesDB utilise un modèle de concurrence basé sur:
 | HNSW max layer | `AtomicUsize` | None | Lock-free CAS promotion |
 | Metrics counters | `AtomicU64` | None | Lock-free |
 | Edge ID registry | `RwLock<HashMap>` | Low | Global, for existence checks |
-| CsrSnapshot | `Option<CsrSnapshot>` | None (after build) | Built on-demand, invalidated by writes |
+| CsrSnapshot | `ArcSwap<Arc<CsrSnapshot>>` | None | Lock-free reads via atomic swap; lazy rebuild on dirty flag |
 | RaBitQ index | `parking_lot::RwLock` | None (after training) | Write-once then read-only |
 | RaBitQ store | `parking_lot::RwLock` | Low | Write per insert (~10ns hold) |
 | RaBitQ training buffer | `parking_lot::Mutex` | Low | Pre-training only |
