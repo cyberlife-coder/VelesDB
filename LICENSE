@@ -75,21 +75,40 @@ The purpose of this requirement is transparency and reproducibility, not restric
 
 ### Attribution for Public-Facing Applications
 
-If You distribute, deploy, or make publicly available an Application or Service that embeds or integrates the Software as a component — including SaaS products, web applications, mobile applications, desktop applications, or browser-based applications accessible by external users — You must include a notice that the Software is used, in at least one of the following locations:
+If You distribute, deploy, or make publicly available an Application or Service that embeds or integrates the Software as a component — including SaaS products, web applications, mobile applications, desktop applications, or browser-based applications accessible by external users — You must include a visible attribution notice as follows:
 
-(a) the application's About page, credits section, or legal notices;
-(b) the application's documentation, README, or terms of service;
-(c) a footer, copyright notice, or "Powered by" section visible to end users.
+**Required placement (at least one):**
 
-The notice must read substantially as follows:
+(a) **Web applications and SaaS products:** a "Powered by VelesDB" notice with a hyperlink to https://velesdb.com, displayed in the application's footer, sidebar, or search results area — visible on at least one page that end users access during normal use of the application;
 
-> "Search and retrieval powered by [VelesDB](https://velesdb.com)" or any equivalent form that attributes VelesDB and links to velesdb.com.
+(b) **Mobile applications:** a "Powered by VelesDB" notice with a link to https://velesdb.com in the application's About screen, Settings screen, or credits section;
 
-This requirement:
-- **applies** to any application or service that is publicly accessible by external users (customers, visitors, or any third party outside your organization);
-- **does not apply** to internal use (use solely within your organization, not exposed to external users);
-- **does not apply** to development, testing, or staging environments;
-- **does not apply** to redistribution of the Software itself (covered by the Redistribution section below).
+(c) **Desktop applications (including Tauri, Electron):** a "Powered by VelesDB" notice in the application's About dialog or Help menu;
+
+(d) **APIs and developer tools:** a "Powered by VelesDB" notice in the API documentation landing page or README, with a hyperlink to https://velesdb.com.
+
+**Notice format:**
+
+The notice must be human-readable, use a font size no smaller than the surrounding text, and include a clickable hyperlink to https://velesdb.com. Acceptable forms include:
+
+- "Powered by [VelesDB](https://velesdb.com)"
+- "Search powered by [VelesDB](https://velesdb.com)"
+- "Built with [VelesDB](https://velesdb.com)"
+- The VelesDB logo (available at https://velesdb.com/brand) with a link to https://velesdb.com
+
+The notice must not be hidden behind a click, placed in a location that requires scrolling past the main content, or rendered in a color that makes it invisible against the background.
+
+**Exemptions:**
+
+This requirement does not apply to:
+- internal use (applications used solely within your organization, not exposed to external users);
+- development, testing, or staging environments;
+- redistribution of the Software itself (covered by the Redistribution Terms below);
+- applications licensed under a VelesDB Enterprise or Premium commercial license (which may include alternative attribution terms).
+
+**Removal of attribution:**
+
+If You wish to remove the attribution requirement, You may obtain a VelesDB Enterprise or Premium license from the Licensor (contact@wiscale.fr), which may include alternative or waived attribution terms.
 
 Failure to comply with this attribution requirement constitutes a violation of this license.
 
@@ -334,9 +353,13 @@ The VelesDB Core license covers VelesDB Core. Premium features (such as RBAC, SS
 
 ### 25) Do I need to display "Powered by VelesDB" on my website or app?
 
-**Yes, if your application is publicly accessible.** Any public-facing application or service that uses VelesDB Core as a backend must include an attribution notice (e.g., "Search powered by VelesDB" with a link to velesdb.com) in at least one visible location: About page, footer, credits, or documentation.
+**Yes, if your application is publicly accessible.** Any public-facing application or service that uses VelesDB Core must display a visible "Powered by VelesDB" notice with a clickable link to velesdb.com. The notice must be placed where users can see it during normal use — not hidden in legal pages or behind clicks.
 
-This does **not** apply to internal tools, development environments, or private applications used only within your organization.
+For web apps and SaaS: footer, sidebar, or search results area.
+For mobile apps: About or Settings screen.
+For APIs: documentation landing page.
+
+If you want to remove this requirement, contact Wiscale France for an Enterprise license.
 
 ### 26) What counts as a "public-facing application"?
 
@@ -347,3 +370,7 @@ Any application, website, or service that is accessible by users outside your or
 - A website with search functionality powered by VelesDB
 
 Internal dashboards, staging environments, and tools used only by your employees are **not** public-facing.
+
+### 27) Can I use the VelesDB logo instead of text?
+
+**Yes.** You may use the VelesDB logo (available at https://velesdb.com/brand) as your attribution notice, provided it links to velesdb.com and is visible to end users.
