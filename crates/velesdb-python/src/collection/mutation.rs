@@ -14,6 +14,19 @@ use super::Collection;
 
 #[pymethods]
 impl Collection {
+    /// Creates a secondary index on a payload field for faster filtered queries.
+    ///
+    /// Args:
+    ///     field_name: Name of the payload field to index (e.g. "category")
+    ///
+    /// Example:
+    ///     >>> collection.create_index("category")
+    #[pyo3(signature = (field_name))]
+    fn create_index(&self, py: Python<'_>, field_name: &str) -> PyResult<()> {
+        let name = field_name.to_string();
+        py.allow_threads(|| self.inner.create_index(&name).map_err(core_err))
+    }
+
     /// Insert or update vectors in the collection.
     #[pyo3(signature = (points))]
     fn upsert(&self, py: Python<'_>, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
