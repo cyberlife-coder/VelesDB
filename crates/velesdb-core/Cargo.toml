@@ -366,3 +366,7 @@ harness = false
 [[bench]]
 name = "search_layer_benchmark"
 harness = false
+
+[[bench]]
+name = "graph_traversal_v2"
+harness = false
