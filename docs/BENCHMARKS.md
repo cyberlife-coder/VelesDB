@@ -11,7 +11,7 @@
 | **CPU** | Intel Core i9-14900KF (24 cores, 32 threads, AVX2) |
 | **RAM** | 64 GB DDR5 |
 | **OS** | Microsoft Windows 11 Professionnel |
-| **Rust** | rustc 1.92.0 (ded5c06cf 2025-12-08) |
+| **Rust** | rustc 1.94.1 (e408947bf 2026-03-25) |
 | **Build** | `--release`, `target-cpu=native`, LTO thin, codegen-units=1 |
 | **Framework** | Criterion.rs with `--noplot` |
 
@@ -21,17 +21,17 @@ Hardware configuration captured in `benchmarks/machine-config.json`.
 
 ## 1. Dense Search Baseline (SIMD Kernels)
 
-SIMD kernels use AVX2 multi-accumulator pipelines with runtime feature detection via `simd_dispatch`. Measured March 27, 2026 on Intel Core i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Rust 1.92.0, Windows 11 Pro, sequential run on idle machine.
+SIMD kernels use AVX2 multi-accumulator pipelines with runtime feature detection via `simd_dispatch`. Measured April 3, 2026 on Intel Core i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Rust 1.94.1, Windows 11 Pro, sequential run on idle machine.
 
 ### SIMD Kernel Latency
 
 | Operation | 128D | 384D | 768D | 1536D | 3072D |
 |-----------|------|------|------|-------|-------|
-| **Dot Product** | 5.4 ns | 12.0 ns | 19.8 ns | 43.8 ns | 91.2 ns |
-| **Euclidean** | 5.2 ns | 11.5 ns | 22.5 ns | 46.1 ns | 99.3 ns |
-| **Cosine** | 7.7 ns | 18.6 ns | 33.1 ns | 61.4 ns | 118.9 ns |
-| **Hamming** | 7.3 ns | 17.8 ns | 35.8 ns | 69.2 ns | 132.2 ns |
-| **Jaccard** | 6.4 ns | 16.4 ns | 35.1 ns | 50.9 ns | 100.6 ns |
+| **Dot Product** | 5.4 ns | 10.7 ns | 21.8 ns | 61.6 ns | 94.8 ns |
+| **Euclidean** | 5.3 ns | 11.0 ns | 26.0 ns | 50.5 ns | 118.2 ns |
+| **Cosine** | 12.5 ns | 21.4 ns | 32.4 ns | 60.9 ns | 123.5 ns |
+| **Hamming** | 7.4 ns | 19.1 ns | 35.2 ns | 65.5 ns | 129.4 ns |
+| **Jaccard** | 6.8 ns | 17.6 ns | 27.3 ns | 52.3 ns | 113.1 ns |
 
 *Run `cargo bench -p velesdb-core --bench simd_benchmark -- --noplot` to regenerate.*
 
@@ -49,16 +49,16 @@ Engine dispatch overhead is negligible at typical embedding dimensions (768D+).
 
 | Dimension | Dot Product | Throughput |
 |-----------|-------------|------------|
-| 768D | 19.8 ns | 38.8 Gelem/s |
-| 1536D | 43.8 ns | 35.1 Gelem/s |
-| 3072D | 91.2 ns | 33.7 Gelem/s |
+| 768D | 21.8 ns | 35.2 Gelem/s |
+| 1536D | 61.6 ns | 24.9 Gelem/s |
+| 3072D | 94.8 ns | 32.4 Gelem/s |
 
 ### Batch Distance Computation
 
 | Benchmark | Latency | Per-Vector |
 |-----------|---------|------------|
-| Native 1000x768D | 43.8 µs | 43.8 ns |
-| Engine 1000x768D | 45.0 µs | 45.0 ns |
+| Native 1000x768D | 42.1 µs | 42.1 ns |
+| Engine 1000x768D | 42.9 µs | 42.9 ns |
 
 ---
 

@@ -280,9 +280,10 @@ mod tests {
         add_test_edges(&coll);
         let config = TraversalConfig::with_range(1, 3).with_limit(100);
         let results = coll.traverse_bfs_parallel(&[1, 2], &config);
-        // Node 3 reachable from both 1 and 2 — should appear only once
+        // Node 3 reachable from both 1 (path [1,2,3]) and 2 (path [2,3])
+        // — different paths produce different path signatures, so both are kept.
         let count_3 = results.iter().filter(|r| r.target_id == 3).count();
-        assert_eq!(count_3, 1);
+        assert_eq!(count_3, 2);
     }
 
     #[test]
