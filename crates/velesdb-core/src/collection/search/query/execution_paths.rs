@@ -65,6 +65,8 @@ impl Collection {
     }
 
     /// Scans a set of candidate IDs and applies a filter, returning matching results.
+    ///
+    /// Uses score `1.0` for metadata-only matches (no vector similarity involved).
     fn scan_ids_with_filter(
         &self,
         ids: &[u64],
@@ -75,7 +77,7 @@ impl Collection {
         for point in self.get(ids).into_iter().flatten() {
             let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
             if filter.matches(&payload) {
-                results.push(SearchResult::new(point, 0.0));
+                results.push(SearchResult::new(point, 1.0));
                 if results.len() >= execution_limit {
                     break;
                 }

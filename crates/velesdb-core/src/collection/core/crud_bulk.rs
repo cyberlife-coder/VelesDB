@@ -324,6 +324,12 @@ impl Collection {
         // The caller should call create_index AFTER the bulk load to backfill.
         // This avoids O(N × num_indexes) B-tree insertions during ingestion.
         if ids.len() > 1000 && indexes.len() > 3 {
+            tracing::warn!(
+                ids_len = ids.len(),
+                index_count = indexes.len(),
+                "Skipping per-point secondary index updates for large bulk load; \
+                 call create_index after ingestion to backfill"
+            );
             return;
         }
         for (i, opt) in ps.iter().enumerate() {

@@ -250,6 +250,8 @@ impl ConcurrentEdgeStore {
     fn ensure_csr_fresh(&self) {
         if self.csr_dirty.swap(false, std::sync::atomic::Ordering::AcqRel) {
             if let Err(e) = self.rebuild_snapshot() {
+                // Restore dirty flag so the next caller retries the rebuild.
+                self.csr_dirty.store(true, std::sync::atomic::Ordering::Release);
                 #[cfg(debug_assertions)]
                 eprintln!("[velesdb] WARNING: lazy CSR snapshot rebuild failed: {e}");
             }

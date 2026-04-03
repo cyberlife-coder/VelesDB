@@ -10,7 +10,6 @@
 //! `buffer` must never be held while acquiring any lock at position ≤ 10.
 
 use crate::distance::DistanceMetric;
-use crate::index::hnsw::segment_builder::HnswSegmentBuilder;
 use crate::index::hnsw::HnswIndex;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -157,9 +156,6 @@ impl AsyncIndexBuilder {
                 .unwrap_or(4)
         });
 
-        let builder = HnswSegmentBuilder::new(segment_count);
-
-        // Convert to the format expected by insert_batch_parallel
         let pairs: Vec<(u64, &[f32])> = vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
 
         let inserted = hnsw_index.insert_batch_parallel(pairs);
@@ -170,9 +166,6 @@ impl AsyncIndexBuilder {
             "AsyncIndexBuilder::flush_sync: indexed {inserted}/{count} vectors \
              (segments={segment_count})"
         );
-
-        // Keep builder reference alive to suppress unused warning
-        let _ = builder;
 
         Ok(inserted)
     }

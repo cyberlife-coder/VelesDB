@@ -453,6 +453,9 @@ impl Collection {
 
         // Prefer the lock-free CSR snapshot path when available (Issue #491).
         let snapshot = self.edge_store.get_csr_snapshot();
+        // Guard: only use the CSR path when the snapshot has been populated
+        // (node_count > 0). An empty snapshot means no edges have been
+        // ingested yet, so we fall through to the per-shard streaming BFS.
         if snapshot.node_count() > 0 {
             return crate::collection::graph::bfs_traverse_csr(&snapshot, source_id, config);
         }

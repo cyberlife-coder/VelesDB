@@ -179,13 +179,21 @@ impl Collection {
             .as_slice()
             .ok_or_else(|| PyValueError::new_err("numpy array must be C-contiguous"))?;
 
-        // Parse JSON strings to serde_json::Value (no GIL needed for this).
+        // Parse JSON strings to serde_json::Value — surface errors instead of
+        // silently dropping malformed payloads (Devin review fix).
         let parsed_payloads: Vec<Option<serde_json::Value>> = json_payloads
             .iter()
-            .map(|opt| {
-                opt.as_ref().and_then(|s| serde_json::from_str(s).ok())
+            .enumerate()
+            .map(|(i, opt)| match opt {
+                Some(s) => match serde_json::from_str(s) {
+                    Ok(v) => Ok(Some(v)),
+                    Err(e) => Err(PyValueError::new_err(format!(
+                        "Invalid JSON payload at index {i}: {e}"
+                    ))),
+                },
+                None => Ok(None),
             })
-            .collect();
+            .collect::<PyResult<Vec<_>>>()?;
 
         let flat_owned: Vec<f32> = flat.to_vec();
         let payload_vec: Vec<Option<serde_json::Value>> = parsed_payloads;

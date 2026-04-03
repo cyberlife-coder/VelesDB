@@ -49,7 +49,10 @@ impl Collection {
                     if let Ok(Some(payload)) = PayloadStorage::retrieve(&*payload_storage, id) {
                         if let Some(val) = payload.get(field_name) {
                             if let Some(key) = JsonValue::from_json(val) {
-                                tree_guard.entry(key).or_default().push(id);
+                                let ids_vec = tree_guard.entry(key).or_default();
+                                if !ids_vec.contains(&id) {
+                                    ids_vec.push(id);
+                                }
                             }
                         }
                     }
@@ -122,9 +125,11 @@ impl Collection {
             crate::filter::Condition::Neq { field, value } => {
                 // NEQ = universe - eq_matches
                 // Build the universe from all keys in the index for this field,
-                // then subtract the matching IDs.
-                let eq_bitmap = Self::bitmap_for_eq_field(indexes, field, value)?;
+                // then subtract the matching IDs. If the value doesn't exist in
+                // the index, eq_bitmap defaults to empty — every indexed ID matches.
                 let universe = Self::bitmap_universe_for_field(indexes, field)?;
+                let eq_bitmap = Self::bitmap_for_eq_field(indexes, field, value)
+                    .unwrap_or_default();
                 Some(universe - eq_bitmap)
             }
             crate::filter::Condition::Gt { field, value }
