@@ -274,6 +274,30 @@ Local measurement (i9-14900KF, 10K vectors, 384D): upsert throughput ~808 vec/s 
 
 ## 9. Competitive Analysis
 
+### Graph Traversal — VelesDB vs Memgraph (Issue #491)
+
+*Measured April 2026 via `bench_graph_quick.py` — 5K nodes, 50K edges, LDBC-style social network.*
+*Previous benchmark (v1.10.0): Memgraph was 100-25000x faster.*
+
+| Query | Memgraph p50 | VelesDB p50 | Ratio | Results |
+|-------|-------------|-------------|-------|---------|
+| **BFS 1-hop** | 479 µs | **5 µs** | VelesDB **94x faster** | 10 = 10 |
+| **BFS 2-hop** | 1.4 ms | **31 µs** | VelesDB **45x faster** | 110 = 110 |
+| **BFS 3-hop (limit 200)** | 2.6 ms | **50 µs** | VelesDB **52x faster** | 200 = 200 |
+
+**Improvement**: from 100-25000x slower → 45-94x faster (reversal).
+
+#### Known Limitation — Edge Loading
+
+| Operation | Memgraph | VelesDB | Gap |
+|-----------|----------|---------|-----|
+| **50K edges batch load** | ~0.05s | ~0.05s | Parity (batch API) |
+| **374K edges (50K nodes)** | 7s | 60s | Memgraph **9x faster** |
+
+Root cause: per-edge `edge_ids` write lock + shard lock in `ConcurrentEdgeStore::add_edge`.
+Planned fix: bulk `add_edges_batch` at the Rust core level with deferred shard locking
+and single CSR rebuild at the end of the batch.
+
 ### SIMD Distance Kernels
 
 | Library | Dot Product 1536D | Notes |
