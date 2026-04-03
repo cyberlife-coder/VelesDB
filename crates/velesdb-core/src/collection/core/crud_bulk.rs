@@ -2,9 +2,14 @@
 //!
 //! Extracted from `crud.rs` (Issue #425) to keep each file under 500 NLOC.
 //! These methods are optimized for high-throughput import with parallel I/O.
+//!
+//! When `async_index_builder` is configured, `upsert_bulk` uses an optimized
+//! V2 path: `DirectVectorWriter` bypasses per-vector `ShardedVectors` overhead
+//! and `AsyncIndexBuilder` defers HNSW construction for higher throughput.
 
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
+use crate::index::hnsw::direct_writer::DirectVectorWriter;
 use crate::point::Point;
 use crate::storage::VectorStorage;
 use crate::validation::validate_dimension_match;
@@ -73,6 +78,47 @@ impl Collection {
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         let sparse_batch = Self::collect_sparse_batch(points);
 
+        // ── V2 optimized path: DirectVectorWriter + AsyncIndexBuilder ───
+        if let Some(ref aib) = self.async_index_builder {
+            // WAL + payload write (same durability guarantees as standard path).
+            self.store_vectors_and_payloads_inner(&vector_refs, points, fsync)?;
+
+            // Bypass ShardedVectors: write directly to ContiguousVectors.
+            let writer = DirectVectorWriter::new(&self.index);
+            let results = writer.write_batch_direct(&vector_refs)?;
+
+            // Enqueue for deferred HNSW construction.
+            let tuples: Vec<(u64, Vec<f32>)> = points
+                .iter()
+                .map(|p| (p.id, p.vector.clone()))
+                .collect();
+
+            if aib.enqueue(tuples) {
+                // Buffer reached merge_threshold — flush synchronously.
+                aib.flush_sync(&self.index)?;
+            }
+
+            // Sync to ShardedVectors for SIMD re-ranking.
+            writer.sync_to_sharded(&results)?;
+
+            let count = vector_refs.len();
+            self.config.write().point_count = self.vector_storage.read().len();
+            self.apply_sparse_batch_bulk(&sparse_batch)?;
+            self.invalidate_caches_and_bump_generation();
+
+            // Track inserts for periodic HNSW save (Issue #423 Component 3).
+            #[allow(clippy::cast_possible_truncation)]
+            self.inserts_since_last_hnsw_save
+                .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
+
+            tracing::debug!(
+                "upsert_bulk V2 path: inserted {count} vectors via DirectVectorWriter + AsyncIndexBuilder"
+            );
+
+            return Ok(count);
+        }
+
+        // ── Standard path (ShardedVectors + synchronous HNSW) ───────────
         self.store_vectors_and_payloads_inner(&vector_refs, points, fsync)?;
 
         let inserted = self.bulk_index_or_defer(vector_refs);

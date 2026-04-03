@@ -138,9 +138,54 @@ fn bench_async_builder_buffer_search(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark: V2 wired path — `upsert_bulk` with `AsyncIndexBuilder` configured.
+///
+/// Creates a collection WITH `async_index_builder` config and measures the
+/// full pipeline: WAL + `DirectVectorWriter` + `AsyncIndexBuilder` enqueue.
+fn bench_upsert_bulk_v2_wired(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bulk_insert_v2");
+    group.sample_size(10);
+    group.throughput(Throughput::Elements(VECTOR_COUNT as u64));
+
+    let points = generate_points(VECTOR_COUNT, DIMENSION);
+
+    group.bench_function("upsert_bulk_v2_wired", |b| {
+        b.iter_with_setup(
+            || {
+                let dir = tempfile::tempdir().unwrap();
+                let config = AsyncIndexBuilderConfig {
+                    merge_threshold: VECTOR_COUNT + 1, // Don't trigger flush during bench
+                    segment_count: Some(4),
+                    sync_mode: false,
+                };
+                #[allow(deprecated)]
+                let coll = velesdb_core::collection::Collection::create_with_async_builder(
+                    dir.path().join("bench_v2"),
+                    DIMENSION,
+                    DistanceMetric::Cosine,
+                    config,
+                )
+                .unwrap();
+                (dir, coll, points.clone())
+            },
+            |(dir, coll, pts)| {
+                for batch in pts.chunks(BATCH_SIZE) {
+                    coll.upsert_bulk(batch).unwrap();
+                }
+                black_box(coll.len());
+                drop(coll);
+                drop(dir);
+            },
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_upsert_bulk_standard,
+    bench_upsert_bulk_v2_wired,
     bench_async_builder_enqueue_drain,
     bench_async_builder_buffer_search,
 );

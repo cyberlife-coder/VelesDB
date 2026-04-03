@@ -311,6 +311,38 @@ impl Collection {
         Self::create_from_config(path, config, Some(hnsw_params))
     }
 
+    /// Creates a new collection with `AsyncIndexBuilder` configuration.
+    ///
+    /// When `async_index_builder` is `Some`, `upsert_bulk` uses the optimized
+    /// V2 path: `DirectVectorWriter` + `AsyncIndexBuilder` for higher throughput.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config cannot be saved.
+    pub fn create_with_async_builder(
+        path: PathBuf,
+        dimension: usize,
+        metric: DistanceMetric,
+        async_builder_config: crate::collection::streaming::AsyncIndexBuilderConfig,
+    ) -> Result<Self> {
+        let config = CollectionConfig {
+            name: Self::name_from_path(&path),
+            dimension,
+            metric,
+            point_count: 0,
+            storage_mode: StorageMode::Full,
+            metadata_only: false,
+            graph_schema: None,
+            embedding_dimension: None,
+            pq_rescore_oversampling: Some(4),
+            hnsw_params: None,
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
+            async_index_builder: Some(async_builder_config),
+        };
+        Self::create_from_config(path, config, None)
+    }
+
     /// Creates a new collection with a specific type (Vector or `MetadataOnly`).
     ///
     /// # Arguments

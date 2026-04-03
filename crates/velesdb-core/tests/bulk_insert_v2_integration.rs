@@ -298,3 +298,108 @@ fn async_builder_config_serde_with_config() {
     assert_eq!(aib.segment_count, Some(4));
     assert!(aib.sync_mode);
 }
+
+// ── V2 wired path: DirectVectorWriter + AsyncIndexBuilder ───────────────
+
+#[test]
+fn v2_path_produces_searchable_results() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll_dir = tmp.path().join("v2_searchable");
+    let dim = 16;
+
+    let config = velesdb_core::collection::streaming::AsyncIndexBuilderConfig {
+        merge_threshold: 50, // Low threshold to trigger flush during test
+        segment_count: Some(2),
+        sync_mode: false,
+    };
+
+    #[allow(deprecated)]
+    let coll = Collection::create_with_async_builder(
+        coll_dir,
+        dim,
+        DistanceMetric::Cosine,
+        config,
+    )
+    .expect("create collection with async builder");
+
+    // Insert 100 vectors via upsert_bulk (V2 path).
+    let points: Vec<Point> = (0..100)
+        .map(|i| Point::without_payload(i, make_vector(i, dim)))
+        .collect();
+    let inserted = coll.upsert_bulk(&points).expect("upsert_bulk V2");
+    assert_eq!(inserted, 100);
+
+    // Flush to persist.
+    coll.flush().expect("flush");
+
+    // Search should find results — verifies V2 path produces searchable vectors.
+    let query = make_vector(0, dim);
+    let results = coll.search(&query, 5).expect("search after V2 insert");
+    assert!(
+        !results.is_empty(),
+        "V2 path must produce searchable vectors"
+    );
+    assert_eq!(coll.len(), 100);
+}
+
+#[test]
+fn v2_path_maintains_recall() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dim = 16;
+    let n = 200;
+    let k = 10;
+
+    // Create collection with V2 path.
+    let v2_dir = tmp.path().join("v2_recall");
+    let config = velesdb_core::collection::streaming::AsyncIndexBuilderConfig {
+        merge_threshold: 50,
+        segment_count: Some(2),
+        sync_mode: false,
+    };
+    #[allow(deprecated)]
+    let v2_coll = Collection::create_with_async_builder(
+        v2_dir,
+        dim,
+        DistanceMetric::Cosine,
+        config,
+    )
+    .expect("create V2 collection");
+
+    // Create standard collection for comparison.
+    let std_dir = tmp.path().join("std_recall");
+    let std_coll = create_test_collection(&std_dir, dim, DistanceMetric::Cosine);
+
+    // Insert same vectors into both.
+    let points: Vec<Point> = (0..n)
+        .map(|i| Point::without_payload(i as u64, make_vector(i as u64, dim)))
+        .collect();
+    v2_coll.upsert_bulk(&points).expect("V2 upsert");
+    std_coll.upsert_bulk(&points).expect("std upsert");
+
+    v2_coll.flush().expect("V2 flush");
+    std_coll.flush().expect("std flush");
+
+    // Compare search results — V2 should have comparable recall.
+    let query = make_vector(0, dim);
+    let v2_results = v2_coll.search(&query, k).expect("V2 search");
+    let std_results = std_coll.search(&query, k).expect("std search");
+
+    assert!(!v2_results.is_empty(), "V2 must return results");
+    assert!(!std_results.is_empty(), "std must return results");
+
+    // Both should find the exact match (id=0) as the closest.
+    assert_eq!(v2_results[0].point.id, 0, "V2 closest must be id=0");
+    assert_eq!(std_results[0].point.id, 0, "std closest must be id=0");
+
+    // Compute recall: fraction of std top-k that appear in V2 top-k.
+    let std_ids: std::collections::HashSet<u64> =
+        std_results.iter().map(|r| r.point.id).collect();
+    let v2_ids: std::collections::HashSet<u64> =
+        v2_results.iter().map(|r| r.point.id).collect();
+    let overlap = std_ids.intersection(&v2_ids).count();
+    let recall = overlap as f64 / k as f64;
+    assert!(
+        recall >= 0.7,
+        "V2 recall ({recall:.2}) must be >= 0.70 vs standard path"
+    );
+}
