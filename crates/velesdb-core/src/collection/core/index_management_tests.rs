@@ -599,18 +599,39 @@ mod tests {
     }
 
     #[test]
-    fn test_build_prefilter_bitmap_neq_returns_none() {
+    fn test_build_prefilter_bitmap_neq_uses_universe_subtraction() {
         let (collection, _temp) = create_test_collection();
         collection
             .create_index("category")
             .expect("test: index creation");
+
+        // Manually populate: 3 tech (IDs 1,5,10) + 2 science (IDs 2,7)
+        {
+            let indexes = collection.secondary_indexes.read();
+            if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
+                let mut t = tree.write();
+                t.insert(
+                    crate::index::JsonValue::String("tech".to_string()),
+                    vec![1, 5, 10],
+                );
+                t.insert(
+                    crate::index::JsonValue::String("science".to_string()),
+                    vec![2, 7],
+                );
+            }
+        }
 
         let filter = crate::filter::Filter::new(crate::filter::Condition::Neq {
             field: "category".to_string(),
             value: serde_json::Value::String("tech".to_string()),
         });
         let bitmap = collection.build_prefilter_bitmap(&filter);
-        assert!(bitmap.is_none(), "Neq returns None (needs universe bitmap)");
+        assert!(bitmap.is_some(), "Neq should return Some (universe - eq)");
+        let bm = bitmap.unwrap();
+        // Universe = {1,2,5,7,10}, eq("tech") = {1,5,10}, NEQ = {2,7}
+        assert_eq!(bm.len(), 2, "Neq should exclude tech points");
+        assert!(bm.contains(2));
+        assert!(bm.contains(7));
     }
 
     // =========================================================================
