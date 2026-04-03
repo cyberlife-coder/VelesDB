@@ -194,11 +194,52 @@ fn bench_bfs_dense_graph(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Benchmark: Edge mutation throughput with lazy CSR rebuild
+// ---------------------------------------------------------------------------
+
+/// Measures `add_edge` throughput on `ConcurrentEdgeStore` with lazy CSR.
+///
+/// The lazy rebuild (via `csr_dirty` flag) defers the O(N+E) snapshot
+/// rebuild to the next read, so pure write throughput should be high.
+fn bench_add_edge_throughput(c: &mut Criterion) {
+    use velesdb_core::collection::graph::ConcurrentEdgeStore;
+
+    let mut group = c.benchmark_group("add_edge_throughput");
+    let labels = ["KNOWS", "FOLLOWS", "LIKES", "WORKS_AT", "CREATED"];
+
+    for &batch_size in &[1_000u64, 10_000] {
+        group.bench_with_input(
+            BenchmarkId::new("lazy_csr", batch_size),
+            &batch_size,
+            |b, &n| {
+                b.iter_with_setup(
+                    || ConcurrentEdgeStore::with_shards(4),
+                    |store| {
+                        for eid in 0..n {
+                            let src = eid % 500;
+                            let tgt = (eid + 1) % 500;
+                            let label = labels[(eid as usize) % labels.len()];
+                            if let Ok(edge) = GraphEdge::new(eid, src, tgt, label) {
+                                let _ = store.add_edge(edge);
+                            }
+                        }
+                        black_box(&store);
+                    },
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bfs_edgestore_vs_csr,
     bench_bfs_csr_with_predicate,
     bench_csr_build_time,
     bench_bfs_dense_graph,
+    bench_add_edge_throughput,
 );
 criterion_main!(benches);
