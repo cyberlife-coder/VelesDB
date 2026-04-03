@@ -155,7 +155,7 @@ impl EdgePredicate for LabelFilter {
 pub struct NoFilter;
 
 impl EdgePredicate for NoFilter {
-    #[inline(always)]
+    #[inline]
     fn matches(&self, _target: u64, _edge_id: u64, _label_id: LabelId) -> bool {
         true
     }
