@@ -9,6 +9,11 @@ impl Collection {
         // Try simple Eq lookup first (fastest path).
         if let Some((field_name, key)) = Self::extract_index_lookup_condition(cond) {
             let ids = self.secondary_index_lookup(&field_name, &key)?;
+            // Skip index path when too many hits — sequential scan with early
+            // exit is faster than hydrating thousands of index results.
+            if ids.len() > execution_limit.saturating_mul(50).max(1000) {
+                return None; // Fall through to scan
+            }
             let filter =
                 crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
             return Some(self.scan_ids_with_filter(&ids, &filter, execution_limit));

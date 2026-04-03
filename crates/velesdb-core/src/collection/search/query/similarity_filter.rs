@@ -235,8 +235,14 @@ impl Collection {
     ) -> Vec<SearchResult> {
         // Try index-accelerated scan: extract the first Eq condition and use
         // the secondary index to get candidate IDs, then post-filter.
+        // Skip when the index returns too many candidates relative to the limit —
+        // sequential scan with early exit is faster than hydrating thousands of
+        // index hits (e.g., IsMobile=1 matching 20% of rows).
         if let Some(candidate_ids) = self.try_index_accelerated_ids(filter) {
-            return self.scan_candidate_ids(&candidate_ids, filter, limit);
+            if candidate_ids.len() <= limit.saturating_mul(50).max(1000) {
+                return self.scan_candidate_ids(&candidate_ids, filter, limit);
+            }
+            // Fall through to sequential scan — index has too many hits
         }
 
         // Full sequential scan (slow fallback for non-indexed conditions).
