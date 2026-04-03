@@ -14,7 +14,7 @@
 use super::helpers::PostcardPersistence;
 use super::label_table::{LabelId, LabelTable};
 use crate::error::{Error, Result};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -108,6 +108,56 @@ impl GraphEdge {
     #[must_use]
     pub fn property(&self, name: &str) -> Option<&Value> {
         self.properties.get(name)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EdgePredicate trait and filters (Task 7: predicate pushdown)
+// ---------------------------------------------------------------------------
+
+/// Trait for predicate pushdown filtering in [`CsrSnapshot`].
+///
+/// Implementations evaluate whether an edge should be included in traversal
+/// results directly at the CSR level, avoiding materialisation of non-matching
+/// edges.
+pub trait EdgePredicate: Send + Sync {
+    /// Returns `true` if the edge `(target, edge_id, label_id)` should be
+    /// included in the result set.
+    fn matches(&self, target: u64, edge_id: u64, label_id: LabelId) -> bool;
+}
+
+/// Filters edges by a set of allowed [`LabelId`]s.
+///
+/// Only edges whose label is in the `allowed` set pass the predicate.
+pub struct LabelFilter {
+    allowed: FxHashSet<LabelId>,
+}
+
+impl LabelFilter {
+    /// Creates a new `LabelFilter` accepting only the given label IDs.
+    #[must_use]
+    pub fn new(allowed: FxHashSet<LabelId>) -> Self {
+        Self { allowed }
+    }
+}
+
+impl EdgePredicate for LabelFilter {
+    #[inline]
+    fn matches(&self, _target: u64, _edge_id: u64, label_id: LabelId) -> bool {
+        self.allowed.contains(&label_id)
+    }
+}
+
+/// Accepts all edges (no-op predicate).
+///
+/// Optimised away by monomorphisation — the compiler inlines the constant
+/// `true` return, producing zero overhead compared to an unfiltered path.
+pub struct NoFilter;
+
+impl EdgePredicate for NoFilter {
+    #[inline(always)]
+    fn matches(&self, _target: u64, _edge_id: u64, _label_id: LabelId) -> bool {
+        true
     }
 }
 
@@ -250,6 +300,31 @@ impl CsrSnapshot {
     #[inline]
     pub fn has_label(&self, label: &str) -> bool {
         self.label_to_idx.contains_key(label)
+    }
+
+    /// Returns an iterator over neighbors that match the given predicate.
+    ///
+    /// Only edges for which `predicate.matches(target, edge_id, label_id)`
+    /// returns `true` are yielded. Non-matching edges are skipped without
+    /// materialisation.
+    ///
+    /// Each yielded item is `(target_id, edge_id, label_id)`.
+    pub fn neighbors_filtered<'a, P: EdgePredicate>(
+        &'a self,
+        node_id: u64,
+        predicate: &'a P,
+    ) -> impl Iterator<Item = (u64, u64, LabelId)> + 'a {
+        let (start, end) = self.range_of(node_id).unwrap_or((0, 0));
+        (start..end).filter_map(move |i| {
+            let target = self.targets[i];
+            let eid = self.edge_ids[i];
+            let lid = self.label_ids[i];
+            if predicate.matches(target, eid, lid) {
+                Some((target, eid, lid))
+            } else {
+                None
+            }
+        })
     }
 
     /// Returns a reference to the internal offsets array (for testing/validation).

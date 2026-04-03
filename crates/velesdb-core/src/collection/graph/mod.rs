@@ -84,7 +84,7 @@ pub use degree_router::{
     DegreeAdaptiveStorage, DegreeRouter, EdgeIndex, HashSetEdgeIndex, VecEdgeIndex,
     DEFAULT_DEGREE_THRESHOLD,
 };
-pub use edge::{CsrSnapshot, EdgeStore, GraphEdge};
+pub use edge::{CsrSnapshot, EdgeStore, GraphEdge, EdgePredicate, LabelFilter, NoFilter};
 // Re-exported for use by ConcurrentEdgeStore (Task 5) and other internal consumers.
 #[allow(unused_imports)]
 pub(crate) use edge::SnapshotBuilder;
@@ -100,4 +100,4 @@ pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
 pub use streaming::{
     bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,
 };
-pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH, bfs_traverse_csr};
+pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH, bfs_traverse_csr, bfs_traverse_csr_filtered};

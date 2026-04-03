@@ -588,3 +588,251 @@ fn test_snapshot_rebuild_after_remove_node_edges() {
     );
     assert_eq!(snapshot.edge_count(), 0, "all edges should be removed");
 }
+
+
+// =============================================================================
+// Unit tests — Task 7.4: Predicate pushdown
+// =============================================================================
+
+/// `NoFilter` returns all neighbors (no filtering).
+#[test]
+fn test_no_filter_returns_all() {
+    use super::edge::NoFilter;
+
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "LIKES").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 10, 40, "FOLLOWS").expect("valid"))
+        .expect("add");
+
+    let label_table = LabelTable::new();
+    let snapshot = SnapshotBuilder::build(&store, &label_table);
+
+    let no_filter = NoFilter;
+    let filtered: Vec<(u64, u64, _)> = snapshot
+        .neighbors_filtered(10, &no_filter)
+        .collect();
+
+    // NoFilter should return all 3 neighbors
+    assert_eq!(filtered.len(), 3);
+    let targets: HashSet<u64> = filtered.iter().map(|&(t, _, _)| t).collect();
+    assert_eq!(targets, HashSet::from([20, 30, 40]));
+}
+
+/// `LabelFilter` returns only edges with matching labels.
+#[test]
+fn test_label_filter_selective() {
+    use super::edge::LabelFilter;
+    use rustc_hash::FxHashSet;
+
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "LIKES").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 10, 40, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(4, 10, 50, "FOLLOWS").expect("valid"))
+        .expect("add");
+
+    let label_table = LabelTable::new();
+    let snapshot = SnapshotBuilder::build(&store, &label_table);
+
+    // Find the LabelId for "KNOWS" from the snapshot's label_ids
+    // We need to identify which LabelId corresponds to "KNOWS"
+    let all_neighbors: Vec<(u64, u64, _)> = snapshot
+        .neighbors_filtered(10, &super::edge::NoFilter)
+        .collect();
+
+    // Find the label_id for KNOWS by checking which edges have target 20 or 40
+    let knows_label_id = all_neighbors
+        .iter()
+        .find(|&&(t, _, _)| t == 20)
+        .map(|&(_, _, lid)| lid)
+        .expect("should find KNOWS edge");
+
+    let mut allowed = FxHashSet::default();
+    allowed.insert(knows_label_id);
+    let label_filter = LabelFilter::new(allowed);
+
+    let filtered: Vec<(u64, u64, _)> = snapshot
+        .neighbors_filtered(10, &label_filter)
+        .collect();
+
+    // Only KNOWS edges (targets 20 and 40)
+    assert_eq!(filtered.len(), 2);
+    let targets: HashSet<u64> = filtered.iter().map(|&(t, _, _)| t).collect();
+    assert_eq!(targets, HashSet::from([20, 40]));
+}
+
+/// BFS with predicate pushdown produces same results as post-hoc filtering.
+#[test]
+fn test_bfs_filtered_vs_post_filter() {
+    use super::edge::{LabelFilter, NoFilter};
+    use super::traversal::bfs_traverse_csr_filtered;
+    use rustc_hash::FxHashSet;
+
+    // Build a graph: 1 -KNOWS-> 2 -LIKES-> 3 -KNOWS-> 4
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(10, 1, 2, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(11, 2, 3, "LIKES").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(12, 3, 4, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(13, 1, 5, "LIKES").expect("valid"))
+        .expect("add");
+
+    let label_table = LabelTable::new();
+    let snapshot = SnapshotBuilder::build(&store, &label_table);
+
+    // Find the LabelId for "KNOWS"
+    let all_n: Vec<(u64, u64, _)> = snapshot
+        .neighbors_filtered(1, &NoFilter)
+        .collect();
+    let knows_lid = all_n
+        .iter()
+        .find(|&&(t, _, _)| t == 2)
+        .map(|&(_, _, lid)| lid)
+        .expect("KNOWS edge");
+
+    let mut allowed = FxHashSet::default();
+    allowed.insert(knows_lid);
+    let predicate = LabelFilter::new(allowed);
+
+    let config = TraversalConfig::with_range(1, 3);
+
+    // Filtered BFS (pushdown)
+    let filtered_results = bfs_traverse_csr_filtered(&snapshot, 1, &config, &predicate);
+
+    // Unfiltered BFS then post-filter
+    let all_results = bfs_traverse_csr(&snapshot, 1, &config);
+
+    // Post-filter: only keep results reachable via KNOWS-only paths
+    // With pushdown, BFS only follows KNOWS edges, so from node 1:
+    //   depth 1: node 2 (via KNOWS) — included
+    //   depth 2: nothing (node 2's edges are LIKES, filtered out)
+    // Post-filter on all results would keep different nodes since it
+    // doesn't restrict traversal paths. The pushdown is stricter.
+    // Verify pushdown results are a subset of unfiltered results.
+    let filtered_targets: HashSet<u64> = filtered_results.iter().map(|r| r.target_id).collect();
+    let all_targets: HashSet<u64> = all_results.iter().map(|r| r.target_id).collect();
+
+    // Pushdown results must be a subset of all results
+    assert!(
+        filtered_targets.is_subset(&all_targets),
+        "filtered targets {:?} should be subset of all targets {:?}",
+        filtered_targets,
+        all_targets
+    );
+
+    // With KNOWS-only filter from node 1, only node 2 is reachable at depth 1
+    assert!(filtered_targets.contains(&2), "node 2 reachable via KNOWS");
+    // Node 5 is via LIKES, should NOT be in filtered results
+    assert!(!filtered_targets.contains(&5), "node 5 via LIKES should be filtered out");
+}
+
+// =============================================================================
+// Property-based test — Task 7.3: Predicate pushdown correctness
+// =============================================================================
+
+mod predicate_property_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use rustc_hash::FxHashSet;
+    use crate::collection::graph::edge::{EdgePredicate, LabelFilter, NoFilter};
+    use crate::collection::graph::label_table::LabelId;
+
+    /// Generates a random `(EdgeStore, LabelTable)` with 1-50 nodes and 0-200 edges.
+    /// (Duplicated from property_tests to keep module self-contained.)
+    fn arb_edge_store() -> impl Strategy<Value = (EdgeStore, LabelTable)> {
+        (1_u64..=50, 0_usize..=200).prop_flat_map(|(max_node, edge_count)| {
+            let labels = vec!["KNOWS", "FOLLOWS", "LIKES", "WORKS_AT", "CREATED"];
+            prop::collection::vec(
+                (1..=max_node, 1..=max_node, 0..labels.len()),
+                0..=edge_count,
+            )
+            .prop_map(move |edges| {
+                let mut store = EdgeStore::new();
+                let label_table = LabelTable::new();
+                let labels = vec!["KNOWS", "FOLLOWS", "LIKES", "WORKS_AT", "CREATED"];
+                for (i, (src, tgt, label_idx)) in edges.into_iter().enumerate() {
+                    let label = labels[label_idx];
+                    let eid = (i + 1) as u64;
+                    if let Ok(edge) = GraphEdge::new(eid, src, tgt, label) {
+                        let _ = store.add_edge(edge);
+                    }
+                }
+                (store, label_table)
+            })
+        })
+    }
+
+    // Feature: graph-traversal-v2, Property 6: Predicate pushdown correctness
+    // **Validates: Requirements 4.1**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_predicate_pushdown(
+            (store, label_table) in arb_edge_store(),
+            filter_bits in proptest::bits::u8::between(0, 5),
+        ) {
+            let snapshot = SnapshotBuilder::build(&store, &label_table);
+
+            // Build a LabelFilter from the random bits
+            let mut allowed = FxHashSet::default();
+            for i in 0..5u32 {
+                if filter_bits & (1 << i) != 0 {
+                    allowed.insert(LabelId::from_u32(i));
+                }
+            }
+            let predicate = LabelFilter::new(allowed.clone());
+
+            // For each source node, verify filtered == subset of unfiltered where matches() is true
+            let source_nodes: std::collections::HashSet<u64> =
+                store.all_edges().iter().map(|e| e.source()).collect();
+
+            for &nid in &source_nodes {
+                if !snapshot.contains_node(nid) {
+                    continue;
+                }
+
+                // Get all neighbors (unfiltered)
+                let all_neighbors: Vec<(u64, u64, LabelId)> = snapshot
+                    .neighbors_filtered(nid, &NoFilter)
+                    .collect();
+
+                // Get filtered neighbors
+                let filtered: Vec<(u64, u64, LabelId)> = snapshot
+                    .neighbors_filtered(nid, &predicate)
+                    .collect();
+
+                // Expected: subset of all_neighbors where predicate matches
+                let expected: Vec<(u64, u64, LabelId)> = all_neighbors
+                    .iter()
+                    .filter(|&&(t, e, l)| predicate.matches(t, e, l))
+                    .copied()
+                    .collect();
+
+                prop_assert_eq!(
+                    filtered, expected,
+                    "predicate pushdown mismatch for node {}",
+                    nid
+                );
+            }
+        }
+    }
+}

@@ -6,8 +6,8 @@
 //! - Edge count
 
 use super::{ConcurrentEdgeStore, GraphEdge};
-use super::super::edge::CsrSnapshot;
-use super::super::traversal::{bfs_traverse_csr, TraversalConfig, TraversalResult};
+use super::super::edge::{CsrSnapshot, EdgePredicate};
+use super::super::traversal::{bfs_traverse_csr, bfs_traverse_csr_filtered, TraversalConfig, TraversalResult};
 use arc_swap::Guard;
 use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
@@ -259,5 +259,21 @@ impl ConcurrentEdgeStore {
     pub fn traverse_bfs_csr(&self, source: u64, config: &TraversalConfig) -> Vec<TraversalResult> {
         let snapshot = self.csr_snapshot.load();
         bfs_traverse_csr(&snapshot, source, config)
+    }
+
+    /// BFS traversal with predicate pushdown on the CSR snapshot.
+    ///
+    /// Loads the current snapshot atomically and delegates to
+    /// [`bfs_traverse_csr_filtered`] which applies the predicate at the
+    /// CSR level, avoiding materialisation of non-matching edges.
+    #[must_use]
+    pub fn traverse_bfs_filtered<P: EdgePredicate>(
+        &self,
+        source: u64,
+        config: &TraversalConfig,
+        predicate: &P,
+    ) -> Vec<TraversalResult> {
+        let snapshot = self.csr_snapshot.load();
+        bfs_traverse_csr_filtered(&snapshot, source, config, predicate)
     }
 }
