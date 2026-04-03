@@ -182,6 +182,77 @@ fn wal_reopen_preserves_vectors() {
     assert_eq!(coll.len(), 30, "point count must be 30 after reopen");
 }
 
+// ── Crash recovery: WAL gap detection on reopen (Task 5.4) ──────────────
+
+/// Simulates a "crash" by inserting vectors, flushing WAL only (not HNSW),
+/// then reopening. The recovery path should detect the gap and re-index.
+#[test]
+fn crash_recovery_reindexes_gap_vectors() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll_dir = tmp.path().join("bulk_v2_crash_recovery");
+    let dim = 8;
+
+    {
+        let coll = create_test_collection(&coll_dir, dim, DistanceMetric::Euclidean);
+
+        // Insert vectors — they go to WAL + mmap + HNSW.
+        let points: Vec<Point> = (0..20)
+            .map(|i| Point::without_payload(i, make_vector(i, dim)))
+            .collect();
+        coll.upsert_bulk(&points).expect("upsert_bulk");
+
+        // Flush WAL only (not HNSW save) to simulate partial persistence.
+        // The fast flush path skips HNSW save unless threshold exceeded.
+        coll.flush().expect("flush");
+
+        // Verify search works before "crash".
+        let results = coll.search(&make_vector(0, dim), 3).expect("search");
+        assert!(!results.is_empty(), "search must work before crash");
+    }
+    // Collection dropped — simulates crash (HNSW may not be saved).
+
+    // Reopen — recovery should detect gap and re-index.
+    #[allow(deprecated)]
+    let coll = Collection::open(coll_dir).expect("reopen after crash");
+    let results = coll
+        .search(&make_vector(0, dim), 5)
+        .expect("search after recovery");
+    assert!(
+        !results.is_empty(),
+        "vectors must be recoverable after crash"
+    );
+    assert_eq!(coll.len(), 20, "all 20 vectors must be recovered");
+}
+
+/// Validates that flush_full persists everything (WAL + HNSW + vectors.idx),
+/// so no recovery is needed on reopen.
+#[test]
+fn flush_full_no_recovery_needed() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll_dir = tmp.path().join("bulk_v2_flush_full");
+    let dim = 8;
+
+    {
+        let coll = create_test_collection(&coll_dir, dim, DistanceMetric::Cosine);
+        let points: Vec<Point> = (0..40)
+            .map(|i| Point::without_payload(i, make_vector(i, dim)))
+            .collect();
+        coll.upsert_bulk(&points).expect("upsert_bulk");
+        coll.flush_full().expect("flush_full");
+    }
+
+    #[allow(deprecated)]
+    let coll = Collection::open(coll_dir).expect("reopen");
+    let results = coll
+        .search(&make_vector(0, dim), 5)
+        .expect("search after flush_full reopen");
+    assert!(
+        !results.is_empty(),
+        "vectors must be intact after flush_full + reopen"
+    );
+    assert_eq!(coll.len(), 40);
+}
+
 // ── AsyncIndexBuilder config serde backward compat ──────────────────────
 
 #[test]
