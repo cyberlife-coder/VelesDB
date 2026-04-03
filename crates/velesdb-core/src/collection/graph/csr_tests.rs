@@ -5,6 +5,7 @@
 
 use super::edge::{EdgeStore, GraphEdge, SnapshotBuilder};
 use super::label_table::LabelTable;
+use super::traversal::{bfs_traverse, bfs_traverse_csr, TraversalConfig};
 use std::collections::HashSet;
 
 // =============================================================================
@@ -321,4 +322,159 @@ mod property_tests {
             }
         }
     }
+
+    /// Generates a valid `TraversalConfig` with `min_depth <= max_depth` and `limit > 0`.
+    fn arb_traversal_config() -> impl Strategy<Value = TraversalConfig> {
+        (1_u32..=5, 0_u32..=3, 1_usize..=50).prop_map(|(max_depth, min_offset, limit)| {
+            let min_depth = if min_offset >= max_depth {
+                1
+            } else {
+                max_depth - min_offset
+            };
+            TraversalConfig {
+                min_depth,
+                max_depth,
+                limit,
+                rel_types: Vec::new(),
+            }
+        })
+    }
+
+    // Feature: graph-traversal-v2, Property 3: BFS equivalence CSR vs EdgeStore
+    // **Validates: Requirements 2.1, 2.4**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_bfs_equivalence(
+            (store, label_table) in arb_edge_store(),
+            config in arb_traversal_config(),
+        ) {
+            let snapshot = SnapshotBuilder::build(&store, &label_table);
+
+            // Pick a source node from the store (first source node, or skip if empty).
+            let source_nodes: Vec<u64> = store.all_edges().iter().map(|e| e.source()).collect();
+            if let Some(&source_id) = source_nodes.first() {
+                let csr_results = bfs_traverse_csr(&snapshot, source_id, &config);
+                let store_results = bfs_traverse(&store, source_id, &config);
+
+                // Compare as sets of (target_id, depth).
+                let csr_set: HashSet<(u64, u32)> = csr_results
+                    .iter()
+                    .map(|r| (r.target_id, r.depth))
+                    .collect();
+                let store_set: HashSet<(u64, u32)> = store_results
+                    .iter()
+                    .map(|r| (r.target_id, r.depth))
+                    .collect();
+
+                prop_assert_eq!(csr_set, store_set,
+                    "BFS equivalence failed for source={}, config=({},{}), limit={}",
+                    source_id, config.min_depth, config.max_depth, config.limit);
+            }
+        }
+    }
+
+    // Feature: graph-traversal-v2, Property 4: BFS limit invariant
+    // **Validates: Requirements 2.5**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_bfs_limit(
+            (store, label_table) in arb_edge_store(),
+            limit in 1_usize..100,
+        ) {
+            let snapshot = SnapshotBuilder::build(&store, &label_table);
+
+            let source_nodes: Vec<u64> = store.all_edges().iter().map(|e| e.source()).collect();
+            if let Some(&source_id) = source_nodes.first() {
+                let config = TraversalConfig::with_range(1, 5).with_limit(limit);
+                let results = bfs_traverse_csr(&snapshot, source_id, &config);
+
+                prop_assert!(results.len() <= limit,
+                    "BFS returned {} results but limit was {}",
+                    results.len(), limit);
+            }
+        }
+    }
+}
+
+
+// =============================================================================
+// Unit tests — Task 3.4: bfs_traverse_csr
+// =============================================================================
+
+/// Source not in snapshot → empty Vec.
+#[test]
+fn test_bfs_csr_missing_source() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("valid"))
+        .expect("add");
+
+    let label_table = LabelTable::new();
+    let snapshot = SnapshotBuilder::build(&store, &label_table);
+
+    let config = TraversalConfig::with_range(1, 3);
+    let results = bfs_traverse_csr(&snapshot, 999, &config);
+    assert!(results.is_empty(), "missing source should return empty Vec");
+}
+
+/// Verify min_depth/max_depth filtering on a known graph.
+#[test]
+fn test_bfs_csr_depth_range() {
+    // Chain: 1 -> 2 -> 3 -> 4
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(100, 1, 2, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(101, 2, 3, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(102, 3, 4, "KNOWS").expect("valid"))
+        .expect("add");
+
+    let label_table = LabelTable::new();
+    let snapshot = SnapshotBuilder::build(&store, &label_table);
+
+    // min_depth=2, max_depth=3 → should only return nodes at depth 2 and 3
+    let config = TraversalConfig::with_range(2, 3);
+    let results = bfs_traverse_csr(&snapshot, 1, &config);
+
+    assert!(
+        !results.iter().any(|r| r.depth < 2),
+        "no results below min_depth"
+    );
+    assert!(
+        results.iter().any(|r| r.target_id == 3 && r.depth == 2),
+        "node 3 at depth 2"
+    );
+    assert!(
+        results.iter().any(|r| r.target_id == 4 && r.depth == 3),
+        "node 4 at depth 3"
+    );
+}
+
+/// Verify results.len() <= limit.
+#[test]
+fn test_bfs_csr_limit_respected() {
+    // Star graph: 1 -> {2, 3, 4, 5, 6}
+    let mut store = EdgeStore::new();
+    for i in 2..=6 {
+        store
+            .add_edge(GraphEdge::new(i, 1, i, "LINK").expect("valid"))
+            .expect("add");
+    }
+
+    let label_table = LabelTable::new();
+    let snapshot = SnapshotBuilder::build(&store, &label_table);
+
+    let config = TraversalConfig::with_range(1, 1).with_limit(3);
+    let results = bfs_traverse_csr(&snapshot, 1, &config);
+
+    assert!(
+        results.len() <= 3,
+        "expected at most 3 results, got {}",
+        results.len()
+    );
 }
