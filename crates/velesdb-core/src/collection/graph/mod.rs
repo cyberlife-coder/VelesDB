@@ -84,7 +84,7 @@ pub use degree_router::{
     DegreeAdaptiveStorage, DegreeRouter, EdgeIndex, HashSetEdgeIndex, VecEdgeIndex,
     DEFAULT_DEGREE_THRESHOLD,
 };
-pub use edge::{CsrSnapshot, EdgeStore, GraphEdge, EdgePredicate, LabelFilter, NoFilter};
+pub use edge::{CsrSnapshot, EdgeStore, GraphEdge, EdgePredicate, LabelFilter, NoFilter, AdjacencySource};
 // Re-exported for use by ConcurrentEdgeStore (Task 5) and other internal consumers.
 #[allow(unused_imports)]
 pub(crate) use edge::SnapshotBuilder;

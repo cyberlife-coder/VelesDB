@@ -161,6 +161,39 @@ impl EdgePredicate for NoFilter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// AdjacencySource trait (Task 9: generic BFS)
+// ---------------------------------------------------------------------------
+
+/// Source of adjacency data for traversal algorithms.
+///
+/// Abstracts neighbor access so that BFS/DFS algorithms can work with
+/// either [`CsrSnapshot`] (zero-copy) or [`EdgeStore`] (legacy) without
+/// code duplication.
+pub trait AdjacencySource {
+    /// Returns the target node IDs reachable from `node_id`.
+    fn neighbors(&self, node_id: u64) -> Vec<u64>;
+}
+
+impl AdjacencySource for CsrSnapshot {
+    /// Returns neighbors from the CSR contiguous array (copies to Vec).
+    #[inline]
+    fn neighbors(&self, node_id: u64) -> Vec<u64> {
+        self.neighbors(node_id).to_vec()
+    }
+}
+
+impl AdjacencySource for EdgeStore {
+    /// Returns outgoing neighbor target IDs from the edge index.
+    #[inline]
+    fn neighbors(&self, node_id: u64) -> Vec<u64> {
+        self.get_outgoing(node_id)
+            .iter()
+            .map(|e| e.target())
+            .collect()
+    }
+}
+
 /// Immutable CSR (Compressed Sparse Row) snapshot of the graph for zero-copy traversals.
 ///
 /// All arrays are contiguous in memory for optimal cache locality during BFS/DFS.

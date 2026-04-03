@@ -836,3 +836,44 @@ mod predicate_property_tests {
         }
     }
 }
+
+
+// =============================================================================
+// Unit tests — Task 9: AdjacencySource trait
+// =============================================================================
+
+/// AdjacencySource on CsrSnapshot and EdgeStore return the same neighbor sets.
+#[test]
+fn test_adjacency_source_equivalence() {
+    use super::edge::AdjacencySource;
+
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "LIKES").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 20, 30, "FOLLOWS").expect("valid"))
+        .expect("add");
+
+    let label_table = LabelTable::new();
+    let snapshot = SnapshotBuilder::build(&store, &label_table);
+
+    // Compare AdjacencySource::neighbors for each source node
+    for &nid in &[10u64, 20, 30] {
+        let csr_neighbors: HashSet<u64> =
+            AdjacencySource::neighbors(&snapshot, nid).into_iter().collect();
+        let store_neighbors: HashSet<u64> =
+            AdjacencySource::neighbors(&store, nid).into_iter().collect();
+        assert_eq!(
+            csr_neighbors, store_neighbors,
+            "AdjacencySource mismatch for node {nid}"
+        );
+    }
+
+    // Non-existent node returns empty
+    assert!(AdjacencySource::neighbors(&snapshot, 999).is_empty());
+    assert!(AdjacencySource::neighbors(&store, 999).is_empty());
+}
