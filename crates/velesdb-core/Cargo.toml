@@ -364,5 +364,9 @@ name = "chunked_insert_recall_benchmark"
 harness = false
 
 [[bench]]
+name = "bulk_insert_v2_benchmark"
+harness = false
+
+[[bench]]
 name = "search_layer_benchmark"
 harness = false
