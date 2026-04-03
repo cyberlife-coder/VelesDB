@@ -28,10 +28,35 @@ impl Collection {
     ///
     /// Returns Ok(()) on success. Index creation is idempotent.
     pub fn create_index(&self, field_name: &str) -> Result<()> {
+        use crate::storage::PayloadStorage;
+
         let mut indexes = self.secondary_indexes.write();
+        let is_new = !indexes.contains_key(field_name);
         indexes
             .entry(field_name.to_string())
             .or_insert_with(|| SecondaryIndex::BTree(RwLock::new(BTreeMap::new())));
+
+        // Backfill: scan existing payloads to populate the new index.
+        if is_new {
+            drop(indexes); // Release write lock before reading payloads
+            let payload_storage = self.payload_storage.read();
+            let ids = PayloadStorage::ids(&*payload_storage);
+            let indexes = self.secondary_indexes.read();
+            if let Some(index) = indexes.get(field_name) {
+                let SecondaryIndex::BTree(ref tree) = index;
+                let mut tree_guard = tree.write();
+                for id in ids {
+                    if let Ok(Some(payload)) = PayloadStorage::retrieve(&*payload_storage, id) {
+                        if let Some(val) = payload.get(field_name) {
+                            if let Some(key) = JsonValue::from_json(val) {
+                                tree_guard.entry(key).or_default().push(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 

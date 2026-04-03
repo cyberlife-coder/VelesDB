@@ -213,6 +213,7 @@ impl Collection {
 
         self.update_text_index_from_raw(ids, payloads);
         self.update_label_index_from_raw(ids, payloads);
+        self.update_secondary_indexes_from_raw(ids, payloads);
 
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
@@ -302,6 +303,34 @@ impl Collection {
         }
 
         Ok(())
+    }
+
+    /// Batch-updates secondary indexes from raw payload slices.
+    ///
+    /// For each point with a payload, updates all secondary indexes that
+    /// have a matching field. This is the bulk equivalent of
+    /// `update_secondary_indexes_on_upsert` from `crud_helpers.rs`.
+    fn update_secondary_indexes_from_raw(
+        &self,
+        ids: &[u64],
+        payloads: Option<&[Option<serde_json::Value>]>,
+    ) {
+        let Some(ps) = payloads else { return };
+        let indexes = self.secondary_indexes.read();
+        if indexes.is_empty() {
+            return;
+        }
+        for (i, opt) in ps.iter().enumerate() {
+            if let Some(payload) = opt {
+                for (field, index) in indexes.iter() {
+                    if let Some(val) = payload.get(field) {
+                        if let Some(key) = crate::index::JsonValue::from_json(val) {
+                            self.insert_into_secondary_index(index, key, ids[i]);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Updates BM25 text index from raw payload slices.
