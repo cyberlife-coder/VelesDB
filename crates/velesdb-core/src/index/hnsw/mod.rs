@@ -21,6 +21,7 @@
 // ============================================================================
 pub(crate) mod auto_ef;
 mod backend;
+pub(crate) mod direct_writer;
 mod index;
 mod mappings;
 pub mod native;
@@ -40,6 +41,8 @@ mod vector_store;
 // ============================================================================
 #[cfg(test)]
 mod auto_ef_tests;
+#[cfg(test)]
+mod direct_writer_tests;
 #[cfg(test)]
 mod gpu_rerank_tests;
 #[cfg(test)]

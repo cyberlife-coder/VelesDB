@@ -419,6 +419,39 @@ impl NativeHnswInner {
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.with_vectors_read(f),
         }
     }
+
+    /// Executes a closure with read access to the contiguous vector storage.
+    ///
+    /// Alias for [`with_contiguous_vectors`](Self::with_contiguous_vectors)
+    /// with explicit read semantics for clarity at call sites.
+    #[inline]
+    pub fn with_contiguous_vectors_read<R: Default>(
+        &self,
+        f: impl FnOnce(&crate::perf_optimizations::ContiguousVectors) -> R,
+    ) -> R {
+        self.with_contiguous_vectors(f)
+    }
+
+    /// Executes a closure with mutable access to the contiguous vector storage.
+    ///
+    /// Acquires a write lock on the underlying `NativeHnsw.vectors` `RwLock`.
+    /// Used by `DirectVectorWriter` to write vectors directly during bulk insert.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Internal`] if vector storage is not initialized.
+    /// Propagates any error returned by the closure.
+    ///
+    /// [`Error::Internal`]: crate::error::Error::Internal
+    pub fn with_contiguous_vectors_mut<R>(
+        &self,
+        f: impl FnOnce(&mut crate::perf_optimizations::ContiguousVectors) -> crate::error::Result<R>,
+    ) -> crate::error::Result<R> {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.with_vectors_write(f),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.with_vectors_write(f),
+        }
+    }
 }
 
 // ============================================================================
