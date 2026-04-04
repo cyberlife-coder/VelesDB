@@ -1,5 +1,5 @@
 """
-Multi-query fusion demo - VelesDB v1.11.0
+Multi-query fusion demo - VelesDB v1.11.1
 
 Demonstrates why single-query vector search misses relevant documents,
 and how multi-query fusion with different strategies fixes retrieval.

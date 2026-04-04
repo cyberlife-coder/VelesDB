@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 import hashlib
-import random
+import secrets
 import time
 
 
 def make_initial_id_counter() -> int:
     """Generate an initial counter value for ID generation.
 
-    Uses the current millisecond timestamp plus a large random offset to
-    prevent collisions between concurrent instances or process restarts.
+    Uses the current millisecond timestamp plus a cryptographically secure
+    random offset to prevent collisions between concurrent instances or
+    process restarts.
 
     Returns:
         A positive integer suitable as an ID counter seed.
     """
-    return int(time.time() * 1000) + random.randint(1_000_000, 9_999_999)
+    return int(time.time() * 1000) + secrets.randbelow(9_000_000) + 1_000_000
 
 
 def stable_hash_id(value: str) -> int:

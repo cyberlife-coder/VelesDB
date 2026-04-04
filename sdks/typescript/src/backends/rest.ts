@@ -19,6 +19,7 @@ import type {
   GetEdgesOptions,
   GraphEdge,
   TraverseRequest,
+  TraverseParallelRequest,
   TraverseResponse,
   DegreeResponse,
   QueryOptions,
@@ -57,6 +58,7 @@ import {
   addEdge as _addEdge,
   getEdges as _getEdges,
   traverseGraph as _traverseGraph,
+  traverseParallel as _traverseParallel,
   getNodeDegree as _getNodeDegree,
   createGraphCollection as _createGraphCollection,
 } from './graph-backend';
@@ -423,6 +425,11 @@ export class RestBackend implements IVelesDBBackend {
   async traverseGraph(collection: string, req: TraverseRequest): Promise<TraverseResponse> {
     this.ensureInitialized();
     return _traverseGraph(this.asCrudTransport(), collection, req);
+  }
+
+  async traverseParallel(collection: string, req: TraverseParallelRequest): Promise<TraverseResponse> {
+    this.ensureInitialized();
+    return _traverseParallel(this.asCrudTransport(), collection, req);
   }
 
   async getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse> {

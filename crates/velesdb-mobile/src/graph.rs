@@ -174,14 +174,36 @@ impl MobileGraphStore {
     /// * `max_depth` - Maximum traversal depth
     /// * `limit` - Maximum number of results
     pub fn bfs_traverse(&self, source_id: u64, max_depth: u32, limit: u32) -> Vec<TraversalResult> {
+        self.bfs_traverse_parallel(vec![source_id], max_depth, limit)
+    }
+
+    /// Performs multi-source BFS traversal with deduplication.
+    ///
+    /// Starts BFS from multiple source nodes simultaneously and deduplicates
+    /// results by target node ID (first-seen wins).
+    ///
+    /// # Arguments
+    ///
+    /// * `source_ids` - Starting node IDs
+    /// * `max_depth` - Maximum traversal depth
+    /// * `limit` - Maximum number of results
+    pub fn bfs_traverse_parallel(
+        &self,
+        source_ids: Vec<u64>,
+        max_depth: u32,
+        limit: u32,
+    ) -> Vec<TraversalResult> {
         use std::collections::{HashSet, VecDeque};
 
         let mut results: Vec<TraversalResult> = Vec::new();
         let mut visited: HashSet<u64> = HashSet::new();
         let mut queue: VecDeque<(u64, u32)> = VecDeque::new();
 
-        queue.push_back((source_id, 0));
-        visited.insert(source_id);
+        for &source_id in &source_ids {
+            if visited.insert(source_id) {
+                queue.push_back((source_id, 0));
+            }
+        }
 
         while let Some((node_id, depth)) = queue.pop_front() {
             if results.len() >= limit as usize {
@@ -194,8 +216,7 @@ impl MobileGraphStore {
 
             if depth < max_depth {
                 for edge in self.get_outgoing(node_id) {
-                    if !visited.contains(&edge.target) {
-                        visited.insert(edge.target);
+                    if visited.insert(edge.target) {
                         queue.push_back((edge.target, depth + 1));
                     }
                 }

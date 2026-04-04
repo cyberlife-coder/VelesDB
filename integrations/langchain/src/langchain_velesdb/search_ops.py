@@ -240,7 +240,7 @@ class SearchOpsMixin:
         self,
         query: str,
         k: int = 4,
-        filter: Optional[dict] = None,
+        metadata_filter: Optional[dict] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Search for documents with metadata filtering.
@@ -248,14 +248,14 @@ class SearchOpsMixin:
         Args:
             query: Query string to search for.
             k: Number of results to return. Defaults to 4.
-            filter: Metadata filter dict (VelesDB filter format).
+            metadata_filter: Metadata filter dict (VelesDB filter format).
             **kwargs: Additional arguments.
 
         Returns:
             List of Documents matching the query and filter.
         """
         query_embedding = self._embedding.embed_query(query)
-        results = self._run_vector_search(query_embedding, k, filter=filter)
+        results = self._run_vector_search(query_embedding, k, filter=metadata_filter)
         return _results_to_docs(results)
 
     def similarity_search_with_ef(

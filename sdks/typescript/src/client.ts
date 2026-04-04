@@ -17,6 +17,7 @@ import type {
   GetEdgesOptions,
   GraphEdge,
   TraverseRequest,
+  TraverseParallelRequest,
   TraverseResponse,
   DegreeResponse,
   QueryOptions,
@@ -712,6 +713,35 @@ export class VelesDB {
     }
 
     return this.backend.traverseGraph(collection, request);
+  }
+
+  /**
+   * Multi-source parallel BFS traversal with deduplication.
+   * 
+   * Starts BFS from multiple source nodes simultaneously and deduplicates
+   * results by path signature.
+   * 
+   * @param collection - Collection name
+   * @param request - Parallel traverse request with sources array
+   * @returns Traverse response with results, stats, and pagination
+   * 
+   * @example
+   * ```typescript
+   * const result = await db.traverseParallel('social', {
+   *   sources: [100, 200, 300],
+   *   maxDepth: 3,
+   *   limit: 50,
+   * });
+   * ```
+   */
+  async traverseParallel(collection: string, request: TraverseParallelRequest): Promise<TraverseResponse> {
+    this.ensureInitialized();
+
+    if (!Array.isArray(request.sources) || request.sources.length === 0) {
+      throw new ValidationError('At least one source node ID is required');
+    }
+
+    return this.backend.traverseParallel(collection, request);
   }
 
   /**

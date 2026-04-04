@@ -437,6 +437,11 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "get_edges",
     "traverse_graph",
     "get_node_degree",
+    "traverse_graph_parallel",
+    // Secondary Indexes
+    "create_index",
+    "drop_index",
+    "list_indexes",
 ];
 
 /// Test to ensure all registered commands have corresponding permissions

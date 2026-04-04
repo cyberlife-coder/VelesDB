@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-traverse-graph-parallel"
+description = "Enables the traverse_graph_parallel command without any pre-configured scope."
+commands.allow = ["traverse_graph_parallel"]
+
+[[permission]]
+identifier = "deny-traverse-graph-parallel"
+description = "Denies the traverse_graph_parallel command without any pre-configured scope."
+commands.deny = ["traverse_graph_parallel"]

@@ -182,6 +182,24 @@ impl Parser {
     }
 
     fn split_column_ref(input: &str) -> Option<(String, String)> {
+        let dot_index = Self::find_unquoted_dot(input)?;
+        let (left, right_with_dot) = input.split_at(dot_index);
+        let right = right_with_dot.strip_prefix('.')?;
+
+        if left.is_empty() || right.is_empty() {
+            return None;
+        }
+
+        Some((
+            strip_identifier_quotes(left),
+            strip_identifier_quotes(right),
+        ))
+    }
+
+    /// Scans `input` for the first `.` that is not inside backtick or
+    /// double-quote delimiters. Returns `None` when no unquoted dot is
+    /// found, when there are multiple dots, or when quotes are unbalanced.
+    fn find_unquoted_dot(input: &str) -> Option<usize> {
         let mut separator_index = None;
         let mut chars = input.char_indices().peekable();
         let mut in_backtick = false;
@@ -222,17 +240,6 @@ impl Parser {
             return None;
         }
 
-        let dot_index = separator_index?;
-        let (left, right_with_dot) = input.split_at(dot_index);
-        let right = right_with_dot.strip_prefix('.')?;
-
-        if left.is_empty() || right.is_empty() {
-            return None;
-        }
-
-        Some((
-            strip_identifier_quotes(left),
-            strip_identifier_quotes(right),
-        ))
+        separator_index
     }
 }
