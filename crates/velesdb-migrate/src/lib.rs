@@ -67,6 +67,7 @@ pub mod config;
 pub mod connectors;
 pub mod error;
 pub mod pipeline;
+pub(crate) mod pipeline_points;
 pub mod retry;
 pub mod source_config_builder;
 pub mod transform;

@@ -18,7 +18,7 @@ fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
 /// Converts scored triples `(id, score, payload)` to a JSON array of objects.
 ///
 /// Shared by `hybrid_search_impl`, `search_with_filter_impl`, and
-/// `hybrid_search_quantized` in `lib.rs`.
+/// `hybrid_search_quantized` in `hybrid_quantized.rs`.
 pub(crate) fn scored_triples_to_js(
     results: Vec<(u64, f32, Option<&serde_json::Value>)>,
 ) -> Result<JsValue, JsValue> {

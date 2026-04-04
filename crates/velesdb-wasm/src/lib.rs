@@ -51,6 +51,7 @@ mod fusion;
 mod graph;
 mod graph_persistence;
 mod graph_worker;
+mod hybrid_quantized;
 mod idb_helpers;
 mod parsing;
 mod persistence;

@@ -28,6 +28,7 @@ mod repl_collection_cmds;
 mod repl_commands;
 mod repl_config_cmds;
 mod repl_data_cmds;
+mod repl_execute;
 mod repl_graph_cmds;
 mod repl_output;
 mod repl_query_cmds;

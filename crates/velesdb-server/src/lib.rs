@@ -27,15 +27,17 @@
 pub mod auth;
 pub mod config;
 mod handlers;
+pub mod onboarding;
 pub mod tls;
 mod types;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::AtomicBool;
 use utoipa::OpenApi;
 use velesdb_core::guardrails::QueryLimits;
 use velesdb_core::Database;
 
 // Re-export types for external use
+pub use onboarding::OnboardingMetrics;
 pub use types::*;
 
 // Re-export handlers for routing
@@ -240,41 +242,11 @@ pub struct AppState {
     /// The `VelesDB` database instance.
     pub db: Database,
     /// New-user onboarding diagnostics counters.
-    pub onboarding_metrics: OnboardingMetrics,
+    pub onboarding_metrics: onboarding::OnboardingMetrics,
     /// Query guard-rails configuration (EPIC-048).
     pub query_limits: parking_lot::RwLock<QueryLimits>,
     /// Readiness flag — `true` once the database is fully loaded.
     pub ready: AtomicBool,
-}
-
-/// Lightweight counters for first-hour troubleshooting diagnostics.
-#[derive(Default)]
-pub struct OnboardingMetrics {
-    pub search_requests_total: AtomicU64,
-    pub dimension_mismatch_total: AtomicU64,
-    pub empty_search_results_total: AtomicU64,
-    pub filter_parse_errors_total: AtomicU64,
-}
-
-impl OnboardingMetrics {
-    pub fn record_search_request(&self) {
-        self.search_requests_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_dimension_mismatch(&self) {
-        self.dimension_mismatch_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_empty_search_results(&self) {
-        self.empty_search_results_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_filter_parse_error(&self) {
-        self.filter_parse_errors_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
 }
 
 // ============================================================================
