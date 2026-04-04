@@ -484,6 +484,11 @@ impl VelesConfig {
     /// Loads configuration from default sources.
     ///
     /// Priority: defaults < file < environment variables.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConfigError` if the configuration file is malformed or
+    /// environment variables contain invalid values.
     pub fn load() -> Result<Self, ConfigError> {
         Self::load_from_path("velesdb.toml")
     }

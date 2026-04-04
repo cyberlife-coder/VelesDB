@@ -7,17 +7,6 @@ use super::traversal::{reconstruct_path, BfsState, TraversalConfig, TraversalRes
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 
-fn build_path_via_parent(
-    node_id: u64,
-    edge_id: u64,
-    source_id: u64,
-    parent_map: &FxHashMap<u64, (u64, u64)>,
-) -> Vec<u64> {
-    let mut path = reconstruct_path(node_id, source_id, parent_map);
-    path.push(edge_id);
-    path
-}
-
 /// BFS traversal on a `CsrSnapshot` for zero-copy graph exploration.
 ///
 /// Uses `FxHashSet` for the visited set and accesses neighbors via
@@ -75,22 +64,18 @@ pub fn bfs_traverse_csr(
             let is_new = visited.insert(target);
             if is_new {
                 parent_map.insert(target, (state.node_id, eid));
-            }
 
-            if new_depth >= config.min_depth {
-                let path = if is_new {
-                    reconstruct_path(target, source_id, &parent_map)
-                } else {
-                    build_path_via_parent(state.node_id, eid, source_id, &parent_map)
-                };
-                results.push(TraversalResult::new(target, path, new_depth));
-            }
+                if new_depth >= config.min_depth {
+                    let path = reconstruct_path(target, source_id, &parent_map);
+                    results.push(TraversalResult::new(target, path, new_depth));
+                }
 
-            if is_new && new_depth < config.max_depth {
-                queue.push_back(BfsState {
-                    node_id: target,
-                    depth: new_depth,
-                });
+                if new_depth < config.max_depth {
+                    queue.push_back(BfsState {
+                        node_id: target,
+                        depth: new_depth,
+                    });
+                }
             }
         }
     }
@@ -139,22 +124,18 @@ pub fn bfs_traverse_csr_filtered<P: EdgePredicate>(
             let is_new = visited.insert(target);
             if is_new {
                 parent_map.insert(target, (state.node_id, eid));
-            }
 
-            if new_depth >= config.min_depth {
-                let path = if is_new {
-                    reconstruct_path(target, source_id, &parent_map)
-                } else {
-                    build_path_via_parent(state.node_id, eid, source_id, &parent_map)
-                };
-                results.push(TraversalResult::new(target, path, new_depth));
-            }
+                if new_depth >= config.min_depth {
+                    let path = reconstruct_path(target, source_id, &parent_map);
+                    results.push(TraversalResult::new(target, path, new_depth));
+                }
 
-            if is_new && new_depth < config.max_depth {
-                queue.push_back(BfsState {
-                    node_id: target,
-                    depth: new_depth,
-                });
+                if new_depth < config.max_depth {
+                    queue.push_back(BfsState {
+                        node_id: target,
+                        depth: new_depth,
+                    });
+                }
             }
         }
     }

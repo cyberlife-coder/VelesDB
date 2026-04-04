@@ -1,4 +1,5 @@
 // Migration tool - pedantic lints reactivated per-module
+#![allow(clippy::doc_markdown)] // Product names in crate-level docs (MongoDB, ChromaDB, etc.)
 //! # `VelesDB` Migration Tool
 //!
 //! `velesdb-migrate` is a CLI tool and library for migrating vector data from

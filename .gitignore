@@ -2,6 +2,9 @@
 /target/
 # Cargo.lock - VERSIONED for reproducible builds (this is a binary, not a lib)
 
+# Proptest regression files (auto-generated)
+**/proptest-regressions/
+
 # IDE
 .idea/
 .vscode/

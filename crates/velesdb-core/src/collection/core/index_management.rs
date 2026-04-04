@@ -300,6 +300,22 @@ impl Collection {
     pub fn list_indexes(&self) -> Vec<IndexInfo> {
         let mut indexes = Vec::new();
 
+        // Secondary indexes (metadata field indexes created via create_index)
+        let sec_indexes = self.secondary_indexes.read();
+        for (field, index) in sec_indexes.iter() {
+            let cardinality = match index {
+                crate::index::SecondaryIndex::BTree(tree) => tree.read().len(),
+            };
+            indexes.push(IndexInfo {
+                label: "secondary".to_string(),
+                property: field.clone(),
+                index_type: "hash".to_string(),
+                cardinality,
+                memory_bytes: 0,
+            });
+        }
+        drop(sec_indexes);
+
         // LOCK ORDER: property_index(7) read — then range_index(7) read.
         // Same level, reads-only; canonical order prevents deadlock.
         let prop_index = self.property_index.read();
@@ -310,7 +326,7 @@ impl Collection {
                 property,
                 index_type: "hash".to_string(),
                 cardinality,
-                memory_bytes: 0, // Approximation
+                memory_bytes: 0,
             });
         }
 
@@ -321,7 +337,7 @@ impl Collection {
                 label,
                 property,
                 index_type: "range".to_string(),
-                cardinality: 0, // Range indexes don't track cardinality the same way
+                cardinality: 0,
                 memory_bytes: 0,
             });
         }

@@ -11,21 +11,7 @@ use super::velesql::{ParsedStatement, VelesQL, VelesQLParameterError, VelesQLSyn
 impl ParsedStatement {
     /// Extracts the collection name from a DML statement, if present.
     pub(crate) fn dml_collection_name(query: &Query) -> Option<String> {
-        use velesdb_core::velesql::DmlStatement;
-        let name = match query.dml.as_ref()? {
-            DmlStatement::Insert(s) | DmlStatement::Upsert(s) => &s.table,
-            DmlStatement::Update(s) => &s.table,
-            DmlStatement::Delete(s) => &s.table,
-            DmlStatement::InsertEdge(s) => &s.collection,
-            DmlStatement::DeleteEdge(s) => &s.collection,
-            DmlStatement::SelectEdges(s) => &s.collection,
-            DmlStatement::InsertNode(s) => &s.collection,
-        };
-        if name.is_empty() {
-            None
-        } else {
-            Some(name.clone())
-        }
+        query.dml_collection_name().map(String::from)
     }
 
     /// Returns a human-readable label for the query type.
@@ -45,17 +31,7 @@ impl ParsedStatement {
 
     /// Recursively check if a condition contains vector search.
     pub(crate) fn condition_has_vector_search(cond: &velesdb_core::velesql::Condition) -> bool {
-        use velesdb_core::velesql::Condition;
-
-        match cond {
-            Condition::VectorSearch(_) | Condition::VectorFusedSearch { .. } => true,
-            Condition::And(left, right) | Condition::Or(left, right) => {
-                Self::condition_has_vector_search(left) || Self::condition_has_vector_search(right)
-            }
-            Condition::Group(inner) => Self::condition_has_vector_search(inner),
-            Condition::Not(inner) => Self::condition_has_vector_search(inner),
-            _ => false,
-        }
+        cond.has_vector_search()
     }
 }
 

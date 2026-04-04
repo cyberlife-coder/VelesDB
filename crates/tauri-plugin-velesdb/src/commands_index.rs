@@ -4,7 +4,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::{CommandError, Error};
-use crate::helpers::{require_collection, require_vector_collection};
+use crate::helpers::require_vector_collection;
 use crate::state::VelesDbState;
 use tauri::{command, AppHandle, Runtime, State};
 
@@ -34,7 +34,7 @@ pub async fn drop_index<R: Runtime>(
 ) -> std::result::Result<bool, CommandError> {
     state
         .with_db(|db| {
-            let coll = require_collection(&db, &request.collection)?;
+            let coll = require_vector_collection(&db, &request.collection)?;
             Ok(coll.drop_secondary_index(&request.field_name))
         })
         .map_err(CommandError::from)
