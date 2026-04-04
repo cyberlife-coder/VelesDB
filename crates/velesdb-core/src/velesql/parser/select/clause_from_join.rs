@@ -6,6 +6,78 @@ use crate::velesql::ast::{ColumnRef, JoinClause, JoinCondition};
 use crate::velesql::error::{ParseError, ParseErrorKind};
 use crate::velesql::Parser;
 
+// ---------------------------------------------------------------------------
+// Helper types for `find_unquoted_dot` — keeps CC ≤ 8 by isolating
+// quote-tracking state from the main scanning loop.
+// ---------------------------------------------------------------------------
+
+/// What the main loop should do after processing a character.
+enum CharAction {
+    /// Character was consumed inside a quoted region — skip it.
+    Skip,
+    /// An unquoted `.` was found.
+    Dot,
+    /// An ordinary unquoted character — no special handling.
+    Plain,
+}
+
+/// Tracks whether we are inside backtick or double-quote delimiters.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuoteState {
+    None,
+    Backtick,
+    DoubleQuote,
+}
+
+impl QuoteState {
+    /// Advance the state machine by one character.
+    ///
+    /// Returns a [`CharAction`] telling the caller how to handle the
+    /// character. The `chars` iterator is passed so that escaped
+    /// double-quotes (`""`) can consume the second quote.
+    fn advance(
+        &mut self,
+        ch: char,
+        chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    ) -> CharAction {
+        match *self {
+            Self::Backtick => {
+                if ch == '`' {
+                    *self = Self::None;
+                }
+                CharAction::Skip
+            }
+            Self::DoubleQuote => {
+                if ch == '"' {
+                    if matches!(chars.peek(), Some((_, '"'))) {
+                        chars.next(); // escaped ""
+                    } else {
+                        *self = Self::None;
+                    }
+                }
+                CharAction::Skip
+            }
+            Self::None => match ch {
+                '`' => {
+                    *self = Self::Backtick;
+                    CharAction::Skip
+                }
+                '"' => {
+                    *self = Self::DoubleQuote;
+                    CharAction::Skip
+                }
+                '.' => CharAction::Dot,
+                _ => CharAction::Plain,
+            },
+        }
+    }
+
+    /// Returns `true` when a quoted region was opened but never closed.
+    const fn is_open(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
 impl Parser {
     pub(crate) fn parse_from_clause(pair: pest::iterators::Pair<Rule>) -> (String, Vec<String>) {
         let mut table = String::new();
@@ -202,41 +274,17 @@ impl Parser {
     fn find_unquoted_dot(input: &str) -> Option<usize> {
         let mut separator_index = None;
         let mut chars = input.char_indices().peekable();
-        let mut in_backtick = false;
-        let mut in_double_quotes = false;
+        let mut quote_state = QuoteState::None;
 
         while let Some((index, ch)) = chars.next() {
-            if in_backtick {
-                if ch == '`' {
-                    in_backtick = false;
+            if let CharAction::Dot = quote_state.advance(ch, &mut chars) {
+                if separator_index.replace(index).is_some() {
+                    return None;
                 }
-                continue;
-            }
-
-            if in_double_quotes {
-                if ch == '"' {
-                    if matches!(chars.peek(), Some((_, '"'))) {
-                        chars.next();
-                    } else {
-                        in_double_quotes = false;
-                    }
-                }
-                continue;
-            }
-
-            match ch {
-                '`' => in_backtick = true,
-                '"' => in_double_quotes = true,
-                '.' => {
-                    if separator_index.replace(index).is_some() {
-                        return None;
-                    }
-                }
-                _ => {}
             }
         }
 
-        if in_backtick || in_double_quotes {
+        if quote_state.is_open() {
             return None;
         }
 
