@@ -110,19 +110,8 @@ where
         let coll = Arc::clone(&collection);
         let is_last = chunk_idx + 1 == num_chunks;
 
-        // H3: Intermediate batches skip fsync (deferred sync).
-        // The final batch uses the standard path with full fsync.
-        let count = if is_last {
-            tokio::task::spawn_blocking(move || coll.upsert_bulk(&chunk_vec))
-                .await
-                .map_err(|e| Error::Internal(format!("Task join error: {e}")))?
-        } else {
-            tokio::task::spawn_blocking(move || coll.upsert_bulk_deferred_sync(&chunk_vec))
-                .await
-                .map_err(|e| Error::Internal(format!("Task join error: {e}")))?
-        };
-
-        inserted += count?;
+        let count = upsert_chunk(coll, chunk_vec, is_last).await?;
+        inserted += count;
 
         // Report progress
         if let Some(ref mut callback) = on_progress {
@@ -145,6 +134,27 @@ where
         .map_err(|e| Error::Internal(format!("Final flush error: {e}")))?;
 
     Ok(inserted)
+}
+
+/// Upserts a single chunk, using deferred sync for intermediate batches
+/// and full sync for the final batch.
+///
+/// H3: Intermediate batches skip fsync (deferred sync) to eliminate
+/// per-batch I/O overhead.
+async fn upsert_chunk(
+    coll: Arc<Collection>,
+    chunk_vec: Vec<Point>,
+    is_last: bool,
+) -> Result<usize> {
+    if is_last {
+        tokio::task::spawn_blocking(move || coll.upsert_bulk(&chunk_vec))
+            .await
+            .map_err(|e| Error::Internal(format!("Task join error: {e}")))?
+    } else {
+        tokio::task::spawn_blocking(move || coll.upsert_bulk_deferred_sync(&chunk_vec))
+            .await
+            .map_err(|e| Error::Internal(format!("Task join error: {e}")))?
+    }
 }
 
 /// Asynchronously flushes the collection to disk.

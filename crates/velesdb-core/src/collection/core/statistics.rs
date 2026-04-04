@@ -53,34 +53,7 @@ impl Collection {
         collector.set_row_count(saturating_u64(config.point_count));
         drop(config);
 
-        let mut distinct_values: HashMap<String, HashSet<String>> = HashMap::new();
-        let mut null_counts: HashMap<String, u64> = HashMap::new();
-        let mut payload_size_bytes = 0u64;
-
-        let payload_storage = self.payload_storage.read();
-        let ids = payload_storage.ids();
-        for id in ids.into_iter().take(1_000) {
-            if let Ok(Some(payload)) = payload_storage.retrieve(id) {
-                if let Ok(payload_bytes) = serde_json::to_vec(&payload) {
-                    payload_size_bytes =
-                        payload_size_bytes.saturating_add(saturating_u64(payload_bytes.len()));
-                }
-
-                if let Some(obj) = payload.as_object() {
-                    for (key, value) in obj {
-                        if value.is_null() {
-                            *null_counts.entry(key.clone()).or_insert(0) += 1;
-                        } else {
-                            distinct_values
-                                .entry(key.clone())
-                                .or_default()
-                                .insert(value.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        drop(payload_storage);
+        let (payload_size_bytes, distinct_values, null_counts) = self.sample_payload_stats();
 
         collector.set_total_size(payload_size_bytes);
 
@@ -108,6 +81,41 @@ impl Collection {
         }
 
         Ok(collector.build())
+    }
+
+    /// Samples up to 1000 payloads to compute size, distinct values, and null counts.
+    fn sample_payload_stats(
+        &self,
+    ) -> (u64, HashMap<String, HashSet<String>>, HashMap<String, u64>) {
+        let mut distinct_values: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut null_counts: HashMap<String, u64> = HashMap::new();
+        let mut payload_size_bytes = 0u64;
+
+        let payload_storage = self.payload_storage.read();
+        let ids = payload_storage.ids();
+        for id in ids.into_iter().take(1_000) {
+            if let Ok(Some(payload)) = payload_storage.retrieve(id) {
+                if let Ok(payload_bytes) = serde_json::to_vec(&payload) {
+                    payload_size_bytes =
+                        payload_size_bytes.saturating_add(saturating_u64(payload_bytes.len()));
+                }
+
+                if let Some(obj) = payload.as_object() {
+                    for (key, value) in obj {
+                        if value.is_null() {
+                            *null_counts.entry(key.clone()).or_insert(0) += 1;
+                        } else {
+                            distinct_values
+                                .entry(key.clone())
+                                .or_default()
+                                .insert(value.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        (payload_size_bytes, distinct_values, null_counts)
     }
 
     /// Returns cached statistics if available and fresh, otherwise recomputes.

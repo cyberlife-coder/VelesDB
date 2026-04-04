@@ -57,19 +57,33 @@ pub(crate) fn kmeans_plusplus_init(
     let mut min_dists = vec![f32::MAX; n];
 
     // Step 2: Pick remaining centroids proportional to D(x)^2.
-    for iter in 1..k {
-        update_min_distances(&mut min_dists, samples, &centroids[iter - 1]);
+    pick_remaining_centroids(samples, k, n, rng, &mut centroids, &mut min_dists);
 
-        if let Some(chosen) = pick_weighted_sample(&min_dists, rng) {
+    centroids
+}
+
+/// Iteratively picks remaining centroids using D(x)^2 weighted sampling.
+///
+/// Falls back to sequential fill if all samples coincide with existing centroids.
+fn pick_remaining_centroids(
+    samples: &[Vec<f32>],
+    k: usize,
+    n: usize,
+    rng: &mut impl Rng,
+    centroids: &mut Vec<Vec<f32>>,
+    min_dists: &mut [f32],
+) {
+    for iter in 1..k {
+        update_min_distances(min_dists, samples, &centroids[iter - 1]);
+
+        if let Some(chosen) = pick_weighted_sample(min_dists, rng) {
             centroids.push(samples[chosen].clone());
         } else {
             // All remaining samples coincide with existing centroids.
-            fill_remaining_centroids(&mut centroids, samples, k, n);
+            fill_remaining_centroids(centroids, samples, k, n);
             break;
         }
     }
-
-    centroids
 }
 
 /// Update `min_dists[i]` to be the minimum of current value and distance to
@@ -142,13 +156,8 @@ pub(crate) fn kmeans_train(
     debug_assert!(k > 0);
     let dim = samples[0].len();
 
-    // k-means++ initialization for well-spread initial centroids.
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut centroids = kmeans_plusplus_init(samples, k.min(samples.len()), &mut rng);
-    // If k > samples.len(), pad with cycled samples (shouldn't happen after train() validation).
-    while centroids.len() < k {
-        centroids.push(samples[centroids.len() % samples.len()].clone());
-    }
+    let mut centroids = init_centroids(samples, k, &mut rng);
 
     let mut assignments = vec![0usize; samples.len()];
 
@@ -172,6 +181,16 @@ pub(crate) fn kmeans_train(
         }
     }
 
+    centroids
+}
+
+/// Initializes centroids using k-means++ and pads if needed.
+fn init_centroids(samples: &[Vec<f32>], k: usize, rng: &mut rand::rngs::StdRng) -> Vec<Vec<f32>> {
+    let mut centroids = kmeans_plusplus_init(samples, k.min(samples.len()), rng);
+    // If k > samples.len(), pad with cycled samples (shouldn't happen after train() validation).
+    while centroids.len() < k {
+        centroids.push(samples[centroids.len() % samples.len()].clone());
+    }
     centroids
 }
 

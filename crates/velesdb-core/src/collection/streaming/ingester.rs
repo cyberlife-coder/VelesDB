@@ -207,6 +207,9 @@ impl Drop for StreamIngester {
 /// 1. Shutdown notification — flush remaining batch and exit.
 /// 2. Timer tick — flush partial batch if non-empty.
 /// 3. Channel receive — push to batch; flush when `batch_size` reached.
+// Reason: tokio::select! macro expansion inflates cognitive complexity beyond
+// what the actual logic warrants. Each branch delegates to a helper function.
+#[allow(clippy::cognitive_complexity)]
 async fn drain_loop(
     collection: Collection,
     mut rx: mpsc::Receiver<Point>,
@@ -224,45 +227,74 @@ async fn drain_loop(
             // Branch 1: shutdown signal — drain remaining channel items in
             // micro-batches (M-1: flush at batch_size to bound memory usage).
             () = shutdown.notified() => {
-                while let Ok(point) = rx.try_recv() {
-                    batch.push(point);
-                    // Flush at batch_size boundaries to avoid unbounded accumulation.
-                    if batch.len() >= batch_size {
-                        flush_batch(&collection, &mut batch).await;
-                    }
-                }
-                if !batch.is_empty() {
-                    flush_batch(&collection, &mut batch).await;
-                }
+                drain_on_shutdown(&collection, &mut rx, &mut batch, batch_size).await;
                 break;
             }
 
             // Branch 2: timer tick — flush partial batch
             _ = interval.tick() => {
-                if !batch.is_empty() {
-                    flush_batch(&collection, &mut batch).await;
-                }
+                flush_if_non_empty(&collection, &mut batch).await;
             }
 
             // Branch 3: receive point from channel
             msg = rx.recv() => {
-                if let Some(point) = msg {
-                    batch.push(point);
-                    if batch.len() >= batch_size {
-                        flush_batch(&collection, &mut batch).await;
-                        // Reset the interval so the timer doesn't fire
-                        // immediately after a batch-size flush.
-                        interval.reset();
-                    }
-                } else {
-                    // Channel closed (all senders dropped).
-                    if !batch.is_empty() {
-                        flush_batch(&collection, &mut batch).await;
-                    }
+                if !handle_received_point(&collection, &mut batch, batch_size, &mut interval, msg).await {
                     break;
                 }
             }
         }
+    }
+}
+
+/// Drains remaining channel items in micro-batches during shutdown.
+///
+/// Flushes at `batch_size` boundaries to bound memory usage, then
+/// flushes any remaining partial batch.
+async fn drain_on_shutdown(
+    collection: &Collection,
+    rx: &mut mpsc::Receiver<Point>,
+    batch: &mut Vec<Point>,
+    batch_size: usize,
+) {
+    while let Ok(point) = rx.try_recv() {
+        batch.push(point);
+        if batch.len() >= batch_size {
+            flush_batch(collection, batch).await;
+        }
+    }
+    flush_if_non_empty(collection, batch).await;
+}
+
+/// Flushes the batch only when it contains at least one point.
+async fn flush_if_non_empty(collection: &Collection, batch: &mut Vec<Point>) {
+    if !batch.is_empty() {
+        flush_batch(collection, batch).await;
+    }
+}
+
+/// Handles a single received point (or channel-closed signal).
+///
+/// Returns `true` to continue the drain loop, `false` to break.
+async fn handle_received_point(
+    collection: &Collection,
+    batch: &mut Vec<Point>,
+    batch_size: usize,
+    interval: &mut tokio::time::Interval,
+    msg: Option<Point>,
+) -> bool {
+    if let Some(point) = msg {
+        batch.push(point);
+        if batch.len() >= batch_size {
+            flush_batch(collection, batch).await;
+            // Reset the interval so the timer doesn't fire
+            // immediately after a batch-size flush.
+            interval.reset();
+        }
+        true
+    } else {
+        // Channel closed (all senders dropped).
+        flush_if_non_empty(collection, batch).await;
+        false
     }
 }
 

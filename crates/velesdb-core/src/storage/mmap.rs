@@ -278,41 +278,9 @@ impl MmapStorage {
         // Now acquire mmap read lock and validate bounds
         let mmap = self.mmap.read();
         let vector_size = self.dimension * std::mem::size_of::<f32>();
-        let end = offset.checked_add(vector_size).ok_or_else(|| {
-            global_guardrails_metrics().record_invalid_offset_read_error();
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Offset arithmetic overflow while reading vector",
-            )
-        })?;
 
-        if end > mmap.len() {
-            global_guardrails_metrics().record_invalid_offset_read_error();
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Offset out of bounds",
-            ));
-        }
+        Self::validate_offset(offset, vector_size, mmap.len())?;
 
-        // EPIC-032/US-001: Verify alignment before pointer cast
-        // SAFETY: We've validated that offset + vector_size <= mmap.len(), offset is 4-byte aligned,
-        // and the pointer is derived from the mmap which is held by the guard.
-        // - Condition 1: Bounds check passed (offset + vector_size <= mmap.len()).
-        // - Condition 2: Alignment verified (offset % 4 == 0).
-        // - Condition 3: Pointer derived from valid mmap held by VectorSliceGuard.
-        // - Condition 4: All writes via store() use f32-aligned offsets.
-        // Reason: Zero-copy vector access via memory mapping requires raw pointer operations.
-        // P2 Audit 2026-01-29: Converted from debug_assert to assert for memory safety
-        if offset % std::mem::align_of::<f32>() != 0 {
-            global_guardrails_metrics().record_invalid_offset_read_error();
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "EPIC-032/US-001: offset {offset} is not f32-aligned (must be multiple of {})",
-                    std::mem::align_of::<f32>()
-                ),
-            ));
-        }
         #[allow(clippy::cast_ptr_alignment)]
         // SAFETY: We validated bounds/alignment above and keep the mmap read lock
         // in `VectorSliceGuard`, so `ptr` stays valid for the guard lifetime.
@@ -330,6 +298,42 @@ impl MmapStorage {
             epoch_ptr: &self.remap_epoch,
             epoch_at_creation,
         }))
+    }
+
+    /// Validates that `offset` is within bounds and f32-aligned.
+    ///
+    /// Returns an error if the offset overflows, is out of bounds, or
+    /// is not aligned to `align_of::<f32>()`.
+    fn validate_offset(offset: usize, vector_size: usize, mmap_len: usize) -> io::Result<()> {
+        let end = offset.checked_add(vector_size).ok_or_else(|| {
+            global_guardrails_metrics().record_invalid_offset_read_error();
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Offset arithmetic overflow while reading vector",
+            )
+        })?;
+
+        if end > mmap_len {
+            global_guardrails_metrics().record_invalid_offset_read_error();
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Offset out of bounds",
+            ));
+        }
+
+        // EPIC-032/US-001: Verify alignment before pointer cast
+        if offset % std::mem::align_of::<f32>() != 0 {
+            global_guardrails_metrics().record_invalid_offset_read_error();
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "EPIC-032/US-001: offset {offset} is not f32-aligned (must be multiple of {})",
+                    std::mem::align_of::<f32>()
+                ),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Persists the `vectors.idx` index file to disk with fsync.
@@ -383,6 +387,14 @@ impl MmapStorage {
     /// to obtain a deterministic durability barrier.
     pub(crate) fn flush_on_shutdown_best_effort(&self) {
         // 1. Flush WAL first (operation log)
+        self.try_flush_wal();
+
+        // 2. Flush mmap to persist vector bytes
+        self.try_flush_mmap();
+    }
+
+    /// Best-effort WAL flush: skips if lock is contended.
+    fn try_flush_wal(&self) {
         if let Some(mut wal) = self.wal.try_write() {
             if let Err(e) = wal.flush() {
                 error!(?e, "Failed to flush WAL in MmapStorage shutdown path");
@@ -391,8 +403,10 @@ impl MmapStorage {
                 error!(?e, "Failed to fsync WAL in MmapStorage shutdown path");
             }
         }
+    }
 
-        // 2. Flush mmap to persist vector bytes
+    /// Best-effort mmap flush: skips if lock is contended.
+    fn try_flush_mmap(&self) {
         if let Some(mmap) = self.mmap.try_write() {
             if let Err(e) = mmap.flush() {
                 error!(?e, "Failed to flush mmap in MmapStorage shutdown path");

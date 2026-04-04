@@ -316,25 +316,18 @@ fn process_bfs_csr(
                 continue;
             }
         }
-        let new_depth = state.depth + 1;
-        if new_depth > config.max_depth {
-            continue;
-        }
-        let is_new = visited.insert(target);
-        if is_new {
-            parent_map.insert(target, (state.node_id, eid));
-
-            if new_depth >= config.min_depth {
-                let path = reconstruct_path(target, source_id, parent_map);
-                results.push(TraversalResult::new(target, path, new_depth));
-            }
-            if new_depth < config.max_depth {
-                queue.push_back(BfsState {
-                    node_id: target,
-                    depth: new_depth,
-                });
-            }
-        }
+        process_bfs_candidate(
+            target,
+            eid,
+            state.node_id,
+            state.depth,
+            config,
+            source_id,
+            results,
+            visited,
+            queue,
+            parent_map,
+        );
     }
 }
 
@@ -367,24 +360,55 @@ fn process_bfs_neighbors(
             BfsDirection::Forward => edge.target(),
             BfsDirection::Reverse => edge.source(),
         };
-        let new_depth = state.depth + 1;
-        if new_depth > config.max_depth {
-            continue;
-        }
-        let is_new = visited.insert(next_node);
-        if is_new {
-            parent_map.insert(next_node, (state.node_id, edge.id()));
+        process_bfs_candidate(
+            next_node,
+            edge.id(),
+            state.node_id,
+            state.depth,
+            config,
+            source_id,
+            results,
+            visited,
+            queue,
+            parent_map,
+        );
+    }
+}
 
-            if new_depth >= config.min_depth {
-                let path = reconstruct_path(next_node, source_id, parent_map);
-                results.push(TraversalResult::new(next_node, path, new_depth));
-            }
-            if new_depth < config.max_depth {
-                queue.push_back(BfsState {
-                    node_id: next_node,
-                    depth: new_depth,
-                });
-            }
+/// Processes a single BFS candidate: checks depth, visited status, records
+/// parent pointer, emits result if within depth range, and enqueues for
+/// further expansion.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn process_bfs_candidate(
+    target: u64,
+    edge_id: u64,
+    parent_node: u64,
+    current_depth: u32,
+    config: &TraversalConfig,
+    source_id: u64,
+    results: &mut Vec<TraversalResult>,
+    visited: &mut FxHashSet<u64>,
+    queue: &mut VecDeque<BfsState>,
+    parent_map: &mut FxHashMap<u64, (u64, u64)>,
+) {
+    let new_depth = current_depth + 1;
+    if new_depth > config.max_depth {
+        return;
+    }
+    let is_new = visited.insert(target);
+    if is_new {
+        parent_map.insert(target, (parent_node, edge_id));
+
+        if new_depth >= config.min_depth {
+            let path = reconstruct_path(target, source_id, parent_map);
+            results.push(TraversalResult::new(target, path, new_depth));
+        }
+        if new_depth < config.max_depth {
+            queue.push_back(BfsState {
+                node_id: target,
+                depth: new_depth,
+            });
         }
     }
 }
