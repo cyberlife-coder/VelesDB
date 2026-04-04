@@ -28,52 +28,95 @@ velesdb-core/
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── collection/    # Typed collections (Vector, Graph, Metadata) + legacy
-│   │   │   ├── index/         # HNSW, BM25, Trigram, Secondary indexes
-│   │   │   ├── storage/       # mmap, WAL, sharded vectors, compaction
-│   │   │   ├── velesql/       # VelesQL parser (pest), planner, executor, cache
+│   │   │   │   ├── core/      # CRUD, flush, recovery, lifecycle, index management
+│   │   │   │   ├── graph/     # ConcurrentEdgeStore, CsrSnapshot, traversal, streaming
+│   │   │   │   ├── search/    # Query planner, filter pushdown, reranking
+│   │   │   │   ├── streaming/ # Delta buffer, streaming insert
+│   │   │   │   └── vector_collection/ # VectorCollection impl
+│   │   │   ├── database/      # Database, typed registries, query engine, DDL/DML executors
+│   │   │   ├── index/         # HNSW (native), BM25, Trigram, Secondary, Sparse indexes
+│   │   │   │   └── hnsw/native/ # NativeHnsw, BatchEfSchedule, graph_io, search pipeline
+│   │   │   ├── storage/       # mmap, WAL, sharded vectors, compaction, snapshots
+│   │   │   ├── velesql/       # VelesQL parser (pest), planner, executor, cache, AST
 │   │   │   ├── simd_native/   # AVX-512, AVX2, NEON distance kernels
-│   │   │   ├── simd_dispatch.rs # Runtime SIMD path selection
-│   │   │   ├── column_store/  # Typed column storage for metadata
-│   │   │   ├── quantization/  # SQ8 (4x) and Binary (32x) compression
-│   │   │   ├── fusion/        # RRF score fusion for hybrid search
-│   │   │   ├── agent/         # Agent Memory Patterns SDK
-│   │   │   ├── observer.rs    # DatabaseObserver trait (premium hooks)
-│   │   │   └── guardrails/    # Allocation guards, memory limits
+│   │   │   ├── sparse_index/  # Inverted index, DAAT MaxScore search
+│   │   │   ├── column_store/  # Typed column storage, bitmap filters, vacuum
+│   │   │   ├── quantization/  # SQ8, Binary, Product Quantization, RaBitQ
+│   │   │   ├── fusion/        # RRF/RSF/Weighted score fusion
+│   │   │   ├── agent/         # Agent Memory SDK (semantic, episodic, procedural)
+│   │   │   ├── cache/         # LRU, plan cache, bloom filter, lock-free cache
+│   │   │   ├── filter/        # Filter builders, matching, conversion
+│   │   │   ├── gpu/           # wgpu backend, PQ GPU, shaders
+│   │   │   ├── guardrails/    # Allocation guards, memory limits, resilience
+│   │   │   ├── metrics/       # Latency, query, retrieval, operational metrics
+│   │   │   ├── api_types/     # Shared request/response types
+│   │   │   ├── compression/   # Dictionary compression
+│   │   │   └── update_check/  # Version check client
 │   │   ├── benches/           # Criterion benchmarks
-│   │   └── tests/             # Integration tests
+│   │   └── tests/             # Integration + BDD tests
 │   │
 │   ├── velesdb-server/        # Axum REST API server (37 endpoints)
 │   │   ├── Cargo.toml
 │   │   └── src/
+│   │       └── handlers/      # Route handlers (query/, search/, graph, admin)
 │   │
 │   ├── velesdb-cli/           # Interactive REPL for VelesQL
 │   │   ├── Cargo.toml
 │   │   └── src/
+│   │       ├── main.rs        # CLI entry point, sub-enum dispatch
+│   │       ├── commands.rs    # CollectionCommands, DataCommands, QueryCommands
+│   │       ├── repl*.rs       # REPL modules (collection, data, graph, search, config)
+│   │       └── graph*.rs      # Graph CLI handlers
 │   │
 │   ├── velesdb-python/        # Python bindings (PyO3 + NumPy)
 │   │   ├── Cargo.toml
 │   │   └── src/
+│   │       ├── lib.rs         # PyO3 module registration
+│   │       ├── database.rs    # VelesDatabase pyclass
+│   │       ├── fusion.rs      # FusionStrategy pyclass
+│   │       ├── graph_collection.rs # PyGraphCollection
+│   │       └── collection/    # PyCollection methods
 │   │
 │   ├── velesdb-wasm/          # Browser-side vector search (no persistence)
 │   │   ├── Cargo.toml
 │   │   └── src/
+│   │       ├── lib.rs         # WASM entry point
+│   │       ├── vector_store.rs # VectorStore struct + search/insert
+│   │       ├── graph.rs       # GraphStore for in-browser knowledge graphs
+│   │       └── velesql.rs     # Client-side VelesQL parsing
 │   │
 │   ├── velesdb-mobile/        # iOS/Android bindings (UniFFI)
 │   │   ├── Cargo.toml
 │   │   └── src/
+│   │       ├── lib.rs         # VelesDatabase + UniFFI exports
+│   │       ├── collection.rs  # VelesCollection (full search API)
+│   │       └── graph.rs       # MobileGraphStore (BFS/DFS/parallel)
 │   │
-│   ├── velesdb-migrate/       # Schema and data migration tooling
+│   ├── velesdb-migrate/       # Data migration from 12 sources
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │
-│   └── tauri-plugin-velesdb/  # Tauri desktop integration
+│   └── tauri-plugin-velesdb/  # Tauri v2 desktop integration
 │       ├── Cargo.toml
 │       └── src/
+│           ├── lib.rs         # Plugin init + invoke handler macro
+│           ├── commands.rs    # Core commands (CRUD, search)
+│           ├── commands_graph.rs  # Graph commands (traverse, parallel BFS)
+│           ├── commands_index.rs  # Index management
+│           ├── commands_sparse.rs # Sparse vector commands
+│           └── commands_memory.rs # Agent memory commands
 │
-├── conformance/               # VelesQL cross-ecosystem conformance cases
+├── sdks/
+│   └── typescript/            # TypeScript SDK (REST + WASM backends)
+│       ├── package.json
+│       └── src/
 │
 ├── integrations/
-│   └── langchain-velesdb/     # LangChain VectorStore
+│   ├── common/                # Shared integration utilities
+│   ├── langchain/             # LangChain VectorStore
+│   └── llamaindex/            # LlamaIndex VectorStore
+│
+├── conformance/               # VelesQL cross-ecosystem conformance cases
 │
 ├── docs/                      # Documentation
 │
@@ -108,9 +151,15 @@ Axum-based REST API server with 37 endpoints. Exposes:
 ### `velesdb-cli`
 
 Command-line interface with:
-- `repl`: Interactive VelesQL shell
-- `query`: Single query execution
-- `info`: Database information
+- `repl`: Interactive VelesQL shell with dot-commands and backslash-commands
+- `collection`: Create/list/show/delete/analyze collections (vector, graph, metadata)
+- `data`: Import/export, upsert, get, delete points
+- `query`: Single VelesQL query execution + multi-search fusion + explain
+- `graph`: Add/remove edges, traverse (BFS/DFS), neighbors, degree, search, node payloads
+- `index`: Create/list/drop secondary, property, and range indexes
+- `simd`: SIMD diagnostics and benchmarks
+- `license`: License management
+- Commands grouped into sub-enums (`CollectionCommands`, `DataCommands`, `QueryCommands`)
 
 ### `velesdb-python`
 
