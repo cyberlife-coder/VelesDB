@@ -45,6 +45,20 @@
 
 ---
 
+## The Story Behind VelesDB
+
+VelesDB was born in France out of a simple observation: **EU data sovereignty is an architectural problem, not a legal one.**
+
+The US Cloud Act, FISA 702, and PATRIOT Act give US authorities multiple legal paths to reach data held by any US company — regardless of where the servers are. Hosting on AWS `eu-west-1` is a latency decision, not a sovereignty decision. The EU's Data Privacy Framework has been invalidated twice (Schrems I, Schrems II), and a third challenge is pending.
+
+For European developers building AI agents that handle health data, legal documents, or financial records, the typical 2026 stack sends embeddings to Pinecone (US), graphs to Neo4j Aura (US), and metadata to PostgreSQL on AWS (US provider). Every one of these is reachable by a FISA warrant.
+
+VelesDB removes the US provider from the chain entirely. One Rust binary, local-first by design. No API key, no cloud account, no data processor. Your data stays in a directory you control — on your laptop, your server, your jurisdiction.
+
+> [Read the full story: "I built a database in France because the Cloud Act makes EU data sovereignty impossible"](https://dev.to/wiscale-fr/i-built-a-database-in-france-because-the-cloud-act-makes-eu-data-sovereignty-impossible-5325)
+
+---
+
 ## Why VelesDB?
 
 | Today (3 systems to maintain) | With VelesDB (1 binary) |
@@ -228,6 +242,25 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 | Quantization | SQ8 (4x), PQ (32x), Binary (32x), RaBitQ (32x) |
 
 5 search quality modes (Fast → Perfect), adaptive two-phase ef, AutoTune.
+
+### Distance Metrics
+
+5 metrics with SIMD acceleration (AVX-512, AVX2, NEON, WASM SIMD128):
+
+| Metric | What it measures | Use case | SIMD perf (768D) |
+|--------|-----------------|----------|------------------|
+| **Cosine** | Angle between vectors (direction similarity) | Text embeddings (BERT, OpenAI, Cohere), normalized vectors | 33 ns |
+| **Euclidean** | Straight-line distance (L2 norm) | Image features, spatial data, when magnitude matters | 20 ns |
+| **Dot Product** | Inner product (projection) | Pre-normalized vectors, Maximum Inner Product Search (MIPS) | 22 ns |
+| **Hamming** | Bit differences in binary vectors | Binary embeddings, locality-sensitive hashing (LSH), fingerprints | 36 ns |
+| **Jaccard** | Set overlap (intersection / union) | Sparse vectors, tag similarity, set membership | 35 ns |
+
+```sql
+-- Choose metric at collection creation
+CREATE COLLECTION docs (dimension = 768, metric = 'cosine');
+CREATE COLLECTION images (dimension = 512, metric = 'euclidean');
+CREATE COLLECTION fingerprints (dimension = 256, metric = 'hamming');
+```
 
 ```sql
 SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 5
