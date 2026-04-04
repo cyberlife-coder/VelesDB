@@ -351,7 +351,12 @@ impl HnswIndex {
         }
 
         if let SearchQuality::Adaptive { min_ef, max_ef } = quality {
-            return Ok(Some(self.search_adaptive(query, k, (*min_ef).max(k), *max_ef)));
+            return Ok(Some(self.search_adaptive(
+                query,
+                k,
+                (*min_ef).max(k),
+                *max_ef,
+            )));
         }
 
         if matches!(quality, SearchQuality::AutoTune) {
