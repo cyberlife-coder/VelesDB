@@ -50,7 +50,7 @@ Expected response:
 ```json
 {
   "status": "ok",
-  "version": "1.7.2"
+  "version": "1.11.1"
 }
 ```
 

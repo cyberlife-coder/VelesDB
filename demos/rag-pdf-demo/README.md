@@ -184,7 +184,7 @@ CHUNK_OVERLAP=50
 
 ## 📊 Performance Benchmarks
 
-Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.7.0 (500 iterations):
+Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations):
 
 ### Layer-by-Layer Latency
 

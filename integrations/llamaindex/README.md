@@ -175,7 +175,7 @@ results = vector_store.text_query(
 ## Performance
 
 Measured on CI runners (ubuntu-latest, 2-core). Local hardware will be faster.
-Source: `benchmarks/baseline.json` (v1.7.0).
+Source: `benchmarks/baseline.json` (v1.11.1).
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|

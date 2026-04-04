@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: April 3, 2026 (v1.11.0 — includes competitive benchmarks vs Qdrant, Memgraph, ClickHouse)*
+*Last updated: April 4, 2026 (v1.11.1 — includes competitive benchmarks vs Qdrant, Memgraph, ClickHouse)*
 
 ---
 
@@ -279,7 +279,7 @@ Local measurement (i9-14900KF, 10K vectors, 384D): upsert throughput ~808 vec/s 
 
 ### Vector Search — VelesDB vs Qdrant (SIFT1M, 1M × 128D)
 
-| Metric | VelesDB 1.11.0 | Qdrant 1.17.1 | Ratio |
+| Metric | VelesDB 1.11.1 | Qdrant 1.17.1 | Ratio |
 |--------|----------------|---------------|-------|
 | **kNN@10 p50** | **348 µs** | 6.8 ms | VelesDB **19.7x faster** |
 | **kNN@100 p50** | **1.9 ms** | 6.9 ms | VelesDB **3.6x faster** |

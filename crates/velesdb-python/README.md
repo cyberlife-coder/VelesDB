@@ -3,9 +3,9 @@
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-1.11.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
+[![Version](https://img.shields.io/badge/version-1.11.1-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
-Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.11.0 - a high-performance vector database for AI applications.
+Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.11.1 - a high-performance vector database for AI applications.
 
 ## Features
 
@@ -563,6 +563,13 @@ node_ids = graph.all_node_ids()
 results = graph.traverse_bfs(source_id=10, max_depth=3, limit=100)
 for r in results:
     print(f"Reached node {r['target_id']} at depth {r['depth']}")
+
+# Multi-source parallel BFS (starts from multiple nodes, deduplicates)
+results = graph.traverse_bfs_parallel(
+    source_ids=[10, 20, 30],
+    max_depth=3,
+    limit=100
+)
 
 # DFS with relationship type filter
 results = graph.traverse_dfs(

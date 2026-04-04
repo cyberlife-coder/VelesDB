@@ -232,6 +232,7 @@ In-memory graph store for mobile knowledge graphs.
 | `outDegree(nodeId)` | Returns the out-degree of a node |
 | `inDegree(nodeId)` | Returns the in-degree of a node |
 | `bfsTraverse(sourceId, maxDepth, limit)` | Breadth-first traversal |
+| `bfsTraverseParallel(sourceIds, maxDepth, limit)` | Multi-source parallel BFS with deduplication |
 | `dfsTraverse(sourceId, maxDepth, limit)` | Depth-first traversal |
 | `removeNode(nodeId)` | Removes a node and all connected edges |
 | `removeEdge(edgeId)` | Removes an edge by ID |

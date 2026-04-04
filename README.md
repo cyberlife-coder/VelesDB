@@ -25,7 +25,7 @@
   <a href="https://img.shields.io/badge/contributors-welcome-brightgreen"><img src="https://img.shields.io/badge/contributors-welcome-brightgreen" alt="Contributors Welcome"></a>
 </p>
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.11.0">Download v1.11.0</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.11.1">Download v1.11.1</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
@@ -728,6 +728,7 @@ Your feedback shapes the roadmap. Whether it's a RAG pipeline, a knowledge graph
 
 | Version | Status | Highlights |
 |---------|--------|------------|
+| **v1.11.1** | Released | Graph API parity (7 new REST endpoints), bitmap pre-filter for filtered search, CSR graph traversal v2, bulk insert v2 pipeline, 13 new server tests. |
 | **v1.11.0** | Released | VelesQL v3.6 — 15 new SQL statements (SHOW, DESCRIBE, EXPLAIN, CREATE/DROP INDEX, ANALYZE, TRUNCATE, ALTER, FLUSH, multi-row INSERT, UPSERT, SELECT EDGES, INSERT NODE), 203 BDD tests, full ecosystem propagation. |
 | **v1.10.0** | Released | VelesQL v3.2 — WITH options wiring, component scores, LET clause, Agent Memory VelesQL bridge. All 5 pillars accessible via SQL. |
 | **v1.9.3** | Released | VelesQL ecosystem completion — OFFSET fix, MATCH propagation to Python/CLI/tauri/mobile, aggregation routing, DRY refactoring |
@@ -741,6 +742,8 @@ Your feedback shapes the roadmap. Whether it's a RAG pipeline, a knowledge graph
 
 <details>
 <summary>Detailed release history</summary>
+
+**v1.11.1** — Graph API parity: 7 new REST endpoints (delete edge, edge count, list nodes, node edges, node payload get/upsert, parallel BFS, graph search). CLI/REPL graph commands. Bitmap pre-filter for filtered search with adaptive strategy selection. CSR graph traversal v2 with edge IDs, labels, ArcSwap lock-free adjacency. Bulk insert v2 pipeline with DirectVectorWriter and AsyncIndexBuilder. Secondary index backfill. LIKE→BM25 fallback. Native batch edge loading. License attribution clause. Rate limit increased to 100K QPS.
 
 **v1.11.0** — VelesQL v3.6: 15 new SQL statements — SHOW COLLECTIONS, DESCRIBE, EXPLAIN, CREATE/DROP INDEX, ANALYZE, TRUNCATE (incl. graph collections), ALTER COLLECTION, FLUSH, multi-row INSERT, UPSERT, SELECT EDGES, INSERT NODE. 203 BDD E2E tests. Grammar word-boundary fix for COLLECTION keyword. Tauri query routing aligned with server architecture. Cyclomatic complexity reduced to CC≤8 across 6 hotspots. Full ecosystem propagation across all 8 crates. Python `execute_query()` method. VelesQL spec v3.6.
 

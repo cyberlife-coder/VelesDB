@@ -22,7 +22,7 @@ cd crates/velesdb-wasm
 wasm-pack build --target web --out-dir ../../examples/wasm-browser-demo/pkg
 
 # Then update index.html to use the local path instead of CDN:
-# Change: import init from 'https://unpkg.com/velesdb-wasm@1.7.0/velesdb_wasm.js'
+# Change: import init from 'https://unpkg.com/velesdb-wasm@1.11.1/velesdb_wasm.js'
 # To:     import init from './pkg/velesdb_wasm.js'
 ```
 
@@ -80,7 +80,7 @@ Typical results on modern hardware:
 ```html
 <script type="module">
   // If published on npm:
-  // import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@1.7.0/velesdb_wasm.js';
+  // import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@1.11.1/velesdb_wasm.js';
   // If built locally with wasm-pack:
   import init, { VectorStore } from './pkg/velesdb_wasm.js';
 

@@ -2,9 +2,16 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.11.0** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.11.1** | Node.js >= 18 | Browser (WASM) | MIT License
 
-## What's New in v1.11.0
+## What's New in v1.11.1
+
+- **Graph API parity** -- 7 new REST endpoints for complete graph operations (delete edge, edge count, list nodes, node edges, node payload, parallel BFS, graph search)
+- **Bitmap pre-filter** -- adaptive strategy selection for filtered search
+- **CSR graph traversal v2** -- lock-free adjacency with edge IDs and labels
+- **Bulk insert v2** -- DirectVectorWriter + AsyncIndexBuilder pipeline
+
+### Previous (v1.11.0)
 
 - **15 new VelesQL statements** -- SHOW COLLECTIONS, DESCRIBE, EXPLAIN, CREATE/DROP INDEX, ANALYZE, TRUNCATE, ALTER COLLECTION, FLUSH, multi-row INSERT, UPSERT, SELECT EDGES, INSERT NODE
 - **203 BDD E2E tests** -- comprehensive end-to-end test coverage for all VelesQL features
@@ -530,6 +537,23 @@ Get the in-degree and out-degree of a node.
 ```typescript
 const degree = await db.getNodeDegree('social', 100);
 console.log(`In: ${degree.inDegree}, Out: ${degree.outDegree}`);
+```
+
+#### `db.traverseParallel(collection, request)`
+
+Multi-source parallel BFS traversal with deduplication. Starts BFS from multiple source nodes simultaneously.
+
+```typescript
+const result = await db.traverseParallel('social', {
+  sources: [100, 200, 300],
+  maxDepth: 3,
+  limit: 50,
+  relTypes: ['FOLLOWS']
+});
+
+for (const node of result.results) {
+  console.log(`Node ${node.targetId} at depth ${node.depth}`);
+}
 ```
 
 ---

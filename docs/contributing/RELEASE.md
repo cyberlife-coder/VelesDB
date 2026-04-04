@@ -62,8 +62,8 @@ de version n'est nécessaire.
 ### 5. Créer et pusher le tag (après CI vert)
 
 ```bash
-git tag -a v1.7.0 -m "v1.7.0 - Description"
-git push origin v1.7.0
+git tag -a v1.11.1 -m "v1.11.1 - Description"
+git push origin v1.11.1
 ```
 
 ### 6. Le workflow `release.yml` publie automatiquement
@@ -88,8 +88,8 @@ git push origin v1.7.0
 Pour une pre-release (beta, rc) :
 
 ```bash
-git tag v1.7.0-beta.1
-git push origin v1.7.0-beta.1
+git tag v1.11.1-beta.1
+git push origin v1.11.1-beta.1
 ```
 
 Le workflow détecte automatiquement les pre-releases et :
@@ -109,7 +109,7 @@ Le workflow détecte automatiquement les pre-releases et :
 ### Le workflow ne se déclenche pas
 
 Vérifier que le tag suit le format `v[0-9]+.[0-9]+.[0-9]+` :
-- ✅ `v1.7.0`
+- ✅ `v1.11.1`
 - ✅ `v1.0.0-beta.1`
 - ❌ `0.8.6` (pas de "v")
 - ❌ `v0.8` (version incomplète)
@@ -121,9 +121,9 @@ Si une version existe déjà sur crates.io/PyPI/npm, le workflow skip cette éta
 ### Force-update un tag
 
 ```bash
-git tag -d v1.7.0
-git tag v1.7.0
-git push origin v1.7.0 --force
+git tag -d v1.11.1
+git tag v1.11.1
+git push origin v1.11.1 --force
 ```
 
 ## Workflow manuel
