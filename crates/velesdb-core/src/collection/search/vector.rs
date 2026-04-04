@@ -35,10 +35,7 @@ pub(crate) fn estimate_real_selectivity(
 /// For pure vector search, the HNSW/PQ score IS the vector component.
 pub(super) fn tag_vector_component_scores(results: &mut [SearchResult]) {
     for result in results {
-        result.component_scores = Some(smallvec::smallvec![(
-            "vector_score".to_string(),
-            result.score
-        ),]);
+        result.component_scores = Some(smallvec::smallvec![("vector_score", result.score),]);
     }
 }
 

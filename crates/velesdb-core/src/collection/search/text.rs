@@ -15,8 +15,8 @@ fn attach_rrf_components(
 ) {
     if let Some(&(vec_score, bm25_score)) = component_map.get(&result.point.id) {
         result.component_scores = Some(smallvec::smallvec![
-            ("vector_score".to_string(), vec_score),
-            ("bm25_score".to_string(), bm25_score),
+            ("vector_score", vec_score),
+            ("bm25_score", bm25_score),
         ]);
     }
 }
@@ -50,10 +50,7 @@ impl Collection {
         );
         // Tag each result with its BM25 component score.
         for result in &mut results {
-            result.component_scores = Some(smallvec::smallvec![(
-                "bm25_score".to_string(),
-                result.score
-            ),]);
+            result.component_scores = Some(smallvec::smallvec![("bm25_score", result.score),]);
         }
         Ok(results)
     }
@@ -108,7 +105,7 @@ impl Collection {
                 Some(SearchResult::with_component_scores(
                     point,
                     score,
-                    smallvec::smallvec![("bm25_score".to_string(), score)],
+                    smallvec::smallvec![("bm25_score", score)],
                 ))
             })
             .take(k)
@@ -267,6 +264,7 @@ impl Collection {
     /// * `k` - Maximum number of results to return
     /// * `vector_weight` - Weight for vector results (0.0-1.0, default 0.5)
     /// * `filter` - Metadata filter to apply
+    /// * `rrf_k` - RRF constant (default 60). Lower values amplify rank differences.
     ///
     /// # Errors
     ///
@@ -278,6 +276,7 @@ impl Collection {
         k: usize,
         vector_weight: Option<f32>,
         filter: &crate::filter::Filter,
+        rrf_k: Option<u32>,
     ) -> Result<Vec<SearchResult>> {
         use crate::index::VectorIndex;
 
@@ -288,6 +287,9 @@ impl Collection {
 
         let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
         let text_weight = 1.0 - weight;
+        // Reason: RRF k is typically 1–1000; u32→f32 is lossless below 2^24.
+        #[allow(clippy::cast_precision_loss)]
+        let rrf_constant = rrf_k.unwrap_or(60).max(1) as f32;
         let candidates_k = k.saturating_mul(4).max(k + 10);
 
         let raw_vector_results = self.index.search(vector_query, candidates_k);
@@ -300,7 +302,7 @@ impl Collection {
             &text_results,
             weight,
             text_weight,
-            60.0,
+            rrf_constant,
         );
 
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();

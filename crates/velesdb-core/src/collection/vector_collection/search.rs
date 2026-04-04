@@ -172,7 +172,7 @@ impl VectorCollection {
         filter: &crate::filter::Filter,
     ) -> Result<Vec<SearchResult>> {
         self.inner
-            .hybrid_search_with_filter(vector, text, k, alpha, filter)
+            .hybrid_search_with_filter(vector, text, k, alpha, filter, None)
     }
 
     /// Performs batch kNN search with per-query metadata filters.

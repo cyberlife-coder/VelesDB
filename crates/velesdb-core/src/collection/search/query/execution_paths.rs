@@ -271,6 +271,7 @@ impl Collection {
                     execution_limit,
                     vector_weight,
                     &filter,
+                    rrf_k,
                 );
             }
             return self.hybrid_search(vector, &text_query, execution_limit, vector_weight, rrf_k);

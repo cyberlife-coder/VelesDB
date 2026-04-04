@@ -374,6 +374,7 @@ pub async fn hybrid_search<R: Runtime>(
                     request.top_k,
                     Some(request.vector_weight),
                     f,
+                    None,
                 )?
             } else {
                 coll.hybrid_search(

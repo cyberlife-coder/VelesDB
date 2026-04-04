@@ -191,7 +191,7 @@ impl Point {
 ///
 /// Uses `SmallVec<4>` to avoid heap allocation for typical queries
 /// (at most 2-3 components: vector, text, sparse).
-pub type ComponentScores = smallvec::SmallVec<[(String, f32); 4]>;
+pub type ComponentScores = smallvec::SmallVec<[(&'static str, f32); 4]>;
 
 /// A search result containing a point and its similarity score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,7 +207,7 @@ pub struct SearchResult {
     /// When present, variables like `vector_score` and `bm25_score` resolve
     /// to their individual component values. When `None`, all score variables
     /// fall back to `score` (the fused/primary score).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_deserializing)]
     pub component_scores: Option<ComponentScores>,
 }
 
