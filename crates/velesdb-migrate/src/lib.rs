@@ -70,6 +70,7 @@ pub mod pipeline;
 pub(crate) mod pipeline_points;
 pub mod retry;
 pub mod source_config_builder;
+mod source_builders;
 pub mod transform;
 pub mod wizard;
 

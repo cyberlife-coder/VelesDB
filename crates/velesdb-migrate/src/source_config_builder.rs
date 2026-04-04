@@ -39,6 +39,7 @@ pub struct SourceParams<'a> {
 ///   pgvector requires `--features postgres`).
 /// - A required API key is missing or empty (Supabase, Pinecone, MongoDB).
 pub fn build_source_config(params: &SourceParams<'_>) -> Result<SourceConfig> {
+    use super::source_builders::*;
     match params.source_type {
         SourceType::Supabase => build_supabase(params),
         SourceType::Qdrant => Ok(build_qdrant(params)),
@@ -60,156 +61,12 @@ pub fn build_source_config(params: &SourceParams<'_>) -> Result<SourceConfig> {
 /// # Errors
 ///
 /// Returns `Error::Config` if the API key is `None` or empty.
-fn require_api_key(params: &SourceParams<'_>, source_name: &str) -> Result<String> {
+pub(crate) fn require_api_key(params: &SourceParams<'_>, source_name: &str) -> Result<String> {
     params
         .api_key
         .filter(|k| !k.is_empty())
         .map(String::from)
         .ok_or_else(|| Error::Config(format!("{source_name} requires an API key (--api-key)")))
-}
-
-fn build_supabase(params: &SourceParams<'_>) -> Result<SourceConfig> {
-    let api_key = require_api_key(params, "Supabase")?;
-    Ok(SourceConfig::Supabase(crate::config::SupabaseConfig {
-        url: params.url.to_string(),
-        api_key,
-        table: params.collection.to_string(),
-        vector_column: "embedding".to_string(),
-        id_column: "id".to_string(),
-        payload_columns: vec![],
-    }))
-}
-
-fn build_qdrant(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::Qdrant(crate::config::QdrantConfig {
-        url: params.url.to_string(),
-        collection: params.collection.to_string(),
-        api_key: params.api_key.map(String::from),
-        payload_fields: vec![],
-    })
-}
-
-fn build_pinecone(params: &SourceParams<'_>) -> Result<SourceConfig> {
-    let api_key = require_api_key(params, "Pinecone")?;
-    Ok(SourceConfig::Pinecone(crate::config::PineconeConfig {
-        api_key,
-        environment: String::new(),
-        index: params.collection.to_string(),
-        namespace: None,
-        base_url: None,
-    }))
-}
-
-fn build_weaviate(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::Weaviate(crate::config::WeaviateConfig {
-        url: params.url.to_string(),
-        class_name: params.collection.to_string(),
-        api_key: params.api_key.map(String::from),
-        properties: vec![],
-    })
-}
-
-fn build_milvus(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::Milvus(crate::config::MilvusConfig {
-        url: params.url.to_string(),
-        collection: params.collection.to_string(),
-        username: None,
-        password: None,
-    })
-}
-
-fn build_chromadb(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::ChromaDB(crate::config::ChromaDBConfig {
-        url: params.url.to_string(),
-        collection: params.collection.to_string(),
-        tenant: None,
-        database: None,
-    })
-}
-
-fn build_pgvector(params: &SourceParams<'_>) -> Result<SourceConfig> {
-    #[cfg(feature = "postgres")]
-    {
-        Ok(SourceConfig::PgVector(crate::config::PgVectorConfig {
-            connection_string: params.url.to_string(),
-            table: params.collection.to_string(),
-            vector_column: "embedding".to_string(),
-            id_column: "id".to_string(),
-            payload_columns: vec![],
-            filter: None,
-        }))
-    }
-    #[cfg(not(feature = "postgres"))]
-    {
-        let _ = params;
-        Err(Error::Config(
-            "pgvector requires --features postgres".to_string(),
-        ))
-    }
-}
-
-fn build_json_file(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::JsonFile(crate::connectors::json_file::JsonFileConfig {
-        path: std::path::PathBuf::from(params.url),
-        array_path: String::new(),
-        id_field: "id".to_string(),
-        vector_field: "vector".to_string(),
-        payload_fields: vec![],
-    })
-}
-
-fn build_csv_file(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::CsvFile(crate::connectors::csv_file::CsvFileConfig {
-        path: std::path::PathBuf::from(params.url),
-        id_column: "id".to_string(),
-        vector_column: "vector".to_string(),
-        vector_spread: false,
-        dim_prefix: "dim_".to_string(),
-        delimiter: ',',
-        has_header: true,
-    })
-}
-
-fn build_mongodb(params: &SourceParams<'_>) -> Result<SourceConfig> {
-    let api_key = require_api_key(params, "MongoDB")?;
-    Ok(SourceConfig::MongoDB(
-        crate::connectors::mongodb::MongoDBConfig {
-            data_api_url: params.url.to_string(),
-            api_key,
-            database: "vectors".to_string(),
-            collection: params.collection.to_string(),
-            vector_field: "embedding".to_string(),
-            id_field: "_id".to_string(),
-            payload_fields: vec![],
-            filter: None,
-        },
-    ))
-}
-
-fn build_elasticsearch(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::Elasticsearch(crate::connectors::elasticsearch::ElasticsearchConfig {
-        url: params.url.to_string(),
-        index: params.collection.to_string(),
-        vector_field: "embedding".to_string(),
-        id_field: "_id".to_string(),
-        payload_fields: vec![],
-        username: None,
-        password: None,
-        api_key: params.api_key.map(String::from),
-        query: None,
-    })
-}
-
-fn build_redis(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::Redis(crate::connectors::redis::RedisConfig {
-        url: params.url.to_string(),
-        password: params.api_key.map(String::from),
-        index: params.collection.to_string(),
-        vector_field: "embedding".to_string(),
-        key_prefix: "doc:".to_string(),
-        payload_fields: vec![],
-        filter: None,
-    })
 }
 
 /// Parses a source type string into a `SourceType`.

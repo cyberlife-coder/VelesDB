@@ -11,6 +11,9 @@ pub mod async_index_builder;
 pub mod delta;
 
 #[cfg(feature = "persistence")]
+mod delta_merge;
+
+#[cfg(feature = "persistence")]
 pub mod deferred;
 
 #[cfg(feature = "persistence")]
@@ -21,7 +24,7 @@ pub use async_index_builder::{AsyncIndexBuilder, AsyncIndexBuilderConfig};
 #[cfg(feature = "persistence")]
 pub use deferred::{DeferredIndexer, DeferredIndexerConfig};
 #[cfg(feature = "persistence")]
-pub use delta::{merge_with_delta, merge_with_delta_scored};
+pub use delta_merge::{merge_with_delta, merge_with_delta_scored};
 #[cfg(feature = "persistence")]
 pub use ingester::{BackpressureError, StreamIngester, StreamingConfig};
 

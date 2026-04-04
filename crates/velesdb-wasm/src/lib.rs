@@ -65,7 +65,9 @@ mod store_search;
 mod text_search;
 mod vector_ops;
 mod vector_store;
+mod vector_store_persistence;
 mod velesql;
+mod velesql_helpers;
 
 pub use agent::SemanticMemory;
 pub use graph::{GraphEdge, GraphNode, GraphStore};

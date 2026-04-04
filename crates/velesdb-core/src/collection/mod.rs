@@ -24,6 +24,7 @@ mod core;
 pub mod diagnostics;
 pub mod graph;
 mod graph_collection;
+mod graph_collection_query;
 mod metadata_collection;
 pub mod query_cost;
 pub mod search;

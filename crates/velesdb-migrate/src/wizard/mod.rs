@@ -4,6 +4,7 @@
 //! auto-detecting schema and configuration options.
 
 mod discovery;
+mod migration_builder;
 mod prompts;
 mod source_type;
 mod ui;
@@ -13,14 +14,11 @@ pub use prompts::WizardPrompts;
 pub use source_type::SourceType;
 pub use ui::WizardUI;
 
-use crate::config::{
-    DestinationConfig, DistanceMetric, MigrationOptions, SourceConfig, StorageMode,
-};
+use crate::config::SourceConfig;
 use crate::connectors::{create_connector, SourceSchema};
 use crate::error::Result;
 use crate::pipeline::Pipeline;
 use crate::MigrationConfig;
-use std::path::PathBuf;
 
 /// Configuration collected during wizard interaction.
 #[derive(Debug, Clone)]
@@ -121,43 +119,14 @@ impl Wizard {
         config: &WizardConfig,
         schema: &SourceSchema,
     ) -> Result<MigrationConfig> {
-        let source = self.build_source_config(config)?;
-
-        let storage_mode = if config.use_sq8 {
-            StorageMode::SQ8
-        } else {
-            StorageMode::Full
-        };
-
-        let destination = DestinationConfig {
-            path: PathBuf::from(&config.dest_path),
-            collection: config.collection.clone(),
-            dimension: schema.dimension,
-            metric: DistanceMetric::Cosine,
-            storage_mode,
-        };
-
-        let options = MigrationOptions {
-            batch_size: 1000,
-            workers: 4,
-            dry_run: false,
-            continue_on_error: false,
-            checkpoint_enabled: true,
-            checkpoint_path: None,
-            field_mappings: std::collections::HashMap::new(),
-        };
-
-        Ok(MigrationConfig {
-            source,
-            destination,
-            options,
-        })
+        migration_builder::build_migration_config(config, schema)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{DistanceMetric, StorageMode};
 
     // ==================== SourceType Tests ====================
 

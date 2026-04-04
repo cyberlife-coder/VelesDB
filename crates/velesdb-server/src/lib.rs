@@ -3,7 +3,6 @@
 // trait signature even when they don't await).
 #![allow(clippy::pedantic)] // Axum handlers + utoipa derive generate pedantic warnings
 #![allow(clippy::nursery)] // false positives on Axum extractors
-#![allow(clippy::doc_markdown)] // utoipa doc attributes conflict with doc_markdown
 #![allow(clippy::uninlined_format_args)] // readability in error messages
 #![allow(clippy::manual_let_else)] // pattern matching in handlers is clearer
 #![allow(clippy::cast_possible_truncation)] // u128→u64 timing casts are bounded
@@ -28,19 +27,19 @@ pub mod auth;
 pub mod config;
 mod handlers;
 pub mod onboarding;
+mod security_addon;
 pub mod tls;
 mod types;
 
+use security_addon::SecurityAddon;
 use std::sync::atomic::AtomicBool;
 use utoipa::OpenApi;
 use velesdb_core::guardrails::QueryLimits;
 use velesdb_core::Database;
 
-// Re-export types for external use
 pub use onboarding::OnboardingMetrics;
 pub use types::*;
 
-// Re-export handlers for routing
 pub use handlers::{
     aggregate, analyze_collection, batch_search, collection_sanity, create_collection,
     create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
@@ -50,7 +49,6 @@ pub use handlers::{
     stream_upsert_points, text_search, update_guardrails, upsert_points,
 };
 
-// Graph handlers (EPIC-016/US-031)
 pub use handlers::graph::{
     add_edge, get_edge_count, get_edges, get_node_degree, get_node_edges, get_node_payload,
     graph_search, list_nodes, remove_edge, stream_traverse, traverse_graph, traverse_parallel,
@@ -61,13 +59,11 @@ pub use handlers::graph::{
     UpsertNodePayloadRequest,
 };
 
-// FLAG-3 FIX: Re-export metrics handlers conditionally (EPIC-016/US-034,035)
 #[cfg(feature = "prometheus")]
 pub use handlers::metrics::{health_metrics, prometheus_metrics};
 
 // ============================================================================
 // OpenAPI Documentation
-// ============================================================================
 
 /// VelesDB API Documentation
 #[derive(OpenApi)]
@@ -215,27 +211,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
 )]
 pub struct ApiDoc;
 
-/// Adds the Bearer authentication security scheme to the OpenAPI spec.
-struct SecurityAddon;
-
-impl utoipa::Modify for SecurityAddon {
-    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        if let Some(components) = openapi.components.as_mut() {
-            components.add_security_scheme(
-                "bearer_auth",
-                utoipa::openapi::security::SecurityScheme::Http(
-                    utoipa::openapi::security::Http::new(
-                        utoipa::openapi::security::HttpAuthScheme::Bearer,
-                    ),
-                ),
-            );
-        }
-    }
-}
-
 // ============================================================================
 // Application State
-// ============================================================================
 
 /// Application state shared across handlers.
 pub struct AppState {
@@ -251,7 +228,6 @@ pub struct AppState {
 
 // ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

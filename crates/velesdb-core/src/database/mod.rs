@@ -28,6 +28,7 @@ mod introspection_executor;
 mod metadata_ops;
 mod persistence;
 mod query_engine;
+mod query_engine_dml;
 mod stats;
 mod training;
 mod vector_ops;

@@ -30,6 +30,7 @@ mod agent;
 mod collection;
 mod collection_helpers;
 mod database;
+mod database_stats;
 mod fusion;
 mod graph;
 mod graph_collection;
@@ -37,6 +38,7 @@ mod graph_collection_query;
 mod graph_store;
 mod utils;
 mod velesql;
+mod velesql_helpers;
 
 pub use collection::Collection;
 pub use database::Database;
