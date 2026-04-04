@@ -97,6 +97,15 @@ impl Parser {
             }
         }
 
+        Self::build_update_query(table, assignments, where_clause)
+    }
+
+    /// Validates extracted UPDATE components and builds the query.
+    fn build_update_query(
+        table: Option<String>,
+        assignments: Vec<UpdateAssignment>,
+        where_clause: Option<Condition>,
+    ) -> Result<Query, ParseError> {
         let table =
             table.ok_or_else(|| ParseError::syntax(0, "", "UPDATE requires target collection"))?;
         if assignments.is_empty() {

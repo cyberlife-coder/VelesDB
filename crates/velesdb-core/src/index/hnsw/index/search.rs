@@ -318,29 +318,9 @@ impl HnswIndex {
     ) -> crate::error::Result<Vec<ScoredResult>> {
         self.validate_dimension(query)?;
 
-        // Perfect mode uses brute-force SIMD for guaranteed 100% recall
-        if matches!(quality, SearchQuality::Perfect) {
-            return self.search_brute_force(query, k);
-        }
-
-        // For very small collections (<=100 vectors), use brute-force to guarantee 100% recall
-        // HNSW graph may not be fully connected with so few nodes, causing missed results
-        // Only use brute-force if vector storage is enabled (not in fast-insert mode)
-        if self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty() {
-            return self.search_brute_force(query, k);
-        }
-
-        // Adaptive two-phase: start with min_ef, escalate if query is hard
-        if let SearchQuality::Adaptive { min_ef, max_ef } = quality {
-            return Ok(self.search_adaptive(query, k, min_ef.max(k), max_ef));
-        }
-
-        // AutoTune: compute ef range from collection statistics, then delegate
-        // to the same adaptive two-phase algorithm.
-        if matches!(quality, SearchQuality::AutoTune) {
-            let (min_ef, max_ef) =
-                crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k);
-            return Ok(self.search_adaptive(query, k, min_ef, max_ef));
+        // Delegate to specialised paths that don't need the full match cascade.
+        if let Some(result) = self.try_search_special_quality(query, k, &quality)? {
+            return Ok(result);
         }
 
         let ef_search = quality.ef_search_for_scale(k, self.len());
@@ -351,6 +331,36 @@ impl HnswIndex {
         }
 
         Ok(self.search_hnsw_only(query, k, ef_search))
+    }
+
+    /// Handles Perfect, small-collection brute-force, Adaptive, and AutoTune
+    /// quality modes. Returns `Ok(Some(results))` when handled, `Ok(None)` to
+    /// fall through to the standard HNSW path.
+    fn try_search_special_quality(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: &SearchQuality,
+    ) -> crate::error::Result<Option<Vec<ScoredResult>>> {
+        if matches!(quality, SearchQuality::Perfect) {
+            return self.search_brute_force(query, k).map(Some);
+        }
+
+        if self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty() {
+            return self.search_brute_force(query, k).map(Some);
+        }
+
+        if let SearchQuality::Adaptive { min_ef, max_ef } = quality {
+            return Ok(Some(self.search_adaptive(query, k, (*min_ef).max(k), *max_ef)));
+        }
+
+        if matches!(quality, SearchQuality::AutoTune) {
+            let (min_ef, max_ef) =
+                crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k);
+            return Ok(Some(self.search_adaptive(query, k, min_ef, max_ef)));
+        }
+
+        Ok(None)
     }
 
     /// Two-phase adaptive search that starts with a low ef and escalates if needed.

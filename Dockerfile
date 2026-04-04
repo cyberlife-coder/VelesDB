@@ -1,12 +1,12 @@
 # Build stage
-FROM rust:1.84-bookworm AS builder
+FROM rust:1.86-bookworm AS builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies (pinned to bookworm versions for reproducibility)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config \
-    libssl-dev \
+    pkg-config=1.8.1-1 \
+    libssl-dev=3.0.15-1~deb12u1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests and source
@@ -22,10 +22,10 @@ FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
+# Install runtime dependencies (pinned to bookworm versions for reproducibility)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
+    ca-certificates=20230311 \
+    curl=7.88.1-10+deb12u8 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
