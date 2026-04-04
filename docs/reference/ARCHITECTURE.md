@@ -117,11 +117,15 @@ VelesDB core architecture is explicitly **hybrid by design**:
 ### 3. Core Engine (velesdb-core)
 
 #### Database
-- Collection management
+- Collection management via typed registries:
+  - `vector_collections: HashMap<String, VectorCollection>`
+  - `graph_collections: HashMap<String, GraphCollection>`
+  - `metadata_collections: HashMap<String, MetadataCollection>`
 - Multi-collection support
 - Automatic persistence
 
 #### Collection
+- Three typed collection variants: `VectorCollection`, `GraphCollection`, `MetadataCollection`
 - Point CRUD operations
 - Vector search (single & batch)
 - Text search (BM25)
@@ -204,6 +208,11 @@ VelesDB core architecture is explicitly **hybrid by design**:
   reconstructed on-demand via `reconstruct_path()` only when emitting
   results. Uses `FxHashSet` visited sets (via `rustc_hash`) for faster
   hashing than `std::HashSet`.
+- **Parallel BFS**: Multi-source BFS traversal (`traverse_bfs_parallel`)
+  launches concurrent BFS from multiple source nodes with deduplication
+  by path signature. Available across all components: server REST API,
+  Python bindings (GIL-released), Mobile (UniFFI), Tauri plugin, and
+  TypeScript SDK.
 
 ### 5. Index Layer
 

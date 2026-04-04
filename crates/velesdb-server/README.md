@@ -664,7 +664,7 @@ enabled = true       # set to false to disable
 
 All sections and fields are optional. Only include what you need to override.
 
-### Update Check (v1.9.2+)
+### Update Check
 
 On startup, the server performs a non-blocking version check against `velesdb.com/api/check`. This sends only: version, OS, architecture, and a non-reversible SHA256 instance hash. No personal data is collected.
 

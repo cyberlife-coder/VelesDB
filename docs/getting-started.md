@@ -170,7 +170,7 @@ curl -X POST http://localhost:8080/query \
   }'
 ```
 
-### 8. Knowledge Graph (EPIC-011)
+### 8. Knowledge Graph
 
 VelesDB supports graph relationships between vectors:
 

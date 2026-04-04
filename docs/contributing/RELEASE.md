@@ -18,10 +18,10 @@ VelesDB utilise **3 workflows GitHub Actions** :
 
 ```powershell
 # Preview changes (dry run)
-.\scripts\bump-version.ps1 -Version "0.9.0" -DryRun
+.\scripts\bump-version.ps1 -Version "1.11.1" -DryRun
 
 # Apply changes to all 9 package files
-.\scripts\bump-version.ps1 -Version "0.9.0"
+.\scripts\bump-version.ps1 -Version "1.11.1"
 ```
 
 Le script `bump-version.ps1` met à jour automatiquement :
@@ -42,7 +42,7 @@ Ajouter une section pour la nouvelle version avec les changements.
 
 ```bash
 git add -A
-git commit -m "chore(release): bump version to 0.9.0"
+git commit -m "chore(release): bump version to 1.11.1"
 git push origin main
 ```
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-04-04
+
+### Changed
+- Module refactoring: `VectorStore` extracted to `vector_store.rs`, persistence to `vector_store_persistence.rs`
+- VelesQL helpers extracted to `velesql_helpers.rs`
+- All production files under 500 NLOC (Codacy compliance)
+- Version bump to align with workspace v1.11.1 release
+
 ## [1.7.0] - 2026-03-24
 
 ### Added

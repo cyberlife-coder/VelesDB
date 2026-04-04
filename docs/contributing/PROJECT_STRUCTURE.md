@@ -93,8 +93,9 @@ Core engine. Contains:
 - **Typed Collections**: `VectorCollection`, `GraphCollection`, `MetadataCollection` (plus legacy `Collection` for backward compatibility)
 - **VelesQL**: SQL-like query language with vector and graph extensions (pest-based parser)
 - **Storage**: Memory-mapped files, WAL, sharded vectors, compaction
-- **Quantization**: SQ8 (4x) and Binary (32x) memory compression
+- **Quantization**: SQ8 (4x), Binary (32x), Product Quantization (8-32x), RaBitQ (32x)
 - **Agent Memory**: Semantic, episodic, and procedural memory patterns for AI agents
+- **Graph Engine**: CsrSnapshot zero-copy BFS/DFS, parallel multi-source BFS, FxHashSet visited sets, parent-pointer path reconstruction
 
 ### `velesdb-server`
 
@@ -114,8 +115,10 @@ Command-line interface with:
 ### `velesdb-python`
 
 Python bindings via PyO3:
-- `Database`, `Collection`, `GraphCollection`, `AgentMemory` classes
+- `Database`, `VelesDatabase`, `Collection`, `GraphCollection`, `AgentMemory` classes
+- `FusionStrategy` pyclass (extracted to `fusion.rs`)
 - NumPy array support (float32, float64)
+- Parallel BFS with GIL release (`py.allow_threads`)
 - Comprehensive pytest suite
 
 ### `velesdb-wasm`
@@ -130,14 +133,17 @@ cargo build -p velesdb-wasm --no-default-features --target wasm32-unknown-unknow
 iOS and Android bindings via UniFFI:
 - Swift bindings for iOS
 - Kotlin bindings for Android
+- `VelesCollection` (extracted to `collection.rs`) with full search API
+- `MobileGraphStore` with BFS, DFS, and parallel multi-source BFS
+- StorageMode support (Full, SQ8, Binary) for IoT/Edge
 
 ### `velesdb-migrate`
 
-Schema and data migration tooling for version upgrades (e.g., bincode-to-postcard migration in v1.5).
+Schema and data migration tooling. Supports 12 source connectors: Qdrant, Pinecone, Weaviate, Milvus, ChromaDB, pgvector, Supabase, Elasticsearch, MongoDB Atlas, Redis, JSON, CSV.
 
 ### `tauri-plugin-velesdb`
 
-Tauri desktop integration plugin for building local-first desktop applications with embedded vector search.
+Tauri desktop integration plugin for building local-first desktop applications with embedded vector search. Includes index management (create/drop/list), graph traversal (BFS/DFS/parallel BFS), sparse vectors, agent memory, and streaming insert.
 
 ---
 

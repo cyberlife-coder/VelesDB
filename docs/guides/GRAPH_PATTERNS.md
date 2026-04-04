@@ -1,6 +1,6 @@
 # Graph Patterns Guide
 
-*Version 1.9.1 -- March 2026*
+*Version 1.11.1 -- April 2026*
 
 Practical guide for using VelesQL `MATCH` graph patterns in VelesDB.
 
@@ -123,6 +123,44 @@ Labels are case-sensitive. `"Product"` and `"product"` are different labels. Ens
 // Direct graph API example
 let outgoing = graph_collection.get_outgoing(node_id)?;
 let bfs_results = graph_collection.traverse_bfs(start_id, max_depth)?;
+```
+
+---
+
+## Parallel BFS Traversal
+
+Multi-source BFS launches concurrent traversals from multiple starting nodes with automatic deduplication by path signature. Available across all components.
+
+### REST API
+
+```bash
+curl -X POST http://localhost:8080/collections/kg/graph/traverse/parallel \
+  -H "Content-Type: application/json" \
+  -d '{"sources": [1, 5, 10], "max_depth": 3, "limit": 100}'
+```
+
+### Python
+
+```python
+results = graph_collection.traverse_bfs_parallel(
+    source_ids=[1, 5, 10],
+    max_depth=3,
+    limit=100
+)
+```
+
+### Tauri
+
+```javascript
+const results = await invoke('plugin:velesdb|traverse_graph_parallel', {
+  request: { collection: 'kg', sources: [1, 5, 10], maxDepth: 3, limit: 100 }
+});
+```
+
+### Mobile (UniFFI)
+
+```swift
+let results = try graphStore.bfsTraverseParallel(sourceIds: [1, 5, 10], maxDepth: 3, limit: 100)
 ```
 
 ---

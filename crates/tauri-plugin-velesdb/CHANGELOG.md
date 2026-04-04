@@ -5,6 +5,22 @@ All notable changes to `tauri-plugin-velesdb` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.1] - 2026-04-04
+
+### Added
+
+- `create_index` — create secondary metadata indexes for faster filtered search
+- `drop_index` — drop a secondary metadata index
+- `list_indexes` — list all indexes on a collection
+- `traverse_graph_parallel` — multi-source parallel BFS with deduplication
+
+### Changed
+
+- Version bump to align with workspace v1.11.1 release
+- Module refactoring: commands split into `commands_sparse.rs`, `commands_memory.rs`, `commands_query.rs`
+- `velesdb_invoke_handler!` macro replaces duplicated `generate_handler!` blocks
+- All production files under 500 NLOC (Codacy compliance)
+
 ## [1.7.0] - 2026-03-24
 
 ### Changed
