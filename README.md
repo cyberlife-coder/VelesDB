@@ -494,7 +494,7 @@ Share your experience on [GitHub Discussions](https://github.com/cyberlife-coder
 
 ## License
 
-VelesDB Core License 1.0. Free for development, research, and internal tools. Commercial use requires a license for revenue-generating applications. [Read the full license](LICENSE).
+VelesDB Core License 1.0 (based on ELv2). Free for production use, including commercial applications. Two restrictions: no offering VelesDB as a hosted/managed database service, and no building a competing database product. [Read the full license](LICENSE).
 
 ---
 
