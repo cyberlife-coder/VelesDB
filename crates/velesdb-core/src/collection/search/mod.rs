@@ -25,6 +25,7 @@ mod text;
 #[cfg(test)]
 mod text_tests;
 mod vector;
+mod vector_filter;
 #[cfg(test)]
 mod vector_tests;
 

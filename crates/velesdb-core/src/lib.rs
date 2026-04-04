@@ -75,6 +75,7 @@ pub mod compression;
 pub mod config;
 #[cfg(test)]
 mod config_tests;
+pub mod contiguous_ops;
 pub mod distance;
 #[cfg(test)]
 mod distance_tests;
@@ -192,10 +193,10 @@ pub use collection::{
     ValueType,
     VectorCollection,
 };
+pub use contiguous_ops::pad_to_simd_width;
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
-pub use perf_optimizations::pad_to_simd_width;
 pub use point::{ComponentScores, Point, SearchResult};
 pub use quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,

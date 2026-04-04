@@ -59,6 +59,7 @@ mod streaming;
 #[cfg(test)]
 mod streaming_tests;
 mod traversal;
+mod traversal_csr;
 #[cfg(test)]
 mod traversal_tests;
 
@@ -102,7 +103,5 @@ pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
 pub use streaming::{
     bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,
 };
-pub use traversal::{
-    bfs_traverse_csr, bfs_traverse_csr_filtered, TraversalConfig, TraversalPath, TraversalResult,
-    DEFAULT_MAX_DEPTH,
-};
+pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH};
+pub use traversal_csr::{bfs_traverse_csr, bfs_traverse_csr_filtered};

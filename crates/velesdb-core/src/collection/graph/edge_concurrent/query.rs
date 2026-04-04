@@ -6,9 +6,8 @@
 //! - Edge count
 
 use super::super::csr_snapshot::{CsrSnapshot, EdgePredicate};
-use super::super::traversal::{
-    bfs_traverse_csr, bfs_traverse_csr_filtered, TraversalConfig, TraversalResult,
-};
+use super::super::traversal::{TraversalConfig, TraversalResult};
+use super::super::traversal_csr::{bfs_traverse_csr, bfs_traverse_csr_filtered};
 use super::{ConcurrentEdgeStore, GraphEdge};
 use arc_swap::Guard;
 use rustc_hash::FxHashSet;

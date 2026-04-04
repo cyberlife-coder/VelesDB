@@ -33,6 +33,7 @@ mod vector_bytes_tests;
 pub mod wal_batcher;
 #[cfg(test)]
 mod wal_batcher_tests;
+mod wal_entry;
 
 #[cfg(test)]
 mod compaction_tests;

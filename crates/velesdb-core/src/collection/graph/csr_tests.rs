@@ -17,7 +17,8 @@
 use super::csr_snapshot::SnapshotBuilder;
 use super::edge::{EdgeStore, GraphEdge};
 use super::label_table::LabelTable;
-use super::traversal::{bfs_traverse, bfs_traverse_csr, TraversalConfig};
+use super::traversal::{bfs_traverse, TraversalConfig};
+use super::traversal_csr::bfs_traverse_csr;
 use std::collections::HashSet;
 
 // =============================================================================
@@ -698,7 +699,7 @@ fn test_label_filter_selective() {
 #[test]
 fn test_bfs_filtered_vs_post_filter() {
     use super::csr_snapshot::{LabelFilter, NoFilter};
-    use super::traversal::bfs_traverse_csr_filtered;
+    use super::traversal_csr::bfs_traverse_csr_filtered;
     use rustc_hash::FxHashSet;
 
     // Build a graph: 1 -KNOWS-> 2 -LIKES-> 3 -KNOWS-> 4
