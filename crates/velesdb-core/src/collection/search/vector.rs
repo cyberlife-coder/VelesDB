@@ -531,7 +531,8 @@ impl Collection {
 
             let index_results = if selectivity <= SELECTIVITY_THRESHOLD {
                 // Full-scan brute-force for very selective filters
-                self.index.full_scan_with_bitmap(query, k, &bitmap)?
+                let results = self.index.full_scan_with_bitmap(query, k, &bitmap)?;
+                self.merge_delta(results, query, k, metric)
             } else {
                 // HNSW + bitmap pre-filter
                 let candidates_k = compute_oversampled_k(k, filter);

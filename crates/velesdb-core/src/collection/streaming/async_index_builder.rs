@@ -150,22 +150,13 @@ impl AsyncIndexBuilder {
             return Ok(0);
         }
 
-        let segment_count = self.config.segment_count.unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(std::num::NonZero::get)
-                .unwrap_or(4)
-        });
-
         let pairs: Vec<(u64, &[f32])> = vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
 
         let inserted = hnsw_index.insert_batch_parallel(pairs);
 
         self.building.store(false, Ordering::Release);
 
-        tracing::debug!(
-            "AsyncIndexBuilder::flush_sync: indexed {inserted}/{count} vectors \
-             (segments={segment_count})"
-        );
+        tracing::debug!("AsyncIndexBuilder::flush_sync: indexed {inserted}/{count} vectors");
 
         Ok(inserted)
     }
