@@ -549,15 +549,14 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 
 ## Roadmap
 
-| Milestone | Status | Target |
-|-----------|--------|--------|
-| v1.0 — Core engine (vector + graph + VelesQL) | ✅ Shipped | 2025 Q4 |
-| v1.5 — Python SDK, WASM, Mobile bindings | ✅ Shipped | 2026 Q1 |
-| v1.10 — Agent Memory SDK, hybrid search, quantization | ✅ Shipped | 2026 Q1 |
-| v1.11 — Cross-collection MATCH, bitmap pre-filter, CSR graph | ✅ Shipped | 2026 Q2 |
-| v1.12 — EXPLAIN ANALYZE, CBO improvements, SSE4.2 fallback | 🔧 In progress | 2026 Q2 |
-| v2.0 — Distributed mode (multi-node replication) | 📋 Planned | 2026 Q3 |
-| v2.1 — Managed cloud service (VelesDB Cloud) | 📋 Planned | 2026 Q4 |
+| Milestone | Status |
+|-----------|--------|
+| v1.0 — Core engine (vector + graph + VelesQL) | ✅ Shipped |
+| v1.5 — Python SDK, WASM, Mobile bindings | ✅ Shipped |
+| v1.10 — Agent Memory SDK, hybrid search, quantization | ✅ Shipped |
+| v1.11 — Cross-collection MATCH, bitmap pre-filter, CSR graph | ✅ Shipped |
+
+> VelesDB Core is open-source. Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
 
 > We ship weekly. [Full changelog](CHANGELOG.md) | [Contributing guide](CONTRIBUTING.md)
 
