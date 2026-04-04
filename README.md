@@ -19,7 +19,7 @@
   <a href="https://pypi.org/project/velesdb/"><img src="https://img.shields.io/pypi/v/velesdb.svg" alt="PyPI"></a>
   <a href="https://www.npmjs.com/package/@wiscale/velesdb-sdk"><img src="https://img.shields.io/npm/v/@wiscale/velesdb-sdk.svg" alt="npm"></a>
   <a href="https://app.codacy.com/gh/cyberlife-coder/VelesDB/dashboard"><img src="https://app.codacy.com/project/badge/Coverage/58c73832dd294ba38144856ae69e9cf2" alt="Coverage"></a>
-  <img src="https://img.shields.io/badge/tests-4675_(incl._228_BDD)-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-4685_(incl._238_BDD)-brightgreen" alt="Tests">
   <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-VelesDB_Core_1.0-blue" alt="License"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="Stars"></a>
   <a href="https://img.shields.io/badge/contributors-welcome-brightgreen"><img src="https://img.shields.io/badge/contributors-welcome-brightgreen" alt="Contributors Welcome"></a>
@@ -501,16 +501,65 @@ ColumnStore filters are applied as pre-filters or post-filters depending on sele
 
 ## Use Cases
 
-| Use Case | VelesDB Feature |
-|----------|-----------------|
-| **RAG Pipelines** | Vector search + ColumnStore metadata filters |
-| **AI Agents** | [Agent Memory SDK](#agent-memory-sdk) — semantic, episodic, procedural memory |
-| **E-commerce** | Vector similarity + price/stock ColumnStore filters + co-purchase graph |
-| **Desktop Apps (Tauri/Electron)** | Single binary, no server needed |
-| **Mobile AI (iOS/Android)** | Native SDKs with 32x memory compression |
-| **Browser-side Search** | WASM module, zero backend |
-| **Edge/IoT Devices** | 6 MB footprint, ARM NEON optimized |
-| **On-Prem / Air-Gapped** | No cloud dependency, full data sovereignty |
+### AI Agent Memory
+
+Your agent needs to remember conversations, learn from mistakes, and recall relevant knowledge. VelesDB provides all three memory types in a single embedded database — no Redis, no Pinecone, no Neo4j.
+
+```python
+memory = AgentMemory(db, dimension=384)
+memory.semantic.store(1, "User prefers dark mode", embedding)
+memory.episodic.record(2, "User asked about billing", timestamp, embedding)
+memory.procedural.learn(3, "handle_refund", steps, embedding, confidence=0.9)
+```
+
+### RAG with Metadata Filtering
+
+Vector search alone returns noise. VelesDB's ColumnStore filters eliminate irrelevant results 130x faster than JSON scanning.
+
+```sql
+SELECT * FROM docs
+WHERE vector NEAR $query AND department = 'engineering' AND updated_at > NOW() - INTERVAL '30 days'
+LIMIT 10
+```
+
+### E-commerce: Vector + Graph + Filters in One Query
+
+Find products similar to a query, filter by price/stock, and traverse co-purchase relationships — all in a single VelesQL statement.
+
+```sql
+MATCH (product)-[:BOUGHT_TOGETHER]->(related)
+WHERE similarity(product.embedding, $query) > 0.7
+  AND related.price < 200 AND related.in_stock = true
+RETURN related.name, related.price
+ORDER BY similarity() DESC LIMIT 20
+```
+
+### Desktop & Mobile AI
+
+Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and Android apps.
+
+| Platform | Integration | Binary size |
+|----------|-------------|-------------|
+| Desktop (Tauri) | `tauri-plugin-velesdb` | 6 MB |
+| iOS (Swift) | UniFFI bindings | ~4 MB |
+| Android (Kotlin) | UniFFI bindings | ~4 MB |
+| Browser | WASM module | ~50 KB gzipped |
+
+---
+
+## Roadmap
+
+| Milestone | Status | Target |
+|-----------|--------|--------|
+| v1.0 — Core engine (vector + graph + VelesQL) | ✅ Shipped | 2025 Q4 |
+| v1.5 — Python SDK, WASM, Mobile bindings | ✅ Shipped | 2026 Q1 |
+| v1.10 — Agent Memory SDK, hybrid search, quantization | ✅ Shipped | 2026 Q1 |
+| v1.11 — Cross-collection MATCH, bitmap pre-filter, CSR graph | ✅ Shipped | 2026 Q2 |
+| v1.12 — EXPLAIN ANALYZE, CBO improvements, SSE4.2 fallback | 🔧 In progress | 2026 Q2 |
+| v2.0 — Distributed mode (multi-node replication) | 📋 Planned | 2026 Q3 |
+| v2.1 — Managed cloud service (VelesDB Cloud) | 📋 Planned | 2026 Q4 |
+
+> We ship weekly. [Full changelog](CHANGELOG.md) | [Contributing guide](CONTRIBUTING.md)
 
 ---
 
