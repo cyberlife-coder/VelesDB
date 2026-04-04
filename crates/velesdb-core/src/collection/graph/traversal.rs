@@ -10,7 +10,7 @@
 
 #![allow(dead_code)] // WIP: Will be used by MATCH clause execution
 
-use super::edge::CsrSnapshot;
+use super::csr_snapshot::CsrSnapshot;
 use super::EdgeStore;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -590,7 +590,7 @@ pub fn bfs_traverse_csr(
     results
 }
 
-use super::edge::EdgePredicate;
+use super::csr_snapshot::EdgePredicate;
 
 /// BFS traversal on a `CsrSnapshot` with predicate pushdown filtering.
 ///

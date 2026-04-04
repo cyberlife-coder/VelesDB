@@ -12,6 +12,7 @@ mod crud_helpers;
 mod crud_read_delete;
 #[cfg(test)]
 mod crud_tests;
+mod flush;
 #[cfg(all(test, feature = "persistence"))]
 mod flush_defer_tests;
 mod graph_api;
@@ -23,7 +24,6 @@ mod index_management_tests;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
-#[cfg(feature = "persistence")]
 mod recovery;
 #[cfg(all(test, feature = "persistence"))]
 mod recovery_tests;

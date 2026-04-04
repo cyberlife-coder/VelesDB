@@ -588,7 +588,7 @@ fn test_adaptive_ef_recall_preserved_with_2000_vectors() {
 #[test]
 fn test_batch_ef_schedule_small_batch_uniform() {
     // Batches < 1000 should use full ef for all phases
-    let schedule = super::backend_adapter::compute_batch_ef_schedule(200, 500, 16);
+    let schedule = super::batch_schedule::compute_batch_ef_schedule(200, 500, 16);
     assert_eq!(schedule.scaffold_ef, 200);
     assert_eq!(schedule.bulk_ef, 200);
     assert_eq!(schedule.finalize_ef, 200);
@@ -599,7 +599,7 @@ fn test_batch_ef_schedule_small_batch_uniform() {
 #[test]
 fn test_batch_ef_schedule_large_batch_graduated() {
     // Batch of 10_000 with ef=200, M=16
-    let schedule = super::backend_adapter::compute_batch_ef_schedule(200, 10_000, 16);
+    let schedule = super::batch_schedule::compute_batch_ef_schedule(200, 10_000, 16);
     assert_eq!(schedule.scaffold_ef, 200, "scaffold should use full ef");
     assert_eq!(schedule.bulk_ef, 100, "bulk should use 0.5x ef");
     assert_eq!(schedule.finalize_ef, 150, "finalize should use 0.75x ef");
@@ -611,7 +611,7 @@ fn test_batch_ef_schedule_large_batch_graduated() {
 fn test_batch_ef_schedule_floor_enforcement() {
     // When 0.5x ef < 2*m, the floor should kick in
     // ef=40, m=16 → bulk = max(20, 32) = 32; finalize = max(30, 32) = 32
-    let schedule = super::backend_adapter::compute_batch_ef_schedule(40, 5000, 16);
+    let schedule = super::batch_schedule::compute_batch_ef_schedule(40, 5000, 16);
     assert_eq!(schedule.scaffold_ef, 40);
     assert_eq!(schedule.bulk_ef, 32, "bulk floored at 2*M");
     assert_eq!(schedule.finalize_ef, 32, "finalize floored at 2*M");
@@ -619,7 +619,7 @@ fn test_batch_ef_schedule_floor_enforcement() {
 
 #[test]
 fn test_batch_ef_schedule_ef_for_position() {
-    let schedule = super::backend_adapter::compute_batch_ef_schedule(200, 10_000, 16);
+    let schedule = super::batch_schedule::compute_batch_ef_schedule(200, 10_000, 16);
 
     // Scaffold phase: positions 0..999
     assert_eq!(schedule.ef_for_position(0), 200);
@@ -638,14 +638,14 @@ fn test_batch_ef_schedule_ef_for_position() {
 #[test]
 fn test_batch_ef_schedule_boundary_batch_size() {
     // Exactly 1000: should apply graduated schedule
-    let schedule = super::backend_adapter::compute_batch_ef_schedule(100, 1000, 16);
+    let schedule = super::batch_schedule::compute_batch_ef_schedule(100, 1000, 16);
     assert_eq!(schedule.scaffold_count, 100);
     assert_eq!(schedule.finalize_start, 900);
     assert_eq!(schedule.bulk_ef, 50);
     assert_eq!(schedule.finalize_ef, 75);
 
     // 999: should use uniform full ef
-    let schedule = super::backend_adapter::compute_batch_ef_schedule(100, 999, 16);
+    let schedule = super::batch_schedule::compute_batch_ef_schedule(100, 999, 16);
     assert_eq!(schedule.scaffold_ef, 100);
     assert_eq!(schedule.bulk_ef, 100);
     assert_eq!(schedule.finalize_ef, 100);

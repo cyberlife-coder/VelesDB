@@ -13,7 +13,8 @@
 mod query;
 
 use super::clustered_index::ClusteredIndex;
-use super::edge::{CsrSnapshot, EdgeStore, GraphEdge, SnapshotBuilder};
+use super::csr_snapshot::{CsrSnapshot, SnapshotBuilder};
+use super::edge::{EdgeStore, GraphEdge};
 use super::label_table::LabelTable;
 use crate::error::{Error, Result};
 use arc_swap::ArcSwap;

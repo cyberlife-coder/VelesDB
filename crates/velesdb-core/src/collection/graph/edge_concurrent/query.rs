@@ -5,7 +5,7 @@
 //! - BFS traversal
 //! - Edge count
 
-use super::super::edge::{CsrSnapshot, EdgePredicate};
+use super::super::csr_snapshot::{CsrSnapshot, EdgePredicate};
 use super::super::traversal::{
     bfs_traverse_csr, bfs_traverse_csr_filtered, TraversalConfig, TraversalResult,
 };

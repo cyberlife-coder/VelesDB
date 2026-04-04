@@ -37,11 +37,13 @@
 #![allow(clippy::unused_self)]
 
 mod backend_adapter;
+mod batch_schedule;
 pub(crate) mod columnar_distance;
 pub(crate) mod columnar_vectors;
 mod distance;
 mod dual_precision;
 mod graph;
+mod graph_io;
 pub(crate) mod layer;
 mod ordered_float;
 mod quantization;

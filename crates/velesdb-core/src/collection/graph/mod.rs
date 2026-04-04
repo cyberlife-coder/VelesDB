@@ -38,6 +38,7 @@
 
 mod cart;
 mod clustered_index;
+mod csr_snapshot;
 mod degree_router;
 mod edge;
 mod edge_concurrent;
@@ -80,16 +81,15 @@ mod schema_tests;
 
 pub use cart::{CARTEdgeIndex, CompressedART};
 pub use clustered_index::{ClusteredEdgeIndex, ClusteredIndex};
+pub use csr_snapshot::{AdjacencySource, CsrSnapshot, EdgePredicate, LabelFilter, NoFilter};
 pub use degree_router::{
     DegreeAdaptiveStorage, DegreeRouter, EdgeIndex, HashSetEdgeIndex, VecEdgeIndex,
     DEFAULT_DEGREE_THRESHOLD,
 };
-pub use edge::{
-    AdjacencySource, CsrSnapshot, EdgePredicate, EdgeStore, GraphEdge, LabelFilter, NoFilter,
-};
+pub use edge::{EdgeStore, GraphEdge};
 // Re-exported for use by ConcurrentEdgeStore (Task 5) and other internal consumers.
 #[allow(unused_imports)]
-pub(crate) use edge::SnapshotBuilder;
+pub(crate) use csr_snapshot::SnapshotBuilder;
 pub use edge_concurrent::ConcurrentEdgeStore;
 pub use label_index::LabelIndex;
 pub use label_table::{LabelId, LabelTable};

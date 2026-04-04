@@ -14,7 +14,8 @@
     clippy::module_name_repetitions
 )]
 
-use super::edge::{EdgeStore, GraphEdge, SnapshotBuilder};
+use super::csr_snapshot::SnapshotBuilder;
+use super::edge::{EdgeStore, GraphEdge};
 use super::label_table::LabelTable;
 use super::traversal::{bfs_traverse, bfs_traverse_csr, TraversalConfig};
 use std::collections::HashSet;
@@ -620,7 +621,7 @@ fn test_snapshot_rebuild_after_remove_node_edges() {
 /// `NoFilter` returns all neighbors (no filtering).
 #[test]
 fn test_no_filter_returns_all() {
-    use super::edge::NoFilter;
+    use super::csr_snapshot::NoFilter;
 
     let mut store = EdgeStore::new();
     store
@@ -648,7 +649,7 @@ fn test_no_filter_returns_all() {
 /// `LabelFilter` returns only edges with matching labels.
 #[test]
 fn test_label_filter_selective() {
-    use super::edge::LabelFilter;
+    use super::csr_snapshot::LabelFilter;
     use rustc_hash::FxHashSet;
 
     let mut store = EdgeStore::new();
@@ -671,7 +672,7 @@ fn test_label_filter_selective() {
     // Find the LabelId for "KNOWS" from the snapshot's label_ids
     // We need to identify which LabelId corresponds to "KNOWS"
     let all_neighbors: Vec<(u64, u64, _)> = snapshot
-        .neighbors_filtered(10, &super::edge::NoFilter)
+        .neighbors_filtered(10, &super::csr_snapshot::NoFilter)
         .collect();
 
     // Find the label_id for KNOWS by checking which edges have target 20 or 40
@@ -696,7 +697,7 @@ fn test_label_filter_selective() {
 /// BFS with predicate pushdown produces same results as post-hoc filtering.
 #[test]
 fn test_bfs_filtered_vs_post_filter() {
-    use super::edge::{LabelFilter, NoFilter};
+    use super::csr_snapshot::{LabelFilter, NoFilter};
     use super::traversal::bfs_traverse_csr_filtered;
     use rustc_hash::FxHashSet;
 
@@ -771,7 +772,7 @@ fn test_bfs_filtered_vs_post_filter() {
 
 mod predicate_property_tests {
     use super::*;
-    use crate::collection::graph::edge::{EdgePredicate, LabelFilter, NoFilter};
+    use crate::collection::graph::csr_snapshot::{EdgePredicate, LabelFilter, NoFilter};
     use crate::collection::graph::label_table::LabelId;
     use proptest::prelude::*;
     use rustc_hash::FxHashSet;
@@ -864,7 +865,7 @@ mod predicate_property_tests {
 /// AdjacencySource on CsrSnapshot and EdgeStore return the same neighbor sets.
 #[test]
 fn test_adjacency_source_equivalence() {
-    use super::edge::AdjacencySource;
+    use super::csr_snapshot::AdjacencySource;
 
     let mut store = EdgeStore::new();
     store
