@@ -10,6 +10,7 @@
 // - Used for sharding only, actual storage uses u64 for persistence
 #![allow(clippy::cast_possible_truncation)]
 
+mod persistence;
 mod query;
 
 use super::clustered_index::ClusteredIndex;
@@ -531,76 +532,7 @@ impl ConcurrentEdgeStore {
     }
 }
 
-impl ConcurrentEdgeStore {
-    /// Builds a `ConcurrentEdgeStore` from a persisted `EdgeStore`.
-    ///
-    /// Re-distributes edges across shards based on source node ID.
-    /// Backward-compatible: old `edge_store.bin` files contain a single
-    /// `EdgeStore`; this constructor shards them on load.
-    #[must_use]
-    pub fn from_edge_store(store: &EdgeStore) -> Self {
-        let edges = store.all_edges();
-        let concurrent = Self::with_estimated_edges(edges.len());
-
-        for edge in edges {
-            // Loaded data has already been validated; duplicates cannot occur
-            // in a correctly persisted store. If the file is corrupted, the
-            // duplicate is silently skipped — the first occurrence wins.
-            if concurrent.add_edge(edge.clone()).is_err() {
-                #[cfg(debug_assertions)]
-                eprintln!("[velesdb] WARNING: skipped duplicate edge during CES reconstruction");
-            }
-        }
-
-        // Build CSR snapshot for fast reads after bulk load.
-        concurrent.build_read_snapshot();
-        concurrent
-    }
-
-    /// Saves the concurrent edge store to a file.
-    ///
-    /// Merges all shards into a single `EdgeStore` for postcard serialization,
-    /// maintaining backward-compatible persistence format.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if serialization or file I/O fails.
-    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
-        self.to_merged_edge_store().save_to_file(path)
-    }
-
-    /// Loads a concurrent edge store from a persisted file.
-    ///
-    /// The file must contain a postcard-serialized `EdgeStore` (backward
-    /// compatible). Edges are re-sharded on load.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if file I/O or deserialization fails.
-    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
-        let store = EdgeStore::load_from_file(path)?;
-        Ok(Self::from_edge_store(&store))
-    }
-
-    /// Merges all shards into a single `EdgeStore` for serialization.
-    ///
-    /// Uses only the outgoing-indexed edges from each shard to avoid
-    /// double-counting cross-shard edges.
-    fn to_merged_edge_store(&self) -> EdgeStore {
-        let ids = self.edge_ids.read();
-        let mut merged = EdgeStore::with_capacity(ids.len(), ids.len());
-
-        for (&edge_id, &source_id) in ids.iter() {
-            let shard_idx = self.shard_index(source_id);
-            let guard = self.shards[shard_idx].read();
-            if let Some(edge) = guard.get_edge(edge_id) {
-                // Loaded data; ignore duplicate errors (cannot happen here).
-                let _ = merged.add_edge(edge.clone());
-            }
-        }
-        merged
-    }
-}
+// Persistence (from_edge_store, save_to_file, load_from_file) is in persistence.rs
 
 impl Default for ConcurrentEdgeStore {
     fn default() -> Self {

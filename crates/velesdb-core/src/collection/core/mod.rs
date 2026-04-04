@@ -19,10 +19,12 @@ mod flush_defer_tests;
 mod graph_api;
 #[cfg(test)]
 mod graph_api_tests;
+mod graph_traversal_helpers;
 mod index_management;
 #[cfg(test)]
 mod index_management_tests;
 mod lifecycle;
+mod lifecycle_create;
 #[cfg(test)]
 mod lifecycle_tests;
 mod recovery;

@@ -22,6 +22,7 @@ pub mod hnsw_delta_wal;
 mod log_payload;
 pub mod metrics;
 mod mmap;
+mod mmap_capacity;
 mod sharded_index;
 #[cfg(test)]
 mod sharded_index_tests;

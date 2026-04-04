@@ -5,6 +5,8 @@
 
 #[cfg(feature = "persistence")]
 pub mod persistence;
+#[cfg(feature = "persistence")]
+pub(crate) mod persistence_wal;
 #[cfg(test)]
 #[cfg(feature = "persistence")]
 mod persistence_tests;

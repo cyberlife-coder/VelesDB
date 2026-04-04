@@ -49,6 +49,7 @@ uniffi::setup_scaffolding!();
 
 mod agent;
 mod collection;
+mod collection_sparse;
 mod graph;
 mod types;
 
