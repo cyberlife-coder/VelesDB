@@ -67,6 +67,7 @@ use tauri::{
 
 pub mod commands;
 pub mod commands_graph;
+pub mod commands_index;
 pub mod error;
 pub mod events;
 pub mod helpers;
@@ -326,9 +327,9 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
         commands_graph::get_node_degree,
         commands_graph::traverse_graph_parallel,
         // Secondary Index commands
-        commands::create_index,
-        commands::drop_index,
-        commands::list_indexes,
+        commands_index::create_index,
+        commands_index::drop_index,
+        commands_index::list_indexes,
     ]);
     #[cfg(not(feature = "persistence"))]
     let builder = Builder::new("velesdb").invoke_handler(tauri::generate_handler![
@@ -365,9 +366,9 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
         commands_graph::get_node_degree,
         commands_graph::traverse_graph_parallel,
         // Secondary Index commands
-        commands::create_index,
-        commands::drop_index,
-        commands::list_indexes,
+        commands_index::create_index,
+        commands_index::drop_index,
+        commands_index::list_indexes,
     ]);
     builder
         .setup(move |app, _api| {
