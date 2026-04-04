@@ -388,9 +388,9 @@ fn test_match_hybrid_near_and_text() {
 // =========================================================================
 
 /// GIVEN a graph collection with nodes and edges
-/// WHEN a MATCH graph query is executed via `Database::execute_query`
-/// THEN the database correctly returns an error indicating MATCH queries must
-///      go through the collection-level API.
+/// WHEN a MATCH graph query is executed via `Database::execute_query` without
+///      a FROM clause or `_collection` param
+/// THEN the database returns a clear error guiding the user.
 #[test]
 fn test_graph_match_via_database_returns_informative_error() {
     let (_dir, db) = create_test_db();
@@ -413,13 +413,14 @@ fn test_graph_match_via_database_returns_informative_error() {
     let edge = velesdb_core::GraphEdge::new(1, 1, 2, "KNOWS").expect("test: create edge");
     gc.add_edge(edge).expect("test: add edge");
 
+    // MATCH without FROM or _collection param → clear error
     let sql = "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b LIMIT 10";
-    let err = execute_sql(&db, sql).expect_err("test: database MATCH should error");
+    let err = execute_sql(&db, sql).expect_err("test: MATCH without collection should error");
 
     let msg = err.to_string();
     assert!(
-        msg.contains("MATCH") || msg.contains("match"),
-        "Error should mention MATCH queries, got: {}",
+        msg.contains("target collection"),
+        "Error should guide user to specify collection, got: {}",
         msg
     );
 }

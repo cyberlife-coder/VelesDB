@@ -229,11 +229,27 @@ impl Database {
             StatementType::Ddl(ddl) => Ok(Some(self.execute_ddl(ddl)?)),
             StatementType::Train(train) => Ok(Some(self.execute_train(train)?)),
             StatementType::Dml(dml) => Ok(Some(self.execute_dml(dml, params)?)),
-            StatementType::Match => Err(Error::Query(
-                "Database::execute_query does not support top-level MATCH queries. \
-                 Use Collection::execute_query or pass the collection name."
-                    .to_string(),
-            )),
+            StatementType::Match => {
+                // Route MATCH queries to the target collection.
+                // Resolution order:
+                // 1. select.from (e.g. "SELECT * FROM kg WHERE MATCH ...")
+                // 2. "_collection" key in params (programmatic API)
+                // 3. Error with guidance
+                let collection_name = if !query.select.from.is_empty() {
+                    query.select.from.clone()
+                } else if let Some(serde_json::Value::String(name)) = params.get("_collection") {
+                    name.clone()
+                } else {
+                    return Err(Error::Query(
+                        "MATCH query requires a target collection. Either use \
+                         SELECT ... FROM <collection> WHERE MATCH ..., or pass \
+                         {\"_collection\": \"name\"} in params."
+                            .to_string(),
+                    ));
+                };
+                let coll = self.resolve_collection(&collection_name)?;
+                Ok(Some(coll.execute_query(query, params)?))
+            }
             StatementType::Select => Ok(None),
         }
     }
