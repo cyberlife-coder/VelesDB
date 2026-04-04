@@ -12,14 +12,15 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
+/// Deserialized HNSW graph structure loaded from disk.
 pub(super) struct LoadedGraph {
-    pub layers: Vec<Layer>,
-    pub num_layers: usize,
-    pub max_connections: usize,
-    pub max_connections_0: usize,
-    pub ef_construction: usize,
-    pub entry_point: usize,
-    pub max_layer: usize,
+    pub(super) layers: Vec<Layer>,
+    pub(super) num_layers: usize,
+    pub(super) max_connections: usize,
+    pub(super) max_connections_0: usize,
+    pub(super) ef_construction: usize,
+    pub(super) entry_point: usize,
+    pub(super) max_layer: usize,
 }
 
 /// Temporary struct for graph file header fields during dump.
@@ -33,6 +34,8 @@ struct GraphFileHeader {
 }
 
 /// Reads a little-endian `u32` from the reader and returns it as `usize`.
+#[allow(clippy::cast_possible_truncation)]
+// Reason: u32 always fits in usize (min 32-bit targets)
 fn read_u32_field(reader: &mut BufReader<File>) -> std::io::Result<usize> {
     let mut buf = [0u8; 4];
     reader.read_exact(&mut buf)?;
@@ -40,6 +43,8 @@ fn read_u32_field(reader: &mut BufReader<File>) -> std::io::Result<usize> {
 }
 
 /// Reads a little-endian `u64` from the reader and returns it as `usize`.
+#[allow(clippy::cast_possible_truncation)]
+// Reason: graph sizes are bounded well below usize::MAX on all supported targets
 fn read_u64_field(reader: &mut BufReader<File>) -> std::io::Result<usize> {
     let mut buf = [0u8; 8];
     reader.read_exact(&mut buf)?;

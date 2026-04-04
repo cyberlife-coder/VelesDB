@@ -26,7 +26,6 @@ fn is_aggregation_query(parsed: &velesdb_core::velesql::Query) -> bool {
 /// to `execute_aggregate()`. DDL/DML/TRAIN queries are dispatched directly
 /// to `Database::execute_query`. MATCH queries are not yet supported through
 /// this endpoint. Returns results in `HybridResult` format.
-#[allow(clippy::too_many_lines)]
 #[command]
 pub async fn query<R: Runtime>(
     _app: AppHandle<R>,

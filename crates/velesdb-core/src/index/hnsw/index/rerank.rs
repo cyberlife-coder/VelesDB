@@ -32,6 +32,10 @@ impl HnswIndex {
         self.search_with_rerank_with_ef(query, k, adaptive_rerank_k, ef_search)
     }
 
+    /// Searches with SIMD-based re-ranking using an explicit `ef_search` value.
+    ///
+    /// Lower-level variant of [`search_with_rerank`] that accepts a pre-computed
+    /// `ef_search` and `rerank_k` directly.
     pub(crate) fn search_with_rerank_with_ef(
         &self,
         query: &[f32],

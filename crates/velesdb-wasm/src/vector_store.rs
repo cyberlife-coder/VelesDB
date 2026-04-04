@@ -42,8 +42,11 @@ pub struct VectorStore {
     pub(crate) sq8_scales: Vec<f32>,
     /// Payloads (JSON metadata) for each vector
     pub(crate) payloads: Vec<Option<serde_json::Value>>,
+    /// Number of dimensions per vector
     pub(crate) dimension: usize,
+    /// Distance metric used for similarity computation
     pub(crate) metric: DistanceMetric,
+    /// Quantization / storage mode (Full, SQ8, Binary)
     pub(crate) storage_mode: StorageMode,
     /// Optional sparse index for sparse/hybrid search
     pub(crate) sparse_index: Option<sparse::SparseIndex>,

@@ -79,6 +79,7 @@ impl Collection {
         }
     }
 
+    /// Updates all secondary indexes after an upsert (removes old values, inserts new ones).
     pub(crate) fn update_secondary_indexes_on_upsert(
         &self,
         id: u64,
@@ -102,6 +103,7 @@ impl Collection {
         }
     }
 
+    /// Removes entries from all secondary indexes for a deleted point.
     pub(crate) fn update_secondary_indexes_on_delete(
         &self,
         id: u64,
