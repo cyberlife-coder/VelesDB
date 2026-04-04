@@ -521,7 +521,13 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 [![Built with VelesDB](https://img.shields.io/badge/Built_with-VelesDB-blue?style=flat-square)](https://github.com/cyberlife-coder/VelesDB)
 
-Share your experience on [GitHub Discussions](https://github.com/cyberlife-coder/VelesDB/discussions) — your feedback shapes the roadmap.
+Tell us about your project and get featured on the [**"Powered by VelesDB"** showcase on velesdb.com](https://velesdb.com). We highlight companies and projects that build with VelesDB — from RAG pipelines to sovereign AI agents.
+
+How to get listed:
+- Open a [GitHub Discussion](https://github.com/cyberlife-coder/VelesDB/discussions) describing your use case
+- Or email [contact@wiscale.fr](mailto:contact@wiscale.fr) with your project name, logo, and a one-liner
+
+Your feedback shapes the roadmap.
 
 ---
 
