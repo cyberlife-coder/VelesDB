@@ -248,7 +248,16 @@ impl Database {
                     ));
                 };
                 let coll = self.resolve_collection(&collection_name)?;
-                Ok(Some(coll.execute_query(query, params)?))
+                let mut results = coll.execute_query(query, params)?;
+
+                // Cross-collection enrichment: if any node pattern has a
+                // @collection annotation, look up payloads from those
+                // collections and merge into the projected fields.
+                if let Some(mc) = &query.match_clause {
+                    self.enrich_match_results_cross_collection(mc, &mut results);
+                }
+
+                Ok(Some(results))
             }
             StatementType::Select => Ok(None),
         }

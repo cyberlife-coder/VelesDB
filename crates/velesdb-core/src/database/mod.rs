@@ -21,6 +21,7 @@ use crate::{Collection, ColumnStore, Error, Result};
 
 mod admin_executor;
 mod collection_ops;
+mod cross_collection;
 mod ddl_executor;
 mod dml_executor;
 mod graph_ops;

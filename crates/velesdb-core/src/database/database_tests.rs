@@ -312,13 +312,16 @@ fn test_database_execute_query_rejects_top_level_match_queries() {
     db.create_collection("docs", 2, DistanceMetric::Cosine)
         .unwrap();
 
+    // MATCH without FROM or _collection param → clear guidance error
     let query = Parser::parse("MATCH (d:Doc) RETURN d LIMIT 10").unwrap();
     let err = db
         .execute_query(&query, &std::collections::HashMap::new())
         .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Database::execute_query does not support top-level MATCH queries"));
+    assert!(
+        err.to_string().contains("target collection"),
+        "Should guide user to specify collection, got: {}",
+        err
+    );
 }
 
 #[test]

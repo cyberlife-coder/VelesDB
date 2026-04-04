@@ -38,6 +38,15 @@ pub struct NodePattern {
     pub labels: Vec<String>,
     /// Node properties for filtering.
     pub properties: HashMap<String, Value>,
+    /// Optional source collection override for cross-collection MATCH.
+    ///
+    /// When set, this node's data is resolved from the named collection
+    /// instead of the MATCH query's default collection. Enables patterns like:
+    /// `MATCH (p:Product@products)-[:STORED_IN]->(inv:Inventory@inventory)`
+    ///
+    /// When `None`, the node is resolved from the default collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
 }
 
 impl NodePattern {
@@ -48,6 +57,7 @@ impl NodePattern {
             alias: None,
             labels: Vec::new(),
             properties: HashMap::new(),
+            collection: None,
         }
     }
 
@@ -62,6 +72,13 @@ impl NodePattern {
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.labels.push(label.into());
+        self
+    }
+
+    /// Sets the source collection for cross-collection MATCH.
+    #[must_use]
+    pub fn with_collection(mut self, collection: impl Into<String>) -> Self {
+        self.collection = Some(collection.into());
         self
     }
 }

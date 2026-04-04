@@ -132,6 +132,13 @@ impl Parser {
                         Rule::node_properties => {
                             node.properties = Self::parse_node_properties(spec_pair)?;
                         }
+                        Rule::collection_annotation => {
+                            for coll_pair in spec_pair.into_inner() {
+                                if coll_pair.as_rule() == Rule::collection_ref {
+                                    node.collection = Some(coll_pair.as_str().to_string());
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
