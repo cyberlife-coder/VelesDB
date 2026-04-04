@@ -41,6 +41,10 @@ impl Collection {
         self.drain_delta_into_index();
         // Drain deferred indexer into HNSW (position 11, after delta at 10).
         self.drain_deferred_into_index();
+        // Drain async index builder buffer (V2 bulk insert path) into HNSW.
+        // Without this, sub-threshold batches from upsert_bulk would remain
+        // invisible to search until the buffer reaches merge_threshold.
+        self.drain_async_index_builder();
         // Issue #423 Component 3: Save HNSW only when insert threshold
         // exceeded. Otherwise defer to flush_full() (shutdown/compaction).
         self.save_hnsw_if_threshold_exceeded()?;
@@ -64,6 +68,7 @@ impl Collection {
         self.payload_storage.write().flush()?;
         self.drain_delta_into_index();
         self.drain_deferred_into_index();
+        self.drain_async_index_builder();
         // Always save HNSW on full flush and reset the counter.
         self.index.save(&self.path)?;
         self.inserts_since_last_hnsw_save
@@ -176,6 +181,28 @@ impl Collection {
     /// No-op stub when persistence is disabled.
     #[cfg(not(feature = "persistence"))]
     fn drain_deferred_into_index(&self) {}
+
+    /// Drains the async index builder buffer into the HNSW index.
+    ///
+    /// Ensures sub-threshold batches from the V2 `upsert_bulk` path are
+    /// indexed into HNSW, making them visible to search. Without this,
+    /// vectors written via `DirectVectorWriter` but not yet flushed by
+    /// `AsyncIndexBuilder` would be stored but invisible to ANN search.
+    ///
+    /// No-op when the async index builder is not configured.
+    fn drain_async_index_builder(&self) {
+        if let Some(ref aib) = self.async_index_builder {
+            match aib.flush_sync(&self.index) {
+                Ok(count) if count > 0 => {
+                    tracing::debug!("flush: drained {count} vectors from async index builder");
+                }
+                Err(e) => {
+                    tracing::warn!("flush: async index builder drain failed: {e}");
+                }
+                _ => {}
+            }
+        }
+    }
 
     /// Persists property index, range index, and edge store (EPIC-009 US-005).
     fn flush_secondary_indexes(&self) -> Result<()> {
