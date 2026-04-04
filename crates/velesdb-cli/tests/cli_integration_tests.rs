@@ -74,7 +74,7 @@ fn test_info_help() {
 }
 
 // =============================================================================
-// List Command Tests
+// Collection List Command Tests
 // =============================================================================
 
 #[test]
@@ -84,7 +84,7 @@ fn test_list_empty_database() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("list")
+        .args(["collection", "list"])
         .arg(&db_path)
         .assert()
         .success()
@@ -98,7 +98,7 @@ fn test_list_json_format() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("list")
+        .args(["collection", "list"])
         .arg(&db_path)
         .arg("--format")
         .arg("json")
@@ -108,7 +108,7 @@ fn test_list_json_format() {
 }
 
 // =============================================================================
-// Show Command Tests
+// Collection Show Command Tests
 // =============================================================================
 
 #[test]
@@ -118,7 +118,7 @@ fn test_show_nonexistent_collection() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("show")
+        .args(["collection", "show"])
         .arg(&db_path)
         .arg("nonexistent_collection")
         .assert()
@@ -137,7 +137,7 @@ fn test_create_metadata_collection() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("create-metadata-collection")
+        .args(["collection", "create-metadata"])
         .arg(&db_path)
         .arg("test_metadata")
         .assert()
@@ -151,11 +151,8 @@ fn test_create_metadata_collection_then_list() {
     let db_path = temp_dir.path().join("test_db");
     fs::create_dir_all(&db_path).unwrap();
 
-    // Create collection - just verify the command succeeds
-    // Note: metadata collections may not persist across CLI invocations
-    // This tests the command execution, not persistence
     velesdb_cmd()
-        .arg("create-metadata-collection")
+        .args(["collection", "create-metadata"])
         .arg(&db_path)
         .arg("my_collection")
         .assert()
@@ -164,7 +161,7 @@ fn test_create_metadata_collection_then_list() {
 }
 
 // =============================================================================
-// Get Command Tests
+// Data Get Command Tests
 // =============================================================================
 
 #[test]
@@ -173,9 +170,8 @@ fn test_get_nonexistent_collection() {
     let db_path = temp_dir.path().join("test_db");
     fs::create_dir_all(&db_path).unwrap();
 
-    // Try to get from a nonexistent collection
     velesdb_cmd()
-        .arg("get")
+        .args(["data", "get"])
         .arg(&db_path)
         .arg("nonexistent_col")
         .arg("1")
@@ -186,10 +182,8 @@ fn test_get_nonexistent_collection() {
 
 #[test]
 fn test_get_format_option() {
-    // Just test that the --format option is accepted
     velesdb_cmd()
-        .arg("get")
-        .arg("--help")
+        .args(["data", "get", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("format"));
@@ -266,7 +260,7 @@ fn test_license_verify_invalid_key() {
 }
 
 // =============================================================================
-// Import Command Tests
+// Data Import Command Tests
 // =============================================================================
 
 #[test]
@@ -276,7 +270,7 @@ fn test_import_nonexistent_file() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("import")
+        .args(["data", "import"])
         .arg("/nonexistent/file.jsonl")
         .arg("--database")
         .arg(&db_path)
@@ -295,7 +289,7 @@ fn test_import_unsupported_format() {
     fs::write(&data_file, "test data").unwrap();
 
     velesdb_cmd()
-        .arg("import")
+        .args(["data", "import"])
         .arg(&data_file)
         .arg("--database")
         .arg(&db_path)
@@ -308,10 +302,8 @@ fn test_import_unsupported_format() {
 
 #[test]
 fn test_import_help() {
-    // Test import command help
     velesdb_cmd()
-        .arg("import")
-        .arg("--help")
+        .args(["data", "import", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("collection"))
@@ -319,7 +311,7 @@ fn test_import_help() {
 }
 
 // =============================================================================
-// Export Command Tests
+// Data Export Command Tests
 // =============================================================================
 
 #[test]
@@ -329,7 +321,7 @@ fn test_export_nonexistent_collection() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("export")
+        .args(["data", "export"])
         .arg(&db_path)
         .arg("nonexistent_collection")
         .assert()
@@ -344,7 +336,7 @@ fn test_export_nonexistent_collection() {
 #[test]
 fn test_query_nonexistent_database() {
     velesdb_cmd()
-        .arg("query")
+        .args(["query", "execute"])
         .arg("/nonexistent/path")
         .arg("SELECT * FROM test LIMIT 1")
         .assert()
@@ -352,15 +344,13 @@ fn test_query_nonexistent_database() {
 }
 
 // =============================================================================
-// MultiSearch Command Tests
+// Query Search (MultiSearch) Command Tests
 // =============================================================================
 
 #[test]
 fn test_multisearch_help() {
-    // Test multi-search command help
     velesdb_cmd()
-        .arg("multi-search")
-        .arg("--help")
+        .args(["query", "search", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("vectors"))
@@ -374,7 +364,7 @@ fn test_multisearch_nonexistent_collection() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("multi-search")
+        .args(["query", "search"])
         .arg(&db_path)
         .arg("nonexistent")
         .arg("[[0.1, 0.2]]")
@@ -466,7 +456,7 @@ fn test_list_json_shows_type_field() {
     drop(db);
 
     velesdb_cmd()
-        .arg("list")
+        .args(["collection", "list"])
         .arg(&db_path)
         .arg("--format")
         .arg("json")
@@ -486,7 +476,7 @@ fn test_show_vector_collection_shows_type() {
     drop(db);
 
     velesdb_cmd()
-        .arg("show")
+        .args(["collection", "show"])
         .arg(&db_path)
         .arg("docs")
         .assert()
@@ -505,7 +495,7 @@ fn test_show_graph_collection_shows_type() {
     drop(db);
 
     velesdb_cmd()
-        .arg("show")
+        .args(["collection", "show"])
         .arg(&db_path)
         .arg("kg")
         .assert()
@@ -523,7 +513,7 @@ fn test_show_metadata_collection_shows_type() {
     drop(db);
 
     velesdb_cmd()
-        .arg("show")
+        .args(["collection", "show"])
         .arg(&db_path)
         .arg("products")
         .assert()
@@ -542,7 +532,7 @@ fn test_export_rejects_graph_collection() {
     drop(db);
 
     velesdb_cmd()
-        .arg("export")
+        .args(["data", "export"])
         .arg(&db_path)
         .arg("kg")
         .assert()

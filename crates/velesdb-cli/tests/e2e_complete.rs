@@ -44,7 +44,7 @@ mod info_commands {
         let temp = temp_db_dir();
 
         cli()
-            .arg("list")
+            .args(["collection", "list"])
             .arg(temp.path())
             .arg("--format")
             .arg("json")
@@ -58,7 +58,7 @@ mod info_commands {
         let temp = temp_db_dir();
 
         cli()
-            .arg("list")
+            .args(["collection", "list"])
             .arg(temp.path())
             .arg("--format")
             .arg("table")
@@ -79,7 +79,7 @@ mod query_commands {
         let temp = temp_db_dir();
 
         cli()
-            .arg("query")
+            .args(["query", "execute"])
             .arg(temp.path())
             .arg("INVALID QUERY SYNTAX")
             .assert()
@@ -92,7 +92,7 @@ mod query_commands {
 
         // Collection does not exist — command should fail gracefully
         cli()
-            .arg("query")
+            .args(["query", "execute"])
             .arg(temp.path())
             .arg("SELECT * FROM nonexistent LIMIT 10")
             .assert()
@@ -113,7 +113,7 @@ mod multi_search_commands {
 
         // Collection does not exist — command should fail gracefully
         cli()
-            .arg("multi-search")
+            .args(["query", "search"])
             .arg(temp.path())
             .arg("test_collection")
             .arg("[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]")
@@ -132,7 +132,7 @@ mod multi_search_commands {
         let temp = temp_db_dir();
 
         cli()
-            .arg("multi-search")
+            .args(["query", "search"])
             .arg(temp.path())
             .arg("test_collection")
             .arg("[[1.0, 0.0], [0.0, 1.0]]")
@@ -147,7 +147,7 @@ mod multi_search_commands {
         let temp = temp_db_dir();
 
         cli()
-            .arg("multi-search")
+            .args(["query", "search"])
             .arg(temp.path())
             .arg("test_collection")
             .arg("[[1.0, 0.0]]")
@@ -169,7 +169,8 @@ mod graph_commands {
     fn create_graph(temp: &TempDir, name: &str) {
         cli()
             .args([
-                "create-graph-collection",
+                "collection",
+                "create-graph",
                 temp.path().to_str().unwrap(),
                 name,
             ])
@@ -304,7 +305,7 @@ mod import_export_commands {
         writeln!(file, r#"{{"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]}}"#).unwrap();
 
         cli()
-            .arg("import")
+            .args(["data", "import"])
             .arg(&jsonl_file)
             .arg("--database")
             .arg(temp.path())
@@ -324,7 +325,7 @@ mod import_export_commands {
 
         // Collection does not exist — export should fail gracefully
         cli()
-            .arg("export")
+            .args(["data", "export"])
             .arg(temp.path())
             .arg("test_collection")
             .arg("--output")
@@ -435,7 +436,7 @@ mod get_commands {
         let temp = temp_db_dir();
 
         cli()
-            .arg("get")
+            .args(["data", "get"])
             .arg(temp.path())
             .arg("test_collection")
             .arg("1")
@@ -450,7 +451,7 @@ mod get_commands {
         let temp = temp_db_dir();
 
         cli()
-            .arg("get")
+            .args(["data", "get"])
             .arg(temp.path())
             .arg("test_collection")
             .arg("1")
@@ -473,7 +474,7 @@ mod show_commands {
         let temp = temp_db_dir();
 
         cli()
-            .arg("show")
+            .args(["collection", "show"])
             .arg(temp.path())
             .arg("test_collection")
             .arg("--format")
@@ -487,7 +488,7 @@ mod show_commands {
         let temp = temp_db_dir();
 
         cli()
-            .arg("show")
+            .args(["collection", "show"])
             .arg(temp.path())
             .arg("test_collection")
             .arg("--samples")
