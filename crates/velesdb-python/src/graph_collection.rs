@@ -333,6 +333,36 @@ impl PyGraphCollection {
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
 
+    /// Perform multi-source BFS traversal with deduplication.
+    ///
+    /// Starts BFS from multiple source nodes simultaneously and deduplicates
+    /// results by path signature.
+    ///
+    /// Args:
+    ///     source_ids: List of starting node IDs
+    ///     max_depth: Maximum traversal depth (default: 3)
+    ///     limit: Maximum results to return (default: 100)
+    ///     rel_types: Optional list of relationship types to follow
+    ///
+    /// Returns:
+    ///     List of traversal result dicts with keys: target_id, path, depth
+    ///
+    /// Example:
+    ///     >>> results = graph.traverse_bfs_parallel([1, 5, 10], max_depth=3)
+    #[pyo3(signature = (source_ids, max_depth=None, limit=None, rel_types=None))]
+    fn traverse_bfs_parallel(
+        &self,
+        py: Python<'_>,
+        source_ids: Vec<u64>,
+        max_depth: Option<u32>,
+        limit: Option<usize>,
+        rel_types: Option<Vec<String>>,
+    ) -> PyResult<Vec<PyObject>> {
+        let config = build_traversal_config(max_depth, limit, rel_types);
+        let results = py.allow_threads(|| self.inner.traverse_bfs_parallel(&source_ids, &config));
+        Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
+    }
+
     /// Search for similar nodes by embedding vector.
     ///
     /// Only available when the collection was created with a dimension

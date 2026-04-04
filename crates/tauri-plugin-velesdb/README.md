@@ -10,10 +10,15 @@ A Tauri plugin for **VelesDB** — Vector search in desktop applications.
 - **Fast Vector Search** — Microsecond latency similarity search (HNSW + AVX2/AVX-512)
 - **Text Search** — BM25 full-text search across payloads
 - **Hybrid Search** — Combined vector + text with RRF fusion
+- **Sparse Vectors** — Sparse-only and hybrid dense+sparse search
 - **Multi-Query Fusion** — MQG support with RRF / Weighted / Average strategies
 - **Collection Management** — Create, list, and delete vector and metadata collections
-- **Knowledge Graph** — Add edges, traverse (BFS/DFS), get node degrees
+- **Secondary Indexes** — Create/drop metadata indexes for faster filtered search
+- **Knowledge Graph** — Add edges, traverse (BFS/DFS), multi-source parallel BFS, node degrees
 - **VelesQL** — SQL-like query language for advanced searches
+- **Agent Memory** — Semantic memory store and query for AI agents
+- **Streaming Insert** — High-throughput bulk insert with persistence
+- **Quantization** — PQ training for memory-efficient storage
 - **Event System** — Real-time notifications for data changes
 - **Local-First** — All data stays on the user's device
 
@@ -196,6 +201,72 @@ const degree = await invoke('plugin:velesdb|get_node_degree', {
   request: { collection: 'documents', nodeId: 100 }
 });
 // { nodeId: 100, inDegree: 5, outDegree: 3 }
+
+// Multi-source parallel BFS traversal
+const parallel = await invoke('plugin:velesdb|traverse_graph_parallel', {
+  request: {
+    collection: 'documents',
+    sources: [100, 200, 300],
+    maxDepth: 3,
+    limit: 50
+  }
+});
+```
+
+### Secondary Indexes
+
+```javascript
+// Create a secondary index for faster filtered search
+await invoke('plugin:velesdb|create_index', {
+  request: { collection: 'documents', fieldName: 'category' }
+});
+
+// List all indexes
+const indexes = await invoke('plugin:velesdb|list_indexes', {
+  request: { collection: 'documents' }
+});
+// [{ label: "secondary", property: "category", indexType: "hash", cardinality: 42, memoryBytes: 1024 }]
+
+// Drop an index
+await invoke('plugin:velesdb|drop_index', {
+  request: { collection: 'documents', fieldName: 'category' }
+});
+```
+
+### Sparse Vectors
+
+```javascript
+// Insert with sparse vector
+await invoke('plugin:velesdb|sparse_upsert', {
+  request: {
+    collection: 'documents',
+    points: [{
+      id: 1,
+      vector: [0.1, 0.2, /* ... */],
+      payload: { title: 'Doc' },
+      sparseVector: { "42": 0.8, "7": 1.2, "100": 0.5 }
+    }]
+  }
+});
+
+// Sparse-only search
+const sparseResults = await invoke('plugin:velesdb|sparse_search', {
+  request: {
+    collection: 'documents',
+    sparseVector: { "42": 1.0, "7": 0.5 },
+    topK: 10
+  }
+});
+
+// Hybrid dense + sparse search
+const hybridSparse = await invoke('plugin:velesdb|hybrid_sparse_search', {
+  request: {
+    collection: 'documents',
+    vector: [0.1, 0.2, /* ... */],
+    sparseVector: { "42": 1.0, "7": 0.5 },
+    topK: 10
+  }
+});
 ```
 
 ### Event System
@@ -276,7 +347,16 @@ async fn my_command(app: AppHandle) -> Result<usize, String> {
 | `add_edge` | Add a directed edge to the knowledge graph |
 | `get_edges` | Query edges by label / source / target |
 | `traverse_graph` | BFS / DFS graph traversal from a node |
+| `traverse_graph_parallel` | Multi-source parallel BFS with deduplication |
 | `get_node_degree` | Get in-degree and out-degree of a node |
+| `sparse_search` | Sparse-only search (inverted index) |
+| `hybrid_sparse_search` | Hybrid dense + sparse search with RRF fusion |
+| `sparse_upsert` | Insert vectors with sparse vectors |
+| `train_pq` | Train product quantization on a collection |
+| `stream_insert` | Streaming bulk insert (persistence only) |
+| `create_index` | Create a secondary metadata index for faster filtered search |
+| `drop_index` | Drop a secondary metadata index |
+| `list_indexes` | List all indexes on a collection |
 | `semantic_store` | Store a knowledge fact (Agent Memory SDK) |
 | `semantic_query` | Retrieve semantically similar facts |
 

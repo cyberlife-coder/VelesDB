@@ -18,6 +18,7 @@ import type {
   GetEdgesOptions,
   GraphEdge,
   TraverseRequest,
+  TraverseParallelRequest,
   TraverseResponse,
   DegreeResponse,
   QueryOptions,
@@ -690,6 +691,11 @@ export class WasmBackend implements IVelesDBBackend {
   async traverseGraph(_collection: string, _request: TraverseRequest): Promise<TraverseResponse> {
     this.ensureInitialized();
     wasmNotSupported('Graph traversal');
+  }
+
+  async traverseParallel(_collection: string, _request: TraverseParallelRequest): Promise<TraverseResponse> {
+    this.ensureInitialized();
+    wasmNotSupported('Graph parallel traversal');
   }
 
   async getNodeDegree(_collection: string, _nodeId: number): Promise<DegreeResponse> {

@@ -8,7 +8,7 @@ use crate::helpers::require_graph_collection;
 use crate::state::VelesDbState;
 use crate::types::{
     AddEdgeRequest, EdgeOutput, GetEdgesRequest, GetNodeDegreeRequest, NodeDegreeOutput,
-    TraversalOutput, TraverseGraphRequest,
+    TraversalOutput, TraverseGraphParallelRequest, TraverseGraphRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
 use velesdb_core::collection::graph::TraversalConfig;
@@ -133,6 +133,35 @@ pub async fn get_node_degree<R: Runtime>(
                 in_degree,
                 out_degree,
             })
+        })
+        .map_err(CommandError::from)
+}
+
+/// Multi-source parallel BFS traversal with deduplication.
+#[command]
+pub async fn traverse_graph_parallel<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: TraverseGraphParallelRequest,
+) -> std::result::Result<Vec<TraversalOutput>, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = require_graph_collection(&db, &request.collection)?;
+
+            let config = TraversalConfig::with_range(1, request.max_depth)
+                .with_limit(request.limit)
+                .with_rel_types(request.rel_types.unwrap_or_default());
+
+            let results = coll.traverse_bfs_parallel(&request.sources, &config);
+
+            Ok(results
+                .into_iter()
+                .map(|r| TraversalOutput {
+                    target_id: r.target_id,
+                    depth: r.depth,
+                    path: r.path,
+                })
+                .collect())
         })
         .map_err(CommandError::from)
 }

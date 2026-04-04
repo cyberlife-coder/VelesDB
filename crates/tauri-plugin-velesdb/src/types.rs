@@ -577,6 +577,68 @@ pub struct NodeDegreeOutput {
     pub out_degree: usize,
 }
 
+/// Request to create a secondary index on a metadata field.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateIndexRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Metadata field name to index.
+    pub field_name: String,
+}
+
+/// Request to drop a secondary index.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DropIndexRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Metadata field name whose index to drop.
+    pub field_name: String,
+}
+
+/// Request to list secondary indexes on a collection.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListIndexesRequest {
+    /// Collection name.
+    pub collection: String,
+}
+
+/// Output for a secondary index entry.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexInfoOutput {
+    /// Node label (or field name for secondary indexes).
+    pub label: String,
+    /// Property name.
+    pub property: String,
+    /// Index type (hash, range, or secondary).
+    pub index_type: String,
+    /// Number of unique values indexed.
+    pub cardinality: usize,
+    /// Memory usage in bytes.
+    pub memory_bytes: usize,
+}
+
+/// Request for multi-source parallel BFS traversal.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraverseGraphParallelRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Source node IDs to start traversal from.
+    pub sources: Vec<u64>,
+    /// Maximum traversal depth.
+    #[serde(default = "default_max_depth")]
+    pub max_depth: u32,
+    /// Maximum number of results.
+    #[serde(default = "default_traverse_limit")]
+    pub limit: usize,
+    /// Optional relationship types to follow.
+    pub rel_types: Option<Vec<String>>,
+}
+
 fn default_max_depth() -> u32 {
     3
 }

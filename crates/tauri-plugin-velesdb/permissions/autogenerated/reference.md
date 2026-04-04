@@ -27,6 +27,10 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-get-edges`
 - `allow-traverse-graph`
 - `allow-get-node-degree`
+- `allow-traverse-graph-parallel`
+- `allow-create-index`
+- `allow-drop-index`
+- `allow-list-indexes`
 
 ## Permission Table
 
@@ -118,6 +122,32 @@ Denies the create_collection command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-create-index`
+
+</td>
+<td>
+
+Enables the create_index command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-create-index`
+
+</td>
+<td>
+
+Denies the create_index command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-create-metadata-collection`
 
 </td>
@@ -189,6 +219,32 @@ Enables the delete_points command without any pre-configured scope.
 <td>
 
 Denies the delete_points command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-drop-index`
+
+</td>
+<td>
+
+Enables the drop_index command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-drop-index`
+
+</td>
+<td>
+
+Denies the drop_index command without any pre-configured scope.
 
 </td>
 </tr>
@@ -404,6 +460,32 @@ Denies the list_collections command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-list-indexes`
+
+</td>
+<td>
+
+Enables the list_indexes command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-list-indexes`
+
+</td>
+<td>
+
+Denies the list_indexes command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-multi-query-search`
 
 </td>
@@ -579,6 +661,32 @@ Enables the traverse_graph command without any pre-configured scope.
 <td>
 
 Denies the traverse_graph command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-traverse-graph-parallel`
+
+</td>
+<td>
+
+Enables the traverse_graph_parallel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-traverse-graph-parallel`
+
+</td>
+<td>
+
+Denies the traverse_graph_parallel command without any pre-configured scope.
 
 </td>
 </tr>

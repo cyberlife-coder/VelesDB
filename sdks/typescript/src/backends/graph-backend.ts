@@ -11,6 +11,7 @@ import type {
   GetEdgesOptions,
   GraphEdge,
   TraverseRequest,
+  TraverseParallelRequest,
   TraverseResponse,
   DegreeResponse,
   GraphCollectionConfig,
@@ -131,4 +132,43 @@ export async function createGraphCollection(
   });
 
   throwOnError(response);
+}
+
+export async function traverseParallel(
+  transport: GraphTransport,
+  collection: string,
+  request: TraverseParallelRequest
+): Promise<TraverseResponse> {
+  const response = await transport.requestJson<{
+    results: Array<{ target_id: number; depth: number; path: number[] }>;
+    next_cursor: string | null;
+    has_more: boolean;
+    stats: { visited: number; depth_reached: number };
+  }>(
+    'POST',
+    `${collectionPath(collection)}/graph/traverse/parallel`,
+    {
+      sources: request.sources,
+      max_depth: request.maxDepth ?? 3,
+      limit: request.limit ?? 100,
+      rel_types: request.relTypes ?? [],
+    }
+  );
+
+  throwOnError(response, `Collection '${collection}'`);
+
+  const data = response.data!;
+  return {
+    results: data.results.map(r => ({
+      targetId: r.target_id,
+      depth: r.depth,
+      path: r.path,
+    })),
+    nextCursor: data.next_cursor ?? undefined,
+    hasMore: data.has_more,
+    stats: {
+      visited: data.stats.visited,
+      depthReached: data.stats.depth_reached,
+    },
+  };
 }

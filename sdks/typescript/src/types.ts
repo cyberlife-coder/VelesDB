@@ -207,6 +207,18 @@ export interface TraverseRequest {
   relTypes?: string[];
 }
 
+/** Request for multi-source parallel BFS traversal */
+export interface TraverseParallelRequest {
+  /** Source node IDs to start traversal from */
+  sources: number[];
+  /** Maximum traversal depth */
+  maxDepth?: number;
+  /** Maximum number of results to return */
+  limit?: number;
+  /** Filter by relationship types (empty = all types) */
+  relTypes?: string[];
+}
+
 /** A single traversal result item */
 export interface TraversalResultItem {
   /** Target node ID reached */
@@ -595,6 +607,9 @@ export interface IVelesDBBackend {
 
   /** Traverse the graph using BFS or DFS from a source node */
   traverseGraph(collection: string, request: TraverseRequest): Promise<TraverseResponse>;
+
+  /** Multi-source parallel BFS traversal with deduplication */
+  traverseParallel(collection: string, request: TraverseParallelRequest): Promise<TraverseResponse>;
 
   /** Get the in-degree and out-degree of a node */
   getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse>;
