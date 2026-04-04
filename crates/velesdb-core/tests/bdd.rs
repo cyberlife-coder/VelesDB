@@ -9,6 +9,8 @@ mod advanced;
 mod agent_memory;
 #[path = "bdd/aggregation.rs"]
 mod aggregation;
+#[path = "bdd/bugfixes.rs"]
+mod bugfixes;
 #[path = "bdd/cross_collection.rs"]
 mod cross_collection;
 #[path = "bdd/ddl_lifecycle.rs"]

@@ -109,6 +109,10 @@ impl Collection {
                 )
                 .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
         }
+        // Bug #475: Apply DISTINCT before ORDER BY (same as finalize_query_results path).
+        if early.stmt.distinct == crate::velesql::DistinctMode::All {
+            results = super::distinct::apply_distinct(results, &early.stmt.columns);
+        }
         if let Some(ref order_by) = early.stmt.order_by {
             self.apply_order_by(&mut results, order_by, early.params)
                 .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;

@@ -287,11 +287,17 @@ impl PyGraphCollection {
     ///     source_id: Starting node ID
     ///     max_depth: Maximum traversal depth (default: 3)
     ///     limit: Maximum results to return (default: 100)
-    ///     rel_types: Optional list of relationship types to follow
+    ///     rel_types: Optional list of relationship types to follow.
+    ///         Alias: ``relationship_types`` (same effect, either name works).
     ///
     /// Returns:
     ///     List of traversal result dicts with keys: target_id, path, depth
-    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None))]
+    ///
+    /// Example:
+    ///     >>> results = graph.traverse_bfs(source_id=1, max_depth=3)
+    ///     >>> results = graph.traverse_bfs(1, rel_types=["KNOWS"])
+    ///     >>> results = graph.traverse_bfs(1, relationship_types=["KNOWS"])  # alias
+    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None, relationship_types=None))]
     fn traverse_bfs(
         &self,
         py: Python<'_>,
@@ -299,8 +305,10 @@ impl PyGraphCollection {
         max_depth: Option<u32>,
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
+        relationship_types: Option<Vec<String>>,
     ) -> PyResult<Vec<PyObject>> {
-        let config = build_traversal_config(max_depth, limit, rel_types);
+        let effective_rel_types = rel_types.or(relationship_types);
+        let config = build_traversal_config(max_depth, limit, effective_rel_types);
         let results = py.allow_threads(|| self.inner.traverse_bfs(source_id, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
@@ -311,11 +319,17 @@ impl PyGraphCollection {
     ///     source_id: Starting node ID
     ///     max_depth: Maximum traversal depth (default: 3)
     ///     limit: Maximum results to return (default: 100)
-    ///     rel_types: Optional list of relationship types to follow
+    ///     rel_types: Optional list of relationship types to follow.
+    ///         Alias: ``relationship_types`` (same effect, either name works).
     ///
     /// Returns:
     ///     List of traversal result dicts with keys: target_id, path, depth
-    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None))]
+    ///
+    /// Example:
+    ///     >>> results = graph.traverse_dfs(source_id=1, max_depth=3)
+    ///     >>> results = graph.traverse_dfs(1, rel_types=["KNOWS"])
+    ///     >>> results = graph.traverse_dfs(1, relationship_types=["KNOWS"])  # alias
+    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None, relationship_types=None))]
     fn traverse_dfs(
         &self,
         py: Python<'_>,
@@ -323,8 +337,10 @@ impl PyGraphCollection {
         max_depth: Option<u32>,
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
+        relationship_types: Option<Vec<String>>,
     ) -> PyResult<Vec<PyObject>> {
-        let config = build_traversal_config(max_depth, limit, rel_types);
+        let effective_rel_types = rel_types.or(relationship_types);
+        let config = build_traversal_config(max_depth, limit, effective_rel_types);
         let results = py.allow_threads(|| self.inner.traverse_dfs(source_id, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
@@ -338,14 +354,15 @@ impl PyGraphCollection {
     ///     source_ids: List of starting node IDs
     ///     max_depth: Maximum traversal depth (default: 3)
     ///     limit: Maximum results to return (default: 100)
-    ///     rel_types: Optional list of relationship types to follow
+    ///     rel_types: Optional list of relationship types to follow.
+    ///         Alias: ``relationship_types`` (same effect, either name works).
     ///
     /// Returns:
     ///     List of traversal result dicts with keys: target_id, path, depth
     ///
     /// Example:
     ///     >>> results = graph.traverse_bfs_parallel([1, 5, 10], max_depth=3)
-    #[pyo3(signature = (source_ids, max_depth=None, limit=None, rel_types=None))]
+    #[pyo3(signature = (source_ids, max_depth=None, limit=None, rel_types=None, relationship_types=None))]
     fn traverse_bfs_parallel(
         &self,
         py: Python<'_>,
@@ -353,8 +370,10 @@ impl PyGraphCollection {
         max_depth: Option<u32>,
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
+        relationship_types: Option<Vec<String>>,
     ) -> PyResult<Vec<PyObject>> {
-        let config = build_traversal_config(max_depth, limit, rel_types);
+        let effective_rel_types = rel_types.or(relationship_types);
+        let config = build_traversal_config(max_depth, limit, effective_rel_types);
         let results = py.allow_threads(|| self.inner.traverse_bfs_parallel(&source_ids, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
