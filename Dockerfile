@@ -1,12 +1,15 @@
 # Build stage
-FROM rust:1.86-bookworm AS builder
+FROM rust:1.87-bookworm AS builder
+
+LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
+LABEL version="1.11.1"
 
 WORKDIR /app
 
-# Install build dependencies (pinned to bookworm versions for reproducibility)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config=1.8.1-1 \
-    libssl-dev=3.0.15-1~deb12u1 \
+# Install build dependencies
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    pkg-config \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests and source
@@ -20,12 +23,15 @@ RUN cargo build --release --bin velesdb-server
 # Runtime stage
 FROM debian:bookworm-slim
 
+LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
+LABEL version="1.11.1"
+
 WORKDIR /app
 
-# Install runtime dependencies (pinned to bookworm versions for reproducibility)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates=20230311 \
-    curl=7.88.1-10+deb12u8 \
+# Install runtime dependencies
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

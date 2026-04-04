@@ -73,9 +73,9 @@ pub mod column_store;
 mod column_store_tests;
 pub mod compression;
 pub mod config;
-mod config_validation;
 #[cfg(test)]
 mod config_tests;
+mod config_validation;
 pub mod contiguous_ops;
 pub mod distance;
 #[cfg(test)]

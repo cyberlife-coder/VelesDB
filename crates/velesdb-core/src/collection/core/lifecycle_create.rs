@@ -170,11 +170,9 @@ impl Collection {
                 storage_mode,
             } => Self::create_with_options(path, *dimension, *metric, *storage_mode),
             CollectionType::MetadataOnly => Self::create_metadata_only(path, name),
-            CollectionType::Graph { .. } => {
-                Err(crate::Error::GraphNotSupported(
-                    "Graph collection creation not yet implemented".to_string(),
-                ))
-            }
+            CollectionType::Graph { .. } => Err(crate::Error::GraphNotSupported(
+                "Graph collection creation not yet implemented".to_string(),
+            )),
         }
     }
 

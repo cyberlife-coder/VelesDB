@@ -1,11 +1,11 @@
 //! VelesQL query execution handlers.
 
+pub mod aggregation;
 pub mod explain;
 pub(crate) mod velesql_helpers;
-pub mod aggregation;
 
-pub use aggregation::aggregate;
 pub use aggregation::__path_aggregate;
+pub use aggregation::aggregate;
 pub use explain::{__path_explain, explain};
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
@@ -19,8 +19,7 @@ use velesdb_core::velesql::{
 
 use crate::handlers::helpers::notify_query_timing;
 use crate::types::{
-    QueryRequest, QueryResponse, QueryResponseMeta, QueryType,
-    VELESQL_CONTRACT_VERSION,
+    QueryRequest, QueryResponse, QueryResponseMeta, QueryType, VELESQL_CONTRACT_VERSION,
 };
 use crate::AppState;
 

@@ -1,6 +1,4 @@
-// CLI - pedantic/nursery lints relaxed
-#![allow(clippy::pedantic)]
-#![allow(clippy::nursery)]
+// CLI - pedantic lints reactivated per-module; nursery globally relaxed
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::cast_precision_loss)]
@@ -13,26 +11,46 @@
 //!   `velesdb query ./my_database "SELECT * FROM docs LIMIT 10"`
 //!   `velesdb import ./data.jsonl --collection docs`
 
-mod cli_types;
+mod cli_types; // pedantic-clean ✓
+#[allow(clippy::pedantic)]
 mod collection_helpers;
+#[allow(clippy::pedantic)]
 mod commands;
+#[allow(clippy::pedantic)]
 mod graph;
+#[allow(clippy::pedantic)]
 mod graph_display;
+#[allow(clippy::pedantic)]
 mod graph_handlers;
+#[allow(clippy::pedantic)]
 mod handlers;
+#[allow(clippy::pedantic)]
 mod helpers;
+#[allow(clippy::pedantic)]
 mod import;
+#[allow(clippy::pedantic)]
 mod license;
+#[allow(clippy::pedantic)]
 mod repl;
+#[allow(clippy::pedantic)]
 mod repl_collection_cmds;
+#[allow(clippy::pedantic)]
 mod repl_commands;
+#[allow(clippy::pedantic)]
 mod repl_config_cmds;
+#[allow(clippy::pedantic)]
 mod repl_data_cmds;
+#[allow(clippy::pedantic)]
 mod repl_execute;
+#[allow(clippy::pedantic)]
 mod repl_graph_cmds;
+#[allow(clippy::pedantic)]
 mod repl_output;
+#[allow(clippy::pedantic)]
 mod repl_query_cmds;
+#[allow(clippy::pedantic)]
 mod repl_search_cmds;
+#[allow(clippy::pedantic)]
 mod session;
 
 use clap::Parser;

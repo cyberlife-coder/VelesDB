@@ -3,11 +3,14 @@
 
 FROM rust:slim-bookworm AS builder
 
+LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
+LABEL version="1.11.1"
+
 WORKDIR /app
 
 # Install nightly and build dependencies
 RUN rustup default nightly && \
-    apt-get update && apt-get install -y \
+    apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     curl \
@@ -24,10 +27,13 @@ RUN cargo build --release --bin velesdb-server
 # Runtime stage
 FROM debian:bookworm-slim
 
+LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
+LABEL version="1.11.1"
+
 WORKDIR /app
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*

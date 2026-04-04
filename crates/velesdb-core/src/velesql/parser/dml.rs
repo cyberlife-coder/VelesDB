@@ -3,9 +3,8 @@
 
 use super::{extract_identifier, Rule};
 use crate::velesql::ast::{
-    Condition, DeleteEdgeStatement, DeleteStatement, DmlStatement,
-    InsertStatement, Query, SelectEdgesStatement, UpdateAssignment,
-    UpdateStatement, Value,
+    Condition, DeleteEdgeStatement, DeleteStatement, DmlStatement, InsertStatement, Query,
+    SelectEdgesStatement, UpdateAssignment, UpdateStatement, Value,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;

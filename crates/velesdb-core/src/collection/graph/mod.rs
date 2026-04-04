@@ -41,8 +41,8 @@ mod clustered_index;
 mod csr_snapshot;
 mod degree_router;
 mod edge;
-mod edge_persistence;
 mod edge_concurrent;
+mod edge_persistence;
 pub(crate) mod helpers;
 mod label_index;
 #[cfg(test)]

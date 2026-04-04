@@ -236,8 +236,8 @@ impl Default for DeltaBuffer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::delta_merge::merge_with_delta;
+    use super::*;
 
     #[test]
     fn test_stream_delta_buffer_compiles_and_defaults_inactive() {

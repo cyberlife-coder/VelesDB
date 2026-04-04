@@ -60,7 +60,9 @@ impl VelesQL {
     fn parse(query: &str) -> PyResult<ParsedStatement> {
         CoreParser::parse(query)
             .map(|q| ParsedStatement { inner: q })
-            .map_err(|e| VelesQLSyntaxError::new_err(super::velesql_helpers::format_parse_error(&e)))
+            .map_err(|e| {
+                VelesQLSyntaxError::new_err(super::velesql_helpers::format_parse_error(&e))
+            })
     }
 
     /// Validate a VelesQL query without full parsing.

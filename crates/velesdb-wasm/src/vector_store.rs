@@ -519,5 +519,4 @@ impl VectorStore {
         }
         Ok(())
     }
-
 }

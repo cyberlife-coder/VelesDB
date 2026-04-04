@@ -8,15 +8,15 @@ use std::sync::Arc;
 use velesdb_core::velesql::{Query, SelectColumns};
 
 use crate::handlers::helpers::notify_query_timing;
-use crate::types::{AggregationResponse, QueryRequest, QueryResponseMeta, VELESQL_CONTRACT_VERSION};
+use crate::types::{
+    AggregationResponse, QueryRequest, QueryResponseMeta, VELESQL_CONTRACT_VERSION,
+};
 use crate::AppState;
 
 use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
 
 /// Returns `true` if the query contains aggregation functions or GROUP BY.
-pub(crate) fn is_aggregation_query(
-    select: &velesdb_core::velesql::SelectStatement,
-) -> bool {
+pub(crate) fn is_aggregation_query(select: &velesdb_core::velesql::SelectStatement) -> bool {
     let has_aggs = match &select.columns {
         SelectColumns::Aggregations(_) => true,
         SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),

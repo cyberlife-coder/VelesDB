@@ -5,9 +5,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::collection::graph::{
-    GraphEdge, GraphSchema, TraversalConfig, TraversalResult,
-};
+use crate::collection::graph::{GraphEdge, GraphSchema, TraversalConfig, TraversalResult};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;

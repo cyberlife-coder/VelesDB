@@ -5,10 +5,13 @@
 
 FROM debian:bookworm-slim
 
+LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
+LABEL version="1.11.1"
+
 WORKDIR /app
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*

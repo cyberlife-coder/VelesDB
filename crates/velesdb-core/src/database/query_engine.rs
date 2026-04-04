@@ -407,5 +407,4 @@ impl Database {
             crate::velesql::DmlStatement::InsertNode(stmt) => self.execute_insert_node(stmt),
         }
     }
-
 }

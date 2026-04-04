@@ -169,9 +169,7 @@ fn parse_node_type_def(pair: pest::iterators::Pair<Rule>) -> SchemaDefinition {
 }
 
 /// Parses `EDGE TypeName FROM Source TO Target`.
-fn parse_edge_type_def(
-    pair: pest::iterators::Pair<Rule>,
-) -> Result<SchemaDefinition, ParseError> {
+fn parse_edge_type_def(pair: pest::iterators::Pair<Rule>) -> Result<SchemaDefinition, ParseError> {
     let mut idents = pair
         .into_inner()
         .filter(|p| p.as_rule() == Rule::identifier)

@@ -524,7 +524,6 @@ impl VelesCollection {
     pub fn get_stats(&self) -> MobileCollectionStats {
         self.inner.get_stats().into()
     }
-
 }
 
 // Sparse vector operations are in collection_sparse.rs

@@ -359,7 +359,6 @@ impl GraphCollection {
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         self.search_by_embedding(query, k)
     }
-
 }
 
 #[cfg(test)]

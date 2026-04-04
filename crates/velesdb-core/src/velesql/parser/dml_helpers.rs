@@ -4,9 +4,7 @@
 //! `Parser` impl methods for each DML statement type.
 
 use super::{extract_identifier, Rule};
-use crate::velesql::ast::{
-    DmlStatement, InsertEdgeStatement, InsertNodeStatement, Query, Value,
-};
+use crate::velesql::ast::{DmlStatement, InsertEdgeStatement, InsertNodeStatement, Query, Value};
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
 
@@ -92,7 +90,11 @@ fn parse_edge_id_value(pair: pest::iterators::Pair<Rule>) -> Result<u64, ParseEr
 }
 
 /// Unwraps an optional field or returns a syntax error.
-pub(super) fn require_field<T>(opt: Option<T>, context: &str, field: &str) -> Result<T, ParseError> {
+pub(super) fn require_field<T>(
+    opt: Option<T>,
+    context: &str,
+    field: &str,
+) -> Result<T, ParseError> {
     opt.ok_or_else(|| ParseError::syntax(0, "", format!("{context} requires {field}")))
 }
 

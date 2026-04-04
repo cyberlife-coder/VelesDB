@@ -1,7 +1,4 @@
-// Migration tool - pedantic/nursery lints relaxed for CLI ergonomics
-#![allow(clippy::pedantic)]
-#![allow(clippy::nursery)]
-
+// Migration tool - pedantic lints reactivated per-module
 //! # `VelesDB` Migration Tool
 //!
 //! `velesdb-migrate` is a CLI tool and library for migrating vector data from
@@ -61,17 +58,26 @@
 //! ```
 
 #![warn(missing_docs)]
-// #![warn(clippy::pedantic)] // Disabled for release to avoid blocking CI on non-critical lints
 
+#[allow(clippy::pedantic)]
 pub mod config;
+#[allow(clippy::pedantic)]
 pub mod connectors;
+#[allow(clippy::pedantic)]
 pub mod error;
+#[allow(clippy::pedantic)]
 pub mod pipeline;
+#[allow(clippy::pedantic)]
 pub(crate) mod pipeline_points;
+#[allow(clippy::pedantic)]
 pub mod retry;
-pub mod source_config_builder;
+#[allow(clippy::pedantic)]
 mod source_builders;
+#[allow(clippy::pedantic)]
+pub mod source_config_builder;
+#[allow(clippy::pedantic)]
 pub mod transform;
+#[allow(clippy::pedantic)]
 pub mod wizard;
 
 pub use config::{MigrationConfig, MigrationOptions, SourceConfig};

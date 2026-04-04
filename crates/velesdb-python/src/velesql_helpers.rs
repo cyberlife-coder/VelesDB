@@ -44,16 +44,13 @@ impl ParsedStatement {
     }
 
     /// Recursively check if a condition contains vector search.
-    pub(crate) fn condition_has_vector_search(
-        cond: &velesdb_core::velesql::Condition,
-    ) -> bool {
+    pub(crate) fn condition_has_vector_search(cond: &velesdb_core::velesql::Condition) -> bool {
         use velesdb_core::velesql::Condition;
 
         match cond {
             Condition::VectorSearch(_) | Condition::VectorFusedSearch { .. } => true,
             Condition::And(left, right) | Condition::Or(left, right) => {
-                Self::condition_has_vector_search(left)
-                    || Self::condition_has_vector_search(right)
+                Self::condition_has_vector_search(left) || Self::condition_has_vector_search(right)
             }
             Condition::Group(inner) => Self::condition_has_vector_search(inner),
             Condition::Not(inner) => Self::condition_has_vector_search(inner),

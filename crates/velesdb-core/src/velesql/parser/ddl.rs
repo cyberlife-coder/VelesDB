@@ -2,9 +2,8 @@
 
 use super::{extract_identifier, Rule};
 use crate::velesql::ast::{
-    AlterCollectionStatement, AnalyzeStatement, CreateCollectionStatement,
-    CreateIndexStatement, DdlStatement, DropCollectionStatement, DropIndexStatement,
-    Query, TruncateStatement,
+    AlterCollectionStatement, AnalyzeStatement, CreateCollectionStatement, CreateIndexStatement,
+    DdlStatement, DropCollectionStatement, DropIndexStatement, Query, TruncateStatement,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;

@@ -146,10 +146,7 @@ pub(super) fn bfs_pop(
 }
 
 /// BFS push: appends to the back of the `VecDeque`.
-pub(super) fn bfs_push(
-    q: &mut std::collections::VecDeque<TraversalEntry>,
-    item: TraversalEntry,
-) {
+pub(super) fn bfs_push(q: &mut std::collections::VecDeque<TraversalEntry>, item: TraversalEntry) {
     q.push_back(item);
 }
 

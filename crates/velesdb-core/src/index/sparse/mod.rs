@@ -5,11 +5,11 @@
 
 #[cfg(feature = "persistence")]
 pub mod persistence;
-#[cfg(feature = "persistence")]
-pub(crate) mod persistence_wal;
 #[cfg(test)]
 #[cfg(feature = "persistence")]
 mod persistence_tests;
+#[cfg(feature = "persistence")]
+pub(crate) mod persistence_wal;
 
 // Re-export all public types from the always-compiled sparse_index module.
 pub use crate::sparse_index::inverted_index;

@@ -77,8 +77,7 @@ impl VectorStore {
             None => {
                 // No sparse data inserted yet — return empty results
                 let empty: Vec<()> = vec![];
-                serde_wasm_bindgen::to_value(&empty)
-                    .map_err(|e| JsValue::from_str(&e.to_string()))
+                serde_wasm_bindgen::to_value(&empty).map_err(|e| JsValue::from_str(&e.to_string()))
             }
         }
     }
