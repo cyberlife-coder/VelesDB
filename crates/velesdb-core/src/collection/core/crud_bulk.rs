@@ -336,13 +336,22 @@ impl Collection {
             return;
         }
         for (i, opt) in ps.iter().enumerate() {
-            if let Some(payload) = opt {
-                for (field, index) in indexes.iter() {
-                    if let Some(val) = payload.get(field) {
-                        if let Some(key) = crate::index::JsonValue::from_json(val) {
-                            self.insert_into_secondary_index(index, key, ids[i]);
-                        }
-                    }
+            let Some(payload) = opt else { continue };
+            self.index_single_payload(&indexes, payload, ids[i]);
+        }
+    }
+
+    /// Indexes a single payload against all secondary indexes.
+    fn index_single_payload(
+        &self,
+        indexes: &std::collections::HashMap<String, crate::index::SecondaryIndex>,
+        payload: &serde_json::Value,
+        point_id: u64,
+    ) {
+        for (field, index) in indexes {
+            if let Some(val) = payload.get(field) {
+                if let Some(key) = crate::index::JsonValue::from_json(val) {
+                    self.insert_into_secondary_index(index, key, point_id);
                 }
             }
         }
