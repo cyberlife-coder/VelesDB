@@ -227,60 +227,62 @@ impl ConcurrentEdgeStore {
             for edge in edges {
                 let edge_id = edge.id();
                 if ids.contains_key(&edge_id) {
-                    continue; // Skip duplicates
+                    continue;
                 }
 
                 let source_id = edge.source();
-                let source_shard = self.shard_index(source_id);
-                let target_shard = self.shard_index(edge.target());
-
-                let ok = if source_shard == target_shard {
-                    let mut guard = self.shards[source_shard].write();
-                    guard.add_edge(edge).is_ok()
-                } else {
-                    let (first_idx, second_idx) = if source_shard < target_shard {
-                        (source_shard, target_shard)
-                    } else {
-                        (target_shard, source_shard)
-                    };
-                    let mut first = self.shards[first_idx].write();
-                    let mut second = self.shards[second_idx].write();
-
-                    if source_shard < target_shard {
-                        if first.add_edge_outgoing_only(edge.clone()).is_ok() {
-                            if second.add_edge_incoming_only(edge).is_err() {
-                                first.remove_edge_outgoing_only(edge_id);
-                                false
-                            } else {
-                                true
-                            }
-                        } else {
-                            false
-                        }
-                    } else if second.add_edge_outgoing_only(edge.clone()).is_ok() {
-                        if first.add_edge_incoming_only(edge).is_err() {
-                            second.remove_edge_outgoing_only(edge_id);
-                            false
-                        } else {
-                            true
-                        }
-                    } else {
-                        false
-                    }
-                };
+                let ok = self.insert_edge_into_shards(edge);
 
                 if ok {
                     ids.insert(edge_id, source_id);
                     count += 1;
                 }
             }
-        } // All locks dropped.
+        }
 
         if count > 0 {
             self.invalidate_snapshot();
             self.rebuild_snapshot_best_effort();
         }
         count
+    }
+
+    /// Inserts a single edge into the correct shard(s), handling cross-shard locking.
+    ///
+    /// Returns `true` if the edge was successfully inserted.
+    fn insert_edge_into_shards(&self, edge: GraphEdge) -> bool {
+        let source_shard = self.shard_index(edge.source());
+        let target_shard = self.shard_index(edge.target());
+
+        if source_shard == target_shard {
+            return self.shards[source_shard].write().add_edge(edge).is_ok();
+        }
+
+        // Cross-shard: acquire locks in ascending order to prevent deadlock.
+        let (first_idx, second_idx) = if source_shard < target_shard {
+            (source_shard, target_shard)
+        } else {
+            (target_shard, source_shard)
+        };
+        let mut first = self.shards[first_idx].write();
+        let mut second = self.shards[second_idx].write();
+
+        let (outgoing_guard, incoming_guard) = if source_shard < target_shard {
+            (&mut first, &mut second)
+        } else {
+            (&mut second, &mut first)
+        };
+
+        let edge_id = edge.id();
+        if outgoing_guard.add_edge_outgoing_only(edge.clone()).is_ok() {
+            if incoming_guard.add_edge_incoming_only(edge).is_err() {
+                outgoing_guard.remove_edge_outgoing_only(edge_id);
+                return false;
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Removes an edge by ID using optimized 2-shard lookup.
@@ -344,76 +346,118 @@ impl ConcurrentEdgeStore {
     pub fn remove_node_edges(&self, node_id: u64) {
         {
             let mut ids = self.edge_ids.write();
-
             let node_shard = self.shard_index(node_id);
 
-            // Phase 1: Collect all edges connected to this node (read-only)
-            let (outgoing_edges, incoming_edges): (Vec<_>, Vec<_>) = {
-                let guard = self.shards[node_shard].read();
-                let outgoing: Vec<_> = guard
-                    .get_outgoing(node_id)
-                    .iter()
-                    .map(|e| (e.id(), e.target()))
-                    .collect();
-                let incoming: Vec<_> = guard
-                    .get_incoming(node_id)
-                    .iter()
-                    .map(|e| (e.id(), e.source()))
-                    .collect();
-                (outgoing, incoming)
-            };
+            let (outgoing_edges, incoming_edges) = self.collect_node_edges(node_shard, node_id);
 
-            // Phase 2: Collect all shards that need cleanup (BTreeSet = sorted ascending)
-            let mut shards_to_clean: std::collections::BTreeSet<usize> =
-                std::collections::BTreeSet::new();
-            shards_to_clean.insert(node_shard);
+            let shards_to_clean =
+                self.gather_affected_shards(node_shard, &outgoing_edges, &incoming_edges);
 
-            for (_, target) in &outgoing_edges {
-                shards_to_clean.insert(self.shard_index(*target));
-            }
-            for (_, source) in &incoming_edges {
-                shards_to_clean.insert(self.shard_index(*source));
-            }
-
-            // Phase 3: Acquire shard locks in ascending order and perform cleanup
             let mut guards: Vec<_> = shards_to_clean
                 .iter()
                 .map(|&idx| (idx, self.shards[idx].write()))
                 .collect();
 
-            // Phase 4: Clean up edges in all shards
-            for (shard_idx, guard) in &mut guards {
-                if *shard_idx == node_shard {
-                    guard.remove_node_edges(node_id);
-                } else {
-                    for (edge_id, target) in &outgoing_edges {
-                        if self.shard_index(*target) == *shard_idx {
-                            guard.remove_edge_incoming_only(*edge_id);
-                        }
-                    }
-                    for (edge_id, source) in &incoming_edges {
-                        if self.shard_index(*source) == *shard_idx {
-                            guard.remove_edge_outgoing_only(*edge_id);
-                        }
-                    }
-                }
-            }
+            self.cleanup_shard_edges(
+                &mut guards,
+                node_shard,
+                node_id,
+                &outgoing_edges,
+                &incoming_edges,
+            );
 
-            // Phase 5: Remove edge IDs from global registry
-            let mut removed: FxHashSet<u64> = FxHashSet::default();
-            for (edge_id, _) in &outgoing_edges {
-                if removed.insert(*edge_id) {
-                    ids.remove(edge_id);
-                }
-            }
-            for (edge_id, _) in &incoming_edges {
-                if removed.insert(*edge_id) {
-                    ids.remove(edge_id);
-                }
-            }
-        } // All locks dropped here.
+            self.deregister_edge_ids(&mut ids, &outgoing_edges, &incoming_edges);
+        }
         self.invalidate_snapshot();
         self.rebuild_snapshot_best_effort();
+    }
+
+    /// Collects all outgoing and incoming edges for a node (read-only).
+    #[allow(clippy::type_complexity)] // Reason: tuple of (outgoing, incoming) edge lists is clear in context
+    fn collect_node_edges(
+        &self,
+        node_shard: usize,
+        node_id: u64,
+    ) -> (Vec<(u64, u64)>, Vec<(u64, u64)>) {
+        let guard = self.shards[node_shard].read();
+        let outgoing: Vec<_> = guard
+            .get_outgoing(node_id)
+            .iter()
+            .map(|e| (e.id(), e.target()))
+            .collect();
+        let incoming: Vec<_> = guard
+            .get_incoming(node_id)
+            .iter()
+            .map(|e| (e.id(), e.source()))
+            .collect();
+        (outgoing, incoming)
+    }
+
+    /// Gathers the set of shard indices that need cleanup (sorted ascending for lock ordering).
+    fn gather_affected_shards(
+        &self,
+        node_shard: usize,
+        outgoing: &[(u64, u64)],
+        incoming: &[(u64, u64)],
+    ) -> std::collections::BTreeSet<usize> {
+        let mut shards = std::collections::BTreeSet::new();
+        shards.insert(node_shard);
+        for (_, target) in outgoing {
+            shards.insert(self.shard_index(*target));
+        }
+        for (_, source) in incoming {
+            shards.insert(self.shard_index(*source));
+        }
+        shards
+    }
+
+    /// Cleans up edges in all affected shards.
+    #[allow(clippy::too_many_arguments)]
+    fn cleanup_shard_edges(
+        &self,
+        guards: &mut [(usize, parking_lot::RwLockWriteGuard<'_, super::EdgeStore>)],
+        node_shard: usize,
+        node_id: u64,
+        outgoing: &[(u64, u64)],
+        incoming: &[(u64, u64)],
+    ) {
+        for (shard_idx, guard) in guards {
+            if *shard_idx == node_shard {
+                guard.remove_node_edges(node_id);
+            } else {
+                for (edge_id, target) in outgoing {
+                    if self.shard_index(*target) == *shard_idx {
+                        guard.remove_edge_incoming_only(*edge_id);
+                    }
+                }
+                for (edge_id, source) in incoming {
+                    if self.shard_index(*source) == *shard_idx {
+                        guard.remove_edge_outgoing_only(*edge_id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Removes edge IDs from the global registry, deduplicating.
+    #[allow(clippy::unused_self)] // Reason: method on ConcurrentEdgeStore for API consistency
+    fn deregister_edge_ids(
+        &self,
+        ids: &mut FxHashMap<u64, u64>,
+        outgoing: &[(u64, u64)],
+        incoming: &[(u64, u64)],
+    ) {
+        let mut removed: FxHashSet<u64> = FxHashSet::default();
+        for (edge_id, _) in outgoing {
+            if removed.insert(*edge_id) {
+                ids.remove(edge_id);
+            }
+        }
+        for (edge_id, _) in incoming {
+            if removed.insert(*edge_id) {
+                ids.remove(edge_id);
+            }
+        }
     }
 }
 

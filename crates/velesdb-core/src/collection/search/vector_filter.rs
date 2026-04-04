@@ -45,76 +45,61 @@ impl Collection {
         let metric = config.metric;
         drop(config);
 
-        let quality = opts.quality.unwrap_or_else(|| {
-            opts.ef_search
-                .map_or(crate::SearchQuality::Balanced, |ef| match ef {
-                    0..=64 => crate::SearchQuality::Fast,
-                    65..=128 => crate::SearchQuality::Balanced,
-                    129..=512 => crate::SearchQuality::Accurate,
-                    _ => crate::SearchQuality::Perfect,
-                })
-        });
+        let quality = resolve_quality(opts);
 
-        if let Some(bitmap) = self.build_prefilter_bitmap(filter) {
-            if bitmap.is_empty() {
-                return Ok(Vec::new());
+        let index_results = match self.build_prefilter_bitmap(filter) {
+            Some(bitmap) if bitmap.is_empty() => return Ok(Vec::new()),
+            Some(bitmap) => {
+                self.search_with_bitmap_strategy(query, k, filter, quality, metric, &bitmap)?
             }
+            None => self.search_post_filter(query, k, filter, quality, metric)?,
+        };
 
-            let selectivity = super::vector::estimate_real_selectivity(&bitmap, self.index.len());
+        Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
+    }
 
-            tracing::debug!(
-                selectivity = selectivity,
-                bitmap_len = bitmap.len(),
-                collection_len = self.index.len(),
-                strategy = if selectivity <= SELECTIVITY_THRESHOLD {
-                    "full_scan"
-                } else if selectivity > SELECTIVITY_HIGH_THRESHOLD {
-                    "post_filter"
-                } else {
-                    "hnsw_bitmap"
-                },
-                "bitmap prefilter strategy selected"
-            );
+    /// Dispatches to full-scan, HNSW+bitmap, or post-filter based on selectivity.
+    fn search_with_bitmap_strategy(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: &crate::filter::Filter,
+        quality: crate::SearchQuality,
+        metric: crate::DistanceMetric,
+        bitmap: &roaring::RoaringBitmap,
+    ) -> Result<Vec<ScoredResult>> {
+        let selectivity = super::vector::estimate_real_selectivity(bitmap, self.index.len());
 
-            if selectivity > SELECTIVITY_HIGH_THRESHOLD {
-                tracing::debug!(
-                    selectivity = selectivity,
-                    threshold = SELECTIVITY_HIGH_THRESHOLD,
-                    "high selectivity — skipping bitmap, using post-filter path"
-                );
-                let candidates_k = compute_oversampled_k(k, filter);
-                let index_results = self
-                    .index
-                    .search_with_quality(query, candidates_k, quality)?;
-                let index_results = self.merge_delta(index_results, query, candidates_k, metric);
-                return Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better));
-            }
-
-            let index_results = if selectivity <= SELECTIVITY_THRESHOLD {
-                let results = self.index.full_scan_with_bitmap(query, k, &bitmap)?;
-                self.merge_delta(results, query, k, metric)
-            } else {
-                let candidates_k = compute_oversampled_k(k, filter);
-                let results = self.index.search_with_quality_and_bitmap(
-                    query,
-                    candidates_k,
-                    quality,
-                    &bitmap,
-                )?;
-                self.merge_delta(results, query, candidates_k, metric)
-            };
-
-            return Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better));
+        if selectivity > SELECTIVITY_HIGH_THRESHOLD {
+            return self.search_post_filter(query, k, filter, quality, metric);
         }
 
+        if selectivity <= SELECTIVITY_THRESHOLD {
+            let results = self.index.full_scan_with_bitmap(query, k, bitmap)?;
+            return Ok(self.merge_delta(results, query, k, metric));
+        }
+
+        let candidates_k = compute_oversampled_k(k, filter);
+        let results =
+            self.index
+                .search_with_quality_and_bitmap(query, candidates_k, quality, bitmap)?;
+        Ok(self.merge_delta(results, query, candidates_k, metric))
+    }
+
+    /// Searches without bitmap pre-filter, using quality-aware HNSW + post-filter.
+    fn search_post_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: &crate::filter::Filter,
+        quality: crate::SearchQuality,
+        metric: crate::DistanceMetric,
+    ) -> Result<Vec<ScoredResult>> {
         let candidates_k = compute_oversampled_k(k, filter);
         let index_results = self
             .index
             .search_with_quality(query, candidates_k, quality)?;
-        let index_results = self.merge_delta(index_results, query, candidates_k, metric);
-
-        let results = self.filter_and_hydrate(index_results, filter, k, higher_is_better);
-        Ok(results)
+        Ok(self.merge_delta(index_results, query, candidates_k, metric))
     }
 
     /// Filters scored results by metadata and hydrates matching points.
@@ -157,6 +142,21 @@ impl Collection {
         super::vector::tag_vector_component_scores(&mut results);
         results
     }
+}
+
+/// Resolves the search quality from query options.
+fn resolve_quality(
+    opts: &crate::collection::search::query::QuerySearchOptions,
+) -> crate::SearchQuality {
+    opts.quality.unwrap_or_else(|| {
+        opts.ef_search
+            .map_or(crate::SearchQuality::Balanced, |ef| match ef {
+                0..=64 => crate::SearchQuality::Fast,
+                65..=128 => crate::SearchQuality::Balanced,
+                129..=512 => crate::SearchQuality::Accurate,
+                _ => crate::SearchQuality::Perfect,
+            })
+    })
 }
 
 /// Computes the oversampled candidate count for filtered search.
