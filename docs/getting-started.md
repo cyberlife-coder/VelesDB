@@ -212,6 +212,33 @@ Response:
 }
 ```
 
+### 9. Cross-Collection MATCH
+
+Combine graph traversal with data from multiple collections using `@collection`:
+
+```bash
+# Create a graph collection with edges
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "catalog", "type": "graph", "dimension": 4, "metric": "cosine"}'
+
+# Create a metadata collection with pricing
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "pricing", "type": "metadata"}'
+
+# Query: traverse catalog graph, enrich with pricing data
+curl -X POST http://localhost:8080/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@pricing) RETURN p.name, w.price LIMIT 10",
+    "collection": "catalog",
+    "params": {}
+  }'
+```
+
+> **Full guide:** [Graph Patterns Guide](guides/GRAPH_PATTERNS.md#cross-collection-match-collection)
+
 ## Next Steps
 
 - Read the [API Reference](reference/api-reference.md) for complete endpoint documentation

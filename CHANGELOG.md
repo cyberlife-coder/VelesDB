@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Cross-collection MATCH queries (Issue #495)** — `@collection` annotation on MATCH node patterns
+  enables cross-collection graph queries. Syntax: `MATCH (p:Product@products)-[:STORED_IN]->(inv:Inventory@inventory)`.
+  Results are enriched with payloads from annotated collections (alias-prefixed fields).
+- **MATCH via `/query` endpoint** — MATCH queries can now be executed via `Database::execute_query`
+  using `_collection` parameter or `SELECT ... FROM <collection> WHERE MATCH ...` syntax.
+  Previously, MATCH was rejected at the Database level.
+- **Cross-type JOIN tests** — VectorCollection JOIN MetadataCollection validated with BDD tests.
+- **BFS dedup fix** — CSR and EdgeStore BFS no longer produce duplicate results for nodes
+  reachable via multiple paths (diamond graph fix).
+
 ## [1.11.1] - 2026-04-04
 
 ### Added
