@@ -91,13 +91,18 @@ impl Collection {
             let tuples: Vec<(u64, Vec<f32>)> =
                 points.iter().map(|p| (p.id, p.vector.clone())).collect();
 
-            if aib.enqueue(tuples) {
+            let needs_flush = aib.enqueue(tuples);
+
+            // Sync to ShardedVectors for SIMD re-ranking BEFORE flush_sync,
+            // because flush_sync → insert_batch_parallel re-registers mappings
+            // with new internal indices, making the `results` from
+            // write_batch_direct stale.
+            writer.sync_to_sharded(&results)?;
+
+            if needs_flush {
                 // Buffer reached merge_threshold — flush synchronously.
                 aib.flush_sync(&self.index)?;
             }
-
-            // Sync to ShardedVectors for SIMD re-ranking.
-            writer.sync_to_sharded(&results)?;
 
             let count = vector_refs.len();
             self.config.write().point_count = self.vector_storage.read().len();

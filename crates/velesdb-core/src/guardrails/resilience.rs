@@ -70,21 +70,24 @@ impl RateLimiter {
         }
     }
 
-    /// Exhausts all tokens for a client and sets the refill rate to zero,
-    /// ensuring the next `check()` will fail regardless of elapsed time.
+    /// Exhausts all tokens for a specific client, ensuring the next
+    /// `check()` for that client will fail.
+    ///
+    /// Only affects the targeted client's bucket — other clients and the
+    /// global `limit_qps` are untouched.
     ///
     /// Useful for testing rate-limit rejection paths.
     pub fn exhaust(&self, client_id: &str) {
-        // Set refill rate to 0 so no tokens are ever added back.
-        self.limit_qps
-            .store(0, std::sync::atomic::Ordering::Relaxed);
         let mut clients = self.clients.write();
         let now = Instant::now();
         let bucket = clients.entry(client_id.to_string()).or_insert(TokenBucket {
             tokens: 0.0,
             last_update: now,
         });
-        bucket.tokens = 0.0;
+        // Set tokens to a large negative value so that even after time-based
+        // refill the bucket stays below 1.0 for a reasonable test window.
+        // With limit_qps = 100_000, it takes 10 seconds to refill 1M tokens.
+        bucket.tokens = -1_000_000.0;
         bucket.last_update = now;
     }
 }

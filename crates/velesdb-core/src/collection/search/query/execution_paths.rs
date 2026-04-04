@@ -344,10 +344,17 @@ impl Collection {
     /// for candidate document IDs. The full condition is then post-filtered
     /// over those candidates instead of scanning the entire collection.
     ///
+    /// Returns `Some(results)` only when BM25 found enough candidates to
+    /// fill the limit. When BM25 returns fewer matches than requested, the
+    /// result set may be incomplete (BM25 tokenization differs from LIKE
+    /// substring matching), so we return `None` to let the caller fall
+    /// through to a full sequential scan.
+    ///
     /// Returns `None` when:
     /// - No LIKE condition is found in the condition tree
     /// - The extracted word is too short (< 3 chars) for meaningful BM25 lookup
     /// - BM25 returns no candidates (fall through to sequential scan)
+    /// - BM25 candidates yield fewer than `limit` matches (incomplete set)
     fn try_like_via_text_index(
         &self,
         cond: &crate::velesql::Condition,
@@ -380,7 +387,16 @@ impl Collection {
                 }
             }
         }
-        Some(results)
+
+        // Only return BM25 results when we filled the limit — otherwise the
+        // result set may be incomplete because BM25 tokenization differs from
+        // LIKE substring matching (e.g., "analytics.google.com" won't match
+        // BM25 for "google" but should match LIKE '%google%').
+        if results.len() >= limit {
+            Some(results)
+        } else {
+            None // Fall through to full sequential scan
+        }
     }
 
     /// Recursively extracts the first LIKE pattern from a condition tree.

@@ -24,6 +24,10 @@ pub struct IndexInfo {
 impl Collection {
     /// Creates a secondary metadata index for a payload field.
     ///
+    /// When the index already exists, triggers a backfill to ensure all
+    /// existing payloads are indexed (handles the case where bulk insert
+    /// skipped per-point index updates).
+    ///
     /// # Errors
     ///
     /// Returns Ok(()) on success. Index creation is idempotent.
@@ -36,27 +40,33 @@ impl Collection {
             .entry(field_name.to_string())
             .or_insert_with(|| SecondaryIndex::BTree(RwLock::new(BTreeMap::new())));
 
-        // Backfill: scan existing payloads to populate the new index.
-        if is_new {
-            drop(indexes); // Release write lock before reading payloads
-            let payload_storage = self.payload_storage.read();
-            let ids = PayloadStorage::ids(&*payload_storage);
-            let indexes = self.secondary_indexes.read();
-            if let Some(index) = indexes.get(field_name) {
-                let SecondaryIndex::BTree(ref tree) = index;
-                let mut tree_guard = tree.write();
-                for id in ids {
-                    if let Ok(Some(payload)) = PayloadStorage::retrieve(&*payload_storage, id) {
-                        if let Some(val) = payload.get(field_name) {
-                            if let Some(key) = JsonValue::from_json(val) {
-                                let ids_vec = tree_guard.entry(key).or_default();
-                                if !ids_vec.contains(&id) {
-                                    ids_vec.push(id);
-                                }
+        // Backfill: scan existing payloads to populate the index.
+        // Runs for both new indexes AND existing indexes (to catch points
+        // inserted via bulk paths that skipped per-point index updates).
+        drop(indexes); // Release write lock before reading payloads
+        let payload_storage = self.payload_storage.read();
+        let ids = PayloadStorage::ids(&*payload_storage);
+        let indexes = self.secondary_indexes.read();
+        if let Some(index) = indexes.get(field_name) {
+            let SecondaryIndex::BTree(ref tree) = index;
+            let mut tree_guard = tree.write();
+            for id in ids {
+                if let Ok(Some(payload)) = PayloadStorage::retrieve(&*payload_storage, id) {
+                    if let Some(val) = payload.get(field_name) {
+                        if let Some(key) = JsonValue::from_json(val) {
+                            let ids_vec = tree_guard.entry(key).or_default();
+                            if !ids_vec.contains(&id) {
+                                ids_vec.push(id);
                             }
                         }
                     }
                 }
+            }
+            if !is_new {
+                tracing::debug!(
+                    field = field_name,
+                    "create_index: backfilled existing index (bulk insert recovery)"
+                );
             }
         }
 
