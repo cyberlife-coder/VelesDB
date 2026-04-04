@@ -3,22 +3,13 @@
 
 use crate::error::{CommandError, Error};
 use crate::events::{emit_collection_created, emit_collection_deleted, emit_collection_updated};
+#[cfg(feature = "persistence")]
+use crate::helpers::require_vector_collection;
 use crate::helpers::{
     map_core_results, metric_to_string, parse_filter, parse_fusion_strategy, parse_metric,
-    parse_sparse_vector, parse_storage_mode, require_collection, require_vector_collection,
-    storage_mode_to_string, timed_search_response,
+    parse_storage_mode, require_collection, storage_mode_to_string, timed_search_response,
 };
 use crate::state::VelesDbState;
-use velesdb_core::velesql::SelectColumns;
-
-/// Detects aggregation queries (COUNT, SUM, AVG, etc. in SELECT).
-fn is_aggregation_query(parsed: &velesdb_core::velesql::Query) -> bool {
-    match &parsed.select.columns {
-        SelectColumns::Aggregations(_) => true,
-        SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
-        _ => false,
-    }
-}
 #[cfg(feature = "persistence")]
 use crate::types::StreamInsertRequest;
 pub use crate::types::{
@@ -26,10 +17,9 @@ pub use crate::types::{
 };
 use crate::types::{
     BatchSearchRequest, CollectionInfo, CreateCollectionRequest, CreateMetadataCollectionRequest,
-    DeletePointsRequest, GetPointsRequest, HybridResult, HybridSearchRequest,
-    HybridSparseSearchRequest, MultiQuerySearchRequest, PointOutput, QueryRequest, QueryResponse,
-    SearchRequest, SearchResponse, SparseSearchRequest, SparseUpsertRequest, TextSearchRequest,
-    TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
+    DeletePointsRequest, GetPointsRequest, HybridSearchRequest, MultiQuerySearchRequest,
+    PointOutput, SearchRequest, SearchResponse, TextSearchRequest, TrainPqRequest,
+    UpsertMetadataRequest, UpsertRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
 
@@ -401,102 +391,8 @@ pub async fn hybrid_search<R: Runtime>(
     Ok(timed_search_response(results, start))
 }
 
-/// Executes a `VelesQL` query (EPIC-031 US-012).
-///
-/// Supports SELECT-style `VelesQL` queries with vector similarity search.
-/// Aggregation queries (GROUP BY, COUNT, etc.) are auto-detected and routed
-/// to `execute_aggregate()`. DDL/DML/TRAIN queries are dispatched directly
-/// to `Database::execute_query`. MATCH queries are not yet supported through
-/// this endpoint. Returns results in `HybridResult` format.
-#[allow(clippy::too_many_lines)]
-#[command]
-pub async fn query<R: Runtime>(
-    _app: AppHandle<R>,
-    state: State<'_, VelesDbState>,
-    request: QueryRequest,
-) -> std::result::Result<QueryResponse, CommandError> {
-    let start = std::time::Instant::now();
-
-    // Parse the VelesQL query
-    let parsed = velesdb_core::velesql::Parser::parse(&request.query)
-        .map_err(|e| Error::InvalidConfig(format!("VelesQL parse error: {}", e.message)))?;
-
-    // MATCH queries are not supported through this endpoint.
-    if parsed.is_match_query() {
-        return Err(CommandError::from(Error::InvalidConfig(
-            "MATCH queries are not supported through the query endpoint. \
-             Use graph-specific commands instead."
-                .to_string(),
-        )));
-    }
-
-    let results = dispatch_tauri_query(&state, &parsed, &request)?;
-
-    Ok(QueryResponse {
-        results,
-        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
-    })
-}
-
-/// Dispatches a tauri query to aggregation or standard execution path.
-fn dispatch_tauri_query(
-    state: &VelesDbState,
-    parsed: &velesdb_core::velesql::Query,
-    request: &QueryRequest,
-) -> std::result::Result<Vec<HybridResult>, CommandError> {
-    let collection_name = &parsed.select.from;
-
-    if is_aggregation_query(parsed) && !collection_name.is_empty() {
-        return execute_tauri_aggregation(state, parsed, request, collection_name);
-    }
-
-    state
-        .with_db(|db| {
-            let search_results = db.execute_query(parsed, &request.params)?;
-            Ok(search_results
-                .into_iter()
-                .map(|r| search_result_to_hybrid(&r))
-                .collect())
-        })
-        .map_err(CommandError::from)
-}
-
-/// Executes an aggregation query through the collection API.
-fn execute_tauri_aggregation(
-    state: &VelesDbState,
-    parsed: &velesdb_core::velesql::Query,
-    request: &QueryRequest,
-    collection_name: &str,
-) -> std::result::Result<Vec<HybridResult>, CommandError> {
-    let agg_json = state
-        .with_db(|db| {
-            let coll = require_collection(&db, collection_name)?;
-            coll.execute_aggregate(parsed, &request.params)
-                .map_err(|e| Error::InvalidConfig(format!("Aggregation error: {e}")))
-        })
-        .map_err(CommandError::from)?;
-
-    Ok(vec![HybridResult {
-        node_id: 0,
-        vector_score: None,
-        graph_score: None,
-        fused_score: 0.0,
-        bindings: None,
-        column_data: Some(agg_json),
-    }])
-}
-
-/// Converts a `SearchResult` to a `HybridResult`.
-fn search_result_to_hybrid(r: &velesdb_core::SearchResult) -> HybridResult {
-    HybridResult {
-        node_id: r.point.id,
-        vector_score: Some(r.score),
-        graph_score: None,
-        fused_score: r.score,
-        bindings: r.point.payload.clone(),
-        column_data: None,
-    }
-}
+// NOTE: VelesQL query command moved to commands_query.rs (NLOC refactoring)
+pub use crate::commands_query::query;
 
 /// Checks if a collection is empty.
 #[command]
@@ -560,95 +456,8 @@ pub async fn multi_query_search<R: Runtime>(
     Ok(timed_search_response(results, start))
 }
 
-// ============================================================================
-// Sparse Vector Commands
-// ============================================================================
-
-/// Searches using a sparse (keyword) vector via inverted index.
-#[command]
-pub async fn sparse_search<R: Runtime>(
-    _app: AppHandle<R>,
-    state: State<'_, VelesDbState>,
-    request: SparseSearchRequest,
-) -> std::result::Result<SearchResponse, CommandError> {
-    let start = std::time::Instant::now();
-
-    let results = state
-        .with_db(|db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
-
-            let core_sv = parse_sparse_vector(&request.sparse_vector)?;
-            let idx_name = request.index_name.unwrap_or_default();
-
-            let search_results = coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
-            Ok(map_core_results(search_results))
-        })
-        .map_err(CommandError::from)?;
-
-    Ok(timed_search_response(results, start))
-}
-
-/// Performs hybrid dense+sparse search with RRF fusion.
-#[command]
-pub async fn hybrid_sparse_search<R: Runtime>(
-    _app: AppHandle<R>,
-    state: State<'_, VelesDbState>,
-    request: HybridSparseSearchRequest,
-) -> std::result::Result<SearchResponse, CommandError> {
-    let start = std::time::Instant::now();
-
-    let results = state
-        .with_db(|db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
-
-            let core_sv = parse_sparse_vector(&request.sparse_vector)?;
-            let strategy = velesdb_core::fusion::FusionStrategy::RRF { k: 60 };
-
-            let search_results =
-                coll.hybrid_sparse_search(&request.vector, &core_sv, request.top_k, "", &strategy)?;
-            Ok(map_core_results(search_results))
-        })
-        .map_err(CommandError::from)?;
-
-    Ok(timed_search_response(results, start))
-}
-
-/// Upserts points with optional sparse vectors.
-#[command]
-pub async fn sparse_upsert<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, VelesDbState>,
-    request: SparseUpsertRequest,
-) -> std::result::Result<usize, CommandError> {
-    let collection_name = request.collection.clone();
-    let count = state
-        .with_db(|db| {
-            let coll = require_collection(&db, &request.collection)?;
-
-            let mut points = Vec::with_capacity(request.points.len());
-            for p in request.points {
-                let sparse_map = if let Some(ref sv) = p.sparse_vector {
-                    let core_sv = parse_sparse_vector(sv)?;
-                    let mut map = std::collections::BTreeMap::new();
-                    map.insert(String::new(), core_sv);
-                    Some(map)
-                } else {
-                    None
-                };
-                points.push(velesdb_core::Point::with_sparse(
-                    p.id, p.vector, p.payload, sparse_map,
-                ));
-            }
-
-            let count = points.len();
-            coll.upsert(points)?;
-            Ok(count)
-        })
-        .map_err(CommandError::from)?;
-
-    emit_collection_updated(&app, &collection_name, "sparse_upsert", count);
-    Ok(count)
-}
+// NOTE: Sparse Vector Commands moved to commands_sparse.rs (NLOC refactoring)
+pub use crate::commands_sparse::{hybrid_sparse_search, sparse_search, sparse_upsert};
 
 // ============================================================================
 // PQ Training Command
@@ -732,59 +541,8 @@ pub async fn stream_insert<R: Runtime>(
     Ok(count)
 }
 
-// ============================================================================
-// AgentMemory Commands (EPIC-016 US-003)
-// ============================================================================
-
-use crate::types::{SemanticQueryRequest, SemanticQueryResult, SemanticStoreRequest};
-use velesdb_core::agent::SemanticMemory;
-
-/// Creates a `SemanticMemory` instance, converting agent errors to plugin errors.
-fn open_semantic_memory(
-    db: std::sync::Arc<velesdb_core::Database>,
-    dimension: usize,
-) -> std::result::Result<SemanticMemory, Error> {
-    SemanticMemory::new_from_db(db, dimension).map_err(|e| Error::InvalidConfig(e.to_string()))
-}
-
-/// Stores a knowledge fact in semantic memory.
-#[command]
-pub async fn semantic_store<R: Runtime>(
-    _app: AppHandle<R>,
-    state: State<'_, VelesDbState>,
-    request: SemanticStoreRequest,
-) -> std::result::Result<(), CommandError> {
-    state
-        .with_db(|db| {
-            let memory = open_semantic_memory(db, request.embedding.len())?;
-            memory
-                .store(request.id, &request.content, &request.embedding)
-                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
-            Ok(())
-        })
-        .map_err(CommandError::from)
-}
-
-/// Queries semantic memory by similarity search.
-#[command]
-pub async fn semantic_query<R: Runtime>(
-    _app: AppHandle<R>,
-    state: State<'_, VelesDbState>,
-    request: SemanticQueryRequest,
-) -> std::result::Result<Vec<SemanticQueryResult>, CommandError> {
-    state
-        .with_db(|db| {
-            let memory = open_semantic_memory(db, request.embedding.len())?;
-            let results = memory
-                .query(&request.embedding, request.top_k)
-                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
-            Ok(results
-                .into_iter()
-                .map(|(id, score, content)| SemanticQueryResult { id, score, content })
-                .collect())
-        })
-        .map_err(CommandError::from)
-}
+// NOTE: AgentMemory Commands moved to commands_memory.rs (NLOC refactoring)
+pub use crate::commands_memory::{semantic_query, semantic_store};
 
 // NOTE: Secondary Index Commands moved to commands_index.rs
 pub use crate::commands_index::{create_index, drop_index, list_indexes};

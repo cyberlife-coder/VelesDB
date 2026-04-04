@@ -23,6 +23,7 @@
 mod batch;
 mod brute_force;
 mod constructors;
+mod rerank;
 mod search;
 mod trait_impl;
 mod vacuum;

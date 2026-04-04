@@ -31,6 +31,7 @@ mod collection;
 mod collection_helpers;
 mod graph;
 mod graph_collection;
+mod graph_collection_query;
 mod graph_store;
 mod utils;
 mod velesql;

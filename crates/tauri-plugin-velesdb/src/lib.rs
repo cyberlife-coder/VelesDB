@@ -68,11 +68,15 @@ use tauri::{
 pub mod commands;
 pub mod commands_graph;
 pub mod commands_index;
+pub mod commands_memory;
+pub mod commands_query;
+pub mod commands_sparse;
 pub mod error;
 pub mod events;
 pub mod helpers;
 pub mod state;
 pub mod types;
+pub mod types_graph;
 
 pub use error::{CommandError, Error, Result};
 pub use state::VelesDbState;
@@ -306,20 +310,20 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
         commands::text_search,
         commands::hybrid_search,
         commands::multi_query_search,
-        commands::query,
+        commands_query::query,
         commands::is_empty,
         commands::flush,
         // Sparse vector commands
-        commands::sparse_search,
-        commands::hybrid_sparse_search,
-        commands::sparse_upsert,
+        commands_sparse::sparse_search,
+        commands_sparse::hybrid_sparse_search,
+        commands_sparse::sparse_upsert,
         // PQ training command
         commands::train_pq,
         // Streaming insert command (requires persistence)
         commands::stream_insert,
         // AgentMemory commands (EPIC-016 US-003)
-        commands::semantic_store,
-        commands::semantic_query,
+        commands_memory::semantic_store,
+        commands_memory::semantic_query,
         // Knowledge Graph commands (EPIC-015 US-001)
         commands_graph::add_edge,
         commands_graph::get_edges,
@@ -347,18 +351,18 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
         commands::text_search,
         commands::hybrid_search,
         commands::multi_query_search,
-        commands::query,
+        commands_query::query,
         commands::is_empty,
         commands::flush,
         // Sparse vector commands
-        commands::sparse_search,
-        commands::hybrid_sparse_search,
-        commands::sparse_upsert,
+        commands_sparse::sparse_search,
+        commands_sparse::hybrid_sparse_search,
+        commands_sparse::sparse_upsert,
         // PQ training command
         commands::train_pq,
         // AgentMemory commands (EPIC-016 US-003)
-        commands::semantic_store,
-        commands::semantic_query,
+        commands_memory::semantic_store,
+        commands_memory::semantic_query,
         // Knowledge Graph commands (EPIC-015 US-001)
         commands_graph::add_edge,
         commands_graph::get_edges,
