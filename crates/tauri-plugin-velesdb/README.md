@@ -211,6 +211,17 @@ const parallel = await invoke('plugin:velesdb|traverse_graph_parallel', {
     limit: 50
   }
 });
+
+// Cross-collection MATCH: enrich nodes with data from other collections.
+// Nodes annotated with @collection in the MATCH pattern have their payloads
+// looked up from the named collection after traversal.
+const crossColl = await invoke('plugin:velesdb|query', {
+  request: {
+    query: "MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) RETURN p.name, inv.price, inv.stock LIMIT 20",
+    collection: "catalog_graph",
+    params: {}
+  }
+});
 ```
 
 ### Secondary Indexes

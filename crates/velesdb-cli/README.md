@@ -666,6 +666,16 @@ WHERE category = 'tech' AND MATCH (d:Doc)-[:HAS_TAG]->(tag)
 LIMIT 10;
 ```
 
+> **Cross-collection MATCH:** Use `\use <collection>` to set the primary collection
+> (the one with graph edges) before running a MATCH query. Nodes annotated with
+> `@collection` will have their payloads enriched from the named collection after
+> traversal. Example:
+>
+> ```
+> velesdb> \use catalog_graph
+> velesdb> MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) RETURN p.name, inv.price LIMIT 20;
+> ```
+
 ### Metadata-Only Collections
 
 Metadata collections store structured data without vectors. They support full VelesQL `SELECT` queries:

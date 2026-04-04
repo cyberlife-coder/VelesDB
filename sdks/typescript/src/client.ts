@@ -395,7 +395,11 @@ export class VelesDB {
    * 
    * @param collection - Collection name
    * @param queryString - VelesQL query string
-   * @param params - Query parameters (vectors, scalars)
+   * @param params - Query parameters (vectors, scalars).
+   *   For cross-collection MATCH queries, pass `_collection` to specify the
+   *   primary collection (the one with graph edges). Nodes annotated with
+   *   `@collection` in the MATCH pattern will have their payloads enriched
+   *   from the named collection after traversal.
    * @param options - Query options (timeout, streaming)
    * @returns Query response with results and execution stats
    * 
@@ -408,6 +412,16 @@ export class VelesDB {
    * for (const r of response.results) {
    *   console.log(`ID ${r.id}, title: ${r.title}`);
    * }
+   * ```
+   *
+   * @example Cross-collection MATCH
+   * ```typescript
+   * // Enrich Product nodes with Inventory data from the 'inventory' collection
+   * const response = await db.query('catalog_graph', `
+   *   MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory)
+   *   RETURN p.name, inv.price, inv.stock
+   *   LIMIT 20
+   * `);
    * ```
    */
   async query(

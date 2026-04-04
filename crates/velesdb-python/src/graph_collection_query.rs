@@ -23,9 +23,23 @@ impl PyGraphCollection {
     /// Returns:
     ///     List of result dicts
     ///
+    /// # Cross-Collection MATCH
+    ///
+    /// For MATCH queries that reference nodes from other collections via
+    /// the ``@collection`` annotation, pass ``_collection`` in ``params``
+    /// to specify the primary collection (the one with graph edges).
+    /// Annotated nodes will have their payloads enriched from the named
+    /// collection after traversal.
+    ///
     /// Example:
     ///     >>> results = graph.query(
     ///     ...     "SELECT * FROM kg WHERE category = 'person' LIMIT 10"
+    ///     ... )
+    ///     >>> # Cross-collection MATCH
+    ///     >>> results = graph.query(
+    ///     ...     "MATCH (p:Product)-[:IN]->(c:Category@categories) "
+    ///     ...     "RETURN p.name, c.label LIMIT 20",
+    ///     ...     params={"_collection": "product_graph"},
     ///     ... )
     #[pyo3(signature = (query_str, params=None))]
     fn query(

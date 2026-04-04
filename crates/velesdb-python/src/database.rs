@@ -376,12 +376,26 @@ impl Database {
     ///     ValueError: If the SQL string fails to parse.
     ///     RuntimeError: If execution fails.
     ///
+    /// # Cross-Collection MATCH
+    ///
+    /// For MATCH queries that span multiple collections, pass the
+    /// ``_collection`` key in ``params`` to specify the primary collection
+    /// (the one containing graph edges). Nodes annotated with ``@collection``
+    /// in the MATCH pattern will have their payloads enriched from the named
+    /// collection after traversal.
+    ///
     /// Example:
     ///     >>> results = db.execute_query("SELECT * FROM docs LIMIT 5")
     ///     >>> db.execute_query("CREATE COLLECTION notes (dimension=128, metric=cosine)")
     ///     >>> db.execute_query(
     ///     ...     "SELECT * FROM docs WHERE vector NEAR $q LIMIT 10",
     ///     ...     params={"$q": [0.1, 0.2]},
+    ///     ... )
+    ///     >>> # Cross-collection MATCH: enrich from 'inventory' collection
+    ///     >>> db.execute_query(
+    ///     ...     "MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) "
+    ///     ...     "RETURN p.name, inv.price, inv.stock LIMIT 20",
+    ///     ...     params={"_collection": "catalog_graph"},
     ///     ... )
     #[pyo3(signature = (sql, params = None))]
     fn execute_query(

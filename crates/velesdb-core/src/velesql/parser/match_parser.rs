@@ -117,35 +117,44 @@ impl Parser {
 
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::node_spec {
-                for spec_pair in inner_pair.into_inner() {
-                    match spec_pair.as_rule() {
-                        Rule::node_alias => {
-                            node.alias = Some(spec_pair.as_str().to_string());
-                        }
-                        Rule::node_labels => {
-                            for label_pair in spec_pair.into_inner() {
-                                if label_pair.as_rule() == Rule::label_name {
-                                    node.labels.push(label_pair.as_str().to_string());
-                                }
-                            }
-                        }
-                        Rule::node_properties => {
-                            node.properties = Self::parse_node_properties(spec_pair)?;
-                        }
-                        Rule::collection_annotation => {
-                            for coll_pair in spec_pair.into_inner() {
-                                if coll_pair.as_rule() == Rule::collection_ref {
-                                    node.collection = Some(coll_pair.as_str().to_string());
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                Self::apply_node_spec(inner_pair, &mut node)?;
             }
         }
 
         Ok(node)
+    }
+
+    /// Applies all fields from a `node_spec` pest pair to a `NodePattern`.
+    fn apply_node_spec(
+        spec: pest::iterators::Pair<Rule>,
+        node: &mut NodePattern,
+    ) -> Result<(), ParseError> {
+        for spec_pair in spec.into_inner() {
+            match spec_pair.as_rule() {
+                Rule::node_alias => {
+                    node.alias = Some(spec_pair.as_str().to_string());
+                }
+                Rule::node_labels => {
+                    for label_pair in spec_pair.into_inner() {
+                        if label_pair.as_rule() == Rule::label_name {
+                            node.labels.push(label_pair.as_str().to_string());
+                        }
+                    }
+                }
+                Rule::node_properties => {
+                    node.properties = Self::parse_node_properties(spec_pair)?;
+                }
+                Rule::collection_annotation => {
+                    for coll_pair in spec_pair.into_inner() {
+                        if coll_pair.as_rule() == Rule::collection_ref {
+                            node.collection = Some(coll_pair.as_str().to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// Parse node properties (EPIC-045 US-001).
