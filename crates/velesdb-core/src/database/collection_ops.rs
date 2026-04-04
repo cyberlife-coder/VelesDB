@@ -5,14 +5,10 @@
 //! - [`graph_ops`] — graph collection create/get
 //! - [`metadata_ops`] — metadata-only collection create/get
 
-#[allow(deprecated)]
-use crate::{Collection, CollectionType, DistanceMetric, Error, Result, StorageMode};
+use crate::{CollectionType, DistanceMetric, Error, Result, StorageMode};
 
 use super::Database;
 
-// Almost every method below reads/writes `self.collections` (HashMap<String, Collection>),
-// so `#[allow(deprecated)]` is applied at impl-block level rather than per-method.
-#[allow(deprecated)]
 impl Database {
     /// Ensures a collection name is valid, free in memory, and free on disk.
     ///
@@ -34,10 +30,9 @@ impl Database {
         Ok(())
     }
 
-    /// Checks whether a collection name exists in any of the four registries.
+    /// Checks whether a collection name exists in any of the typed registries.
     fn collection_exists_in_registry(&self, name: &str) -> bool {
-        self.collections.read().contains_key(name)
-            || self.vector_colls.read().contains_key(name)
+        self.vector_colls.read().contains_key(name)
             || self.graph_colls.read().contains_key(name)
             || self.metadata_colls.read().contains_key(name)
     }
@@ -96,33 +91,35 @@ impl Database {
         since = "2.0.0",
         note = "Use get_vector_collection(), get_graph_collection(), or get_metadata_collection()"
     )]
-    pub fn get_collection(&self, name: &str) -> Option<Collection> {
+    #[allow(deprecated)]
+    pub fn get_collection(&self, name: &str) -> Option<crate::Collection> {
         self.collections.read().get(name).cloned()
     }
 
     /// Returns the write generation for a named collection, if it exists.
     #[must_use]
     pub fn collection_write_generation(&self, name: &str) -> Option<u64> {
-        self.collections
-            .read()
-            .get(name)
-            .map(crate::Collection::write_generation)
+        if let Some(vc) = self.vector_colls.read().get(name) {
+            return Some(vc.inner.write_generation());
+        }
+        if let Some(gc) = self.graph_colls.read().get(name) {
+            return Some(gc.inner.write_generation());
+        }
+        if let Some(mc) = self.metadata_colls.read().get(name) {
+            return Some(mc.inner.write_generation());
+        }
+        None
     }
 
     /// Lists all collection names in the database.
     ///
     /// Includes collections created via any typed API (vector, graph, metadata).
     pub fn list_collections(&self) -> Vec<String> {
-        // BUG-7: acquire all locks together for a consistent point-in-time snapshot.
-        let collections = self.collections.read();
         let vector_colls = self.vector_colls.read();
         let graph_colls = self.graph_colls.read();
         let metadata_colls = self.metadata_colls.read();
 
-        let mut names: std::collections::HashSet<String> = collections.keys().cloned().collect();
-        for k in vector_colls.keys() {
-            names.insert(k.clone());
-        }
+        let mut names: std::collections::HashSet<String> = vector_colls.keys().cloned().collect();
         for k in graph_colls.keys() {
             names.insert(k.clone());
         }
@@ -165,6 +162,7 @@ impl Database {
     }
 
     /// Removes a collection from all registries and stats cache.
+    #[allow(deprecated)]
     fn remove_from_all_registries(&self, name: &str) {
         self.collections.write().remove(name);
         self.vector_colls.write().remove(name);
@@ -222,9 +220,14 @@ impl Database {
 
     /// Propagates updated query limits to all active collections.
     pub fn update_guardrails(&self, limits: &crate::guardrails::QueryLimits) {
-        let collections = self.collections.read();
-        for collection in collections.values() {
-            collection.guard_rails.update_limits(limits);
+        for vc in self.vector_colls.read().values() {
+            vc.guard_rails().update_limits(limits);
+        }
+        for gc in self.graph_colls.read().values() {
+            gc.inner.guard_rails().update_limits(limits);
+        }
+        for mc in self.metadata_colls.read().values() {
+            mc.inner.guard_rails().update_limits(limits);
         }
     }
 

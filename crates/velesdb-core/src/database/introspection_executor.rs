@@ -54,8 +54,7 @@ impl Database {
     /// Determines the type string for a named collection.
     ///
     /// Returns `None` if the collection does not exist in any registry.
-    /// Checks registries in order: graph → metadata → vector → legacy.
-    #[allow(deprecated)] // Uses legacy Collection for backward compat.
+    /// Checks registries in order: graph → metadata → vector.
     fn resolve_collection_type(&self, name: &str) -> Option<&'static str> {
         if self.get_graph_collection(name).is_some() {
             return Some("graph");
@@ -63,7 +62,7 @@ impl Database {
         if self.get_metadata_collection(name).is_some() {
             return Some("metadata");
         }
-        if self.get_vector_collection(name).is_some() || self.get_collection(name).is_some() {
+        if self.get_vector_collection(name).is_some() {
             return Some("vector");
         }
         None
@@ -140,7 +139,6 @@ fn build_describe_payload(db: &Database, name: &str, coll_type: &str) -> serde_j
 }
 
 /// Adds type-specific fields (dimension, metric, `point_count`) to the payload.
-#[allow(deprecated)] // Uses legacy Collection internally for diagnostics.
 fn add_type_specific_metadata(
     db: &Database,
     name: &str,
@@ -156,7 +154,6 @@ fn add_type_specific_metadata(
 }
 
 /// Adds vector collection metadata (dimension, metric, `point_count`).
-#[allow(deprecated)]
 fn add_vector_metadata(
     db: &Database,
     name: &str,
@@ -169,14 +166,6 @@ fn add_vector_metadata(
             serde_json::json!(format!("{:?}", vc.metric())),
         );
         payload.insert("point_count".to_string(), serde_json::json!(vc.len()));
-    } else if let Some(coll) = db.get_collection(name) {
-        let cfg = coll.config();
-        payload.insert("dimension".to_string(), serde_json::json!(cfg.dimension));
-        payload.insert(
-            "metric".to_string(),
-            serde_json::json!(format!("{:?}", cfg.metric)),
-        );
-        payload.insert("point_count".to_string(), serde_json::json!(coll.len()));
     }
 }
 

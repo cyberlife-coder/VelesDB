@@ -11,16 +11,13 @@ impl Database {
     ///
     /// Returns an error if the name is invalid, the collection does not exist,
     /// analysis fails, or stats cannot be serialized and written to disk.
-    #[allow(deprecated)]
     pub fn analyze_collection(
         &self,
         name: &str,
     ) -> Result<crate::collection::stats::CollectionStats> {
         crate::validation::validate_collection_name(name)?;
 
-        let collection = self
-            .get_collection(name)
-            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?;
+        let collection = self.resolve_collection(name)?;
         let stats = collection.analyze()?;
 
         self.collection_stats

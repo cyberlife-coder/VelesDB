@@ -68,14 +68,19 @@ pub struct Database {
     /// The lock is held for the lifetime of the `Database` and released on `Drop`.
     /// The `_` prefix signals this field is kept for its RAII side effect.
     _lock_file: std::fs::File,
-    /// Legacy registry (Collection god-object) — kept for backward compatibility during migration.
+    /// Legacy registry (Collection god-object) — **migration-only**.
+    ///
+    /// Populated in parallel with the typed registries for backward compatibility.
+    /// Internal code should use `vector_colls`, `graph_colls`, or `metadata_colls`
+    /// instead. This field is retained solely for the public `get_collection()` API
+    /// and will be removed once all external consumers have migrated.
     #[allow(deprecated)]
     collections: parking_lot::RwLock<std::collections::HashMap<String, Collection>>,
-    /// New registry: vector collections.
+    /// Typed registry: vector collections.
     vector_colls: parking_lot::RwLock<std::collections::HashMap<String, VectorCollection>>,
-    /// New registry: graph collections.
+    /// Typed registry: graph collections.
     graph_colls: parking_lot::RwLock<std::collections::HashMap<String, GraphCollection>>,
-    /// New registry: metadata-only collections.
+    /// Typed registry: metadata-only collections.
     metadata_colls: parking_lot::RwLock<std::collections::HashMap<String, MetadataCollection>>,
     /// Cached collection statistics for CBO planning.
     collection_stats: parking_lot::RwLock<

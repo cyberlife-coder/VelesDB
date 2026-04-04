@@ -41,7 +41,7 @@ fn classify_statement(query: &Query) -> StatementType<'_> {
     StatementType::Select
 }
 
-#[allow(deprecated)] // Uses legacy Collection internally for query routing.
+#[allow(deprecated)] // Methods in this block use the deprecated Collection type for query execution.
 impl Database {
     /// Produces a canonical JSON string for a `serde_json::Value`.
     ///
@@ -303,35 +303,43 @@ impl Database {
         names
     }
 
-    /// Resolves a collection by name from all registries (legacy, vector, metadata).
+    /// Resolves a collection by name from all typed registries.
     ///
-    /// Priority: legacy collections registry first (contains live instances for both
-    /// `create_collection` and `create_vector_collection` via shared inner `Arc<>`).
-    /// Falls back to vector collections, then metadata collections.
-    ///
-    /// RF-DEDUP: Shared by `execute_single_select` (reads are valid on all collection
-    /// types, including metadata).
+    /// Priority: vector collections first, then graph, then metadata.
+    /// Returns the inner `Collection` for query execution.
     #[allow(deprecated)]
     pub(super) fn resolve_collection(&self, name: &str) -> Result<crate::collection::Collection> {
-        self.get_collection(name)
-            .or_else(|| self.get_vector_collection(name).map(|vc| vc.inner))
-            .or_else(|| self.get_metadata_collection(name).map(|mc| mc.inner))
-            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+        if let Some(vc) = self.get_vector_collection(name) {
+            return Ok(vc.inner);
+        }
+        if let Some(gc) = self.get_graph_collection(name) {
+            return Ok(gc.inner);
+        }
+        if let Some(mc) = self.get_metadata_collection(name) {
+            return Ok(mc.inner);
+        }
+        Err(Error::CollectionNotFound(name.to_string()))
     }
 
     /// Resolves a collection that supports write operations (INSERT/UPDATE/TRAIN).
     ///
-    /// Only checks legacy and vector collections — metadata-only collections do not
-    /// support INSERT with vectors, UPDATE with vectors, or TRAIN QUANTIZER, so
-    /// resolving them here would produce misleading errors deeper in the pipeline.
+    /// Checks vector, graph, and metadata collections. Metadata-only collections
+    /// support INSERT/UPDATE for metadata fields (no vectors).
     #[allow(deprecated)]
     pub(super) fn resolve_writable_collection(
         &self,
         name: &str,
     ) -> Result<crate::collection::Collection> {
-        self.get_collection(name)
-            .or_else(|| self.get_vector_collection(name).map(|vc| vc.inner))
-            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+        if let Some(vc) = self.get_vector_collection(name) {
+            return Ok(vc.inner);
+        }
+        if let Some(gc) = self.get_graph_collection(name) {
+            return Ok(gc.inner);
+        }
+        if let Some(mc) = self.get_metadata_collection(name) {
+            return Ok(mc.inner);
+        }
+        Err(Error::CollectionNotFound(name.to_string()))
     }
 
     /// Executes a single SELECT (no compound), resolving JOINs if present.

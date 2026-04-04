@@ -5,7 +5,6 @@ use crate::{CollectionType, DistanceMetric, Result};
 
 use super::Database;
 
-#[allow(deprecated)]
 impl Database {
     /// Creates a new graph collection.
     ///
@@ -67,6 +66,7 @@ impl Database {
 
     /// Registers a graph collection in both legacy and typed registries,
     /// notifies the observer, and bumps the schema version.
+    #[allow(deprecated)]
     fn register_graph_collection(
         &self,
         name: &str,

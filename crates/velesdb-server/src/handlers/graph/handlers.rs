@@ -29,7 +29,6 @@ use super::types::{
 /// Auto-creates a schemaless graph collection on first use if no collection exists yet,
 /// preserving backward compatibility with workflows that drive graph ops without
 /// an explicit `create_graph_collection` call.
-#[allow(deprecated)]
 pub(super) fn get_graph_collection_or_404(
     state: &AppState,
     name: &str,
@@ -38,7 +37,10 @@ pub(super) fn get_graph_collection_or_404(
         return Ok(c);
     }
 
-    if state.db.get_collection(name).is_some() {
+    // Check if a non-graph collection exists with this name (type mismatch → 409).
+    if state.db.get_vector_collection(name).is_some()
+        || state.db.get_metadata_collection(name).is_some()
+    {
         return Err((
             StatusCode::CONFLICT,
             Json(ErrorResponse {

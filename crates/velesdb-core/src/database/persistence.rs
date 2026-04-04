@@ -46,8 +46,8 @@ impl Database {
     /// Returns the collection name if the directory entry is a loadable collection.
     ///
     /// A directory is loadable when it contains `config.json`, has a valid
-    /// collection name, and is not already registered in the legacy collections
-    /// map. Directories with invalid names are skipped with a warning.
+    /// collection name, and is not already registered in any typed registry.
+    /// Directories with invalid names are skipped with a warning.
     fn loadable_collection_name(&self, entry: &std::fs::DirEntry) -> Option<String> {
         let path = entry.path();
         if !path.is_dir() {
@@ -65,7 +65,10 @@ impl Database {
             );
             return None;
         }
-        if self.collections.read().contains_key(&name) {
+        if self.vector_colls.read().contains_key(&name)
+            || self.graph_colls.read().contains_key(&name)
+            || self.metadata_colls.read().contains_key(&name)
+        {
             return None;
         }
         Some(name)

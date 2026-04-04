@@ -72,7 +72,6 @@ fn aggregation_result_count(result: &serde_json::Value) -> usize {
     }
 }
 
-#[allow(deprecated)]
 fn execute_aggregation_query(
     state: &Arc<AppState>,
     collection_name: &str,
@@ -80,12 +79,19 @@ fn execute_aggregation_query(
     params: &std::collections::HashMap<String, serde_json::Value>,
     start: std::time::Instant,
 ) -> axum::response::Response {
-    let collection = match state.db.get_collection(collection_name) {
-        Some(c) => c,
-        None => return velesql_collection_not_found(collection_name),
+    // Prefer typed vector collection for aggregation.
+    let result = if let Some(vc) = state.db.get_vector_collection(collection_name) {
+        vc.execute_aggregate(parsed, params)
+    } else {
+        // Non-vector collections: fall back to legacy Collection for aggregation support.
+        #[allow(deprecated)]
+        match state.db.get_collection(collection_name) {
+            Some(c) => c.execute_aggregate(parsed, params),
+            None => return velesql_collection_not_found(collection_name),
+        }
     };
 
-    let result = match collection.execute_aggregate(parsed, params) {
+    let result = match result {
         Ok(r) => r,
         Err(e) => {
             return velesql_error(
@@ -132,7 +138,7 @@ fn execute_aggregation_query(
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
-#[allow(clippy::unused_async, deprecated)]
+#[allow(clippy::unused_async)]
 pub async fn query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
@@ -312,7 +318,7 @@ fn resolve_collection_name(
 }
 
 /// Execute a standard (non-aggregation) query, dispatching MATCH vs SELECT.
-#[allow(deprecated, clippy::result_large_err)]
+#[allow(clippy::result_large_err)]
 fn execute_standard_query(
     state: &Arc<AppState>,
     parsed: &Query,
@@ -320,11 +326,18 @@ fn execute_standard_query(
     req: &QueryRequest,
 ) -> Result<Vec<velesdb_core::SearchResult>, axum::response::Response> {
     let execute_result = if parsed.is_match_query() {
-        match state.db.get_collection(collection_name) {
-            Some(c) => c.execute_query(parsed, &req.params),
-            None => Err(velesdb_core::Error::CollectionNotFound(
+        // MATCH queries need a collection instance for execute_query.
+        // Route through typed registries: vector → graph → metadata.
+        if let Some(vc) = state.db.get_vector_collection(collection_name) {
+            vc.execute_query(parsed, &req.params)
+        } else if let Some(gc) = state.db.get_graph_collection(collection_name) {
+            gc.execute_query(parsed, &req.params)
+        } else if let Some(mc) = state.db.get_metadata_collection(collection_name) {
+            mc.execute_query(parsed, &req.params)
+        } else {
+            Err(velesdb_core::Error::CollectionNotFound(
                 collection_name.to_string(),
-            )),
+            ))
         }
     } else {
         state.db.execute_query(parsed, &req.params)

@@ -5,13 +5,13 @@ use crate::{CollectionType, Result};
 
 use super::Database;
 
-#[allow(deprecated)]
 impl Database {
     /// Creates a new metadata-only collection.
     ///
     /// # Errors
     ///
     /// Returns an error if a collection with the same name already exists.
+    #[allow(deprecated)]
     pub fn create_metadata_collection(&self, name: &str) -> Result<()> {
         self.ensure_collection_name_available(name)?;
         let path = self.data_dir.join(name);
