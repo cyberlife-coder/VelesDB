@@ -137,6 +137,12 @@ impl QuerySearchOptions {
         self.fusion_clause = fusion;
         self
     }
+
+    /// Returns `true` when any quality-related override is set.
+    #[must_use]
+    pub(crate) fn has_quality_overrides(&self) -> bool {
+        self.quality.is_some() || self.ef_search.is_some() || self.force_rerank.is_some()
+    }
 }
 
 /// Maps a mode string from `WITH (mode='...')` to a [`SearchQuality`](crate::SearchQuality).

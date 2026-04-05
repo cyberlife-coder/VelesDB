@@ -7,6 +7,7 @@ LABEL version="1.12.0"
 WORKDIR /app
 
 # Install build dependencies
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
@@ -29,6 +30,7 @@ LABEL version="1.11.1"
 WORKDIR /app
 
 # Install runtime dependencies
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \

@@ -7,6 +7,45 @@ use super::traversal::{reconstruct_path, BfsState, TraversalConfig, TraversalRes
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 
+/// Bundles the mutable BFS state shared across expansion helpers.
+struct BfsContext<'a> {
+    config: &'a TraversalConfig,
+    source_id: u64,
+    results: &'a mut Vec<TraversalResult>,
+    visited: &'a mut FxHashSet<u64>,
+    queue: &'a mut VecDeque<BfsState>,
+    parent_map: &'a mut FxHashMap<u64, (u64, u64)>,
+}
+
+impl BfsContext<'_> {
+    /// Processes a single BFS candidate: checks depth/visited,
+    /// records parent pointer, emits result, and enqueues for further expansion.
+    #[inline]
+    fn visit_candidate(&mut self, target: u64, edge_id: u64, parent_node: u64, current_depth: u32) {
+        let new_depth = current_depth + 1;
+        if new_depth > self.config.max_depth {
+            return;
+        }
+
+        if self.visited.insert(target) {
+            self.parent_map.insert(target, (parent_node, edge_id));
+
+            if new_depth >= self.config.min_depth {
+                let path = reconstruct_path(target, self.source_id, self.parent_map);
+                self.results
+                    .push(TraversalResult::new(target, path, new_depth));
+            }
+
+            if new_depth < self.config.max_depth {
+                self.queue.push_back(BfsState {
+                    node_id: target,
+                    depth: new_depth,
+                });
+            }
+        }
+    }
+}
+
 /// BFS traversal on a `CsrSnapshot` for zero-copy graph exploration.
 ///
 /// Uses `FxHashSet` for the visited set and accesses neighbors via
@@ -37,22 +76,21 @@ pub fn bfs_traverse_csr(
         depth: 0,
     });
 
-    while let Some(state) = queue.pop_front() {
-        if results.len() >= config.limit {
+    let mut ctx = BfsContext {
+        config,
+        source_id,
+        results: &mut results,
+        visited: &mut visited,
+        queue: &mut queue,
+        parent_map: &mut parent_map,
+    };
+
+    while let Some(state) = ctx.queue.pop_front() {
+        if ctx.results.len() >= ctx.config.limit {
             break;
         }
 
-        expand_csr_node(
-            snapshot,
-            &state,
-            config,
-            source_id,
-            &rel_filter,
-            &mut results,
-            &mut visited,
-            &mut queue,
-            &mut parent_map,
-        );
+        expand_csr_node(snapshot, &state, &rel_filter, &mut ctx);
     }
 
     results
@@ -62,23 +100,17 @@ pub fn bfs_traverse_csr(
 ///
 /// Filters by relationship type, records parent pointers, and enqueues
 /// unvisited targets for the next BFS level.
-#[allow(clippy::too_many_arguments)]
 fn expand_csr_node(
     snapshot: &CsrSnapshot,
     state: &BfsState,
-    config: &TraversalConfig,
-    source_id: u64,
     rel_filter: &FxHashSet<&str>,
-    results: &mut Vec<TraversalResult>,
-    visited: &mut FxHashSet<u64>,
-    queue: &mut VecDeque<BfsState>,
-    parent_map: &mut FxHashMap<u64, (u64, u64)>,
+    ctx: &mut BfsContext<'_>,
 ) {
     let targets = snapshot.neighbors(state.node_id);
     let edge_ids = snapshot.edge_ids(state.node_id);
 
     for (i, (&target, &eid)) in targets.iter().zip(edge_ids.iter()).enumerate() {
-        if results.len() >= config.limit {
+        if ctx.results.len() >= ctx.config.limit {
             break;
         }
 
@@ -86,18 +118,7 @@ fn expand_csr_node(
             continue;
         }
 
-        visit_bfs_candidate(
-            target,
-            eid,
-            state.node_id,
-            state.depth,
-            config,
-            source_id,
-            results,
-            visited,
-            queue,
-            parent_map,
-        );
+        ctx.visit_candidate(target, eid, state.node_id, state.depth);
     }
 }
 
@@ -117,45 +138,6 @@ fn label_passes_csr_filter(
     snapshot
         .label_at(node_id, edge_index)
         .is_some_and(|label| rel_filter.contains(label))
-}
-
-/// Processes a single BFS candidate in CSR traversal: checks depth/visited,
-/// records parent pointer, emits result, and enqueues for further expansion.
-#[inline]
-#[allow(clippy::too_many_arguments)]
-fn visit_bfs_candidate(
-    target: u64,
-    edge_id: u64,
-    parent_node: u64,
-    current_depth: u32,
-    config: &TraversalConfig,
-    source_id: u64,
-    results: &mut Vec<TraversalResult>,
-    visited: &mut FxHashSet<u64>,
-    queue: &mut VecDeque<BfsState>,
-    parent_map: &mut FxHashMap<u64, (u64, u64)>,
-) {
-    let new_depth = current_depth + 1;
-    if new_depth > config.max_depth {
-        return;
-    }
-
-    let is_new = visited.insert(target);
-    if is_new {
-        parent_map.insert(target, (parent_node, edge_id));
-
-        if new_depth >= config.min_depth {
-            let path = reconstruct_path(target, source_id, parent_map);
-            results.push(TraversalResult::new(target, path, new_depth));
-        }
-
-        if new_depth < config.max_depth {
-            queue.push_back(BfsState {
-                node_id: target,
-                depth: new_depth,
-            });
-        }
-    }
 }
 
 /// BFS traversal on a `CsrSnapshot` with predicate pushdown filtering.
@@ -181,22 +163,21 @@ pub fn bfs_traverse_csr_filtered<P: EdgePredicate>(
         depth: 0,
     });
 
-    while let Some(state) = queue.pop_front() {
-        if results.len() >= config.limit {
+    let mut ctx = BfsContext {
+        config,
+        source_id,
+        results: &mut results,
+        visited: &mut visited,
+        queue: &mut queue,
+        parent_map: &mut parent_map,
+    };
+
+    while let Some(state) = ctx.queue.pop_front() {
+        if ctx.results.len() >= ctx.config.limit {
             break;
         }
 
-        expand_csr_filtered_node(
-            snapshot,
-            &state,
-            config,
-            source_id,
-            predicate,
-            &mut results,
-            &mut visited,
-            &mut queue,
-            &mut parent_map,
-        );
+        expand_csr_filtered_node(snapshot, &state, predicate, &mut ctx);
     }
 
     results
@@ -206,43 +187,22 @@ pub fn bfs_traverse_csr_filtered<P: EdgePredicate>(
 ///
 /// Uses `neighbors_filtered` for predicate pushdown, records parent pointers,
 /// and enqueues unvisited targets.
-#[allow(clippy::too_many_arguments)]
 fn expand_csr_filtered_node<P: EdgePredicate>(
     snapshot: &CsrSnapshot,
     state: &BfsState,
-    config: &TraversalConfig,
-    source_id: u64,
     predicate: &P,
-    results: &mut Vec<TraversalResult>,
-    visited: &mut FxHashSet<u64>,
-    queue: &mut VecDeque<BfsState>,
-    parent_map: &mut FxHashMap<u64, (u64, u64)>,
+    ctx: &mut BfsContext<'_>,
 ) {
     for (target, eid, _label_id) in snapshot.neighbors_filtered(state.node_id, predicate) {
-        if results.len() >= config.limit {
+        if ctx.results.len() >= ctx.config.limit {
             break;
         }
 
         let new_depth = state.depth + 1;
-        if new_depth > config.max_depth {
+        if new_depth > ctx.config.max_depth {
             continue;
         }
 
-        let is_new = visited.insert(target);
-        if is_new {
-            parent_map.insert(target, (state.node_id, eid));
-
-            if new_depth >= config.min_depth {
-                let path = reconstruct_path(target, source_id, parent_map);
-                results.push(TraversalResult::new(target, path, new_depth));
-            }
-
-            if new_depth < config.max_depth {
-                queue.push_back(BfsState {
-                    node_id: target,
-                    depth: new_depth,
-                });
-            }
-        }
+        ctx.visit_candidate(target, eid, state.node_id, state.depth);
     }
 }

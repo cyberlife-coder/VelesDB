@@ -47,14 +47,23 @@ impl super::Database {
                 }
             };
 
-            for result in results.iter_mut() {
-                let node_id = extract_binding_id(result, alias);
-                if let Some(id) = node_id {
-                    if let Some(point) = coll.get(&[id]).into_iter().flatten().next() {
-                        if let Some(payload) = &point.payload {
-                            merge_cross_payload(result, alias, payload);
-                        }
-                    }
+            enrich_results_from_collection(&coll, results, alias);
+        }
+    }
+}
+
+/// Enriches all results from a single cross-referenced collection.
+#[allow(deprecated)]
+fn enrich_results_from_collection(
+    coll: &crate::Collection,
+    results: &mut [SearchResult],
+    alias: &str,
+) {
+    for result in results.iter_mut() {
+        if let Some(id) = extract_binding_id(result, alias) {
+            if let Some(point) = coll.get(&[id]).into_iter().flatten().next() {
+                if let Some(payload) = &point.payload {
+                    merge_cross_payload(result, alias, payload);
                 }
             }
         }

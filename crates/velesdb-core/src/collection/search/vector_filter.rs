@@ -35,7 +35,7 @@ impl Collection {
         filter: &crate::filter::Filter,
         opts: &crate::collection::search::query::QuerySearchOptions,
     ) -> Result<Vec<SearchResult>> {
-        if opts.quality.is_none() && opts.ef_search.is_none() && opts.force_rerank.is_none() {
+        if !opts.has_quality_overrides() {
             return self.search_with_filter(query, k, filter);
         }
 

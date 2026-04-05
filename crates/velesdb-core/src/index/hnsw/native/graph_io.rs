@@ -158,14 +158,19 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         count: u64,
     ) -> std::io::Result<()> {
         let version: u32 = 1;
-        writer.write_all(&version.to_le_bytes())?;
-        writer.write_all(&header.num_layers.to_le_bytes())?;
-        writer.write_all(&header.max_connections.to_le_bytes())?;
-        writer.write_all(&header.max_connections_0.to_le_bytes())?;
-        writer.write_all(&header.ef_construction.to_le_bytes())?;
-        writer.write_all(&header.entry_point.to_le_bytes())?;
-        writer.write_all(&header.max_layer.to_le_bytes())?;
-        writer.write_all(&count.to_le_bytes())?;
+        let fields: [&[u8]; 8] = [
+            &version.to_le_bytes(),
+            &header.num_layers.to_le_bytes(),
+            &header.max_connections.to_le_bytes(),
+            &header.max_connections_0.to_le_bytes(),
+            &header.ef_construction.to_le_bytes(),
+            &header.entry_point.to_le_bytes(),
+            &header.max_layer.to_le_bytes(),
+            &count.to_le_bytes(),
+        ];
+        for field in &fields {
+            writer.write_all(field)?;
+        }
         Ok(())
     }
 
