@@ -231,7 +231,10 @@ fn test_cached_simd_euclidean() {
 
     let dist = cached.distance(&a, &b);
     // CachedSimdDistance returns squared L2 for Euclidean
-    assert!((dist - 25.0).abs() < 1e-5, "3-4-5 triangle squared: got {dist}");
+    assert!(
+        (dist - 25.0).abs() < 1e-5,
+        "3-4-5 triangle squared: got {dist}"
+    );
 }
 
 #[test]
@@ -587,8 +590,8 @@ fn test_cached_euclidean_128d() {
     let b = gen_vec(dim, 1.0);
     let cpu_d = cpu.distance(&a, &b); // sqrt'd Euclidean
     let c = cached.distance(&a, &b); // squared L2 (no sqrt)
-    // CachedSimdDistance returns squared L2 for HNSW traversal optimization;
-    // CpuDistance returns actual Euclidean (with sqrt).
+                                     // CachedSimdDistance returns squared L2 for HNSW traversal optimization;
+                                     // CpuDistance returns actual Euclidean (with sqrt).
     assert!(
         (c - cpu_d * cpu_d).abs() < 1e-3,
         "cached should equal cpu^2: cached={c}, cpu^2={}",

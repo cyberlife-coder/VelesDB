@@ -228,12 +228,14 @@ fn test_native_backend_trait_search() {
     // Insert via trait
     for i in 0..20 {
         let vec: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32 * 0.01).collect();
-        <NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::insert(&hnsw, (&vec, i)).expect("test");
+        <NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::insert(&hnsw, (&vec, i))
+            .expect("test");
     }
 
     // Search via trait
     let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.01).collect();
-    let results = <NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::search(&hnsw, &query, 5, 50);
+    let results =
+        <NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::search(&hnsw, &query, 5, 50);
 
     assert!(!results.is_empty());
     assert!(results.len() <= 5);
@@ -268,9 +270,7 @@ fn test_native_backend_len_and_is_empty() {
     let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
-    assert!(<NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::is_empty(
-        &hnsw
-    ));
+    assert!(<NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::is_empty(&hnsw));
     assert_eq!(
         <NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::len(&hnsw),
         0
@@ -278,9 +278,7 @@ fn test_native_backend_len_and_is_empty() {
 
     hnsw.insert(&[1.0; 32]).expect("test");
 
-    assert!(!<NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::is_empty(
-        &hnsw
-    ));
+    assert!(!<NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::is_empty(&hnsw));
     assert_eq!(
         <NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::len(&hnsw),
         1
@@ -294,9 +292,18 @@ fn test_native_backend_len_and_is_empty() {
 #[test]
 fn test_compute_chunk_size_boundaries() {
     // Formula: (batch_len / 50).max(1000).min(5000)
-    assert_eq!(NativeHnsw::<CachedSimdDistance>::compute_chunk_size(100), 1000);
-    assert_eq!(NativeHnsw::<CachedSimdDistance>::compute_chunk_size(1_000), 1000);
-    assert_eq!(NativeHnsw::<CachedSimdDistance>::compute_chunk_size(10_000), 1000);
+    assert_eq!(
+        NativeHnsw::<CachedSimdDistance>::compute_chunk_size(100),
+        1000
+    );
+    assert_eq!(
+        NativeHnsw::<CachedSimdDistance>::compute_chunk_size(1_000),
+        1000
+    );
+    assert_eq!(
+        NativeHnsw::<CachedSimdDistance>::compute_chunk_size(10_000),
+        1000
+    );
     assert_eq!(
         NativeHnsw::<CachedSimdDistance>::compute_chunk_size(100_000),
         2000
