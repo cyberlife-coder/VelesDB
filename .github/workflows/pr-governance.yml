@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   governance:
-    name: PR Base & Freshness Checks
+    name: Git Flow & Freshness Checks
     runs-on: ubuntu-latest
     steps:
       - name: Block archive branches as PR source
@@ -21,13 +21,60 @@ jobs:
           echo "::error::PR source branch '${BRANCH_NAME}' is archived and cannot be merged."
           exit 1
 
-      - name: Ensure PR targets main
-        if: ${{ github.event.pull_request.base.ref != 'main' }}
+      - name: Enforce Git Flow branch rules
         env:
+          SOURCE_REF: ${{ github.event.pull_request.head.ref }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          echo "::error::PR base must be 'main'. Current base: '${BASE_REF}'."
-          exit 1
+          # Git Flow enforcement rules:
+          #
+          # → develop : feature/*, feat/*, fix/*, bugfix/*,
+          #             refactor/*, chore/*, docs/*, style/*,
+          #             perf/*, test/*, build/*, ci/*
+          # → main    : develop, release/*, hotfix/*, support/*
+          #
+          # bugfix/* is the standard Git Flow alias for fix/* (bug fixes in develop).
+          # support/* maintains older release lines and merges directly to main.
+          # Any other target branch is rejected.
+
+          allowed_to_develop() {
+            local src="$1"
+            case "$src" in
+              feature/*|feat/*|fix/*|bugfix/*|refactor/*|chore/*) return 0 ;;
+              docs/*|style/*|perf/*|test/*|build/*|ci/*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          allowed_to_main() {
+            local src="$1"
+            case "$src" in
+              develop|release/*|hotfix/*|support/*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          if [ "$BASE_REF" = "develop" ]; then
+            if allowed_to_develop "$SOURCE_REF"; then
+              echo "OK: '${SOURCE_REF}' → develop (Git Flow valid)"
+            else
+              echo "::error::Git Flow violation: '${SOURCE_REF}' cannot target 'develop'."
+              echo "::error::Branches allowed to target 'develop': feature/*, feat/*, fix/*, bugfix/*, refactor/*, chore/*, docs/*, style/*, perf/*, test/*, build/*, ci/*"
+              exit 1
+            fi
+          elif [ "$BASE_REF" = "main" ]; then
+            if allowed_to_main "$SOURCE_REF"; then
+              echo "OK: '${SOURCE_REF}' → main (Git Flow valid)"
+            else
+              echo "::error::Git Flow violation: '${SOURCE_REF}' cannot target 'main'."
+              echo "::error::Branches allowed to target 'main': develop, release/*, hotfix/*, support/*"
+              exit 1
+            fi
+          else
+            echo "::error::PR targets '${BASE_REF}', which is not a valid Git Flow integration branch."
+            echo "::error::Valid targets are 'main' and 'develop'."
+            exit 1
+          fi
 
       - name: Checkout head branch
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -35,12 +82,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Verify branch includes latest origin/main
+      - name: Verify branch includes latest base branch
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          git fetch origin main --depth=1
-          if git merge-base --is-ancestor origin/main HEAD; then
-            echo "OK: HEAD contains latest origin/main."
+          git fetch origin "${BASE_REF}" --depth=1
+          if git merge-base --is-ancestor "origin/${BASE_REF}" HEAD; then
+            echo "OK: HEAD contains latest origin/${BASE_REF}."
           else
-            echo "::error::Branch is behind origin/main. Rebase/merge main before merging."
+            echo "::error::Branch is behind origin/${BASE_REF}. Rebase/merge ${BASE_REF} before opening this PR."
             exit 1
           fi
