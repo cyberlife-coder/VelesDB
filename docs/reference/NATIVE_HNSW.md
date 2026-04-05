@@ -457,61 +457,13 @@ POST /collections/documents/search
 | Latency-critical, recall > 90% acceptable | `Fast` |
 | Must guarantee 100% recall | `Perfect` |
 
-## Migration Guide
-
-### From `HnswIndex` to `NativeHnswIndex`
-
-The API is largely compatible. Key differences:
-
-1. **Feature flag required**: Add `features = ["native-hnsw"]`
-2. **Load signature**: `load(path, dim, metric)` vs `load(path)`
-3. **No `set_searching_mode`**: Native doesn't need this (no-op provided)
-
-### Gradual Migration
-
-```rust
-// Conditional compilation
-#[cfg(feature = "native-hnsw")]
-use velesdb_core::index::hnsw::NativeHnswIndex as HnswIndex;
-
-#[cfg(not(feature = "native-hnsw"))]
-use velesdb_core::index::hnsw::HnswIndex;
-```
-
 ## Benchmarks
 
-Run the comparison benchmark:
+Run the HNSW benchmark:
 
 ```bash
-cargo bench --bench hnsw_comparison_benchmark
+cargo bench -p velesdb-core --bench hnsw_benchmark --features "persistence,internal-bench" -- --noplot
 ```
-
-## Removing hnsw_rs Dependency
-
-The Native HNSW implementation is now **production-ready** and can fully replace `hnsw_rs`:
-
-### Current Status
-
-| Capability | Native HNSW | hnsw_rs | Status |
-|------------|-------------|---------|--------|
-| Insert | ✅ | ✅ | Parity |
-| Batch Insert | ✅ Parallel | ✅ Sequential | Native faster |
-| Search | ✅ 1.2x faster | ✅ | Native faster |
-| Recall | ~99% | baseline | Parity |
-| Persistence | ✅ | ✅ | Parity |
-| Brute-force | ✅ | ✅ | Parity |
-
-### Migration Path
-
-1. **Test with feature flag**: `cargo test --features native-hnsw`
-2. **Benchmark your workload**: `cargo bench --bench hnsw_comparison_benchmark`
-3. **Full migration**: Make `native-hnsw` the default in a future release
-
-### Files to Update for Full Migration
-
-- `Cargo.toml`: Make `hnsw_rs` optional
-- `src/index/hnsw/index.rs`: Use `NativeHnswInner` by default
-- `src/index/hnsw/mod.rs`: Export `NativeHnswIndex` as `HnswIndex`
 
 ## Future Optimizations
 

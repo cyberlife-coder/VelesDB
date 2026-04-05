@@ -1,10 +1,14 @@
 # Build stage
-FROM rust:1.84-bookworm AS builder
+FROM rust:1.87-bookworm AS builder
+
+LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
+LABEL version="1.12.0"
 
 WORKDIR /app
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -20,10 +24,14 @@ RUN cargo build --release --bin velesdb-server
 # Runtime stage
 FROM debian:bookworm-slim
 
+LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
+LABEL version="1.12.0"
+
 WORKDIR /app
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*

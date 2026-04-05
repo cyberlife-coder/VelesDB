@@ -6,7 +6,6 @@ import ...`` call-sites continue to work without modification.
 """
 
 from velesdb_common.security import (  # noqa: F401
-    ALLOWED_METRICS,
     ALLOWED_STORAGE_MODES,
     STORAGE_MODE_ALIASES,
     DEFAULT_TIMEOUT_MS,

@@ -164,9 +164,15 @@ fn test_bfs_cyclic_graph_no_infinite_loop() {
         );
     }
 
+    // Nodes 2 and 3 are discovered at depths 1 and 2 respectively.
     assert!(results.iter().any(|r| r.target_id == 2 && r.depth == 1));
     assert!(results.iter().any(|r| r.target_id == 3 && r.depth == 2));
-    assert!(results.iter().any(|r| r.target_id == 1 && r.depth == 3));
+    // Node 1 (source) is NOT re-emitted when the cycle closes (3→1),
+    // because it was already visited at depth 0. Standard BFS semantics.
+    assert!(
+        !results.iter().any(|r| r.target_id == 1),
+        "Source node should not appear in results (already visited)"
+    );
 }
 
 #[test]

@@ -145,6 +145,25 @@ impl Query {
         matches!(self.dml, Some(DmlStatement::InsertNode(_)))
     }
 
+    /// Extracts the collection name from a DML statement, if present.
+    #[must_use]
+    pub fn dml_collection_name(&self) -> Option<&str> {
+        let name = match self.dml.as_ref()? {
+            DmlStatement::Insert(s) | DmlStatement::Upsert(s) => &s.table,
+            DmlStatement::Update(s) => &s.table,
+            DmlStatement::Delete(s) => &s.table,
+            DmlStatement::InsertEdge(s) => &s.collection,
+            DmlStatement::DeleteEdge(s) => &s.collection,
+            DmlStatement::SelectEdges(s) => &s.collection,
+            DmlStatement::InsertNode(s) => &s.collection,
+        };
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
+    }
+
     /// Creates a new SELECT query.
     #[must_use]
     pub fn new_select(select: SelectStatement) -> Self {

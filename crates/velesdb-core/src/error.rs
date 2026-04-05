@@ -199,6 +199,13 @@ pub enum Error {
         /// Human-readable explanation of why it was rejected.
         reason: String,
     },
+
+    /// CSR snapshot build failed (VELES-035).
+    ///
+    /// Indicates that building a CSR snapshot from the edge store failed
+    /// (e.g., allocation failure during rebuild).
+    #[error("[VELES-035] Snapshot build failed: {0}")]
+    SnapshotBuildFailed(String),
 }
 
 impl Error {
@@ -240,6 +247,7 @@ impl Error {
             Self::InvalidDimension { .. } => "VELES-032",
             Self::AllocationFailed(_) => "VELES-033",
             Self::InvalidCollectionName { .. } => "VELES-034",
+            Self::SnapshotBuildFailed(_) => "VELES-035",
         }
     }
 

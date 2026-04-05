@@ -1,6 +1,6 @@
 # Graph Patterns Guide
 
-*Version 1.9.1 -- March 2026*
+*Version 1.11.1 -- April 2026*
 
 Practical guide for using VelesQL `MATCH` graph patterns in VelesDB.
 
@@ -124,6 +124,102 @@ Labels are case-sensitive. `"Product"` and `"product"` are different labels. Ens
 let outgoing = graph_collection.get_outgoing(node_id)?;
 let bfs_results = graph_collection.traverse_bfs(start_id, max_depth)?;
 ```
+
+---
+
+## Parallel BFS Traversal
+
+Multi-source BFS launches concurrent traversals from multiple starting nodes with automatic deduplication by path signature. Available across all components.
+
+### REST API
+
+```bash
+curl -X POST http://localhost:8080/collections/kg/graph/traverse/parallel \
+  -H "Content-Type: application/json" \
+  -d '{"sources": [1, 5, 10], "max_depth": 3, "limit": 100}'
+```
+
+### Python
+
+```python
+results = graph_collection.traverse_bfs_parallel(
+    source_ids=[1, 5, 10],
+    max_depth=3,
+    limit=100
+)
+```
+
+### Tauri
+
+```javascript
+const results = await invoke('plugin:velesdb|traverse_graph_parallel', {
+  request: { collection: 'kg', sources: [1, 5, 10], maxDepth: 3, limit: 100 }
+});
+```
+
+### Mobile (UniFFI)
+
+```swift
+let results = try graphStore.bfsTraverseParallel(sourceIds: [1, 5, 10], maxDepth: 3, limit: 100)
+```
+
+---
+
+## Cross-Collection MATCH (`@collection`)
+
+By default, MATCH operates within a single collection. The `@collection` annotation
+lets you enrich results with data from other collections.
+
+### Syntax
+
+```sql
+MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@inventory)
+RETURN p.name, w.price, w.stock
+LIMIT 20
+```
+
+- `p:Product` — resolved from the primary collection (the one with edges)
+- `w:Warehouse@inventory` — after traversal, node `w`'s payload is looked up from the `inventory` collection
+
+### How it works
+
+1. The MATCH query executes on the primary collection (specified via `_collection` param or `\use` in REPL)
+2. Graph traversal follows edges in that collection
+3. After traversal, for each node annotated with `@collection`, the engine looks up the node's payload from the named collection
+4. Enriched fields are merged into the result, prefixed with the node alias
+
+### Example: E-commerce catalog
+
+```python
+# Python SDK
+params = {"_collection": "catalog_graph"}
+results = db.query(
+    """MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory)
+       WHERE p.category = 'audio'
+       RETURN p.name, inv.price, inv.stock
+       LIMIT 20""",
+    params=params
+)
+```
+
+### REST API
+
+```bash
+curl -X POST http://localhost:8080/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) RETURN p, inv LIMIT 20",
+    "collection": "catalog_graph",
+    "params": {}
+  }'
+```
+
+### Limitations
+
+- The graph traversal (edges) always runs on the primary collection
+- `@collection` only enriches payloads — it does not change which nodes are traversed
+- If the annotated collection doesn't exist, enrichment is silently skipped
+- Cross-collection vector search (`similarity()` on an annotated node) is not yet supported
 
 ---
 

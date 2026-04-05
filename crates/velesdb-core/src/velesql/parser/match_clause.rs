@@ -92,12 +92,22 @@ fn validate_node_delimiters(input: &str) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Extracts alias and labels from a colon-separated node identifier (e.g. `n:Person:Author`).
+/// Extracts alias, labels, and optional collection from a node identifier.
+///
+/// Supports:
+/// - `n:Person` → alias=n, labels=[Person]
+/// - `n:Person:Author` → alias=n, labels=[Person, Author]
+/// - `n:Person@products` → alias=n, labels=[Person], collection=products
+/// - `:Product@catalog` → labels=[Product], collection=catalog
 fn apply_alias_and_labels(main_part: &str, node: &mut NodePattern) {
     if main_part.is_empty() {
         return;
     }
-    let parts: Vec<&str> = main_part.split(':').collect();
+
+    // Check for @collection suffix on the last segment
+    let (part_without_coll, collection) = extract_collection_annotation(main_part);
+
+    let parts: Vec<&str> = part_without_coll.split(':').collect();
     if !parts[0].trim().is_empty() {
         node.alias = Some(parts[0].trim().to_string());
     }
@@ -107,6 +117,24 @@ fn apply_alias_and_labels(main_part: &str, node: &mut NodePattern) {
             node.labels.push(trimmed.to_string());
         }
     }
+
+    node.collection = collection;
+}
+
+/// Extracts `@collection` annotation from a node identifier string.
+///
+/// Returns `(identifier_without_annotation, Some(collection_name))` if found,
+/// or `(original, None)` if no `@` is present.
+fn extract_collection_annotation(input: &str) -> (&str, Option<String>) {
+    // Find the last '@' that's not inside quotes
+    if let Some(at_pos) = input.rfind('@') {
+        let before = &input[..at_pos];
+        let after = input[at_pos + 1..].trim();
+        if !after.is_empty() {
+            return (before, Some(after.to_string()));
+        }
+    }
+    (input, None)
 }
 
 /// Parses a relationship pattern.

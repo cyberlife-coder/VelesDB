@@ -308,23 +308,53 @@ Response:
 
 ```bash
 # List edges filtered by label (label is required)
-curl http://localhost:8080/collections/documents/graph/edges?label=related
+curl http://localhost:8080/collections/kg/graph/edges?label=KNOWS
 
 # Add an edge (id, source, target, label are required)
-curl -X POST http://localhost:8080/collections/documents/graph/edges \
+curl -X POST http://localhost:8080/collections/kg/graph/edges \
   -H "Content-Type: application/json" \
-  -d '{"id": 1, "source": 1, "target": 2, "label": "related"}'
+  -d '{"id": 1, "source": 1, "target": 2, "label": "KNOWS"}'
 
-# Traverse graph from a node (source is required)
-curl -X POST http://localhost:8080/collections/documents/graph/traverse \
+# Remove an edge by ID
+curl -X DELETE http://localhost:8080/collections/kg/graph/edges/1
+
+# Get total edge count
+curl http://localhost:8080/collections/kg/graph/edges/count
+
+# List all node IDs
+curl http://localhost:8080/collections/kg/graph/nodes
+
+# Get edges for a specific node (direction: in, out, both)
+curl "http://localhost:8080/collections/kg/graph/nodes/1/edges?direction=out"
+
+# Get node degree (in + out)
+curl http://localhost:8080/collections/kg/graph/nodes/1/degree
+
+# Store payload on a node
+curl -X PUT http://localhost:8080/collections/kg/graph/nodes/1/payload \
   -H "Content-Type: application/json" \
-  -d '{"source": 1, "max_depth": 3}'
+  -d '{"payload": {"name": "Alice", "role": "engineer"}}'
 
-# Stream graph traversal (start_node is required)
-curl "http://localhost:8080/collections/documents/graph/traverse/stream?start_node=1"
+# Get node payload
+curl http://localhost:8080/collections/kg/graph/nodes/1/payload
 
-# Get node degree
-curl http://localhost:8080/collections/documents/graph/nodes/1/degree
+# Traverse graph from a node (BFS or DFS)
+curl -X POST http://localhost:8080/collections/kg/graph/traverse \
+  -H "Content-Type: application/json" \
+  -d '{"source": 1, "strategy": "bfs", "max_depth": 3, "limit": 100}'
+
+# Parallel multi-source BFS traversal
+curl -X POST http://localhost:8080/collections/kg/graph/traverse/parallel \
+  -H "Content-Type: application/json" \
+  -d '{"sources": [1, 5, 10], "max_depth": 3, "limit": 100}'
+
+# Stream graph traversal (SSE)
+curl "http://localhost:8080/collections/kg/graph/traverse/stream?start_node=1"
+
+# Search graph nodes by embedding similarity
+curl -X POST http://localhost:8080/collections/kg/graph/search \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, 0.3], "top_k": 10}'
 ```
 
 ### MATCH Query API (Cypher-like graph pattern matching)
@@ -530,7 +560,7 @@ curl http://localhost:8080/health
 Response:
 
 ```json
-{"status": "ok", "version": "1.11.0"}
+{"status": "ok", "version": "1.11.1"}
 ```
 
 ### `GET /ready` -- Readiness Probe
@@ -544,13 +574,13 @@ curl http://localhost:8080/ready
 Response (ready):
 
 ```json
-{"status": "ready", "version": "1.11.0"}
+{"status": "ready", "version": "1.11.1"}
 ```
 
 Response (not ready):
 
 ```json
-{"status": "not_ready", "version": "1.11.0"}
+{"status": "not_ready", "version": "1.11.1"}
 ```
 
 ### Kubernetes Example
@@ -634,7 +664,7 @@ enabled = true       # set to false to disable
 
 All sections and fields are optional. Only include what you need to override.
 
-### Update Check (v1.9.2+)
+### Update Check
 
 On startup, the server performs a non-blocking version check against `velesdb.com/api/check`. This sends only: version, OS, architecture, and a non-reversible SHA256 instance hash. No personal data is collected.
 

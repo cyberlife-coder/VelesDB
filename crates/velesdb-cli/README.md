@@ -182,9 +182,13 @@ All graph REPL commands operate on graph collections via `.graph <subcommand>`:
 | `.graph degree <col> <node_id>` | Show in-degree, out-degree, and total degree |
 | `.graph traverse <col> <source> [--algo bfs\|dfs] [--depth N] [--limit N]` | BFS/DFS traversal from a source node |
 | `.graph neighbors <col> <node_id> [--direction in\|out\|both]` | List neighbors of a node (default: out) |
-| `.nodes <col> [page]` | Paginated browsing of all nodes referenced in edges (with payload if stored) |
-
-> **Note:** `store-payload` and `get-payload` are available as **CLI subcommands only** (`velesdb graph store-payload`, `velesdb graph get-payload`), not as REPL dot-commands.
+| `.graph remove-edge <col> <edge_id>` | Remove an edge by ID |
+| `.graph count <col>` | Show edge and node count |
+| `.graph search <col> <vector_json> [k]` | Search by embedding similarity (requires embeddings) |
+| `.graph store-payload <col> <node_id> <json>` | Store JSON payload on a node |
+| `.graph get-payload <col> <node_id>` | Retrieve node payload |
+| `.graph nodes <col> [--page N]` | Paginated node browsing (20 per page) |
+| `.nodes <col> [page]` | Paginated node browsing for Graph collections (10 per page, includes payload). |
 
 > **Naming note:** The REPL uses `.graph edges` while the CLI subcommand uses `graph get-edges`. Both do the same thing.
 
@@ -205,12 +209,30 @@ Session commands use the backslash prefix (dot prefix also accepted):
 
 ### VelesQL Queries
 
-Any input not starting with `.` or `\` is executed as a VelesQL query:
+Any input not starting with `.` or `\` is executed as a VelesQL query through the full pipeline (parse → validate → execute). The REPL supports the complete VelesQL surface:
 
 ```
-velesdb> SELECT * FROM documents WHERE category = 'tech' LIMIT 10;
+velesdb> SELECT * FROM docs WHERE category = 'tech' LIMIT 10;
 velesdb> SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3] LIMIT 5;
+velesdb> SELECT * FROM docs WHERE similarity(vector, [0.1, 0.2]) > 0.8 LIMIT 10;
+velesdb> SELECT * FROM docs WHERE content MATCH 'rust programming' LIMIT 10;
+velesdb> CREATE COLLECTION test (dimension = 4, metric = 'cosine');
+velesdb> DROP COLLECTION test;
+velesdb> SELECT EDGES FROM kg WHERE label = 'KNOWS';
+velesdb> MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b LIMIT 10;
+velesdb> SELECT category, COUNT(*) FROM docs GROUP BY category HAVING COUNT(*) > 5;
+velesdb> TRAIN QUANTIZER ON docs WITH (m = 8, k = 256);
 ```
+
+**Supported VelesQL statements:** SELECT, INSERT (with $params), UPSERT, UPDATE, DELETE, CREATE/DROP COLLECTION, CREATE/DROP INDEX, TRUNCATE, FLUSH, ANALYZE, SHOW COLLECTIONS, DESCRIBE COLLECTION, EXPLAIN, TRAIN QUANTIZER, INSERT EDGE, DELETE EDGE, INSERT NODE, SELECT EDGES, MATCH (graph patterns), UNION/INTERSECT/EXCEPT, JOIN.
+
+**Supported WHERE clauses:** `=`, `!=`, `>`, `<`, `>=`, `<=`, `IN`, `NOT IN`, `BETWEEN`, `IS NULL`, `IS NOT NULL`, `LIKE`, `ILIKE`, `NOT`, `AND`, `OR`, `NEAR` (vector), `NEAR_FUSED` (multi-vector), `SPARSE_NEAR`, `MATCH` (BM25), `similarity()` threshold.
+
+**Supported modifiers:** `LIMIT`, `OFFSET`, `ORDER BY`, `GROUP BY`, `HAVING`, `DISTINCT`, `WITH (mode, ef_search, timeout_ms, rerank, quantization)`, `USING FUSION (rrf, rsf, weighted, maximum)`.
+
+> **Limitation:** Bind parameters (`$v`, `$query`) are not supported in the REPL because there is no mechanism to pass external values. Use literal vectors `[0.1, 0.2, ...]` for search queries. For INSERT with vectors, use the `velesdb upsert` CLI command instead. Bind parameters work via the REST API (`POST /query` with `params`).
+
+> **MATCH queries** require an active collection set via `\use <collection_name>`. The REPL tries graph collections first, then vector collections.
 
 ## CLI Subcommands
 
@@ -437,6 +459,17 @@ velesdb graph store-payload ./data my_graph 100 '{"name": "Alice", "role": "auth
 # Retrieve node payload
 velesdb graph get-payload ./data my_graph 100
 
+# Remove an edge by ID
+velesdb graph remove-edge ./data my_graph 1
+
+# Count edges and nodes
+velesdb graph count ./data my_graph
+velesdb graph count ./data my_graph --format json
+
+# Search graph nodes by embedding similarity (requires graph with embeddings)
+velesdb graph search ./data my_graph '[0.1, 0.2, 0.3]' -k 10
+velesdb graph search ./data my_graph '[0.1, 0.2, 0.3]' --format json
+
 # List all nodes (paginated, 20 per page)
 velesdb graph nodes ./data my_graph
 velesdb graph nodes ./data my_graph --page 2
@@ -632,6 +665,16 @@ SELECT * FROM articles
 WHERE category = 'tech' AND MATCH (d:Doc)-[:HAS_TAG]->(tag)
 LIMIT 10;
 ```
+
+> **Cross-collection MATCH:** Use `\use <collection>` to set the primary collection
+> (the one with graph edges) before running a MATCH query. Nodes annotated with
+> `@collection` will have their payloads enriched from the named collection after
+> traversal. Example:
+>
+> ```
+> velesdb> \use catalog_graph
+> velesdb> MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) RETURN p.name, inv.price LIMIT 20;
+> ```
 
 ### Metadata-Only Collections
 

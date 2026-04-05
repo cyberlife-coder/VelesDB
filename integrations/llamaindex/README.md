@@ -172,10 +172,27 @@ results = vector_store.text_query(
 )
 ```
 
+### Cross-Collection MATCH
+
+Use the `velesql()` method with the `_collection` parameter to run MATCH queries
+that enrich results with data from other collections. Nodes annotated with
+`@collection` in the MATCH pattern have their payloads looked up from the named
+collection after traversal.
+
+```python
+results = vector_store.velesql(
+    "MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) "
+    "RETURN p.name, inv.price, inv.stock LIMIT 20",
+    params={"_collection": "catalog_graph"}
+)
+for row in results:
+    print(row["p.name"], row["inv.price"])
+```
+
 ## Performance
 
 Measured on CI runners (ubuntu-latest, 2-core). Local hardware will be faster.
-Source: `benchmarks/baseline.json` (v1.7.0).
+Source: `benchmarks/baseline.json` (v1.11.1).
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|

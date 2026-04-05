@@ -196,23 +196,6 @@ pub(super) fn reconstruct_path(
     path
 }
 
-/// Builds an edge-ID path by reconstructing the chain to `parent_node` and
-/// appending `edge_id`.
-///
-/// Used for already-visited nodes (cycle reporting) where the target's own
-/// parent_map entry points to a different (shorter) path.
-#[must_use]
-fn build_path_via_parent(
-    parent_node: u64,
-    edge_id: u64,
-    source: u64,
-    parent_map: &FxHashMap<u64, (u64, u64)>,
-) -> Vec<u64> {
-    let mut path = reconstruct_path(parent_node, source, parent_map);
-    path.push(edge_id);
-    path
-}
-
 /// Direction of edge traversal used by the shared BFS helper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BfsDirection {
@@ -304,9 +287,7 @@ fn bfs_traverse_directed(
 /// Reads target IDs, edge IDs, and interned labels from contiguous memory
 /// instead of cloning full `GraphEdge` objects (96+ bytes each).
 /// Uses parent-pointer insertion instead of path cloning.
-///
-/// Already-visited nodes still emit results (preserving cycle-reporting behavior)
-/// but are not re-enqueued for further expansion.
+/// Only emits results for newly-discovered nodes (no duplicates).
 #[inline]
 #[allow(clippy::too_many_arguments)] // Reason: BFS helper passes parent_map alongside traversal state; private fn
 fn process_bfs_csr(
@@ -334,38 +315,29 @@ fn process_bfs_csr(
             if !rel_filter.is_empty() && !rel_filter.contains(label) {
                 continue;
             }
-        }
-        let new_depth = state.depth + 1;
-        if new_depth > config.max_depth {
+        } else if !rel_filter.is_empty() {
+            // Edge with unresolvable label excluded when filter is active
             continue;
         }
-        let is_new = visited.insert(target);
-        if is_new {
-            parent_map.insert(target, (state.node_id, eid));
-        }
-        if new_depth >= config.min_depth {
-            let path = if is_new {
-                reconstruct_path(target, source_id, parent_map)
-            } else {
-                build_path_via_parent(state.node_id, eid, source_id, parent_map)
-            };
-            results.push(TraversalResult::new(target, path, new_depth));
-        }
-        if is_new && new_depth < config.max_depth {
-            queue.push_back(BfsState {
-                node_id: target,
-                depth: new_depth,
-            });
-        }
+        process_bfs_candidate(
+            target,
+            eid,
+            state.node_id,
+            state.depth,
+            config,
+            source_id,
+            results,
+            visited,
+            queue,
+            parent_map,
+        );
     }
 }
 
 /// Processes neighbors for a single BFS level: filters edges, records results,
 /// and enqueues unvisited nodes for the next hop.
 /// Uses parent-pointer insertion instead of path cloning.
-///
-/// Already-visited nodes still emit results (preserving cycle-reporting behavior)
-/// but are not re-enqueued for further expansion.
+/// Only emits results for newly-discovered nodes (no duplicates).
 #[inline]
 #[allow(clippy::too_many_arguments)] // Reason: BFS helper passes parent_map alongside traversal state; private fn
 fn process_bfs_neighbors(
@@ -391,28 +363,53 @@ fn process_bfs_neighbors(
             BfsDirection::Forward => edge.target(),
             BfsDirection::Reverse => edge.source(),
         };
-        let new_depth = state.depth + 1;
-        if new_depth > config.max_depth {
-            continue;
-        }
-        let is_new = visited.insert(next_node);
-        if is_new {
-            // Record parent pointer (first discovery = shortest BFS path).
-            parent_map.insert(next_node, (state.node_id, edge.id()));
-        }
+        process_bfs_candidate(
+            next_node,
+            edge.id(),
+            state.node_id,
+            state.depth,
+            config,
+            source_id,
+            results,
+            visited,
+            queue,
+            parent_map,
+        );
+    }
+}
+
+/// Processes a single BFS candidate: checks depth, visited status, records
+/// parent pointer, emits result if within depth range, and enqueues for
+/// further expansion.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn process_bfs_candidate(
+    target: u64,
+    edge_id: u64,
+    parent_node: u64,
+    current_depth: u32,
+    config: &TraversalConfig,
+    source_id: u64,
+    results: &mut Vec<TraversalResult>,
+    visited: &mut FxHashSet<u64>,
+    queue: &mut VecDeque<BfsState>,
+    parent_map: &mut FxHashMap<u64, (u64, u64)>,
+) {
+    let new_depth = current_depth + 1;
+    if new_depth > config.max_depth {
+        return;
+    }
+    let is_new = visited.insert(target);
+    if is_new {
+        parent_map.insert(target, (parent_node, edge_id));
+
         if new_depth >= config.min_depth {
-            // Emit result for both new and revisited nodes (cycle reporting).
-            // For revisited nodes, build path via current node's chain + this edge.
-            let path = if is_new {
-                reconstruct_path(next_node, source_id, parent_map)
-            } else {
-                build_path_via_parent(state.node_id, edge.id(), source_id, parent_map)
-            };
-            results.push(TraversalResult::new(next_node, path, new_depth));
+            let path = reconstruct_path(target, source_id, parent_map);
+            results.push(TraversalResult::new(target, path, new_depth));
         }
-        if is_new && new_depth < config.max_depth {
+        if new_depth < config.max_depth {
             queue.push_back(BfsState {
-                node_id: next_node,
+                node_id: target,
                 depth: new_depth,
             });
         }

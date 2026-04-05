@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-03-24 (v1.7.0)
+Last updated: 2026-04-04 (v1.11.1)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -38,6 +38,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 | **Sparse Vector Search** (sparse index) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Sparse Vector Search** (named indexes) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | **Graph Operations** (nodes, edges, traversal) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Cross-Collection MATCH** (`@collection`) | ✅ | ✅ | ⚠️ | ❌ | ❌ | ✅ | ⚠️ | ❌ | ❌ | ❌ |
 | **VelesQL** (parser + executor) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ |
 | **Collection Types** (Vector) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Collection Types** (Graph) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -51,6 +52,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 
 ### Notes
 
+- **Cross-Collection MATCH**: Core and Server support `@collection` annotation on MATCH node patterns. Python bindings support via `_collection` param. CLI supports via `\use`. WASM, Mobile, Tauri, and integrations do not yet expose this feature.
 - **Batch Operations**: WASM and Mobile use streaming chunked inserts instead of single-call bulk to stay within memory constraints.
 - **Multi-Query Fusion (RSF/Weighted)**: WASM supports RRF only; RSF/Weighted fusion is not yet exposed in LangChain/LlamaIndex integrations.
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
@@ -93,3 +95,5 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 4. Promote RaBitQ from experimental to stable once the API is finalized.
 5. Surface RSF/Weighted fusion in LangChain and LlamaIndex integrations.
 6. Expose named sparse indexes in LangChain and LlamaIndex integrations.
+7. Propagate `@collection` cross-collection MATCH to WASM, Mobile, Tauri, LangChain, and LlamaIndex.
+8. Add cross-collection vector search (`similarity()` on `@collection`-annotated nodes).

@@ -105,10 +105,33 @@ fn distance_l2_asymmetric_simd(
     debug_assert_eq!(query.len(), min_vals.len());
     debug_assert_eq!(query.len(), inv_scales.len());
 
-    // Process in chunks of 4 for SIMD-friendly access
     let chunks = query.len() / 4;
     let remainder = query.len() % 4;
 
+    let (sum0, sum1, sum2, sum3) =
+        asymmetric_chunked_sum(query, quantized, min_vals, inv_scales, chunks);
+
+    let remainder_sum = asymmetric_remainder_sum(
+        query,
+        quantized,
+        min_vals,
+        inv_scales,
+        chunks * 4,
+        remainder,
+    );
+
+    (sum0 + sum1 + sum2 + sum3 + remainder_sum).sqrt()
+}
+
+/// Computes the main chunked (4-wide) sum for asymmetric L2 distance.
+#[inline]
+fn asymmetric_chunked_sum(
+    query: &[f32],
+    quantized: &[u8],
+    min_vals: &[f32],
+    inv_scales: &[f32],
+    chunks: usize,
+) -> (f32, f32, f32, f32) {
     let mut sum0: f32 = 0.0;
     let mut sum1: f32 = 0.0;
     let mut sum2: f32 = 0.0;
@@ -117,7 +140,6 @@ fn distance_l2_asymmetric_simd(
     for i in 0..chunks {
         let base = i * 4;
 
-        // Dequantize and compute squared difference
         let dq0 = f32::from(quantized[base]) * inv_scales[base] + min_vals[base];
         let dq1 = f32::from(quantized[base + 1]) * inv_scales[base + 1] + min_vals[base + 1];
         let dq2 = f32::from(quantized[base + 2]) * inv_scales[base + 2] + min_vals[base + 2];
@@ -134,16 +156,27 @@ fn distance_l2_asymmetric_simd(
         sum3 += d3 * d3;
     }
 
-    // Handle remainder
-    let base = chunks * 4;
+    (sum0, sum1, sum2, sum3)
+}
+
+/// Computes the remainder sum for asymmetric L2 distance (elements not covered by 4-wide chunks).
+#[inline]
+fn asymmetric_remainder_sum(
+    query: &[f32],
+    quantized: &[u8],
+    min_vals: &[f32],
+    inv_scales: &[f32],
+    base: usize,
+    remainder: usize,
+) -> f32 {
+    let mut sum = 0.0_f32;
     for i in 0..remainder {
         let idx = base + i;
         let dq = f32::from(quantized[idx]) * inv_scales[idx] + min_vals[idx];
         let diff = query[idx] - dq;
-        sum0 += diff * diff;
+        sum += diff * diff;
     }
-
-    (sum0 + sum1 + sum2 + sum3).sqrt()
+    sum
 }
 
 /// Quantization parameters learned from training data.

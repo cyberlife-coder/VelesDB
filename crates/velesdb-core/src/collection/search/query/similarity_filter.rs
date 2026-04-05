@@ -224,20 +224,31 @@ impl Collection {
     }
 
     /// Fallback method for metadata-only queries without vector search.
+    ///
+    /// When a secondary index is available for the first `Eq` condition in the
+    /// filter, uses the index to narrow the scan to matching IDs only (index-
+    /// accelerated scan). Otherwise falls back to a full sequential scan.
     pub(crate) fn execute_scan_query(
         &self,
         filter: &crate::filter::Filter,
         limit: usize,
     ) -> Vec<SearchResult> {
+        // Try index-accelerated scan: extract the first Eq condition and use
+        // the secondary index to get candidate IDs, then post-filter.
+        // Skip when the index returns too many candidates relative to the limit —
+        // sequential scan with early exit is faster than hydrating thousands of
+        // index hits (e.g., IsMobile=1 matching 20% of rows).
+        if let Some(candidate_ids) = self.try_index_accelerated_ids(filter) {
+            if candidate_ids.len() <= limit.saturating_mul(50).max(1000) {
+                return self.scan_candidate_ids(&candidate_ids, filter, limit);
+            }
+            // Fall through to sequential scan — index has too many hits
+        }
+
+        // Full sequential scan (slow fallback for non-indexed conditions).
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
 
-        // Scan all points (slow fallback)
-        // In production, this should use metadata indexes
-        let mut results = Vec::new();
-
-        // Prefer vector_storage IDs (vector collections). Fall back to payload_storage
-        // IDs for metadata-only collections where vector_storage is empty.
         let vector_ids = vector_storage.ids();
         let ids: Vec<u64> = if vector_ids.is_empty() {
             payload_storage.ids()
@@ -245,6 +256,7 @@ impl Collection {
             vector_ids
         };
 
+        let mut results = Vec::new();
         for id in ids {
             let payload = payload_storage.retrieve(id).ok().flatten();
             let matches = match payload {
@@ -253,9 +265,6 @@ impl Collection {
             };
 
             if matches {
-                // For metadata-only collections, vectors are empty (metadata stored
-                // in payload_storage only). Use unwrap_or_default so both vector and
-                // metadata-only points are included in scan results.
                 let vector = vector_storage
                     .retrieve(id)
                     .ok()
@@ -268,7 +277,7 @@ impl Collection {
                         payload,
                         sparse_vectors: None,
                     },
-                    1.0, // Constant score for scans
+                    1.0,
                 ));
             }
 
@@ -277,6 +286,85 @@ impl Collection {
             }
         }
 
+        results
+    }
+
+    /// Tries to extract candidate IDs from secondary indexes for the filter.
+    ///
+    /// Walks the filter condition tree looking for `Eq` conditions on indexed
+    /// fields. Returns the smallest candidate set found, or `None` if no
+    /// indexed condition exists.
+    fn try_index_accelerated_ids(&self, filter: &crate::filter::Filter) -> Option<Vec<u64>> {
+        self.extract_bitmap_ids_from_filter(&filter.condition)
+    }
+
+    /// Recursively extracts candidate IDs from a filter condition using indexes.
+    fn extract_bitmap_ids_from_filter(
+        &self,
+        condition: &crate::filter::Condition,
+    ) -> Option<Vec<u64>> {
+        use crate::filter::Condition;
+        match condition {
+            Condition::Eq { field, value } => {
+                if let Some(jv) = crate::index::JsonValue::from_json(value) {
+                    return self.secondary_index_lookup(field, &jv);
+                }
+                None
+            }
+            Condition::And { conditions } => {
+                // Find the smallest indexed candidate set among AND children.
+                let mut best: Option<Vec<u64>> = None;
+                for sub in conditions {
+                    if let Some(ids) = self.extract_bitmap_ids_from_filter(sub) {
+                        best = Some(match best {
+                            Some(prev) if prev.len() <= ids.len() => prev,
+                            _ => ids,
+                        });
+                    }
+                }
+                best
+            }
+            _ => None,
+        }
+    }
+
+    /// Scans a pre-filtered set of candidate IDs with the full filter.
+    fn scan_candidate_ids(
+        &self,
+        candidate_ids: &[u64],
+        filter: &crate::filter::Filter,
+        limit: usize,
+    ) -> Vec<SearchResult> {
+        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.vector_storage.read();
+        let mut results = Vec::new();
+
+        for &id in candidate_ids {
+            let payload = payload_storage.retrieve(id).ok().flatten();
+            let matches = match payload {
+                Some(ref p) => filter.matches(p),
+                None => filter.matches(&serde_json::Value::Null),
+            };
+            if matches {
+                let vector = vector_storage
+                    .retrieve(id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                results.push(SearchResult::new(
+                    Point {
+                        id,
+                        vector,
+                        payload,
+                        sparse_vectors: None,
+                    },
+                    1.0,
+                ));
+            }
+            if results.len() >= limit {
+                break;
+            }
+        }
         results
     }
 

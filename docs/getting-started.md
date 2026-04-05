@@ -50,7 +50,7 @@ Expected response:
 ```json
 {
   "status": "ok",
-  "version": "1.7.2"
+  "version": "1.11.1"
 }
 ```
 
@@ -170,7 +170,7 @@ curl -X POST http://localhost:8080/query \
   }'
 ```
 
-### 8. Knowledge Graph (EPIC-011)
+### 8. Knowledge Graph
 
 VelesDB supports graph relationships between vectors:
 
@@ -211,6 +211,33 @@ Response:
   "stats": {"visited": 2, "depth_reached": 2}
 }
 ```
+
+### 9. Cross-Collection MATCH
+
+Combine graph traversal with data from multiple collections using `@collection`:
+
+```bash
+# Create a graph collection with edges
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "catalog", "type": "graph", "dimension": 4, "metric": "cosine"}'
+
+# Create a metadata collection with pricing
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "pricing", "type": "metadata"}'
+
+# Query: traverse catalog graph, enrich with pricing data
+curl -X POST http://localhost:8080/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@pricing) RETURN p.name, w.price LIMIT 10",
+    "collection": "catalog",
+    "params": {}
+  }'
+```
+
+> **Full guide:** [Graph Patterns Guide](guides/GRAPH_PATTERNS.md#cross-collection-match-collection)
 
 ## Next Steps
 

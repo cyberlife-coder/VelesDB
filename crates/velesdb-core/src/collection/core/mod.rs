@@ -9,21 +9,24 @@
 mod crud;
 mod crud_bulk;
 mod crud_helpers;
+mod crud_indexing;
 mod crud_read_delete;
 #[cfg(test)]
 mod crud_tests;
+mod flush;
 #[cfg(all(test, feature = "persistence"))]
 mod flush_defer_tests;
 mod graph_api;
 #[cfg(test)]
 mod graph_api_tests;
+mod graph_traversal_helpers;
 mod index_management;
 #[cfg(test)]
 mod index_management_tests;
 mod lifecycle;
+mod lifecycle_create;
 #[cfg(test)]
 mod lifecycle_tests;
-#[cfg(feature = "persistence")]
 mod recovery;
 #[cfg(all(test, feature = "persistence"))]
 mod recovery_tests;

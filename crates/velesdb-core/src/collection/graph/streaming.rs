@@ -374,6 +374,73 @@ impl<'a> ConcurrentBfsIterator<'a> {
     }
 }
 
+impl ConcurrentBfsIterator<'_> {
+    /// Checks whether the given label passes the rel-type filter.
+    ///
+    /// Empty filter = accept all labels.
+    #[inline]
+    fn label_passes_filter(&self, label: &str) -> bool {
+        self.rel_types_set.is_empty() || self.rel_types_set.contains(label)
+    }
+
+    /// Records a visited target, handling overflow when the visited set
+    /// exceeds `max_visited_size`.
+    ///
+    /// Returns `true` if the target should be processed (not already visited).
+    #[inline]
+    fn try_visit(&mut self, target: u64) -> bool {
+        if self.visited_overflow {
+            return true;
+        }
+        if self.visited.contains(&target) {
+            return false;
+        }
+        if self.visited.len() >= self.config.max_visited_size {
+            self.visited_overflow = true;
+            self.visited.clear();
+            return true;
+        }
+        self.visited.insert(target);
+        true
+    }
+
+    /// Expands a single BFS node: filters edges, records parent pointers,
+    /// enqueues unvisited targets, and buffers pending results.
+    fn expand_node(&mut self, state: &BfsState) {
+        let edges = self.edge_store.get_outgoing(state.node_id);
+
+        for edge in &edges {
+            if !self.label_passes_filter(edge.label()) {
+                continue;
+            }
+
+            let target = edge.target();
+            let new_depth = state.depth + 1;
+
+            if new_depth > self.config.max_depth {
+                continue;
+            }
+
+            if !self.try_visit(target) {
+                continue;
+            }
+
+            self.parent_map.insert(target, (state.node_id, edge.id()));
+
+            if new_depth < self.config.max_depth {
+                self.queue.push_back(BfsState {
+                    node_id: target,
+                    depth: new_depth,
+                });
+            }
+
+            let path = reconstruct_path(target, self.source_id, &self.parent_map);
+            self.pending_results
+                .push_back(TraversalResult::new(target, path, new_depth));
+        }
+    }
+}
+
 impl Iterator for ConcurrentBfsIterator<'_> {
     type Item = TraversalResult;
 
@@ -390,48 +457,7 @@ impl Iterator for ConcurrentBfsIterator<'_> {
         }
 
         while let Some(state) = self.queue.pop_front() {
-            // Per-node shard lock: acquired and released within this call.
-            let edges = self.edge_store.get_outgoing(state.node_id);
-
-            for edge in &edges {
-                if !self.rel_types_set.is_empty() && !self.rel_types_set.contains(edge.label()) {
-                    continue;
-                }
-
-                let target = edge.target();
-                let new_depth = state.depth + 1;
-
-                if new_depth > self.config.max_depth {
-                    continue;
-                }
-
-                if !self.visited_overflow && self.visited.contains(&target) {
-                    continue;
-                }
-
-                if !self.visited_overflow {
-                    if self.visited.len() >= self.config.max_visited_size {
-                        self.visited_overflow = true;
-                        self.visited.clear();
-                    } else {
-                        self.visited.insert(target);
-                    }
-                }
-
-                // Record parent pointer; path reconstructed lazily for results.
-                self.parent_map.insert(target, (state.node_id, edge.id()));
-
-                if new_depth < self.config.max_depth {
-                    self.queue.push_back(BfsState {
-                        node_id: target,
-                        depth: new_depth,
-                    });
-                }
-
-                let path = reconstruct_path(target, self.source_id, &self.parent_map);
-                self.pending_results
-                    .push_back(TraversalResult::new(target, path, new_depth));
-            }
+            self.expand_node(&state);
 
             if let Some(result) = self.pending_results.pop_front() {
                 self.yielded += 1;

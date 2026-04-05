@@ -316,7 +316,7 @@ pub(crate) struct ScoreContext<'a> {
     ///
     /// When present, built-in score variables (`vector_score`, `bm25_score`, etc.)
     /// resolve to their individual component values instead of the fused score.
-    component_scores: Option<&'a [(String, f32)]>,
+    component_scores: Option<&'a [(&'static str, f32)]>,
     /// Pre-evaluated LET binding values (VelesQL v1.10 Phase 3).
     ///
     /// Resolution priority: LET bindings > component_scores > search_score > payload.
@@ -342,7 +342,7 @@ impl<'a> ScoreContext<'a> {
     pub(crate) fn with_components(
         search_score: f32,
         payload: Option<&'a serde_json::Value>,
-        component_scores: Option<&'a [(String, f32)]>,
+        component_scores: Option<&'a [(&'static str, f32)]>,
     ) -> Self {
         Self {
             search_score,
@@ -356,7 +356,7 @@ impl<'a> ScoreContext<'a> {
     pub(crate) fn with_let_bindings(
         search_score: f32,
         payload: Option<&'a serde_json::Value>,
-        component_scores: Option<&'a [(String, f32)]>,
+        component_scores: Option<&'a [(&'static str, f32)]>,
         let_bindings: Option<&'a [(String, f32)]>,
     ) -> Self {
         Self {
@@ -405,7 +405,7 @@ impl<'a> ScoreContext<'a> {
     fn lookup_component(&self, name: &str) -> Option<f32> {
         self.component_scores?
             .iter()
-            .find(|(k, _)| k == name)
+            .find(|(k, _)| *k == name)
             .map(|(_, v)| *v)
     }
 
@@ -432,7 +432,7 @@ pub(crate) fn evaluate_let_bindings(
     bindings: &[crate::velesql::LetBinding],
     search_score: f32,
     payload: Option<&serde_json::Value>,
-    component_scores: Option<&[(String, f32)]>,
+    component_scores: Option<&[(&'static str, f32)]>,
 ) -> Vec<(String, f32)> {
     let mut evaluated: Vec<(String, f32)> = Vec::with_capacity(bindings.len());
     for binding in bindings {

@@ -97,49 +97,55 @@ impl Aggregator {
     /// inconsistent state is handled by returning early in release builds.
     pub fn process_value(&mut self, column: &str, value: &serde_json::Value) {
         if let Some(num) = Self::extract_number(value) {
-            // Fast path: column already tracked - no allocation
-            if let Some(sum) = self.sums.get_mut(column) {
-                *sum += num;
-                // Reason: All 4 HashMaps (sums, counts, mins, maxs) are always inserted
-                // together in the slow path below — missing key here is a logic bug.
-                let Some(count) = self.counts.get_mut(column) else {
-                    debug_assert!(
-                        false,
-                        "Invariant violated: counts must contain all keys present in sums"
-                    );
-                    return;
-                };
-                *count += 1;
-                let Some(min) = self.mins.get_mut(column) else {
-                    debug_assert!(
-                        false,
-                        "Invariant violated: mins must contain all keys present in sums"
-                    );
-                    return;
-                };
-                if num < *min {
-                    *min = num;
-                }
-                let Some(max) = self.maxs.get_mut(column) else {
-                    debug_assert!(
-                        false,
-                        "Invariant violated: maxs must contain all keys present in sums"
-                    );
-                    return;
-                };
-                if num > *max {
-                    *max = num;
-                }
-                return;
-            }
-
-            // Slow path: first time seeing this column - allocate once
-            let col_owned = column.to_string();
-            self.sums.insert(col_owned.clone(), num);
-            self.counts.insert(col_owned.clone(), 1);
-            self.mins.insert(col_owned.clone(), num);
-            self.maxs.insert(col_owned, num);
+            self.accumulate_value(column, num, 1);
         }
+    }
+
+    /// Accumulates a numeric value (or batch aggregate) into the column's running stats.
+    ///
+    /// Handles both the fast path (column already tracked) and slow path
+    /// (first occurrence, requires allocation).
+    fn accumulate_value(&mut self, column: &str, value: f64, count: u64) {
+        // Fast path: column already tracked - no allocation
+        if let Some(sum) = self.sums.get_mut(column) {
+            *sum += value;
+            let Some(col_count) = self.counts.get_mut(column) else {
+                debug_assert!(
+                    false,
+                    "Invariant violated: counts must contain all keys present in sums"
+                );
+                return;
+            };
+            *col_count += count;
+            let Some(min) = self.mins.get_mut(column) else {
+                debug_assert!(
+                    false,
+                    "Invariant violated: mins must contain all keys present in sums"
+                );
+                return;
+            };
+            if value < *min {
+                *min = value;
+            }
+            let Some(max) = self.maxs.get_mut(column) else {
+                debug_assert!(
+                    false,
+                    "Invariant violated: maxs must contain all keys present in sums"
+                );
+                return;
+            };
+            if value > *max {
+                *max = value;
+            }
+            return;
+        }
+
+        // Slow path: first time seeing this column - allocate once
+        let col_owned = column.to_string();
+        self.sums.insert(col_owned.clone(), value);
+        self.counts.insert(col_owned.clone(), count);
+        self.mins.insert(col_owned.clone(), value);
+        self.maxs.insert(col_owned, value);
     }
 
     /// Extract a numeric value from JSON.
@@ -172,6 +178,21 @@ impl Aggregator {
         let batch_min = values.iter().copied().fold(f64::INFINITY, f64::min);
         let batch_max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
+        self.accumulate_batch(column, batch_sum, batch_count, batch_min, batch_max);
+    }
+
+    /// Accumulates pre-computed batch aggregates into the column's running stats.
+    ///
+    /// Handles both the fast path (column already tracked) and slow path
+    /// (first occurrence, requires allocation).
+    fn accumulate_batch(
+        &mut self,
+        column: &str,
+        batch_sum: f64,
+        batch_count: u64,
+        batch_min: f64,
+        batch_max: f64,
+    ) {
         // Fast path: column already tracked
         if let Some(sum) = self.sums.get_mut(column) {
             *sum += batch_sum;

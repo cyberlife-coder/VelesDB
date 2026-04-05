@@ -86,189 +86,260 @@ impl CARTNode {
                 keys,
                 children,
                 ..
-            } => {
-                if key.is_empty() {
-                    return false;
-                }
-                let byte = key[0];
-                for i in 0..*num_children as usize {
-                    if keys[i] == byte {
-                        if let Some(child) = &children[i] {
-                            return child.search(&key[1..], value);
-                        }
-                    }
-                }
-                false
-            }
+            } => Self::search_node4(key, value, *num_children, *keys, children),
             Self::Node16 {
                 num_children,
                 keys,
                 children,
                 ..
-            } => {
-                if key.is_empty() {
-                    return false;
+            } => Self::search_node16(key, value, *num_children, keys, children),
+            Self::Node48 { keys, children, .. } => Self::search_node48(key, value, keys, children),
+            Self::Node256 { children, .. } => Self::search_node256(key, value, children),
+        }
+    }
+
+    /// Searches for a value in a Node4 by linear scan of keys.
+    fn search_node4(
+        key: &[u8],
+        value: u64,
+        num_children: u8,
+        keys: [u8; 4],
+        children: &[Option<Box<CARTNode>>; 4],
+    ) -> bool {
+        if key.is_empty() {
+            return false;
+        }
+        let byte = key[0];
+        for i in 0..num_children as usize {
+            if keys[i] == byte {
+                if let Some(child) = &children[i] {
+                    return child.search(&key[1..], value);
                 }
-                let byte = key[0];
-                let slice = &keys[..*num_children as usize];
-                if let Ok(idx) = slice.binary_search(&byte) {
-                    if let Some(child) = &children[idx] {
-                        return child.search(&key[1..], value);
-                    }
-                }
-                false
             }
-            Self::Node48 { keys, children, .. } => {
-                if key.is_empty() {
-                    return false;
-                }
-                let byte = key[0];
-                let slot = keys[byte as usize];
-                if slot != 255 {
-                    if let Some(child) = &children[slot as usize] {
-                        return child.search(&key[1..], value);
-                    }
-                }
-                false
+        }
+        false
+    }
+
+    /// Searches for a value in a Node16 by binary search of sorted keys.
+    fn search_node16(
+        key: &[u8],
+        value: u64,
+        num_children: u8,
+        keys: &[u8; 16],
+        children: &[Option<Box<CARTNode>>; 16],
+    ) -> bool {
+        if key.is_empty() {
+            return false;
+        }
+        let byte = key[0];
+        let slice = &keys[..num_children as usize];
+        if let Ok(idx) = slice.binary_search(&byte) {
+            if let Some(child) = &children[idx] {
+                return child.search(&key[1..], value);
             }
-            Self::Node256 { children, .. } => {
-                if key.is_empty() {
-                    return false;
+        }
+        false
+    }
+
+    /// Searches for a value in a Node48 via the 256-byte index lookup.
+    fn search_node48(
+        key: &[u8],
+        value: u64,
+        keys: &[u8; 256],
+        children: &[Option<Box<CARTNode>>; 48],
+    ) -> bool {
+        if key.is_empty() {
+            return false;
+        }
+        let byte = key[0];
+        let slot = keys[byte as usize];
+        if slot != 255 {
+            if let Some(child) = &children[slot as usize] {
+                return child.search(&key[1..], value);
+            }
+        }
+        false
+    }
+
+    /// Searches for a value in a Node256 via direct array indexing.
+    fn search_node256(key: &[u8], value: u64, children: &[Option<Box<CARTNode>>; 256]) -> bool {
+        if key.is_empty() {
+            return false;
+        }
+        let byte = key[0] as usize;
+        if let Some(child) = &children[byte] {
+            child.search(&key[1..], value)
+        } else {
+            false
+        }
+    }
+
+    /// Inserts a value into the subtree.
+    pub(crate) fn insert(&mut self, key: &[u8], value: u64) -> bool {
+        match self {
+            Self::Leaf { entries, .. } => Self::insert_into_leaf(entries, value),
+            Self::Node4 { .. } => self.insert_node4(key, value),
+            Self::Node16 { .. } => self.insert_node16(key, value),
+            Self::Node48 { .. } => self.insert_node48(key, value),
+            Self::Node256 { .. } => self.insert_node256(key, value),
+        }
+    }
+
+    /// Inserts a value into a leaf node's sorted entry list.
+    fn insert_into_leaf(entries: &mut Vec<u64>, value: u64) -> bool {
+        match entries.binary_search(&value) {
+            Ok(_) => false, // Already exists
+            Err(pos) => {
+                entries.insert(pos, value);
+                true
+            }
+        }
+    }
+
+    /// Inserts into a Node4, growing to Node16 when full.
+    fn insert_node4(&mut self, key: &[u8], value: u64) -> bool {
+        let Self::Node4 {
+            num_children,
+            keys,
+            children,
+        } = self
+        else {
+            return false;
+        };
+        if key.is_empty() {
+            return false;
+        }
+        let byte = key[0];
+
+        for i in 0..*num_children as usize {
+            if keys[i] == byte {
+                if let Some(child) = &mut children[i] {
+                    return child.insert(&key[1..], value);
                 }
-                let byte = key[0] as usize;
-                if let Some(child) = &children[byte] {
-                    child.search(&key[1..], value)
+            }
+        }
+
+        if (*num_children as usize) < 4 {
+            let idx = *num_children as usize;
+            keys[idx] = byte;
+            children[idx] = Some(Box::new(Self::new_leaf(value)));
+            *num_children += 1;
+            true
+        } else {
+            *self = self.grow_to_node16();
+            self.insert(key, value)
+        }
+    }
+
+    /// Inserts into a Node16, growing to Node48 when full.
+    fn insert_node16(&mut self, key: &[u8], value: u64) -> bool {
+        let Self::Node16 {
+            num_children,
+            keys,
+            children,
+        } = self
+        else {
+            return false;
+        };
+        if key.is_empty() {
+            return false;
+        }
+        let byte = key[0];
+
+        let slice = &keys[..*num_children as usize];
+        match slice.binary_search(&byte) {
+            Ok(idx) => {
+                if let Some(child) = &mut children[idx] {
+                    child.insert(&key[1..], value)
                 } else {
                     false
+                }
+            }
+            Err(pos) => {
+                if (*num_children as usize) < 16 {
+                    Self::shift_and_insert(keys, children, num_children, pos, byte, value);
+                    true
+                } else {
+                    *self = self.grow_to_node48();
+                    self.insert(key, value)
                 }
             }
         }
     }
 
-    /// Inserts a value into the subtree.
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn insert(&mut self, key: &[u8], value: u64) -> bool {
-        match self {
-            Self::Leaf { entries, .. } => {
-                match entries.binary_search(&value) {
-                    Ok(_) => false, // Already exists
-                    Err(pos) => {
-                        entries.insert(pos, value);
-                        true
-                    }
-                }
+    /// Shifts keys/children right and inserts a new child at `pos` in a Node16.
+    fn shift_and_insert(
+        keys: &mut [u8; 16],
+        children: &mut [Option<Box<CARTNode>>; 16],
+        num_children: &mut u8,
+        pos: usize,
+        byte: u8,
+        value: u64,
+    ) {
+        let n = *num_children as usize;
+        for i in (pos..n).rev() {
+            keys[i + 1] = keys[i];
+            children[i + 1] = children[i].take();
+        }
+        keys[pos] = byte;
+        children[pos] = Some(Box::new(Self::new_leaf(value)));
+        *num_children += 1;
+    }
+
+    /// Inserts into a Node48, growing to Node256 when full.
+    fn insert_node48(&mut self, key: &[u8], value: u64) -> bool {
+        let Self::Node48 {
+            num_children,
+            keys,
+            children,
+        } = self
+        else {
+            return false;
+        };
+        if key.is_empty() {
+            return false;
+        }
+        let byte = key[0];
+        let slot = keys[byte as usize];
+
+        if slot != 255 {
+            if let Some(child) = &mut children[slot as usize] {
+                return child.insert(&key[1..], value);
             }
-            Self::Node4 {
-                num_children,
-                keys,
-                children,
-            } => {
-                if key.is_empty() {
-                    return false;
-                }
-                let byte = key[0];
+        }
 
-                for i in 0..*num_children as usize {
-                    if keys[i] == byte {
-                        if let Some(child) = &mut children[i] {
-                            return child.insert(&key[1..], value);
-                        }
-                    }
-                }
+        if (*num_children as usize) < 48 {
+            let new_slot = *num_children;
+            keys[byte as usize] = new_slot;
+            children[new_slot as usize] = Some(Box::new(Self::new_leaf(value)));
+            *num_children += 1;
+            true
+        } else {
+            *self = self.grow_to_node256();
+            self.insert(key, value)
+        }
+    }
 
-                if (*num_children as usize) < 4 {
-                    let idx = *num_children as usize;
-                    keys[idx] = byte;
-                    children[idx] = Some(Box::new(Self::new_leaf(value)));
-                    *num_children += 1;
-                    true
-                } else {
-                    *self = self.grow_to_node16();
-                    self.insert(key, value)
-                }
-            }
-            Self::Node16 {
-                num_children,
-                keys,
-                children,
-            } => {
-                if key.is_empty() {
-                    return false;
-                }
-                let byte = key[0];
+    /// Inserts into a Node256 (densest node, no growth needed).
+    fn insert_node256(&mut self, key: &[u8], value: u64) -> bool {
+        let Self::Node256 {
+            num_children,
+            children,
+        } = self
+        else {
+            return false;
+        };
+        if key.is_empty() {
+            return false;
+        }
+        let byte = key[0] as usize;
 
-                let slice = &keys[..*num_children as usize];
-                match slice.binary_search(&byte) {
-                    Ok(idx) => {
-                        if let Some(child) = &mut children[idx] {
-                            child.insert(&key[1..], value)
-                        } else {
-                            false
-                        }
-                    }
-                    Err(pos) => {
-                        if (*num_children as usize) < 16 {
-                            let n = *num_children as usize;
-                            for i in (pos..n).rev() {
-                                keys[i + 1] = keys[i];
-                                children[i + 1] = children[i].take();
-                            }
-                            keys[pos] = byte;
-                            children[pos] = Some(Box::new(Self::new_leaf(value)));
-                            *num_children += 1;
-                            true
-                        } else {
-                            *self = self.grow_to_node48();
-                            self.insert(key, value)
-                        }
-                    }
-                }
-            }
-            Self::Node48 {
-                num_children,
-                keys,
-                children,
-            } => {
-                if key.is_empty() {
-                    return false;
-                }
-                let byte = key[0];
-                let slot = keys[byte as usize];
-
-                if slot != 255 {
-                    if let Some(child) = &mut children[slot as usize] {
-                        return child.insert(&key[1..], value);
-                    }
-                }
-
-                if (*num_children as usize) < 48 {
-                    let new_slot = *num_children;
-                    keys[byte as usize] = new_slot;
-                    children[new_slot as usize] = Some(Box::new(Self::new_leaf(value)));
-                    *num_children += 1;
-                    true
-                } else {
-                    *self = self.grow_to_node256();
-                    self.insert(key, value)
-                }
-            }
-            Self::Node256 {
-                num_children,
-                children,
-            } => {
-                if key.is_empty() {
-                    return false;
-                }
-                let byte = key[0] as usize;
-
-                if let Some(child) = &mut children[byte] {
-                    child.insert(&key[1..], value)
-                } else {
-                    children[byte] = Some(Box::new(Self::new_leaf(value)));
-                    *num_children += 1;
-                    true
-                }
-            }
+        if let Some(child) = &mut children[byte] {
+            child.insert(&key[1..], value)
+        } else {
+            children[byte] = Some(Box::new(Self::new_leaf(value)));
+            *num_children += 1;
+            true
         }
     }
 

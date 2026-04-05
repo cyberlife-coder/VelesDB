@@ -5,7 +5,6 @@ use crate::{CollectionType, DistanceMetric, Result, StorageMode};
 
 use super::Database;
 
-#[allow(deprecated)]
 impl Database {
     /// Creates a new vector collection.
     ///
@@ -74,6 +73,7 @@ impl Database {
 
     /// Registers a vector collection in both legacy and typed registries,
     /// notifies the observer, and bumps the schema version.
+    #[allow(deprecated)]
     fn register_vector_collection(
         &self,
         name: &str,

@@ -5,9 +5,14 @@
 //! - BFS traversal
 //! - Edge count
 
+use super::super::csr_snapshot::{CsrSnapshot, EdgePredicate};
+use super::super::traversal::{TraversalConfig, TraversalResult};
+use super::super::traversal_csr::{bfs_traverse_csr, bfs_traverse_csr_filtered};
 use super::{ConcurrentEdgeStore, GraphEdge};
+use arc_swap::Guard;
 use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 impl ConcurrentEdgeStore {
     /// Gets all outgoing edges from a node (thread-safe).
@@ -235,5 +240,71 @@ impl ConcurrentEdgeStore {
     pub fn incoming_degree(&self, node_id: u64) -> usize {
         let shard_idx = self.shard_index(node_id);
         self.shards[shard_idx].read().incoming_degree(node_id)
+    }
+
+    /// Rebuilds the CSR snapshot if the dirty flag is set.
+    ///
+    /// Uses `swap(false, AcqRel)` to atomically clear the flag and check
+    /// the previous value. Only one thread performs the rebuild; concurrent
+    /// readers see the stale-but-valid snapshot until the swap completes.
+    #[inline]
+    fn ensure_csr_fresh(&self) {
+        if self
+            .csr_dirty
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            #[allow(unused_variables)]
+            if let Err(e) = self.rebuild_snapshot() {
+                // Restore dirty flag so the next caller retries the rebuild.
+                self.csr_dirty
+                    .store(true, std::sync::atomic::Ordering::Release);
+                #[cfg(debug_assertions)]
+                eprintln!("[velesdb] WARNING: lazy CSR snapshot rebuild failed: {e}");
+            }
+        }
+    }
+
+    /// Returns the current CSR snapshot (lock-free read).
+    ///
+    /// The returned `Guard` dereferences to `Arc<CsrSnapshot>` and keeps
+    /// the snapshot alive for the duration of the borrow. No locks are
+    /// acquired — this is a single atomic load.
+    ///
+    /// If the snapshot is dirty (mutation occurred since last rebuild),
+    /// triggers a lazy rebuild before returning.
+    #[must_use]
+    pub fn get_csr_snapshot(&self) -> Guard<Arc<CsrSnapshot>> {
+        self.ensure_csr_fresh();
+        self.csr_snapshot.load()
+    }
+
+    /// BFS traversal on the CSR snapshot (lock-free, zero-copy).
+    ///
+    /// Loads the current snapshot atomically and delegates to
+    /// [`bfs_traverse_csr`] for the actual traversal.
+    /// Triggers a lazy CSR rebuild if dirty.
+    #[must_use]
+    pub fn traverse_bfs_csr(&self, source: u64, config: &TraversalConfig) -> Vec<TraversalResult> {
+        self.ensure_csr_fresh();
+        let snapshot = self.csr_snapshot.load();
+        bfs_traverse_csr(&snapshot, source, config)
+    }
+
+    /// BFS traversal with predicate pushdown on the CSR snapshot.
+    ///
+    /// Loads the current snapshot atomically and delegates to
+    /// [`bfs_traverse_csr_filtered`] which applies the predicate at the
+    /// CSR level, avoiding materialisation of non-matching edges.
+    /// Triggers a lazy CSR rebuild if dirty.
+    #[must_use]
+    pub fn traverse_bfs_filtered<P: EdgePredicate>(
+        &self,
+        source: u64,
+        config: &TraversalConfig,
+        predicate: &P,
+    ) -> Vec<TraversalResult> {
+        self.ensure_csr_fresh();
+        let snapshot = self.csr_snapshot.load();
+        bfs_traverse_csr_filtered(&snapshot, source, config, predicate)
     }
 }

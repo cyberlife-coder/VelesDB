@@ -286,6 +286,32 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         result
     }
 
+    /// Executes a closure with mutable access to the contiguous vector storage.
+    ///
+    /// Acquires a write lock on `vectors`. Used by `DirectVectorWriter` to
+    /// write vectors directly during bulk insert, bypassing `ShardedVectors`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Internal`] if vector storage is not initialized.
+    /// Propagates any error returned by the closure.
+    ///
+    /// [`Error::Internal`]: crate::error::Error::Internal
+    pub(in crate::index::hnsw) fn with_vectors_write<R>(
+        &self,
+        f: impl FnOnce(&mut ContiguousVectors) -> crate::error::Result<R>,
+    ) -> crate::error::Result<R> {
+        record_lock_acquire(LockRank::Vectors);
+        let mut guard = self.vectors.write();
+        let storage = guard.as_mut().ok_or_else(|| {
+            crate::error::Error::Internal("ContiguousVectors not initialized".to_string())
+        })?;
+        let result = f(storage);
+        drop(guard);
+        record_lock_release(LockRank::Vectors);
+        result
+    }
+
     /// Executes a closure with a layers read snapshot and tracked lock rank.
     #[inline]
     pub(in crate::index::hnsw::native) fn with_layers_read<R>(

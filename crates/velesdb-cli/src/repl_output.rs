@@ -140,6 +140,10 @@ pub fn print_help() {
         ".delete <name> <id> [id2..]".yellow()
     );
     println!(
+        "  {} Upsert a point (vector + payload)",
+        ".upsert <col> <id> <vector> [payload]".yellow()
+    );
+    println!(
         "  {}      Flush collection to disk",
         ".flush <name>".yellow()
     );
@@ -165,6 +169,51 @@ pub fn print_help() {
     println!("  {}        Show query guard-rails", ".guardrails".yellow());
     println!("  {}   Agent memory (preview)", ".agent [cmd]".yellow());
     println!();
+    println!("{}", "Graph Commands:".bold().underline());
+    println!();
+    println!(
+        "  {} Add edge",
+        ".graph add-edge <col> <id> <src> <tgt> <label>".yellow()
+    );
+    println!(
+        "  {}       List edges",
+        ".graph edges <col> [--label X]".yellow()
+    );
+    println!(
+        "  {}         Node degree",
+        ".graph degree <col> <node>".yellow()
+    );
+    println!(
+        "  {}   Traverse graph",
+        ".graph traverse <col> <src> [--algo bfs|dfs]".yellow()
+    );
+    println!(
+        "  {} Neighbors",
+        ".graph neighbors <col> <node> [--direction in|out|both]".yellow()
+    );
+    println!(
+        "  {}  Remove edge",
+        ".graph remove-edge <col> <edge_id>".yellow()
+    );
+    println!("  {}          Graph stats", ".graph count <col>".yellow());
+    println!(
+        "  {} Embedding search",
+        ".graph search <col> <vector> [k]".yellow()
+    );
+    println!(
+        "  {} Store payload",
+        ".graph store-payload <col> <node> <json>".yellow()
+    );
+    println!(
+        "  {}  Get payload",
+        ".graph get-payload <col> <node>".yellow()
+    );
+    println!(
+        "  {}    List nodes",
+        ".graph nodes <col> [--page N]".yellow()
+    );
+    println!("  {}           Full graph help", ".graph help".yellow());
+    println!();
     println!("{}", "Session Commands:".bold().underline());
     println!();
     println!(
@@ -188,20 +237,65 @@ pub fn print_help() {
     println!("  {} Enable reranking (true/false)", "rerank".cyan());
     println!("  {} Max results per query", "max_results".cyan());
     println!();
-    println!("{}", "VelesQL Examples:".bold().underline());
+    println!("{}", "VelesQL (type any SQL directly):".bold().underline());
     println!();
-    println!("  {}", "SELECT * FROM documents LIMIT 10;".italic().white());
     println!(
         "  {}",
-        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (mode = 'fast');"
+        "SELECT * FROM docs WHERE category = 'tech' LIMIT 10;"
             .italic()
             .white()
     );
     println!(
         "  {}",
-        "SELECT * FROM items WHERE category = 'tech' LIMIT 20;"
+        "SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3] LIMIT 5;"
             .italic()
             .white()
+    );
+    println!(
+        "  {}",
+        "SELECT * FROM docs WHERE similarity(vector, [0.1, 0.2]) > 0.8 LIMIT 10;"
+            .italic()
+            .white()
+    );
+    println!(
+        "  {}",
+        "SELECT * FROM docs WHERE content MATCH 'rust' LIMIT 10;"
+            .italic()
+            .white()
+    );
+    println!(
+        "  {}",
+        "CREATE COLLECTION test (dimension = 4, metric = 'cosine');"
+            .italic()
+            .white()
+    );
+    println!("  {}", "DROP COLLECTION test;".italic().white());
+    println!(
+        "  {}",
+        "SELECT EDGES FROM kg WHERE label = 'KNOWS';"
+            .italic()
+            .white()
+    );
+    println!(
+        "  {}",
+        "MATCH (a)-[:KNOWS]->(b) RETURN a, b LIMIT 10;  (needs \\use <col>)"
+            .italic()
+            .white()
+    );
+    println!(
+        "  {}",
+        "SELECT category, COUNT(*) FROM docs GROUP BY category;"
+            .italic()
+            .white()
+    );
+    println!();
+    println!(
+        "  {}",
+        "Tip: Use '.upsert <col> <id> <vector> [payload]' to insert vectors.".dimmed()
+    );
+    println!(
+        "  {}",
+        "Note: $parameter vectors require REST API. Use literal [0.1, ...] in REPL.".dimmed()
     );
     println!();
 }

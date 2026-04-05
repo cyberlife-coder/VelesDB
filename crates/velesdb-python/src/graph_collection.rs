@@ -7,10 +7,6 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-use crate::collection::query::{
-    build_explain_dict, parse_velesql, run_velesql_match, run_velesql_select,
-    run_velesql_select_ids,
-};
 use crate::collection_helpers::{core_err, search_result_to_dict};
 use crate::graph::{dict_to_edge, edge_to_dict, traversal_to_dict};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
@@ -106,7 +102,7 @@ impl PyGraphSchema {
 ///     >>> edges = graph.get_edges()
 #[pyclass(name = "GraphCollection")]
 pub struct PyGraphCollection {
-    inner: GraphCollection,
+    pub(crate) inner: GraphCollection,
     name: String,
 }
 
@@ -160,6 +156,35 @@ impl PyGraphCollection {
     fn add_edge(&self, py: Python<'_>, edge: HashMap<String, PyObject>) -> PyResult<()> {
         let graph_edge = dict_to_edge(py, &edge)?;
         py.allow_threads(|| self.inner.add_edge(graph_edge).map_err(core_err))
+    }
+
+    /// Add multiple edges in batch (much faster than calling add_edge in a loop).
+    ///
+    /// Defers CSR snapshot rebuild until after all edges are inserted,
+    /// eliminating per-edge rebuild overhead.
+    ///
+    /// Args:
+    ///     edges: List of edge dicts (same format as add_edge)
+    ///
+    /// Returns:
+    ///     Number of edges successfully added
+    ///
+    /// Example:
+    ///     >>> graph.add_edges_batch([
+    ///     ...     {"id": 1, "source": 10, "target": 20, "label": "KNOWS"},
+    ///     ...     {"id": 2, "source": 20, "target": 30, "label": "FOLLOWS"},
+    ///     ... ])
+    #[pyo3(signature = (edges))]
+    fn add_edges_batch(
+        &self,
+        py: Python<'_>,
+        edges: Vec<HashMap<String, PyObject>>,
+    ) -> PyResult<usize> {
+        let graph_edges: Vec<velesdb_core::collection::graph::GraphEdge> = edges
+            .iter()
+            .map(|e| dict_to_edge(py, e))
+            .collect::<PyResult<Vec<_>>>()?;
+        py.allow_threads(|| Ok(self.inner.add_edges_batch(graph_edges)))
     }
 
     /// Get edges, optionally filtered by label.
@@ -262,11 +287,17 @@ impl PyGraphCollection {
     ///     source_id: Starting node ID
     ///     max_depth: Maximum traversal depth (default: 3)
     ///     limit: Maximum results to return (default: 100)
-    ///     rel_types: Optional list of relationship types to follow
+    ///     rel_types: Optional list of relationship types to follow.
+    ///         Alias: ``relationship_types`` (same effect, either name works).
     ///
     /// Returns:
     ///     List of traversal result dicts with keys: target_id, path, depth
-    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None))]
+    ///
+    /// Example:
+    ///     >>> results = graph.traverse_bfs(source_id=1, max_depth=3)
+    ///     >>> results = graph.traverse_bfs(1, rel_types=["KNOWS"])
+    ///     >>> results = graph.traverse_bfs(1, relationship_types=["KNOWS"])  # alias
+    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None, relationship_types=None))]
     fn traverse_bfs(
         &self,
         py: Python<'_>,
@@ -274,8 +305,10 @@ impl PyGraphCollection {
         max_depth: Option<u32>,
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
+        relationship_types: Option<Vec<String>>,
     ) -> PyResult<Vec<PyObject>> {
-        let config = build_traversal_config(max_depth, limit, rel_types);
+        let effective_rel_types = rel_types.or(relationship_types);
+        let config = build_traversal_config(max_depth, limit, effective_rel_types);
         let results = py.allow_threads(|| self.inner.traverse_bfs(source_id, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
@@ -286,11 +319,17 @@ impl PyGraphCollection {
     ///     source_id: Starting node ID
     ///     max_depth: Maximum traversal depth (default: 3)
     ///     limit: Maximum results to return (default: 100)
-    ///     rel_types: Optional list of relationship types to follow
+    ///     rel_types: Optional list of relationship types to follow.
+    ///         Alias: ``relationship_types`` (same effect, either name works).
     ///
     /// Returns:
     ///     List of traversal result dicts with keys: target_id, path, depth
-    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None))]
+    ///
+    /// Example:
+    ///     >>> results = graph.traverse_dfs(source_id=1, max_depth=3)
+    ///     >>> results = graph.traverse_dfs(1, rel_types=["KNOWS"])
+    ///     >>> results = graph.traverse_dfs(1, relationship_types=["KNOWS"])  # alias
+    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None, relationship_types=None))]
     fn traverse_dfs(
         &self,
         py: Python<'_>,
@@ -298,9 +337,44 @@ impl PyGraphCollection {
         max_depth: Option<u32>,
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
+        relationship_types: Option<Vec<String>>,
     ) -> PyResult<Vec<PyObject>> {
-        let config = build_traversal_config(max_depth, limit, rel_types);
+        let effective_rel_types = rel_types.or(relationship_types);
+        let config = build_traversal_config(max_depth, limit, effective_rel_types);
         let results = py.allow_threads(|| self.inner.traverse_dfs(source_id, &config));
+        Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
+    }
+
+    /// Perform multi-source BFS traversal with deduplication.
+    ///
+    /// Starts BFS from multiple source nodes simultaneously and deduplicates
+    /// results by path signature.
+    ///
+    /// Args:
+    ///     source_ids: List of starting node IDs
+    ///     max_depth: Maximum traversal depth (default: 3)
+    ///     limit: Maximum results to return (default: 100)
+    ///     rel_types: Optional list of relationship types to follow.
+    ///         Alias: ``relationship_types`` (same effect, either name works).
+    ///
+    /// Returns:
+    ///     List of traversal result dicts with keys: target_id, path, depth
+    ///
+    /// Example:
+    ///     >>> results = graph.traverse_bfs_parallel([1, 5, 10], max_depth=3)
+    #[pyo3(signature = (source_ids, max_depth=None, limit=None, rel_types=None, relationship_types=None))]
+    fn traverse_bfs_parallel(
+        &self,
+        py: Python<'_>,
+        source_ids: Vec<u64>,
+        max_depth: Option<u32>,
+        limit: Option<usize>,
+        rel_types: Option<Vec<String>>,
+        relationship_types: Option<Vec<String>>,
+    ) -> PyResult<Vec<PyObject>> {
+        let effective_rel_types = rel_types.or(relationship_types);
+        let config = build_traversal_config(max_depth, limit, effective_rel_types);
+        let results = py.allow_threads(|| self.inner.traverse_bfs_parallel(&source_ids, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
 
@@ -365,104 +439,8 @@ impl PyGraphCollection {
 }
 
 // ---------------------------------------------------------------------------
-// VelesQL query methods (parity with Collection)
+// VelesQL query methods (parity with Collection) — moved to graph_collection_query.rs
 // ---------------------------------------------------------------------------
-
-#[pymethods]
-impl PyGraphCollection {
-    /// Execute a VelesQL query (SELECT or MATCH).
-    ///
-    /// Args:
-    ///     query_str: VelesQL query string
-    ///     params: Query parameters (vectors as lists/numpy arrays, scalars)
-    ///
-    /// Returns:
-    ///     List of result dicts
-    ///
-    /// Example:
-    ///     >>> results = graph.query(
-    ///     ...     "SELECT * FROM kg WHERE category = 'person' LIMIT 10"
-    ///     ... )
-    #[pyo3(signature = (query_str, params=None))]
-    fn query(
-        &self,
-        py: Python<'_>,
-        query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
-        let inner = &self.inner;
-        run_velesql_select(py, query_str, params, |q, p| inner.execute_query(q, p))
-    }
-
-    /// Execute a MATCH graph traversal query.
-    ///
-    /// This is the primary method for Cypher-like graph pattern matching
-    /// in VelesQL. Edges added via `add_edge()` are found by this method.
-    ///
-    /// Args:
-    ///     query_str: VelesQL MATCH query string
-    ///     params: Query parameters (default: empty dict)
-    ///     vector: Optional query vector for similarity scoring
-    ///     threshold: Similarity threshold (default: 0.0)
-    ///
-    /// Returns:
-    ///     List of dicts with keys: node_id, depth, path, bindings, score, projected
-    ///
-    /// Example:
-    ///     >>> results = graph.match_query(
-    ///     ...     "MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10"
-    ///     ... )
-    #[pyo3(signature = (query_str, params = None, vector = None, threshold = 0.0))]
-    fn match_query(
-        &self,
-        py: Python<'_>,
-        query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-        vector: Option<PyObject>,
-        threshold: f32,
-    ) -> PyResult<Vec<PyObject>> {
-        let inner = &self.inner;
-        run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
-            if let Some(ref qv) = qv {
-                inner.execute_match_with_similarity(&mc, qv, threshold, &p)
-            } else {
-                inner.execute_match(&mc, &p)
-            }
-        })
-    }
-
-    /// Return query execution plan (EXPLAIN).
-    ///
-    /// Args:
-    ///     query_str: VelesQL query string
-    ///
-    /// Returns:
-    ///     Dict with tree, estimated_cost_ms, filter_strategy, index_used
-    #[pyo3(signature = (query_str))]
-    fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<PyObject> {
-        let parsed = parse_velesql(query_str)?;
-        Ok(build_explain_dict(py, &parsed))
-    }
-
-    /// Execute a VelesQL query returning only IDs and scores (no payload).
-    ///
-    /// Args:
-    ///     velesql: VelesQL query string
-    ///     params: Optional dict of query parameters
-    ///
-    /// Returns:
-    ///     List of dicts with 'id' and 'score' fields
-    #[pyo3(signature = (velesql, params = None))]
-    fn query_ids(
-        &self,
-        py: Python<'_>,
-        velesql: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
-        let inner = &self.inner;
-        run_velesql_select_ids(py, velesql, params, |q, p| inner.execute_query(q, p))
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Helpers

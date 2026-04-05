@@ -43,42 +43,55 @@ impl Collection {
                 }
             }
             StorageMode::ProductQuantization => {
-                let mut quantizer_guard = self.pq_quantizer.write();
-                let mut backfill_samples: Vec<(u64, Vec<f32>)> = Vec::new();
-
-                if quantizer_guard.is_none() {
-                    let mut buffer = self.pq_training_buffer.write();
-                    buffer.push_back((point.id, point.vector.clone()));
-                    if buffer.len() >= PQ_TRAINING_SAMPLES {
-                        let training: Vec<Vec<f32>> =
-                            buffer.iter().map(|(_, vector)| vector.clone()).collect();
-                        let num_centroids = 256usize.min(training.len().max(2));
-                        *quantizer_guard = ProductQuantizer::train(
-                            &training,
-                            auto_num_subspaces(point.vector.len()),
-                            num_centroids,
-                        )
-                        .ok();
-                        backfill_samples = buffer.drain(..).collect();
-                    }
-                }
-
-                if let (Some(cache), Some(quantizer)) = (pq_cache, quantizer_guard.as_ref()) {
-                    for (id, vector) in backfill_samples {
-                        if let Ok(code) = quantizer.quantize(&vector) {
-                            cache.insert(id, code);
-                        }
-                    }
-
-                    if let Ok(code) = quantizer.quantize(&point.vector) {
-                        cache.insert(point.id, code);
-                    }
-                }
+                self.cache_pq_vector(point, pq_cache);
             }
             StorageMode::Full | StorageMode::RaBitQ => {}
         }
     }
 
+    /// Handles the Product Quantization arm of `cache_quantized_vector`.
+    ///
+    /// Trains the quantizer on first `PQ_TRAINING_SAMPLES` points, then
+    /// backfills and quantizes subsequent points.
+    fn cache_pq_vector(
+        &self,
+        point: &Point,
+        pq_cache: Option<&mut std::collections::HashMap<u64, PQVector>>,
+    ) {
+        let mut quantizer_guard = self.pq_quantizer.write();
+        let mut backfill_samples: Vec<(u64, Vec<f32>)> = Vec::new();
+
+        if quantizer_guard.is_none() {
+            let mut buffer = self.pq_training_buffer.write();
+            buffer.push_back((point.id, point.vector.clone()));
+            if buffer.len() >= PQ_TRAINING_SAMPLES {
+                let training: Vec<Vec<f32>> =
+                    buffer.iter().map(|(_, vector)| vector.clone()).collect();
+                let num_centroids = 256usize.min(training.len().max(2));
+                *quantizer_guard = ProductQuantizer::train(
+                    &training,
+                    auto_num_subspaces(point.vector.len()),
+                    num_centroids,
+                )
+                .ok();
+                backfill_samples = buffer.drain(..).collect();
+            }
+        }
+
+        if let (Some(cache), Some(quantizer)) = (pq_cache, quantizer_guard.as_ref()) {
+            for (id, vector) in backfill_samples {
+                if let Ok(code) = quantizer.quantize(&vector) {
+                    cache.insert(id, code);
+                }
+            }
+
+            if let Ok(code) = quantizer.quantize(&point.vector) {
+                cache.insert(point.id, code);
+            }
+        }
+    }
+
+    /// Updates all secondary indexes after an upsert (removes old values, inserts new ones).
     pub(crate) fn update_secondary_indexes_on_upsert(
         &self,
         id: u64,
@@ -102,6 +115,7 @@ impl Collection {
         }
     }
 
+    /// Removes entries from all secondary indexes for a deleted point.
     pub(crate) fn update_secondary_indexes_on_delete(
         &self,
         id: u64,
@@ -121,7 +135,12 @@ impl Collection {
     // These methods take `&self` for consistency with the impl block calling convention,
     // but the operations are logically index-directed and do not need instance state.
     #[allow(clippy::unused_self)]
-    fn insert_into_secondary_index(&self, index: &SecondaryIndex, key: JsonValue, id: u64) {
+    pub(crate) fn insert_into_secondary_index(
+        &self,
+        index: &SecondaryIndex,
+        key: JsonValue,
+        id: u64,
+    ) {
         match index {
             SecondaryIndex::BTree(tree) => {
                 let mut tree = tree.write();

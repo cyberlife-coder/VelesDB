@@ -25,7 +25,7 @@ fn make_result(id: u64, score: f32) -> SearchResult {
 fn make_result_with_components(
     id: u64,
     score: f32,
-    components: Vec<(String, f32)>,
+    components: Vec<(&'static str, f32)>,
 ) -> SearchResult {
     let mut result = SearchResult::new(Point::without_payload(id, vec![0.0; 4]), score);
     result.component_scores = Some(components.into());
@@ -39,10 +39,8 @@ fn make_result_with_components(
 /// Nominal: component score takes priority over fallback search_score.
 #[test]
 fn test_resolve_variable_prefers_component_over_search_score() {
-    let components: smallvec::SmallVec<[(String, f32); 4]> = smallvec::smallvec![
-        ("vector_score".to_string(), 0.9_f32),
-        ("bm25_score".to_string(), 0.4_f32),
-    ];
+    let components: smallvec::SmallVec<[(&'static str, f32); 4]> =
+        smallvec::smallvec![("vector_score", 0.9_f32), ("bm25_score", 0.4_f32),];
     let ctx = ScoreContext::with_components(0.65, None, Some(&components));
 
     let expr_vec = ArithmeticExpr::Variable("vector_score".to_string());
@@ -78,8 +76,8 @@ fn test_resolve_variable_falls_back_to_search_score() {
 /// Edge: component scores present but variable not in the list -> fallback.
 #[test]
 fn test_resolve_variable_missing_component_falls_back() {
-    let components: smallvec::SmallVec<[(String, f32); 4]> =
-        smallvec::smallvec![("vector_score".to_string(), 0.9_f32),];
+    let components: smallvec::SmallVec<[(&'static str, f32); 4]> =
+        smallvec::smallvec![("vector_score", 0.9_f32),];
     let ctx = ScoreContext::with_components(0.65, None, Some(&components));
 
     // bm25_score not in components -> should fall back to search_score
@@ -95,7 +93,7 @@ fn test_resolve_variable_missing_component_falls_back() {
 /// Edge: empty component_scores vec treated like None.
 #[test]
 fn test_resolve_variable_empty_components_falls_back() {
-    let components: smallvec::SmallVec<[(String, f32); 4]> = smallvec::smallvec![];
+    let components: smallvec::SmallVec<[(&'static str, f32); 4]> = smallvec::smallvec![];
     let ctx = ScoreContext::with_components(0.80, None, Some(&components));
 
     let expr = ArithmeticExpr::Variable("vector_score".to_string());
@@ -111,8 +109,8 @@ fn test_resolve_variable_empty_components_falls_back() {
 /// NOT to a component score. This preserves backward compat.
 #[test]
 fn test_similarity_still_resolves_to_search_score() {
-    let components: smallvec::SmallVec<[(String, f32); 4]> =
-        smallvec::smallvec![("vector_score".to_string(), 0.9_f32),];
+    let components: smallvec::SmallVec<[(&'static str, f32); 4]> =
+        smallvec::smallvec![("vector_score", 0.9_f32),];
     let ctx = ScoreContext::with_components(0.65, None, Some(&components));
 
     let expr = ArithmeticExpr::Similarity(Box::new(crate::velesql::OrderByExpr::SimilarityBare));
@@ -127,10 +125,8 @@ fn test_similarity_still_resolves_to_search_score() {
 /// Edge: fused_score resolves to search_score even when components exist.
 #[test]
 fn test_fused_score_resolves_to_search_score() {
-    let components: smallvec::SmallVec<[(String, f32); 4]> = smallvec::smallvec![
-        ("vector_score".to_string(), 0.9_f32),
-        ("bm25_score".to_string(), 0.4_f32),
-    ];
+    let components: smallvec::SmallVec<[(&'static str, f32); 4]> =
+        smallvec::smallvec![("vector_score", 0.9_f32), ("bm25_score", 0.4_f32),];
     let ctx = ScoreContext::with_components(0.65, None, Some(&components));
 
     let expr = ArithmeticExpr::Variable("fused_score".to_string());
@@ -154,14 +150,10 @@ fn test_weighted_components_differ_from_similarity() {
     // Without component scores, ORDER BY any weighted expression is identical.
     // WITH component scores, the ordering changes.
 
-    let components_a: smallvec::SmallVec<[(String, f32); 4]> = smallvec::smallvec![
-        ("vector_score".to_string(), 0.95_f32),
-        ("bm25_score".to_string(), 0.10_f32),
-    ];
-    let components_b: smallvec::SmallVec<[(String, f32); 4]> = smallvec::smallvec![
-        ("vector_score".to_string(), 0.30_f32),
-        ("bm25_score".to_string(), 0.90_f32),
-    ];
+    let components_a: smallvec::SmallVec<[(&'static str, f32); 4]> =
+        smallvec::smallvec![("vector_score", 0.95_f32), ("bm25_score", 0.10_f32),];
+    let components_b: smallvec::SmallVec<[(&'static str, f32); 4]> =
+        smallvec::smallvec![("vector_score", 0.30_f32), ("bm25_score", 0.90_f32),];
 
     // Both have the same fused score.
     let ctx_a = ScoreContext::with_components(0.70, None, Some(&components_a));
@@ -199,8 +191,8 @@ fn test_weighted_components_differ_from_similarity() {
 /// Nominal: ORDER BY single component equals ORDER BY similarity() for pure vector.
 #[test]
 fn test_single_component_matches_similarity_for_pure_vector() {
-    let components: smallvec::SmallVec<[(String, f32); 4]> =
-        smallvec::smallvec![("vector_score".to_string(), 0.85_f32),];
+    let components: smallvec::SmallVec<[(&'static str, f32); 4]> =
+        smallvec::smallvec![("vector_score", 0.85_f32),];
     // For pure vector search, fused score == vector_score.
     let ctx = ScoreContext::with_components(0.85, None, Some(&components));
 
@@ -234,14 +226,8 @@ fn test_component_scores_default_none() {
 /// Nominal: component_scores can be set.
 #[test]
 fn test_component_scores_populated() {
-    let result = make_result_with_components(
-        1,
-        0.7,
-        vec![
-            ("vector_score".to_string(), 0.9),
-            ("bm25_score".to_string(), 0.3),
-        ],
-    );
+    let result =
+        make_result_with_components(1, 0.7, vec![("vector_score", 0.9), ("bm25_score", 0.3)]);
     assert!(result.component_scores.is_some());
     let scores = result.component_scores.as_ref().expect("set above");
     assert_eq!(scores.len(), 2);
@@ -297,8 +283,8 @@ fn test_score_context_new_has_no_components() {
 #[test]
 fn test_payload_variable_not_affected_by_components() {
     let payload = serde_json::json!({"price": 42.0});
-    let components: smallvec::SmallVec<[(String, f32); 4]> =
-        smallvec::smallvec![("vector_score".to_string(), 0.9_f32),];
+    let components: smallvec::SmallVec<[(&'static str, f32); 4]> =
+        smallvec::smallvec![("vector_score", 0.9_f32),];
     let ctx = ScoreContext::with_components(0.5, Some(&payload), Some(&components));
 
     let expr = ArithmeticExpr::Variable("price".to_string());
@@ -348,22 +334,8 @@ fn test_order_by_arithmetic_uses_component_scores() {
 
     // Manually build results with component_scores to verify ordering uses them.
     let mut results = vec![
-        make_result_with_components(
-            1,
-            0.70,
-            vec![
-                ("vector_score".to_string(), 0.95),
-                ("bm25_score".to_string(), 0.10),
-            ],
-        ),
-        make_result_with_components(
-            2,
-            0.70,
-            vec![
-                ("vector_score".to_string(), 0.30),
-                ("bm25_score".to_string(), 0.90),
-            ],
-        ),
+        make_result_with_components(1, 0.70, vec![("vector_score", 0.95), ("bm25_score", 0.10)]),
+        make_result_with_components(2, 0.70, vec![("vector_score", 0.30), ("bm25_score", 0.90)]),
     ];
 
     // ORDER BY 0.7 * vector_score + 0.3 * bm25_score DESC

@@ -1,8 +1,11 @@
 //! VelesQL query execution handlers.
 
+pub mod aggregation;
 pub mod explain;
 pub(crate) mod velesql_helpers;
 
+pub use aggregation::__path_aggregate;
+pub use aggregation::aggregate;
 pub use explain::{__path_explain, explain};
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
@@ -16,11 +19,11 @@ use velesdb_core::velesql::{
 
 use crate::handlers::helpers::notify_query_timing;
 use crate::types::{
-    AggregationResponse, QueryRequest, QueryResponse, QueryResponseMeta, QueryType,
-    VELESQL_CONTRACT_VERSION,
+    QueryRequest, QueryResponse, QueryResponseMeta, QueryType, VELESQL_CONTRACT_VERSION,
 };
 use crate::AppState;
 
+use aggregation::{execute_aggregation_query, is_aggregation_query};
 use explain::condition_has_vector_search;
 use velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
 
@@ -55,64 +58,6 @@ fn is_ast_routed_dml(parsed: &Query) -> bool {
     )
 }
 
-fn is_aggregation_query(select: &velesdb_core::velesql::SelectStatement) -> bool {
-    let has_aggs = match &select.columns {
-        SelectColumns::Aggregations(_) => true,
-        SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
-        _ => false,
-    };
-    has_aggs || select.group_by.is_some()
-}
-
-fn aggregation_result_count(result: &serde_json::Value) -> usize {
-    match result {
-        serde_json::Value::Array(rows) => rows.len(),
-        serde_json::Value::Object(_) => 1,
-        _ => 0,
-    }
-}
-
-#[allow(deprecated)]
-fn execute_aggregation_query(
-    state: &Arc<AppState>,
-    collection_name: &str,
-    parsed: &Query,
-    params: &std::collections::HashMap<String, serde_json::Value>,
-    start: std::time::Instant,
-) -> axum::response::Response {
-    let collection = match state.db.get_collection(collection_name) {
-        Some(c) => c,
-        None => return velesql_collection_not_found(collection_name),
-    };
-
-    let result = match collection.execute_aggregate(parsed, params) {
-        Ok(r) => r,
-        Err(e) => {
-            return velesql_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "VELESQL_AGGREGATION_ERROR",
-                &e.to_string(),
-                "Verify GROUP BY/HAVING clauses and aggregate function arguments",
-                None,
-            )
-        }
-    };
-
-    let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
-    notify_query_timing(state, collection_name, start);
-    let count = aggregation_result_count(&result);
-
-    Json(AggregationResponse {
-        result,
-        timing_ms,
-        meta: QueryResponseMeta {
-            velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
-            count,
-        },
-    })
-    .into_response()
-}
-
 /// Execute a VelesQL query.
 ///
 /// BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)
@@ -132,7 +77,7 @@ fn execute_aggregation_query(
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
-#[allow(clippy::unused_async, deprecated)]
+#[allow(clippy::unused_async)]
 pub async fn query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
@@ -312,7 +257,7 @@ fn resolve_collection_name(
 }
 
 /// Execute a standard (non-aggregation) query, dispatching MATCH vs SELECT.
-#[allow(deprecated, clippy::result_large_err)]
+#[allow(clippy::result_large_err)]
 fn execute_standard_query(
     state: &Arc<AppState>,
     parsed: &Query,
@@ -320,11 +265,18 @@ fn execute_standard_query(
     req: &QueryRequest,
 ) -> Result<Vec<velesdb_core::SearchResult>, axum::response::Response> {
     let execute_result = if parsed.is_match_query() {
-        match state.db.get_collection(collection_name) {
-            Some(c) => c.execute_query(parsed, &req.params),
-            None => Err(velesdb_core::Error::CollectionNotFound(
+        // MATCH queries need a collection instance for execute_query.
+        // Route through typed registries: vector → graph → metadata.
+        if let Some(vc) = state.db.get_vector_collection(collection_name) {
+            vc.execute_query(parsed, &req.params)
+        } else if let Some(gc) = state.db.get_graph_collection(collection_name) {
+            gc.execute_query(parsed, &req.params)
+        } else if let Some(mc) = state.db.get_metadata_collection(collection_name) {
+            mc.execute_query(parsed, &req.params)
+        } else {
+            Err(velesdb_core::Error::CollectionNotFound(
                 collection_name.to_string(),
-            )),
+            ))
         }
     } else {
         state.db.execute_query(parsed, &req.params)
@@ -369,79 +321,6 @@ fn build_query_response(
         },
     })
     .into_response()
-}
-
-/// Execute an aggregation-only VelesQL query.
-///
-/// This endpoint is explicit and stable for GROUP BY / HAVING / aggregate workloads.
-#[utoipa::path(
-    post,
-    path = "/aggregate",
-    tag = "query",
-    request_body = QueryRequest,
-    responses(
-        (status = 200, description = "Aggregation results", body = AggregationResponse),
-        (status = 400, description = "Query syntax error", body = crate::types::QueryErrorResponse),
-        (status = 422, description = "Aggregation validation/execution error", body = crate::types::VelesqlErrorResponse),
-        (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
-    )
-)]
-#[allow(clippy::unused_async)]
-pub async fn aggregate(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<QueryRequest>,
-) -> impl IntoResponse {
-    let start = std::time::Instant::now();
-
-    let parsed = match parse_and_validate(&req.query) {
-        Ok(q) => q,
-        Err(resp) => return resp,
-    };
-
-    if parsed.is_match_query() || !is_aggregation_query(&parsed.select) {
-        return velesql_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "VELESQL_AGGREGATION_ERROR",
-            "Only aggregation queries are accepted on /aggregate",
-            "Use /query for row/search/graph queries; use /aggregate for GROUP BY/aggregate workloads.",
-            Some(serde_json::json!({ "endpoint": "/aggregate" })),
-        );
-    }
-
-    let collection_name = resolve_aggregate_collection(&parsed, &req);
-    let collection_name = match collection_name {
-        Ok(name) => name,
-        Err(resp) => return resp,
-    };
-
-    execute_aggregation_query(&state, &collection_name, &parsed, &req.params, start)
-}
-
-/// Resolve the collection name for an aggregation query.
-#[allow(clippy::result_large_err)]
-fn resolve_aggregate_collection(
-    parsed: &Query,
-    req: &QueryRequest,
-) -> Result<String, axum::response::Response> {
-    if !parsed.select.from.is_empty() {
-        return Ok(parsed.select.from.clone());
-    }
-    req.collection
-        .as_ref()
-        .filter(|name| !name.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            velesql_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "VELESQL_MISSING_COLLECTION",
-                "Aggregation query requires a FROM collection or request-body `collection`",
-                "Add FROM <collection> to query or set `collection` in request JSON",
-                Some(serde_json::json!({
-                    "field": "collection",
-                    "endpoint": "/aggregate"
-                })),
-            )
-        })
 }
 
 /// Detect query type from parsed AST (EPIC-052 US-006).

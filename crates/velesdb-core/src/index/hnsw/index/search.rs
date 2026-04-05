@@ -8,7 +8,6 @@ use crate::index::hnsw::params::SearchQuality;
 use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 
 impl HnswIndex {
     /// Sets a soft latency target (microseconds) for two-stage reranking adaptation.
@@ -115,6 +114,80 @@ impl HnswIndex {
                 // Bitmap uses u32 keys. IDs in the bitmap must match.
                 // IDs > u32::MAX cannot be represented in the bitmap, so they
                 // are passed through unconditionally to the post-filter.
+                let in_bitmap = u32::try_from(id).is_ok_and(|id32| allowed_ids.contains(id32));
+                let exceeds_bitmap_range = u32::try_from(id).is_err();
+                if in_bitmap || exceeds_bitmap_range {
+                    let score = inner.transform_score(raw_dist);
+                    results.push(ScoredResult::new(id, score));
+                }
+            }
+        }
+        results
+    }
+
+    /// Quality-aware HNSW search with bitmap pre-filter.
+    ///
+    /// Adapts `ef_search` based on `SearchQuality`, then filters results
+    /// keeping only IDs present in the bitmap or exceeding `u32::MAX`.
+    ///
+    /// Over-fetches candidates (4× `k`) from the HNSW graph to compensate
+    /// for bitmap filtering. If the initial search yields fewer than `k`
+    /// bitmap-matching results, retries once with doubled `candidates_k`
+    /// (capped at 10 000) to explore deeper into the HNSW graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DimensionMismatch`] if query dimension is wrong.
+    pub fn search_with_quality_and_bitmap(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: SearchQuality,
+        allowed_ids: &roaring::RoaringBitmap,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
+
+        let ef_search = quality.ef_search_for_scale(k, self.len());
+        // Over-fetch to compensate for bitmap filtering
+        let candidates_k = k.saturating_mul(4).max(ef_search);
+
+        let mut results =
+            self.search_bitmap_filtered_inner(query, candidates_k, ef_search, allowed_ids);
+
+        // Adaptive retry: if too few results survived the bitmap filter,
+        // double the candidate pool and retry once to find more matches.
+        if results.len() < k && candidates_k < 10_000 {
+            let retry_k = (candidates_k.saturating_mul(2)).min(10_000);
+            let retry_results =
+                self.search_bitmap_filtered_inner(query, retry_k, ef_search, allowed_ids);
+            // Merge retry results, deduplicating by ID
+            let existing_ids: rustc_hash::FxHashSet<u64> = results.iter().map(|r| r.id).collect();
+            for r in retry_results {
+                if !existing_ids.contains(&r.id) {
+                    results.push(r);
+                }
+            }
+        }
+
+        self.metric.sort_scored_results(&mut results);
+        results.truncate(k);
+        Ok(results)
+    }
+
+    /// Inner bitmap-filtered HNSW search (shared by initial + retry paths).
+    fn search_bitmap_filtered_inner(
+        &self,
+        query: &[f32],
+        candidates_k: usize,
+        ef_search: usize,
+        allowed_ids: &roaring::RoaringBitmap,
+    ) -> Vec<ScoredResult> {
+        let inner = self.inner.read();
+        let neighbours = inner.search(query, candidates_k, ef_search);
+
+        let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
+        for &(node_id, raw_dist) in &neighbours {
+            if let Some(id) = self.mappings.get_id(node_id) {
                 let in_bitmap = u32::try_from(id).is_ok_and(|id32| allowed_ids.contains(id32));
                 let exceeds_bitmap_range = u32::try_from(id).is_err();
                 if in_bitmap || exceeds_bitmap_range {
@@ -244,29 +317,9 @@ impl HnswIndex {
     ) -> crate::error::Result<Vec<ScoredResult>> {
         self.validate_dimension(query)?;
 
-        // Perfect mode uses brute-force SIMD for guaranteed 100% recall
-        if matches!(quality, SearchQuality::Perfect) {
-            return self.search_brute_force(query, k);
-        }
-
-        // For very small collections (<=100 vectors), use brute-force to guarantee 100% recall
-        // HNSW graph may not be fully connected with so few nodes, causing missed results
-        // Only use brute-force if vector storage is enabled (not in fast-insert mode)
-        if self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty() {
-            return self.search_brute_force(query, k);
-        }
-
-        // Adaptive two-phase: start with min_ef, escalate if query is hard
-        if let SearchQuality::Adaptive { min_ef, max_ef } = quality {
-            return Ok(self.search_adaptive(query, k, min_ef.max(k), max_ef));
-        }
-
-        // AutoTune: compute ef range from collection statistics, then delegate
-        // to the same adaptive two-phase algorithm.
-        if matches!(quality, SearchQuality::AutoTune) {
-            let (min_ef, max_ef) =
-                crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k);
-            return Ok(self.search_adaptive(query, k, min_ef, max_ef));
+        // Delegate to specialised paths that don't need the full match cascade.
+        if let Some(result) = self.try_search_special_quality(query, k, &quality)? {
+            return Ok(result);
         }
 
         let ef_search = quality.ef_search_for_scale(k, self.len());
@@ -277,6 +330,41 @@ impl HnswIndex {
         }
 
         Ok(self.search_hnsw_only(query, k, ef_search))
+    }
+
+    /// Handles Perfect, small-collection brute-force, Adaptive, and AutoTune
+    /// quality modes. Returns `Ok(Some(results))` when handled, `Ok(None)` to
+    /// fall through to the standard HNSW path.
+    fn try_search_special_quality(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: &SearchQuality,
+    ) -> crate::error::Result<Option<Vec<ScoredResult>>> {
+        if matches!(quality, SearchQuality::Perfect) {
+            return self.search_brute_force(query, k).map(Some);
+        }
+
+        if self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty() {
+            return self.search_brute_force(query, k).map(Some);
+        }
+
+        if let SearchQuality::Adaptive { min_ef, max_ef } = quality {
+            return Ok(Some(self.search_adaptive(
+                query,
+                k,
+                (*min_ef).max(k),
+                *max_ef,
+            )));
+        }
+
+        if matches!(quality, SearchQuality::AutoTune) {
+            let (min_ef, max_ef) =
+                crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k);
+            return Ok(Some(self.search_adaptive(query, k, min_ef, max_ef)));
+        }
+
+        Ok(None)
     }
 
     /// Two-phase adaptive search that starts with a low ef and escalates if needed.
@@ -326,254 +414,6 @@ impl HnswIndex {
         }
 
         self.search_hnsw_only(query, k, escalated_ef)
-    }
-
-    /// Searches with SIMD-based re-ranking for improved precision.
-    ///
-    /// This method first retrieves `rerank_k` candidates using the HNSW index,
-    /// then re-ranks them using our SIMD-optimized distance functions for
-    /// exact distance computation, returning the top `k` results.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
-    /// match the index dimension.
-    pub fn search_with_rerank(
-        &self,
-        query: &[f32],
-        k: usize,
-        rerank_k: usize,
-    ) -> crate::error::Result<Vec<ScoredResult>> {
-        let ef_search = SearchQuality::Accurate.ef_search(rerank_k);
-        let adaptive_rerank_k = self
-            .should_two_stage_rerank(SearchQuality::Accurate, k, ef_search)
-            .unwrap_or(rerank_k.min(self.len().max(k)));
-        self.search_with_rerank_with_ef(query, k, adaptive_rerank_k, ef_search)
-    }
-
-    fn search_with_rerank_with_ef(
-        &self,
-        query: &[f32],
-        k: usize,
-        rerank_k: usize,
-        ef_search: usize,
-    ) -> crate::error::Result<Vec<ScoredResult>> {
-        self.validate_dimension(query)?;
-        let candidates = self.search_hnsw_only(query, rerank_k, ef_search);
-
-        Ok(self.rerank_sort_and_truncate(query, &candidates, k))
-    }
-
-    /// Searches with SIMD-based re-ranking using a custom quality for initial search.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
-    /// match the index dimension.
-    pub fn search_with_rerank_quality(
-        &self,
-        query: &[f32],
-        k: usize,
-        rerank_k: usize,
-        initial_quality: SearchQuality,
-    ) -> crate::error::Result<Vec<ScoredResult>> {
-        self.validate_dimension(query)?;
-
-        // Avoid recursion if initial_quality is Perfect
-        let actual_quality = if matches!(initial_quality, SearchQuality::Perfect) {
-            SearchQuality::Accurate
-        } else {
-            initial_quality
-        };
-        let candidates = self.search_with_quality(query, rerank_k, actual_quality)?;
-
-        Ok(self.rerank_sort_and_truncate(query, &candidates, k))
-    }
-
-    /// Reranks candidates with SIMD, sorts, truncates, and updates latency EMA.
-    ///
-    /// The batch path in `batch.rs` uses `rerank_sort_and_truncate_timed`
-    /// directly for aggregated EMA updates.
-    pub(super) fn rerank_sort_and_truncate(
-        &self,
-        query: &[f32],
-        candidates: &[ScoredResult],
-        k: usize,
-    ) -> Vec<ScoredResult> {
-        let (results, elapsed) = self.rerank_sort_and_truncate_timed(query, candidates, k);
-        if elapsed > 0 {
-            self.update_rerank_latency_ema(elapsed);
-        }
-        results
-    }
-
-    /// Reranks, sorts, and truncates without updating the EMA.
-    ///
-    /// Returns `(results, elapsed_us)` so the caller can aggregate latencies
-    /// from a parallel batch and update the EMA once (avoiding lost samples).
-    pub(super) fn rerank_sort_and_truncate_timed(
-        &self,
-        query: &[f32],
-        candidates: &[ScoredResult],
-        k: usize,
-    ) -> (Vec<ScoredResult>, u64) {
-        if candidates.is_empty() {
-            return (Vec::new(), 0);
-        }
-
-        let rerank_start = Instant::now();
-
-        let mut reranked = self.rerank_candidates(query, candidates);
-
-        self.metric.sort_scored_results(&mut reranked);
-        reranked.truncate(k);
-
-        let elapsed_micros = rerank_start.elapsed().as_micros();
-        let elapsed = u64::try_from(elapsed_micros).unwrap_or(u64::MAX);
-        (reranked, elapsed)
-    }
-
-    /// Re-ranks candidates using the best available compute path.
-    ///
-    /// Tries GPU dispatch first when the workload exceeds the GPU threshold
-    /// (rerank_k * dimension > 262,144 floats, ~1 MB) and a GPU is available.
-    /// Falls back to SIMD for small workloads, unsupported metrics, or GPU errors.
-    fn rerank_candidates(&self, query: &[f32], candidates: &[ScoredResult]) -> Vec<ScoredResult> {
-        #[cfg(feature = "gpu")]
-        {
-            use crate::gpu::GpuAccelerator;
-            if GpuAccelerator::should_rerank_gpu(candidates.len(), self.dimension) {
-                if let Some(results) = self.rerank_candidates_gpu(query, candidates) {
-                    return results;
-                }
-            }
-        }
-        self.rerank_candidates_simd(query, candidates)
-    }
-
-    /// Resolves candidate external IDs to internal indices.
-    ///
-    /// Shared by both SIMD and GPU reranking paths to eliminate duplication.
-    fn resolve_candidate_indices(&self, candidates: &[ScoredResult]) -> Vec<(u64, usize)> {
-        candidates
-            .iter()
-            .filter_map(|sr| {
-                let idx = self.mappings.get_idx(sr.id)?;
-                Some((sr.id, idx))
-            })
-            .collect()
-    }
-
-    /// Clamps a GPU-computed score to the mathematical range of the metric.
-    ///
-    /// GPU shaders use f32 with different reduction trees than CPU SIMD, so
-    /// floating-point rounding can push bounded metrics (Cosine, Jaccard)
-    /// slightly outside their theoretical range. Clamping guarantees
-    /// downstream assertions and comparisons are never violated.
-    ///
-    /// Only Cosine ([-1, 1]) and Jaccard ([0, 1]) are bounded.
-    /// DotProduct, Euclidean, and Hamming are unbounded.
-    #[cfg(feature = "gpu")]
-    #[inline]
-    pub(crate) fn clamp_score_for_metric(&self, score: f32) -> f32 {
-        match self.metric {
-            DistanceMetric::Cosine => score.clamp(-1.0, 1.0),
-            DistanceMetric::Jaccard => score.clamp(0.0, 1.0),
-            // DotProduct, Euclidean, Hamming: unbounded
-            _ => score,
-        }
-    }
-
-    /// Re-ranks candidates using GPU batch distance computation.
-    ///
-    /// Snapshots candidate vectors under a brief read lock, then releases
-    /// the lock before the GPU round-trip (buffer upload + compute + poll +
-    /// readback = 5-50 ms). This prevents writer starvation during GPU dispatch.
-    ///
-    /// Returns `None` if GPU is unavailable, the metric has no GPU shader,
-    /// or a GPU error occurs. The caller falls back to SIMD in that case.
-    #[cfg(feature = "gpu")]
-    pub(crate) fn rerank_candidates_gpu(
-        &self,
-        query: &[f32],
-        candidates: &[ScoredResult],
-    ) -> Option<Vec<ScoredResult>> {
-        use crate::gpu::GpuAccelerator;
-
-        let gpu = GpuAccelerator::global()?;
-
-        // Snapshot vectors under a brief read lock, then release before GPU dispatch
-        let (entries, flat_vectors) = {
-            let inner = self.inner.read();
-            inner.with_contiguous_vectors(|vectors| {
-                let entries = self.resolve_candidate_indices(candidates);
-                if entries.is_empty() {
-                    return None;
-                }
-                let indices: Vec<usize> = entries.iter().map(|&(_, idx)| idx).collect();
-                let flat = vectors.gather_flat(&indices);
-                // Early validation: gather_flat may skip invalidated indices,
-                // producing fewer elements. Detect before paying GPU round-trip.
-                let expected_len = indices.len() * self.dimension;
-                if flat.len() != expected_len {
-                    return None;
-                }
-                Some((entries, flat))
-            })
-        }?;
-
-        // Lock released -- GPU dispatch is lock-free
-        let scores = gpu
-            .batch_distance_for_metric(self.metric, &flat_vectors, query, self.dimension)?
-            .ok()?;
-
-        // Guard: GPU must return exactly one score per entry. If mismatched
-        // (e.g., shader error or buffer desync), fall back to SIMD.
-        if scores.len() != entries.len() {
-            return None;
-        }
-
-        let reranked = entries
-            .iter()
-            .zip(scores.iter())
-            .map(|(&(id, _), &score)| ScoredResult::new(id, self.clamp_score_for_metric(score)))
-            .collect();
-
-        Some(reranked)
-    }
-
-    /// Re-ranks candidates using SIMD-optimized exact distance computation.
-    ///
-    /// Reads vector slices directly from `ContiguousVectors` (64-byte aligned,
-    /// cache-friendly) instead of cloning via `ShardedVectors::get()`.
-    pub(crate) fn rerank_candidates_simd(
-        &self,
-        query: &[f32],
-        candidates: &[ScoredResult],
-    ) -> Vec<ScoredResult> {
-        let inner = self.inner.read();
-
-        inner.with_contiguous_vectors(|vectors| {
-            let candidate_indices = self.resolve_candidate_indices(candidates);
-
-            let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
-            let mut reranked: Vec<ScoredResult> = Vec::with_capacity(candidate_indices.len());
-
-            for (i, &(id, idx)) in candidate_indices.iter().enumerate() {
-                // Prefetch upcoming vectors from contiguous storage
-                if i + prefetch_distance < candidate_indices.len() {
-                    vectors.prefetch(candidate_indices[i + prefetch_distance].1);
-                }
-
-                // Zero-copy: get &[f32] slice directly from ContiguousVectors
-                if let Some(vec) = vectors.get(idx) {
-                    let exact_dist = self.compute_distance(query, vec);
-                    reranked.push(ScoredResult::new(id, exact_dist));
-                }
-            }
-
-            reranked
-        })
     }
 
     /// Sets the index to searching mode after bulk insertions.

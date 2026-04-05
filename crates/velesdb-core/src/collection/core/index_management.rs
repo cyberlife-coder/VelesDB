@@ -24,15 +24,72 @@ pub struct IndexInfo {
 impl Collection {
     /// Creates a secondary metadata index for a payload field.
     ///
+    /// When the index already exists, triggers a backfill to ensure all
+    /// existing payloads are indexed (handles the case where bulk insert
+    /// skipped per-point index updates).
+    ///
     /// # Errors
     ///
     /// Returns Ok(()) on success. Index creation is idempotent.
     pub fn create_index(&self, field_name: &str) -> Result<()> {
         let mut indexes = self.secondary_indexes.write();
+        let is_new = !indexes.contains_key(field_name);
         indexes
             .entry(field_name.to_string())
             .or_insert_with(|| SecondaryIndex::BTree(RwLock::new(BTreeMap::new())));
+
+        // Backfill: scan existing payloads to populate the index.
+        // Runs for both new indexes AND existing indexes (to catch points
+        // inserted via bulk paths that skipped per-point index updates).
+        drop(indexes); // Release write lock before reading payloads
+        self.backfill_secondary_index(field_name, is_new);
+
         Ok(())
+    }
+
+    /// Scans existing payloads and populates the secondary index for `field_name`.
+    ///
+    /// Runs for both new and existing indexes to catch points inserted via
+    /// bulk paths that skipped per-point index updates.
+    fn backfill_secondary_index(&self, field_name: &str, is_new: bool) {
+        use crate::storage::PayloadStorage;
+
+        let payload_storage = self.payload_storage.read();
+        let ids = PayloadStorage::ids(&*payload_storage);
+        let indexes = self.secondary_indexes.read();
+        let Some(index) = indexes.get(field_name) else {
+            return;
+        };
+        let SecondaryIndex::BTree(ref tree) = index;
+        let mut tree_guard = tree.write();
+        for id in ids {
+            Self::backfill_single_payload(&*payload_storage, id, field_name, &mut tree_guard);
+        }
+        if !is_new {
+            tracing::debug!(
+                field = field_name,
+                "create_index: backfilled existing index (bulk insert recovery)"
+            );
+        }
+    }
+
+    /// Indexes a single payload entry for the given field, if present.
+    fn backfill_single_payload(
+        payload_storage: &dyn crate::storage::PayloadStorage,
+        id: u64,
+        field_name: &str,
+        tree_guard: &mut std::collections::BTreeMap<JsonValue, Vec<u64>>,
+    ) {
+        if let Ok(Some(payload)) = payload_storage.retrieve(id) {
+            if let Some(val) = payload.get(field_name) {
+                if let Some(key) = JsonValue::from_json(val) {
+                    let ids_vec = tree_guard.entry(key).or_default();
+                    if !ids_vec.contains(&id) {
+                        ids_vec.push(id);
+                    }
+                }
+            }
+        }
     }
 
     /// Drops a secondary metadata index for a payload field.
@@ -62,10 +119,11 @@ impl Collection {
 
     /// Builds a pre-filter bitmap from a [`Filter`] using secondary indexes.
     ///
-    /// Supports `Eq`, `Gt`/`Gte`/`Lt`/`Lte` (range scan), `And` (intersection),
-    /// and `Or` (union, only when all children resolve). Returns `None` when the
-    /// condition cannot be resolved via indexes (e.g., `Not`, `Neq`, non-indexed
-    /// fields), signalling the caller to fall back to post-filter.
+    /// Supports `Eq`, `Neq` (universe subtraction), `Gt`/`Gte`/`Lt`/`Lte`
+    /// (range scan), `And` (intersection), and `Or` (union, only when all
+    /// children resolve). Returns `None` when the condition cannot be resolved
+    /// via indexes (e.g., `Not`, non-indexed fields), signalling the caller to
+    /// fall back to post-filter.
     #[must_use]
     pub(crate) fn build_prefilter_bitmap(
         &self,
@@ -78,12 +136,12 @@ impl Collection {
     ///
     /// Supported conditions:
     /// - `Eq`: exact-match lookup
+    /// - `Neq`: universe bitmap minus exact-match (all indexed IDs except matches)
     /// - `Gt`, `Gte`, `Lt`, `Lte`: range scan via `BTreeMap::range()`
     /// - `And`: intersection of child bitmaps
     /// - `Or`: union of child bitmaps (all children must resolve)
     ///
-    /// Returns `None` for `Not`, `Neq`, and unsupported conditions
-    /// (these require a universe bitmap that is not yet implemented).
+    /// Returns `None` for `Not` and unsupported conditions.
     fn bitmap_from_condition(
         indexes: &std::sync::Arc<
             parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
@@ -93,6 +151,16 @@ impl Collection {
         match cond {
             crate::filter::Condition::Eq { field, value } => {
                 Self::bitmap_for_eq_field(indexes, field, value)
+            }
+            crate::filter::Condition::Neq { field, value } => {
+                // NEQ = universe - eq_matches
+                // Build the universe from all keys in the index for this field,
+                // then subtract the matching IDs. If the value doesn't exist in
+                // the index, eq_bitmap defaults to empty — every indexed ID matches.
+                let universe = Self::bitmap_universe_for_field(indexes, field)?;
+                let eq_bitmap =
+                    Self::bitmap_for_eq_field(indexes, field, value).unwrap_or_default();
+                Some(universe - eq_bitmap)
             }
             crate::filter::Condition::Gt { field, value }
             | crate::filter::Condition::Gte { field, value }
@@ -106,10 +174,20 @@ impl Collection {
             crate::filter::Condition::Or { conditions } => {
                 Self::bitmap_from_or(indexes, conditions)
             }
-            // TODO #487: NOT and Neq need a universe bitmap to invert.
-            // Post-filter handles these correctly until then.
             _ => None,
         }
+    }
+
+    /// Builds a universe bitmap containing ALL IDs indexed for a given field.
+    fn bitmap_universe_for_field(
+        indexes: &std::sync::Arc<
+            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
+        >,
+        field: &str,
+    ) -> Option<roaring::RoaringBitmap> {
+        let guard = indexes.read();
+        let index = guard.get(field)?;
+        Some(index.all_ids_bitmap())
     }
 
     /// Looks up a single equality field in the secondary indexes.
@@ -241,6 +319,22 @@ impl Collection {
     pub fn list_indexes(&self) -> Vec<IndexInfo> {
         let mut indexes = Vec::new();
 
+        // Secondary indexes (metadata field indexes created via create_index)
+        let sec_indexes = self.secondary_indexes.read();
+        for (field, index) in sec_indexes.iter() {
+            let cardinality = match index {
+                crate::index::SecondaryIndex::BTree(tree) => tree.read().len(),
+            };
+            indexes.push(IndexInfo {
+                label: "secondary".to_string(),
+                property: field.clone(),
+                index_type: "hash".to_string(),
+                cardinality,
+                memory_bytes: 0,
+            });
+        }
+        drop(sec_indexes);
+
         // LOCK ORDER: property_index(7) read — then range_index(7) read.
         // Same level, reads-only; canonical order prevents deadlock.
         let prop_index = self.property_index.read();
@@ -251,7 +345,7 @@ impl Collection {
                 property,
                 index_type: "hash".to_string(),
                 cardinality,
-                memory_bytes: 0, // Approximation
+                memory_bytes: 0,
             });
         }
 
@@ -262,7 +356,7 @@ impl Collection {
                 label,
                 property,
                 index_type: "range".to_string(),
-                cardinality: 0, // Range indexes don't track cardinality the same way
+                cardinality: 0,
                 memory_bytes: 0,
             });
         }

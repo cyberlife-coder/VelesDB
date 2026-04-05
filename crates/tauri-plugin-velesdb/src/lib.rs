@@ -67,11 +67,16 @@ use tauri::{
 
 pub mod commands;
 pub mod commands_graph;
+pub mod commands_index;
+pub mod commands_memory;
+pub mod commands_query;
+pub mod commands_sparse;
 pub mod error;
 pub mod events;
 pub mod helpers;
 pub mod state;
 pub mod types;
+pub mod types_graph;
 
 pub use error::{CommandError, Error, Result};
 pub use state::VelesDbState;
@@ -271,6 +276,28 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
     init_with_path("./velesdb_data")
 }
 
+/// Generates a Tauri invoke handler that registers common commands
+/// unconditionally and persistence-only commands behind the
+/// `persistence` feature flag.
+///
+/// Each command appears in exactly one list, eliminating the duplicated
+/// `#[cfg(feature = "persistence")]` / `#[cfg(not(...))]` blocks.
+macro_rules! velesdb_invoke_handler {
+    (
+        common: [$($common:path),* $(,)?],
+        persistence_only: [$($persist:path),* $(,)?] $(,)?
+    ) => {{
+        #[cfg(feature = "persistence")]
+        {
+            tauri::generate_handler![$($common,)* $($persist,)*]
+        }
+        #[cfg(not(feature = "persistence"))]
+        {
+            tauri::generate_handler![$($common,)*]
+        }
+    }};
+}
+
 /// Initializes the `VelesDB` plugin with a custom data directory.
 ///
 /// # Arguments
@@ -289,76 +316,49 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
     let db_path = path.as_ref().to_path_buf();
 
-    #[cfg(feature = "persistence")]
-    let builder = Builder::new("velesdb").invoke_handler(tauri::generate_handler![
-        commands::create_collection,
-        commands::create_metadata_collection,
-        commands::delete_collection,
-        commands::list_collections,
-        commands::get_collection,
-        commands::upsert,
-        commands::upsert_metadata,
-        commands::get_points,
-        commands::delete_points,
-        commands::search,
-        commands::batch_search,
-        commands::text_search,
-        commands::hybrid_search,
-        commands::multi_query_search,
-        commands::query,
-        commands::is_empty,
-        commands::flush,
-        // Sparse vector commands
-        commands::sparse_search,
-        commands::hybrid_sparse_search,
-        commands::sparse_upsert,
-        // PQ training command
-        commands::train_pq,
-        // Streaming insert command (requires persistence)
-        commands::stream_insert,
-        // AgentMemory commands (EPIC-016 US-003)
-        commands::semantic_store,
-        commands::semantic_query,
-        // Knowledge Graph commands (EPIC-015 US-001)
-        commands_graph::add_edge,
-        commands_graph::get_edges,
-        commands_graph::traverse_graph,
-        commands_graph::get_node_degree,
-    ]);
-    #[cfg(not(feature = "persistence"))]
-    let builder = Builder::new("velesdb").invoke_handler(tauri::generate_handler![
-        commands::create_collection,
-        commands::create_metadata_collection,
-        commands::delete_collection,
-        commands::list_collections,
-        commands::get_collection,
-        commands::upsert,
-        commands::upsert_metadata,
-        commands::get_points,
-        commands::delete_points,
-        commands::search,
-        commands::batch_search,
-        commands::text_search,
-        commands::hybrid_search,
-        commands::multi_query_search,
-        commands::query,
-        commands::is_empty,
-        commands::flush,
-        // Sparse vector commands
-        commands::sparse_search,
-        commands::hybrid_sparse_search,
-        commands::sparse_upsert,
-        // PQ training command
-        commands::train_pq,
-        // AgentMemory commands (EPIC-016 US-003)
-        commands::semantic_store,
-        commands::semantic_query,
-        // Knowledge Graph commands (EPIC-015 US-001)
-        commands_graph::add_edge,
-        commands_graph::get_edges,
-        commands_graph::traverse_graph,
-        commands_graph::get_node_degree,
-    ]);
+    let builder = Builder::new("velesdb").invoke_handler(velesdb_invoke_handler!(
+        common: [
+            commands::create_collection,
+            commands::create_metadata_collection,
+            commands::delete_collection,
+            commands::list_collections,
+            commands::get_collection,
+            commands::upsert,
+            commands::upsert_metadata,
+            commands::get_points,
+            commands::delete_points,
+            commands::search,
+            commands::batch_search,
+            commands::text_search,
+            commands::hybrid_search,
+            commands::multi_query_search,
+            commands_query::query,
+            commands::is_empty,
+            commands::flush,
+            // Sparse vector commands
+            commands_sparse::sparse_search,
+            commands_sparse::hybrid_sparse_search,
+            commands_sparse::sparse_upsert,
+            // PQ training command
+            commands::train_pq,
+            // AgentMemory commands (EPIC-016 US-003)
+            commands_memory::semantic_store,
+            commands_memory::semantic_query,
+            // Knowledge Graph commands (EPIC-015 US-001)
+            commands_graph::add_edge,
+            commands_graph::get_edges,
+            commands_graph::traverse_graph,
+            commands_graph::get_node_degree,
+            commands_graph::traverse_graph_parallel,
+            // Secondary Index commands
+            commands_index::create_index,
+            commands_index::drop_index,
+            commands_index::list_indexes,
+        ],
+        persistence_only: [
+            commands::stream_insert,
+        ],
+    ));
     builder
         .setup(move |app, _api| {
             let state = VelesDbState::new(db_path.clone());

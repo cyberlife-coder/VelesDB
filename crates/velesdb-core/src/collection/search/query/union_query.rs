@@ -45,47 +45,23 @@ impl Collection {
 
         // 1. Execute similarity search if we have a similarity condition
         if let Some(sim_cond) = similarity_cond {
-            let similarity_conditions =
-                self.extract_all_similarity_conditions(&sim_cond, params)?;
-            if let Some((field, vec, op, threshold)) = similarity_conditions.first() {
-                // Multi-vector (P1-A): field may be "vector" or a named payload vector.
-                let overfetch_factor = 10;
-                let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
-                let candidates = self.search(vec, candidates_k)?;
-
-                let filter_k = limit.saturating_mul(2);
-                let filtered =
-                    self.filter_by_similarity(candidates, field, vec, *op, *threshold, filter_k);
-
-                for result in filtered {
-                    // Issue #122: Apply outer filter to similarity results
-                    if let Some(ref outer) = outer_filter {
-                        if !Self::matches_metadata_filter(&result.point, outer) {
-                            continue;
-                        }
-                    }
-                    results_map.insert(result.point.id, result);
-                }
-            }
+            self.collect_similarity_results(
+                &sim_cond,
+                params,
+                limit,
+                outer_filter.as_ref(),
+                &mut results_map,
+            )?;
         }
 
         // 2. Execute metadata scan if we have a metadata condition
         if let Some(meta_cond) = metadata_cond {
-            // Issue #122: Combine metadata condition with outer filter
-            let combined_cond = match outer_filter {
-                Some(ref outer) => {
-                    crate::velesql::Condition::And(Box::new(meta_cond), Box::new(outer.clone()))
-                }
-                None => meta_cond,
-            };
-            let filter = crate::filter::Filter::new(crate::filter::Condition::from(combined_cond));
-            let metadata_results = self.execute_scan_query(&filter, limit);
-
-            for result in metadata_results {
-                // Only add if not already found by similarity search
-                // If already present, keep the similarity score (higher priority)
-                results_map.entry(result.point.id).or_insert(result);
-            }
+            self.collect_metadata_results(
+                meta_cond,
+                outer_filter.as_ref(),
+                limit,
+                &mut results_map,
+            );
         }
 
         // 3. Collect and return results
@@ -100,6 +76,63 @@ impl Collection {
         results.truncate(limit);
 
         Ok(results)
+    }
+
+    /// Collects similarity search results into the results map, applying
+    /// optional outer filter.
+    fn collect_similarity_results(
+        &self,
+        sim_cond: &crate::velesql::Condition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        limit: usize,
+        outer_filter: Option<&crate::velesql::Condition>,
+        results_map: &mut std::collections::HashMap<u64, SearchResult>,
+    ) -> Result<()> {
+        let similarity_conditions = self.extract_all_similarity_conditions(sim_cond, params)?;
+        if let Some((field, vec, op, threshold)) = similarity_conditions.first() {
+            let overfetch_factor = 10;
+            let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
+            let candidates = self.search(vec, candidates_k)?;
+
+            let filter_k = limit.saturating_mul(2);
+            let filtered =
+                self.filter_by_similarity(candidates, field, vec, *op, *threshold, filter_k);
+
+            for result in filtered {
+                if let Some(outer) = outer_filter {
+                    if !Self::matches_metadata_filter(&result.point, outer) {
+                        continue;
+                    }
+                }
+                results_map.insert(result.point.id, result);
+            }
+        }
+        Ok(())
+    }
+
+    /// Collects metadata scan results into the results map, combining with
+    /// optional outer filter. Existing entries (from similarity) are preserved.
+    fn collect_metadata_results(
+        &self,
+        meta_cond: crate::velesql::Condition,
+        outer_filter: Option<&crate::velesql::Condition>,
+        limit: usize,
+        results_map: &mut std::collections::HashMap<u64, SearchResult>,
+    ) {
+        let combined_cond = match outer_filter {
+            Some(outer) => {
+                crate::velesql::Condition::And(Box::new(meta_cond), Box::new(outer.clone()))
+            }
+            None => meta_cond,
+        };
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(combined_cond));
+        let metadata_results = self.execute_scan_query(&filter, limit);
+
+        for result in metadata_results {
+            // Only add if not already found by similarity search
+            // If already present, keep the similarity score (higher priority)
+            results_map.entry(result.point.id).or_insert(result);
+        }
     }
 
     /// Check if a point matches a metadata filter condition.

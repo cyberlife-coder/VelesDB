@@ -2,6 +2,8 @@
 //!
 //! All graph operations are routed through `AppState.db.get_graph_collection()`.
 //! No separate GraphService state — graph data persists via GraphCollection/GraphEngine.
+//!
+//! Extended handlers (parity endpoints) live in [`super::handlers_extended`].
 
 use std::sync::Arc;
 
@@ -27,19 +29,18 @@ use super::types::{
 /// Auto-creates a schemaless graph collection on first use if no collection exists yet,
 /// preserving backward compatibility with workflows that drive graph ops without
 /// an explicit `create_graph_collection` call.
-#[allow(deprecated)]
-fn get_graph_collection_or_404(
+pub(super) fn get_graph_collection_or_404(
     state: &AppState,
     name: &str,
 ) -> Result<velesdb_core::GraphCollection, (StatusCode, Json<ErrorResponse>)> {
-    // Fast path: already registered as a graph collection.
     if let Some(c) = state.db.get_graph_collection(name) {
         return Ok(c);
     }
 
-    // Check if a collection with this name exists but with a different type.
-    // Attempting to create over it would return CollectionExists — surface as 409.
-    if state.db.get_collection(name).is_some() {
+    // Check if a non-graph collection exists with this name (type mismatch → 409).
+    if state.db.get_vector_collection(name).is_some()
+        || state.db.get_metadata_collection(name).is_some()
+    {
         return Err((
             StatusCode::CONFLICT,
             Json(ErrorResponse {
@@ -53,7 +54,6 @@ fn get_graph_collection_or_404(
         ));
     }
 
-    // No collection at all — auto-create a schemaless graph collection.
     use velesdb_core::GraphSchema;
     state
         .db
@@ -83,10 +83,7 @@ fn get_graph_collection_or_404(
 #[utoipa::path(
     get,
     path = "/collections/{name}/graph/edges",
-    params(
-        ("name" = String, Path, description = "Collection name"),
-        EdgeQueryParams
-    ),
+    params(("name" = String, Path, description = "Collection name"), EdgeQueryParams),
     responses(
         (status = 200, description = "Edges retrieved successfully", body = EdgesResponse),
         (status = 400, description = "Missing required 'label' query parameter", body = ErrorResponse),
@@ -229,7 +226,6 @@ pub async fn traverse_graph(
         }
     };
 
-    // Convert TraversalResult -> TraversalResultItem
     let results: Vec<super::types::TraversalResultItem> = raw_results
         .into_iter()
         .map(|r| super::types::TraversalResultItem {

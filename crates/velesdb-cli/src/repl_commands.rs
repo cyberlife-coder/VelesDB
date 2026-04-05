@@ -61,6 +61,7 @@ pub fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Com
         ".indexes" => repl_query_cmds::cmd_indexes(db, &parts),
         ".delete" => repl_query_cmds::cmd_delete(db, &parts),
         ".flush" => repl_query_cmds::cmd_flush(db, &parts),
+        ".upsert" => repl_data_cmds::cmd_upsert(db, &parts),
         ".create-index" => repl_query_cmds::cmd_create_index(db, &parts),
         ".drop-index" => repl_query_cmds::cmd_drop_index(db, &parts),
         // Advanced search commands

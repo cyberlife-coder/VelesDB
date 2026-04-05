@@ -1,8 +1,7 @@
 #[cfg(feature = "persistence")]
-#[allow(deprecated)] // Uses legacy Collection internally.
-use super::{Collection, ColumnStore, Database, Error, Result};
+use super::{ColumnStore, Database, Error, Result};
 
-#[allow(deprecated)] // Uses legacy Collection internally.
+#[allow(deprecated)] // build_update_filter and build_join_column_store use deprecated Collection type.
 impl Database {
     pub(super) fn resolve_dml_value(
         value: &crate::velesql::Value,
@@ -119,7 +118,7 @@ impl Database {
         filter.matches(&serde_json::Value::Object(obj))
     }
 
-    pub(super) fn build_join_column_store(collection: &Collection) -> Result<ColumnStore> {
+    pub(super) fn build_join_column_store(collection: &crate::Collection) -> Result<ColumnStore> {
         let ids = collection.all_ids();
         let points: Vec<_> = collection.get(&ids).into_iter().flatten().collect();
 

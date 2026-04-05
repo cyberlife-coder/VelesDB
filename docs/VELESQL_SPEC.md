@@ -1189,7 +1189,28 @@ A node is enclosed in parentheses with optional alias, labels, and properties:
 (alias:Label {prop: value})      -- Node with property filter
 (:Label)                         -- Anonymous node with label
 ()                               -- Anonymous node (any)
+(alias:Label@collection)         -- Node resolved from a specific collection (cross-collection)
 ```
+
+#### Cross-Collection Annotation (`@collection`)
+
+The `@collection` suffix on a node pattern specifies which collection the node's data
+should be resolved from. This enables cross-collection MATCH queries where the graph
+traversal runs on one collection (the primary/edge collection) and node payloads are
+enriched from other collections.
+
+```sql
+-- Products in 'catalog' graph, enriched with pricing from 'inventory' collection
+MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@inventory)
+RETURN p.name, w.price, w.stock
+LIMIT 20
+```
+
+When using `@collection`:
+- The graph traversal (edges) runs on the primary collection specified via `_collection` param or `FROM` clause
+- Node payloads are looked up from the annotated collection after traversal
+- Enriched fields are prefixed with the node alias (e.g., `w.price`, `w.stock`)
+- If the annotated collection doesn't exist, the enrichment is silently skipped
 
 #### Relationship Patterns
 

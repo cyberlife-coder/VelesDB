@@ -8,7 +8,6 @@
 //! The graph schema and embedding dimension are persisted in `config.json`.
 //! There are no separate engine fields — no dual-storage risk.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::collection::graph::{GraphEdge, GraphSchema, TraversalConfig, TraversalResult};
@@ -148,6 +147,25 @@ impl GraphCollection {
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
         self.inner.add_edge(edge)
+    }
+
+    /// Adds multiple edges in batch (much faster than calling add_edge in a loop).
+    ///
+    /// Acquires locks once for the entire batch and rebuilds the CSR snapshot
+    /// once at the end. Duplicate edge IDs are silently skipped.
+    ///
+    /// # Returns
+    ///
+    /// Number of edges successfully added.
+    #[must_use]
+    pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> usize {
+        let count = self.inner.edge_store.add_edges_batch(edges);
+        if count > 0 {
+            self.inner
+                .write_generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        count
     }
 
     /// Returns edges, optionally filtered by label.
@@ -341,70 +359,6 @@ impl GraphCollection {
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         self.search_by_embedding(query, k)
     }
-
-    // -------------------------------------------------------------------------
-    // VelesQL
-    // -------------------------------------------------------------------------
-
-    /// Executes a parsed `VelesQL` query.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query is invalid or execution fails.
-    pub fn execute_query(
-        &self,
-        query: &crate::velesql::Query,
-        params: &HashMap<String, serde_json::Value>,
-    ) -> Result<Vec<SearchResult>> {
-        self.inner.execute_query(query, params)
-    }
-
-    /// Executes a raw VelesQL string, parsing it before execution.
-    ///
-    /// # Errors
-    ///
-    /// - Returns an error if the SQL string cannot be parsed.
-    /// - Returns an error if query execution fails.
-    pub fn execute_query_str(
-        &self,
-        sql: &str,
-        params: &HashMap<String, serde_json::Value>,
-    ) -> Result<Vec<SearchResult>> {
-        self.inner.execute_query_str(sql, params)
-    }
-
-    /// Executes a MATCH graph pattern query.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query cannot be executed.
-    pub fn execute_match(
-        &self,
-        match_clause: &crate::velesql::MatchClause,
-        params: &HashMap<String, serde_json::Value>,
-    ) -> Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
-        self.inner.execute_match(match_clause, params)
-    }
-
-    /// Executes a MATCH query with vector similarity scoring.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error on dimension mismatch or execution failure.
-    pub fn execute_match_with_similarity(
-        &self,
-        match_clause: &crate::velesql::MatchClause,
-        query_vector: &[f32],
-        similarity_threshold: f32,
-        params: &HashMap<String, serde_json::Value>,
-    ) -> Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
-        self.inner.execute_match_with_similarity(
-            match_clause,
-            query_vector,
-            similarity_threshold,
-            params,
-        )
-    }
 }
 
 #[cfg(test)]
@@ -412,6 +366,7 @@ mod tests {
     use super::*;
     use crate::collection::graph::GraphSchema;
     use crate::distance::DistanceMetric;
+    use std::collections::HashMap;
     use tempfile::tempdir;
 
     #[test]

@@ -90,6 +90,14 @@ impl Collection {
 
     /// Deletes vector points from all stores (vector, payload, index, caches, sparse, delta).
     fn delete_vector_points(&self, ids: &[u64]) -> Result<()> {
+        self.delete_vector_core_stores(ids)?;
+        self.delete_from_sparse_indexes(ids)?;
+        self.delete_from_deferred_stores(ids);
+        Ok(())
+    }
+
+    /// Removes points from vector/payload storage, HNSW index, caches, and label index.
+    fn delete_vector_core_stores(&self, ids: &[u64]) -> Result<()> {
         // LOCK ORDER: vector_storage(2) → payload_storage(3) → caches(4) → label_index(7).
         let mut vector_storage = self.vector_storage.write();
         let mut payload_storage = self.payload_storage.write();
@@ -121,9 +129,12 @@ impl Collection {
         drop(binary_cache);
         drop(pq_cache);
         self.config.write().point_count = point_count;
+        Ok(())
+    }
 
-        self.delete_from_sparse_indexes(ids)?;
-
+    /// Removes IDs from delta buffer and deferred indexer (persistence feature).
+    #[allow(unused_variables)] // `ids` unused when persistence feature is off.
+    fn delete_from_deferred_stores(&self, ids: &[u64]) {
         // Lock order: delta_buffer(10) acquired after sparse_indexes(9) released.
         #[cfg(feature = "persistence")]
         for &id in ids {
@@ -137,8 +148,6 @@ impl Collection {
                 di.remove(id);
             }
         }
-
-        Ok(())
     }
 
     /// Deletes IDs from sparse indexes with WAL-before-apply.

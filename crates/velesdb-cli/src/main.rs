@@ -1,6 +1,4 @@
-// CLI - pedantic/nursery lints relaxed
-#![allow(clippy::pedantic)]
-#![allow(clippy::nursery)]
+// CLI - pedantic lints reactivated per-module; nursery globally relaxed
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::cast_precision_loss)]
@@ -13,29 +11,51 @@
 //!   `velesdb query ./my_database "SELECT * FROM docs LIMIT 10"`
 //!   `velesdb import ./data.jsonl --collection docs`
 
-mod cli_types;
+mod cli_types; // pedantic-clean ✓
+#[allow(clippy::pedantic)]
 mod collection_helpers;
+#[allow(clippy::pedantic)]
 mod commands;
+#[allow(clippy::pedantic)]
 mod graph;
+#[allow(clippy::pedantic)]
 mod graph_display;
+#[allow(clippy::pedantic)]
+mod graph_handlers;
+#[allow(clippy::pedantic)]
 mod handlers;
+#[allow(clippy::pedantic)]
 mod helpers;
+#[allow(clippy::pedantic)]
 mod import;
+#[allow(clippy::pedantic)]
 mod license;
+#[allow(clippy::pedantic)]
 mod repl;
+#[allow(clippy::pedantic)]
 mod repl_collection_cmds;
+#[allow(clippy::pedantic)]
 mod repl_commands;
+#[allow(clippy::pedantic)]
 mod repl_config_cmds;
+#[allow(clippy::pedantic)]
 mod repl_data_cmds;
+#[allow(clippy::pedantic)]
+mod repl_execute;
+#[allow(clippy::pedantic)]
 mod repl_graph_cmds;
+#[allow(clippy::pedantic)]
 mod repl_output;
+#[allow(clippy::pedantic)]
 mod repl_query_cmds;
+#[allow(clippy::pedantic)]
 mod repl_search_cmds;
+#[allow(clippy::pedantic)]
 mod session;
 
 use clap::Parser;
 
-use commands::Commands;
+use commands::{CollectionCommands, Commands, DataCommands, QueryCommands};
 
 #[derive(Parser)]
 #[command(name = "velesdb")]
@@ -44,24 +64,14 @@ use commands::Commands;
     version,
     about = "VelesDB CLI - High-performance vector database"
 )]
-#[command(propagate_version = true)]
+#[command(propagate_version = true, disable_help_subcommand = false)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
 
 fn main() -> anyhow::Result<()> {
-    // Clap's derive-macro help generation for our 22-variant Commands enum
-    // exceeds the default ~2 MB stack in unoptimized (debug/test) builds.
-    // Spawn the real entry point on an 8 MB stack to accommodate this.
-    const STACK_SIZE: usize = 8 * 1024 * 1024;
-    let handler = std::thread::Builder::new()
-        .stack_size(STACK_SIZE)
-        .spawn(cli_main)?;
-    match handler.join() {
-        Ok(result) => result,
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
+    cli_main()
 }
 
 fn cli_main() -> anyhow::Result<()> {
@@ -81,27 +91,68 @@ fn cli_main() -> anyhow::Result<()> {
 /// Dispatches a parsed CLI command to its handler.
 fn dispatch(command: Commands) -> anyhow::Result<()> {
     match command {
+        // Standalone commands
         Commands::Repl { path } => repl::run(path),
-        Commands::Query {
-            path,
-            query,
-            format,
-        } => dispatch_query(&path, &query, &format),
         Commands::Info { path } => handlers::handle_info(&path),
-        Commands::List { path, format } => handlers::handle_list(&path, &format),
-        Commands::Show {
+        Commands::Completions { shell } => {
+            handlers::handle_completions::<Cli>(shell);
+            Ok(())
+        }
+        Commands::Simd { action } => {
+            handlers::handle_simd(action);
+            Ok(())
+        }
+        Commands::License { action } => handlers::handle_license(action),
+
+        // Grouped sub-commands
+        Commands::Collection { action } => dispatch_collection(action),
+        Commands::Data { action } => dispatch_data(action),
+        Commands::QueryCmd { action } => dispatch_query_cmd(action),
+        Commands::Graph { action } => graph::handle(action),
+        Commands::Index { action } => handlers::handle_index(action),
+    }
+}
+
+/// Dispatches collection sub-commands.
+fn dispatch_collection(action: CollectionCommands) -> anyhow::Result<()> {
+    match action {
+        CollectionCommands::CreateVector {
+            path,
+            name,
+            dimension,
+            metric,
+            storage,
+        } => handlers::handle_create_vector_collection(&path, &name, dimension, metric, storage),
+        CollectionCommands::CreateGraph {
+            path,
+            name,
+            schemaless,
+        } => handlers::handle_create_graph_collection(&path, &name, schemaless),
+        CollectionCommands::CreateMetadata { path, name } => {
+            handlers::handle_create_metadata_collection(&path, &name)
+        }
+        CollectionCommands::Delete { path, name, force } => {
+            handlers::handle_delete_collection(&path, &name, force)
+        }
+        CollectionCommands::List { path, format } => handlers::handle_list(&path, &format),
+        CollectionCommands::Show {
             path,
             collection,
             samples,
             format,
         } => handlers::handle_show(&path, &collection, samples, &format),
-        Commands::Export {
+        CollectionCommands::Analyze {
             path,
             collection,
-            output,
-            include_vectors,
-        } => handlers::handle_export(&path, &collection, output, include_vectors),
-        Commands::Import {
+            format,
+        } => handlers::handle_analyze(&path, &collection, &format),
+    }
+}
+
+/// Dispatches data sub-commands.
+fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
+    match action {
+        DataCommands::Import {
             file,
             database,
             collection,
@@ -124,8 +175,42 @@ fn dispatch(command: Commands) -> anyhow::Result<()> {
             batch_size,
             progress,
         ),
-        Commands::License { action } => handlers::handle_license(action),
-        Commands::MultiSearch {
+        DataCommands::Export {
+            path,
+            collection,
+            output,
+            include_vectors,
+        } => handlers::handle_export(&path, &collection, output, include_vectors),
+        DataCommands::Upsert {
+            path,
+            collection,
+            id,
+            vector,
+            payload,
+        } => handlers::handle_upsert(&path, &collection, id, vector, payload),
+        DataCommands::Get {
+            path,
+            collection,
+            id,
+            format,
+        } => handlers::handle_get(&path, &collection, id, &format),
+        DataCommands::DeletePoints {
+            path,
+            collection,
+            ids,
+        } => handlers::handle_delete_points(&path, &collection, &ids),
+    }
+}
+
+/// Dispatches query sub-commands.
+fn dispatch_query_cmd(action: QueryCommands) -> anyhow::Result<()> {
+    match action {
+        QueryCommands::Execute {
+            path,
+            query,
+            format,
+        } => dispatch_query(&path, &query, &format),
+        QueryCommands::Search {
             path,
             collection,
             vectors,
@@ -142,62 +227,11 @@ fn dispatch(command: Commands) -> anyhow::Result<()> {
             rrf_k,
             &format,
         ),
-        Commands::CreateMetadataCollection { path, name } => {
-            handlers::handle_create_metadata_collection(&path, &name)
-        }
-        Commands::Get {
-            path,
-            collection,
-            id,
-            format,
-        } => handlers::handle_get(&path, &collection, id, &format),
-        Commands::Graph { action } => graph::handle(action),
-        Commands::Completions { shell } => {
-            handlers::handle_completions::<Cli>(shell);
-            Ok(())
-        }
-        Commands::Simd { action } => {
-            handlers::handle_simd(action);
-            Ok(())
-        }
-        Commands::CreateVectorCollection {
-            path,
-            name,
-            dimension,
-            metric,
-            storage,
-        } => handlers::handle_create_vector_collection(&path, &name, dimension, metric, storage),
-        Commands::CreateGraphCollection {
-            path,
-            name,
-            schemaless,
-        } => handlers::handle_create_graph_collection(&path, &name, schemaless),
-        Commands::DeleteCollection { path, name, force } => {
-            handlers::handle_delete_collection(&path, &name, force)
-        }
-        Commands::Explain {
+        QueryCommands::Explain {
             path,
             query,
             format,
         } => handlers::handle_explain(&path, &query, &format),
-        Commands::Analyze {
-            path,
-            collection,
-            format,
-        } => handlers::handle_analyze(&path, &collection, &format),
-        Commands::DeletePoints {
-            path,
-            collection,
-            ids,
-        } => handlers::handle_delete_points(&path, &collection, &ids),
-        Commands::Upsert {
-            path,
-            collection,
-            id,
-            vector,
-            payload,
-        } => handlers::handle_upsert(&path, &collection, id, vector, payload),
-        Commands::Index { action } => handlers::handle_index(action),
     }
 }
 
@@ -218,6 +252,18 @@ mod tests {
     use super::*;
     use cli_types::{MetricArg, StorageModeArg};
     use velesdb_core::{DistanceMetric, StorageMode};
+
+    #[test]
+    fn test_commands_enum_size_below_threshold() {
+        let size = std::mem::size_of::<Commands>();
+        eprintln!("Commands enum size: {} bytes", size);
+        // Sub-enum grouping should keep the enum well under 1 KB.
+        assert!(
+            size < 1024,
+            "Commands enum is {} bytes, expected < 1024",
+            size
+        );
+    }
 
     // =========================================================================
     // Tests for MetricArg conversions

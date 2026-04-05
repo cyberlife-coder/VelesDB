@@ -178,6 +178,24 @@ results = vectorstore.similarity_search_with_filter(
 )
 ```
 
+### Cross-Collection MATCH
+
+Use the `query()` method with the `_collection` parameter to run MATCH queries
+that enrich results with data from other collections. Nodes annotated with
+`@collection` in the MATCH pattern have their payloads looked up from the named
+collection after traversal.
+
+```python
+# Enrich Product nodes with Inventory data from the 'inventory' collection
+results = vectorstore.query(
+    "MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) "
+    "RETURN p.name, inv.price, inv.stock LIMIT 20",
+    params={"_collection": "catalog_graph"}
+)
+for row in results:
+    print(row["p.name"], row["inv.price"])
+```
+
 ## Features
 
 - **High Performance**: VelesDB's Rust backend delivers sub-millisecond latencies

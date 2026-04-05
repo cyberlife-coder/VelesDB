@@ -11,7 +11,7 @@
       "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
-    "version": "1.11.0"
+    "version": "1.12.0"
   },
   "servers": [
     {
@@ -549,6 +549,146 @@
         }
       }
     },
+    "/collections/{name}/graph/edges/count": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Get the total number of edges in the graph.",
+        "operationId": "get_edge_count",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Edge count retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeCountResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/graph/edges/{edge_id}": {
+      "delete": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Remove an edge by ID.",
+        "operationId": "remove_edge",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "edge_id",
+            "in": "path",
+            "description": "Edge ID to remove",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Edge removed successfully"
+          },
+          "404": {
+            "description": "Edge or collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/graph/nodes": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "List all node IDs in the graph.",
+        "operationId": "list_nodes",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Node list retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeListResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{name}/graph/nodes/{node_id}/degree": {
       "get": {
         "tags": [
@@ -585,6 +725,280 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DegreeResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/graph/nodes/{node_id}/edges": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Get edges for a specific node with direction filtering.",
+        "operationId": "get_node_edges",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Filter by direction: \"in\", \"out\", or \"both\".",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "out"
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "Filter edges by label.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "example": "KNOWS"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Node edges retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/graph/nodes/{node_id}/payload": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Get the payload of a graph node.",
+        "operationId": "get_node_payload",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payload retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodePayloadResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Upsert a payload on a graph node.",
+        "operationId": "upsert_node_payload",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertNodePayloadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Payload stored successfully"
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/graph/search": {
+      "post": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Search graph nodes by embedding similarity.",
+        "operationId": "graph_search",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Graph search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphSearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -672,6 +1086,67 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/graph/traverse/parallel": {
+      "post": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Parallel multi-source BFS traversal.",
+        "operationId": "traverse_parallel",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParallelTraverseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Parallel traversal completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraverseResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -2383,6 +2858,20 @@
           }
         }
       },
+      "EdgeCountResponse": {
+        "type": "object",
+        "description": "Response for edge count query.",
+        "required": [
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "Total number of edges in the graph.",
+            "minimum": 0
+          }
+        }
+      },
       "EdgeResponse": {
         "type": "object",
         "description": "A single edge in the response.",
@@ -2702,6 +3191,68 @@
             "type": "string",
             "description": "Fusion strategy: \"rrf\" or \"rsf\".",
             "example": "rrf"
+          }
+        }
+      },
+      "GraphSearchRequest": {
+        "type": "object",
+        "description": "Request for graph embedding search.",
+        "required": [
+          "vector"
+        ],
+        "properties": {
+          "top_k": {
+            "type": "integer",
+            "description": "Number of results to return.",
+            "minimum": 0
+          },
+          "vector": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "Query vector for similarity search."
+          }
+        }
+      },
+      "GraphSearchResponse": {
+        "type": "object",
+        "description": "Response for graph embedding search.",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphSearchResultItem"
+            },
+            "description": "Search results with node ID and similarity score."
+          }
+        }
+      },
+      "GraphSearchResultItem": {
+        "type": "object",
+        "description": "A single graph search result.",
+        "required": [
+          "id",
+          "score"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Node ID.",
+            "minimum": 0
+          },
+          "payload": {
+            "description": "Node payload (if any)."
+          },
+          "score": {
+            "type": "number",
+            "format": "float",
+            "description": "Similarity score."
           }
         }
       },
@@ -3204,6 +3755,84 @@
               }
             },
             "description": "List of query vectors."
+          }
+        }
+      },
+      "NodeListResponse": {
+        "type": "object",
+        "description": "Response containing all node IDs in the graph.",
+        "required": [
+          "node_ids",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "Total count of nodes.",
+            "minimum": 0
+          },
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "List of node IDs."
+          }
+        }
+      },
+      "NodePayloadResponse": {
+        "type": "object",
+        "description": "Response for a node payload retrieval.",
+        "required": [
+          "node_id"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Node ID.",
+            "minimum": 0
+          },
+          "payload": {
+            "description": "Stored payload (null if none)."
+          }
+        }
+      },
+      "ParallelTraverseRequest": {
+        "type": "object",
+        "description": "Request for parallel multi-source BFS traversal.",
+        "required": [
+          "sources"
+        ],
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results per source.",
+            "minimum": 0
+          },
+          "max_depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum traversal depth.",
+            "minimum": 0
+          },
+          "rel_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Filter by relationship types (empty = all types)."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Source node IDs to start traversal from."
           }
         }
       },
@@ -3833,6 +4462,18 @@
           "stats": {
             "$ref": "#/components/schemas/TraversalStats",
             "description": "Traversal statistics."
+          }
+        }
+      },
+      "UpsertNodePayloadRequest": {
+        "type": "object",
+        "description": "Request to upsert a node payload.",
+        "required": [
+          "payload"
+        ],
+        "properties": {
+          "payload": {
+            "description": "JSON payload to store on the node."
           }
         }
       },

@@ -6,6 +6,7 @@ use crate::collection::graph::{
 use crate::collection::stats::CollectionStats;
 #[cfg(feature = "persistence")]
 use crate::collection::streaming::delta::DeltaBuffer;
+use crate::collection::streaming::{AsyncIndexBuilder, AsyncIndexBuilderConfig};
 #[cfg(feature = "persistence")]
 use crate::collection::streaming::{BackpressureError, DeferredIndexer, StreamIngester};
 use crate::distance::DistanceMetric;
@@ -188,6 +189,17 @@ pub struct CollectionConfig {
     #[cfg(feature = "persistence")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deferred_indexing: Option<crate::collection::streaming::DeferredIndexerConfig>,
+
+    /// Async index builder configuration (Issue #488 — Bulk Insert V2).
+    ///
+    /// When `Some`, enables the `AsyncIndexBuilder` for deferred HNSW
+    /// construction during bulk insert. Vectors are buffered and indexed
+    /// asynchronously via `HnswSegmentBuilder`.
+    ///
+    /// Backward compatible: old `config.json` files without this field
+    /// deserialize to `None` (disabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_index_builder: Option<AsyncIndexBuilderConfig>,
 }
 
 /// Returns `Some(4)` as the default PQ rescore oversampling factor.
@@ -212,7 +224,7 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 //   8. (reserved — edge_store now uses internal sharded locking)
 //   9. sparse_indexes
 //  10. delta_buffer
-//  11. deferred_indexer (internal locks)
+//  11. deferred_indexer / async_index_builder (internal locks)
 
 /// A collection of vectors with associated metadata.
 #[deprecated(
@@ -334,6 +346,15 @@ pub struct Collection {
     /// Lock order position: **11** (after `delta_buffer` at 10).
     #[cfg(feature = "persistence")]
     pub(crate) deferred_indexer: Option<Arc<DeferredIndexer>>,
+
+    /// Async index builder for bulk insert V2 (Issue #488).
+    ///
+    /// `None` when not configured. When `Some`, provides deferred HNSW
+    /// construction via `HnswSegmentBuilder` for high-throughput bulk import.
+    ///
+    /// Lock order position: **11** (same tier as `deferred_indexer`).
+    #[allow(dead_code)] // Read by future upsert_bulk_v2 path
+    pub(crate) async_index_builder: Option<Arc<AsyncIndexBuilder>>,
 }
 
 impl Collection {
@@ -445,6 +466,7 @@ mod rescore_config_tests {
             hnsw_params: None,
             #[cfg(feature = "persistence")]
             deferred_indexing: None,
+            async_index_builder: None,
         }
     }
 

@@ -179,3 +179,19 @@ pub struct MatchCondition {
     /// Search query.
     pub query: String,
 }
+
+impl Condition {
+    /// Returns `true` if this condition (or any nested sub-condition) contains
+    /// a vector search (`NEAR`, `NEAR_FUSED`, or `SPARSE_NEAR`).
+    #[must_use]
+    pub fn has_vector_search(&self) -> bool {
+        match self {
+            Self::VectorSearch(_) | Self::VectorFusedSearch(_) | Self::SparseVectorSearch(_) => {
+                true
+            }
+            Self::And(l, r) | Self::Or(l, r) => l.has_vector_search() || r.has_vector_search(),
+            Self::Group(inner) | Self::Not(inner) => inner.has_vector_search(),
+            _ => false,
+        }
+    }
+}

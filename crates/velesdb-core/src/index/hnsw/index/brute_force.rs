@@ -10,6 +10,99 @@ use crate::index::hnsw::params::SearchQuality;
 use crate::scored_result::ScoredResult;
 
 impl HnswIndex {
+    /// Brute-force scan restricted to vectors in the bitmap.
+    ///
+    /// Iterates over bitmap IDs, resolves each to an internal index via
+    /// `mappings`, retrieves the vector from `ContiguousVectors`, computes
+    /// the exact SIMD distance, and returns the top-k results sorted by
+    /// the index metric.
+    ///
+    /// IDs exceeding `u32::MAX` are not representable in `RoaringBitmap`
+    /// and are unconditionally included (consistent with the HNSW+bitmap
+    /// path in `search_bitmap_filtered_inner`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DimensionMismatch`] if query dimension is wrong.
+    pub fn full_scan_with_bitmap(
+        &self,
+        query: &[f32],
+        k: usize,
+        allowed_ids: &roaring::RoaringBitmap,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
+
+        if allowed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let inner = self.inner.read();
+        let results = inner.with_contiguous_vectors(|vectors| {
+            let mut scored: Vec<ScoredResult> =
+                Vec::with_capacity(usize::try_from(allowed_ids.len()).unwrap_or(k));
+
+            // Scan bitmap IDs (u32 range).
+            self.score_bitmap_ids(query, allowed_ids, vectors, &mut scored);
+
+            // Include IDs exceeding u32::MAX that cannot be represented in
+            // RoaringBitmap — consistent with HNSW+bitmap path (search.rs).
+            self.score_overflow_ids(query, vectors, &mut scored);
+
+            self.metric.sort_scored_results(&mut scored);
+            scored.truncate(k);
+            scored
+        });
+
+        Ok(results)
+    }
+
+    /// Scores vectors whose IDs are present in the bitmap (u32 range).
+    fn score_bitmap_ids(
+        &self,
+        query: &[f32],
+        allowed_ids: &roaring::RoaringBitmap,
+        vectors: &crate::perf_optimizations::ContiguousVectors,
+        scored: &mut Vec<ScoredResult>,
+    ) {
+        for id32 in allowed_ids {
+            let id = u64::from(id32);
+            if let Some(idx) = self.mappings.get_idx(id) {
+                if let Some(vec) = vectors.get(idx) {
+                    let dist = self.compute_distance(query, vec);
+                    scored.push(ScoredResult::new(id, dist));
+                }
+            }
+        }
+    }
+
+    /// Scores vectors whose IDs exceed `u32::MAX` (not representable in `RoaringBitmap`).
+    ///
+    /// These are unconditionally included, consistent with the HNSW+bitmap
+    /// path in `search_bitmap_filtered_inner`.
+    fn score_overflow_ids(
+        &self,
+        query: &[f32],
+        vectors: &crate::perf_optimizations::ContiguousVectors,
+        scored: &mut Vec<ScoredResult>,
+    ) {
+        // Fast path: if no vectors are stored, nothing to scan.
+        if vectors.is_empty() {
+            return;
+        }
+        for idx in 0..vectors.len() {
+            let Some(id) = self.mappings.get_id(idx) else {
+                continue;
+            };
+            if u32::try_from(id).is_ok() {
+                continue;
+            }
+            if let Some(vec) = vectors.get(idx) {
+                let dist = self.compute_distance(query, vec);
+                scored.push(ScoredResult::new(id, dist));
+            }
+        }
+    }
+
     /// Performs brute-force search for guaranteed 100% recall.
     ///
     /// Uses rayon-parallelized distance computation across all stored vectors.

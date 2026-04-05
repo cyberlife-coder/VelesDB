@@ -282,6 +282,7 @@ The WASM build is optimized for client-side use cases but has some limitations c
 | Agent Memory (SemanticMemory) | ✅ | ✅ |
 | VelesQL parsing and validation | ✅ | ✅ |
 | VelesQL query execution | ❌ | ✅ |
+| Cross-collection MATCH (`@collection`) | ❌ | ✅ |
 | JOIN operations | ❌ | ✅ |
 | Aggregations (GROUP BY) | ❌ | ✅ |
 | Persistence | IndexedDB | Disk (mmap) |
@@ -385,6 +386,7 @@ const fused = hybrid_search_fuse(denseResults, sparseResults, 60, 10);
 Consider using the [REST server](https://github.com/cyberlife-coder/VelesDB) if you need:
 
 - **VelesQL query execution** - Running queries against data (JOINs, aggregations, server-side filtering)
+- **Cross-collection MATCH** - The `@collection` annotation requires Database-level query routing, which is only available on the server (WASM operates on a single collection)
 - **Large datasets** - More than 100K vectors
 - **Server-side processing** - Centralized vector database
 

@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: March 27, 2026 (v1.7.2 — sequential benchmarks on idle machine)*
+*Last updated: April 4, 2026 (v1.11.1 — includes competitive benchmarks vs Qdrant, Memgraph, ClickHouse)*
 
 ---
 
@@ -11,7 +11,7 @@
 | **CPU** | Intel Core i9-14900KF (24 cores, 32 threads, AVX2) |
 | **RAM** | 64 GB DDR5 |
 | **OS** | Microsoft Windows 11 Professionnel |
-| **Rust** | rustc 1.92.0 (ded5c06cf 2025-12-08) |
+| **Rust** | rustc 1.94.1 (e408947bf 2026-03-25) |
 | **Build** | `--release`, `target-cpu=native`, LTO thin, codegen-units=1 |
 | **Framework** | Criterion.rs with `--noplot` |
 
@@ -21,17 +21,17 @@ Hardware configuration captured in `benchmarks/machine-config.json`.
 
 ## 1. Dense Search Baseline (SIMD Kernels)
 
-SIMD kernels use AVX2 multi-accumulator pipelines with runtime feature detection via `simd_dispatch`. Measured March 27, 2026 on Intel Core i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Rust 1.92.0, Windows 11 Pro, sequential run on idle machine.
+SIMD kernels use AVX2 multi-accumulator pipelines with runtime feature detection via `simd_dispatch`. Measured April 3, 2026 on Intel Core i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Rust 1.94.1, Windows 11 Pro, sequential run on idle machine.
 
 ### SIMD Kernel Latency
 
 | Operation | 128D | 384D | 768D | 1536D | 3072D |
 |-----------|------|------|------|-------|-------|
-| **Dot Product** | 5.4 ns | 12.0 ns | 19.8 ns | 43.8 ns | 91.2 ns |
-| **Euclidean** | 5.2 ns | 11.5 ns | 22.5 ns | 46.1 ns | 99.3 ns |
-| **Cosine** | 7.7 ns | 18.6 ns | 33.1 ns | 61.4 ns | 118.9 ns |
-| **Hamming** | 7.3 ns | 17.8 ns | 35.8 ns | 69.2 ns | 132.2 ns |
-| **Jaccard** | 6.4 ns | 16.4 ns | 35.1 ns | 50.9 ns | 100.6 ns |
+| **Dot Product** | 5.4 ns | 10.7 ns | 21.8 ns | 61.6 ns | 94.8 ns |
+| **Euclidean** | 5.3 ns | 11.0 ns | 26.0 ns | 50.5 ns | 118.2 ns |
+| **Cosine** | 12.5 ns | 21.4 ns | 32.4 ns | 60.9 ns | 123.5 ns |
+| **Hamming** | 7.4 ns | 19.1 ns | 35.2 ns | 65.5 ns | 129.4 ns |
+| **Jaccard** | 6.8 ns | 17.6 ns | 27.3 ns | 52.3 ns | 113.1 ns |
 
 *Run `cargo bench -p velesdb-core --bench simd_benchmark -- --noplot` to regenerate.*
 
@@ -49,16 +49,16 @@ Engine dispatch overhead is negligible at typical embedding dimensions (768D+).
 
 | Dimension | Dot Product | Throughput |
 |-----------|-------------|------------|
-| 768D | 19.8 ns | 38.8 Gelem/s |
-| 1536D | 43.8 ns | 35.1 Gelem/s |
-| 3072D | 91.2 ns | 33.7 Gelem/s |
+| 768D | 21.8 ns | 35.2 Gelem/s |
+| 1536D | 61.6 ns | 24.9 Gelem/s |
+| 3072D | 94.8 ns | 32.4 Gelem/s |
 
 ### Batch Distance Computation
 
 | Benchmark | Latency | Per-Vector |
 |-----------|---------|------------|
-| Native 1000x768D | 43.8 µs | 43.8 ns |
-| Engine 1000x768D | 45.0 µs | 45.0 ns |
+| Native 1000x768D | 42.1 µs | 42.1 ns |
+| Engine 1000x768D | 42.9 µs | 42.9 ns |
 
 ---
 
@@ -236,9 +236,101 @@ Local measurement (i9-14900KF, 10K vectors, 384D): upsert throughput ~808 vec/s 
 | **BFS depth 3** | 3.32 µs |
 | **Parallel reads (8 threads)** | 292 µs |
 
+### Graph Traversal V2 — CSR Snapshot (Issue #491)
+
+*Measured April 2026 with Criterion on the same test environment.*
+
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| **BFS CSR 1K nodes (deg 5, depth 3)** | 3.2 µs | Zero-copy slice access |
+| **BFS CSR 10K nodes** | 2.8 µs | Cache-optimal CSR layout |
+| **BFS CSR 100K nodes** | 2.8 µs | Scales perfectly — same latency |
+| **BFS dense 10K (deg 20)** | 4.6 µs | 4x more neighbors, 1.6x slower |
+| **Predicate pushdown 1/5 labels** | 290 ns | 12x faster than unfiltered |
+| **Predicate pushdown 2/5 labels** | 721 ns | Linear with label count |
+| **No filter baseline** | 3.4 µs | Reference |
+| **CSR build 1K nodes** | 262 µs | One-shot construction |
+| **CSR build 10K nodes** | 5.8 ms | O(N+E) |
+| **add_edge (lazy CSR)** | 442 ns/edge | No O(N+E) rebuild per mutation |
+
+### Filtered Search — Bitmap Pre-filter V2 (Issue #487)
+
+| Selectivity | Latency | Strategy |
+|-------------|---------|----------|
+| **1% (rare)** | 32 µs | Full-scan brute-force |
+| **10% (uncommon)** | 65 µs | HNSW + bitmap pre-filter |
+| **50% (common)** | 302 µs | Post-filter fallback (>30% threshold) |
+| **Unfiltered baseline** | 83 µs | Reference |
+
+### Bulk Insert V2 (Issue #488)
+
+| Operation | Latency | Throughput |
+|-----------|---------|------------|
+| **upsert_bulk standard** | 77 ms / 10K | 130K vec/s |
+| **AsyncIndexBuilder enqueue+drain** | 108 µs / 10K | 90M vec/s (buffer only) |
+| **Buffer brute-force search (10K)** | 213 µs | — |
+
 ---
 
-## 9. Competitive Analysis
+## 9. Competitive Analysis (April 3, 2026)
+
+*All measurements via `bench_full_audit.py` and `bench_graph_quick.py` on the same machine.*
+*Competitors: Qdrant 1.17.1, Memgraph 3.9.0, ClickHouse 26.3.2.3 (all Docker, localhost).*
+
+### Vector Search — VelesDB vs Qdrant (SIFT1M, 1M × 128D)
+
+| Metric | VelesDB 1.11.1 | Qdrant 1.17.1 | Ratio |
+|--------|----------------|---------------|-------|
+| **kNN@10 p50** | **348 µs** | 6.8 ms | VelesDB **19.7x faster** |
+| **kNN@100 p50** | **1.9 ms** | 6.9 ms | VelesDB **3.6x faster** |
+| **Insert 1M** | 19.0K vec/s | ~15.5K vec/s | VelesDB **1.2x faster** |
+| **Recall@10** | 0.992 | 0.998 | −0.6% |
+| **Recall@100** | 0.995 | 0.996 | −0.1% |
+
+### Graph Traversal — VelesDB vs Memgraph (5K nodes, 55K edges)
+
+| Query | VelesDB p50 | Memgraph p50 | Ratio | Results |
+|-------|-------------|-------------|-------|---------|
+| **BFS 1-hop** | **2 µs** | 441 µs | VelesDB **189x faster** | 10 = 10 |
+| **BFS 2-hop** | **23 µs** | 2.2 ms | VelesDB **97x faster** | 110 = 110 |
+| **BFS 3-hop (limit 200)** | **44 µs** | 2.2 ms | VelesDB **50x faster** | 200 = 200 |
+| **Multi KNOWS→WORKS_AT** | **27 µs** | 525 µs | VelesDB **19x faster** | 10 = 10 |
+| **Edge loading** | 1.03M edges/s | — | — | — |
+
+### Columnar Queries — VelesDB vs ClickHouse (1M rows, ClickBench)
+
+*Measured via `bench_clickbench.py` with metadata-only queries (no forced vector NEAR).*
+
+| Query | VelesDB p50 | ClickHouse p50 | Ratio | Results |
+|-------|-------------|---------------|-------|---------|
+| **Q37 dashboard (4 predicates)** | **5.3 ms** | 5.4 ms | **Parity** | 100 = 100 |
+| **Q38 dashboard + Title** | 5.8 ms | 4.9 ms | CH 1.2x | 100 = 100 |
+| **Q41 traffic source** | 5.3 ms | 4.5 ms | CH 1.2x | 100 = 100 |
+| **Q21 URL LIKE '%google%'** | 38.6 ms | 8.3 ms | CH 4.6x | 3 vs 98* |
+| **Q39 links (IsLink!=0)** | 21.0 ms | 4.8 ms | CH 4.4x | 100 = 100 |
+| **Qx mobile (IsMobile=1)** | 15.9 ms | 5.1 ms | CH 3.1x | 100 = 100 |
+| **Q20 point lookup** | 4.2 s | 2.6 ms | CH 1616x | 74 = 74 |
+
+*\*Q21: BM25 text index returns fewer results than LIKE pattern match on URL strings.*
+
+### Improvement vs v1.10.0
+
+| Metric | v1.10.0 | v1.11.0 | Change |
+|--------|---------|---------|--------|
+| vs Qdrant search | 17.7x faster | **19.7x faster** | Improved |
+| vs Qdrant insert | **23x slower** | **1.2x faster** | **Reversed** |
+| vs Memgraph BFS 1-hop | **100x slower** | **189x faster** | **Reversed** |
+| vs Memgraph BFS 3-hop | **25,000x slower** | **50x faster** | **Reversed** |
+| vs ClickHouse Q37 | **345x slower** | **Parity** | **Reversed** |
+| vs ClickHouse Q39 | **200x slower** | **4.4x slower** | **45x improved** |
+
+### Known Limitations
+
+| Issue | Current | Root Cause | Planned Fix |
+|-------|---------|-----------|-------------|
+| Q20 point lookup (1616x) | Full scan 1M rows | No hash index for high-cardinality Eq | Hash index on secondary indexes |
+| Q21 LIKE result count (3 vs 98) | BM25 tokenization mismatch | URL strings tokenize differently | Trigram index for LIKE patterns |
+| Bulk load with many indexes | Slow at 1M+ with >3 indexes | Per-point B-tree insert | Deferred index build (implemented) |
 
 ### SIMD Distance Kernels
 

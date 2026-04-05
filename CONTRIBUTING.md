@@ -169,9 +169,9 @@ VelesDB utilise **3 workflows GitHub Actions simplifiés** :
 ```bash
 # 1. Mettre à jour version dans Cargo.toml
 # 2. Commit et tag
-git commit -am "release: v1.7.0"
-git tag v1.7.0
-git push origin main v1.7.0
+git commit -am "release: v1.11.1"
+git tag v1.11.1
+git push origin main v1.11.1
 ```
 
 Le workflow `release.yml` publie automatiquement sur :

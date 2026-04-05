@@ -14,7 +14,7 @@ fn cmd() -> Command {
 /// Helper: create a graph collection in a temp directory via CLI.
 fn create_graph_collection(dir: &std::path::Path, name: &str) {
     cmd()
-        .args(["create-graph-collection", dir.to_str().unwrap(), name])
+        .args(["collection", "create-graph", dir.to_str().unwrap(), name])
         .assert()
         .success();
 }

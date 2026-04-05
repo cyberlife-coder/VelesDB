@@ -470,121 +470,50 @@ pub struct EpisodicResult {
 }
 
 // ============================================================================
-// Knowledge Graph Types (EPIC-015 US-001)
+// Knowledge Graph Types (EPIC-015 US-001) — moved to types_graph.rs
 // ============================================================================
+pub use crate::types_graph::*;
 
-/// Request to add an edge to the knowledge graph.
+/// Request to create a secondary index on a metadata field.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AddEdgeRequest {
+pub struct CreateIndexRequest {
     /// Collection name.
     pub collection: String,
-    /// Edge ID.
-    pub id: u64,
-    /// Source node ID.
-    pub source: u64,
-    /// Target node ID.
-    pub target: u64,
-    /// Edge label (relationship type).
+    /// Metadata field name to index.
+    pub field_name: String,
+}
+
+/// Request to drop a secondary index.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DropIndexRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Metadata field name whose index to drop.
+    pub field_name: String,
+}
+
+/// Request to list secondary indexes on a collection.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListIndexesRequest {
+    /// Collection name.
+    pub collection: String,
+}
+
+/// Output for a secondary index entry.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexInfoOutput {
+    /// Node label (or field name for secondary indexes).
     pub label: String,
-    /// Optional edge properties.
-    #[serde(default)]
-    pub properties: Option<serde_json::Value>,
-}
-
-/// Request to get edges from the knowledge graph.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GetEdgesRequest {
-    /// Collection name.
-    pub collection: String,
-    /// Optional label filter.
-    pub label: Option<String>,
-    /// Optional source node filter.
-    pub source: Option<u64>,
-    /// Optional target node filter.
-    pub target: Option<u64>,
-}
-
-/// Request to traverse the knowledge graph.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TraverseGraphRequest {
-    /// Collection name.
-    pub collection: String,
-    /// Starting node ID.
-    pub source: u64,
-    /// Maximum traversal depth.
-    #[serde(default = "default_max_depth")]
-    pub max_depth: u32,
-    /// Optional relationship type filter.
-    pub rel_types: Option<Vec<String>>,
-    /// Maximum number of results.
-    #[serde(default = "default_traverse_limit")]
-    pub limit: usize,
-    /// Traversal algorithm: "bfs" or "dfs".
-    #[serde(default = "default_algorithm")]
-    pub algorithm: String,
-}
-
-/// Request to get node degree.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GetNodeDegreeRequest {
-    /// Collection name.
-    pub collection: String,
-    /// Node ID.
-    pub node_id: u64,
-}
-
-/// Edge output for API responses.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EdgeOutput {
-    /// Edge ID.
-    pub id: u64,
-    /// Source node ID.
-    pub source: u64,
-    /// Target node ID.
-    pub target: u64,
-    /// Edge label.
-    pub label: String,
-    /// Edge properties.
-    pub properties: serde_json::Value,
-}
-
-/// Traversal result output.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TraversalOutput {
-    /// Target node ID reached.
-    pub target_id: u64,
-    /// Depth of traversal.
-    pub depth: u32,
-    /// Path taken (node IDs).
-    pub path: Vec<u64>,
-}
-
-/// Node degree output.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NodeDegreeOutput {
-    /// Node ID.
-    pub node_id: u64,
-    /// Number of incoming edges.
-    pub in_degree: usize,
-    /// Number of outgoing edges.
-    pub out_degree: usize,
-}
-
-fn default_max_depth() -> u32 {
-    3
-}
-
-fn default_traverse_limit() -> usize {
-    100
-}
-
-fn default_algorithm() -> String {
-    "bfs".to_string()
+    /// Property name.
+    pub property: String,
+    /// Index type (hash, range, or secondary).
+    pub index_type: String,
+    /// Number of unique values indexed.
+    pub cardinality: usize,
+    /// Memory usage in bytes.
+    pub memory_bytes: usize,
 }

@@ -5,21 +5,37 @@ use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
-use crate::point::{Point, SearchResult};
+use crate::point::SearchResult;
 use crate::quantization::{distance_pq_l2, PQVector, ProductQuantizer, StorageMode};
 use crate::scored_result::ScoredResult;
-use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
+
+// Re-export constants moved to vector_filter.rs for test compatibility.
+#[cfg(test)]
+pub(crate) use super::vector_filter::SELECTIVITY_THRESHOLD;
+
+/// Estimates the real selectivity from a pre-filter bitmap.
+///
+/// Returns the ratio `bitmap.len() / collection_len` as an `f64` in
+/// `[0.0, 1.0]`. Returns `0.0` when `collection_len` is zero.
+#[allow(clippy::cast_precision_loss)]
+#[inline]
+pub(crate) fn estimate_real_selectivity(
+    bitmap: &roaring::RoaringBitmap,
+    collection_len: usize,
+) -> f64 {
+    if collection_len == 0 {
+        return 0.0;
+    }
+    bitmap.len() as f64 / collection_len as f64
+}
 
 /// Tags each `SearchResult` with a `vector_score` component equal to its score.
 ///
 /// For pure vector search, the HNSW/PQ score IS the vector component.
-fn tag_vector_component_scores(results: &mut [SearchResult]) {
+pub(super) fn tag_vector_component_scores(results: &mut [SearchResult]) {
     for result in results {
-        result.component_scores = Some(smallvec::smallvec![(
-            "vector_score".to_string(),
-            result.score
-        ),]);
+        result.component_scores = Some(smallvec::smallvec![("vector_score", result.score),]);
     }
 }
 
@@ -407,7 +423,7 @@ impl Collection {
         let metric = config.metric;
         drop(config);
 
-        let candidates_k = compute_oversampled_k(k, filter);
+        let candidates_k = super::vector_filter::compute_oversampled_k(k, filter);
 
         // Attempt bitmap pre-filter from secondary indexes.
         let index_results =
@@ -416,78 +432,7 @@ impl Collection {
         Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
     }
 
-    /// Searches with metadata filtering AND quality options from a WITH clause.
-    ///
-    /// Combines the candidate-retrieval strategy of [`search_with_opts`] with the
-    /// post-filtering of [`search_with_filter`]. When quality options are present,
-    /// uses quality-aware HNSW search (higher ef_search) for candidates before
-    /// applying the metadata filter. Falls back to [`search_with_filter`] when no
-    /// quality options are set.
-    ///
-    /// # Note on bitmap pre-filter
-    ///
-    /// Unlike [`search_with_filter`], this method does not use
-    /// [`search_with_optional_bitmap`] because `search_with_quality` and
-    /// `search_hnsw_only_filtered` are separate code paths on `HnswIndex`.
-    /// Combining quality-aware ef_search with bitmap pre-filtering would
-    /// require a new `HnswIndex` method.
-    // TODO #issue: Wire bitmap pre-filter into quality-aware search path.
-    // This requires a `search_with_quality_and_bitmap` method on `HnswIndex`
-    // that combines `search_with_quality`'s ef_search adaptation with
-    // `search_hnsw_only_filtered`'s bitmap exclusion.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query vector dimension doesn't match the collection.
-    pub(crate) fn search_with_filter_and_opts(
-        &self,
-        query: &[f32],
-        k: usize,
-        filter: &crate::filter::Filter,
-        opts: &crate::collection::search::query::QuerySearchOptions,
-    ) -> Result<Vec<SearchResult>> {
-        // No quality options: delegate to the standard filter path.
-        if opts.quality.is_none() && opts.ef_search.is_none() && opts.force_rerank.is_none() {
-            return self.search_with_filter(query, k, filter);
-        }
-
-        let config = self.config.read();
-        validate_dimension_match(config.dimension, query.len())?;
-        let higher_is_better = config.metric.higher_is_better();
-        let metric = config.metric;
-        drop(config);
-
-        let quality = opts.quality.unwrap_or_else(|| {
-            opts.ef_search
-                .map_or(crate::SearchQuality::Balanced, |ef| match ef {
-                    0..=64 => crate::SearchQuality::Fast,
-                    65..=128 => crate::SearchQuality::Balanced,
-                    129..=512 => crate::SearchQuality::Accurate,
-                    _ => crate::SearchQuality::Perfect,
-                })
-        });
-
-        // Over-fetch for filtering: retrieve more candidates than needed.
-        let candidates_k = compute_oversampled_k(k, filter);
-
-        let index_results = self
-            .index
-            .search_with_quality(query, candidates_k, quality)?;
-        let index_results = self.merge_delta(index_results, query, candidates_k, metric);
-
-        let results = self.filter_and_hydrate(index_results, filter, k, higher_is_better);
-        Ok(results)
-    }
-
     /// Searches HNSW with an optional bitmap pre-filter from secondary indexes.
-    ///
-    /// When a bitmap can be built from the filter's equality conditions (i.e.,
-    /// the filter references indexed fields), the HNSW search over-fetches
-    /// candidates and keeps only those whose external ID is in the bitmap.
-    /// This eliminates expensive payload retrieval for non-matching points.
-    ///
-    /// Falls back to the standard unfiltered HNSW search when no bitmap is
-    /// available (non-indexed fields, NOT/Neq conditions).
     fn search_with_optional_bitmap(
         &self,
         query: &[f32],
@@ -504,106 +449,5 @@ impl Collection {
             return self.merge_delta(results, query, candidates_k, metric);
         }
         self.search_ids_with_adc_if_pq(query, candidates_k)
-    }
-
-    /// Filters scored results by metadata and hydrates matching points.
-    ///
-    /// Shared logic for `search_with_filter` and `search_with_filter_and_opts`
-    /// to avoid duplicating the filter-then-hydrate pipeline.
-    fn filter_and_hydrate(
-        &self,
-        index_results: Vec<ScoredResult>,
-        filter: &crate::filter::Filter,
-        k: usize,
-        higher_is_better: bool,
-    ) -> Vec<SearchResult> {
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
-
-        let mut results: Vec<SearchResult> = index_results
-            .into_iter()
-            .filter_map(|sr| {
-                let payload = payload_storage.retrieve(sr.id).ok().flatten();
-                let matches = match payload.as_ref() {
-                    Some(p) => filter.matches(p),
-                    None => filter.matches(&serde_json::Value::Null),
-                };
-                if !matches {
-                    return None;
-                }
-                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
-                Some(SearchResult::new(
-                    Point {
-                        id: sr.id,
-                        vector,
-                        payload,
-                        sparse_vectors: None,
-                    },
-                    sr.score,
-                ))
-            })
-            .collect();
-
-        resolve::sort_results_by_metric(&mut results, higher_is_better);
-        results.truncate(k);
-        tag_vector_component_scores(&mut results);
-        results
-    }
-}
-
-/// Computes the oversampled candidate count for filtered search.
-///
-/// Uses heuristic selectivity to determine how many extra candidates to
-/// retrieve from HNSW so that enough survive post-filtering.
-fn compute_oversampled_k(k: usize, filter: &crate::filter::Filter) -> usize {
-    let selectivity = estimate_filter_selectivity(filter);
-    // Reason: k is a small search count (typically <1000); f64 has 52-bit mantissa.
-    #[allow(clippy::cast_precision_loss)]
-    let k_f64 = k as f64;
-    #[allow(clippy::cast_precision_loss)]
-    let lower = (k + 10) as f64;
-    // Reason: result is clamped to [k+10, 10_000] so no truncation risk.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let clamped = (k_f64 / selectivity).ceil().clamp(lower, 10_000.0) as usize;
-    clamped
-}
-
-/// Heuristic selectivity estimate based on filter structure.
-///
-/// Returns a value in `(0, 1]` where 1.0 = no filtering, 0.01 = very selective.
-/// Used to compute dynamic over-fetch factor for `search_with_filter`.
-fn estimate_filter_selectivity(filter: &crate::filter::Filter) -> f64 {
-    estimate_condition_selectivity(&filter.condition)
-}
-
-fn estimate_condition_selectivity(cond: &crate::filter::Condition) -> f64 {
-    use crate::filter::Condition;
-    match cond {
-        Condition::Eq { .. } | Condition::IsNull { .. } => 0.1,
-        Condition::Gt { .. }
-        | Condition::Gte { .. }
-        | Condition::Lt { .. }
-        | Condition::Lte { .. }
-        | Condition::Contains { .. }
-        | Condition::Like { .. }
-        | Condition::ILike { .. } => 0.3,
-        Condition::In { values, .. } => {
-            // Reason: values.len() is a small count; f64 precision is sufficient.
-            #[allow(clippy::cast_precision_loss)]
-            let sel = values.len() as f64 * 0.05;
-            sel.min(0.8)
-        }
-        Condition::Neq { .. } | Condition::IsNotNull { .. } => 0.9,
-        Condition::And { conditions } => conditions
-            .iter()
-            .map(estimate_condition_selectivity)
-            .product::<f64>()
-            .max(0.01),
-        Condition::Or { conditions } => conditions
-            .iter()
-            .map(estimate_condition_selectivity)
-            .sum::<f64>()
-            .min(1.0),
-        Condition::Not { condition } => (1.0 - estimate_condition_selectivity(condition)).max(0.01),
     }
 }

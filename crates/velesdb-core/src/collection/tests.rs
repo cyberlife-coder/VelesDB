@@ -1117,7 +1117,7 @@ fn test_hybrid_search_with_filter() {
     let filter = crate::filter::Filter::new(crate::filter::Condition::eq("category", "tech"));
     let query = vec![1.0, 0.0, 0.0];
     let results = collection
-        .hybrid_search_with_filter(&query, "rust", 10, Some(0.5), &filter)
+        .hybrid_search_with_filter(&query, "rust", 10, Some(0.5), &filter, None)
         .unwrap();
 
     // Assert - doc 1 should be first (matches both vector + text + filter)

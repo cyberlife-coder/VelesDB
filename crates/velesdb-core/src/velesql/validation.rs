@@ -205,54 +205,79 @@ impl QueryValidator {
         config: &ValidationConfig,
     ) -> Result<(), ParseError> {
         if raw_query.len() > config.max_query_length {
-            return Err(ParseError::new(
-                ParseErrorKind::ComplexityLimit,
+            return Err(Self::complexity_error(
                 config.max_query_length,
                 raw_query.chars().take(128).collect::<String>(),
-                format!(
-                    "Query length exceeded: max={}, actual={}",
-                    config.max_query_length,
-                    raw_query.len()
-                ),
+                "Query length",
+                config.max_query_length,
+                raw_query.len(),
             ));
         }
 
         let stats = Self::analyze_query_complexity(query);
-        if stats.ast_depth > config.max_ast_depth {
-            return Err(ParseError::new(
-                ParseErrorKind::ComplexityLimit,
-                0,
-                "WHERE",
-                format!(
-                    "AST depth exceeded: max={}, actual={}",
-                    config.max_ast_depth, stats.ast_depth
-                ),
-            ));
-        }
-        if stats.like_ilike_terms > config.max_like_ilike_terms {
-            return Err(ParseError::new(
-                ParseErrorKind::ComplexityLimit,
-                0,
-                "LIKE/ILIKE",
-                format!(
-                    "LIKE/ILIKE budget exceeded: max={}, actual={}",
-                    config.max_like_ilike_terms, stats.like_ilike_terms
-                ),
-            ));
-        }
-        if stats.max_graph_hops > config.max_graph_expansion {
-            return Err(ParseError::new(
-                ParseErrorKind::ComplexityLimit,
-                0,
-                "MATCH",
-                format!(
-                    "Graph expansion exceeded: max={}, actual={}",
-                    config.max_graph_expansion, stats.max_graph_hops
-                ),
-            ));
-        }
+        Self::check_limit(stats.ast_depth, config.max_ast_depth, "AST depth", "WHERE")?;
+        Self::check_limit(
+            stats.like_ilike_terms,
+            config.max_like_ilike_terms,
+            "LIKE/ILIKE budget",
+            "LIKE/ILIKE",
+        )?;
+        Self::check_limit_u32(
+            stats.max_graph_hops,
+            config.max_graph_expansion,
+            "Graph expansion",
+            "MATCH",
+        )?;
 
         Ok(())
+    }
+
+    /// Returns a complexity-limit error when `actual > max`.
+    fn check_limit(
+        actual: usize,
+        max: usize,
+        label: &str,
+        context: &str,
+    ) -> Result<(), ParseError> {
+        if actual > max {
+            return Err(Self::complexity_error(0, context, label, max, actual));
+        }
+        Ok(())
+    }
+
+    /// Returns a complexity-limit error when `actual > max` (u32 variant).
+    fn check_limit_u32(
+        actual: u32,
+        max: u32,
+        label: &str,
+        context: &str,
+    ) -> Result<(), ParseError> {
+        if actual > max {
+            return Err(Self::complexity_error(
+                0,
+                context,
+                label,
+                max as usize,
+                actual as usize,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Builds a [`ParseError`] for a complexity-limit violation.
+    fn complexity_error(
+        position: usize,
+        context: impl Into<String>,
+        label: &str,
+        max: usize,
+        actual: usize,
+    ) -> ParseError {
+        ParseError::new(
+            ParseErrorKind::ComplexityLimit,
+            position,
+            context,
+            format!("{label} exceeded: max={max}, actual={actual}"),
+        )
     }
 
     #[must_use]

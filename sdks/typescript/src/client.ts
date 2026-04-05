@@ -17,6 +17,7 @@ import type {
   GetEdgesOptions,
   GraphEdge,
   TraverseRequest,
+  TraverseParallelRequest,
   TraverseResponse,
   DegreeResponse,
   QueryOptions,
@@ -394,7 +395,11 @@ export class VelesDB {
    * 
    * @param collection - Collection name
    * @param queryString - VelesQL query string
-   * @param params - Query parameters (vectors, scalars)
+   * @param params - Query parameters (vectors, scalars).
+   *   For cross-collection MATCH queries, pass `_collection` to specify the
+   *   primary collection (the one with graph edges). Nodes annotated with
+   *   `@collection` in the MATCH pattern will have their payloads enriched
+   *   from the named collection after traversal.
    * @param options - Query options (timeout, streaming)
    * @returns Query response with results and execution stats
    * 
@@ -407,6 +412,16 @@ export class VelesDB {
    * for (const r of response.results) {
    *   console.log(`ID ${r.id}, title: ${r.title}`);
    * }
+   * ```
+   *
+   * @example Cross-collection MATCH
+   * ```typescript
+   * // Enrich Product nodes with Inventory data from the 'inventory' collection
+   * const response = await db.query('catalog_graph', `
+   *   MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory)
+   *   RETURN p.name, inv.price, inv.stock
+   *   LIMIT 20
+   * `);
    * ```
    */
   async query(
@@ -712,6 +727,35 @@ export class VelesDB {
     }
 
     return this.backend.traverseGraph(collection, request);
+  }
+
+  /**
+   * Multi-source parallel BFS traversal with deduplication.
+   * 
+   * Starts BFS from multiple source nodes simultaneously and deduplicates
+   * results by path signature.
+   * 
+   * @param collection - Collection name
+   * @param request - Parallel traverse request with sources array
+   * @returns Traverse response with results, stats, and pagination
+   * 
+   * @example
+   * ```typescript
+   * const result = await db.traverseParallel('social', {
+   *   sources: [100, 200, 300],
+   *   maxDepth: 3,
+   *   limit: 50,
+   * });
+   * ```
+   */
+  async traverseParallel(collection: string, request: TraverseParallelRequest): Promise<TraverseResponse> {
+    this.ensureInitialized();
+
+    if (!Array.isArray(request.sources) || request.sources.length === 0) {
+      throw new ValidationError('At least one source node ID is required');
+    }
+
+    return this.backend.traverseParallel(collection, request);
   }
 
   /**

@@ -3,7 +3,8 @@
 
 #![allow(clippy::cast_precision_loss)]
 
-use super::delta::{merge_with_delta, DeltaBuffer};
+use super::delta::DeltaBuffer;
+use super::delta_merge::merge_with_delta;
 use crate::distance::DistanceMetric;
 use std::sync::Arc;
 

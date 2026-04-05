@@ -10,6 +10,10 @@ use std::path::PathBuf;
 use crate::cli_types::{IndexTypeArg, MetricArg, StorageModeArg};
 use crate::graph;
 
+/// Top-level CLI commands for VelesDB CLI - High-performance vector database.
+///
+/// Standalone commands live at the top level; related commands are grouped
+/// into sub-enums (`Collection`, `Data`, `Query`) for ergonomic CLI usage.
 #[derive(Subcommand)]
 pub enum Commands {
     /// Start interactive REPL
@@ -19,23 +23,127 @@ pub enum Commands {
         path: PathBuf,
     },
 
-    /// Execute a single query
-    Query {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// `VelesQL` query to execute
-        query: String,
-
-        /// Output format (table, json)
-        #[arg(short, long, default_value = "table")]
-        format: String,
-    },
-
     /// Show database info
     Info {
         /// Path to database directory
         path: PathBuf,
+    },
+
+    /// Generate shell completions
+    Completions {
+        /// Shell type (bash, zsh, fish, powershell, elvish)
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+
+    /// SIMD performance diagnostics and benchmarking
+    Simd {
+        #[command(subcommand)]
+        action: SimdAction,
+    },
+
+    /// License management commands
+    License {
+        #[command(subcommand)]
+        action: LicenseAction,
+    },
+
+    /// Collection management (create, delete, list, show, analyze)
+    Collection {
+        #[command(subcommand)]
+        action: CollectionCommands,
+    },
+
+    /// Data operations (import, export, upsert, get, delete)
+    Data {
+        #[command(subcommand)]
+        action: DataCommands,
+    },
+
+    /// Query operations (execute, search, explain)
+    #[command(name = "query")]
+    QueryCmd {
+        #[command(subcommand)]
+        action: QueryCommands,
+    },
+
+    /// Graph operations (EPIC-016 US-050)
+    Graph {
+        #[command(subcommand)]
+        action: graph::GraphAction,
+    },
+
+    /// Index management (create, drop, list)
+    Index {
+        #[command(subcommand)]
+        action: IndexAction,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Collection sub-commands
+// ---------------------------------------------------------------------------
+
+/// Commands for managing collections.
+#[derive(Subcommand)]
+pub enum CollectionCommands {
+    /// Create a vector collection with dimension, metric, and storage options
+    #[command(name = "create")]
+    CreateVector {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        name: String,
+
+        /// Vector dimension
+        #[arg(short, long)]
+        dimension: usize,
+
+        /// Distance metric (cosine, euclidean, dot, hamming, jaccard)
+        #[arg(short, long, value_enum, default_value = "cosine")]
+        metric: MetricArg,
+
+        /// Storage mode (full, sq8, binary, pq, rabitq)
+        #[arg(short, long, value_enum, default_value = "full")]
+        storage: StorageModeArg,
+    },
+
+    /// Create a graph collection
+    #[command(name = "create-graph")]
+    CreateGraph {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        name: String,
+
+        /// Create with schemaless mode (any node/edge types accepted)
+        #[arg(long, default_value = "true")]
+        schemaless: bool,
+    },
+
+    /// Create a metadata-only collection (no vectors)
+    #[command(name = "create-metadata")]
+    CreateMetadata {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        name: String,
+    },
+
+    /// Delete a collection (vector, graph, or metadata)
+    Delete {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        name: String,
+
+        /// Skip interactive confirmation
+        #[arg(long)]
+        force: bool,
     },
 
     /// List all collections in the database
@@ -65,23 +173,27 @@ pub enum Commands {
         format: String,
     },
 
-    /// Export a collection to JSON file
-    Export {
+    /// Analyze a collection and display statistics
+    Analyze {
         /// Path to database directory
         path: PathBuf,
 
         /// Collection name
         collection: String,
 
-        /// Output file path
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Include vectors in export
-        #[arg(long, default_value = "true")]
-        include_vectors: bool,
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
     },
+}
 
+// ---------------------------------------------------------------------------
+// Data sub-commands
+// ---------------------------------------------------------------------------
+
+/// Commands for data operations on collections.
+#[derive(Subcommand)]
+pub enum DataCommands {
     /// Import vectors from CSV or JSONL file
     Import {
         /// Path to data file (CSV or JSONL)
@@ -124,19 +236,42 @@ pub enum Commands {
         progress: bool,
     },
 
-    /// License management commands
-    License {
-        #[command(subcommand)]
-        action: LicenseAction,
-    },
-
-    /// Create a metadata-only collection (no vectors)
-    CreateMetadataCollection {
+    /// Export a collection to JSON file
+    Export {
         /// Path to database directory
         path: PathBuf,
 
         /// Collection name
-        name: String,
+        collection: String,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Include vectors in export
+        #[arg(long, default_value = "true")]
+        include_vectors: bool,
+    },
+
+    /// Upsert a single point into a vector collection
+    Upsert {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Point ID
+        #[arg(long)]
+        id: u64,
+
+        /// Vector as JSON array (e.g., '[0.1, 0.2, 0.3]')
+        #[arg(long)]
+        vector: Option<String>,
+
+        /// Payload as JSON object (e.g., '{"title": "Hello"}')
+        #[arg(long)]
+        payload: Option<String>,
     },
 
     /// Get a point by ID
@@ -155,8 +290,45 @@ pub enum Commands {
         format: String,
     },
 
+    /// Delete points from a vector collection by ID
+    #[command(name = "delete")]
+    DeletePoints {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Point IDs to delete
+        #[arg(required = true)]
+        ids: Vec<u64>,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Query sub-commands
+// ---------------------------------------------------------------------------
+
+/// Commands for querying collections.
+#[derive(Subcommand)]
+pub enum QueryCommands {
+    /// Execute a single query
+    #[command(name = "execute")]
+    Execute {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// `VelesQL` query to execute
+        query: String,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
+
     /// Perform multi-query search with fusion
-    MultiSearch {
+    #[command(name = "search")]
+    Search {
         /// Path to database directory
         path: PathBuf,
 
@@ -183,72 +355,6 @@ pub enum Commands {
         format: String,
     },
 
-    /// Graph operations (EPIC-016 US-050)
-    Graph {
-        #[command(subcommand)]
-        action: graph::GraphAction,
-    },
-
-    /// Generate shell completions (EPIC-014 US-007)
-    Completions {
-        /// Shell type (bash, zsh, fish, powershell, elvish)
-        #[arg(value_enum)]
-        shell: Shell,
-    },
-
-    /// SIMD performance diagnostics and benchmarking
-    Simd {
-        #[command(subcommand)]
-        action: SimdAction,
-    },
-
-    /// Create a vector collection with dimension, metric, and storage options
-    CreateVectorCollection {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        name: String,
-
-        /// Vector dimension
-        #[arg(short, long)]
-        dimension: usize,
-
-        /// Distance metric (cosine, euclidean, dot, hamming, jaccard)
-        #[arg(short, long, value_enum, default_value = "cosine")]
-        metric: MetricArg,
-
-        /// Storage mode (full, sq8, binary, pq, rabitq)
-        #[arg(short, long, value_enum, default_value = "full")]
-        storage: StorageModeArg,
-    },
-
-    /// Create a graph collection
-    CreateGraphCollection {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        name: String,
-
-        /// Create with schemaless mode (any node/edge types accepted)
-        #[arg(long, default_value = "true")]
-        schemaless: bool,
-    },
-
-    /// Delete a collection (vector, graph, or metadata)
-    DeleteCollection {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        name: String,
-
-        /// Skip interactive confirmation
-        #[arg(long)]
-        force: bool,
-    },
-
     /// Show the query execution plan (EXPLAIN) for a VelesQL query
     Explain {
         /// Path to database directory
@@ -261,61 +367,13 @@ pub enum Commands {
         #[arg(short, long, default_value = "tree")]
         format: String,
     },
-
-    /// Analyze a collection and display statistics
-    Analyze {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Output format (table, json)
-        #[arg(short, long, default_value = "table")]
-        format: String,
-    },
-
-    /// Delete points from a vector collection by ID
-    DeletePoints {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Point IDs to delete
-        #[arg(required = true)]
-        ids: Vec<u64>,
-    },
-
-    /// Upsert a single point into a vector collection
-    Upsert {
-        /// Path to database directory
-        path: PathBuf,
-
-        /// Collection name
-        collection: String,
-
-        /// Point ID
-        #[arg(long)]
-        id: u64,
-
-        /// Vector as JSON array (e.g., '[0.1, 0.2, 0.3]')
-        #[arg(long)]
-        vector: Option<String>,
-
-        /// Payload as JSON object (e.g., '{"title": "Hello"}')
-        #[arg(long)]
-        payload: Option<String>,
-    },
-
-    /// Index management (create, drop, list)
-    Index {
-        #[command(subcommand)]
-        action: IndexAction,
-    },
 }
 
+// ---------------------------------------------------------------------------
+// Existing sub-command enums (unchanged)
+// ---------------------------------------------------------------------------
+
+/// SIMD diagnostic actions.
 #[derive(Subcommand)]
 pub enum SimdAction {
     /// Show current SIMD dispatch configuration
@@ -325,6 +383,7 @@ pub enum SimdAction {
     Benchmark,
 }
 
+/// Index management actions.
 #[derive(Subcommand)]
 pub enum IndexAction {
     /// Create an index on a collection field
@@ -376,6 +435,7 @@ pub enum IndexAction {
     },
 }
 
+/// License management actions.
 #[derive(Subcommand)]
 pub enum LicenseAction {
     /// Show current license status

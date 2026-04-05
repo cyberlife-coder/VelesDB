@@ -88,6 +88,12 @@ impl VectorCollection {
         self.inner.has_secondary_index(field)
     }
 
+    /// Drops a secondary index on `field_name`. Returns `true` if the index existed.
+    #[must_use]
+    pub fn drop_secondary_index(&self, field_name: &str) -> bool {
+        self.inner.drop_secondary_index(field_name)
+    }
+
     /// Returns `true` if a property index exists.
     #[must_use]
     pub fn has_property_index(&self, label: &str, property: &str) -> bool {

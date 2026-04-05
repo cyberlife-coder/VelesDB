@@ -22,6 +22,7 @@ pub mod hnsw_delta_wal;
 mod log_payload;
 pub mod metrics;
 mod mmap;
+mod mmap_capacity;
 mod sharded_index;
 #[cfg(test)]
 mod sharded_index_tests;
@@ -33,6 +34,7 @@ mod vector_bytes_tests;
 pub mod wal_batcher;
 #[cfg(test)]
 mod wal_batcher_tests;
+mod wal_entry;
 
 #[cfg(test)]
 mod compaction_tests;

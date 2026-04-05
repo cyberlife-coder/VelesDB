@@ -36,7 +36,7 @@ fn test_create_vector_collection_success() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("create-vector-collection")
+        .args(["collection", "create"])
         .arg(&db_path)
         .arg("my_vectors")
         .arg("--dimension")
@@ -55,7 +55,7 @@ fn test_create_vector_collection_with_metric_and_storage() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("create-vector-collection")
+        .args(["collection", "create"])
         .arg(&db_path)
         .arg("embeddings")
         .arg("--dimension")
@@ -78,7 +78,7 @@ fn test_create_vector_collection_duplicate_fails() {
 
     // Create first
     velesdb_cmd()
-        .arg("create-vector-collection")
+        .args(["collection", "create"])
         .arg(&db_path)
         .arg("dupes")
         .arg("--dimension")
@@ -88,7 +88,7 @@ fn test_create_vector_collection_duplicate_fails() {
 
     // Create duplicate — should fail
     velesdb_cmd()
-        .arg("create-vector-collection")
+        .args(["collection", "create"])
         .arg(&db_path)
         .arg("dupes")
         .arg("--dimension")
@@ -104,7 +104,7 @@ fn test_create_vector_collection_then_list() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("create-vector-collection")
+        .args(["collection", "create"])
         .arg(&db_path)
         .arg("docs")
         .arg("--dimension")
@@ -113,7 +113,7 @@ fn test_create_vector_collection_then_list() {
         .success();
 
     velesdb_cmd()
-        .arg("list")
+        .args(["collection", "list"])
         .arg(&db_path)
         .assert()
         .success()
@@ -123,7 +123,7 @@ fn test_create_vector_collection_then_list() {
 #[test]
 fn test_create_vector_collection_help() {
     velesdb_cmd()
-        .arg("create-vector-collection")
+        .args(["collection", "create"])
         .arg("--help")
         .assert()
         .success()
@@ -143,7 +143,7 @@ fn test_create_graph_collection_success() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("create-graph-collection")
+        .args(["collection", "create-graph"])
         .arg(&db_path)
         .arg("knowledge")
         .assert()
@@ -159,14 +159,14 @@ fn test_create_graph_collection_duplicate_fails() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("create-graph-collection")
+        .args(["collection", "create-graph"])
         .arg(&db_path)
         .arg("kg")
         .assert()
         .success();
 
     velesdb_cmd()
-        .arg("create-graph-collection")
+        .args(["collection", "create-graph"])
         .arg(&db_path)
         .arg("kg")
         .assert()
@@ -180,7 +180,7 @@ fn test_create_graph_collection_then_info() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("create-graph-collection")
+        .args(["collection", "create-graph"])
         .arg(&db_path)
         .arg("relations")
         .assert()
@@ -198,7 +198,7 @@ fn test_create_graph_collection_then_info() {
 #[test]
 fn test_create_graph_collection_help() {
     velesdb_cmd()
-        .arg("create-graph-collection")
+        .args(["collection", "create-graph"])
         .arg("--help")
         .assert()
         .success()
@@ -217,7 +217,7 @@ fn test_delete_collection_with_force() {
 
     // Create then delete
     velesdb_cmd()
-        .arg("create-vector-collection")
+        .args(["collection", "create"])
         .arg(&db_path)
         .arg("to_delete")
         .arg("--dimension")
@@ -226,7 +226,7 @@ fn test_delete_collection_with_force() {
         .success();
 
     velesdb_cmd()
-        .arg("delete-collection")
+        .args(["collection", "delete"])
         .arg(&db_path)
         .arg("to_delete")
         .arg("--force")
@@ -242,7 +242,7 @@ fn test_delete_collection_nonexistent_fails() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("delete-collection")
+        .args(["collection", "delete"])
         .arg(&db_path)
         .arg("ghost")
         .arg("--force")
@@ -257,7 +257,7 @@ fn test_delete_collection_then_list_empty() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("create-vector-collection")
+        .args(["collection", "create"])
         .arg(&db_path)
         .arg("temp_col")
         .arg("--dimension")
@@ -266,7 +266,7 @@ fn test_delete_collection_then_list_empty() {
         .success();
 
     velesdb_cmd()
-        .arg("delete-collection")
+        .args(["collection", "delete"])
         .arg(&db_path)
         .arg("temp_col")
         .arg("--force")
@@ -274,7 +274,7 @@ fn test_delete_collection_then_list_empty() {
         .success();
 
     velesdb_cmd()
-        .arg("list")
+        .args(["collection", "list"])
         .arg(&db_path)
         .assert()
         .success()
@@ -284,7 +284,7 @@ fn test_delete_collection_then_list_empty() {
 #[test]
 fn test_delete_collection_help() {
     velesdb_cmd()
-        .arg("delete-collection")
+        .args(["collection", "delete"])
         .arg("--help")
         .assert()
         .success()
@@ -300,7 +300,7 @@ fn test_explain_tree_output() {
     let (db_path, _temp) = setup_vector_collection("docs", 128);
 
     velesdb_cmd()
-        .arg("explain")
+        .args(["query", "explain"])
         .arg(&db_path)
         .arg("SELECT * FROM docs LIMIT 10")
         .assert()
@@ -314,7 +314,7 @@ fn test_explain_json_output() {
     let (db_path, _temp) = setup_vector_collection("docs", 128);
 
     velesdb_cmd()
-        .arg("explain")
+        .args(["query", "explain"])
         .arg(&db_path)
         .arg("SELECT * FROM docs LIMIT 10")
         .arg("--format")
@@ -330,7 +330,7 @@ fn test_explain_invalid_query_fails() {
     let (db_path, _temp) = setup_vector_collection("docs", 128);
 
     velesdb_cmd()
-        .arg("explain")
+        .args(["query", "explain"])
         .arg(&db_path)
         .arg("THIS IS NOT SQL")
         .assert()
@@ -341,7 +341,7 @@ fn test_explain_invalid_query_fails() {
 #[test]
 fn test_explain_help() {
     velesdb_cmd()
-        .arg("explain")
+        .args(["query", "explain"])
         .arg("--help")
         .assert()
         .success()
@@ -358,7 +358,7 @@ fn test_analyze_table_output() {
     let (db_path, _temp) = setup_vector_collection("docs", 64);
 
     velesdb_cmd()
-        .arg("analyze")
+        .args(["collection", "analyze"])
         .arg(&db_path)
         .arg("docs")
         .assert()
@@ -373,7 +373,7 @@ fn test_analyze_json_output() {
     let (db_path, _temp) = setup_vector_collection("docs", 64);
 
     velesdb_cmd()
-        .arg("analyze")
+        .args(["collection", "analyze"])
         .arg(&db_path)
         .arg("docs")
         .arg("--format")
@@ -391,7 +391,7 @@ fn test_analyze_nonexistent_collection_fails() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("analyze")
+        .args(["collection", "analyze"])
         .arg(&db_path)
         .arg("ghost")
         .assert()
@@ -401,7 +401,7 @@ fn test_analyze_nonexistent_collection_fails() {
 #[test]
 fn test_analyze_help() {
     velesdb_cmd()
-        .arg("analyze")
+        .args(["collection", "analyze"])
         .arg("--help")
         .assert()
         .success()
@@ -430,7 +430,7 @@ fn test_delete_points_success() {
     }
 
     velesdb_cmd()
-        .arg("delete-points")
+        .args(["data", "delete"])
         .arg(&db_path)
         .arg("docs")
         .arg("42")
@@ -456,7 +456,7 @@ fn test_delete_points_multiple_ids() {
     }
 
     velesdb_cmd()
-        .arg("delete-points")
+        .args(["data", "delete"])
         .arg(&db_path)
         .arg("docs")
         .arg("1")
@@ -474,7 +474,7 @@ fn test_delete_points_nonexistent_collection_fails() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("delete-points")
+        .args(["data", "delete"])
         .arg(&db_path)
         .arg("ghost")
         .arg("1")
@@ -486,7 +486,7 @@ fn test_delete_points_nonexistent_collection_fails() {
 #[test]
 fn test_delete_points_no_ids_fails() {
     velesdb_cmd()
-        .arg("delete-points")
+        .args(["data", "delete"])
         .arg("./data")
         .arg("docs")
         .assert()
@@ -502,7 +502,7 @@ fn test_upsert_single_point() {
     let (db_path, _temp) = setup_vector_collection("docs", 4);
 
     velesdb_cmd()
-        .arg("upsert")
+        .args(["data", "upsert"])
         .arg(&db_path)
         .arg("docs")
         .arg("--id")
@@ -521,7 +521,7 @@ fn test_upsert_then_get() {
     let (db_path, _temp) = setup_vector_collection("items", 3);
 
     velesdb_cmd()
-        .arg("upsert")
+        .args(["data", "upsert"])
         .arg(&db_path)
         .arg("items")
         .arg("--id")
@@ -532,7 +532,7 @@ fn test_upsert_then_get() {
         .success();
 
     velesdb_cmd()
-        .arg("get")
+        .args(["data", "get"])
         .arg(&db_path)
         .arg("items")
         .arg("7")
@@ -548,7 +548,7 @@ fn test_upsert_invalid_vector_json_fails() {
     let (db_path, _temp) = setup_vector_collection("docs", 4);
 
     velesdb_cmd()
-        .arg("upsert")
+        .args(["data", "upsert"])
         .arg(&db_path)
         .arg("docs")
         .arg("--id")
@@ -565,7 +565,7 @@ fn test_upsert_invalid_payload_json_fails() {
     let (db_path, _temp) = setup_vector_collection("docs", 4);
 
     velesdb_cmd()
-        .arg("upsert")
+        .args(["data", "upsert"])
         .arg(&db_path)
         .arg("docs")
         .arg("--id")
@@ -586,7 +586,7 @@ fn test_upsert_nonexistent_collection_fails() {
     fs::create_dir_all(&db_path).unwrap();
 
     velesdb_cmd()
-        .arg("upsert")
+        .args(["data", "upsert"])
         .arg(&db_path)
         .arg("ghost")
         .arg("--id")
@@ -601,7 +601,7 @@ fn test_upsert_nonexistent_collection_fails() {
 #[test]
 fn test_upsert_help() {
     velesdb_cmd()
-        .arg("upsert")
+        .args(["data", "upsert"])
         .arg("--help")
         .assert()
         .success()
@@ -799,7 +799,7 @@ fn test_create_vector_upsert_delete_lifecycle() {
 
     // Create collection
     velesdb_cmd()
-        .arg("create-vector-collection")
+        .args(["collection", "create"])
         .arg(&db_path)
         .arg("lifecycle")
         .arg("--dimension")
@@ -809,7 +809,7 @@ fn test_create_vector_upsert_delete_lifecycle() {
 
     // Upsert a point
     velesdb_cmd()
-        .arg("upsert")
+        .args(["data", "upsert"])
         .arg(&db_path)
         .arg("lifecycle")
         .arg("--id")
@@ -823,7 +823,7 @@ fn test_create_vector_upsert_delete_lifecycle() {
 
     // Get the point
     velesdb_cmd()
-        .arg("get")
+        .args(["data", "get"])
         .arg(&db_path)
         .arg("lifecycle")
         .arg("1")
@@ -835,7 +835,7 @@ fn test_create_vector_upsert_delete_lifecycle() {
 
     // Delete the point
     velesdb_cmd()
-        .arg("delete-points")
+        .args(["data", "delete"])
         .arg(&db_path)
         .arg("lifecycle")
         .arg("1")
@@ -844,7 +844,7 @@ fn test_create_vector_upsert_delete_lifecycle() {
 
     // Delete the collection
     velesdb_cmd()
-        .arg("delete-collection")
+        .args(["collection", "delete"])
         .arg(&db_path)
         .arg("lifecycle")
         .arg("--force")
@@ -853,7 +853,7 @@ fn test_create_vector_upsert_delete_lifecycle() {
 
     // Verify it's gone
     velesdb_cmd()
-        .arg("list")
+        .args(["collection", "list"])
         .arg(&db_path)
         .assert()
         .success()
@@ -868,7 +868,7 @@ fn test_create_analyze_explain_flow() {
 
     // Create
     velesdb_cmd()
-        .arg("create-vector-collection")
+        .args(["collection", "create"])
         .arg(&db_path)
         .arg("analytics")
         .arg("--dimension")
@@ -878,7 +878,7 @@ fn test_create_analyze_explain_flow() {
 
     // Analyze
     velesdb_cmd()
-        .arg("analyze")
+        .args(["collection", "analyze"])
         .arg(&db_path)
         .arg("analytics")
         .assert()
@@ -887,7 +887,7 @@ fn test_create_analyze_explain_flow() {
 
     // Explain
     velesdb_cmd()
-        .arg("explain")
+        .args(["query", "explain"])
         .arg(&db_path)
         .arg("SELECT * FROM analytics LIMIT 5")
         .assert()
@@ -977,7 +977,7 @@ fn test_velesql_select_metadata_collection() {
     let (db_path, _temp_dir) = setup_metadata_collection("meta");
 
     velesdb_cmd()
-        .arg("query")
+        .args(["query", "execute"])
         .arg(&db_path)
         .arg("SELECT * FROM meta LIMIT 5")
         .assert()

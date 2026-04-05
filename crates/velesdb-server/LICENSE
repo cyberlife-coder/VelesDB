@@ -73,6 +73,34 @@ The purpose of this requirement is transparency and reproducibility, not restric
 
 ## Redistribution
 
+### Attribution for Public-Facing Applications
+
+If You deploy or make publicly available an Application or Service that uses the Software as a component — including SaaS products, web applications, mobile applications, or browser-based applications — You must include a visible attribution notice containing a hyperlink to https://velesdb.com.
+
+**Placement:** The notice must appear in at least one location that is accessible to end users without requiring a separate action (e.g., not solely in source code or internal documentation). Acceptable placements include, but are not limited to:
+
+- a website footer or sidebar;
+- an application's About, Credits, or Settings page;
+- API documentation or developer portal;
+- a README or landing page for open-source projects that integrate the Software.
+
+**Format:** The notice may take any reasonable form, such as:
+
+- "Powered by [VelesDB](https://velesdb.com)"
+- "Built with [VelesDB](https://velesdb.com)"
+- The VelesDB logo (available at https://velesdb.com/brand) linking to https://velesdb.com
+
+The key requirement is a **clickable link to https://velesdb.com** that is visible to end users.
+
+**Exemptions:** This requirement does not apply to:
+- internal use within your organization;
+- development, testing, or staging environments;
+- holders of a VelesDB Enterprise or Premium license (which may include waived or alternative attribution terms — contact contact@wiscale.fr).
+
+Failure to comply with this attribution requirement constitutes a violation of this license.
+
+### Redistribution Terms
+
 You may redistribute the Software (in original or modified form), including through container images (e.g., Docker), installers, package managers (e.g., Homebrew, apt, cargo), infrastructure-as-code templates (e.g., Terraform, Helm), or any other distribution mechanism, provided that:
 
 1. a complete copy of this license is included with each distribution,
@@ -309,3 +337,17 @@ The VelesDB Core license covers VelesDB Core. Premium features (such as RBAC, SS
 ### 24) Can I use VelesDB Core's VelesQL query language in my product?
 
 **Yes.** Using VelesQL to query data internally within your product is permitted. However, exposing a general-purpose VelesQL endpoint to third parties (allowing them to run arbitrary queries) would constitute providing access to a Substantial Set of the Software's capabilities and is not permitted without a commercial license.
+
+### 25) Do I need to display "Powered by VelesDB" on my website or app?
+
+**Yes, if your app is public.** Include a link to velesdb.com somewhere visible — footer, About page, credits, or docs. That's it. No specific size, color, or position required. Just a clickable link that users can find.
+
+Want to remove it? An Enterprise license waives the attribution requirement.
+
+### 26) What counts as a "public-facing application"?
+
+Anything accessible by people outside your organization: a SaaS product, a public website, a mobile app on app stores, a public API. Internal tools and staging environments don't count.
+
+### 27) Can I use the VelesDB logo instead of text?
+
+**Yes.** Logo or text, your choice — as long as it links to velesdb.com. Brand assets are at https://velesdb.com/brand.

@@ -6,20 +6,83 @@ impl Collection {
         cond: &crate::velesql::Condition,
         execution_limit: usize,
     ) -> Option<Vec<SearchResult>> {
-        let (field_name, key) = Self::extract_index_lookup_condition(cond)?;
-        let ids = self.secondary_index_lookup(&field_name, &key)?;
-        let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+        // Try simple Eq lookup first (fastest path).
+        if let Some((field_name, key)) = Self::extract_index_lookup_condition(cond) {
+            let ids = self.secondary_index_lookup(&field_name, &key)?;
+            tracing::debug!(
+                field = %field_name,
+                ids_count = ids.len(),
+                limit = execution_limit,
+                "indexed metadata query: Eq lookup"
+            );
+            // Skip index path when too many hits — sequential scan with early
+            // exit is faster than hydrating thousands of index results.
+            if ids.len() > execution_limit.saturating_mul(50).max(1000) {
+                tracing::debug!("indexed metadata query: too many hits, falling through to scan");
+                return None; // Fall through to scan
+            }
+            let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+            return Some(self.scan_ids_with_filter(&ids, &filter, execution_limit));
+        }
+
+        // For AND conditions, find the first Eq sub-condition that has an index,
+        // use it to narrow the candidate set, then post-filter the rest.
+        if let crate::velesql::Condition::And(ref _left, ref _right) = cond {
+            // Flatten the AND tree into a list of leaf conditions.
+            let mut leaves = Vec::new();
+            Self::flatten_and_conditions(cond, &mut leaves);
+            for sub in &leaves {
+                if let Some((field_name, key)) = Self::extract_index_lookup_condition(sub) {
+                    if let Some(ids) = self.secondary_index_lookup(&field_name, &key) {
+                        let filter = crate::filter::Filter::new(crate::filter::Condition::from(
+                            cond.clone(),
+                        ));
+                        return Some(self.scan_ids_with_filter(&ids, &filter, execution_limit));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Flattens a binary AND tree into a list of leaf conditions.
+    fn flatten_and_conditions<'a>(
+        cond: &'a crate::velesql::Condition,
+        out: &mut Vec<&'a crate::velesql::Condition>,
+    ) {
+        match cond {
+            crate::velesql::Condition::And(left, right) => {
+                Self::flatten_and_conditions(left, out);
+                Self::flatten_and_conditions(right, out);
+            }
+            crate::velesql::Condition::Group(inner) => {
+                Self::flatten_and_conditions(inner, out);
+            }
+            other => out.push(other),
+        }
+    }
+
+    /// Scans a set of candidate IDs and applies a filter, returning matching results.
+    ///
+    /// Uses score `1.0` for metadata-only matches (no vector similarity involved).
+    fn scan_ids_with_filter(
+        &self,
+        ids: &[u64],
+        filter: &crate::filter::Filter,
+        execution_limit: usize,
+    ) -> Vec<SearchResult> {
         let mut results = Vec::new();
-        for point in self.get(&ids).into_iter().flatten() {
+        for point in self.get(ids).into_iter().flatten() {
             let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
             if filter.matches(&payload) {
-                results.push(SearchResult::new(point, 0.0));
+                results.push(SearchResult::new(point, 1.0));
                 if results.len() >= execution_limit {
                     break;
                 }
             }
         }
-        Some(results)
+        results
     }
 
     fn extract_index_lookup_condition(
@@ -32,6 +95,26 @@ impl Collection {
             }
         }
         None
+    }
+
+    /// Scans candidate IDs from a bitmap and applies the full filter.
+    fn scan_candidate_ids_metadata(
+        &self,
+        candidate_ids: &[u64],
+        filter: &crate::filter::Filter,
+        limit: usize,
+    ) -> Vec<SearchResult> {
+        let mut results = Vec::new();
+        for point in self.get(candidate_ids).into_iter().flatten() {
+            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
+            if filter.matches(&payload) {
+                results.push(SearchResult::new(point, 1.0));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+        results
     }
 
     pub(crate) fn evaluate_graph_match_anchor_ids(
@@ -176,6 +259,21 @@ impl Collection {
                 w_f32
             });
             let rrf_k = fusion.and_then(|fc| fc.k);
+            // Bug #474: Extract co-occurring metadata filters (e.g. `category = 'tech'`)
+            // before calling hybrid_search. Without this, metadata conditions alongside
+            // MATCH are silently dropped.
+            if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
+                let filter =
+                    crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
+                return self.hybrid_search_with_filter(
+                    vector,
+                    &text_query,
+                    execution_limit,
+                    vector_weight,
+                    &filter,
+                    rrf_k,
+                );
+            }
             return self.hybrid_search(vector, &text_query, execution_limit, vector_weight, rrf_k);
         }
         let cbo_search_k = execution_limit
@@ -212,15 +310,120 @@ impl Collection {
             return Ok(self.execute_scan_query(&empty_filter(), execution_limit));
         }
         if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
+            // Fast path: use bitmap from secondary indexes (same mechanism as
+            // search_with_filter). This handles AND conditions, Eq lookups, and
+            // range queries via the bitmap infrastructure.
+            let filter =
+                crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond.clone()));
+            if let Some(bitmap) = self.build_prefilter_bitmap(&filter) {
+                if bitmap.is_empty() {
+                    return Ok(Vec::new());
+                }
+                // Convert bitmap to ID list and scan with filter
+                let candidate_ids: Vec<u64> = bitmap.iter().map(u64::from).collect();
+                if candidate_ids.len() <= execution_limit.saturating_mul(50).max(1000) {
+                    return Ok(self.scan_candidate_ids_metadata(
+                        &candidate_ids,
+                        &filter,
+                        execution_limit,
+                    ));
+                }
+                // Too many bitmap hits — fall through to scan with early exit
+            }
+
+            tracing::debug!("dispatch_metadata_only: trying indexed path");
             if let Some(indexed) =
                 self.execute_indexed_metadata_query(&metadata_cond, execution_limit)
             {
+                tracing::debug!("dispatch_metadata_only: indexed path succeeded");
                 return Ok(indexed);
             }
+            tracing::debug!("dispatch_metadata_only: indexed path returned None, trying BM25");
+
+            // Try BM25 text search for LIKE conditions before falling back to full scan.
+            // When a LIKE pattern contains a word-like substring (e.g. `%google%`),
+            // BM25 can narrow candidates significantly faster than a sequential scan.
+            if let Some(like_results) = self.try_like_via_text_index(cond, execution_limit) {
+                return Ok(like_results);
+            }
+
             let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
             return Ok(self.execute_scan_query(&filter, execution_limit));
         }
         Ok(self.execute_scan_query(&empty_filter(), execution_limit))
+    }
+
+    /// Attempts to accelerate a LIKE condition using the BM25 text index.
+    ///
+    /// Extracts the word-like core from a `%word%` pattern and queries BM25
+    /// for candidate document IDs. The full condition is then post-filtered
+    /// over those candidates instead of scanning the entire collection.
+    ///
+    /// Returns `Some(results)` only when BM25 found enough candidates to
+    /// fill the limit. When BM25 returns fewer matches than requested, the
+    /// result set may be incomplete (BM25 tokenization differs from LIKE
+    /// substring matching), so we return `None` to let the caller fall
+    /// through to a full sequential scan.
+    ///
+    /// Returns `None` when:
+    /// - No LIKE condition is found in the condition tree
+    /// - The extracted word is too short (< 3 chars) for meaningful BM25 lookup
+    /// - BM25 returns no candidates (fall through to sequential scan)
+    /// - BM25 candidates yield fewer than `limit` matches (incomplete set)
+    fn try_like_via_text_index(
+        &self,
+        cond: &crate::velesql::Condition,
+        limit: usize,
+    ) -> Option<Vec<SearchResult>> {
+        let pattern = Self::extract_like_pattern(cond)?;
+
+        // Extract the word-like core from the pattern (strip leading/trailing %).
+        let word = pattern.trim_matches('%');
+        if word.is_empty() || word.len() < 3 {
+            return None;
+        }
+
+        // Use BM25 text index to find candidates (over-fetch 10× for post-filter headroom).
+        let text_results = self.text_index.search(word, limit.saturating_mul(10));
+        if text_results.is_empty() {
+            return None;
+        }
+
+        let candidate_ids: Vec<u64> = text_results.iter().map(|(id, _)| *id).collect();
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+
+        let mut results = Vec::new();
+        for point in self.get(&candidate_ids).into_iter().flatten() {
+            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
+            if filter.matches(&payload) {
+                results.push(SearchResult::new(point, 1.0));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+
+        // Only return BM25 results when we filled the limit — otherwise the
+        // result set may be incomplete because BM25 tokenization differs from
+        // LIKE substring matching (e.g., "analytics.google.com" won't match
+        // BM25 for "google" but should match LIKE '%google%').
+        if results.len() >= limit {
+            Some(results)
+        } else {
+            None // Fall through to full sequential scan
+        }
+    }
+
+    /// Recursively extracts the first LIKE pattern from a condition tree.
+    fn extract_like_pattern(cond: &crate::velesql::Condition) -> Option<String> {
+        match cond {
+            crate::velesql::Condition::Like(like) => Some(like.pattern.clone()),
+            crate::velesql::Condition::And(left, right) => {
+                Self::extract_like_pattern(left).or_else(|| Self::extract_like_pattern(right))
+            }
+            crate::velesql::Condition::Group(inner) => Self::extract_like_pattern(inner),
+            _ => None,
+        }
     }
 
     #[allow(clippy::too_many_arguments)] // All arguments come from query extraction in the caller.

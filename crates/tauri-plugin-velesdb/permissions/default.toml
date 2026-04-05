@@ -39,6 +39,11 @@ permissions = [
     "allow-get-edges",
     "allow-traverse-graph",
     "allow-get-node-degree",
+    "allow-traverse-graph-parallel",
+    # Secondary Indexes
+    "allow-create-index",
+    "allow-drop-index",
+    "allow-list-indexes",
 ]
 
 # Read-only permission set
@@ -59,6 +64,8 @@ permissions = [
     "allow-get-edges",
     "allow-traverse-graph",
     "allow-get-node-degree",
+    "allow-traverse-graph-parallel",
+    "allow-list-indexes",
 ]
 
 # Search-only permission set

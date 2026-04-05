@@ -24,6 +24,7 @@ fn make_match_clause(has_similarity: bool, limit: Option<u64>) -> MatchClause {
                 alias: Some("a".to_string()),
                 labels: vec!["Person".to_string()],
                 properties: std::collections::HashMap::new(),
+                collection: None,
             }],
             relationships: vec![RelationshipPattern {
                 alias: None,

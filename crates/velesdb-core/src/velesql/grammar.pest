@@ -66,10 +66,12 @@ match_query = {
 // Graph pattern: (node)-[rel]->(node) chains
 graph_pattern = { node_pattern ~ (relationship_pattern ~ node_pattern)* }
 node_pattern = { "(" ~ node_spec? ~ ")" }
-node_spec = { node_alias? ~ node_labels? ~ node_properties? }
+node_spec = { node_alias? ~ node_labels? ~ collection_annotation? ~ node_properties? }
 node_alias = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 node_labels = { ":" ~ label_name ~ (":" ~ label_name)* }
 label_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+collection_annotation = { "@" ~ collection_ref }
+collection_ref = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 node_properties = { "{" ~ property_list ~ "}" }
 property_list = { property ~ ("," ~ property)* }
 property = { identifier ~ ":" ~ property_value }

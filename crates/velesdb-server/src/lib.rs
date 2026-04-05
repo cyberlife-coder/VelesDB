@@ -3,7 +3,6 @@
 // trait signature even when they don't await).
 #![allow(clippy::pedantic)] // Axum handlers + utoipa derive generate pedantic warnings
 #![allow(clippy::nursery)] // false positives on Axum extractors
-#![allow(clippy::doc_markdown)] // utoipa doc attributes conflict with doc_markdown
 #![allow(clippy::uninlined_format_args)] // readability in error messages
 #![allow(clippy::manual_let_else)] // pattern matching in handlers is clearer
 #![allow(clippy::cast_possible_truncation)] // u128→u64 timing casts are bounded
@@ -27,18 +26,20 @@
 pub mod auth;
 pub mod config;
 mod handlers;
+pub mod onboarding;
+mod security_addon;
 pub mod tls;
 mod types;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use security_addon::SecurityAddon;
+use std::sync::atomic::AtomicBool;
 use utoipa::OpenApi;
 use velesdb_core::guardrails::QueryLimits;
 use velesdb_core::Database;
 
-// Re-export types for external use
+pub use onboarding::OnboardingMetrics;
 pub use types::*;
 
-// Re-export handlers for routing
 pub use handlers::{
     aggregate, analyze_collection, batch_search, collection_sanity, create_collection,
     create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
@@ -48,20 +49,21 @@ pub use handlers::{
     stream_upsert_points, text_search, update_guardrails, upsert_points,
 };
 
-// Graph handlers (EPIC-016/US-031)
 pub use handlers::graph::{
-    add_edge, get_edges, get_node_degree, stream_traverse, traverse_graph, DegreeResponse,
-    StreamDoneEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams, TraversalResultItem,
-    TraversalStats, TraverseRequest, TraverseResponse,
+    add_edge, get_edge_count, get_edges, get_node_degree, get_node_edges, get_node_payload,
+    graph_search, list_nodes, remove_edge, stream_traverse, traverse_graph, traverse_parallel,
+    upsert_node_payload, DegreeResponse, EdgeCountResponse, GraphSearchRequest,
+    GraphSearchResponse, NodeEdgeQueryParams, NodeListResponse, NodePayloadResponse,
+    ParallelTraverseRequest, StreamDoneEvent, StreamNodeEvent, StreamStatsEvent,
+    StreamTraverseParams, TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+    UpsertNodePayloadRequest,
 };
 
-// FLAG-3 FIX: Re-export metrics handlers conditionally (EPIC-016/US-034,035)
 #[cfg(feature = "prometheus")]
 pub use handlers::metrics::{health_metrics, prometheus_metrics};
 
 // ============================================================================
 // OpenAPI Documentation
-// ============================================================================
 
 /// VelesDB API Documentation
 #[derive(OpenApi)]
@@ -127,8 +129,16 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::indexes::delete_index,
         handlers::graph::handlers::get_edges,
         handlers::graph::handlers::add_edge,
+        handlers::graph::handlers_extended::remove_edge,
+        handlers::graph::handlers_extended::get_edge_count,
+        handlers::graph::handlers_extended::list_nodes,
+        handlers::graph::handlers_extended::get_node_edges,
+        handlers::graph::handlers_extended::get_node_payload,
+        handlers::graph::handlers_extended::upsert_node_payload,
         handlers::graph::handlers::traverse_graph,
+        handlers::graph::handlers_extended::traverse_parallel,
         handlers::graph::handlers::get_node_degree,
+        handlers::graph::handlers_extended::graph_search,
         handlers::graph::stream::stream_traverse,
         handlers::match_query::match_query
     ),
@@ -180,6 +190,14 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             handlers::graph::AddEdgeRequest,
             handlers::graph::EdgesResponse,
             handlers::graph::EdgeResponse,
+            handlers::graph::EdgeCountResponse,
+            handlers::graph::NodeListResponse,
+            handlers::graph::NodePayloadResponse,
+            handlers::graph::UpsertNodePayloadRequest,
+            handlers::graph::ParallelTraverseRequest,
+            handlers::graph::GraphSearchRequest,
+            handlers::graph::GraphSearchResponse,
+            handlers::graph::GraphSearchResultItem,
             handlers::graph::StreamNodeEvent,
             handlers::graph::StreamStatsEvent,
             handlers::graph::StreamDoneEvent,
@@ -193,73 +211,23 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
 )]
 pub struct ApiDoc;
 
-/// Adds the Bearer authentication security scheme to the OpenAPI spec.
-struct SecurityAddon;
-
-impl utoipa::Modify for SecurityAddon {
-    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        if let Some(components) = openapi.components.as_mut() {
-            components.add_security_scheme(
-                "bearer_auth",
-                utoipa::openapi::security::SecurityScheme::Http(
-                    utoipa::openapi::security::Http::new(
-                        utoipa::openapi::security::HttpAuthScheme::Bearer,
-                    ),
-                ),
-            );
-        }
-    }
-}
-
 // ============================================================================
 // Application State
-// ============================================================================
 
 /// Application state shared across handlers.
 pub struct AppState {
     /// The `VelesDB` database instance.
     pub db: Database,
     /// New-user onboarding diagnostics counters.
-    pub onboarding_metrics: OnboardingMetrics,
+    pub onboarding_metrics: onboarding::OnboardingMetrics,
     /// Query guard-rails configuration (EPIC-048).
     pub query_limits: parking_lot::RwLock<QueryLimits>,
     /// Readiness flag — `true` once the database is fully loaded.
     pub ready: AtomicBool,
 }
 
-/// Lightweight counters for first-hour troubleshooting diagnostics.
-#[derive(Default)]
-pub struct OnboardingMetrics {
-    pub search_requests_total: AtomicU64,
-    pub dimension_mismatch_total: AtomicU64,
-    pub empty_search_results_total: AtomicU64,
-    pub filter_parse_errors_total: AtomicU64,
-}
-
-impl OnboardingMetrics {
-    pub fn record_search_request(&self) {
-        self.search_requests_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_dimension_mismatch(&self) {
-        self.dimension_mismatch_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_empty_search_results(&self) {
-        self.empty_search_results_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_filter_parse_error(&self) {
-        self.filter_parse_errors_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-}
-
 // ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

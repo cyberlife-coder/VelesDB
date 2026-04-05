@@ -188,18 +188,7 @@ impl VectorStorage for MmapStorage {
         // 1. Calculate total space needed and prepare batch WAL entry
         // Perf: Use FxHashMap for O(1) lookup instead of Vec with O(n) find
         // EPIC-033/US-004: Use sharded index for reduced contention
-        let mut new_vector_offsets: FxHashMap<u64, usize> = FxHashMap::default();
-        new_vector_offsets.reserve(vectors.len());
-        let mut total_new_size = 0usize;
-
-        for &(id, _) in vectors {
-            if !self.index.contains_key(id) {
-                // M-2: Acquire ordering for cross-platform visibility
-                let offset = self.next_offset.load(Ordering::Acquire) + total_new_size;
-                new_vector_offsets.insert(id, offset);
-                total_new_size += vector_size;
-            }
-        }
+        let (new_vector_offsets, total_new_size) = self.compute_new_offsets(vectors, vector_size);
 
         // 2. Pre-allocate space for all new vectors at once
         if total_new_size > 0 {
@@ -228,33 +217,7 @@ impl VectorStorage for MmapStorage {
         }
 
         // 4. Write all vectors to mmap contiguously
-        // EPIC-033/US-004: Use sharded index for reduced contention
-        {
-            let mut mmap = self.mmap.write();
-
-            for &(id, vector) in vectors {
-                let vector_bytes = vector_to_bytes(vector);
-
-                // Get offset (existing or from new_vector_offsets)
-                // Perf: O(1) HashMap lookup instead of O(n) linear search
-                let offset = if let Some(existing) = self.index.get(id) {
-                    existing
-                } else {
-                    // BUG FIX (04-05): Replaced `unwrap_or(0)` which would silently
-                    // write to offset 0 (corrupting the first vector) if the invariant
-                    // ever broke. Every new ID is added to `new_vector_offsets` above,
-                    // so this should always succeed.
-                    new_vector_offsets.get(&id).copied().ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "ID not found in new_vector_offsets",
-                        )
-                    })?
-                };
-
-                mmap[offset..offset + vector_size].copy_from_slice(vector_bytes);
-            }
-        }
+        self.write_vectors_to_mmap(vectors, vector_size, &new_vector_offsets)?;
 
         // 5. Batch update index (EPIC-033/US-004: Use sharded index)
         for (id, offset) in new_vector_offsets {
@@ -354,5 +317,62 @@ impl VectorStorage for MmapStorage {
 
     fn ids(&self) -> Vec<u64> {
         self.index.keys()
+    }
+}
+
+impl MmapStorage {
+    /// Computes offsets for new vectors (not yet in the index).
+    ///
+    /// Returns a map of `(id -> offset)` for new vectors and the total
+    /// byte size needed for all new vectors.
+    fn compute_new_offsets(
+        &self,
+        vectors: &[(u64, &[f32])],
+        vector_size: usize,
+    ) -> (FxHashMap<u64, usize>, usize) {
+        let mut new_vector_offsets: FxHashMap<u64, usize> = FxHashMap::default();
+        new_vector_offsets.reserve(vectors.len());
+        let mut total_new_size = 0usize;
+
+        for &(id, _) in vectors {
+            if !self.index.contains_key(id) {
+                // M-2: Acquire ordering for cross-platform visibility
+                let offset = self.next_offset.load(Ordering::Acquire) + total_new_size;
+                new_vector_offsets.insert(id, offset);
+                total_new_size += vector_size;
+            }
+        }
+
+        (new_vector_offsets, total_new_size)
+    }
+
+    /// Writes all vectors to the mmap, resolving offsets from the index
+    /// or from `new_vector_offsets` for newly inserted IDs.
+    fn write_vectors_to_mmap(
+        &self,
+        vectors: &[(u64, &[f32])],
+        vector_size: usize,
+        new_vector_offsets: &FxHashMap<u64, usize>,
+    ) -> io::Result<()> {
+        let mut mmap = self.mmap.write();
+
+        for &(id, vector) in vectors {
+            let vector_bytes = vector_to_bytes(vector);
+
+            let offset = if let Some(existing) = self.index.get(id) {
+                existing
+            } else {
+                new_vector_offsets.get(&id).copied().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "ID not found in new_vector_offsets",
+                    )
+                })?
+            };
+
+            mmap[offset..offset + vector_size].copy_from_slice(vector_bytes);
+        }
+
+        Ok(())
     }
 }

@@ -4,6 +4,7 @@
 //! Persistence-related functionality is in `index::sparse::persistence`.
 
 pub mod inverted_index;
+mod mutable_segment;
 pub mod search;
 pub mod types;
 

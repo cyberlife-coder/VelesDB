@@ -7,21 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-04-05
+
+### Added
+- **Cross-collection MATCH queries (Issue #495)** — `@collection` annotation on MATCH node patterns
+  enables cross-collection graph queries. Syntax: `MATCH (p:Product@products)-[:STORED_IN]->(inv:Inventory@inventory)`.
+  Results are enriched with payloads from annotated collections (alias-prefixed fields).
+- **MATCH via `/query` endpoint** — MATCH queries can now be executed via `Database::execute_query`
+  using `_collection` parameter or `SELECT ... FROM <collection> WHERE MATCH ...` syntax.
+  Previously, MATCH was rejected at the Database level.
+- **Cross-type JOIN tests** — VectorCollection JOIN MetadataCollection validated with BDD tests.
+- **Graph API parity** — 7 new REST endpoints for complete graph operations:
+  - `DELETE /collections/{name}/graph/edges/{id}` — remove edge by ID
+  - `GET /collections/{name}/graph/edges/count` — total edge count
+  - `GET /collections/{name}/graph/nodes` — list all node IDs
+  - `GET /collections/{name}/graph/nodes/{id}/edges` — node edges with direction filter (in/out/both)
+  - `GET/PUT /collections/{name}/graph/nodes/{id}/payload` — get/upsert node payload
+  - `POST /collections/{name}/graph/traverse/parallel` — multi-source BFS traversal
+  - `POST /collections/{name}/graph/search` — embedding similarity search on graph nodes
+- **CLI graph commands** — `graph remove-edge`, `graph count`, `graph search`
+- **REPL graph commands** — `.graph remove-edge`, `.graph count`, `.graph search`, `.graph store-payload`, `.graph get-payload`, `.graph nodes` with full help documentation
+- **Core** — `GraphCollection::traverse_bfs_parallel()` for multi-source BFS with deduplication
+- **OpenAPI** — all new graph endpoints registered in API documentation
+- **Tests** — 238 BDD tests, 4447 lib tests, 13 new server tests
+
 ### Performance
-- **HNSW graduated ef_construction** -- 3-phase VAMANA schedule (low/mid/full ef) during
-  batch insert reduces graph construction cost while preserving recall quality
-- **Lock-free CAS entry-point promotion** -- replaced mutex-based HNSW entry-point
-  updates with `AtomicUsize` compare-and-swap, eliminating contention during parallel inserts
-- **Pre-allocated vector storage** -- `allocate_batch` split into `reserve` + `bulk-push`
-  to reduce per-vector allocation overhead during batch inserts
-- **CsrSnapshot zero-copy BFS** -- CSR (Compressed Sparse Row) snapshot of the edge store
-  enables zero-copy graph traversal without holding locks during BFS/DFS
-- **FxHashSet visited sets** -- replaced `std::collections::HashSet` with `rustc_hash::FxHashSet`
-  in graph traversal for faster hashing on integer node IDs
-- **Parent-pointer path reconstruction** -- replaced per-path cloning with parent-pointer
-  backtracking in BFS/DFS, reducing memory allocations during graph traversal
-- **WAL deferred sync for streaming bulk insert** -- WAL fsync is deferred during bulk
-  insert streams and flushed once at completion, reducing I/O overhead
+- **Bitmap pre-filter for filtered search (#487)** — adaptive strategy selection based on
+  real selectivity: full-scan brute-force for ≤1% selectivity, HNSW+bitmap for 1-30%,
+  post-filter fallback for >30%. Eliminates massive over-fetching on selective filters
+- **CSR graph traversal v2 (#491)** — CsrSnapshot with edge IDs + labels, ArcSwap lock-free
+  adjacency, EdgePredicate pushdown (290ns for label-filtered BFS vs 3.4µs unfiltered = 12x),
+  lazy CSR rebuild on read instead of every mutation
+- **Bulk insert v2 pipeline (#488)** — DirectVectorWriter bypasses ShardedVectors overhead,
+  AsyncIndexBuilder with background thread for deferred HNSW construction
+- **`ComponentScores` optimization (#476)** — `SmallVec<[(&'static str, f32); 4]>` eliminates per-result heap allocation
+- **Bitmap NEQ support** — `Neq` conditions now use universe bitmap subtraction
+- **Secondary index backfill** — `create_index` scans existing payloads to populate the index
+- **LIKE→BM25 fallback** — metadata-only LIKE queries use BM25 text index for candidate narrowing
+- **Native batch edge loading** — `add_edges_batch` with single lock acquisition cycle (1M+ edges/s)
+- **19 functions CC > 8 reduced to ≤ 8** — all non-SIMD functions now comply with Codacy CC ≤ 8
+
+### Fixed
+- **BFS dedup** — CSR and EdgeStore BFS no longer produce duplicate results for nodes
+  reachable via multiple paths (diamond graph fix).
+- **DISTINCT in early-return paths (#475)** — `SELECT DISTINCT` now applied in NOT-similarity and union query paths.
+- **NEAR + MATCH + metadata filter (#474)** — co-occurring metadata filters no longer silently dropped in hybrid search.
+- **`list_indexes` includes secondary indexes** — was only returning property/range indexes.
+- **`rrf_k` propagated to `hybrid_search_with_filter` (#472)** — was hardcoded to 60.
+- **CSR label filter** — edges with unresolvable labels now excluded when rel_type filter is active.
+- **Cross-collection enrichment** — logs `tracing::warn` when `@collection` references a non-existent collection.
+- **AsyncIndexBuilder drain in flush** — `flush()` and `flush_full()` now drain the AIB buffer into HNSW.
+- **Tauri `drop_index`** — uses `require_vector_collection` instead of deprecated `require_collection`.
+- **LangChain `filter=` kwarg** — backward-compatible alias restored alongside `metadata_filter=`.
+
+### Changed (Breaking)
+- **BFS cycle behavior** — BFS no longer re-emits already-visited nodes when a cycle closes.
+  Code relying on duplicate entries for cycle detection must be updated.
+- **`ComponentScores` type** — changed from `SmallVec<[(String, f32); 4]>` to `SmallVec<[(&'static str, f32); 4]>`.
+  External code constructing `SearchResult` with custom component scores must use `&'static str` literals.
+- **Python `relationship_types=` alias (#490)** — `traverse_bfs/dfs` now accept both `rel_types=` and `relationship_types=`.
+- **CLI commands restructured** — flat commands (`velesdb list`) grouped into sub-commands (`velesdb collection list`).
+- **License** — added Attribution clause for public-facing applications (visible link
+  to velesdb.com required, Enterprise license waives requirement).
+- **Rate limit** — increased default from 100 to 100K QPS for local-first deployment.
 
 ## [1.11.0] - 2026-03-31
 

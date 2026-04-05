@@ -15,7 +15,7 @@ pub const DEFAULT_MAX_CARDINALITY: usize = 100_000;
 pub const DEFAULT_MEMORY_LIMIT_BYTES: usize = 100 * 1024 * 1024;
 
 /// Default rate limit (queries per second).
-pub const DEFAULT_RATE_LIMIT_QPS: u32 = 100;
+pub const DEFAULT_RATE_LIMIT_QPS: u32 = 100_000;
 
 /// Default circuit breaker failure threshold.
 pub const DEFAULT_CIRCUIT_FAILURE_THRESHOLD: u32 = 5;

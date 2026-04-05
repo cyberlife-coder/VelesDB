@@ -49,15 +49,14 @@ pub fn extract_vector(py: Python<'_>, obj: &PyObject) -> PyResult<Vec<f32>> {
 pub fn parse_metric(metric: &str) -> PyResult<DistanceMetric> {
     metric
         .parse::<DistanceMetric>()
-        .map_err(|e| PyValueError::new_err(e))
+        .map_err(PyValueError::new_err)
 }
 
 /// Parse a storage mode string into a `StorageMode` enum.
 ///
 /// Delegates to [`StorageMode::from_str`] (single source of truth in `velesdb-core`).
 pub fn parse_storage_mode(mode: &str) -> PyResult<StorageMode> {
-    mode.parse::<StorageMode>()
-        .map_err(|e| PyValueError::new_err(e))
+    mode.parse::<StorageMode>().map_err(PyValueError::new_err)
 }
 
 /// Convert a Python object to a `serde_json::Value`.

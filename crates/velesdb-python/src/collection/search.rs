@@ -221,6 +221,7 @@ impl Collection {
                     top_k,
                     Some(vector_weight),
                     &f,
+                    None,
                 )
             } else {
                 self.inner.hybrid_search(

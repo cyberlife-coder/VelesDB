@@ -4,119 +4,21 @@
 //! auto-detecting schema and configuration options.
 
 mod discovery;
+mod migration_builder;
 mod prompts;
+mod source_type;
 mod ui;
 
 pub use discovery::SourceDiscovery;
 pub use prompts::WizardPrompts;
+pub use source_type::SourceType;
 pub use ui::WizardUI;
 
-use crate::config::{
-    DestinationConfig, DistanceMetric, MigrationOptions, SourceConfig, StorageMode,
-};
+use crate::config::SourceConfig;
 use crate::connectors::{create_connector, SourceSchema};
 use crate::error::Result;
 use crate::pipeline::Pipeline;
 use crate::MigrationConfig;
-use std::path::PathBuf;
-
-/// Supported source types for the wizard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceType {
-    /// Supabase (PostgreSQL + pgvector via PostgREST).
-    Supabase,
-    /// Qdrant vector database.
-    Qdrant,
-    /// Pinecone serverless/pod indexes.
-    Pinecone,
-    /// Weaviate vector database.
-    Weaviate,
-    /// Milvus / Zilliz Cloud.
-    Milvus,
-    /// ChromaDB vector database.
-    ChromaDB,
-    /// PostgreSQL with pgvector extension (direct SQL).
-    PgVector,
-    /// JSON file import.
-    JsonFile,
-    /// CSV file import.
-    CsvFile,
-    /// MongoDB Atlas Vector Search.
-    MongoDB,
-    /// Elasticsearch/OpenSearch with vector search.
-    Elasticsearch,
-    /// Redis Vector Search (Redis Stack).
-    Redis,
-}
-
-impl SourceType {
-    /// Returns all available source types.
-    pub fn all() -> Vec<Self> {
-        vec![
-            Self::Supabase,
-            Self::Qdrant,
-            Self::Pinecone,
-            Self::Weaviate,
-            Self::Milvus,
-            Self::ChromaDB,
-            Self::PgVector,
-            Self::JsonFile,
-            Self::CsvFile,
-            Self::MongoDB,
-            Self::Elasticsearch,
-            Self::Redis,
-        ]
-    }
-
-    /// Display name for the source type.
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::Supabase => "Supabase (PostgreSQL + pgvector)",
-            Self::Qdrant => "Qdrant",
-            Self::Pinecone => "Pinecone",
-            Self::Weaviate => "Weaviate",
-            Self::Milvus => "Milvus / Zilliz Cloud",
-            Self::ChromaDB => "ChromaDB",
-            Self::PgVector => "PostgreSQL (pgvector direct)",
-            Self::JsonFile => "JSON File (local import)",
-            Self::CsvFile => "CSV File (local import)",
-            Self::MongoDB => "MongoDB Atlas Vector Search",
-            Self::Elasticsearch => "Elasticsearch / OpenSearch",
-            Self::Redis => "Redis Vector Search",
-        }
-    }
-
-    /// Short name for CLI.
-    pub fn short_name(&self) -> &'static str {
-        match self {
-            Self::Supabase => "supabase",
-            Self::Qdrant => "qdrant",
-            Self::Pinecone => "pinecone",
-            Self::Weaviate => "weaviate",
-            Self::Milvus => "milvus",
-            Self::ChromaDB => "chromadb",
-            Self::PgVector => "pgvector",
-            Self::JsonFile => "json_file",
-            Self::CsvFile => "csv_file",
-            Self::MongoDB => "mongodb",
-            Self::Elasticsearch => "elasticsearch",
-            Self::Redis => "redis",
-        }
-    }
-
-    /// Whether this source requires an API key.
-    pub fn requires_api_key(&self) -> bool {
-        matches!(self, Self::Supabase | Self::Pinecone | Self::MongoDB)
-    }
-
-    /// Whether API key is optional.
-    pub fn optional_api_key(&self) -> bool {
-        matches!(
-            self,
-            Self::Qdrant | Self::Weaviate | Self::Milvus | Self::Elasticsearch | Self::Redis
-        )
-    }
-}
 
 /// Configuration collected during wizard interaction.
 #[derive(Debug, Clone)]
@@ -217,43 +119,14 @@ impl Wizard {
         config: &WizardConfig,
         schema: &SourceSchema,
     ) -> Result<MigrationConfig> {
-        let source = self.build_source_config(config)?;
-
-        let storage_mode = if config.use_sq8 {
-            StorageMode::SQ8
-        } else {
-            StorageMode::Full
-        };
-
-        let destination = DestinationConfig {
-            path: PathBuf::from(&config.dest_path),
-            collection: config.collection.clone(),
-            dimension: schema.dimension,
-            metric: DistanceMetric::Cosine,
-            storage_mode,
-        };
-
-        let options = MigrationOptions {
-            batch_size: 1000,
-            workers: 4,
-            dry_run: false,
-            continue_on_error: false,
-            checkpoint_enabled: true,
-            checkpoint_path: None,
-            field_mappings: std::collections::HashMap::new(),
-        };
-
-        Ok(MigrationConfig {
-            source,
-            destination,
-            options,
-        })
+        migration_builder::build_migration_config(config, schema)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{DistanceMetric, StorageMode};
 
     // ==================== SourceType Tests ====================
 
