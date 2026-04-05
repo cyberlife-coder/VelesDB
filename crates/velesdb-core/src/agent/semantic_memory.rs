@@ -72,7 +72,6 @@ impl SemanticMemory {
     ///
     /// Returns an error when embedding dimension is invalid, collection access fails,
     /// or persistence fails.
-    #[allow(deprecated)]
     pub fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), AgentMemoryError> {
         memory_helpers::validate_dimension(self.dimension, embedding.len())?;
 

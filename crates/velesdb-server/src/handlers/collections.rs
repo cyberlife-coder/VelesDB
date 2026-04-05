@@ -225,11 +225,10 @@ pub async fn collection_sanity(
 }
 
 /// Build the JSON sanity check response body.
-#[allow(deprecated)]
 fn build_sanity_response(
     state: &AppState,
     config: &velesdb_core::collection::CollectionConfig,
-    collection: &velesdb_core::Collection,
+    collection: &velesdb_core::AnyCollection,
 ) -> axum::response::Response {
     let has_data = config.point_count > 0;
     Json(serde_json::json!({

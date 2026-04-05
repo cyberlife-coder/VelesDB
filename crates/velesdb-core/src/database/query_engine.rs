@@ -41,7 +41,6 @@ fn classify_statement(query: &Query) -> StatementType<'_> {
     StatementType::Select
 }
 
-#[allow(deprecated)] // Methods in this block use the deprecated Collection type for query execution.
 impl Database {
     /// Produces a canonical JSON string for a `serde_json::Value`.
     ///
@@ -332,7 +331,6 @@ impl Database {
     ///
     /// Priority: vector collections first, then graph, then metadata.
     /// Returns the inner `Collection` for query execution.
-    #[allow(deprecated)]
     pub(super) fn resolve_collection(&self, name: &str) -> Result<crate::collection::Collection> {
         if let Some(vc) = self.get_vector_collection(name) {
             return Ok(vc.inner);
@@ -350,7 +348,6 @@ impl Database {
     ///
     /// Checks vector, graph, and metadata collections. Metadata-only collections
     /// support INSERT/UPDATE for metadata fields (no vectors).
-    #[allow(deprecated)]
     pub(super) fn resolve_writable_collection(
         &self,
         name: &str,

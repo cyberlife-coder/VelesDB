@@ -248,7 +248,7 @@ impl Pipeline {
             };
 
             if db
-                .get_collection(&self.config.destination.collection)
+                .get_any_collection(&self.config.destination.collection)
                 .is_none()
             {
                 db.create_collection_with_options(
@@ -282,7 +282,7 @@ impl Pipeline {
 
             if let Some(ref db) = db {
                 let collection = db
-                    .get_collection(&self.config.destination.collection)
+                    .get_vector_collection(&self.config.destination.collection)
                     .ok_or_else(|| {
                         Error::DestinationConnection("Collection not found".to_string())
                     })?;

@@ -137,7 +137,6 @@ impl ProceduralMemory {
     ///
     /// Returns an error when embedding dimension is invalid, the collection is
     /// unavailable, or persistence fails.
-    #[allow(deprecated)]
     pub fn learn(
         &self,
         procedure_id: u64,
@@ -240,7 +239,6 @@ impl ProceduralMemory {
     /// # Errors
     ///
     /// Returns an error when procedure retrieval or update fails.
-    #[allow(deprecated)]
     pub fn reinforce_with_strategy(
         &self,
         procedure_id: u64,
@@ -339,7 +337,6 @@ impl ProceduralMemory {
     /// # Errors
     ///
     /// Returns an error when collection access fails.
-    #[allow(deprecated)]
     pub fn list_all(&self) -> Result<Vec<ProcedureMatch>, AgentMemoryError> {
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 

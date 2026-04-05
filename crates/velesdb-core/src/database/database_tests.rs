@@ -1,5 +1,3 @@
-#![allow(deprecated)] // Tests use legacy Collection.
-
 use super::*;
 use crate::collection::graph::GraphEdge;
 use crate::point::Point;
@@ -43,13 +41,13 @@ fn test_get_collection() {
     let db = Database::open(dir.path()).unwrap();
 
     // Non-existent collection returns None
-    assert!(db.get_collection("nonexistent").is_none());
+    assert!(db.get_vector_collection("nonexistent").is_none());
 
     // Create and retrieve collection
     db.create_collection("test", 768, DistanceMetric::Cosine)
         .unwrap();
 
-    let collection = db.get_collection("test");
+    let collection = db.get_vector_collection("test");
     assert!(collection.is_some());
 
     let config = collection.unwrap().config();
@@ -69,7 +67,7 @@ fn test_delete_collection() {
     // Delete the collection
     db.delete_collection("to_delete").unwrap();
     assert!(db.list_collections().is_empty());
-    assert!(db.get_collection("to_delete").is_none());
+    assert!(db.get_vector_collection("to_delete").is_none());
 }
 
 #[test]
@@ -110,8 +108,8 @@ fn test_database_execute_query_join_on_end_to_end() {
     db.create_collection("customers", 2, DistanceMetric::Cosine)
         .unwrap();
 
-    let orders = db.get_collection("orders").unwrap();
-    let customers = db.get_collection("customers").unwrap();
+    let orders = db.get_vector_collection("orders").unwrap();
+    let customers = db.get_vector_collection("customers").unwrap();
 
     orders
         .upsert(vec![
@@ -157,10 +155,10 @@ fn test_database_execute_query_join_using_with_graph_match_filter() {
     db.create_collection("profiles", 2, DistanceMetric::Cosine)
         .unwrap();
 
-    // Use get_collection() here to get the shared instance that supports both
+    // Use get_vector_collection() here to get the shared instance that supports both
     // vector operations and graph operations (add_edge) on the same Collection.
-    let orders = db.get_collection("orders").unwrap();
-    let profiles = db.get_collection("profiles").unwrap();
+    let orders = db.get_vector_collection("orders").unwrap();
+    let profiles = db.get_vector_collection("profiles").unwrap();
 
     orders
         .upsert(vec![
@@ -218,7 +216,7 @@ fn test_database_execute_query_supports_left_join_runtime() {
     db.create_collection("customers", 2, DistanceMetric::Cosine)
         .unwrap();
 
-    let orders = db.get_collection("orders").unwrap();
+    let orders = db.get_vector_collection("orders").unwrap();
     orders
         .upsert(vec![Point::new(
             1,
@@ -353,7 +351,7 @@ fn test_database_execute_query_update_metadata_only_where_id() {
     let db = Database::open(dir.path()).unwrap();
     db.create_collection_typed("products", &CollectionType::MetadataOnly)
         .unwrap();
-    let products = db.get_collection("products").unwrap();
+    let products = db.get_metadata_collection("products").unwrap();
     products
         .upsert_metadata(vec![Point::metadata_only(
             1,
@@ -378,8 +376,8 @@ fn test_database_execute_query_insert_with_params() {
     let db = Database::open(dir.path()).unwrap();
     db.create_collection_typed("profiles", &CollectionType::MetadataOnly)
         .unwrap();
-    // get_collection() returns the shared registry instance for INSERT to be visible
-    let _profiles = db.get_collection("profiles").unwrap();
+    // get_vector_collection() returns the shared registry instance for INSERT to be visible
+    let _profiles = db.get_metadata_collection("profiles").unwrap();
 
     let query =
         Parser::parse("INSERT INTO profiles (id, name, age) VALUES ($id, $name, $age)").unwrap();
@@ -390,7 +388,7 @@ fn test_database_execute_query_insert_with_params() {
 
     db.execute_query(&query, &params).unwrap();
 
-    let profiles = db.get_collection("profiles").unwrap();
+    let profiles = db.get_metadata_collection("profiles").unwrap();
     let point = profiles.get(&[7]).into_iter().flatten().next().unwrap();
     let payload = point.payload.unwrap();
     assert_eq!(payload["name"], serde_json::json!("Alice"));
@@ -416,7 +414,7 @@ fn test_create_collection_rejects_existing_on_disk_dir_not_loaded() {
 
 /// Helper: insert vectors into a collection for training.
 fn seed_training_vectors(db: &Database, name: &str, dim: usize, count: usize) {
-    let coll = db.get_collection(name).unwrap();
+    let coll = db.get_vector_collection(name).unwrap();
     let points: Vec<Point> = (0..count)
         .map(|i| {
             #[allow(clippy::cast_precision_loss)]
@@ -449,7 +447,7 @@ fn test_execute_train_pq_success() {
     assert_eq!(payload["type"], serde_json::json!("pq"));
 
     // Verify storage mode updated
-    let coll = db.get_collection("docs").unwrap();
+    let coll = db.get_vector_collection("docs").unwrap();
     assert_eq!(coll.config().storage_mode, StorageMode::ProductQuantization);
 }
 
@@ -498,7 +496,7 @@ fn test_execute_train_opq_success() {
     assert_eq!(payload["type"], serde_json::json!("opq"));
     assert_eq!(payload["status"], serde_json::json!("trained"));
 
-    let coll = db.get_collection("vecs").unwrap();
+    let coll = db.get_vector_collection("vecs").unwrap();
     assert_eq!(coll.config().storage_mode, StorageMode::ProductQuantization);
 }
 
@@ -519,7 +517,7 @@ fn test_execute_train_rabitq_success() {
     let payload = results[0].point.payload.as_ref().unwrap();
     assert_eq!(payload["type"], serde_json::json!("rabitq"));
 
-    let coll = db.get_collection("rbq").unwrap();
+    let coll = db.get_vector_collection("rbq").unwrap();
     assert_eq!(coll.config().storage_mode, StorageMode::RaBitQ);
 }
 
@@ -532,7 +530,7 @@ fn test_execute_train_updates_storage_mode() {
     seed_training_vectors(&db, "docs", 16, 300);
 
     // Verify initial state
-    let coll = db.get_collection("docs").unwrap();
+    let coll = db.get_vector_collection("docs").unwrap();
     assert_eq!(coll.config().storage_mode, StorageMode::Full);
 
     let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16)").unwrap();
@@ -540,7 +538,7 @@ fn test_execute_train_updates_storage_mode() {
         .unwrap();
 
     // After training
-    let coll = db.get_collection("docs").unwrap();
+    let coll = db.get_vector_collection("docs").unwrap();
     assert_eq!(coll.config().storage_mode, StorageMode::ProductQuantization);
 }
 
@@ -694,8 +692,8 @@ fn test_database_open_loads_sparse_index() {
     // Step 3: Reopen database and verify sparse index is loaded
     {
         let db = Database::open(dir.path()).unwrap();
-        let coll = db.get_collection("sparse_test").unwrap();
-        let guard = coll.sparse_indexes().read();
+        let coll = db.get_vector_collection("sparse_test").unwrap();
+        let guard = coll.inner.sparse_indexes().read();
         assert!(
             guard.contains_key(""),
             "Default sparse index should be loaded from disk on Database::open()"
@@ -721,8 +719,8 @@ fn test_database_open_loads_sparse_index() {
     }
     {
         let db = Database::open(dir2.path()).unwrap();
-        let coll = db.get_collection("wal_only").unwrap();
-        let guard = coll.sparse_indexes().read();
+        let coll = db.get_vector_collection("wal_only").unwrap();
+        let guard = coll.inner.sparse_indexes().read();
         assert!(
             guard.contains_key(""),
             "WAL-only sparse index should be loaded on Database::open()"
@@ -744,8 +742,8 @@ fn test_update_guardrails_propagates_to_collections() {
         .unwrap();
 
     // Default timeout is 30_000 ms.
-    let coll_a = db.get_collection("coll_a").unwrap();
-    assert_eq!(coll_a.guard_rails.limits().timeout_ms, 30_000);
+    let coll_a = db.get_vector_collection("coll_a").unwrap();
+    assert_eq!(coll_a.guard_rails().limits().timeout_ms, 30_000);
 
     // Update guardrails at the database level.
     let new_limits = QueryLimits::default()
@@ -754,12 +752,12 @@ fn test_update_guardrails_propagates_to_collections() {
     db.update_guardrails(&new_limits);
 
     // Both collections should reflect the updated limits.
-    let coll_a = db.get_collection("coll_a").unwrap();
-    let coll_b = db.get_collection("coll_b").unwrap();
-    assert_eq!(coll_a.guard_rails.limits().timeout_ms, 5_000);
-    assert_eq!(coll_a.guard_rails.limits().max_depth, 3);
-    assert_eq!(coll_b.guard_rails.limits().timeout_ms, 5_000);
-    assert_eq!(coll_b.guard_rails.limits().max_depth, 3);
+    let coll_a = db.get_vector_collection("coll_a").unwrap();
+    let coll_b = db.get_vector_collection("coll_b").unwrap();
+    assert_eq!(coll_a.guard_rails().limits().timeout_ms, 5_000);
+    assert_eq!(coll_a.guard_rails().limits().max_depth, 3);
+    assert_eq!(coll_b.guard_rails().limits().timeout_ms, 5_000);
+    assert_eq!(coll_b.guard_rails().limits().max_depth, 3);
 }
 
 #[test]
@@ -776,8 +774,8 @@ fn test_update_guardrails_affects_query_context() {
     db.update_guardrails(&new_limits);
 
     // A query context created after the update should enforce the new limit.
-    let coll = db.get_collection("ctx_test").unwrap();
-    let ctx = coll.guard_rails.create_context();
+    let coll = db.get_vector_collection("ctx_test").unwrap();
+    let ctx = coll.guard_rails().create_context();
     assert!(ctx.check_depth(2).is_ok());
     assert!(ctx.check_depth(3).is_err());
 }

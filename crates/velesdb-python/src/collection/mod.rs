@@ -17,9 +17,9 @@ mod search;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
-#[allow(deprecated)] // CoreCollection = legacy Collection, kept for backward compat.
+#[allow(clippy::missing_errors_doc)] // CoreCollection = VectorCollection for backward compat.
 use velesdb_core::{
-    Collection as CoreCollection, Filter, FusionStrategy as CoreFusionStrategy, SearchResult,
+    Filter, FusionStrategy as CoreFusionStrategy, SearchResult, VectorCollection as CoreCollection,
 };
 
 /// Default fusion strategy when none is specified by the caller.
@@ -30,7 +30,6 @@ const DEFAULT_FUSION: CoreFusionStrategy = CoreFusionStrategy::RRF { k: 60 };
 /// Collections store vectors with optional metadata (payload) and support
 /// efficient similarity search.
 #[pyclass]
-#[allow(deprecated)] // CoreCollection = legacy Collection, kept for backward compat.
 pub struct Collection {
     /// Core collection (cheap to clone — all fields are `Arc`-wrapped internally).
     pub(crate) inner: CoreCollection,
@@ -38,7 +37,6 @@ pub struct Collection {
     pub(crate) name: String,
 }
 
-#[allow(deprecated)]
 impl Collection {
     /// Create a new Collection wrapper.
     pub fn new(inner: CoreCollection, name: String) -> Self {

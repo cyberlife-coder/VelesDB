@@ -103,42 +103,40 @@ impl Database {
         }
     }
 
-    /// Loads a graph collection from disk, registering it in both registries.
+    /// Loads a graph collection from disk, registering it in the typed registry.
     fn load_graph_collection(&self, path: &std::path::Path, name: &str) -> bool {
         self.try_open_and_register(path, name, "graph", |p| {
-            GraphCollection::open(p).map(|c| (c.inner.clone(), TypedColl::Graph(c)))
+            GraphCollection::open(p).map(TypedColl::Graph)
         })
     }
 
-    /// Loads a metadata collection from disk, registering it in both registries.
+    /// Loads a metadata collection from disk, registering it in the typed registry.
     fn load_metadata_collection(&self, path: &std::path::Path, name: &str) -> bool {
         self.try_open_and_register(path, name, "metadata", |p| {
-            MetadataCollection::open(p).map(|c| (c.inner.clone(), TypedColl::Metadata(c)))
+            MetadataCollection::open(p).map(TypedColl::Metadata)
         })
     }
 
-    /// Loads a vector collection from disk, registering it in both registries.
+    /// Loads a vector collection from disk, registering it in the typed registry.
     fn load_vector_collection(&self, path: &std::path::Path, name: &str) -> bool {
         self.try_open_and_register(path, name, "vector", |p| {
-            VectorCollection::open(p).map(|c| (c.inner.clone(), TypedColl::Vector(c)))
+            VectorCollection::open(p).map(TypedColl::Vector)
         })
     }
 
-    /// Opens a collection from disk and registers it in the legacy + typed registries.
+    /// Opens a collection from disk and registers it in the typed registry.
     ///
-    /// The `open_fn` closure returns `(inner Collection clone, TypedColl variant)`.
+    /// The `open_fn` closure returns a `TypedColl` variant.
     /// Returns `true` on success, `false` on failure (logged as warning).
-    #[allow(deprecated)]
     fn try_open_and_register(
         &self,
         path: &std::path::Path,
         name: &str,
         kind: &str,
-        open_fn: impl FnOnce(std::path::PathBuf) -> crate::Result<(crate::Collection, TypedColl)>,
+        open_fn: impl FnOnce(std::path::PathBuf) -> crate::Result<TypedColl>,
     ) -> bool {
         match open_fn(path.to_path_buf()) {
-            Ok((inner, typed)) => {
-                self.collections.write().insert(name.to_string(), inner);
+            Ok(typed) => {
                 typed.insert_into(
                     &self.vector_colls,
                     &self.graph_colls,

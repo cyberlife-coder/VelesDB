@@ -90,7 +90,7 @@ fn csv_config(source_path: &Path, destination_path: &Path, collection: &str) -> 
 fn open_collection(db_path: &Path, name: &str) -> velesdb_core::Collection {
     Database::open(db_path)
         .expect("open database")
-        .get_collection(name)
+        .get_vector_collection(name)
         .expect("collection exists")
 }
 
@@ -186,7 +186,7 @@ async fn test_pipeline_dry_run_does_not_create_collection() {
     assert_eq!(stats.loaded, 1);
     assert!(Database::open(destination.path())
         .expect("open database")
-        .get_collection("dry_run_docs")
+        .get_any_collection("dry_run_docs")
         .is_none());
 }
 
@@ -619,7 +619,7 @@ async fn test_pipeline_qdrant_schema_mismatch() {
     assert!(
         velesdb_core::Database::open(destination.path())
             .expect("open database")
-            .get_collection("dim_docs")
+            .get_any_collection("dim_docs")
             .is_none(),
         "no collection should exist after schema mismatch"
     );

@@ -43,13 +43,10 @@ pub(crate) fn execute_aggregation_query(
     // Prefer typed vector collection for aggregation.
     let result = if let Some(vc) = state.db.get_vector_collection(collection_name) {
         vc.execute_aggregate(parsed, params)
+    } else if let Some(any) = state.db.get_any_collection(collection_name) {
+        any.execute_aggregate(parsed, params)
     } else {
-        // Non-vector collections: fall back to legacy Collection for aggregation support.
-        #[allow(deprecated)]
-        match state.db.get_collection(collection_name) {
-            Some(c) => c.execute_aggregate(parsed, params),
-            None => return velesql_collection_not_found(collection_name),
-        }
+        return velesql_collection_not_found(collection_name);
     };
 
     let result = match result {

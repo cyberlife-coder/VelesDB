@@ -53,7 +53,10 @@ use super::types::Collection;
 ///
 /// Returns an error if any point has a mismatched dimension or if
 /// the blocking task panics.
-pub async fn upsert_bulk_async(collection: Arc<Collection>, points: Vec<Point>) -> Result<usize> {
+pub(crate) async fn upsert_bulk_async(
+    collection: Arc<Collection>,
+    points: Vec<Point>,
+) -> Result<usize> {
     tokio::task::spawn_blocking(move || collection.upsert_bulk(&points))
         .await
         .map_err(|e| Error::Internal(format!("Task join error: {e}")))?
@@ -91,7 +94,7 @@ pub async fn upsert_bulk_async(collection: Arc<Collection>, points: Vec<Point>) 
 /// # Errors
 ///
 /// Returns an error if any insert operation fails.
-pub async fn upsert_bulk_streaming<F>(
+pub(crate) async fn upsert_bulk_streaming<F>(
     collection: Arc<Collection>,
     points: Vec<Point>,
     chunk_size: usize,
@@ -165,7 +168,7 @@ async fn upsert_chunk(
 /// # Errors
 ///
 /// Returns an error if file operations fail or if the blocking task panics.
-pub async fn flush_async(collection: Arc<Collection>) -> Result<()> {
+pub(crate) async fn flush_async(collection: Arc<Collection>) -> Result<()> {
     tokio::task::spawn_blocking(move || collection.flush())
         .await
         .map_err(|e| Error::Internal(format!("Task join error: {e}")))?
@@ -185,7 +188,7 @@ pub async fn flush_async(collection: Arc<Collection>) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error if the query dimension doesn't match.
-pub async fn search_async(
+pub(crate) async fn search_async(
     collection: Arc<Collection>,
     query: Vec<f32>,
     k: usize,

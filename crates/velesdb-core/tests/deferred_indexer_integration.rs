@@ -17,23 +17,25 @@ use velesdb_core::collection::streaming::DeferredIndexerConfig;
 use velesdb_core::collection::CollectionConfig;
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::quantization::StorageMode;
-use velesdb_core::Point;
+use velesdb_core::{Point, VectorCollection};
 
 /// Creates a collection directory with a config.json that has deferred
-/// indexing enabled, then opens it via `Collection::open`.
-#[allow(deprecated)]
+/// indexing enabled, then opens it via `VectorCollection::open`.
 fn create_deferred_collection(
     dir: &std::path::Path,
     dimension: usize,
     metric: DistanceMetric,
     merge_threshold: usize,
-) -> velesdb_core::collection::Collection {
-    use velesdb_core::collection::Collection;
-
+) -> VectorCollection {
     // First create a normal collection so all storage files are initialized.
-    let coll =
-        Collection::create_with_options(dir.to_path_buf(), dimension, metric, StorageMode::Full)
-            .expect("create collection");
+    let coll = VectorCollection::create(
+        dir.to_path_buf(),
+        "test",
+        dimension,
+        metric,
+        StorageMode::Full,
+    )
+    .expect("create collection");
     coll.flush().expect("flush after create");
     drop(coll);
 
@@ -52,7 +54,7 @@ fn create_deferred_collection(
     f.sync_all().expect("sync config");
 
     // Reopen with deferred indexing enabled.
-    Collection::open(dir.to_path_buf()).expect("reopen collection")
+    VectorCollection::open(dir.to_path_buf()).expect("reopen collection")
 }
 
 /// Generates a deterministic vector with a known pattern.

@@ -1,7 +1,6 @@
 #[cfg(feature = "persistence")]
 use super::{ColumnStore, Database, Error, Result};
 
-#[allow(deprecated)] // build_update_filter and build_join_column_store use deprecated Collection type.
 impl Database {
     pub(super) fn resolve_dml_value(
         value: &crate::velesql::Value,
@@ -73,8 +72,8 @@ impl Database {
             ));
         }
 
-        let filter_condition =
-            crate::Collection::extract_metadata_filter(condition).ok_or_else(|| {
+        let filter_condition = crate::collection::Collection::extract_metadata_filter(condition)
+            .ok_or_else(|| {
                 Error::Query("UPDATE WHERE produced empty metadata filter".to_string())
             })?;
         Ok(Some(crate::Filter::new(crate::Condition::from(
@@ -118,7 +117,9 @@ impl Database {
         filter.matches(&serde_json::Value::Object(obj))
     }
 
-    pub(super) fn build_join_column_store(collection: &crate::Collection) -> Result<ColumnStore> {
+    pub(super) fn build_join_column_store(
+        collection: &crate::collection::Collection,
+    ) -> Result<ColumnStore> {
         let ids = collection.all_ids();
         let points: Vec<_> = collection.get(&ids).into_iter().flatten().collect();
 

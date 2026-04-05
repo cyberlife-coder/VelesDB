@@ -110,13 +110,13 @@ pub async fn list_collections<R: Runtime>(
             let names = db.list_collections();
             let mut collections = Vec::new();
             for name in names {
-                if let Some(coll) = db.get_collection(&name) {
+                if let Some(coll) = db.get_any_collection(&name) {
                     let config = coll.config();
                     collections.push(CollectionInfo {
                         name,
                         dimension: config.dimension,
                         metric: metric_to_string(config.metric).to_string(),
-                        count: coll.len(),
+                        count: config.point_count,
                         storage_mode: storage_mode_to_string(config.storage_mode).to_string(),
                     });
                 }
@@ -374,7 +374,6 @@ pub async fn hybrid_search<R: Runtime>(
                     request.top_k,
                     Some(request.vector_weight),
                     f,
-                    None,
                 )?
             } else {
                 coll.hybrid_search(
@@ -382,7 +381,6 @@ pub async fn hybrid_search<R: Runtime>(
                     &request.query,
                     request.top_k,
                     Some(request.vector_weight),
-                    None,
                 )?
             };
             Ok(map_core_results(search_results))

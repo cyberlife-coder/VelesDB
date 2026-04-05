@@ -1,10 +1,10 @@
 #![cfg(all(test, feature = "persistence"))]
 
 use crate::collection::types::CollectionConfig;
+use crate::collection::Collection;
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::HnswParams;
 use crate::quantization::StorageMode;
-use crate::Collection;
 use std::path::PathBuf;
 
 /// Verifies that custom HNSW params survive config round-trip serialization.

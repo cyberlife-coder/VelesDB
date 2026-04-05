@@ -1,4 +1,3 @@
-#![allow(deprecated)] // Benches use legacy Collection.
 //! `VelesQL` Execution Benchmarks - Scalability Testing
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 //!
@@ -14,14 +13,14 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use serde_json::json;
 use tempfile::TempDir;
-use velesdb_core::{Collection, Database, DistanceMetric, Point};
+use velesdb_core::{Database, DistanceMetric, Point, VectorCollection};
 
-fn create_test_collection(size: usize, dimension: usize) -> (Collection, TempDir) {
+fn create_test_collection(size: usize, dimension: usize) -> (VectorCollection, TempDir) {
     let tmp = TempDir::new().expect("temp dir");
     let db = Database::open(tmp.path()).expect("db");
     db.create_collection("bench", dimension, DistanceMetric::Cosine)
         .expect("collection");
-    let collection = db.get_collection("bench").expect("get collection");
+    let collection = db.get_vector_collection("bench").expect("get collection");
 
     let categories = ["tech", "science", "business", "sports", "health"];
     let points: Vec<Point> = (0..size)

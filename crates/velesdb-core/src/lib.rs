@@ -162,15 +162,6 @@ pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 #[cfg(feature = "persistence")]
 pub use collection::streaming::BackpressureError;
-// MIGRATION: Collection is deprecated since 2.0.0.
-// Use VectorCollection, GraphCollection, or MetadataCollection instead.
-// The deprecated re-export is separated so #[allow(deprecated)] targets only
-// the single item — a block-level allow on a grouped `use` is flagged by
-// llvm-cov instrumentation (issue #329).
-#[cfg(feature = "persistence")]
-#[allow(deprecated)]
-pub use collection::Collection;
-
 #[cfg(feature = "persistence")]
 pub use collection::{
     // Type-erased collection handle (v2.0.0)

@@ -1,5 +1,4 @@
 #![cfg(feature = "persistence")]
-#![allow(deprecated)] // Tests use legacy Collection.
 
 use std::collections::HashMap;
 
@@ -10,17 +9,17 @@ use velesdb_core::{
         Direction, GraphPattern, MatchClause, NodePattern, RelationshipPattern, ReturnClause,
         ReturnItem,
     },
-    Collection, Database, DistanceMetric, Error, GraphEdge, Point,
+    Database, DistanceMetric, Error, GraphEdge, Point, VectorCollection,
 };
 
 const DIM: usize = 4;
 
-fn setup_collection_with_graph() -> (TempDir, Collection) {
+fn setup_collection_with_graph() -> (TempDir, VectorCollection) {
     let dir = TempDir::new().expect("tempdir");
     let db = Database::open(dir.path()).expect("open db");
     db.create_collection("docs", DIM, DistanceMetric::Cosine)
         .expect("create collection");
-    let collection = db.get_collection("docs").expect("get collection");
+    let collection = db.get_vector_collection("docs").expect("get collection");
 
     collection
         .upsert(vec![

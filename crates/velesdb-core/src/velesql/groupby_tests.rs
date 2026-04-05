@@ -1,11 +1,10 @@
 //! Tests for VelesQL GROUP BY (EPIC-017 US-003).
 #![cfg(all(test, feature = "persistence"))]
-#![allow(deprecated)] // Tests use legacy Collection.
 
+use crate::collection::Collection;
 use crate::distance::DistanceMetric;
 use crate::point::Point;
 use crate::velesql::Parser;
-use crate::Collection;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

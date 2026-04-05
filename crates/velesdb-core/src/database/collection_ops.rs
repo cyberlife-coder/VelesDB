@@ -83,20 +83,6 @@ impl Database {
         self.create_vector_collection_with_options(name, dimension, metric, storage_mode)
     }
 
-    /// Gets a reference to a collection by name.
-    ///
-    /// # Returns
-    ///
-    /// Returns `None` if the collection does not exist.
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use get_vector_collection(), get_graph_collection(), or get_metadata_collection()"
-    )]
-    #[allow(deprecated)]
-    pub fn get_collection(&self, name: &str) -> Option<crate::Collection> {
-        self.collections.read().get(name).cloned()
-    }
-
     /// Returns a type-erased collection handle by name.
     ///
     /// Checks vector → graph → metadata registries in order.
@@ -181,9 +167,7 @@ impl Database {
     }
 
     /// Removes a collection from all registries and stats cache.
-    #[allow(deprecated)]
     fn remove_from_all_registries(&self, name: &str) {
-        self.collections.write().remove(name);
         self.vector_colls.write().remove(name);
         self.graph_colls.write().remove(name);
         self.metadata_colls.write().remove(name);

@@ -50,9 +50,8 @@ impl super::Database {
 }
 
 /// Enriches all results from a single cross-referenced collection.
-#[allow(deprecated)]
 fn enrich_results_from_collection(
-    coll: &crate::Collection,
+    coll: &crate::collection::Collection,
     results: &mut [SearchResult],
     alias: &str,
 ) {

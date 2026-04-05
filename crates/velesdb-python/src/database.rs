@@ -71,7 +71,6 @@ impl Database {
     ///     >>> # Auto-tuned for expected dataset size (optimizes M and ef_construction):
     ///     >>> large = db.create_collection("big", dimension=128, expected_vectors=1_000_000)
     #[pyo3(signature = (name, dimension, metric = "cosine", storage_mode = "full", m = None, ef_construction = None, expected_vectors = None))]
-    #[allow(deprecated)]
     #[allow(clippy::too_many_arguments)] // Reason: `py` is an injected PyO3 token, not a user-facing argument
     fn create_collection(
         &self,
@@ -147,7 +146,7 @@ impl Database {
 
         let collection = self
             .inner
-            .get_collection(name)
+            .get_vector_collection(name)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
         Ok(Collection::new(collection, name.to_string()))
@@ -164,9 +163,8 @@ impl Database {
     /// Example:
     ///     >>> collection = db.get_collection("documents")
     #[pyo3(signature = (name))]
-    #[allow(deprecated)]
     fn get_collection(&self, name: &str) -> PyResult<Option<Collection>> {
-        match self.inner.get_collection(name) {
+        match self.inner.get_vector_collection(name) {
             Some(collection) => Ok(Some(Collection::new(collection, name.to_string()))),
             None => Ok(None),
         }
@@ -216,7 +214,6 @@ impl Database {
     ///     ...     {"id": 1, "payload": {"name": "Widget", "price": 9.99}}
     ///     ... ])
     #[pyo3(signature = (name))]
-    #[allow(deprecated)]
     fn create_metadata_collection(&self, name: &str) -> PyResult<Collection> {
         self.inner.create_metadata_collection(name).map_err(|e| {
             PyRuntimeError::new_err(format!("Failed to create metadata collection: {e}"))
@@ -224,7 +221,13 @@ impl Database {
 
         let collection = self
             .inner
-            .get_collection(name)
+            .get_vector_collection(name)
+            .or_else(|| {
+                // Metadata collections aren't in the vector registry;
+                // open via VectorCollection::open which loads any Collection type.
+                let path = self.inner.data_dir().join(name);
+                velesdb_core::VectorCollection::open(path).ok()
+            })
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
         Ok(Collection::new(collection, name.to_string()))

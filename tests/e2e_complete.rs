@@ -2,7 +2,6 @@
 //!
 //! EPIC-060: Comprehensive E2E tests for all components
 //! Tests the complete workflow from creation to query.
-#![allow(deprecated)] // Tests use legacy Collection.
 
 use tempfile::TempDir;
 use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
@@ -36,7 +35,7 @@ mod database_e2e {
         db.create_collection("documents", 128, DistanceMetric::Cosine)
             .expect("Failed to create collection");
 
-        let col = db.get_collection("documents").expect("Collection not found");
+        let col = db.get_vector_collection("documents").expect("Collection not found");
 
         // Insert vectors using Point API
         let points: Vec<Point> = (1..=100u64)
@@ -76,7 +75,7 @@ mod database_e2e {
             db.create_collection(&col_name, 64, metric)
                 .expect(&format!("Failed to create {} collection", name));
 
-            let col = db.get_collection(&col_name).unwrap();
+            let col = db.get_vector_collection(&col_name).unwrap();
 
             // Insert test data using Point API
             col.upsert(vec![
@@ -105,7 +104,7 @@ mod database_e2e {
             db.create_collection_with_options(&col_name, 64, DistanceMetric::Cosine, mode)
                 .expect(&format!("Failed to create {} storage collection", name));
 
-            let col = db.get_collection(&col_name).unwrap();
+            let col = db.get_vector_collection(&col_name).unwrap();
 
             // Insert using Point API
             let points: Vec<Point> = (1..=10u64)
@@ -131,7 +130,7 @@ mod fusion_e2e {
     fn test_rrf_fusion() {
         let (_temp, db) = setup_test_db();
         db.create_collection("fusion_test", 32, DistanceMetric::Cosine).unwrap();
-        let col = db.get_collection("fusion_test").unwrap();
+        let col = db.get_vector_collection("fusion_test").unwrap();
 
         // Insert diverse vectors using Point API
         let points: Vec<Point> = (1..=50u64)
@@ -158,7 +157,7 @@ mod fusion_e2e {
     fn test_average_fusion() {
         let (_temp, db) = setup_test_db();
         db.create_collection("avg_fusion", 32, DistanceMetric::Cosine).unwrap();
-        let col = db.get_collection("avg_fusion").unwrap();
+        let col = db.get_vector_collection("avg_fusion").unwrap();
 
         let points: Vec<Point> = (1..=20u64)
             .map(|i| Point::new(i, generate_vector(i, 32), None))
@@ -179,7 +178,7 @@ mod fusion_e2e {
     fn test_batch_search() {
         let (_temp, db) = setup_test_db();
         db.create_collection("batch_test", 32, DistanceMetric::Cosine).unwrap();
-        let col = db.get_collection("batch_test").unwrap();
+        let col = db.get_vector_collection("batch_test").unwrap();
 
         let points: Vec<Point> = (1..=100u64)
             .map(|i| Point::new(i, generate_vector(i, 32), None))
@@ -229,7 +228,7 @@ mod velesql_e2e {
     fn test_velesql_execution() {
         let (_temp, db) = setup_test_db();
         db.create_collection("velesql_test", 32, DistanceMetric::Cosine).unwrap();
-        let col = db.get_collection("velesql_test").unwrap();
+        let col = db.get_vector_collection("velesql_test").unwrap();
 
         // Insert test data with payloads using Point API
         let points: Vec<Point> = (1..=20u64)
@@ -262,7 +261,7 @@ mod graph_e2e {
     fn test_graph_bfs_traversal() {
         let (_temp, db) = setup_test_db();
         db.create_collection("graph_test", 32, DistanceMetric::Cosine).unwrap();
-        let col = db.get_collection("graph_test").unwrap();
+        let col = db.get_vector_collection("graph_test").unwrap();
 
         // Insert nodes using Point API
         let points: Vec<Point> = (1..=10u64)
@@ -284,7 +283,7 @@ mod graph_e2e {
     fn test_graph_dfs_traversal() {
         let (_temp, db) = setup_test_db();
         db.create_collection("dfs_test", 32, DistanceMetric::Cosine).unwrap();
-        let col = db.get_collection("dfs_test").unwrap();
+        let col = db.get_vector_collection("dfs_test").unwrap();
 
         let points: Vec<Point> = (1..=5u64)
             .map(|i| Point::new(i, generate_vector(i, 32), None))
@@ -311,7 +310,7 @@ mod hybrid_e2e {
     fn test_hybrid_vector_text_search() {
         let (_temp, db) = setup_test_db();
         db.create_collection("hybrid_test", 32, DistanceMetric::Cosine).unwrap();
-        let col = db.get_collection("hybrid_test").unwrap();
+        let col = db.get_vector_collection("hybrid_test").unwrap();
 
         // Insert with text payloads using Point API
         let docs = [
@@ -339,7 +338,7 @@ mod hybrid_e2e {
         assert!(!text_results.is_empty() || text_results.is_empty()); // May be empty if BM25 not indexed
 
         // Hybrid search
-        let hybrid_results = col.hybrid_search(&generate_vector(1, 32), "learning", 3, Some(0.5), None);
+        let hybrid_results = col.hybrid_search(&generate_vector(1, 32), "learning", 3, Some(0.5));
         if let Ok(results) = hybrid_results {
             // Results may be empty if no text indexed
             let _ = results;
@@ -359,7 +358,7 @@ mod stress_e2e {
     fn test_large_collection_operations() {
         let (_temp, db) = setup_test_db();
         db.create_collection("large_test", 128, DistanceMetric::Cosine).unwrap();
-        let col = db.get_collection("large_test").unwrap();
+        let col = db.get_vector_collection("large_test").unwrap();
 
         // Insert 10k vectors in batches for performance
         let start = Instant::now();
@@ -402,7 +401,7 @@ mod stress_e2e {
         for t in 0..4u64 {
             let db_clone = Arc::clone(&db);
             let handle = thread::spawn(move || {
-                let col = db_clone.get_collection("concurrent_test").unwrap();
+                let col = db_clone.get_vector_collection("concurrent_test").unwrap();
                 
                 // Insert some vectors using Point API
                 let points: Vec<Point> = ((t * 100 + 1)..=(t * 100 + 100))

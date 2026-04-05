@@ -36,13 +36,13 @@ pub(crate) fn core_error_response(
         .into_response()
 }
 
-/// Look up a legacy collection by name, returning a 404 response on miss.
-#[allow(deprecated, clippy::result_large_err)]
+/// Look up a type-erased collection by name, returning a 404 response on miss.
+#[allow(clippy::result_large_err)]
 pub(crate) fn get_collection_or_404(
     state: &AppState,
     name: &str,
-) -> Result<velesdb_core::Collection, axum::response::Response> {
-    state.db.get_collection(name).ok_or_else(|| {
+) -> Result<velesdb_core::AnyCollection, axum::response::Response> {
+    state.db.get_any_collection(name).ok_or_else(|| {
         error_response(
             StatusCode::NOT_FOUND,
             format!("Collection '{name}' not found"),

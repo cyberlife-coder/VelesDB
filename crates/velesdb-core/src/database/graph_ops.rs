@@ -64,9 +64,8 @@ impl Database {
         Ok(())
     }
 
-    /// Registers a graph collection in both legacy and typed registries,
+    /// Registers a graph collection in the typed registry,
     /// notifies the observer, and bumps the schema version.
-    #[allow(deprecated)]
     fn register_graph_collection(
         &self,
         name: &str,
@@ -75,9 +74,6 @@ impl Database {
         metric: DistanceMetric,
         schema: &crate::collection::GraphSchema,
     ) {
-        self.collections
-            .write()
-            .insert(name.to_string(), coll.inner.clone());
         self.graph_colls
             .write()
             .insert(name.to_string(), coll.clone());

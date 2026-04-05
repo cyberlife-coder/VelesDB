@@ -14,7 +14,6 @@
 //! - Graph collections for knowledge graph storage (nodes, edges, traversal)
 //! - Async operations via `spawn_blocking` (EPIC-034/US-005)
 #![allow(clippy::doc_markdown)] // Collection docs contain many API/algorithm identifiers.
-#![allow(deprecated)] // Collection is deprecated but used internally throughout this module tree.
 
 pub mod async_ops;
 #[cfg(test)]
@@ -63,5 +62,6 @@ pub use graph::{
 };
 pub use graph_collection::GraphCollection;
 pub use metadata_collection::MetadataCollection;
-pub use types::{Collection, CollectionConfig, CollectionType};
+pub(crate) use types::Collection;
+pub use types::{CollectionConfig, CollectionType};
 pub use vector_collection::VectorCollection;

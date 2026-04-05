@@ -146,4 +146,13 @@ impl VectorCollection {
     pub fn drop_index(&self, label: &str, property: &str) -> Result<bool> {
         self.inner.drop_index(label, property)
     }
+
+    /// Adds a graph edge to the collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the edge cannot be stored.
+    pub fn add_edge(&self, edge: crate::collection::GraphEdge) -> Result<()> {
+        self.inner.add_edge(edge)
+    }
 }

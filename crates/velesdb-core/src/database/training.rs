@@ -4,7 +4,6 @@ use crate::{Error, Result, SearchResult, StorageMode};
 
 use super::Database;
 
-#[allow(deprecated)] // Uses legacy Collection internally for quantizer training.
 impl Database {
     /// Executes a `TRAIN QUANTIZER` statement.
     ///
@@ -57,12 +56,15 @@ impl Database {
     fn resolve_train_collection(
         &self,
         stmt: &crate::velesql::TrainStatement,
-    ) -> Result<crate::Collection> {
+    ) -> Result<crate::collection::Collection> {
         self.resolve_writable_collection(&stmt.collection)
     }
 
     /// Checks if a quantizer is already trained, returning an error unless `force` is set.
-    fn check_already_trained(collection: &crate::Collection, force: bool) -> Result<()> {
+    fn check_already_trained(
+        collection: &crate::collection::Collection,
+        force: bool,
+    ) -> Result<()> {
         let quantizer = collection.pq_quantizer_read();
         if quantizer.is_some() && !force {
             return Err(Error::InvalidQuantizerConfig(
@@ -74,7 +76,7 @@ impl Database {
 
     /// Extracts vectors from the collection for training, with optional sampling.
     fn extract_training_vectors(
-        collection: &crate::Collection,
+        collection: &crate::collection::Collection,
         sample_limit: Option<usize>,
     ) -> Result<Vec<Vec<f32>>> {
         let all_ids = collection.all_ids();
@@ -102,7 +104,7 @@ impl Database {
 
     /// Trains a standard Product Quantizer and persists it.
     fn train_pq(
-        collection: &crate::Collection,
+        collection: &crate::collection::Collection,
         vectors: &[Vec<f32>],
         params: &TrainParams,
     ) -> Result<Vec<SearchResult>> {
@@ -134,7 +136,7 @@ impl Database {
 
     /// Trains an Optimized Product Quantizer (with rotation) and persists it.
     fn train_opq(
-        collection: &crate::Collection,
+        collection: &crate::collection::Collection,
         vectors: &[Vec<f32>],
         params: &TrainParams,
     ) -> Result<Vec<SearchResult>> {
@@ -168,7 +170,7 @@ impl Database {
 
     /// Trains a `RaBitQ` quantizer and persists it.
     fn train_rabitq(
-        collection: &crate::Collection,
+        collection: &crate::collection::Collection,
         vectors: &[Vec<f32>],
         dim: usize,
     ) -> Result<Vec<SearchResult>> {
@@ -191,7 +193,7 @@ impl Database {
 
     /// Updates storage mode and oversampling in config, then persists it.
     fn finalize_pq_config(
-        collection: &crate::Collection,
+        collection: &crate::collection::Collection,
         mode: StorageMode,
         oversampling: u32,
     ) -> Result<()> {

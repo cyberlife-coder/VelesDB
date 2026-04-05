@@ -131,17 +131,13 @@ pub fn map_core_results(
 
 /// Looks up a collection by name, returning a typed error on miss.
 ///
-/// Eliminates the repeated `db.get_collection(name).ok_or_else(|| ...)` pattern
+/// Eliminates the repeated `db.get_vector_collection(name).ok_or_else(|| ...)` pattern
 /// used by every command that operates on a collection.
-///
-/// Uses the deprecated `Collection` type for backward compatibility with commands
-/// that have not yet migrated to typed collection APIs.
-#[allow(deprecated)]
 pub fn require_collection(
     db: &velesdb_core::Database,
     name: &str,
-) -> Result<velesdb_core::Collection> {
-    db.get_collection(name)
+) -> Result<velesdb_core::VectorCollection> {
+    db.get_vector_collection(name)
         .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
 }
 

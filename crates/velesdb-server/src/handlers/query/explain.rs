@@ -23,7 +23,7 @@ use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found};
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
-#[allow(clippy::unused_async, deprecated)]
+#[allow(clippy::unused_async)]
 pub async fn explain(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ExplainRequest>,
@@ -35,7 +35,7 @@ pub async fn explain(
 
     let select = &parsed.select;
 
-    let collection_exists = state.db.get_collection(&select.from).is_some();
+    let collection_exists = state.db.get_any_collection(&select.from).is_some();
     if !collection_exists && !select.from.is_empty() {
         return velesql_collection_not_found(&select.from);
     }

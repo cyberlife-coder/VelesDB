@@ -108,7 +108,7 @@ impl StreamIngester {
     /// Spawns a background drain task that accumulates points and flushes
     /// micro-batches via `Collection::upsert`.
     #[must_use]
-    pub fn new(collection: Collection, config: StreamingConfig) -> Self {
+    pub(crate) fn new(collection: Collection, config: StreamingConfig) -> Self {
         let (tx, rx) = mpsc::channel(config.buffer_size);
         let shutdown = Arc::new(Notify::new());
 

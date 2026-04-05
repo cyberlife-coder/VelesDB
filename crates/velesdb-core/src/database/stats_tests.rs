@@ -15,12 +15,11 @@ fn temp_database() -> (TempDir, Database) {
 }
 
 /// Helper: create a collection and insert some points.
-#[allow(deprecated)]
 fn setup_collection(db: &Database, name: &str, dim: usize, count: u64) {
     db.create_collection(name, dim, DistanceMetric::Cosine)
         .expect("create collection");
 
-    let coll = db.get_collection(name).expect("collection exists");
+    let coll = db.get_vector_collection(name).expect("collection exists");
     let points: Vec<Point> = (1..=count)
         .map(|i| Point {
             id: i,

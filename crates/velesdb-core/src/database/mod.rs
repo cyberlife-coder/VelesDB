@@ -16,8 +16,7 @@
 use crate::collection::{GraphCollection, MetadataCollection, VectorCollection};
 use crate::observer::DatabaseObserver;
 use crate::simd_dispatch;
-#[allow(deprecated)]
-use crate::{Collection, ColumnStore, Error, Result};
+use crate::{ColumnStore, Error, Result};
 
 mod admin_executor;
 mod collection_ops;
@@ -70,14 +69,6 @@ pub struct Database {
     /// The lock is held for the lifetime of the `Database` and released on `Drop`.
     /// The `_` prefix signals this field is kept for its RAII side effect.
     _lock_file: std::fs::File,
-    /// Legacy registry (Collection god-object) — **migration-only**.
-    ///
-    /// Populated in parallel with the typed registries for backward compatibility.
-    /// Internal code should use `vector_colls`, `graph_colls`, or `metadata_colls`
-    /// instead. This field is retained solely for the public `get_collection()` API
-    /// and will be removed once all external consumers have migrated.
-    #[allow(deprecated)]
-    collections: parking_lot::RwLock<std::collections::HashMap<String, Collection>>,
     /// Typed registry: vector collections.
     vector_colls: parking_lot::RwLock<std::collections::HashMap<String, VectorCollection>>,
     /// Typed registry: graph collections.
@@ -156,7 +147,6 @@ impl Database {
         let db = Self {
             data_dir,
             _lock_file: lock_file,
-            collections: parking_lot::RwLock::new(std::collections::HashMap::new()),
             vector_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
             graph_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
             metadata_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),

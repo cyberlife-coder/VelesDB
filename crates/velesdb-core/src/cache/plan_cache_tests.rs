@@ -1,4 +1,3 @@
-#![allow(deprecated)] // Tests use legacy Collection.
 //! Tests for plan cache types (CACHE-01).
 
 use std::sync::atomic::Ordering;
@@ -149,9 +148,12 @@ fn plan_cache_compiled_plan_send_sync() {
 #[test]
 fn write_generation_starts_at_zero_and_increments() {
     let dir = tempfile::tempdir().unwrap();
-    let coll =
-        crate::Collection::create(dir.path().to_path_buf(), 4, crate::DistanceMetric::Cosine)
-            .unwrap();
+    let coll = crate::collection::Collection::create(
+        dir.path().to_path_buf(),
+        4,
+        crate::DistanceMetric::Cosine,
+    )
+    .unwrap();
 
     assert_eq!(coll.write_generation(), 0, "should start at 0");
 
@@ -205,7 +207,7 @@ fn write_generation_accessible_from_database() {
         "new collection starts at 0"
     );
 
-    let coll = db.get_collection("wg_test").unwrap();
+    let coll = db.get_vector_collection("wg_test").unwrap();
     coll.upsert(vec![crate::Point {
         id: 1,
         vector: vec![1.0, 0.0, 0.0, 0.0],
@@ -293,7 +295,7 @@ fn test_plan_cache_hit() {
         .unwrap();
 
     // Insert some data so the query has results.
-    let coll = db.get_collection("cache_hit").unwrap();
+    let coll = db.get_vector_collection("cache_hit").unwrap();
     coll.upsert(vec![crate::Point {
         id: 1,
         vector: vec![1.0, 0.0, 0.0, 0.0],
@@ -351,7 +353,7 @@ fn test_plan_invalidation_on_write() {
     db.create_collection("cache_write", 4, crate::DistanceMetric::Cosine)
         .unwrap();
 
-    let coll = db.get_collection("cache_write").unwrap();
+    let coll = db.get_vector_collection("cache_write").unwrap();
     coll.upsert(vec![crate::Point {
         id: 1,
         vector: vec![1.0, 0.0, 0.0, 0.0],
@@ -389,7 +391,7 @@ fn test_plan_invalidation_on_delete() {
     db.create_collection("cache_del", 4, crate::DistanceMetric::Cosine)
         .unwrap();
 
-    let coll = db.get_collection("cache_del").unwrap();
+    let coll = db.get_vector_collection("cache_del").unwrap();
     coll.upsert(vec![crate::Point {
         id: 1,
         vector: vec![1.0, 0.0, 0.0, 0.0],
@@ -420,7 +422,7 @@ fn test_plan_invalidation_on_drop_recreate() {
     db.create_collection("cache_drop", 4, crate::DistanceMetric::Cosine)
         .unwrap();
 
-    let coll = db.get_collection("cache_drop").unwrap();
+    let coll = db.get_vector_collection("cache_drop").unwrap();
     coll.upsert(vec![crate::Point {
         id: 1,
         vector: vec![1.0, 0.0, 0.0, 0.0],
@@ -481,7 +483,7 @@ fn test_plan_invalidation_on_graph_mutation() {
     db.create_collection("cache_graph", 4, crate::DistanceMetric::Cosine)
         .unwrap();
 
-    let coll = db.get_collection("cache_graph").unwrap();
+    let coll = db.get_vector_collection("cache_graph").unwrap();
 
     // Seed with one vector point so the query returns results and the
     // planner can produce a stable plan to cache.

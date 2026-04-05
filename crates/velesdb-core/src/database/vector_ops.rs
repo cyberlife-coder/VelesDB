@@ -71,9 +71,8 @@ impl Database {
         Ok(())
     }
 
-    /// Registers a vector collection in both legacy and typed registries,
+    /// Registers a vector collection in the typed registry,
     /// notifies the observer, and bumps the schema version.
-    #[allow(deprecated)]
     fn register_vector_collection(
         &self,
         name: &str,
@@ -82,9 +81,6 @@ impl Database {
         metric: DistanceMetric,
         storage_mode: StorageMode,
     ) {
-        self.collections
-            .write()
-            .insert(name.to_string(), coll.inner.clone());
         self.vector_colls
             .write()
             .insert(name.to_string(), coll.clone());

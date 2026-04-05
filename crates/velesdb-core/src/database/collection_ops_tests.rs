@@ -1,5 +1,3 @@
-#![allow(deprecated)] // Tests use legacy Collection via get_collection().
-
 use super::*;
 use crate::point::Point;
 use crate::{CollectionType, DistanceMetric};
@@ -20,14 +18,14 @@ fn test_create_get_delete_lifecycle() {
     assert_eq!(db.list_collections(), vec!["lifecycle"]);
 
     // Get
-    let coll = db.get_collection("lifecycle");
+    let coll = db.get_vector_collection("lifecycle");
     assert!(coll.is_some());
     assert_eq!(coll.unwrap().config().dimension, 128);
 
     // Delete
     db.delete_collection("lifecycle").unwrap();
     assert!(db.list_collections().is_empty());
-    assert!(db.get_collection("lifecycle").is_none());
+    assert!(db.get_vector_collection("lifecycle").is_none());
 }
 
 // =========================================================================
@@ -82,7 +80,7 @@ fn test_get_nonexistent_returns_none() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();
 
-    assert!(db.get_collection("nope").is_none());
+    assert!(db.get_any_collection("nope").is_none());
     assert!(db.get_vector_collection("nope").is_none());
     assert!(db.get_graph_collection("nope").is_none());
     assert!(db.get_metadata_collection("nope").is_none());
@@ -112,7 +110,7 @@ fn test_multi_collection_data_isolation() {
         .unwrap();
 
     // Insert into coll_a only.
-    let coll_a = db.get_collection("coll_a").unwrap();
+    let coll_a = db.get_vector_collection("coll_a").unwrap();
     coll_a
         .upsert(vec![Point::new(
             1,
@@ -122,7 +120,7 @@ fn test_multi_collection_data_isolation() {
         .unwrap();
 
     // coll_b must remain empty.
-    let coll_b = db.get_collection("coll_b").unwrap();
+    let coll_b = db.get_vector_collection("coll_b").unwrap();
     assert!(coll_b.get(&[1]).into_iter().flatten().next().is_none());
 }
 

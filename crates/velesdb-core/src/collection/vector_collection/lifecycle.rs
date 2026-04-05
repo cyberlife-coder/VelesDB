@@ -75,6 +75,27 @@ impl VectorCollection {
         })
     }
 
+    /// Creates a new `VectorCollection` with an async index builder configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config cannot be saved.
+    pub fn create_with_async_builder(
+        path: PathBuf,
+        dimension: usize,
+        metric: DistanceMetric,
+        async_builder_config: crate::collection::streaming::AsyncIndexBuilderConfig,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: Collection::create_with_async_builder(
+                path,
+                dimension,
+                metric,
+                async_builder_config,
+            )?,
+        })
+    }
+
     /// Flushes all engines to disk and saves the config.
     ///
     /// Issue #423: This fast-path flush skips `vectors.idx` serialization.

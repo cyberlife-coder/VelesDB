@@ -11,9 +11,9 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::collection::Collection;
 use crate::distance::DistanceMetric;
 use crate::point::Point;
-use crate::Collection;
 use std::path::PathBuf;
 
 /// Returns true if the HNSW graph has been persisted to disk.

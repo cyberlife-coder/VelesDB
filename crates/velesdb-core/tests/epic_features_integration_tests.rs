@@ -1,5 +1,4 @@
 #![cfg(feature = "persistence")]
-#![allow(deprecated)] // Tests use legacy Collection.
 //! Integration tests for completed EPICs features.
 //!
 //! These tests verify end-to-end functionality of features marked as DONE in EPICs.
@@ -86,7 +85,7 @@ mod epic_009_property_index {
         db.create_collection("indexed_docs", 128, DistanceMetric::Cosine)
             .expect("Failed to create collection");
         let collection = db
-            .get_collection("indexed_docs")
+            .get_vector_collection("indexed_docs")
             .expect("Failed to get collection");
 
         // Create property index for O(1) lookups
@@ -110,7 +109,7 @@ mod epic_009_property_index {
         db.create_collection("events", 64, DistanceMetric::Cosine)
             .expect("Failed to create collection");
         let collection = db
-            .get_collection("events")
+            .get_vector_collection("events")
             .expect("Failed to get collection");
 
         // Create range index for O(log n) range queries
@@ -129,7 +128,7 @@ mod epic_009_property_index {
         db.create_collection("test_drop", 64, DistanceMetric::Cosine)
             .expect("Failed to create collection");
         let collection = db
-            .get_collection("test_drop")
+            .get_vector_collection("test_drop")
             .expect("Failed to get collection");
 
         collection
@@ -318,7 +317,9 @@ mod epic_031_multimodel {
 
         db.create_collection("multimodel", 64, DistanceMetric::Cosine)
             .expect("Failed to create collection");
-        let collection = db.get_collection("multimodel").expect("Failed to get");
+        let collection = db
+            .get_vector_collection("multimodel")
+            .expect("Failed to get");
 
         // Insert data with varied metadata
         for id in 0u64..50 {
@@ -532,7 +533,9 @@ mod cross_epic_integration {
 
         db.create_collection("hybrid_test", 128, DistanceMetric::Cosine)
             .expect("Failed to create collection");
-        let collection = db.get_collection("hybrid_test").expect("Failed to get");
+        let collection = db
+            .get_vector_collection("hybrid_test")
+            .expect("Failed to get");
 
         // Insert documents with text and embeddings
         let docs = [
@@ -567,7 +570,7 @@ mod cross_epic_integration {
 
         // Hybrid search
         let hybrid_results = collection
-            .hybrid_search(&query, "programming", 5, Some(0.5), None)
+            .hybrid_search(&query, "programming", 5, Some(0.5))
             .expect("Hybrid search failed");
         assert!(!hybrid_results.is_empty());
     }

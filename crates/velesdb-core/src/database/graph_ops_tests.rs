@@ -1,7 +1,5 @@
 //! Tests for graph collection creation and retrieval via [`Database`].
 
-#![allow(deprecated)] // Tests use legacy Collection via get_collection().
-
 use super::*;
 use crate::collection::{EdgeType, GraphSchema, NodeType};
 use crate::DistanceMetric;

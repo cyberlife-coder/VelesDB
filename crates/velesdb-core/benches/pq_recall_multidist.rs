@@ -1,4 +1,3 @@
-#![allow(deprecated)] // Benches use legacy Collection.
 //! Multi-distribution PQ recall accuracy benchmark suite (5K vectors, 128d).
 //!
 //! Measures recall@10 for PQ, OPQ, and `RaBitQ` quantization methods across
@@ -19,7 +18,7 @@ use rand::{Rng, SeedableRng};
 use rand_distr::{Distribution, Normal};
 use tempfile::{tempdir, TempDir};
 use velesdb_core::velesql::Parser;
-use velesdb_core::{Collection, Database, DistanceMetric, Point, StorageMode};
+use velesdb_core::{Database, DistanceMetric, Point, StorageMode, VectorCollection};
 
 const DIMENSION: usize = 128;
 const NUM_VECTORS: usize = 5_000;
@@ -125,19 +124,24 @@ fn recall_at_k(ground_truth: &[u64], results: &[u64], k: usize) -> f64 {
     recall
 }
 
-/// Build a collection with specified storage mode (no quantization training).
+/// Build a VectorCollection with specified storage mode (no quantization training).
 fn build_pq_collection(
     storage_mode: StorageMode,
     dataset: &[Vec<f32>],
     dimension: usize,
     name: &str,
-) -> (Collection, TempDir) {
+) -> (VectorCollection, TempDir) {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join(name);
 
-    let collection =
-        Collection::create_with_options(path, dimension, DistanceMetric::Euclidean, storage_mode)
-            .expect("create collection");
+    let VectorCollection = VectorCollection::create(
+        path,
+        "bench",
+        dimension,
+        DistanceMetric::Euclidean,
+        storage_mode,
+    )
+    .expect("create VectorCollection");
 
     let points: Vec<Point> = dataset
         .iter()
@@ -148,23 +152,25 @@ fn build_pq_collection(
             Point::new(pid, v.clone(), Some(serde_json::json!({})))
         })
         .collect();
-    collection.upsert(points).expect("upsert");
-    (collection, dir)
+    VectorCollection.upsert(points).expect("upsert");
+    (VectorCollection, dir)
 }
 
-/// Build a collection via `Database` + `VelesQL` `TRAIN QUANTIZER` for explicit training.
+/// Build a VectorCollection via `Database` + `VelesQL` `TRAIN QUANTIZER` for explicit training.
 fn build_trained_collection(
     dataset: &[Vec<f32>],
     dimension: usize,
     name: &str,
     train_query: &str,
-) -> (Collection, Database, TempDir) {
+) -> (VectorCollection, Database, TempDir) {
     let dir = tempdir().expect("tempdir");
     let db = Database::open(dir.path()).expect("open database");
     db.create_collection(name, dimension, DistanceMetric::Euclidean)
-        .expect("create collection");
+        .expect("create VectorCollection");
 
-    let coll = db.get_collection(name).expect("get collection");
+    let coll = db
+        .get_vector_collection(name)
+        .expect("get VectorCollection");
     let points: Vec<Point> = dataset
         .iter()
         .enumerate()
@@ -182,14 +188,16 @@ fn build_trained_collection(
     db.execute_query(&query, &params)
         .expect("execute TRAIN QUANTIZER");
 
-    // Re-fetch collection after training
-    let coll = db.get_collection(name).expect("get trained collection");
+    // Re-fetch VectorCollection after training
+    let coll = db
+        .get_vector_collection(name)
+        .expect("get trained VectorCollection");
     (coll, db, dir)
 }
 
 /// Measure average recall@k using default `ef_search` (128).
 fn measure_recall(
-    collection: &Collection,
+    VectorCollection: &VectorCollection,
     queries: &[Vec<f32>],
     dataset: &[Vec<f32>],
     k: usize,
@@ -201,7 +209,7 @@ fn measure_recall(
     let mut total_recall = 0.0;
     for query in queries {
         let gt = brute_force_topk(query, dataset, k);
-        let results = collection.search_ids(query, k).expect("search");
+        let results = VectorCollection.search_ids(query, k).expect("search");
         let result_ids: Vec<u64> = results.iter().map(|sr| sr.id).collect();
         total_recall += recall_at_k(&gt, &result_ids, k);
     }
@@ -212,7 +220,7 @@ fn measure_recall(
 
 /// Measure average recall@k with explicit `ef_search` override.
 fn measure_recall_with_ef(
-    collection: &Collection,
+    VectorCollection: &VectorCollection,
     queries: &[Vec<f32>],
     dataset: &[Vec<f32>],
     k: usize,
@@ -225,7 +233,7 @@ fn measure_recall_with_ef(
     let mut total_recall = 0.0;
     for query in queries {
         let gt = brute_force_topk(query, dataset, k);
-        let results = collection
+        let results = VectorCollection
             .search_with_ef(query, k, ef_search)
             .expect("search_with_ef");
         let result_ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();

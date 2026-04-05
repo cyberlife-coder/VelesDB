@@ -2,7 +2,6 @@
 //!
 //! These tests define the expected behavior for collections
 //! that store metadata without vectors.
-#![allow(deprecated)] // Tests use legacy Collection.
 
 use crate::collection::CollectionType;
 use crate::error::Error;
@@ -68,7 +67,7 @@ fn test_create_metadata_only_collection() {
     assert!(collections.contains(&"products".to_string()));
 
     // Verify we can get it
-    let coll = db.get_collection("products").unwrap();
+    let coll = db.get_metadata_collection("products").unwrap();
     assert!(coll.is_metadata_only());
 }
 
@@ -91,7 +90,7 @@ fn test_create_vector_collection_typed() {
     )
     .unwrap();
 
-    let coll = db.get_collection("embeddings").unwrap();
+    let coll = db.get_vector_collection("embeddings").unwrap();
     assert!(!coll.is_metadata_only());
     assert_eq!(coll.config().dimension, 768);
 }
@@ -108,7 +107,7 @@ fn test_metadata_only_upsert_without_vector() {
     db.create_collection_typed("products", &CollectionType::MetadataOnly)
         .unwrap();
 
-    let coll = db.get_collection("products").unwrap();
+    let coll = db.get_metadata_collection("products").unwrap();
 
     // Upsert points without vectors (metadata-only point)
     let result = coll.upsert_metadata(vec![
@@ -144,7 +143,7 @@ fn test_metadata_only_rejects_vector() {
     db.create_collection_typed("products", &CollectionType::MetadataOnly)
         .unwrap();
 
-    let coll = db.get_collection("products").unwrap();
+    let coll = db.get_metadata_collection("products").unwrap();
 
     // Attempt to upsert a point WITH a vector should fail
     let result = coll.upsert(vec![Point::new(
@@ -174,7 +173,7 @@ fn test_metadata_only_get_by_id() {
     db.create_collection_typed("products", &CollectionType::MetadataOnly)
         .unwrap();
 
-    let coll = db.get_collection("products").unwrap();
+    let coll = db.get_metadata_collection("products").unwrap();
 
     coll.upsert_metadata(vec![Point::metadata_only(
         42,
@@ -201,7 +200,7 @@ fn test_metadata_only_delete() {
     db.create_collection_typed("products", &CollectionType::MetadataOnly)
         .unwrap();
 
-    let coll = db.get_collection("products").unwrap();
+    let coll = db.get_metadata_collection("products").unwrap();
 
     coll.upsert_metadata(vec![
         Point::metadata_only(1, json!({"name": "Product 1"})),
@@ -224,7 +223,7 @@ fn test_metadata_only_count() {
     db.create_collection_typed("products", &CollectionType::MetadataOnly)
         .unwrap();
 
-    let coll = db.get_collection("products").unwrap();
+    let coll = db.get_metadata_collection("products").unwrap();
 
     assert_eq!(coll.len(), 0);
     assert!(coll.is_empty());
@@ -248,7 +247,7 @@ fn test_metadata_only_search_returns_error() {
     db.create_collection_typed("products", &CollectionType::MetadataOnly)
         .unwrap();
 
-    let coll = db.get_collection("products").unwrap();
+    let coll = db.get_metadata_collection("products").unwrap();
 
     coll.upsert_metadata(vec![Point::metadata_only(1, json!({"name": "Test"}))])
         .unwrap();
@@ -278,7 +277,7 @@ fn test_metadata_only_no_hnsw_file() {
     db.create_collection_typed("products", &CollectionType::MetadataOnly)
         .unwrap();
 
-    let coll = db.get_collection("products").unwrap();
+    let coll = db.get_metadata_collection("products").unwrap();
 
     coll.upsert_metadata(vec![Point::metadata_only(1, json!({"name": "Test"}))])
         .unwrap();
@@ -306,7 +305,7 @@ fn test_metadata_only_memory_efficient() {
     db.create_collection_typed("products", &CollectionType::MetadataOnly)
         .unwrap();
 
-    let coll = db.get_collection("products").unwrap();
+    let coll = db.get_metadata_collection("products").unwrap();
 
     // Insert 100 metadata-only points
     let points: Vec<_> = (0..100_u64)
@@ -351,7 +350,7 @@ fn test_metadata_only_persistence() {
         db.create_collection_typed("products", &CollectionType::MetadataOnly)
             .unwrap();
 
-        let coll = db.get_collection("products").unwrap();
+        let coll = db.get_metadata_collection("products").unwrap();
         coll.upsert_metadata(vec![
             Point::metadata_only(1, json!({"name": "Product 1"})),
             Point::metadata_only(2, json!({"name": "Product 2"})),
@@ -366,7 +365,7 @@ fn test_metadata_only_persistence() {
         // Load existing collections from disk
         db.load_collections().unwrap();
 
-        let coll = db.get_collection("products").unwrap();
+        let coll = db.get_metadata_collection("products").unwrap();
         assert!(coll.is_metadata_only());
         assert_eq!(coll.len(), 2);
 

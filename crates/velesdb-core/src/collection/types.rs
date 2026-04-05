@@ -227,12 +227,11 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 //  11. deferred_indexer / async_index_builder (internal locks)
 
 /// A collection of vectors with associated metadata.
-#[deprecated(
-    since = "2.0.0",
-    note = "Use VectorCollection, GraphCollection, or MetadataCollection instead"
-)]
+///
+/// Internal executor type — external callers should use `VectorCollection`,
+/// `GraphCollection`, or `MetadataCollection` instead.
 #[derive(Clone)]
-pub struct Collection {
+pub(crate) struct Collection {
     /// Path to the collection data.
     pub(super) path: PathBuf,
 

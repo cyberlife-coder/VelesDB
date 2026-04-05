@@ -1,5 +1,3 @@
-#![allow(deprecated)] // Tests use legacy Collection via get_collection().
-
 use super::*;
 use crate::point::Point;
 use crate::velesql::Parser;
@@ -17,7 +15,7 @@ fn test_execute_query_select_all_returns_inserted_points() {
     db.create_collection("docs", 4, DistanceMetric::Cosine)
         .unwrap();
 
-    let coll = db.get_collection("docs").unwrap();
+    let coll = db.get_vector_collection("docs").unwrap();
     coll.upsert(vec![
         Point::new(
             1,
@@ -47,7 +45,7 @@ fn test_execute_query_with_limit() {
     db.create_collection("items", 4, DistanceMetric::Cosine)
         .unwrap();
 
-    let coll = db.get_collection("items").unwrap();
+    let coll = db.get_vector_collection("items").unwrap();
     let points: Vec<Point> = (1..=5)
         .map(|i| {
             #[allow(clippy::cast_precision_loss)]
@@ -151,7 +149,7 @@ fn test_execute_query_update_modifies_payload() {
     db.create_collection_typed("items", &crate::CollectionType::MetadataOnly)
         .unwrap();
 
-    let coll = db.get_collection("items").unwrap();
+    let coll = db.get_metadata_collection("items").unwrap();
     coll.upsert_metadata(vec![Point::metadata_only(
         1,
         serde_json::json!({"status": "draft", "count": 0}),
