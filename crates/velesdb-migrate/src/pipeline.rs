@@ -365,6 +365,22 @@ impl Pipeline {
 
         progress.finish_with_message("Migration complete");
 
+        // Graph migration phase: migrate FK relations as graph edges.
+        if let Some(ref db) = db {
+            if self.config.destination.graph_collection.is_some()
+                && !self.config.relations.is_empty()
+            {
+                info!("Starting graph migration phase...");
+                let graph_connector = crate::connectors::create_connector(&self.config.source)?;
+                let mut graph_phase = crate::pipeline_graph::GraphMigrationPhase::new(
+                    &self.config,
+                    graph_connector,
+                );
+                graph_phase.connect().await?;
+                let _graph_stats = graph_phase.run(db).await?;
+            }
+        }
+
         self.connector.close().await?;
 
         stats.duration_secs = resumed_duration_secs + start.elapsed().as_secs_f64();
@@ -546,11 +562,13 @@ mod tests {
                 dimension: 2,
                 metric: DistanceMetric::Cosine,
                 storage_mode: StorageMode::Full,
+                graph_collection: None,
             },
             options: MigrationOptions {
                 dry_run: true,
                 ..MigrationOptions::default()
             },
+            relations: vec![],
         };
 
         let mut pipeline = crate::Pipeline::new(config)
@@ -576,11 +594,13 @@ mod tests {
                 dimension: 3,
                 metric: crate::config::DistanceMetric::Cosine,
                 storage_mode: crate::config::StorageMode::Full,
+                graph_collection: None,
             },
             options: crate::config::MigrationOptions {
                 checkpoint_path: Some(std::path::PathBuf::from("./custom-checkpoint.json")),
                 ..crate::config::MigrationOptions::default()
             },
+            relations: vec![],
         };
 
         assert_eq!(

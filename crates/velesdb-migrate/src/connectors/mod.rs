@@ -12,6 +12,7 @@ pub mod pinecone;
 pub mod qdrant;
 #[cfg(feature = "redis-source")]
 pub mod redis;
+pub mod relation_detector;
 pub mod weaviate;
 
 use async_trait::async_trait;

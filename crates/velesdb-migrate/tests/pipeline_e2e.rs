@@ -51,12 +51,14 @@ fn json_config(source_path: &Path, destination_path: &Path, collection: &str) ->
             dimension: 2,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 2,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     }
 }
 
@@ -77,12 +79,14 @@ fn csv_config(source_path: &Path, destination_path: &Path, collection: &str) -> 
             dimension: 2,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 2,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     }
 }
 
@@ -375,12 +379,14 @@ async fn test_pipeline_qdrant_sparse_vectors_e2e() {
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 10,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -458,12 +464,14 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 10,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -529,12 +537,14 @@ async fn test_pipeline_qdrant_429_fails_pipeline() {
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 10,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -591,12 +601,14 @@ async fn test_pipeline_qdrant_schema_mismatch() {
             dimension: 3, // mismatch with source=5
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 10,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -707,12 +719,14 @@ async fn test_pipeline_pinecone_sparse_vectors_e2e() {
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 10,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -840,12 +854,14 @@ async fn test_pipeline_elasticsearch_e2e() {
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 2,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -951,12 +967,14 @@ async fn test_pipeline_qdrant_pagination_multi_page() {
             dimension: 2,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 2,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -1082,12 +1100,14 @@ async fn test_pipeline_pinecone_pagination_multi_page() {
             dimension: 2,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 2,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");

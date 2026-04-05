@@ -14,6 +14,9 @@ pub struct MigrationConfig {
     /// Migration options.
     #[serde(default)]
     pub options: MigrationOptions,
+    /// Relations to migrate as graph edges (optional).
+    #[serde(default)]
+    pub relations: Vec<RelationConfig>,
 }
 
 /// Source database configuration.
@@ -207,6 +210,27 @@ pub struct ChromaDBConfig {
     pub database: Option<String>,
 }
 
+/// Configuration of a source relation to migrate as graph edges.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationConfig {
+    /// Column/field in the source containing the FK (e.g., "author_id").
+    pub from_column: String,
+    /// Target table/collection (e.g., "authors").
+    pub to_table: String,
+    /// ID column in the target (e.g., "id"). Defaults to "id".
+    #[serde(default = "default_relation_id_column")]
+    pub to_column: String,
+    /// Edge label in `VelesDB` (e.g., "AUTHORED_BY").
+    pub edge_label: String,
+    /// Optional column for a numeric edge weight.
+    #[serde(default)]
+    pub weight_column: Option<String>,
+}
+
+fn default_relation_id_column() -> String {
+    "id".to_string()
+}
+
 /// Destination `VelesDB` configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DestinationConfig {
@@ -222,6 +246,9 @@ pub struct DestinationConfig {
     /// Storage mode.
     #[serde(default)]
     pub storage_mode: StorageMode,
+    /// Name of the `GraphCollection` for graph edges (optional).
+    #[serde(default)]
+    pub graph_collection: Option<String>,
 }
 
 /// Distance metric for `VelesDB`.
@@ -385,8 +412,10 @@ mod tests {
                 dimension: 0,
                 metric: DistanceMetric::Cosine,
                 storage_mode: StorageMode::Full,
+                graph_collection: None,
             },
             options: MigrationOptions::default(),
+            relations: vec![],
         };
 
         let result = config.validate();
@@ -408,11 +437,13 @@ mod tests {
                 dimension: 8,
                 metric: DistanceMetric::Cosine,
                 storage_mode: StorageMode::Full,
+                graph_collection: None,
             },
             options: MigrationOptions {
                 batch_size: 0,
                 ..MigrationOptions::default()
             },
+            relations: vec![],
         };
 
         let result = config.validate();
@@ -434,11 +465,13 @@ mod tests {
                 dimension: 8,
                 metric: DistanceMetric::Cosine,
                 storage_mode: StorageMode::Full,
+                graph_collection: None,
             },
             options: MigrationOptions {
                 workers: 0,
                 ..MigrationOptions::default()
             },
+            relations: vec![],
         };
 
         let result = config.validate();
