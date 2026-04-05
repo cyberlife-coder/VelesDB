@@ -267,3 +267,21 @@ fn test_build_ft_search_cmd_with_payload_fields() {
     // Vector field should be auto-added.
     assert!(cmd_str.contains("embedding"));
 }
+
+#[tokio::test]
+async fn test_extract_batch_fails_when_not_connected() {
+    // GIVEN: a connector that has not been connected
+    let connector = RedisConnector::new(test_config());
+
+    // WHEN: extract_batch is called without connect()
+    let result = connector.extract_batch(None, 10).await;
+
+    // THEN: an error is returned indicating not connected
+    assert!(result.is_err(), "extract_batch should fail without connect()");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Not connected"),
+        "expected 'Not connected' in error, got: {err}"
+    );
+}
+

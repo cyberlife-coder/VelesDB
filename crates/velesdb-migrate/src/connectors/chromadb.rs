@@ -164,14 +164,15 @@ impl SourceConnector for ChromaDBConnector {
         let current_offset = offset
             .as_ref()
             .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as usize;
+            .unwrap_or(0);
+        let offset_usize = usize::try_from(current_offset).unwrap_or(usize::MAX);
 
         let url = format!("{}/collections/{}/get", self.base_url(), collection_id);
 
         let req = GetRequest {
             ids: None,
             limit: Some(batch_size),
-            offset: Some(current_offset),
+            offset: Some(offset_usize),
             include: vec![
                 "embeddings".to_string(),
                 "metadatas".to_string(),
@@ -223,7 +224,7 @@ impl SourceConnector for ChromaDBConnector {
         Ok(super::common::build_numeric_offset_batch(
             points,
             batch_size,
-            current_offset as u64,
+            current_offset,
         ))
     }
 

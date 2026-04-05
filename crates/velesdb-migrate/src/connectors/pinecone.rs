@@ -48,6 +48,8 @@ impl PineconeConnector {
         if let Some(base) = &self.config.base_url {
             return base.clone();
         }
+        // Invariant: callers (get_schema, extract_batch) always guard with
+        // `self.host.is_some()` before calling this method; "localhost" is unreachable.
         let host = self.host.as_deref().unwrap_or("localhost");
         format!("https://{host}")
     }

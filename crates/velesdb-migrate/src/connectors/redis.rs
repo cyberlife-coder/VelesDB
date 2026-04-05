@@ -10,9 +10,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::config::RedisConfig;
-use crate::connectors::common::{
-    build_numeric_offset_batch, extract_payload_from_object, parse_vector_from_json,
-};
+use crate::connectors::common::{build_numeric_offset_batch, parse_vector_from_json};
+#[cfg(test)]
+use crate::connectors::common::extract_payload_from_object;
 use crate::connectors::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
 
@@ -41,7 +41,8 @@ impl RedisConnector {
     /// Redis stores vectors as JSON arrays or delimited strings.
     /// The array case delegates to the shared `parse_vector_from_json` helper;
     /// the string case is Redis-specific (comma/space-separated floats).
-    pub fn parse_vector(&self, attrs: &HashMap<String, serde_json::Value>) -> Result<Vec<f32>> {
+    #[cfg(test)]
+    pub(crate) fn parse_vector(&self, attrs: &HashMap<String, serde_json::Value>) -> Result<Vec<f32>> {
         let vector_value = attrs.get(&self.config.vector_field).ok_or_else(|| {
             Error::Extraction(format!(
                 "Vector field '{}' not found in document",
@@ -70,14 +71,16 @@ impl RedisConnector {
     }
 
     /// Extracts ID from Redis document key by stripping the configured prefix.
-    pub fn extract_id(&self, key: &str) -> String {
+    #[cfg(test)]
+    pub(crate) fn extract_id(&self, key: &str) -> String {
         key.strip_prefix(&self.config.key_prefix)
             .unwrap_or(key)
             .to_string()
     }
 
     /// Extracts payload from Redis document attributes, excluding the vector field.
-    pub fn extract_payload(
+    #[cfg(test)]
+    pub(crate) fn extract_payload(
         &self,
         attrs: &HashMap<String, serde_json::Value>,
     ) -> HashMap<String, serde_json::Value> {
