@@ -98,10 +98,14 @@ pub fn run(path: PathBuf) -> Result<()> {
     let mut config = ReplConfig::default();
 
     loop {
-        // Wrap ONLY the ANSI escape codes (not the visible text) in
-        // \x01..\x02 so rustyline computes the visible prompt width
-        // correctly. The visible text "velesdb> " must be OUTSIDE the
-        // invisible-character markers.
+        // On Unix, wrap ANSI codes in \x01..\x02 so rustyline (readline
+        // backend) correctly computes the visible prompt width.
+        // On Windows, rustyline uses the crossterm backend which handles
+        // ANSI natively — the \x01\x02 markers appear as literal garbage
+        // characters there and must be omitted.
+        #[cfg(windows)]
+        let prompt = "\x1b[1;34mvelesdb> \x1b[0m".to_string();
+        #[cfg(not(windows))]
         let prompt = "\x01\x1b[1;34m\x02velesdb> \x01\x1b[0m\x02".to_string();
         match rl.readline(&prompt) {
             Ok(line) => {

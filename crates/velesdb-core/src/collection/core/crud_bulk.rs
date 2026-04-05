@@ -323,18 +323,6 @@ impl Collection {
         if indexes.is_empty() {
             return;
         }
-        // Skip per-point index updates during large bulk loads.
-        // The caller should call create_index AFTER the bulk load to backfill.
-        // This avoids O(N × num_indexes) B-tree insertions during ingestion.
-        if ids.len() > 1000 && indexes.len() > 3 {
-            tracing::warn!(
-                ids_len = ids.len(),
-                index_count = indexes.len(),
-                "Skipping per-point secondary index updates for large bulk load; \
-                 call create_index after ingestion to backfill"
-            );
-            return;
-        }
         for (i, opt) in ps.iter().enumerate() {
             let Some(payload) = opt else { continue };
             self.index_single_payload(&indexes, payload, ids[i]);
