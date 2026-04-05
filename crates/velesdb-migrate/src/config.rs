@@ -55,7 +55,39 @@ pub enum SourceConfig {
     Elasticsearch(crate::connectors::elasticsearch::ElasticsearchConfig),
     /// Redis Vector Search (Redis Stack).
     #[serde(rename = "redis")]
-    Redis(crate::connectors::redis::RedisConfig),
+    Redis(RedisConfig),
+}
+
+/// Configuration for Redis Vector Search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedisConfig {
+    /// Redis URL (e.g., `redis://localhost:6379` or `rediss://...` for TLS).
+    pub url: String,
+    /// Redis password (optional).
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Index name created with `FT.CREATE`.
+    pub index: String,
+    /// Field name containing the vector embedding.
+    #[serde(default = "default_redis_vector_field")]
+    pub vector_field: String,
+    /// Prefix for document keys (e.g., "doc:").
+    #[serde(default = "default_redis_key_prefix")]
+    pub key_prefix: String,
+    /// Fields to include in payload (empty = all).
+    #[serde(default)]
+    pub payload_fields: Vec<String>,
+    /// Optional filter query (RediSearch syntax).
+    #[serde(default)]
+    pub filter: Option<String>,
+}
+
+fn default_redis_vector_field() -> String {
+    "embedding".to_string()
+}
+
+fn default_redis_key_prefix() -> String {
+    "doc:".to_string()
 }
 
 /// `PostgreSQL` pgvector configuration.

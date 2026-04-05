@@ -144,7 +144,7 @@ pub(crate) fn build_elasticsearch(params: &SourceParams<'_>) -> SourceConfig {
 }
 
 pub(crate) fn build_redis(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::Redis(crate::connectors::redis::RedisConfig {
+    SourceConfig::Redis(crate::config::RedisConfig {
         url: params.url.to_string(),
         password: params.api_key.map(String::from),
         index: params.collection.to_string(),
