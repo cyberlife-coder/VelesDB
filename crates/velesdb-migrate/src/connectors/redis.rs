@@ -6,6 +6,8 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::config::RedisConfig;
 use crate::connectors::common::{
@@ -14,10 +16,13 @@ use crate::connectors::common::{
 use crate::connectors::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
 
+type SharedConnection = Arc<Mutex<redis::aio::MultiplexedConnection>>;
+
 /// Redis Vector Search connector.
 pub struct RedisConnector {
     config: RedisConfig,
     schema: Option<SourceSchema>,
+    connection: Option<SharedConnection>,
 }
 
 impl RedisConnector {
@@ -27,6 +32,7 @@ impl RedisConnector {
         Self {
             config,
             schema: None,
+            connection: None,
         }
     }
 
@@ -107,6 +113,20 @@ impl RedisConnector {
         Ok(con)
     }
 
+    /// Returns a lock guard for the cached multiplexed connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SourceConnection` if `connect()` has not been called.
+    async fn acquire_connection(
+        &self,
+    ) -> Result<tokio::sync::MutexGuard<'_, redis::aio::MultiplexedConnection>> {
+        let shared = self.connection.as_ref().ok_or_else(|| {
+            Error::SourceConnection("Not connected to Redis".to_string())
+        })?;
+        Ok(shared.lock().await)
+    }
+
     /// Detects the vector dimension by fetching a single document from the index.
     async fn detect_dimension(
         &self,
@@ -172,6 +192,7 @@ impl SourceConnector for RedisConnector {
             vector_column: Some(self.config.vector_field.clone()),
             id_column: None,
         });
+        self.connection = Some(Arc::new(Mutex::new(con)));
 
         Ok(())
     }
@@ -188,7 +209,7 @@ impl SourceConnector for RedisConnector {
         let offset_num = offset.and_then(|v| v.as_u64()).unwrap_or(0);
         let query = self.config.filter.as_deref().unwrap_or("*");
 
-        let mut con = self.open_connection().await?;
+        let mut con = self.acquire_connection().await?;
 
         let resp: redis::Value = build_ft_search_cmd(
             &self.config.index,
@@ -198,9 +219,10 @@ impl SourceConnector for RedisConnector {
             &self.config.vector_field,
             &self.config.payload_fields,
         )
-        .query_async(&mut con)
+        .query_async(&mut *con)
         .await
         .map_err(|e| Error::Extraction(format!("FT.SEARCH batch failed: {e}")))?;
+        drop(con);
 
         let points =
             parse_ft_search_response(&resp, &self.config.vector_field, &self.config.key_prefix)?;
@@ -209,6 +231,7 @@ impl SourceConnector for RedisConnector {
     }
 
     async fn close(&mut self) -> Result<()> {
+        self.connection = None;
         self.schema = None;
         Ok(())
     }

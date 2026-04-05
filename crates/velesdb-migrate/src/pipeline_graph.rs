@@ -73,9 +73,12 @@ impl<'a> GraphMigrationPhase<'a> {
             return Ok(GraphMigrationStats::default());
         }
 
+        // TODO(US-GRAPH-01): single-pass extraction — currently opens a second
+        // connector and scans the entire source again for graph edges. This doubles
+        // I/O for large sources. Future improvement: extract edges inline during
+        // the main vector pipeline pass.
         let mut stats = GraphMigrationStats::default();
         let batch_size = self.config.options.batch_size;
-        let mut edge_id_counter: u64 = 0;
 
         for relation in relations {
             info!(
@@ -87,7 +90,7 @@ impl<'a> GraphMigrationPhase<'a> {
             );
 
             let edges = self
-                .extract_edges_for_relation(relation, batch_size, &mut edge_id_counter)
+                .extract_edges_for_relation(relation, batch_size)
                 .await?;
 
             let total = edges.len() as u64;
@@ -112,7 +115,6 @@ impl<'a> GraphMigrationPhase<'a> {
         &self,
         relation: &RelationConfig,
         batch_size: usize,
-        edge_id: &mut u64,
     ) -> Result<Vec<velesdb_core::GraphEdge>> {
         let mut edges = Vec::new();
         let mut offset = None;
@@ -121,11 +123,11 @@ impl<'a> GraphMigrationPhase<'a> {
             let batch = self.connector.extract_batch(offset.clone(), batch_size).await?;
 
             for point in &batch.points {
-                if let Some(edge) = build_edge(point, relation, edge_id) {
+                if let Some(edge) = build_edge(point, relation) {
                     edges.push(edge);
                 } else {
                     debug!(
-                        "Skipping point '{}': missing column '{}'",
+                        "Skipping point '{}': unsupported type or missing column '{}'",
                         point.id, relation.from_column
                     );
                 }
@@ -157,7 +159,6 @@ fn ensure_graph_collection_exists(
 fn build_edge(
     point: &crate::connectors::ExtractedPoint,
     relation: &RelationConfig,
-    edge_id: &mut u64,
 ) -> Option<velesdb_core::GraphEdge> {
     let from_node_id = stable_point_id(&point.id);
 
@@ -165,8 +166,8 @@ fn build_edge(
     let fk_str = value_to_id_str(fk_value)?;
     let to_node_id = stable_point_id(&fk_str);
 
-    let id = *edge_id;
-    *edge_id += 1;
+    let key = format!("{from_node_id}-{to_node_id}-{}", relation.edge_label);
+    let id = crate::pipeline::fnv1a64(key.as_bytes());
 
     let edge = match velesdb_core::GraphEdge::new(id, from_node_id, to_node_id, &relation.edge_label) {
         Ok(e) => e,
@@ -241,21 +242,18 @@ mod tests {
     fn test_build_edge_string_fk() {
         let point = make_point("doc-1", serde_json::json!({"author_id": "auth-42"}));
         let relation = make_relation("author_id", "AUTHORED_BY");
-        let mut edge_id = 0u64;
-        let edge = build_edge(&point, &relation, &mut edge_id);
+        let edge = build_edge(&point, &relation);
         assert!(edge.is_some());
         let e = edge.expect("test: edge should be Some");
         assert_eq!(e.source(), stable_point_id("doc-1"));
         assert_eq!(e.target(), stable_point_id("auth-42"));
-        assert_eq!(edge_id, 1);
     }
 
     #[test]
     fn test_build_edge_numeric_fk() {
         let point = make_point("99", serde_json::json!({"category_id": 7}));
         let relation = make_relation("category_id", "BELONGS_TO");
-        let mut edge_id = 0u64;
-        let edge = build_edge(&point, &relation, &mut edge_id);
+        let edge = build_edge(&point, &relation);
         assert!(edge.is_some());
         assert_eq!(
             edge.expect("test: edge should be Some").source(),
@@ -267,8 +265,35 @@ mod tests {
     fn test_build_edge_missing_fk_returns_none() {
         let point = make_point("1", serde_json::json!({}));
         let relation = make_relation("author_id", "AUTHORED_BY");
-        let mut edge_id = 0u64;
-        assert!(build_edge(&point, &relation, &mut edge_id).is_none());
-        assert_eq!(edge_id, 0); // counter not incremented on skip
+        assert!(build_edge(&point, &relation).is_none());
+    }
+
+    #[test]
+    fn test_build_edge_string_fk_deterministic_id() {
+        // GIVEN: same point and relation
+        let point = make_point("doc-1", serde_json::json!({"author_id": "auth-42"}));
+        let relation = make_relation("author_id", "AUTHORED_BY");
+
+        // WHEN: build_edge is called twice
+        let e1 = build_edge(&point, &relation).expect("test: e1 should be Some");
+        let e2 = build_edge(&point, &relation).expect("test: e2 should be Some");
+
+        // THEN: both produce the same deterministic ID
+        assert_eq!(e1.id(), e2.id(), "Edge IDs must be deterministic for the same input");
+    }
+
+    #[test]
+    fn test_build_edge_different_labels_produce_different_ids() {
+        // GIVEN: same point but different edge labels
+        let point = make_point("doc-1", serde_json::json!({"author_id": "auth-42"}));
+        let rel1 = make_relation("author_id", "AUTHORED_BY");
+        let rel2 = make_relation("author_id", "EDITED_BY");
+
+        // WHEN: build_edge is called with each relation
+        let e1 = build_edge(&point, &rel1).expect("test: e1 should be Some");
+        let e2 = build_edge(&point, &rel2).expect("test: e2 should be Some");
+
+        // THEN: different labels produce different IDs
+        assert_ne!(e1.id(), e2.id(), "Different edge labels must produce different IDs");
     }
 }
