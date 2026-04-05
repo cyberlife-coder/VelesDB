@@ -34,8 +34,6 @@ pub(crate) mod segment_builder;
 mod sharded_mappings;
 mod sharded_vectors;
 pub(crate) mod upsert;
-mod vector_store;
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -57,8 +55,6 @@ mod sharded_mappings_tests;
 mod sharded_vectors_tests;
 #[cfg(test)]
 mod upsert_tests;
-#[cfg(test)]
-mod vector_store_tests;
 
 // ============================================================================
 // Public API
