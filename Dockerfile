@@ -2,7 +2,7 @@
 FROM rust:1.87-bookworm AS builder
 
 LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
-LABEL version="1.11.1"
+LABEL version="1.12.0"
 
 WORKDIR /app
 

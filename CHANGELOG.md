@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-04-05
+
 ### Added
 - **Cross-collection MATCH queries (Issue #495)** — `@collection` annotation on MATCH node patterns
   enables cross-collection graph queries. Syntax: `MATCH (p:Product@products)-[:STORED_IN]->(inv:Inventory@inventory)`.

@@ -1,17 +1,19 @@
 {
-  "last_updated": "2026-03-29",
+  "last_updated": "2026-04-05",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
       "file": "README.md",
       "must_contain": "HNSW Search (5K/768D, k=10)",
-      "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark"
+      "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
+      "source": "benchmarks/results/pr363_365_comparison.md (47-56µs measured)"
     },
     {
       "id": "root_readme_simd_dot",
       "file": "README.md",
       "must_contain": "SIMD Dot Product (768D, AVX2)",
-      "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark"
+      "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
+      "source": "docs/guides/TUNING_GUIDE.md"
     },
     {
       "id": "root_readme_ci_quality_gate",
@@ -36,7 +38,7 @@
       "file": "README.md",
       "must_contain": "**21.7 ns**",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
-      "note": "Re-run benchmark and update if value changes",
+      "source": "docs/guides/TUNING_GUIDE.md (measured on i9-14900KF, AVX2)",
       "last_updated": "2026-03-29"
     },
     {
@@ -44,7 +46,7 @@
       "file": "README.md",
       "must_contain": "**450 us**",
       "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
-      "note": "Full production path p50 search latency (10K/384D, WAL ON)",
+      "source": "CHANGELOG.md v1.11.1 (measured 2026-03-27, i9-14900KF, Python SDK, WAL ON)",
       "last_updated": "2026-03-29"
     },
     {
@@ -52,7 +54,7 @@
       "file": "README.md",
       "must_contain": "**55 us**",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
-      "note": "Core engine index-only search latency",
+      "source": "benchmarks/results/pr363_365_comparison.md (47-56µs range)",
       "last_updated": "2026-03-29"
     },
     {
@@ -60,7 +62,7 @@
       "file": "README.md",
       "must_contain": "**100%**",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
-      "note": "Re-run benchmark and update if value changes",
+      "source": "benchmarks/results/2026-02-20-phase-e-report.md",
       "last_updated": "2026-03-18"
     },
     {
@@ -68,7 +70,7 @@
       "file": "README.md",
       "must_contain": "| Fast | 64 | 92.2% |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
-      "note": "Re-run benchmark and update if value changes",
+      "source": "benchmarks/results/2026-02-20-phase-e-report.md (Fast ef=64: 92.2%)",
       "last_updated": "2026-03-29"
     },
     {
@@ -76,7 +78,7 @@
       "file": "README.md",
       "must_contain": "| Balanced (default) | 128 | 98.8% |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
-      "note": "Re-run benchmark and update if value changes",
+      "source": "benchmarks/results/2026-02-20-phase-e-report.md (Balanced ef=128: 98.8%)",
       "last_updated": "2026-03-29"
     },
     {
@@ -84,7 +86,7 @@
       "file": "README.md",
       "must_contain": "| Accurate | 512 | 100% |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
-      "note": "Re-run benchmark and update if value changes",
+      "source": "benchmarks/results/2026-02-20-phase-e-report.md (Accurate ef=256: 100%)",
       "last_updated": "2026-03-29"
     }
   ]

@@ -2,9 +2,17 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.11.1** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.12.0** | Node.js >= 18 | Browser (WASM) | MIT License
 
-## What's New in v1.11.1
+## What's New in v1.12.0
+
+- **Cross-collection MATCH queries** -- `@collection` annotation on MATCH node patterns enables cross-collection graph queries
+- **MATCH via `/query` endpoint** -- MATCH queries can now be executed via `Database::execute_query`
+- **BFS dedup** -- CSR and EdgeStore BFS no longer produce duplicate results for diamond graphs
+- **`rrf_k` propagation** -- now properly propagated to `hybrid_search_with_filter`
+- **`ComponentScores` optimization** -- changed to `&'static str` for zero-allocation score tagging
+
+### Previous (v1.11.1)
 
 - **Graph API parity** -- 7 new REST endpoints for complete graph operations (delete edge, edge count, list nodes, node edges, node payload, parallel BFS, graph search)
 - **Bitmap pre-filter** -- adaptive strategy selection for filtered search

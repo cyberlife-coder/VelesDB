@@ -25,7 +25,7 @@
   <a href="https://img.shields.io/badge/contributors-welcome-brightgreen"><img src="https://img.shields.io/badge/contributors-welcome-brightgreen" alt="Contributors Welcome"></a>
 </p>
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.11.1">Download v1.11.1</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.12.0">Download v1.12.0</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
