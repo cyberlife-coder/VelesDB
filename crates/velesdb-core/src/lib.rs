@@ -173,6 +173,8 @@ pub use collection::Collection;
 
 #[cfg(feature = "persistence")]
 pub use collection::{
+    // Type-erased collection handle (v2.0.0)
+    AnyCollection,
     // Diagnostics (US-006: embedded SDK health checks)
     CollectionDiagnostics,
     // Public user-facing types — 3 typed collections replace Collection as primary API

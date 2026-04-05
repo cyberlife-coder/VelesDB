@@ -5,6 +5,7 @@
 //! - [`graph_ops`] — graph collection create/get
 //! - [`metadata_ops`] — metadata-only collection create/get
 
+use crate::collection::AnyCollection;
 use crate::{CollectionType, DistanceMetric, Error, Result, StorageMode};
 
 use super::Database;
@@ -94,6 +95,24 @@ impl Database {
     #[allow(deprecated)]
     pub fn get_collection(&self, name: &str) -> Option<crate::Collection> {
         self.collections.read().get(name).cloned()
+    }
+
+    /// Returns a type-erased collection handle by name.
+    ///
+    /// Checks vector → graph → metadata registries in order.
+    /// Returns `None` if no collection with the given name exists.
+    #[must_use]
+    pub fn get_any_collection(&self, name: &str) -> Option<AnyCollection> {
+        if let Some(c) = self.get_vector_collection(name) {
+            return Some(AnyCollection::Vector(c));
+        }
+        if let Some(c) = self.get_graph_collection(name) {
+            return Some(AnyCollection::Graph(c));
+        }
+        if let Some(c) = self.get_metadata_collection(name) {
+            return Some(AnyCollection::Metadata(c));
+        }
+        None
     }
 
     /// Returns the write generation for a named collection, if it exists.

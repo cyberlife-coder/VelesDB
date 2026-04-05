@@ -11,6 +11,8 @@ mod agent_memory;
 mod aggregation;
 #[path = "bdd/bugfixes.rs"]
 mod bugfixes;
+#[path = "bdd/collection_type_migration.rs"]
+mod collection_type_migration;
 #[path = "bdd/cross_collection.rs"]
 mod cross_collection;
 #[path = "bdd/ddl_lifecycle.rs"]

@@ -34,6 +34,8 @@ pub(crate) mod text_utils;
 mod types;
 mod vector_collection;
 
+mod any_collection;
+
 #[cfg(test)]
 mod tests;
 
@@ -52,6 +54,7 @@ mod e2e_integration_tests;
 #[cfg(test)]
 mod set_operations_execution_tests;
 
+pub use any_collection::AnyCollection;
 pub use core::{IndexInfo, MAX_DIMENSION, MIN_DIMENSION};
 pub use diagnostics::{CollectionDiagnostics, IndexHealth};
 pub use graph::{

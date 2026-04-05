@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- **`Collection` removed from public API** — `Collection` is now `pub(crate)` only. External code
+  must use `VectorCollection`, `GraphCollection`, `MetadataCollection`, or `AnyCollection`.
+- **`Database::get_collection()` removed** — Use `get_vector_collection()`, `get_graph_collection()`,
+  `get_metadata_collection()`, or `get_any_collection()` instead.
+
+### Added
+- **`AnyCollection` enum** — Type-erased collection handle for callers that don't know the
+  collection type at compile time. Zero-cost dispatch via enum match (no vtable, no heap).
+  Methods: `config()`, `flush()`, `point_count()`, `is_empty()`, `name()`, `execute_query_str()`,
+  `execute_aggregate()`, `diagnostics()`.
+- **`Database::get_any_collection()`** — Returns `Option<AnyCollection>` by checking
+  vector → graph → metadata registries in order.
+- **BDD tests** — 14 new BDD tests for `AnyCollection` dispatch, persistence round-trip,
+  typed registry integrity, and edge cases.
+
+### Migration Guide
+1. **`velesdb_core::Collection` removed** — Replace with `VectorCollection`, `GraphCollection`,
+   `MetadataCollection`, or `AnyCollection` depending on your use case.
+2. **`Database::get_collection()` removed** — Replace with `get_vector_collection()`,
+   `get_graph_collection()`, `get_metadata_collection()`, or `get_any_collection()`.
+3. **`AnyCollection` enum added** — For callers that don't know the collection type at compile
+   time, use `db.get_any_collection(name)` and match on the variant.
+4. **Python SDK unchanged** — The Python `Collection` class name and API are identical.
+5. **Server REST API unchanged** — All HTTP endpoints behave identically.
+
 ### Refactored
 - **Remove deprecated SIMD distance types** — `SimdDistance`, `NativeSimdDistance`, and
   `AdaptiveSimdDistance` removed from `index::hnsw::native::distance`. All production code
