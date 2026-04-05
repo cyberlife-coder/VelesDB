@@ -354,9 +354,12 @@ pub fn parse_ft_search_response(
 }
 
 /// Parses field-value pairs from a RESP Array into a `HashMap`.
+///
+/// The `vector_field` name is used to intercept raw binary blobs before
+/// `resp_value_to_json` converts them into unusable `<binary:N bytes>` placeholders.
 fn parse_field_value_pairs(
     value: &redis::Value,
-    _vector_field: &str,
+    vector_field: &str,
 ) -> Result<HashMap<String, serde_json::Value>> {
     let pairs = match value {
         redis::Value::Array(arr) => arr,
@@ -371,11 +374,35 @@ fn parse_field_value_pairs(
     let mut i = 0;
     while i + 1 < pairs.len() {
         let field_name = extract_bulk_string(&pairs[i]).unwrap_or_default();
-        let field_value = resp_value_to_json(&pairs[i + 1]);
+        let field_value = decode_resp_field(&pairs[i + 1], &field_name, vector_field);
         attrs.insert(field_name, field_value);
         i += 2;
     }
     Ok(attrs)
+}
+
+/// Converts a RESP field value to JSON, intercepting binary vector blobs.
+///
+/// RediSearch stores VECTOR fields as raw little-endian f32 bytes by default.
+/// When the vector field contains a non-UTF-8 `BulkString`, this calls
+/// `decode_vector_blob` and returns a JSON array instead of an unusable
+/// `<binary:N bytes>` placeholder.
+fn decode_resp_field(
+    value: &redis::Value,
+    field_name: &str,
+    vector_field: &str,
+) -> serde_json::Value {
+    if field_name == vector_field {
+        if let redis::Value::BulkString(bytes) = value {
+            if String::from_utf8(bytes.clone()).is_err() {
+                let floats = decode_vector_blob(bytes);
+                return serde_json::Value::Array(
+                    floats.into_iter().map(|f| serde_json::json!(f)).collect(),
+                );
+            }
+        }
+    }
+    resp_value_to_json(value)
 }
 
 /// Extracts a vector from document attributes.

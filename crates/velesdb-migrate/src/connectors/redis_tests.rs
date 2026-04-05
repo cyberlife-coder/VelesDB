@@ -268,6 +268,46 @@ fn test_build_ft_search_cmd_with_payload_fields() {
     assert!(cmd_str.contains("embedding"));
 }
 
+#[test]
+fn test_parse_ft_search_response_binary_blob_vector() {
+    // GIVEN: a FT.SEARCH response where the vector field is a raw LE f32 blob
+    // (this is the default RediSearch storage format for VECTOR fields).
+    let mut blob = Vec::new();
+    blob.extend_from_slice(&f32::to_le_bytes(1.0_f32));
+    blob.extend_from_slice(&f32::to_le_bytes(2.5_f32));
+
+    let resp = redis::Value::Array(vec![
+        redis::Value::Int(1),
+        redis::Value::BulkString(b"doc:7".to_vec()),
+        redis::Value::Array(vec![
+            redis::Value::BulkString(b"embedding".to_vec()),
+            redis::Value::BulkString(blob),
+            redis::Value::BulkString(b"title".to_vec()),
+            redis::Value::BulkString(b"Hello".to_vec()),
+        ]),
+    ]);
+
+    // WHEN: parsing the response
+    let points =
+        parse_ft_search_response(&resp, "embedding", "doc:").expect("test: binary blob");
+
+    // THEN: vector is correctly decoded from LE f32 bytes
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].id, "7");
+    assert_eq!(points[0].vector.len(), 2);
+    assert!(
+        (points[0].vector[0] - 1.0).abs() < 1e-6,
+        "expected 1.0, got {}",
+        points[0].vector[0]
+    );
+    assert!(
+        (points[0].vector[1] - 2.5).abs() < 1e-6,
+        "expected 2.5, got {}",
+        points[0].vector[1]
+    );
+    assert!(points[0].payload.contains_key("title"));
+}
+
 #[tokio::test]
 async fn test_extract_batch_fails_when_not_connected() {
     // GIVEN: a connector that has not been connected
