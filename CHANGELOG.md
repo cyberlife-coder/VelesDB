@@ -15,8 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   using `_collection` parameter or `SELECT ... FROM <collection> WHERE MATCH ...` syntax.
   Previously, MATCH was rejected at the Database level.
 - **Cross-type JOIN tests** — VectorCollection JOIN MetadataCollection validated with BDD tests.
-- **BFS dedup fix** — CSR and EdgeStore BFS no longer produce duplicate results for nodes
+
+### Fixed
+- **BFS dedup** — CSR and EdgeStore BFS no longer produce duplicate results for nodes
   reachable via multiple paths (diamond graph fix).
+- **DISTINCT in early-return paths (#475)** — `SELECT DISTINCT` now applied in NOT-similarity and union query paths.
+- **NEAR + MATCH + metadata filter (#474)** — co-occurring metadata filters no longer silently dropped in hybrid search.
+- **`list_indexes` includes secondary indexes** — was only returning property/range indexes.
+- **`rrf_k` propagated to `hybrid_search_with_filter` (#472)** — was hardcoded to 60.
+- **CSR label filter** — edges with unresolvable labels now excluded (not included) when rel_type filter is active.
+- **Cross-collection enrichment** — logs `tracing::warn` when `@collection` references a non-existent collection.
+
+### Changed (Breaking)
+- **BFS cycle behavior** — BFS no longer re-emits already-visited nodes when a cycle closes.
+  Code relying on duplicate entries for cycle detection must be updated.
+- **`ComponentScores` type** — changed from `SmallVec<[(String, f32); 4]>` to `SmallVec<[(&'static str, f32); 4]>`.
+  External code constructing `SearchResult` with custom component scores must use `&'static str` literals.
+- **Python `relationship_types=` alias (#490)** — `traverse_bfs/dfs` now accept both `rel_types=` and `relationship_types=`.
 
 ## [1.11.1] - 2026-04-04
 
