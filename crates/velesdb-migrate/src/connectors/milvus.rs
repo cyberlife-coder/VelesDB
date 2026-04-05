@@ -16,6 +16,8 @@ use crate::error::{Error, Result};
 pub struct MilvusConnector {
     config: MilvusConfig,
     client: reqwest::Client,
+    vector_field: Option<String>,
+    cached_schema: Option<SourceSchema>,
 }
 
 impl MilvusConnector {
@@ -25,6 +27,8 @@ impl MilvusConnector {
         Self {
             config,
             client: create_http_client(),
+            vector_field: None,
+            cached_schema: None,
         }
     }
 
@@ -141,65 +145,13 @@ impl SourceConnector for MilvusConnector {
         }
 
         info!("Connected to Milvus collection: {}", self.config.collection);
+
+        self.fetch_and_cache_schema().await?;
         Ok(())
     }
 
     async fn get_schema(&self) -> Result<SourceSchema> {
-        // Get collection schema
-        let resp = self
-            .request(reqwest::Method::GET, "/collections/describe")
-            .query(&[("collectionName", &self.config.collection)])
-            .send()
-            .await?;
-
-        let resp = check_response(resp, "Milvus", "describe").await?;
-
-        let result: MilvusResponse<CollectionSchema> = resp.json().await?;
-
-        let schema = result
-            .data
-            .ok_or_else(|| Error::Extraction("No schema data returned".to_string()))?;
-
-        let (vector_field, dimension) = Self::find_vector_field(&schema)?;
-
-        let fields: Vec<FieldInfo> = schema
-            .fields
-            .iter()
-            .filter(|f| f.name != vector_field)
-            .map(|f| FieldInfo {
-                name: f.name.clone(),
-                field_type: f.field_type.clone(),
-                indexed: f.is_primary_key.unwrap_or(false),
-            })
-            .collect();
-
-        // Get stats for count
-        let resp = self
-            .request(reqwest::Method::GET, "/collections/stats")
-            .query(&[("collectionName", &self.config.collection)])
-            .send()
-            .await?;
-
-        let total_count = if resp.status().is_success() {
-            let stats: MilvusResponse<StatsResponse> = resp.json().await?;
-            stats.data.map(|s| s.row_count)
-        } else {
-            None
-        };
-
-        info!(
-            "Milvus collection '{}': {}D vectors, {:?} rows",
-            self.config.collection, dimension, total_count
-        );
-
-        Ok(SourceSchema {
-            source_type: "milvus".to_string(),
-            collection: self.config.collection.clone(),
-            dimension,
-            total_count,
-            fields,
-            ..Default::default()
-        })
+        crate::connectors::common::cached_schema(&self.cached_schema)
     }
 
     async fn extract_batch(
@@ -212,9 +164,13 @@ impl SourceConnector for MilvusConnector {
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0) as usize;
 
-        let schema = self.get_schema().await?;
-        let (vector_field, _) = Self::find_vector_field_from_schema(&schema)?;
+        let vector_field = self
+            .vector_field
+            .as_deref()
+            .ok_or_else(|| Error::SourceConnection("Not connected to Milvus".to_string()))?
+            .to_owned();
 
+        let schema = self.get_schema().await?;
         let mut output_fields: Vec<String> = schema.fields.iter().map(|f| f.name.clone()).collect();
         output_fields.push(vector_field.clone());
 
@@ -282,9 +238,11 @@ impl SourceConnector for MilvusConnector {
 }
 
 impl MilvusConnector {
+    /// Detect the first vector-typed field in the Milvus collection schema.
     fn find_vector_field(schema: &CollectionSchema) -> Result<(String, usize)> {
         for field in &schema.fields {
-            if field.field_type.contains("Vector") || field.field_type.contains("FLOAT_VECTOR") {
+            let ft = field.field_type.to_ascii_uppercase();
+            if ft.contains("VECTOR") {
                 let dim = field.params.as_ref().and_then(|p| p.dim).unwrap_or(0);
                 return Ok((field.name.clone(), dim));
             }
@@ -292,9 +250,63 @@ impl MilvusConnector {
         Err(Error::SchemaMismatch("No vector field found".to_string()))
     }
 
-    fn find_vector_field_from_schema(schema: &SourceSchema) -> Result<(String, usize)> {
-        // Return default vector field name and dimension from schema
-        Ok(("vector".to_string(), schema.dimension))
+    /// Fetch the collection schema from Milvus and cache it locally.
+    async fn fetch_and_cache_schema(&mut self) -> Result<()> {
+        let resp = self
+            .request(reqwest::Method::GET, "/collections/describe")
+            .query(&[("collectionName", &self.config.collection)])
+            .send()
+            .await?;
+
+        let resp = check_response(resp, "Milvus", "describe").await?;
+        let result: MilvusResponse<CollectionSchema> = resp.json().await?;
+
+        let schema = result
+            .data
+            .ok_or_else(|| Error::Extraction("No schema data returned".to_string()))?;
+
+        let (vector_field, dimension) = Self::find_vector_field(&schema)?;
+
+        let fields: Vec<FieldInfo> = schema
+            .fields
+            .iter()
+            .filter(|f| f.name != vector_field)
+            .map(|f| FieldInfo {
+                name: f.name.clone(),
+                field_type: f.field_type.clone(),
+                indexed: f.is_primary_key.unwrap_or(false),
+            })
+            .collect();
+
+        let resp = self
+            .request(reqwest::Method::GET, "/collections/stats")
+            .query(&[("collectionName", &self.config.collection)])
+            .send()
+            .await?;
+
+        let total_count = if resp.status().is_success() {
+            let stats: MilvusResponse<StatsResponse> = resp.json().await?;
+            stats.data.map(|s| s.row_count)
+        } else {
+            None
+        };
+
+        info!(
+            "Milvus collection '{}': {}D vectors, {:?} rows",
+            self.config.collection, dimension, total_count
+        );
+
+        self.vector_field = Some(vector_field);
+        self.cached_schema = Some(SourceSchema {
+            source_type: "milvus".to_string(),
+            collection: self.config.collection.clone(),
+            dimension,
+            total_count,
+            fields,
+            ..Default::default()
+        });
+
+        Ok(())
     }
 }
 
@@ -332,8 +344,67 @@ mod tests {
 
     #[test]
     fn test_connect_rejects_file_url() {
-        assert!(
-            crate::connectors::common::validate_url("file:///etc/passwd").is_err()
-        );
+        assert!(crate::connectors::common::validate_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_find_vector_field_detects_float_vector() {
+        let schema = CollectionSchema {
+            fields: vec![
+                FieldSchema {
+                    name: "id".to_string(),
+                    field_type: "Int64".to_string(),
+                    is_primary_key: Some(true),
+                    params: None,
+                },
+                FieldSchema {
+                    name: "embedding".to_string(),
+                    field_type: "FloatVector".to_string(),
+                    is_primary_key: None,
+                    params: Some(FieldParams { dim: Some(128) }),
+                },
+            ],
+        };
+        let (name, dim) =
+            MilvusConnector::find_vector_field(&schema).expect("test: should detect FloatVector");
+        assert_eq!(name, "embedding");
+        assert_eq!(dim, 128);
+    }
+
+    #[test]
+    fn test_find_vector_field_detects_float_vector_uppercase() {
+        let schema = CollectionSchema {
+            fields: vec![FieldSchema {
+                name: "vec".to_string(),
+                field_type: "FLOAT_VECTOR".to_string(),
+                is_primary_key: None,
+                params: Some(FieldParams { dim: Some(768) }),
+            }],
+        };
+        let (name, dim) =
+            MilvusConnector::find_vector_field(&schema).expect("test: FLOAT_VECTOR uppercase");
+        assert_eq!(name, "vec");
+        assert_eq!(dim, 768);
+    }
+
+    #[test]
+    fn test_find_vector_field_returns_error_when_no_vector_field() {
+        let schema = CollectionSchema {
+            fields: vec![
+                FieldSchema {
+                    name: "id".to_string(),
+                    field_type: "Int64".to_string(),
+                    is_primary_key: Some(true),
+                    params: None,
+                },
+                FieldSchema {
+                    name: "name".to_string(),
+                    field_type: "VarChar".to_string(),
+                    is_primary_key: None,
+                    params: None,
+                },
+            ],
+        };
+        assert!(MilvusConnector::find_vector_field(&schema).is_err());
     }
 }
