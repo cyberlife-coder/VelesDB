@@ -113,11 +113,18 @@ pub struct QdrantConfig {
 }
 
 /// Pinecone configuration.
+#[allow(deprecated)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PineconeConfig {
     /// Pinecone API key.
     pub api_key: String,
-    /// Environment (e.g., "us-east-1-aws").
+    /// Deprecated: Pinecone serverless (2024+) discovers the host dynamically
+    /// via `GET /indexes/{name}`. Kept for backward compatibility with existing YAML configs.
+    #[serde(default)]
+    #[deprecated(
+        since = "1.12.0",
+        note = "Pinecone serverless ignores environments; host is discovered via the API"
+    )]
     pub environment: String,
     /// Index name.
     pub index: String,

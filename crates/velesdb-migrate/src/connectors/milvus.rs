@@ -111,6 +111,8 @@ impl SourceConnector for MilvusConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
+        crate::connectors::common::validate_url(&self.config.url)?;
+
         info!("Connecting to Milvus at {}", self.config.url);
 
         let resp = self
@@ -326,5 +328,12 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"collectionName\":\"test\""));
         assert!(json.contains("\"limit\":100"));
+    }
+
+    #[test]
+    fn test_connect_rejects_file_url() {
+        assert!(
+            crate::connectors::common::validate_url("file:///etc/passwd").is_err()
+        );
     }
 }

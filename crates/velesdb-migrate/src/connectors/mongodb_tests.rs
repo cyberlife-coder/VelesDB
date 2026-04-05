@@ -13,6 +13,7 @@ fn test_config() -> MongoDBConfig {
         id_field: "_id".to_string(),
         payload_fields: vec![],
         filter: None,
+        data_source: "mongodb-atlas".to_string(),
     }
 }
 
@@ -119,4 +120,18 @@ fn test_aggregate_request_serialization() {
     };
     let json = serde_json::to_value(&req).unwrap();
     assert_eq!(json["pipeline"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn test_mongodb_config_default_data_source() {
+    let json = r#"{"data_api_url":"https://data.mongodb-api.com/v1","api_key":"key","database":"db","collection":"col"}"#;
+    let config: MongoDBConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.data_source, "mongodb-atlas");
+}
+
+#[test]
+fn test_mongodb_config_custom_data_source() {
+    let json = r#"{"data_api_url":"https://data.mongodb-api.com/v1","api_key":"key","database":"db","collection":"col","data_source":"my-cluster"}"#;
+    let config: MongoDBConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.data_source, "my-cluster");
 }

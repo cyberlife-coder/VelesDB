@@ -206,6 +206,8 @@ impl SourceConnector for ElasticsearchConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
+        crate::connectors::common::validate_url(&self.config.url)?;
+
         // Fetch a sample document to detect schema
         let url = self.build_search_url();
         let body = SearchRequest {

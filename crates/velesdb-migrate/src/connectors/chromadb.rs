@@ -64,12 +64,6 @@ struct GetResponse {
     documents: Option<Vec<Option<String>>>,
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)] // Reserved for future count endpoint
-struct CountResponse {
-    count: u64,
-}
-
 #[async_trait]
 impl SourceConnector for ChromaDBConnector {
     fn source_type(&self) -> &'static str {

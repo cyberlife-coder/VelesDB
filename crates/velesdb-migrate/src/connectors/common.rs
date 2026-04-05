@@ -59,6 +59,12 @@ pub fn validate_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Returns `true` if the sparse vector is non-empty and has matching indices/values lengths.
+#[must_use]
+pub fn is_valid_sparse_vector(indices: &[u32], values: &[f32]) -> bool {
+    !indices.is_empty() && indices.len() == values.len()
+}
+
 /// Parses a vector from a JSON value.
 ///
 /// Expects the value to be a JSON array of numbers.

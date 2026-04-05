@@ -30,6 +30,7 @@ pub(crate) fn build_qdrant(params: &SourceParams<'_>) -> SourceConfig {
     })
 }
 
+#[allow(deprecated)]
 pub(crate) fn build_pinecone(params: &SourceParams<'_>) -> Result<SourceConfig> {
     let api_key = require_api_key(params, "Pinecone")?;
     Ok(SourceConfig::Pinecone(crate::config::PineconeConfig {
@@ -123,6 +124,7 @@ pub(crate) fn build_mongodb(params: &SourceParams<'_>) -> Result<SourceConfig> {
             id_field: "_id".to_string(),
             payload_fields: vec![],
             filter: None,
+            data_source: "mongodb-atlas".to_string(),
         },
     ))
 }

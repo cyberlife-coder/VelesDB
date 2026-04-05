@@ -120,6 +120,8 @@ impl SourceConnector for WeaviateConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
+        crate::connectors::common::validate_url(&self.config.url)?;
+
         info!("Connecting to Weaviate at {}", self.config.url);
 
         let resp = self
@@ -359,5 +361,12 @@ mod tests {
 
         let json = serde_json::to_string(&query).unwrap();
         assert!(json.contains("Get"));
+    }
+
+    #[test]
+    fn test_connect_rejects_file_url() {
+        assert!(
+            crate::connectors::common::validate_url("file:///etc/passwd").is_err()
+        );
     }
 }

@@ -182,7 +182,7 @@ async fn test_pipeline_dry_run_does_not_create_collection() {
     let mut pipeline = Pipeline::new(config).expect("pipeline");
     let stats = pipeline.run().await.expect("dry run");
 
-    assert_eq!(stats.loaded, 1);
+    assert_eq!(stats.loaded, 0, "dry_run must not increment loaded");
     assert!(Database::open(destination.path())
         .expect("open database")
         .get_any_collection("dry_run_docs")
@@ -439,7 +439,7 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
     Mock::given(method("POST"))
         .and(path("/collections/test_err/points/scroll"))
         .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
-        .expect(1) // proves no retry
+        .expect(4) // 1 initial + 3 retries (RetryConfig::for_transient_errors)
         .mount(&mock_server)
         .await;
 
@@ -478,8 +478,8 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
 }
 
 /// Verify that an HTTP 429 on the Qdrant scroll endpoint fails the pipeline
-/// immediately. The connector does not implement `with_retry`; this test
-/// documents that behavior and ensures no accidental retry loop is introduced.
+/// after exhausting retries. The pipeline wraps `extract_batch` in
+/// `with_retry(RetryConfig::for_transient_errors())` (3 retries).
 #[tokio::test]
 async fn test_pipeline_qdrant_429_fails_pipeline() {
     let mock_server = MockServer::start().await;
@@ -510,7 +510,7 @@ async fn test_pipeline_qdrant_429_fails_pipeline() {
                 .insert_header("Retry-After", "1")
                 .set_body_string("Too Many Requests"),
         )
-        .expect(1) // proves no retry
+        .expect(4) // 1 initial + 3 retries (RetryConfig::for_transient_errors)
         .mount(&mock_server)
         .await;
 

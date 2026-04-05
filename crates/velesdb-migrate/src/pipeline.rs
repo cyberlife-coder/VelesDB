@@ -266,10 +266,13 @@ impl Pipeline {
         let batch_size = self.config.options.batch_size;
 
         loop {
-            let batch = self
-                .connector
-                .extract_batch(offset.clone(), batch_size)
-                .await?;
+            let connector = &mut *self.connector;
+            let batch = crate::retry::with_retry(
+                &crate::retry::RetryConfig::for_transient_errors(),
+                "extract_batch",
+                || connector.extract_batch(offset.clone(), batch_size),
+            )
+            .await?;
 
             if batch.points.is_empty() {
                 break;
@@ -281,6 +284,7 @@ impl Pipeline {
             let transformed = self.transformer.transform_batch(batch.points);
 
             if let Some(ref db) = db {
+                #[allow(deprecated)] // TODO(MIGRATE-01): migrate to get_vector_collection()
                 let collection = db
                     .get_vector_collection(&self.config.destination.collection)
                     .ok_or_else(|| {
@@ -347,7 +351,7 @@ impl Pipeline {
                     }
                 }
             } else {
-                stats.loaded += transformed.len() as u64;
+                // dry_run: nothing loaded, stats.loaded stays 0
             }
 
             progress.set_position(stats.loaded.min(total));
@@ -506,6 +510,55 @@ mod tests {
 
         assert_eq!(first, second);
         assert_ne!(first, other);
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_dry_run_loaded_stays_zero() {
+        use crate::config::{
+            DestinationConfig, DistanceMetric, MigrationConfig, MigrationOptions, SourceConfig,
+            StorageMode,
+        };
+        use crate::connectors::json_file::JsonFileConfig;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("test: create tempdir");
+        let json_path = dir.path().join("test_data.json");
+        // 3 points with 2-dimensional vectors
+        let json_content = serde_json::json!([
+            {"id": "1", "vector": [0.1, 0.2], "payload": {}},
+            {"id": "2", "vector": [0.3, 0.4], "payload": {}},
+            {"id": "3", "vector": [0.5, 0.6], "payload": {}}
+        ]);
+        std::fs::write(&json_path, json_content.to_string())
+            .expect("test: write json");
+
+        let config = MigrationConfig {
+            source: SourceConfig::JsonFile(JsonFileConfig {
+                path: json_path,
+                array_path: String::new(),
+                id_field: "id".to_string(),
+                vector_field: "vector".to_string(),
+                payload_fields: vec![],
+            }),
+            destination: DestinationConfig {
+                path: dir.path().to_path_buf(),
+                collection: "dry_run_test".to_string(),
+                dimension: 2,
+                metric: DistanceMetric::Cosine,
+                storage_mode: StorageMode::Full,
+            },
+            options: MigrationOptions {
+                dry_run: true,
+                ..MigrationOptions::default()
+            },
+        };
+
+        let mut pipeline = crate::Pipeline::new(config)
+            .expect("test: create pipeline");
+        let stats = pipeline.run().await.expect("test: run pipeline");
+
+        assert_eq!(stats.extracted, 3, "Should extract 3 points");
+        assert_eq!(stats.loaded, 0, "dry_run must not increment loaded");
     }
 
     #[test]

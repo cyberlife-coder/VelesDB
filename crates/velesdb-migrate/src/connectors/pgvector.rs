@@ -1,7 +1,6 @@
 //! `PostgreSQL` pgvector and Supabase connectors.
 
 use async_trait::async_trait;
-use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{debug, info};
 
@@ -40,6 +39,8 @@ impl SourceConnector for PgVectorConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
+        crate::connectors::common::validate_url(&self.config.connection_string)?;
+
         info!("pgvector connector requires 'postgres' feature");
 
         #[cfg(feature = "postgres")]
@@ -149,13 +150,6 @@ impl SupabaseConnector {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)] // Reserved for typed row deserialization
-struct SupabaseRow {
-    #[serde(flatten)]
-    data: HashMap<String, serde_json::Value>,
-}
-
 #[async_trait]
 impl SourceConnector for SupabaseConnector {
     fn source_type(&self) -> &'static str {
@@ -163,6 +157,8 @@ impl SourceConnector for SupabaseConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
+        crate::connectors::common::validate_url(&self.config.url)?;
+
         info!("Connecting to Supabase: {}", self.config.url);
 
         // Test connection by fetching schema
@@ -480,5 +476,12 @@ mod tests {
 
         let connector = SupabaseConnector::new(config);
         assert_eq!(connector.source_type(), "supabase");
+    }
+
+    #[test]
+    fn test_supabase_connect_rejects_file_url() {
+        assert!(
+            crate::connectors::common::validate_url("file:///etc/passwd").is_err()
+        );
     }
 }
