@@ -243,6 +243,23 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 
 5 search quality modes (Fast → Perfect), adaptive two-phase ef, AutoTune.
 
+<details>
+<summary>Detailed benchmarks and search modes</summary>
+
+| Benchmark | Result |
+|-----------|--------|
+| HNSW Search (5K/768D, k=10) | **55 us** |
+| SIMD Dot Product (768D, AVX2) | **21.7 ns** |
+| Recall@10 (Accurate) | **100%** |
+
+| Mode | ef_search | Recall@10 | Use case |
+|------|-----------|-----------|----------|
+| Fast | 64 | 92.2% | Real-time suggestions, typeahead |
+| Balanced (default) | 128 | 98.8% | Production search, RAG pipelines |
+| Accurate | 512 | 100% | Evaluation, ground truth comparison |
+
+</details>
+
 ### Distance Metrics
 
 5 metrics with SIMD acceleration (AVX-512, AVX2, NEON, WASM SIMD128):

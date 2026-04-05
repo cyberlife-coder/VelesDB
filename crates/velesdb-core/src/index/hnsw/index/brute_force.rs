@@ -85,6 +85,10 @@ impl HnswIndex {
         vectors: &crate::perf_optimizations::ContiguousVectors,
         scored: &mut Vec<ScoredResult>,
     ) {
+        // Fast path: if no vectors are stored, nothing to scan.
+        if vectors.is_empty() {
+            return;
+        }
         for idx in 0..vectors.len() {
             let Some(id) = self.mappings.get_id(idx) else {
                 continue;

@@ -116,7 +116,7 @@ fn label_passes_csr_filter(
     }
     snapshot
         .label_at(node_id, edge_index)
-        .is_none_or(|label| rel_filter.contains(label))
+        .is_some_and(|label| rel_filter.contains(label))
 }
 
 /// Processes a single BFS candidate in CSR traversal: checks depth/visited,
