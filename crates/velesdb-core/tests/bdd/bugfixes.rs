@@ -84,7 +84,7 @@ fn test_bug_475_early_return_applies_distinct() {
 
     // There should be no duplicate categories
     let mut unique = categories.clone();
-    unique.sort();
+    unique.sort_unstable();
     unique.dedup();
     assert_eq!(
         categories.len(),

@@ -35,16 +35,13 @@ impl super::Database {
         }
 
         for (alias, coll_name) in &cross_refs {
-            let coll = match self.resolve_collection(coll_name) {
-                Ok(c) => c,
-                Err(_) => {
-                    tracing::warn!(
-                        collection = coll_name,
-                        alias = alias,
-                        "cross-collection enrichment: collection not found, skipping"
-                    );
-                    continue;
-                }
+            let Ok(coll) = self.resolve_collection(coll_name) else {
+                tracing::warn!(
+                    collection = coll_name,
+                    alias = alias,
+                    "cross-collection enrichment: collection not found, skipping"
+                );
+                continue;
             };
 
             enrich_results_from_collection(&coll, results, alias);

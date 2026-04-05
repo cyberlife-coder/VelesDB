@@ -1,15 +1,15 @@
 //! BDD tests for cross-collection queries (Issue #495).
 //!
 //! Validates:
-//! - JOIN between VectorCollection and MetadataCollection
-//! - JOIN between VectorCollection and MetadataCollection with vector search
-//! - MATCH queries routed through Database::execute_query
+//! - JOIN between `VectorCollection` and `MetadataCollection`
+//! - JOIN between `VectorCollection` and `MetadataCollection` with vector search
+//! - MATCH queries routed through `Database::execute_query`
 //! - Three collection types coexisting and independently queryable
 
 use std::collections::HashMap;
 
 use serde_json::json;
-use velesdb_core::{Database, Point};
+use velesdb_core::{Database, GraphEdge, Point};
 
 use super::helpers::{
     create_test_db, execute_sql, execute_sql_with_params, payload_str, vector_param,
@@ -19,8 +19,8 @@ use super::helpers::{
 // Helpers
 // =========================================================================
 
-/// Creates a VectorCollection `products` with 5 products and a
-/// MetadataCollection `inventory` with matching inventory rows.
+/// Creates a `VectorCollection` `products` with 5 products and a
+/// `MetadataCollection` `inventory` with matching inventory rows.
 fn setup_cross_type_collections(db: &Database) {
     execute_sql(
         db,
@@ -77,7 +77,7 @@ fn setup_cross_type_collections(db: &Database) {
         .expect("test: upsert inventory");
 }
 
-/// Creates a GraphCollection `social` with nodes and edges for MATCH tests.
+/// Creates a `GraphCollection` `social` with nodes and edges for MATCH tests.
 fn setup_graph_collection(db: &Database) {
     execute_sql(
         db,
@@ -94,7 +94,6 @@ fn setup_graph_collection(db: &Database) {
     gc.upsert_node_payload(30, &json!({"_labels": ["Person"], "name": "Charlie"}))
         .expect("test: node Charlie");
 
-    use velesdb_core::GraphEdge;
     gc.add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("test: create edge"))
         .expect("test: add edge Alice->Bob");
     gc.add_edge(GraphEdge::new(2, 20, 30, "KNOWS").expect("test: create edge"))
@@ -104,10 +103,10 @@ fn setup_graph_collection(db: &Database) {
 }
 
 // =========================================================================
-// Scenario 1: VectorCollection JOIN MetadataCollection
+// Scenario 1: `VectorCollection` JOIN `MetadataCollection`
 // =========================================================================
 
-/// GIVEN a VectorCollection `products` and a MetadataCollection `inventory`
+/// GIVEN a `VectorCollection` `products` and a `MetadataCollection` `inventory`
 /// WHEN a JOIN query combines both collections
 /// THEN results contain fields from both collections.
 #[test]
@@ -115,7 +114,6 @@ fn test_join_vector_and_metadata_collections() {
     let (_dir, db) = create_test_db();
     setup_cross_type_collections(&db);
 
-    // VelesQL JOIN syntax: FROM table JOIN table ON condition
     let sql = "SELECT * FROM products \
                JOIN inventory ON products.id = inventory.id \
                LIMIT 10";
@@ -129,10 +127,10 @@ fn test_join_vector_and_metadata_collections() {
 }
 
 // =========================================================================
-// Scenario 2: VectorCollection JOIN MetadataCollection + vector search
+// Scenario 2: `VectorCollection` JOIN `MetadataCollection` + vector search
 // =========================================================================
 
-/// GIVEN a VectorCollection `products` and a MetadataCollection `inventory`
+/// GIVEN a `VectorCollection` `products` and a `MetadataCollection` `inventory`
 /// WHEN a JOIN query includes vector NEAR search
 /// THEN results are ordered by vector similarity AND enriched with inventory data.
 #[test]
@@ -151,7 +149,6 @@ fn test_join_vector_metadata_with_near_search() {
 
     assert!(!results.is_empty(), "JOIN + NEAR should return results");
 
-    // The closest vector to [1,0,0,0] is product 1 (Headphones)
     let first = &results[0];
     assert_eq!(
         payload_str(first, "name"),
@@ -161,11 +158,11 @@ fn test_join_vector_metadata_with_near_search() {
 }
 
 // =========================================================================
-// Scenario 3: MATCH query via Database::execute_query with _collection param
+// Scenario 3: MATCH query via `Database::execute_query` with `_collection` param
 // =========================================================================
 
-/// GIVEN a GraphCollection `social` with nodes and edges
-/// WHEN a MATCH query is executed via Database::execute_query with `_collection` param
+/// GIVEN a `GraphCollection` `social` with nodes and edges
+/// WHEN a MATCH query is executed via `Database::execute_query` with `_collection` param
 /// THEN the query succeeds and returns traversal results.
 #[test]
 fn test_match_via_database_with_collection_param() {
@@ -193,8 +190,8 @@ fn test_match_via_database_with_collection_param() {
 // Scenario 4: MATCH without collection param returns clear error
 // =========================================================================
 
-/// GIVEN a GraphCollection `social`
-/// WHEN a MATCH query is sent without FROM or _collection
+/// GIVEN a `GraphCollection` `social`
+/// WHEN a MATCH query is sent without FROM or `_collection`
 /// THEN a clear error guides the user.
 #[test]
 fn test_match_without_collection_returns_guidance_error() {
@@ -224,17 +221,14 @@ fn test_three_collection_types_independent_queries() {
     setup_cross_type_collections(&db);
     setup_graph_collection(&db);
 
-    // Query vector collection
     let v_results = execute_sql(&db, "SELECT * FROM products LIMIT 5")
         .expect("test: SELECT from VectorCollection");
     assert_eq!(v_results.len(), 5, "products should have 5 rows");
 
-    // Query metadata collection
     let m_results = execute_sql(&db, "SELECT * FROM inventory LIMIT 5")
         .expect("test: SELECT from MetadataCollection");
     assert_eq!(m_results.len(), 5, "inventory should have 5 rows");
 
-    // Query graph collection
     let g_results = execute_sql(&db, "SELECT * FROM social LIMIT 5")
         .expect("test: SELECT from GraphCollection");
     assert!(!g_results.is_empty(), "social should have nodes");
@@ -246,7 +240,7 @@ fn test_three_collection_types_independent_queries() {
 
 /// GIVEN a MATCH query with @collection annotations
 /// WHEN parsed
-/// THEN the NodePattern.collection field is populated correctly.
+/// THEN the `NodePattern`.collection field is populated correctly.
 #[test]
 fn test_parser_supports_collection_annotation() {
     use velesdb_core::velesql::Parser;
@@ -258,13 +252,11 @@ fn test_parser_supports_collection_annotation() {
     let mc = parsed.match_clause.expect("test: should have match clause");
     let pattern = &mc.patterns[0];
 
-    // First node: p:Product@products
     let first_node = &pattern.nodes[0];
     assert_eq!(first_node.alias.as_deref(), Some("p"));
     assert_eq!(first_node.labels, vec!["Product"]);
     assert_eq!(first_node.collection.as_deref(), Some("products"));
 
-    // Second node: inv:Inventory@inventory
     let second_node = &pattern.nodes[1];
     assert_eq!(second_node.alias.as_deref(), Some("inv"));
     assert_eq!(second_node.labels, vec!["Inventory"]);
@@ -273,7 +265,7 @@ fn test_parser_supports_collection_annotation() {
 
 /// GIVEN a MATCH query WITHOUT @collection annotations
 /// WHEN parsed
-/// THEN the NodePattern.collection field is None (backward compatible).
+/// THEN the `NodePattern`.collection field is None (backward compatible).
 #[test]
 fn test_parser_no_collection_annotation_backward_compat() {
     use velesdb_core::velesql::Parser;
@@ -298,14 +290,13 @@ fn test_parser_no_collection_annotation_backward_compat() {
 // Scenario 8: Cross-collection MATCH with enrichment
 // =========================================================================
 
-/// GIVEN a GraphCollection with edges and a MetadataCollection with pricing
+/// GIVEN a `GraphCollection` with edges and a `MetadataCollection` with pricing
 /// WHEN a MATCH query uses @collection to reference the metadata collection
 /// THEN results are enriched with fields from the metadata collection.
 #[test]
 fn test_cross_collection_match_enrichment() {
     let (_dir, db) = create_test_db();
 
-    // Create graph collection with product nodes and edges
     execute_sql(
         &db,
         "CREATE GRAPH COLLECTION catalog (dimension = 4, metric = 'cosine') SCHEMALESS;",
@@ -321,12 +312,10 @@ fn test_cross_collection_match_enrichment() {
     gc.upsert_node_payload(2, &json!({"_labels": ["Warehouse"], "name": "Paris HQ"}))
         .expect("test: node 2");
 
-    use velesdb_core::GraphEdge;
     gc.add_edge(GraphEdge::new(1, 1, 2, "STORED_IN").expect("test: edge"))
         .expect("test: add edge");
     gc.flush().expect("test: flush catalog");
 
-    // Create metadata collection with pricing data
     execute_sql(&db, "CREATE METADATA COLLECTION pricing;").expect("test: CREATE pricing");
     let mc = db
         .get_metadata_collection("pricing")
@@ -337,15 +326,11 @@ fn test_cross_collection_match_enrichment() {
     )])
     .expect("test: upsert pricing");
 
-    // Execute MATCH with @collection annotation via _collection param
-    // The MATCH runs on 'catalog' (graph edges), and the @pricing annotation
-    // triggers cross-collection enrichment from the 'pricing' collection.
     let sql = "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@pricing) RETURN p, w LIMIT 10";
 
     let mut params = HashMap::new();
     params.insert("_collection".to_string(), serde_json::json!("catalog"));
 
-    // This test validates the full pipeline: parse → execute → enrich
     let results = execute_sql_with_params(&db, sql, &params);
 
     match results {
@@ -354,14 +339,8 @@ fn test_cross_collection_match_enrichment() {
                 !res.is_empty(),
                 "Cross-collection MATCH should return results"
             );
-            // Check that enrichment happened — the result should have
-            // pricing fields from the 'pricing' collection
-            // (prefixed with the alias "w.")
         }
         Err(e) => {
-            // The enrichment may not find bindings if the MATCH execution
-            // doesn't populate _bindings. That's OK — the test validates
-            // that the pipeline doesn't crash.
             let msg = e.to_string();
             assert!(
                 !msg.contains("does not support"),
