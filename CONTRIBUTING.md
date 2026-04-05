@@ -52,7 +52,7 @@ This project follows **Git Flow**. Feature and fix branches must target `develop
 |---------------|--------|---------|
 | `feature/*`, `feat/*` | `develop` | `feature/amazing-feature` |
 | `fix/*`, `bugfix/*` | `develop` | `fix/crash-on-empty-index` |
-| `refactor/*`, `chore/*`, `ci/*`, `docs/*` | `develop` | `docs/update-api-guide` |
+| `refactor/*`, `chore/*`, `ci/*`, `docs/*`, `style/*`, `perf/*`, `test/*`, `build/*` | `develop` | `docs/update-api-guide` |
 | `release/*`, `hotfix/*`, `support/*` | `main` | `release/1.2.0` |
 
 1. Fork the repository
