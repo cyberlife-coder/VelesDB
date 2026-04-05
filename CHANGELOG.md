@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Refactored
+- **Remove deprecated SIMD distance types** — `SimdDistance`, `NativeSimdDistance`, and
+  `AdaptiveSimdDistance` removed from `index::hnsw::native::distance`. All production code
+  and tests now use `CachedSimdDistance` exclusively. Benchmarks migrated.
+- **Remove deprecated `HnswMappings` module** — `mappings.rs` and `mappings_tests.rs` deleted.
+  Superseded by `ShardedMappings` since v1.6.0.
+- **Tauri types consolidation** — `SearchResult` is now a type alias for
+  `velesdb_core::api_types::SearchResultResponse`. Module-level documentation added explaining
+  the camelCase/collection-field constraints that require Tauri-specific request types.
+- **Project cleanup** — Removed 79 completed EPIC directories, 9 obsolete planning documents,
+  outdated audit reports, and stale research notes. Remaining docs: architecture reference,
+  roadmap strategy, EPIC-036 (mobile SDK), and internal process docs.
+
 ## [1.12.0] - 2026-04-05
 
 ### Added

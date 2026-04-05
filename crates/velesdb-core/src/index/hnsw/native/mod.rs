@@ -52,12 +52,7 @@ mod rabitq_traversal;
 mod search;
 
 pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
-#[allow(deprecated)]
-// F-06: SimdDistance/NativeSimdDistance are deprecated but re-exported for compat
-pub use distance::{
-    AdaptiveSimdDistance, CachedSimdDistance, CpuDistance, DistanceEngine, NativeSimdDistance,
-    SimdDistance,
-};
+pub use distance::{CachedSimdDistance, CpuDistance, DistanceEngine};
 pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
 pub use graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
 pub use layer::{Layer, NodeId};

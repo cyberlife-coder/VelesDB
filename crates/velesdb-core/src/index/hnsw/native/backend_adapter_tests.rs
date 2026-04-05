@@ -1,9 +1,7 @@
 //! Tests for `backend_adapter` module
 
-#![allow(deprecated)] // SimdDistance deprecated in favor of CachedSimdDistance
-
 use super::backend_adapter::*;
-use super::distance::{DistanceEngine, SimdDistance};
+use super::distance::{CachedSimdDistance, DistanceEngine};
 use super::graph::{NativeHnsw, NO_ENTRY_POINT};
 use crate::distance::DistanceMetric;
 use crate::metrics::recall_at_k;
@@ -36,7 +34,7 @@ fn test_native_neighbour_equality() {
 
 #[test]
 fn test_parallel_insert_small_batch() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     let vectors: Vec<Vec<f32>> = (0..10).map(|i| vec![i as f32; 32]).collect();
@@ -53,7 +51,7 @@ fn test_parallel_insert_small_batch() {
 
 #[test]
 fn test_parallel_insert_large_batch() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Use 50 vectors to stay under Rayon parallelization threshold (100)
@@ -76,7 +74,7 @@ fn test_parallel_insert_large_batch() {
 
 #[test]
 fn test_search_neighbours_format() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     for i in 0..50 {
@@ -99,7 +97,7 @@ fn test_search_neighbours_format() {
 
 #[test]
 fn test_transform_score_euclidean() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Euclidean: transform_score applies sqrt (raw distances are squared L2)
@@ -119,7 +117,7 @@ fn test_transform_score_euclidean() {
 
 #[test]
 fn test_transform_score_cosine() {
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Cosine: similarity = 1 - distance
@@ -129,7 +127,7 @@ fn test_transform_score_cosine() {
 
 #[test]
 fn test_transform_score_dot_product() {
-    let engine = SimdDistance::new(DistanceMetric::DotProduct);
+    let engine = CachedSimdDistance::new(DistanceMetric::DotProduct, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // DotProduct: score = -distance
@@ -142,7 +140,7 @@ fn test_transform_score_dot_product() {
 
 #[test]
 fn test_file_dump_creates_files() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     for i in 0..20 {
@@ -159,7 +157,7 @@ fn test_file_dump_creates_files() {
 
 #[test]
 fn test_file_dump_and_load_roundtrip() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Insert some vectors
@@ -176,7 +174,7 @@ fn test_file_dump_and_load_roundtrip() {
     hnsw.file_dump(dir.path(), "roundtrip").unwrap();
 
     // Load from files
-    let engine2 = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine2 = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let loaded = NativeHnsw::file_load(dir.path(), "roundtrip", engine2).unwrap();
 
     // Verify loaded index
@@ -200,7 +198,7 @@ fn test_file_dump_and_load_roundtrip() {
 
 #[test]
 fn test_set_searching_mode_no_panic() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let mut hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     hnsw.set_searching_mode(true);
@@ -217,25 +215,25 @@ fn test_native_backend_trait_is_object_safe() {
     // Verify trait can be used as dyn object
     fn accepts_dyn_backend(_backend: &dyn NativeHnswBackend) {}
 
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
     accepts_dyn_backend(&hnsw);
 }
 
 #[test]
 fn test_native_backend_trait_search() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Insert via trait
     for i in 0..20 {
         let vec: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32 * 0.01).collect();
-        <NativeHnsw<SimdDistance> as NativeHnswBackend>::insert(&hnsw, (&vec, i)).expect("test");
+        <NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::insert(&hnsw, (&vec, i)).expect("test");
     }
 
     // Search via trait
     let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.01).collect();
-    let results = <NativeHnsw<SimdDistance> as NativeHnswBackend>::search(&hnsw, &query, 5, 50);
+    let results = <NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::search(&hnsw, &query, 5, 50);
 
     assert!(!results.is_empty());
     assert!(results.len() <= 5);
@@ -252,7 +250,7 @@ fn test_native_backend_generic_function() {
         backend.search(query, k, 100)
     }
 
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     for i in 0..10 {
@@ -267,24 +265,24 @@ fn test_native_backend_generic_function() {
 
 #[test]
 fn test_native_backend_len_and_is_empty() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
-    assert!(<NativeHnsw<SimdDistance> as NativeHnswBackend>::is_empty(
+    assert!(<NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::is_empty(
         &hnsw
     ));
     assert_eq!(
-        <NativeHnsw<SimdDistance> as NativeHnswBackend>::len(&hnsw),
+        <NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::len(&hnsw),
         0
     );
 
     hnsw.insert(&[1.0; 32]).expect("test");
 
-    assert!(!<NativeHnsw<SimdDistance> as NativeHnswBackend>::is_empty(
+    assert!(!<NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::is_empty(
         &hnsw
     ));
     assert_eq!(
-        <NativeHnsw<SimdDistance> as NativeHnswBackend>::len(&hnsw),
+        <NativeHnsw<CachedSimdDistance> as NativeHnswBackend>::len(&hnsw),
         1
     );
 }
@@ -296,22 +294,22 @@ fn test_native_backend_len_and_is_empty() {
 #[test]
 fn test_compute_chunk_size_boundaries() {
     // Formula: (batch_len / 50).max(1000).min(5000)
-    assert_eq!(NativeHnsw::<SimdDistance>::compute_chunk_size(100), 1000);
-    assert_eq!(NativeHnsw::<SimdDistance>::compute_chunk_size(1_000), 1000);
-    assert_eq!(NativeHnsw::<SimdDistance>::compute_chunk_size(10_000), 1000);
+    assert_eq!(NativeHnsw::<CachedSimdDistance>::compute_chunk_size(100), 1000);
+    assert_eq!(NativeHnsw::<CachedSimdDistance>::compute_chunk_size(1_000), 1000);
+    assert_eq!(NativeHnsw::<CachedSimdDistance>::compute_chunk_size(10_000), 1000);
     assert_eq!(
-        NativeHnsw::<SimdDistance>::compute_chunk_size(100_000),
+        NativeHnsw::<CachedSimdDistance>::compute_chunk_size(100_000),
         2000
     );
     assert_eq!(
-        NativeHnsw::<SimdDistance>::compute_chunk_size(500_000),
+        NativeHnsw::<CachedSimdDistance>::compute_chunk_size(500_000),
         5000
     );
 }
 
 #[test]
 fn test_parallel_insert_chunked_count() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Generate 2000 deterministic 32-D vectors using index-based values
@@ -333,7 +331,7 @@ fn test_parallel_insert_chunked_count() {
 
 #[test]
 fn test_parallel_insert_chunked_ep_update() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Generate 2000 deterministic 32-D vectors
@@ -366,7 +364,7 @@ fn test_parallel_insert_chunked_ep_update() {
 
 #[test]
 fn test_parallel_insert_chunked_recall() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Generate 2000 deterministic 32-D vectors with enough spread for recall testing
@@ -384,7 +382,7 @@ fn test_parallel_insert_chunked_recall() {
         .expect("parallel_insert of 2000 vectors should succeed");
 
     // Brute-force distance engine (same metric as the index)
-    let bf_engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let bf_engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let k = 10;
     let ef_search = 128;
     let num_queries = 50;
@@ -429,7 +427,7 @@ fn test_parallel_insert_chunked_recall() {
 
 #[test]
 fn test_adaptive_ef_small_batch_no_reduction() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 32, 400, 100);
 
     // Batches <= 1000 use full ef_construction with stagnation disabled
@@ -450,7 +448,7 @@ fn test_adaptive_ef_small_batch_no_reduction() {
 
 #[test]
 fn test_adaptive_ef_medium_batch_85_percent() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 32, 400, 100);
 
     // Batches > 1K and <= 10K use 85% of ef_construction
@@ -464,7 +462,7 @@ fn test_adaptive_ef_medium_batch_85_percent() {
 
 #[test]
 fn test_adaptive_ef_large_batch_75_percent() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 32, 400, 100);
 
     // Batches > 10K and <= 50K use 75% of ef_construction
@@ -478,7 +476,7 @@ fn test_adaptive_ef_large_batch_75_percent() {
 
 #[test]
 fn test_adaptive_ef_very_large_batch_60_percent() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 32, 400, 100);
 
     // Batches > 50K use 60% of ef_construction
@@ -492,7 +490,7 @@ fn test_adaptive_ef_very_large_batch_60_percent() {
 
 #[test]
 fn test_adaptive_ef_floor_at_4x_max_connections() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     // ef_construction=40, M=32: 60% of 40 = 24, but floor is 4*M=128
     let hnsw = NativeHnsw::new(engine, 32, 40, 100);
 
@@ -506,7 +504,7 @@ fn test_adaptive_ef_floor_at_4x_max_connections() {
 
 #[test]
 fn test_adaptive_ef_boundary_10001() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 400, 100);
 
     // Exactly 10001 crosses into the 75% tier
@@ -516,7 +514,7 @@ fn test_adaptive_ef_boundary_10001() {
 
 #[test]
 fn test_adaptive_ef_boundary_50001() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 400, 100);
 
     // Exactly 50001 crosses into the 60% tier
@@ -528,7 +526,7 @@ fn test_adaptive_ef_boundary_50001() {
 fn test_adaptive_ef_recall_preserved_with_2000_vectors() {
     // Regression test: adaptive ef for a 2000-vector batch (75% tier)
     // must maintain recall >= 0.90 (same threshold as non-adaptive test above).
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     let vectors: Vec<Vec<f32>> = (0..2000)
@@ -547,7 +545,7 @@ fn test_adaptive_ef_recall_preserved_with_2000_vectors() {
 
     assert_eq!(hnsw.len(), 2000);
 
-    let bf_engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let bf_engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let k = 10;
     let ef_search = 128;
     let num_queries = 50;
@@ -660,7 +658,7 @@ fn test_batch_ef_schedule_boundary_batch_size() {
 /// reduces construction work while preserving graph quality.
 #[test]
 fn test_graduated_ef_construction_recall() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 64);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Generate 5000 deterministic 64-D vectors with enough spread for recall testing
@@ -679,7 +677,7 @@ fn test_graduated_ef_construction_recall() {
 
     assert_eq!(hnsw.len(), 5000);
 
-    let bf_engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let bf_engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 64);
     let k = 10;
     let ef_search = 128;
     let num_queries = 100;
@@ -719,7 +717,7 @@ fn test_graduated_ef_construction_recall() {
 /// since cosine normalizes vectors before insertion.
 #[test]
 fn test_graduated_ef_construction_recall_cosine() {
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Generate 3000 deterministic 32-D vectors
@@ -745,7 +743,7 @@ fn test_graduated_ef_construction_recall_cosine() {
 
     assert_eq!(hnsw.len(), 3000);
 
-    let bf_engine = SimdDistance::new(DistanceMetric::Cosine);
+    let bf_engine = CachedSimdDistance::new(DistanceMetric::Cosine, 32);
     let k = 10;
     let ef_search = 128;
     let num_queries = 50;
@@ -799,7 +797,7 @@ fn test_i2_preallocated_batch_insert_recall() {
     let num_queries = 30;
 
     // Build index via parallel_insert (uses split reserve + push)
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 64);
     let hnsw = NativeHnsw::new(engine, 16, 200, n);
 
     let vectors: Vec<Vec<f32>> = (0..n)
@@ -827,7 +825,7 @@ fn test_i2_preallocated_batch_insert_recall() {
     assert_eq!(hnsw.len(), n, "all vectors should be inserted");
 
     // Recall check against brute-force
-    let bf_engine = SimdDistance::new(DistanceMetric::Cosine);
+    let bf_engine = CachedSimdDistance::new(DistanceMetric::Cosine, dim);
     let mut total_recall = 0.0;
 
     for q_idx in 0..num_queries {
@@ -869,7 +867,7 @@ fn test_i2_preallocated_batch_insert_recall() {
 /// correctly resizes in the reserve phase and pushes without corruption.
 #[test]
 fn test_i2_batch_exceeding_initial_capacity() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     // Initial max_elements = 16, but we insert 500 — forces multiple resizes
     let hnsw = NativeHnsw::new(engine, 16, 100, 16);
 

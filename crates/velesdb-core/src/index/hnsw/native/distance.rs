@@ -59,8 +59,8 @@ pub(crate) fn simd_distance_for_metric(metric: DistanceMetric, a: &[f32], b: &[f
 /// batch sizes (M=16..32 neighbors). For batches up to 32 elements
 /// (~128 bytes), the result lives entirely on the stack.
 ///
-/// Used by `SimdDistance`, `AdaptiveSimdDistance`, and `CachedSimdDistance`.
-/// Also called directly from the HNSW search hot loop to bypass the
+/// Used by `CachedSimdDistance` and called directly from the HNSW search
+/// hot loop to bypass the
 /// `DistanceEngine::batch_distance` trait method (which returns `Vec<f32>`).
 #[inline]
 pub(crate) fn batch_distance_with_prefetch(
@@ -109,93 +109,6 @@ impl DistanceEngine for CpuDistance {
         self.metric
     }
 }
-
-/// SIMD-accelerated distance computation with prefetch optimization.
-///
-/// Delegates all metric calculations to `simd_native` module which handles
-/// AVX-512/AVX2/NEON dispatch. The `batch_distance` implementation adds
-/// CPU prefetch hints to hide memory latency during batch operations.
-///
-/// Note: `NativeSimdDistance` and `AdaptiveSimdDistance` share the same
-/// `distance()` implementation. They differ only in `batch_distance` strategy.
-pub struct SimdDistance {
-    metric: DistanceMetric,
-}
-
-impl SimdDistance {
-    /// Creates a new SIMD-accelerated distance engine with the given metric.
-    #[must_use]
-    pub fn new(metric: DistanceMetric) -> Self {
-        Self { metric }
-    }
-}
-
-impl DistanceEngine for SimdDistance {
-    #[inline]
-    fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        simd_distance_for_metric(self.metric, a, b)
-    }
-
-    fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
-        batch_distance_with_prefetch(self, query, candidates).into_vec()
-    }
-
-    fn metric(&self) -> DistanceMetric {
-        self.metric
-    }
-}
-
-/// Native SIMD distance computation using simd_native dispatch.
-///
-/// Delegates to `simd_native` module which handles AVX-512/AVX2/NEON dispatch
-/// based on CPU capabilities and vector size.
-///
-/// Note: `distance()` is identical to `SimdDistance`. The difference is in
-/// `batch_distance`: this engine uses `batch_dot_product_native` for
-/// `DotProduct` metric (vectorized batch) and falls back to per-item
-/// distance for other metrics (no prefetch hints).
-pub struct NativeSimdDistance {
-    metric: DistanceMetric,
-}
-
-impl NativeSimdDistance {
-    /// Creates a new native SIMD distance engine.
-    #[must_use]
-    pub fn new(metric: DistanceMetric) -> Self {
-        Self { metric }
-    }
-}
-
-impl DistanceEngine for NativeSimdDistance {
-    #[inline]
-    fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        simd_distance_for_metric(self.metric, a, b)
-    }
-
-    fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
-        match self.metric {
-            DistanceMetric::DotProduct => {
-                // Use optimized batch with prefetch
-                crate::simd_native::batch_dot_product_native(candidates, query)
-                    .into_iter()
-                    .map(|d| -d)
-                    .collect()
-            }
-            _ => candidates.iter().map(|c| self.distance(query, c)).collect(),
-        }
-    }
-
-    fn metric(&self) -> DistanceMetric {
-        self.metric
-    }
-}
-
-/// SIMD distance computation with prefetch-based batching.
-///
-/// RF-DEDUP: Functionally identical to `SimdDistance` --- both `distance()` and
-/// `batch_distance()` produce the same results via the same code paths.
-/// Retained as a type alias for backward API compatibility.
-pub type AdaptiveSimdDistance = SimdDistance;
 
 /// SIMD distance with fully cached kernel resolution for HNSW hot loops.
 ///

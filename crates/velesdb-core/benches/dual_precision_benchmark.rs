@@ -6,11 +6,10 @@
 //! Run with: `cargo bench --bench dual_precision_benchmark`
 
 #![allow(clippy::cast_precision_loss)]
-#![allow(deprecated)] // SimdDistance is deprecated in favor of CachedSimdDistance
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use velesdb_core::distance::DistanceMetric;
-use velesdb_core::index::hnsw::native::{DualPrecisionHnsw, NativeHnsw, SimdDistance};
+use velesdb_core::index::hnsw::native::{CachedSimdDistance, DualPrecisionHnsw, NativeHnsw};
 
 fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
     (0..dim)
@@ -34,14 +33,14 @@ fn bench_search_latency(c: &mut Criterion) {
     let query = generate_vector(dim, 99999);
 
     // === Build NativeHnsw (baseline) ===
-    let engine_native = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine_native = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
     let native_hnsw = NativeHnsw::new(engine_native, 32, 200, num_vectors);
     for v in &vectors {
         native_hnsw.insert(v).expect("bench");
     }
 
     // === Build DualPrecisionHnsw (new) ===
-    let engine_dual = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine_dual = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
     let mut dual_hnsw =
         DualPrecisionHnsw::new(engine_dual, dim, 32, 200, num_vectors).expect("bench");
     for v in &vectors {
@@ -107,7 +106,7 @@ fn bench_memory_footprint(c: &mut Criterion) {
         &(),
         |b, ()| {
             b.iter(|| {
-                let engine = SimdDistance::new(DistanceMetric::Euclidean);
+                let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
                 let hnsw = NativeHnsw::new(engine, 32, 200, num_vectors);
                 for v in &vectors {
                     hnsw.insert(v).expect("bench");
@@ -122,7 +121,7 @@ fn bench_memory_footprint(c: &mut Criterion) {
         &(),
         |b, ()| {
             b.iter(|| {
-                let engine = SimdDistance::new(DistanceMetric::Euclidean);
+                let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
                 let mut hnsw =
                     DualPrecisionHnsw::new(engine, dim, 32, 200, num_vectors).expect("bench");
                 for v in &vectors {

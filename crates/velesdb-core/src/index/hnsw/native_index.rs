@@ -33,7 +33,7 @@ use std::path::Path;
 ///
 /// - **Recall**: ~99% parity with `hnsw_rs` (verified by parity tests)
 /// - **Insert**: Comparable performance with SIMD distance calculations
-/// - **Search**: Optimized with `SimdDistance` engine
+/// - **Search**: Optimized with `CachedSimdDistance` engine
 /// - **Persistence**: Native binary format (not compatible with `hnsw_rs` format)
 pub struct NativeHnswIndex {
     dimension: usize,

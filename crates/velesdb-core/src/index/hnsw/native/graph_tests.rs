@@ -1,11 +1,9 @@
 //! Tests for `graph` module - Native HNSW graph implementation.
 
-#![allow(deprecated)] // SimdDistance deprecated in favor of CachedSimdDistance
-
 use super::graph::NativeHnsw;
 use super::layer::NodeId;
 use crate::distance::DistanceMetric;
-use crate::index::hnsw::native::distance::CpuDistance;
+use crate::index::hnsw::native::distance::{CachedSimdDistance, CpuDistance};
 
 #[allow(clippy::cast_precision_loss)]
 #[test]
@@ -166,9 +164,8 @@ fn test_heuristic_fills_quota_with_closest_if_needed() {
 #[test]
 fn test_recall_with_heuristic_selection() {
     // Test that heuristic selection maintains good recall
-    use crate::index::hnsw::native::distance::SimdDistance;
 
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 128);
     let hnsw = NativeHnsw::new(engine, 32, 200, 1000);
 
     // Insert 500 random-ish vectors

@@ -1,8 +1,6 @@
 //! Tests for `RaBitQPrecisionHnsw`.
 
-#![allow(deprecated)] // SimdDistance deprecated in favor of CachedSimdDistance
-
-use super::distance::SimdDistance;
+use super::distance::CachedSimdDistance;
 use super::rabitq_precision::RaBitQPrecisionHnsw;
 use crate::distance::DistanceMetric;
 
@@ -12,7 +10,7 @@ use crate::distance::DistanceMetric;
 
 #[test]
 fn test_rabitq_precision_empty_index() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 64);
     let hnsw = RaBitQPrecisionHnsw::new(engine, 64, 16, 100, 1000).expect("test");
 
     assert!(hnsw.is_empty());
@@ -25,7 +23,7 @@ fn test_rabitq_precision_empty_index() {
 
 #[test]
 fn test_rabitq_precision_fallback_when_untrained() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = RaBitQPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
 
     // Insert fewer vectors than training threshold
@@ -47,7 +45,7 @@ fn test_rabitq_precision_fallback_when_untrained() {
 
 #[test]
 fn test_rabitq_precision_insert_trains_lazily() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 64);
     // training_sample_size = min(1000, 100) = 100
     let hnsw = RaBitQPrecisionHnsw::new(engine, 64, 16, 100, 100).expect("test");
 
@@ -66,7 +64,7 @@ fn test_rabitq_precision_insert_trains_lazily() {
 
 #[test]
 fn test_rabitq_precision_force_train() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 64);
     let hnsw = RaBitQPrecisionHnsw::new(engine, 64, 16, 100, 1000).expect("test");
 
     // Insert fewer than threshold
@@ -88,7 +86,7 @@ fn test_rabitq_precision_force_train() {
 
 #[test]
 fn test_rabitq_precision_search_after_training() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 64);
     let hnsw = RaBitQPrecisionHnsw::new(engine, 64, 16, 100, 1000).expect("test");
 
     for i in 0..200 {
@@ -116,7 +114,7 @@ fn test_rabitq_precision_search_after_training() {
 
 #[test]
 fn test_rabitq_precision_insert_after_training() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = RaBitQPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
 
     // Insert and train
@@ -156,7 +154,7 @@ fn test_rabitq_precision_recall_above_threshold() {
     let ef_search = 200;
 
     // Build index
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
     let hnsw = RaBitQPrecisionHnsw::new(engine, dim, 32, 200, n).expect("test");
 
     let vectors: Vec<Vec<f32>> = (0..n)

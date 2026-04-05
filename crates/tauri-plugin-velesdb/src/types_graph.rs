@@ -1,6 +1,12 @@
 //! Knowledge Graph request/response DTOs extracted from `types.rs` (EPIC-015 US-001).
 //!
 //! Contains graph-related types: edges, traversal, node degree, and parallel traversal.
+//!
+//! These types are Tauri-IPC-specific because:
+//! - Request types carry a `collection` field (no URL path in IPC)
+//! - All types use `#[serde(rename_all = "camelCase")]` for JavaScript callers
+//! - Response types like `EdgeOutput` and `TraversalOutput` project core structs
+//!   into a JS-friendly shape
 
 use serde::{Deserialize, Serialize};
 

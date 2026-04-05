@@ -23,7 +23,6 @@ pub(crate) mod auto_ef;
 mod backend;
 pub(crate) mod direct_writer;
 mod index;
-mod mappings;
 pub mod native;
 pub mod native_index;
 #[cfg(test)]
@@ -48,8 +47,6 @@ mod direct_writer_tests;
 mod gpu_rerank_tests;
 #[cfg(test)]
 mod index_tests;
-#[cfg(test)]
-mod mappings_tests;
 #[cfg(test)]
 mod params_tests;
 #[cfg(test)]

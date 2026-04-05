@@ -109,6 +109,9 @@ pub fn parse_sparse_vector<S: std::hash::BuildHasher>(
 }
 
 /// Converts a core `SearchResult` into the Tauri `SearchResult` DTO.
+///
+/// `SearchResult` is a type alias for [`velesdb_core::api_types::SearchResultResponse`],
+/// so this is a direct field projection from the core search result.
 #[must_use]
 pub fn map_core_result(r: velesdb_core::SearchResult) -> crate::types::SearchResult {
     crate::types::SearchResult {

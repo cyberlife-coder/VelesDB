@@ -1,8 +1,34 @@
-//! Request/Response DTOs for Tauri commands.
+//! Request/Response DTOs for Tauri IPC commands.
 //!
-//! Shared defaults and result types are imported from `velesdb_core::api_types`.
-//! Tauri-specific types use `#[serde(rename_all = "camelCase")]` for JavaScript
-//! frontend compatibility and include a `collection` context field.
+//! # Why separate types from `velesdb-server`?
+//!
+//! Tauri commands are invoked from JavaScript via IPC, which imposes two
+//! constraints that differ from the REST server:
+//!
+//! 1. **`camelCase` serialization** — All types use `#[serde(rename_all = "camelCase")]`
+//!    so that JavaScript callers receive idiomatic field names (`topK`, `storageMode`, etc.).
+//!    The server uses `snake_case` (REST convention).
+//!
+//! 2. **`collection` field on requests** — In the REST API the collection name comes from
+//!    the URL path (`/collections/{name}/search`). In Tauri IPC there is no URL, so every
+//!    request carries a `collection: String` field.
+//!
+//! ## What is shared with core
+//!
+//! - **Default value functions** (`default_metric`, `default_top_k`, etc.) are re-exported
+//!   from [`velesdb_core::api_types`] to avoid duplication.
+//! - **`SearchResult`** re-uses the canonical [`velesdb_core::api_types::SearchResultResponse`]
+//!   via a type alias — its fields (`id`, `score`, `payload`) are single-word and therefore
+//!   identical under both `camelCase` and `snake_case` serialization.
+//!
+//! ## What stays Tauri-specific
+//!
+//! - All **request types** (they carry `collection` + use `camelCase` deserialization).
+//! - **`CollectionInfo`** — uses `count` instead of core's `point_count`, and `storage_mode`
+//!   is serialized as `storageMode` for JS.
+//! - **`HybridResult`** / **`QueryResponse`** — Tauri-specific multi-model query format.
+//! - **`PointOutput`** — no direct core response equivalent.
+//! - **Graph types** (`EdgeOutput`, `TraversalOutput`, etc.) — Tauri-specific wrappers.
 
 use serde::{Deserialize, Serialize};
 
@@ -11,14 +37,20 @@ pub use velesdb_core::api_types::{
     default_metric, default_storage_mode, default_top_k, default_vector_weight,
 };
 
-// Re-export the canonical search result type (single-word fields: camelCase-safe).
-pub use velesdb_core::api_types::SearchResultResponse;
-
 // ============================================================================
-// Request DTOs
+// Request DTOs — Tauri-IPC-specific
+//
+// These types MUST remain in this crate because they:
+// - Use `#[serde(rename_all = "camelCase")]` for JavaScript callers
+// - Include a `collection: String` field (no URL path in IPC)
+// - Have different field shapes than the REST API equivalents in core
 // ============================================================================
 
-/// Request to create a new collection.
+/// Request to create a new collection (Tauri IPC).
+///
+/// Differs from [`velesdb_core::api_types::CreateCollectionRequest`]: simpler
+/// (no `collection_type`, `hnsw_m`, `hnsw_ef_construction` fields) and uses
+/// `camelCase` deserialization.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateCollectionRequest {
@@ -299,9 +331,23 @@ pub struct StreamInsertRequest {
 
 // ============================================================================
 // Response DTOs
+//
+// Response types that differ from core only in serialization convention.
+// Where field names are single-word (camelCase == snake_case), we re-use
+// the canonical core type directly.
 // ============================================================================
 
-/// Response for collection info.
+/// Search result — re-uses the canonical core type.
+///
+/// All fields (`id`, `score`, `payload`) are single-word, so `camelCase` and
+/// `snake_case` serialization produce identical JSON. No wrapper needed.
+pub type SearchResult = velesdb_core::api_types::SearchResultResponse;
+
+/// Response for collection info (Tauri IPC).
+///
+/// Differs from [`velesdb_core::api_types::CollectionResponse`]:
+/// - Uses `count` instead of `point_count`
+/// - Serializes as `camelCase` (`storageMode` vs `storage_mode`)
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionInfo {
@@ -317,19 +363,10 @@ pub struct CollectionInfo {
     pub storage_mode: String,
 }
 
-/// Search result (camelCase wrapper over canonical `SearchResultResponse`).
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchResult {
-    /// Point ID.
-    pub id: u64,
-    /// Similarity/distance score.
-    pub score: f32,
-    /// Point payload.
-    pub payload: Option<serde_json::Value>,
-}
-
-/// Multi-model query result.
+/// Multi-model query result (Tauri IPC).
+///
+/// No core equivalent — this format is specific to the Tauri `query` command
+/// which fuses vector, graph, and column results into a single shape.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HybridResult {
@@ -347,7 +384,11 @@ pub struct HybridResult {
     pub column_data: Option<serde_json::Value>,
 }
 
-/// Response for `VelesQL` query operations.
+/// Response for `VelesQL` query operations (Tauri IPC).
+///
+/// Differs from [`velesdb_core::api_types::QueryResponse`] which has additional
+/// fields (`took_ms`, `rows_returned`, `meta`). The Tauri version is simpler,
+/// returning `HybridResult` items.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryResponse {
@@ -357,7 +398,10 @@ pub struct QueryResponse {
     pub timing_ms: f64,
 }
 
-/// Point output for get operations.
+/// Point output for get operations (Tauri IPC).
+///
+/// No direct core response equivalent. The core `Point` struct is the internal
+/// representation; this DTO projects only the fields needed by the JS frontend.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PointOutput {
@@ -369,7 +413,10 @@ pub struct PointOutput {
     pub payload: Option<serde_json::Value>,
 }
 
-/// Response for search operations.
+/// Response for search operations (Tauri IPC).
+///
+/// Differs from [`velesdb_core::api_types::SearchResponse`]: includes `timing_ms`
+/// (the core version does not) and uses `camelCase` serialization.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {

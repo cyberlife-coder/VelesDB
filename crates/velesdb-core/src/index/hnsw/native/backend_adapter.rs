@@ -74,8 +74,8 @@ pub trait NativeHnswBackend: Send + Sync {
     /// Transforms raw distance to appropriate score based on metric type.
     ///
     /// For Euclidean metric, assumes the input is **squared L2** as produced
-    /// by `CachedSimdDistance`. Other distance engines (e.g. `SimdDistance`,
-    /// `NativeSimdDistance`) that already return actual Euclidean distance
+    /// by `CachedSimdDistance`. Other distance engines that already return
+    /// actual Euclidean distance
     /// should **not** have their results passed through this function, as
     /// it would incorrectly apply `sqrt()` to an already-sqrt'd value.
     fn transform_score(&self, raw_distance: f32) -> f32;

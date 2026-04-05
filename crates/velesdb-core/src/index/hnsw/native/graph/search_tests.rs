@@ -3,7 +3,7 @@
 // process_batch_results helpers extracted from search_layer (Issue #366).
 // =============================================================================
 
-use super::super::distance::SimdDistance;
+use super::super::distance::CachedSimdDistance;
 use super::super::layer::NodeId;
 use super::super::ordered_float::OrderedFloat;
 use super::search_pools::{BitVecVisited, CANDIDATE_HEAP_POOL, POOL_MAX, RESULT_HEAP_POOL};
@@ -339,7 +339,7 @@ fn test_refactored_search_recall_matches_original() {
     let n_queries = 10;
 
     // Build index
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, n);
 
     let vectors: Vec<Vec<f32>> = (0..n)
@@ -648,7 +648,7 @@ fn test_bitvec_visited_recall_regression() {
     let ef_search = 128;
     let n_queries = 20;
 
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 200, n);
 
     let vectors: Vec<Vec<f32>> = (0..n)
@@ -783,7 +783,7 @@ fn test_heap_pool_recall_regression() {
     let ef_search = 128;
     let n_queries = 20;
 
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 200, n);
 
     let vectors: Vec<Vec<f32>> = (0..n)
@@ -980,7 +980,7 @@ fn test_atomic_entry_point_starts_as_sentinel() {
 fn test_atomic_entry_point_set_after_insert() {
     use std::sync::atomic::Ordering;
 
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 8, 32, 100);
 
     hnsw.insert(&[1.0, 2.0, 3.0, 4.0])
@@ -998,7 +998,7 @@ fn test_atomic_entry_point_set_after_insert() {
 fn test_atomic_entry_point_promotes_higher_layer() {
     use std::sync::atomic::Ordering;
 
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 5000);
 
     // Insert many vectors; the entry point should eventually
@@ -1031,7 +1031,7 @@ fn test_prefetch_recall_regression() {
     let ef_search = 128;
     let n_queries = 20;
 
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 64);
     let hnsw = NativeHnsw::new(engine, 16, 200, n);
 
     let vectors: Vec<Vec<f32>> = (0..n)
