@@ -28,16 +28,19 @@ jobs:
         run: |
           # Git Flow enforcement rules:
           #
-          # → develop : feature/*, feat/*, fix/*, refactor/*, chore/*,
-          #             docs/*, style/*, perf/*, test/*, build/*, ci/*
-          # → main    : develop, release/*, hotfix/*
+          # → develop : feature/*, feat/*, fix/*, bugfix/*,
+          #             refactor/*, chore/*, docs/*, style/*,
+          #             perf/*, test/*, build/*, ci/*
+          # → main    : develop, release/*, hotfix/*, support/*
           #
+          # bugfix/* is the standard Git Flow alias for fix/* (bug fixes in develop).
+          # support/* maintains older release lines and merges directly to main.
           # Any other target branch is rejected.
 
           allowed_to_develop() {
             local src="$1"
             case "$src" in
-              feature/*|feat/*|fix/*|refactor/*|chore/*) return 0 ;;
+              feature/*|feat/*|fix/*|bugfix/*|refactor/*|chore/*) return 0 ;;
               docs/*|style/*|perf/*|test/*|build/*|ci/*) return 0 ;;
               *) return 1 ;;
             esac
@@ -46,7 +49,7 @@ jobs:
           allowed_to_main() {
             local src="$1"
             case "$src" in
-              develop|release/*|hotfix/*) return 0 ;;
+              develop|release/*|hotfix/*|support/*) return 0 ;;
               *) return 1 ;;
             esac
           }
@@ -56,7 +59,7 @@ jobs:
               echo "OK: '${SOURCE_REF}' → develop (Git Flow valid)"
             else
               echo "::error::Git Flow violation: '${SOURCE_REF}' cannot target 'develop'."
-              echo "::error::Branches allowed to target 'develop': feature/*, feat/*, fix/*, refactor/*, chore/*, docs/*, style/*, perf/*, test/*, build/*, ci/*"
+              echo "::error::Branches allowed to target 'develop': feature/*, feat/*, fix/*, bugfix/*, refactor/*, chore/*, docs/*, style/*, perf/*, test/*, build/*, ci/*"
               exit 1
             fi
           elif [ "$BASE_REF" = "main" ]; then
@@ -64,7 +67,7 @@ jobs:
               echo "OK: '${SOURCE_REF}' → main (Git Flow valid)"
             else
               echo "::error::Git Flow violation: '${SOURCE_REF}' cannot target 'main'."
-              echo "::error::Branches allowed to target 'main': develop, release/*, hotfix/*"
+              echo "::error::Branches allowed to target 'main': develop, release/*, hotfix/*, support/*"
               exit 1
             fi
           else
