@@ -59,37 +59,38 @@ def cleanup():
     shutil.rmtree(PHOTO_DIR, ignore_errors=True)
 
 
-def dhash_vector(img_path, hash_size=HASH_SIZE):
+def compute_barcode(img_path, hash_size=HASH_SIZE):
+    """Turn an image into a binary barcode for the Bouncer."""
     img = Image.open(img_path)
     h = imagehash.dhash(img, hash_size=hash_size)
     return [float(b) for b in h.hash.flatten()]
 
 
 # ---------------------------------------------------------------------------
-# Test 1: dHash + Hamming collection
+# Test 1: Bouncer - dHash barcodes + Hamming collection
 # ---------------------------------------------------------------------------
 
-def test_dhash_hamming():
-    """Perceptual hash indexing and Hamming search produce correct results."""
+def test_bouncer_hamming():
+    """The Bouncer indexes barcodes and Hamming search finds near-duplicates."""
     shutil.rmtree(DB_DIR, ignore_errors=True)
     files = setup_test_images()
     db = velesdb.Database(DB_DIR)
 
-    hash_dim = HASH_SIZE * HASH_SIZE
-    hash_col = db.get_or_create_collection(
-        "perceptual_hashes", dimension=hash_dim, metric="hamming"
+    barcode_dim = HASH_SIZE * HASH_SIZE
+    bouncer = db.get_or_create_collection(
+        "perceptual_hashes", dimension=barcode_dim, metric="hamming"
     )
 
     for i, fname in enumerate(files):
         path = os.path.join(PHOTO_DIR, fname)
-        vec = dhash_vector(path)
-        assert len(vec) == hash_dim
-        assert all(v in (0.0, 1.0) for v in vec), "Hash must be binary"
-        hash_col.upsert(i + 1, vector=vec, payload={"filename": fname, "path": path})
+        vec = compute_barcode(path)
+        assert len(vec) == barcode_dim
+        assert all(v in (0.0, 1.0) for v in vec), "Barcode must be binary"
+        bouncer.upsert(i + 1, vector=vec, payload={"filename": fname, "path": path})
 
     # Search for beach_1
     query_path = os.path.join(PHOTO_DIR, "beach_1.jpg")
-    results = hash_col.search(vector=dhash_vector(query_path), top_k=5)
+    results = bouncer.search(vector=compute_barcode(query_path), top_k=5)
 
     assert len(results) == 5
     assert results[0]["payload"]["filename"] == "beach_1.jpg"
@@ -98,16 +99,16 @@ def test_dhash_hamming():
     top3 = [r["payload"]["filename"] for r in results[:3]]
     assert "beach_1_small.jpg" in top3, f"Near-duplicate not found in top 3: {top3}"
 
-    print("  [PASS] dHash + Hamming: correct indexing and search")
-    return db, hash_col, files
+    print("  [PASS] Bouncer (dHash + Hamming): correct indexing and search")
+    return db, bouncer, files
 
 
 # ---------------------------------------------------------------------------
-# Test 2: CLIP + Euclidean collection
+# Test 2: Detective - CLIP meanings + Euclidean collection
 # ---------------------------------------------------------------------------
 
-def test_clip_euclidean(db, files):
-    """CLIP embedding indexing and Euclidean search produce correct results."""
+def test_detective_euclidean(db, files):
+    """The Detective indexes meanings and Euclidean search ranks semantically."""
     try:
         import open_clip
         import torch
@@ -120,7 +121,8 @@ def test_clip_euclidean(db, files):
     )
     model.eval()
 
-    def clip_emb(img_path):
+    def compute_meaning(img_path):
+        """Place an image on the Detective's map of meaning."""
         img = Image.open(img_path).convert("RGB")
         with torch.no_grad():
             t = preprocess(img).unsqueeze(0)
@@ -128,18 +130,18 @@ def test_clip_euclidean(db, files):
             f /= f.norm(dim=-1, keepdim=True)
             return f.squeeze().numpy().tolist()
 
-    clip_col = db.get_or_create_collection(
+    detective = db.get_or_create_collection(
         "clip_features", dimension=512, metric="euclidean"
     )
 
     for i, fname in enumerate(files):
         path = os.path.join(PHOTO_DIR, fname)
-        emb = clip_emb(path)
+        emb = compute_meaning(path)
         assert len(emb) == 512
-        clip_col.upsert(i + 1, vector=emb, payload={"filename": fname, "path": path})
+        detective.upsert(i + 1, vector=emb, payload={"filename": fname, "path": path})
 
     query_path = os.path.join(PHOTO_DIR, "beach_1.jpg")
-    results = clip_col.search(vector=clip_emb(query_path), top_k=5)
+    results = detective.search(vector=compute_meaning(query_path), top_k=5)
 
     assert len(results) == 5
     assert results[0]["payload"]["filename"] == "beach_1.jpg"
@@ -148,48 +150,48 @@ def test_clip_euclidean(db, files):
     top3 = [r["payload"]["filename"] for r in results[:3]]
     assert "beach_1_square.jpg" in top3, f"Semantic match not in top 3: {top3}"
 
-    print("  [PASS] CLIP + Euclidean: correct semantic ranking")
-    return clip_col, clip_emb
+    print("  [PASS] Detective (CLIP + Euclidean): correct semantic ranking")
+    return detective, compute_meaning
 
 
 # ---------------------------------------------------------------------------
-# Test 3: Combined two-pass pipeline
+# Test 3: Combined two-pass pipeline (Bouncer + Detective)
 # ---------------------------------------------------------------------------
 
-def test_combined_pipeline(hash_col, clip_col, clip_emb_fn, files):
+def test_combined_pipeline(bouncer, detective, compute_meaning_fn, files):
     """Two-pass pipeline completes under 100ms and produces valid re-ranking."""
     query_path = os.path.join(PHOTO_DIR, "beach_1.jpg")
 
-    # Pass 1: Hamming
+    # Pass 1: The Bouncer
     t0 = time.time()
-    candidates = hash_col.search(vector=dhash_vector(query_path), top_k=8)
-    pass1_ms = (time.time() - t0) * 1000
+    fast_candidates = bouncer.search(vector=compute_barcode(query_path), top_k=8)
+    bouncer_ms = (time.time() - t0) * 1000
 
-    # Pass 2: CLIP re-ranking
-    query_clip = clip_emb_fn(query_path)
+    # Pass 2: The Detective re-ranks
+    query_meaning = compute_meaning_fn(query_path)
     t0 = time.time()
-    clip_all = clip_col.search(vector=query_clip, top_k=len(files))
-    clip_by_id = {r["id"]: r["score"] for r in clip_all}
+    all_meanings = detective.search(vector=query_meaning, top_k=len(files))
+    meaning_scores = {r["id"]: r["score"] for r in all_meanings}
 
     reranked = sorted(
         [
             {
                 "id": c["id"],
                 "filename": c["payload"]["filename"],
-                "hamming": c["score"],
-                "clip_dist": clip_by_id.get(c["id"], float("inf")),
+                "bouncer": c["score"],
+                "detective": meaning_scores.get(c["id"], float("inf")),
             }
-            for c in candidates
+            for c in fast_candidates
         ],
-        key=lambda x: x["clip_dist"],
+        key=lambda x: x["detective"],
     )
-    pass2_ms = (time.time() - t0) * 1000
+    detective_ms = (time.time() - t0) * 1000
 
-    total = pass1_ms + pass2_ms
+    total = bouncer_ms + detective_ms
     assert total < 100, f"Pipeline too slow: {total:.1f}ms"
     assert reranked[0]["filename"] == "beach_1.jpg"
 
-    print(f"  [PASS] Combined pipeline: {total:.2f}ms (p1={pass1_ms:.2f}, p2={pass2_ms:.2f})")
+    print(f"  [PASS] Combined pipeline: {total:.2f}ms (bouncer={bouncer_ms:.2f}, detective={detective_ms:.2f})")
 
 
 # ---------------------------------------------------------------------------
@@ -246,16 +248,16 @@ if __name__ == "__main__":
     files = setup_test_images()
     print(f"  {len(files)} images ready\n")
 
-    print("Test 1: dHash + Hamming")
-    db, hash_col, files = test_dhash_hamming()
+    print("Test 1: Bouncer (dHash + Hamming)")
+    db, bouncer, files = test_bouncer_hamming()
 
-    print("\nTest 2: CLIP + Euclidean")
-    result = test_clip_euclidean(db, files)
+    print("\nTest 2: Detective (CLIP + Euclidean)")
+    result = test_detective_euclidean(db, files)
 
     if result:
-        clip_col, clip_fn = result
-        print("\nTest 3: Two-pass pipeline")
-        test_combined_pipeline(hash_col, clip_col, clip_fn, files)
+        detective, compute_meaning_fn = result
+        print("\nTest 3: Two-pass pipeline (Bouncer + Detective)")
+        test_combined_pipeline(bouncer, detective, compute_meaning_fn, files)
 
     print("\nTest 4: All article metrics")
     test_all_metrics()
