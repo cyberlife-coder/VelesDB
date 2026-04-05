@@ -17,27 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   using `_collection` parameter or `SELECT ... FROM <collection> WHERE MATCH ...` syntax.
   Previously, MATCH was rejected at the Database level.
 - **Cross-type JOIN tests** — VectorCollection JOIN MetadataCollection validated with BDD tests.
-
-### Fixed
-- **BFS dedup** — CSR and EdgeStore BFS no longer produce duplicate results for nodes
-  reachable via multiple paths (diamond graph fix).
-- **DISTINCT in early-return paths (#475)** — `SELECT DISTINCT` now applied in NOT-similarity and union query paths.
-- **NEAR + MATCH + metadata filter (#474)** — co-occurring metadata filters no longer silently dropped in hybrid search.
-- **`list_indexes` includes secondary indexes** — was only returning property/range indexes.
-- **`rrf_k` propagated to `hybrid_search_with_filter` (#472)** — was hardcoded to 60.
-- **CSR label filter** — edges with unresolvable labels now excluded (not included) when rel_type filter is active.
-- **Cross-collection enrichment** — logs `tracing::warn` when `@collection` references a non-existent collection.
-
-### Changed (Breaking)
-- **BFS cycle behavior** — BFS no longer re-emits already-visited nodes when a cycle closes.
-  Code relying on duplicate entries for cycle detection must be updated.
-- **`ComponentScores` type** — changed from `SmallVec<[(String, f32); 4]>` to `SmallVec<[(&'static str, f32); 4]>`.
-  External code constructing `SearchResult` with custom component scores must use `&'static str` literals.
-- **Python `relationship_types=` alias (#490)** — `traverse_bfs/dfs` now accept both `rel_types=` and `relationship_types=`.
-
-## [1.11.1] - 2026-04-04
-
-### Added
 - **Graph API parity** — 7 new REST endpoints for complete graph operations:
   - `DELETE /collections/{name}/graph/edges/{id}` — remove edge by ID
   - `GET /collections/{name}/graph/edges/count` — total edge count
@@ -50,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **REPL graph commands** — `.graph remove-edge`, `.graph count`, `.graph search`, `.graph store-payload`, `.graph get-payload`, `.graph nodes` with full help documentation
 - **Core** — `GraphCollection::traverse_bfs_parallel()` for multi-source BFS with deduplication
 - **OpenAPI** — all new graph endpoints registered in API documentation
-- **Tests** — 13 new server tests covering all new graph operations
+- **Tests** — 238 BDD tests, 4447 lib tests, 13 new server tests
 
 ### Performance
 - **Bitmap pre-filter for filtered search (#487)** — adaptive strategy selection based on
@@ -60,35 +39,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adjacency, EdgePredicate pushdown (290ns for label-filtered BFS vs 3.4µs unfiltered = 12x),
   lazy CSR rebuild on read instead of every mutation
 - **Bulk insert v2 pipeline (#488)** — DirectVectorWriter bypasses ShardedVectors overhead,
-  AsyncIndexBuilder with background thread for deferred HNSW construction,
-  HnswSegmentBuilder for parallel segment-based index building
-- **Bitmap NEQ support** — `Neq` conditions now use universe bitmap subtraction for
-  pre-filtering, enabling indexed queries like `AdvEngineID != 0`
-- **Secondary index backfill** — `create_index` now scans existing payloads to populate
-  the index, and `upsert_bulk_from_raw` maintains indexes during bulk insert
-- **LIKE→BM25 fallback** — metadata-only LIKE queries use the BM25 text index for
-  candidate narrowing before full scan
-- **AND-aware index lookup** — compound AND conditions extract the first indexed Eq
-  sub-condition for bitmap pre-filtering
-- **Bitmap-based metadata dispatch** — `dispatch_metadata_only` uses `build_prefilter_bitmap`
-  for indexed conditions, avoiding full sequential scans
-- **Native batch edge loading** — `add_edges_batch` on ConcurrentEdgeStore with single
-  lock acquisition cycle (1M+ edges/s)
-- **Python `create_index`** — exposed secondary index creation in Python bindings
-- **Python `upsert_bulk_numpy_json`** — fast bulk insert with pre-serialized JSON payloads
-- **CSR wiring in traverse_bfs_config** — all BFS paths (Python, WASM, Server) now use
-  the lock-free CSR snapshot automatically
-- **HNSW graduated ef_construction** — 3-phase VAMANA schedule during batch insert
-- **Lock-free CAS entry-point promotion** — AtomicUsize CAS for HNSW entry-point
-- **Pre-allocated vector storage** — allocate_batch split into reserve + bulk-push
-- **FxHashSet visited sets** — faster hashing on integer node IDs
-- **Parent-pointer path reconstruction** — eliminates per-path cloning in BFS/DFS
-- **WAL deferred sync** — fsync deferred during bulk insert streams
+  AsyncIndexBuilder with background thread for deferred HNSW construction
+- **`ComponentScores` optimization (#476)** — `SmallVec<[(&'static str, f32); 4]>` eliminates per-result heap allocation
+- **Bitmap NEQ support** — `Neq` conditions now use universe bitmap subtraction
+- **Secondary index backfill** — `create_index` scans existing payloads to populate the index
+- **LIKE→BM25 fallback** — metadata-only LIKE queries use BM25 text index for candidate narrowing
+- **Native batch edge loading** — `add_edges_batch` with single lock acquisition cycle (1M+ edges/s)
+- **19 functions CC > 8 reduced to ≤ 8** — all non-SIMD functions now comply with Codacy CC ≤ 8
 
-### Changed
+### Fixed
+- **BFS dedup** — CSR and EdgeStore BFS no longer produce duplicate results for nodes
+  reachable via multiple paths (diamond graph fix).
+- **DISTINCT in early-return paths (#475)** — `SELECT DISTINCT` now applied in NOT-similarity and union query paths.
+- **NEAR + MATCH + metadata filter (#474)** — co-occurring metadata filters no longer silently dropped in hybrid search.
+- **`list_indexes` includes secondary indexes** — was only returning property/range indexes.
+- **`rrf_k` propagated to `hybrid_search_with_filter` (#472)** — was hardcoded to 60.
+- **CSR label filter** — edges with unresolvable labels now excluded when rel_type filter is active.
+- **Cross-collection enrichment** — logs `tracing::warn` when `@collection` references a non-existent collection.
+- **AsyncIndexBuilder drain in flush** — `flush()` and `flush_full()` now drain the AIB buffer into HNSW.
+- **Tauri `drop_index`** — uses `require_vector_collection` instead of deprecated `require_collection`.
+- **LangChain `filter=` kwarg** — backward-compatible alias restored alongside `metadata_filter=`.
+
+### Changed (Breaking)
+- **BFS cycle behavior** — BFS no longer re-emits already-visited nodes when a cycle closes.
+  Code relying on duplicate entries for cycle detection must be updated.
+- **`ComponentScores` type** — changed from `SmallVec<[(String, f32); 4]>` to `SmallVec<[(&'static str, f32); 4]>`.
+  External code constructing `SearchResult` with custom component scores must use `&'static str` literals.
+- **Python `relationship_types=` alias (#490)** — `traverse_bfs/dfs` now accept both `rel_types=` and `relationship_types=`.
+- **CLI commands restructured** — flat commands (`velesdb list`) grouped into sub-commands (`velesdb collection list`).
 - **License** — added Attribution clause for public-facing applications (visible link
-  to velesdb.com required, Enterprise license waives requirement)
-- **Rate limit** — increased default from 100 to 100K QPS for local-first deployment
+  to velesdb.com required, Enterprise license waives requirement).
+- **Rate limit** — increased default from 100 to 100K QPS for local-first deployment.
 
 ## [1.11.0] - 2026-03-31
 
