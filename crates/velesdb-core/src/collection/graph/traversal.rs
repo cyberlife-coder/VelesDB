@@ -315,6 +315,9 @@ fn process_bfs_csr(
             if !rel_filter.is_empty() && !rel_filter.contains(label) {
                 continue;
             }
+        } else if !rel_filter.is_empty() {
+            // Edge with unresolvable label excluded when filter is active
+            continue;
         }
         process_bfs_candidate(
             target,

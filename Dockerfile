@@ -25,7 +25,7 @@ RUN cargo build --release --bin velesdb-server
 FROM debian:bookworm-slim
 
 LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
-LABEL version="1.11.1"
+LABEL version="1.12.0"
 
 WORKDIR /app
 
