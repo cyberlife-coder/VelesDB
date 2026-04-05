@@ -115,7 +115,8 @@ impl Collection {
             | Condition::VectorSearch(_)
             | Condition::VectorFusedSearch(_)
             | Condition::SparseVectorSearch(_)
-            | Condition::GraphMatch(_) => None,
+            | Condition::GraphMatch(_)
+            | Condition::Match(_) => None,
             // For AND: keep both sides if they exist, or just one side
             Condition::And(left, right) => {
                 let left_filter = Self::extract_metadata_filter(left);
