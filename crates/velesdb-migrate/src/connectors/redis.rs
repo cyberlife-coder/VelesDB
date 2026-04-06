@@ -485,6 +485,9 @@ fn parse_ft_info_response(
 }
 
 /// Finds a numeric value by key in a flat key-value RESP list.
+///
+/// `FT.INFO` returns alternating `[key, value, key, value, ...]` pairs,
+/// so we advance by 2 to stay on key positions.
 fn find_info_int(items: &[redis::Value], key: &str) -> Option<u64> {
     let mut i = 0;
     while i + 1 < items.len() {
@@ -497,7 +500,7 @@ fn find_info_int(items: &[redis::Value], key: &str) -> Option<u64> {
                 return s.parse().ok();
             }
         }
-        i += 1;
+        i += 2;
     }
     None
 }
@@ -507,6 +510,7 @@ fn extract_attributes(items: &[redis::Value], vector_field: &str) -> Vec<FieldIn
     let mut fields = Vec::new();
 
     // Find the "attributes" key in the flat list.
+    // FT.INFO returns alternating [key, value, ...] — advance by 2 to stay on keys.
     let mut i = 0;
     while i + 1 < items.len() {
         if extract_bulk_string(&items[i]).as_deref() == Some("attributes") {
@@ -519,7 +523,7 @@ fn extract_attributes(items: &[redis::Value], vector_field: &str) -> Vec<FieldIn
             }
             break;
         }
-        i += 1;
+        i += 2;
     }
 
     fields
@@ -553,14 +557,17 @@ fn parse_single_attribute(
     })
 }
 
-/// Finds the string value immediately after a given key in a flat array.
+/// Finds the string value immediately after a given key in a flat key-value array.
+///
+/// Attribute arrays use the same alternating `[key, value, ...]` layout as `FT.INFO`,
+/// so we advance by 2 to stay on key positions.
 fn find_string_after(parts: &[redis::Value], key: &str) -> Option<String> {
     let mut j = 0;
     while j + 1 < parts.len() {
         if extract_bulk_string(&parts[j]).as_deref() == Some(key) {
             return extract_bulk_string(&parts[j + 1]);
         }
-        j += 1;
+        j += 2;
     }
     None
 }

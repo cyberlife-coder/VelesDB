@@ -120,6 +120,30 @@ fn test_redis_extract_payload_filtered() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_find_info_int_stride2_correctness() {
+    // GIVEN: a flat FT.INFO-style key-value list where a value is "num_docs"
+    // (if stride were 1, the value at index 1 would be checked as a key)
+    let items = vec![
+        redis::Value::BulkString(b"some_key".to_vec()),
+        redis::Value::BulkString(b"num_docs".to_vec()), // value at odd index — must NOT match
+        redis::Value::BulkString(b"num_docs".to_vec()),  // key at even index — must match
+        redis::Value::BulkString(b"42".to_vec()),
+    ];
+    // WHEN: stride is 2, only the key at index 2 matches, returning 42
+    let result = find_info_int(&items, "num_docs");
+    assert_eq!(result, Some(42), "stride-1 bug: matched value as key");
+}
+
+#[test]
+fn test_find_info_int_returns_none_when_missing() {
+    let items = vec![
+        redis::Value::BulkString(b"index_name".to_vec()),
+        redis::Value::BulkString(b"myidx".to_vec()),
+    ];
+    assert_eq!(find_info_int(&items, "num_docs"), None);
+}
+
+#[test]
 fn test_decode_vector_blob_le_bytes() {
     // 2 floats: 1.0 (0x3F800000 LE) and -2.5 (0xC0200000 LE)
     let bytes = [0x00u8, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x20, 0xC0];
