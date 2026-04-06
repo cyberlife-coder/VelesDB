@@ -534,17 +534,16 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ---
 
-## Using VelesDB?
+## Powered by VelesDB
+
+| Project | Use case |
+|---------|----------|
+| [WPLink](https://wplink.ai) | AI-powered semantic analysis to find and apply internal linking opportunities for WordPress sites |
+| *Your project here* | [Get listed →](mailto:contact@wiscale.fr?subject=VelesDB%20Showcase) |
 
 [![Built with VelesDB](https://img.shields.io/badge/Built_with-VelesDB-blue?style=flat-square)](https://github.com/cyberlife-coder/VelesDB)
 
-Tell us about your project and get featured on the [**"Powered by VelesDB"** showcase on velesdb.com](https://velesdb.com). We highlight companies and projects that build with VelesDB — from RAG pipelines to sovereign AI agents.
-
-How to get listed:
-- Open a [GitHub Discussion](https://github.com/cyberlife-coder/VelesDB/discussions) describing your use case
-- Or email [contact@wiscale.fr](mailto:contact@wiscale.fr) with your project name, logo, and a one-liner
-
-Your feedback shapes the roadmap.
+Using VelesDB in production? Open a [GitHub Discussion](https://github.com/cyberlife-coder/VelesDB/discussions) or email [contact@wiscale.fr](mailto:contact@wiscale.fr) to get featured. Your feedback shapes the roadmap.
 
 ---
 
