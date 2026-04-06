@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use velesdb_core::Point;
 
 use crate::collection_helpers::{
-    core_err, dict_to_json_map, extract_point_id, extract_point_vector, parse_payload,
-    parse_point_dicts,
+    core_err, core_err_with_collection, dict_to_json_map, extract_point_id, extract_point_vector,
+    parse_payload, parse_point_dicts,
 };
 
 use super::Collection;
@@ -34,8 +34,14 @@ impl Collection {
         let core_points = parse_point_dicts(py, &points)?;
         let count = core_points.len();
 
-        // Phase 2: Release GIL during core engine work
-        py.allow_threads(|| self.inner.upsert(core_points).map_err(core_err))?;
+        // Phase 2: Release GIL during core engine work; report DimensionMismatch with
+        // the collection name so the error message includes full context.
+        let name = self.name.clone();
+        py.allow_threads(|| {
+            self.inner
+                .upsert(core_points)
+                .map_err(|e| core_err_with_collection(e, &name))
+        })?;
 
         Ok(count)
     }
@@ -49,10 +55,12 @@ impl Collection {
     ) -> PyResult<usize> {
         let mut core_points = Vec::with_capacity(points.len());
 
-        for point_dict in &points {
-            let id = extract_point_id(py, point_dict)?;
+        for (index, point_dict) in points.iter().enumerate() {
+            let id = extract_point_id(py, point_dict, index)?;
             let payload = parse_payload(py, point_dict.get("payload"))?.ok_or_else(|| {
-                PyValueError::new_err("Metadata-only point must have 'payload' field")
+                PyValueError::new_err(format!(
+                    "Point at index {index} must have 'payload' field (metadata-only collection)"
+                ))
             })?;
             core_points.push(Point::metadata_only(id, payload));
         }
@@ -72,14 +80,19 @@ impl Collection {
     ) -> PyResult<usize> {
         let mut core_points = Vec::with_capacity(points.len());
 
-        for point_dict in &points {
-            let id = extract_point_id(py, point_dict)?;
+        for (index, point_dict) in points.iter().enumerate() {
+            let id = extract_point_id(py, point_dict, index)?;
             let vector = extract_point_vector(py, point_dict)?;
             let payload = parse_payload(py, point_dict.get("payload"))?;
             core_points.push(Point::new(id, vector, payload));
         }
 
-        py.allow_threads(|| self.inner.upsert_bulk(&core_points).map_err(core_err))
+        let name = self.name.clone();
+        py.allow_threads(|| {
+            self.inner
+                .upsert_bulk(&core_points)
+                .map_err(|e| core_err_with_collection(e, &name))
+        })
     }
 
     /// Bulk insert from numpy arrays for maximum throughput.

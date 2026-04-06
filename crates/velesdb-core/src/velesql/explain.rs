@@ -17,7 +17,7 @@ mod formatter;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use super::ast::{Condition, SelectStatement};
+use super::ast::{Condition, LetBinding, SelectStatement};
 use crate::collection::search::query::match_planner::{
     CollectionStats, MatchExecutionStrategy, MatchQueryPlanner,
 };
@@ -34,6 +34,20 @@ pub struct QueryPlan {
     pub index_used: Option<IndexType>,
     /// Filter strategy.
     pub filter_strategy: FilterStrategy,
+    /// WITH clause options surfaced for EXPLAIN output (issue #471).
+    ///
+    /// Each entry is a `(key, value_display)` pair extracted from the parsed
+    /// `WithClause`.  Empty when the query has no WITH clause.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub with_options: Vec<(String, String)>,
+    /// LET bindings surfaced for EXPLAIN output (issue #471).
+    ///
+    /// Each entry is `"name = expr"` in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub let_bindings: Vec<String>,
+    /// Fusion strategy info surfaced for EXPLAIN output (issue #471).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fusion_info: Option<FusionInfo>,
     /// Whether this plan was served from the compiled plan cache (CACHE-02).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_hit: Option<bool>,
@@ -136,6 +150,19 @@ pub struct MatchTraversalPlan {
     pub similarity_threshold: Option<f32>,
 }
 
+/// Fusion strategy info for EXPLAIN output (issue #471).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FusionInfo {
+    /// Strategy name (e.g. "RRF", "Weighted", "Maximum", "RSF").
+    pub strategy: String,
+    /// RRF k parameter (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub k: Option<u32>,
+    /// Weights as `"vector=0.7, graph=0.3"` or similar; `None` when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weights: Option<String>,
+}
+
 /// EXPLAIN output with optional ANALYZE stats (EPIC-046 US-004).
 #[allow(dead_code)] // Used by API consumers
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,7 +240,18 @@ impl QueryPlan {
         let (mut nodes, index_used) = Self::build_scan_node(stmt, has_vector_search, index_lookup);
         let filter_strategy = Self::append_filter_nodes(&mut nodes, &filter_conditions, stmt);
 
-        Self::assemble_plan(nodes, index_used, filter_strategy, has_vector_search)
+        let mut plan = Self::assemble_plan(nodes, index_used, filter_strategy, has_vector_search);
+        plan.with_options = Self::extract_with_options(stmt);
+        plan.fusion_info = Self::extract_fusion_info(stmt);
+        plan
+    }
+
+    /// Creates a full query plan from a `Query`, including LET bindings (issue #471).
+    #[must_use]
+    pub fn from_query(query: &super::ast::Query) -> Self {
+        let mut plan = Self::from_select(&query.select);
+        plan.let_bindings = Self::format_let_bindings(&query.let_bindings);
+        plan
     }
 
     /// Collapses a `Vec<PlanNode>` into a single root, estimates cost, and builds the plan.
@@ -234,10 +272,16 @@ impl QueryPlan {
             estimated_cost_ms,
             index_used,
             filter_strategy,
+            with_options: Vec::new(),
+            let_bindings: Vec::new(),
+            fusion_info: None,
             cache_hit: None,
             plan_reuse_count: None,
         }
     }
+
+    /// Default `ef_search` when the WITH clause does not specify one.
+    const DEFAULT_EF_SEARCH: u32 = 100;
 
     /// Builds the primary scan node based on search type.
     fn build_scan_node(
@@ -251,9 +295,10 @@ impl QueryPlan {
         if has_vector_search {
             index_used = Some(IndexType::Hnsw);
             let candidates = u32::try_from(stmt.limit.unwrap_or(50)).unwrap_or(u32::MAX);
+            let ef_search = Self::resolve_ef_search(stmt);
             nodes.push(PlanNode::VectorSearch(VectorSearchPlan {
                 collection: stmt.from.clone(),
-                ef_search: 100,
+                ef_search,
                 candidates,
             }));
         } else if let Some((property, value)) = index_lookup {
@@ -271,6 +316,73 @@ impl QueryPlan {
         }
 
         (nodes, index_used)
+    }
+
+    /// Reads `ef_search` from the WITH clause, falling back to [`Self::DEFAULT_EF_SEARCH`].
+    #[allow(clippy::cast_possible_truncation)]
+    fn resolve_ef_search(stmt: &SelectStatement) -> u32 {
+        stmt.with_clause
+            .as_ref()
+            .and_then(super::ast::WithClause::get_ef_search)
+            .map_or(Self::DEFAULT_EF_SEARCH, |v| v as u32)
+    }
+
+    /// Extracts WITH clause options as display pairs (issue #471).
+    fn extract_with_options(stmt: &SelectStatement) -> Vec<(String, String)> {
+        let Some(ref wc) = stmt.with_clause else {
+            return Vec::new();
+        };
+        wc.options
+            .iter()
+            .map(|opt| (opt.key.clone(), format_with_value(&opt.value)))
+            .collect()
+    }
+
+    /// Extracts FUSION clause info for EXPLAIN display (issue #471).
+    fn extract_fusion_info(stmt: &SelectStatement) -> Option<FusionInfo> {
+        let fc = stmt.fusion_clause.as_ref()?;
+        let strategy = match fc.strategy {
+            super::ast::FusionStrategyType::Rrf => "RRF",
+            super::ast::FusionStrategyType::Weighted => "Weighted",
+            super::ast::FusionStrategyType::Maximum => "Maximum",
+            super::ast::FusionStrategyType::Rsf => "RSF",
+        };
+        let weights = Self::format_fusion_weights(fc);
+        Some(FusionInfo {
+            strategy: strategy.to_string(),
+            k: fc.k,
+            weights,
+        })
+    }
+
+    /// Formats fusion weights into a human-readable string.
+    fn format_fusion_weights(fc: &super::ast::FusionClause) -> Option<String> {
+        let mut parts = Vec::new();
+        if let Some(vw) = fc.vector_weight {
+            parts.push(format!("vector={vw}"));
+        }
+        if let Some(gw) = fc.graph_weight {
+            parts.push(format!("graph={gw}"));
+        }
+        if let Some(dw) = fc.dense_weight {
+            parts.push(format!("dense={dw}"));
+        }
+        if let Some(sw) = fc.sparse_weight {
+            parts.push(format!("sparse={sw}"));
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(", "))
+        }
+    }
+
+    /// Formats LET bindings as `"name = expr"` strings (issue #471).
+    fn format_let_bindings(bindings: &[LetBinding]) -> Vec<String> {
+        bindings
+            .iter()
+            .map(|b| format!("{} = {}", b.name, b.expr))
+            .collect()
     }
 
     /// Appends filter, offset, and limit nodes; returns the filter strategy.
@@ -479,6 +591,16 @@ impl QueryPlan {
                 (labels, depth, true, threshold)
             }
         }
+    }
+}
+
+/// Formats a `WithValue` for human-readable EXPLAIN display.
+fn format_with_value(v: &super::ast::WithValue) -> String {
+    match v {
+        super::ast::WithValue::String(s) | super::ast::WithValue::Identifier(s) => s.clone(),
+        super::ast::WithValue::Integer(i) => i.to_string(),
+        super::ast::WithValue::Float(f) => f.to_string(),
+        super::ast::WithValue::Boolean(b) => b.to_string(),
     }
 }
 

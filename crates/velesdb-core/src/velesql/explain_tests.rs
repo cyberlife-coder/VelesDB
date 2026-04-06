@@ -297,6 +297,9 @@ fn test_index_lookup_node_cost() {
         estimated_cost_ms: 0.0001,
         index_used: Some(IndexType::Property),
         filter_strategy: FilterStrategy::None,
+        with_options: Vec::new(),
+        let_bindings: Vec::new(),
+        fusion_info: None,
         cache_hit: None,
         plan_reuse_count: None,
     };
@@ -309,6 +312,9 @@ fn test_index_lookup_node_cost() {
         estimated_cost_ms: 1.0,
         index_used: None,
         filter_strategy: FilterStrategy::None,
+        with_options: Vec::new(),
+        let_bindings: Vec::new(),
+        fusion_info: None,
         cache_hit: None,
         plan_reuse_count: None,
     };
@@ -328,6 +334,9 @@ fn test_index_lookup_render_tree() {
         estimated_cost_ms: 0.0001,
         index_used: Some(IndexType::Property),
         filter_strategy: FilterStrategy::None,
+        with_options: Vec::new(),
+        let_bindings: Vec::new(),
+        fusion_info: None,
         cache_hit: None,
         plan_reuse_count: None,
     };
@@ -358,6 +367,9 @@ fn test_index_lookup_json_serialization() {
         estimated_cost_ms: 0.0001,
         index_used: Some(IndexType::Property),
         filter_strategy: FilterStrategy::None,
+        with_options: Vec::new(),
+        let_bindings: Vec::new(),
+        fusion_info: None,
         cache_hit: None,
         plan_reuse_count: None,
     };
@@ -385,6 +397,9 @@ fn test_plan_to_tree_cache_hit_present() {
         estimated_cost_ms: 1.0,
         index_used: None,
         filter_strategy: FilterStrategy::None,
+        with_options: Vec::new(),
+        let_bindings: Vec::new(),
+        fusion_info: None,
         cache_hit: Some(true),
         plan_reuse_count: Some(42),
     };
@@ -409,6 +424,9 @@ fn test_plan_to_tree_cache_hit_absent() {
         estimated_cost_ms: 1.0,
         index_used: None,
         filter_strategy: FilterStrategy::None,
+        with_options: Vec::new(),
+        let_bindings: Vec::new(),
+        fusion_info: None,
         cache_hit: None,
         plan_reuse_count: None,
     };
@@ -516,6 +534,9 @@ fn test_explain_output_struct() {
         estimated_cost_ms: 1.0,
         index_used: None,
         filter_strategy: FilterStrategy::None,
+        with_options: Vec::new(),
+        let_bindings: Vec::new(),
+        fusion_info: None,
         cache_hit: None,
         plan_reuse_count: None,
     };
@@ -592,4 +613,382 @@ fn test_estimate_selectivity() {
 
     assert!(s0 > s1);
     assert!(s1 > s2);
+}
+
+// =========================================================================
+// Issue #471: ef_search from WITH clause
+// =========================================================================
+
+#[test]
+fn test_ef_search_reads_with_clause() {
+    use super::ast::{WithClause, WithValue};
+
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "embeddings".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: Some(Condition::VectorSearch(VsCondition {
+            vector: VectorExpr::Parameter("q".to_string()),
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: Some(WithClause::new().with_option("ef_search", WithValue::Integer(512))),
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let tree = plan.to_tree();
+    assert!(tree.contains("ef_search: 512"), "tree: {tree}");
+}
+
+#[test]
+fn test_ef_search_defaults_to_100_without_with() {
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "embeddings".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: Some(Condition::VectorSearch(VsCondition {
+            vector: VectorExpr::Parameter("q".to_string()),
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let tree = plan.to_tree();
+    assert!(tree.contains("ef_search: 100"), "tree: {tree}");
+}
+
+// =========================================================================
+// Issue #471: WITH options in EXPLAIN output
+// =========================================================================
+
+#[test]
+fn test_with_options_displayed_in_tree() {
+    use super::ast::{WithClause, WithValue};
+
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: Some(Condition::VectorSearch(VsCondition {
+            vector: VectorExpr::Parameter("v".to_string()),
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: Some(
+            WithClause::new()
+                .with_option("mode", WithValue::Identifier("accurate".to_string()))
+                .with_option("ef_search", WithValue::Integer(512))
+                .with_option("rerank", WithValue::Boolean(true))
+                .with_option("timeout_ms", WithValue::Integer(5000)),
+        ),
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let tree = plan.to_tree();
+
+    assert!(tree.contains("WITH options:"), "tree: {tree}");
+    assert!(tree.contains("mode = accurate"), "tree: {tree}");
+    assert!(tree.contains("ef_search = 512"), "tree: {tree}");
+    assert!(tree.contains("rerank = true"), "tree: {tree}");
+    assert!(tree.contains("timeout_ms = 5000"), "tree: {tree}");
+}
+
+#[test]
+fn test_no_with_options_when_clause_absent() {
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: None,
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let tree = plan.to_tree();
+    assert!(!tree.contains("WITH options:"), "tree: {tree}");
+}
+
+// =========================================================================
+// Issue #471: LET bindings in EXPLAIN output
+// =========================================================================
+
+#[test]
+fn test_let_bindings_displayed_via_from_query() {
+    use super::ast::{ArithmeticExpr, LetBinding, Query};
+
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: Some(Condition::VectorSearch(VsCondition {
+            vector: VectorExpr::Parameter("v".to_string()),
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let query = Query {
+        let_bindings: vec![LetBinding {
+            name: "hybrid".to_string(),
+            expr: ArithmeticExpr::BinaryOp {
+                left: Box::new(ArithmeticExpr::BinaryOp {
+                    left: Box::new(ArithmeticExpr::Literal(0.7)),
+                    op: super::ast::ArithmeticOp::Mul,
+                    right: Box::new(ArithmeticExpr::Variable("vector_score".to_string())),
+                }),
+                op: super::ast::ArithmeticOp::Add,
+                right: Box::new(ArithmeticExpr::BinaryOp {
+                    left: Box::new(ArithmeticExpr::Literal(0.3)),
+                    op: super::ast::ArithmeticOp::Mul,
+                    right: Box::new(ArithmeticExpr::Variable("bm25_score".to_string())),
+                }),
+            },
+        }],
+        select: stmt,
+        compound: None,
+        match_clause: None,
+        dml: None,
+        train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
+    };
+
+    let plan = QueryPlan::from_query(&query);
+    let tree = plan.to_tree();
+
+    assert!(tree.contains("LET bindings:"), "tree: {tree}");
+    assert!(tree.contains("hybrid = "), "tree: {tree}");
+    assert!(tree.contains("vector_score"), "tree: {tree}");
+    assert!(tree.contains("bm25_score"), "tree: {tree}");
+}
+
+#[test]
+fn test_no_let_bindings_when_empty() {
+    use super::ast::Query;
+
+    let query = Query::new_select(SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: None,
+        order_by: None,
+        limit: None,
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    });
+
+    let plan = QueryPlan::from_query(&query);
+    let tree = plan.to_tree();
+    assert!(!tree.contains("LET bindings:"), "tree: {tree}");
+}
+
+// =========================================================================
+// Issue #471: FUSION info in EXPLAIN output
+// =========================================================================
+
+#[test]
+fn test_fusion_rrf_displayed_in_tree() {
+    use super::ast::FusionClause;
+
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: Some(Condition::VectorSearch(VsCondition {
+            vector: VectorExpr::Parameter("v".to_string()),
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: Some(FusionClause::default()),
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let tree = plan.to_tree();
+
+    assert!(tree.contains("FUSION:"), "tree: {tree}");
+    assert!(tree.contains("Strategy: RRF"), "tree: {tree}");
+    assert!(tree.contains("k: 60"), "tree: {tree}");
+}
+
+#[test]
+fn test_fusion_weighted_with_weights() {
+    use super::ast::{FusionClause, FusionStrategyType};
+
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: Some(Condition::VectorSearch(VsCondition {
+            vector: VectorExpr::Parameter("v".to_string()),
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: Some(FusionClause {
+            strategy: FusionStrategyType::Weighted,
+            k: None,
+            vector_weight: Some(0.7),
+            graph_weight: Some(0.3),
+            dense_weight: None,
+            sparse_weight: None,
+        }),
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let tree = plan.to_tree();
+
+    assert!(tree.contains("FUSION:"), "tree: {tree}");
+    assert!(tree.contains("Strategy: Weighted"), "tree: {tree}");
+    assert!(
+        tree.contains("Weights: vector=0.7, graph=0.3"),
+        "tree: {tree}"
+    );
+    assert!(
+        !tree.contains("k:"),
+        "tree should not show k when None: {tree}"
+    );
+}
+
+#[test]
+fn test_no_fusion_when_absent() {
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: None,
+        order_by: None,
+        limit: None,
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let tree = plan.to_tree();
+    assert!(!tree.contains("FUSION:"), "tree: {tree}");
+}
+
+// =========================================================================
+// Issue #471: JSON serialization of new fields
+// =========================================================================
+
+#[test]
+fn test_with_options_serialized_in_json() {
+    use super::ast::{WithClause, WithValue};
+
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "test".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: Some(Condition::VectorSearch(VsCondition {
+            vector: VectorExpr::Parameter("v".to_string()),
+        })),
+        order_by: None,
+        limit: Some(5),
+        offset: None,
+        with_clause: Some(WithClause::new().with_option("ef_search", WithValue::Integer(256))),
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let json = plan.to_json().expect("JSON should serialize");
+
+    assert!(json.contains("\"with_options\""), "json: {json}");
+    assert!(json.contains("ef_search"), "json: {json}");
+    assert!(json.contains("256"), "json: {json}");
+}
+
+#[test]
+fn test_empty_with_options_skipped_in_json() {
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "test".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: None,
+        order_by: None,
+        limit: None,
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let json = plan.to_json().expect("JSON should serialize");
+
+    assert!(
+        !json.contains("\"with_options\""),
+        "empty with_options should be skipped: {json}"
+    );
+    assert!(
+        !json.contains("\"let_bindings\""),
+        "empty let_bindings should be skipped: {json}"
+    );
+    assert!(
+        !json.contains("\"fusion_info\""),
+        "None fusion_info should be skipped: {json}"
+    );
 }

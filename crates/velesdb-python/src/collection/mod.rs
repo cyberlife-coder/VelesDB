@@ -64,13 +64,20 @@ impl Collection {
         match (dense, sparse, filter) {
             (Some(d), Some(s), Some(f)) => self
                 .inner
-                .hybrid_sparse_search_named_with_filter(
-                    &d, &s, top_k, &DEFAULT_FUSION, index_name, f,
-                )
-                .map_err(core_err),
+                .hybrid_sparse_search(&d, &s, top_k, index_name, &DEFAULT_FUSION)
+                .map_err(core_err)
+                .map(|mut results| {
+                    results.retain(|r| {
+                        r.point
+                            .payload
+                            .as_ref()
+                            .map_or(false, |p| f.matches(p))
+                    });
+                    results
+                }),
             (Some(d), Some(s), None) => self
                 .inner
-                .hybrid_sparse_search_named(&d, &s, top_k, &DEFAULT_FUSION, index_name)
+                .hybrid_sparse_search(&d, &s, top_k, index_name, &DEFAULT_FUSION)
                 .map_err(core_err),
             (Some(d), None, Some(f)) => self
                 .inner
@@ -82,7 +89,7 @@ impl Collection {
             )),
             (None, Some(s), None) => self
                 .inner
-                .sparse_search_named(&s, top_k, index_name)
+                .sparse_search(&s, top_k, index_name)
                 .map_err(core_err),
             (None, None, _) => Err(PyValueError::new_err(
                 "At least one of 'vector' or 'sparse_vector' must be provided",

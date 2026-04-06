@@ -31,6 +31,7 @@ mod collection;
 mod collection_helpers;
 mod database;
 mod database_stats;
+mod exceptions;
 mod fusion;
 mod graph;
 mod graph_collection;
@@ -92,6 +93,9 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // VelesQL query language classes (EPIC-056/US-001)
     velesql::register_velesql_module(m)?;
+
+    // Typed exception hierarchy (issue #427)
+    exceptions::register_exceptions(m)?;
 
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

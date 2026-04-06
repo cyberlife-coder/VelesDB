@@ -394,3 +394,39 @@ try {
 | VELES-032 | `InvalidDimension` | Yes | Validation |
 | VELES-033 | `AllocationFailed` | **No** | Resource |
 | VELES-034 | `InvalidCollectionName` | Yes | Validation |
+
+## Python SDK Exception Hierarchy
+
+VelesDB Python SDK maps core error codes to typed Python exceptions:
+
+| Python Exception | Base | VELES code | When raised |
+|-----------------|------|------------|-------------|
+| `VelesDBError` | `Exception` | — | Base for all VelesDB exceptions |
+| `DimensionMismatchError` | `VelesDBError` | VELES-004 | Vector dimension != collection dimension |
+| `CollectionNotFoundError` | `VelesDBError` | VELES-002 | Collection name not found |
+| `VelesQLSyntaxError` | `Exception` | — | VelesQL parse error |
+| `VelesQLParameterError` | `Exception` | — | Missing or wrong-type parameter |
+
+### Usage
+
+```python
+import velesdb
+
+try:
+    collection.upsert([{"id": 1, "vector": [0.1] * 384}])  # wrong dimension
+except velesdb.DimensionMismatchError as e:
+    print(e)  # Expected 768 dimensions, got 384 (collection 'docs' requires 768-dim vectors)
+except velesdb.VelesDBError as e:
+    print(f"VelesDB error: {e}")
+```
+
+### Bulk upsert errors
+
+When a point in a bulk upsert is malformed, the error includes the point index:
+
+```python
+try:
+    collection.upsert([...10000 points...])
+except ValueError as e:
+    print(e)  # "Point at index 4237 missing 'id' field"
+```
