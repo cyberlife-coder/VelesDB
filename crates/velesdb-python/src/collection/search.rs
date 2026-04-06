@@ -221,7 +221,6 @@ impl Collection {
                     top_k,
                     Some(vector_weight),
                     &f,
-                    None,
                 )
             } else {
                 self.inner.hybrid_search(
@@ -229,7 +228,6 @@ impl Collection {
                     &query_owned,
                     top_k,
                     Some(vector_weight),
-                    None,
                 )
             }
             .map_err(core_err)

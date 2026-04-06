@@ -7,16 +7,46 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::{BTreeMap, HashMap};
 
+use crate::exceptions::{CollectionNotFoundError, DimensionMismatchError};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::sparse_index::SparseVector;
 use velesdb_core::{Filter, Point, SearchResult};
 
-/// Convert a `velesdb_core::Error` into a `PyRuntimeError`.
+/// Convert a `velesdb_core::Error` into the most specific Python exception available.
 ///
-/// Shared helper that replaces ~39 inline `map_err(|e| PyRuntimeError::new_err(...))` closures
-/// across the Python binding crate.
+/// VELES-004 (DimensionMismatch) → `DimensionMismatchError` with a human-readable message
+/// that includes the expected and actual dimensions.
+/// VELES-002 (CollectionNotFound) → `CollectionNotFoundError`.
+/// All other errors fall back to `PyRuntimeError`.
 pub fn core_err(e: velesdb_core::Error) -> PyErr {
-    PyRuntimeError::new_err(e.to_string())
+    match &e {
+        velesdb_core::Error::DimensionMismatch { expected, actual } => {
+            DimensionMismatchError::new_err(format!(
+                "Expected {expected} dimensions, got {actual}"
+            ))
+        }
+        velesdb_core::Error::CollectionNotFound(name) => {
+            CollectionNotFoundError::new_err(format!("Collection '{name}' not found"))
+        }
+        _ => PyRuntimeError::new_err(e.to_string()),
+    }
+}
+
+/// Convert a `velesdb_core::Error::DimensionMismatch` into a `DimensionMismatchError`
+/// with full collection context included in the message.
+///
+/// Use this variant at call-sites where the collection name is available,
+/// so the error reads: "Expected 768 dimensions, got 512 (collection 'docs' requires 768-dim vectors)".
+pub fn core_err_with_collection(e: velesdb_core::Error, collection_name: &str) -> PyErr {
+    match &e {
+        velesdb_core::Error::DimensionMismatch { expected, actual } => {
+            DimensionMismatchError::new_err(format!(
+                "Expected {expected} dimensions, got {actual} \
+                (collection '{collection_name}' requires {expected}-dim vectors)"
+            ))
+        }
+        _ => core_err(e),
+    }
 }
 
 /// Parse a Python filter object into a VelesDB Filter.
@@ -236,9 +266,19 @@ pub fn dict_to_json_map(
 }
 
 /// Extract the `"id"` field from a point dict as `u64`.
-pub fn extract_point_id(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResult<u64> {
+///
+/// `index` is the zero-based position of this point in the batch. When provided
+/// (i.e., the caller is iterating a list), it is embedded in the error message so
+/// the user can locate the offending item: "Point at index 4237 missing 'id' field".
+pub fn extract_point_id(
+    py: Python<'_>,
+    dict: &HashMap<String, PyObject>,
+    index: usize,
+) -> PyResult<u64> {
     dict.get("id")
-        .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
+        .ok_or_else(|| {
+            PyValueError::new_err(format!("Point at index {index} missing 'id' field"))
+        })?
         .extract(py)
 }
 
@@ -264,8 +304,8 @@ pub fn parse_point_dicts(
     points: &[HashMap<String, PyObject>],
 ) -> PyResult<Vec<Point>> {
     let mut result = Vec::with_capacity(points.len());
-    for point_dict in points {
-        let id = extract_point_id(py, point_dict)?;
+    for (index, point_dict) in points.iter().enumerate() {
+        let id = extract_point_id(py, point_dict, index)?;
         let vector = extract_point_vector(py, point_dict)?;
         let payload = parse_payload(py, point_dict.get("payload"))?;
         let sparse_vectors = parse_sparse_vectors_from_point(py, point_dict)?;
@@ -287,5 +327,46 @@ pub fn parse_payload(
             Ok(Some(dict_to_json_map(py, &dict)?))
         }
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::Python;
+
+    /// extract_point_id error message includes the batch index.
+    #[test]
+    fn test_extract_point_id_missing_includes_index() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            // Dict with no "id" key — simulates a malformed point at position 4237.
+            let empty: HashMap<String, PyObject> = HashMap::new();
+            let err = extract_point_id(py, &empty, 4237).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("4237"),
+                "error message must contain the batch index; got: {msg}"
+            );
+            assert!(
+                msg.contains("'id'"),
+                "error message must mention the missing field; got: {msg}"
+            );
+        });
+    }
+
+    /// extract_point_id at index 0 still includes the index in the message.
+    #[test]
+    fn test_extract_point_id_missing_at_index_zero() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let empty: HashMap<String, PyObject> = HashMap::new();
+            let err = extract_point_id(py, &empty, 0).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("index 0"),
+                "error message must contain 'index 0'; got: {msg}"
+            );
+        });
     }
 }
