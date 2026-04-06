@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_metadata_collection()`, or `get_any_collection()` instead.
 
 ### Added
+- **Cross-collection JOIN optimization (Issue #513)** — Filter pushdown and lookup join for
+  `execute_single_select`. WHERE conditions referencing the joined table (e.g.,
+  `inventory.price > 100`) are automatically pushed down before ColumnStore construction.
+  When the JOIN key is the primary key (`id`) and no pushdown filters apply, direct
+  `collection.get()` lookups replace full-scan ColumnStore builds. Reuses existing
+  `analyze_for_pushdown`, `Filter::matches`, and `build_join_column_store` infrastructure.
+  11 new BDD tests, zero regression on existing 8 cross-collection tests.
 - **EXPLAIN now surfaces WITH/LET/FUSION** — `ef_search` is read from `WITH clause` instead of
   hardcoded to 100; `WITH options`, `LET bindings`, and `FUSION` details (strategy, k, weights)
   are now displayed in the EXPLAIN output tree. Closes #471.

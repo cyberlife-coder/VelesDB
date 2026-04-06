@@ -314,6 +314,29 @@ WHERE similarity(p.embedding, $query) > 0.7
 LIMIT 20
 ```
 
+### JOIN Optimizations (v1.12+)
+
+The query engine automatically applies two optimizations to cross-collection JOINs:
+
+**Filter Pushdown**: WHERE conditions that reference the joined table (using qualified column names like `inventory.price > 100`) are automatically pushed down and evaluated before loading points into the ColumnStore. This reduces memory usage and I/O for large joined collections.
+
+```sql
+-- inventory.stock > 0 is pushed down to filter inventory before JOIN
+SELECT * FROM products
+JOIN inventory ON products.id = inventory.id
+WHERE inventory.stock > 0
+```
+
+**Lookup Join**: When the JOIN condition references the primary key (`id`) on both sides and no pushdown filters apply, the engine uses direct `collection.get()` lookups instead of building a full ColumnStore, achieving O(K) instead of O(N) retrieval.
+
+```sql
+-- Uses optimized lookup path (both sides reference id)
+SELECT * FROM products
+JOIN inventory ON products.id = inventory.id
+```
+
+Both optimizations are transparent and produce identical results to the non-optimized path.
+
 ---
 
 ## WHERE Clause
