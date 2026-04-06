@@ -24,6 +24,12 @@ pub struct MigrationStats {
     pub batches: u64,
     /// Duration in seconds.
     pub duration_secs: f64,
+    /// Graph edges created (0 if no graph migration phase ran).
+    pub edges_created: u64,
+    /// Graph edges that failed to create.
+    pub edges_failed: u64,
+    /// FK relations processed during graph migration.
+    pub relations_processed: usize,
 }
 
 impl MigrationStats {
@@ -377,11 +383,11 @@ impl Pipeline {
                     graph_connector,
                 );
                 graph_phase.connect().await?;
-                // Stats discarded here; graph phase runs for side effects only
-                // (edge insertion + graph collection flush). Surfacing these stats
-                // to MigrationStats is tracked in TODO(US-GRAPH-02).
-                let _graph_stats = graph_phase.run(db).await?;
+                let graph_stats = graph_phase.run(db).await?;
                 graph_phase.close().await?;
+                stats.edges_created = graph_stats.edges_created;
+                stats.edges_failed = graph_stats.edges_failed;
+                stats.relations_processed = graph_stats.relations_processed;
             }
         }
 
