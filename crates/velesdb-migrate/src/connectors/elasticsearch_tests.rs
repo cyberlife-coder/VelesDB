@@ -158,7 +158,5 @@ fn test_search_response_deserialization() {
 
 #[test]
 fn test_connect_rejects_file_url() {
-    assert!(
-        crate::connectors::common::validate_url("file:///etc/passwd").is_err()
-    );
+    assert!(crate::connectors::common::validate_url("file:///etc/passwd").is_err());
 }

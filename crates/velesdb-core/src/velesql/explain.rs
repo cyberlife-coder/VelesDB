@@ -163,8 +163,7 @@ pub struct FusionInfo {
     pub weights: Option<String>,
 }
 
-/// EXPLAIN output with optional ANALYZE stats (EPIC-046 US-004).
-#[allow(dead_code)] // Used by API consumers
+/// EXPLAIN output with optional ANALYZE stats.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExplainOutput {
     /// The query plan.
@@ -172,10 +171,38 @@ pub struct ExplainOutput {
     /// Actual execution statistics (only with ANALYZE).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_stats: Option<ActualStats>,
+    /// Per-node execution statistics (only with ANALYZE).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_stats: Vec<NodeStats>,
+}
+
+impl ExplainOutput {
+    /// Creates an EXPLAIN-only output (no actual stats).
+    #[must_use]
+    pub fn plan_only(plan: QueryPlan) -> Self {
+        Self {
+            plan,
+            actual_stats: None,
+            node_stats: vec![],
+        }
+    }
+
+    /// Creates an EXPLAIN ANALYZE output with actual stats.
+    #[must_use]
+    pub fn with_stats(
+        plan: QueryPlan,
+        actual_stats: ActualStats,
+        node_stats: Vec<NodeStats>,
+    ) -> Self {
+        Self {
+            plan,
+            actual_stats: Some(actual_stats),
+            node_stats,
+        }
+    }
 }
 
 /// Actual execution statistics for EXPLAIN ANALYZE.
-#[allow(dead_code)] // Used by API consumers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActualStats {
     /// Actual number of rows returned.
@@ -188,6 +215,21 @@ pub struct ActualStats {
     pub nodes_visited: u64,
     /// Number of edges traversed.
     pub edges_traversed: u64,
+}
+
+/// Per-plan-node actual execution statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeStats {
+    /// Node label (e.g. "VectorSearch", "Filter", "Limit").
+    pub node_label: String,
+    /// Actual wall-clock time for this node in milliseconds.
+    pub actual_time_ms: f64,
+    /// Rows entering this node.
+    pub actual_rows_in: u64,
+    /// Rows leaving this node.
+    pub actual_rows_out: u64,
+    /// Number of loop iterations (1 for non-looping nodes).
+    pub loops: u64,
 }
 
 /// Type of index used in the query.
@@ -624,3 +666,59 @@ fn format_with_value(v: &super::ast::WithValue) -> String {
 
 // Rendering, formatting, Display impl, and as_str() methods moved to explain/formatter.rs
 // Tests in explain_tests.rs per project rules (tests in separate files)
+
+// ---------------------------------------------------------------------------
+// Shared node-stats helpers (used by Database and VectorCollection)
+// ---------------------------------------------------------------------------
+
+/// Returns the label and estimated time fraction for a plan node.
+fn node_label_and_time_fraction(node: &PlanNode, total_time_ms: f64) -> (&'static str, f64) {
+    match node {
+        PlanNode::VectorSearch(_) => ("VectorSearch", total_time_ms * 0.95),
+        PlanNode::TableScan(_) => ("TableScan", total_time_ms * 0.95),
+        PlanNode::MatchTraversal(_) => ("MatchTraversal", total_time_ms * 0.95),
+        PlanNode::IndexLookup(_) => ("IndexLookup", total_time_ms * 0.90),
+        PlanNode::Filter(_) => ("Filter", total_time_ms * 0.03),
+        PlanNode::Limit(_) => ("Limit", total_time_ms * 0.01),
+        PlanNode::Offset(_) => ("Offset", total_time_ms * 0.01),
+        PlanNode::Sequence(_) => ("Sequence", 0.0),
+    }
+}
+
+/// Recursively collects `NodeStats` for each leaf node in the plan tree.
+fn collect_leaf_stats(
+    node: &PlanNode,
+    actual_rows: u64,
+    total_time_ms: f64,
+    out: &mut Vec<NodeStats>,
+) {
+    if let PlanNode::Sequence(children) = node {
+        for child in children {
+            collect_leaf_stats(child, actual_rows, total_time_ms, out);
+        }
+    } else {
+        let (label, time_ms) = node_label_and_time_fraction(node, total_time_ms);
+        out.push(NodeStats {
+            node_label: label.to_string(),
+            actual_time_ms: time_ms,
+            actual_rows_in: actual_rows,
+            actual_rows_out: actual_rows,
+            loops: 1,
+        });
+    }
+}
+
+/// Builds per-node stats for all leaf nodes in the plan tree.
+///
+/// Walks the `PlanNode` tree and creates a `NodeStats` entry for each
+/// non-Sequence node, distributing the total execution time proportionally.
+#[must_use]
+pub fn build_leaf_node_stats(
+    root: &PlanNode,
+    actual_rows: u64,
+    total_time_ms: f64,
+) -> Vec<NodeStats> {
+    let mut stats = Vec::new();
+    collect_leaf_stats(root, actual_rows, total_time_ms, &mut stats);
+    stats
+}

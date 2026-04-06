@@ -4,14 +4,18 @@ use axum::{extract::State, response::IntoResponse, Json};
 use std::sync::Arc;
 use velesdb_core::velesql::{Condition, SelectColumns};
 
-use crate::types::{ExplainCost, ExplainFeatures, ExplainRequest, ExplainResponse, ExplainStep};
+use crate::types::{
+    ActualStatsResponse, ExplainCost, ExplainFeatures, ExplainRequest, ExplainResponse,
+    ExplainStep, NodeStatsResponse,
+};
 use crate::AppState;
 
 use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found};
 
-/// Explain a VelesQL query without executing it (EPIC-058 US-002).
+/// Explain a VelesQL query, optionally executing it with instrumentation.
 ///
-/// Returns the query plan, estimated costs, and detected features.
+/// When `analyze` is false (default), returns the estimated plan only.
+/// When `analyze` is true, executes the query and returns actual statistics.
 #[utoipa::path(
     post,
     path = "/query/explain",
@@ -40,10 +44,23 @@ pub async fn explain(
         return velesql_collection_not_found(&select.from);
     }
 
+    if req.analyze {
+        return explain_with_analyze(&state, &req, &parsed);
+    }
+
+    explain_plan_only(&state, &req, &parsed)
+}
+
+/// Build an EXPLAIN-only response (no execution).
+fn explain_plan_only(
+    state: &AppState,
+    req: &ExplainRequest,
+    parsed: &velesdb_core::velesql::Query,
+) -> axum::response::Response {
+    let select = &parsed.select;
     let features = detect_explain_features(select);
     let plan = build_explain_plan(select, &features);
     let estimated_cost = estimate_cost(features.has_vector_search);
-
     let query_type = if parsed.is_match_query() {
         "MATCH"
     } else {
@@ -52,12 +69,12 @@ pub async fn explain(
 
     let (cache_hit, plan_reuse_count) = state
         .db
-        .explain_query(&parsed)
+        .explain_query(parsed)
         .ok()
         .map_or((None, None), |qp| (qp.cache_hit, qp.plan_reuse_count));
 
     Json(ExplainResponse {
-        query: req.query,
+        query: req.query.clone(),
         query_type: query_type.to_string(),
         collection: select.from.clone(),
         plan,
@@ -65,6 +82,75 @@ pub async fn explain(
         features,
         cache_hit,
         plan_reuse_count,
+        estimated_cost_ms: None,
+        actual_time_ms: None,
+        actual_stats: None,
+        node_stats: None,
+    })
+    .into_response()
+}
+
+/// Build an EXPLAIN ANALYZE response (with execution and actual stats).
+fn explain_with_analyze(
+    state: &AppState,
+    req: &ExplainRequest,
+    parsed: &velesdb_core::velesql::Query,
+) -> axum::response::Response {
+    let select = &parsed.select;
+    let features = detect_explain_features(select);
+    let plan = build_explain_plan(select, &features);
+    let estimated_cost = estimate_cost(features.has_vector_search);
+    let query_type = if parsed.is_match_query() {
+        "MATCH"
+    } else {
+        "SELECT"
+    };
+
+    let output = match state.db.explain_analyze_query(parsed, &req.params) {
+        Ok(o) => o,
+        Err(e) => {
+            return Json(serde_json::json!({ "error": e.to_string() })).into_response();
+        }
+    };
+
+    let (actual_stats_resp, actual_time, node_stats_resp) =
+        if let Some(ref stats) = output.actual_stats {
+            let as_resp = ActualStatsResponse {
+                actual_rows: stats.actual_rows,
+                actual_time_ms: stats.actual_time_ms,
+                loops: stats.loops,
+                nodes_visited: stats.nodes_visited,
+                edges_traversed: stats.edges_traversed,
+            };
+            let ns_resp: Vec<NodeStatsResponse> = output
+                .node_stats
+                .iter()
+                .map(|ns| NodeStatsResponse {
+                    node_label: ns.node_label.clone(),
+                    actual_time_ms: ns.actual_time_ms,
+                    actual_rows_in: ns.actual_rows_in,
+                    actual_rows_out: ns.actual_rows_out,
+                    loops: ns.loops,
+                })
+                .collect();
+            (Some(as_resp), Some(stats.actual_time_ms), Some(ns_resp))
+        } else {
+            (None, None, None)
+        };
+
+    Json(ExplainResponse {
+        query: req.query.clone(),
+        query_type: query_type.to_string(),
+        collection: select.from.clone(),
+        plan,
+        estimated_cost,
+        features,
+        cache_hit: output.plan.cache_hit,
+        plan_reuse_count: output.plan.plan_reuse_count,
+        estimated_cost_ms: Some(output.plan.estimated_cost_ms),
+        actual_time_ms: actual_time,
+        actual_stats: actual_stats_resp,
+        node_stats: node_stats_resp,
     })
     .into_response()
 }

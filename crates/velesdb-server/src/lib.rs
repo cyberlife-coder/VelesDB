@@ -174,6 +174,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             ExplainStep,
             ExplainCost,
             ExplainFeatures,
+            ActualStatsResponse,
+            NodeStatsResponse,
             CreateIndexRequest,
             IndexResponse,
             ListIndexesResponse,

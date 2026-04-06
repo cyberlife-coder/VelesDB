@@ -1,7 +1,8 @@
-//! Query execution: `execute_query`, `explain_query`, plan caching, and DML dispatch.
+//! Query execution: `execute_query`, `explain_query`, `explain_analyze_query`, plan caching, and DML dispatch.
 
 use crate::velesql::{
-    AdminStatement, DdlStatement, DmlStatement, IntrospectionStatement, Query, TrainStatement,
+    ActualStats, AdminStatement, DdlStatement, DmlStatement, ExplainOutput, IntrospectionStatement,
+    Query, TrainStatement,
 };
 use crate::{Error, Result, SearchResult};
 
@@ -163,6 +164,50 @@ impl Database {
         plan.cache_hit = Some(false);
         plan.plan_reuse_count = Some(0);
         Ok(plan)
+    }
+
+    /// Executes a query with instrumentation and returns both plan and actual stats.
+    ///
+    /// Unlike `explain_query` (plan only) and `execute_query` (results only),
+    /// this method returns the full [`ExplainOutput`] with measured statistics.
+    /// The normal `execute_query` path is untouched — zero overhead on
+    /// non-ANALYZE queries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is invalid or execution fails.
+    pub fn explain_analyze_query(
+        &self,
+        query: &Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<ExplainOutput> {
+        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
+
+        let plan = self.explain_query(query)?;
+        let start = std::time::Instant::now();
+        let results = self.execute_query(query, params)?;
+        let elapsed = start.elapsed();
+
+        let actual_rows = results.len() as u64;
+        let actual_time_ms = elapsed.as_secs_f64() * 1000.0;
+        let is_match = query.is_match_query();
+        let (nodes_visited, edges_traversed) = if is_match {
+            (actual_rows, actual_rows)
+        } else {
+            (0, 0)
+        };
+
+        let stats = ActualStats {
+            actual_rows,
+            actual_time_ms,
+            loops: 1,
+            nodes_visited,
+            edges_traversed,
+        };
+
+        let node_stats =
+            crate::velesql::build_leaf_node_stats(&plan.root, actual_rows, actual_time_ms);
+        Ok(ExplainOutput::with_stats(plan, stats, node_stats))
     }
 
     /// Executes a `VelesQL` query with database-level JOIN resolution.

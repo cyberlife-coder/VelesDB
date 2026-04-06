@@ -157,7 +157,7 @@ pub fn create_connector(config: &crate::config::SourceConfig) -> Result<Box<dyn 
         #[cfg(not(feature = "redis-source"))]
         crate::config::SourceConfig::Redis(_) => Err(crate::error::Error::UnsupportedSource(
             "Redis source requires the 'redis-source' feature".to_string(),
-        ))
+        )),
     }
 }
 

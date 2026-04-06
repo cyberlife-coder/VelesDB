@@ -343,6 +343,9 @@ pub struct ExplainRequest {
     /// Named parameters for the query.
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
+    /// When true, execute the query and return actual statistics alongside the plan.
+    #[serde(default)]
+    pub analyze: bool,
 }
 
 // ============================================================================

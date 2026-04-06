@@ -1531,8 +1531,10 @@ paths:
     post:
       tags:
       - query
-      summary: Explain a VelesQL query without executing it (EPIC-058 US-002).
-      description: Returns the query plan, estimated costs, and detected features.
+      summary: Explain a VelesQL query, optionally executing it with instrumentation.
+      description: |-
+        When `analyze` is false (default), returns the estimated plan only.
+        When `analyze` is true, executes the query and returns actual statistics.
       operationId: explain
       requestBody:
         content:
@@ -1580,6 +1582,40 @@ paths:
                 type: object
 components:
   schemas:
+    ActualStatsResponse:
+      type: object
+      description: Actual execution statistics for EXPLAIN ANALYZE responses.
+      required:
+      - actual_rows
+      - actual_time_ms
+      - loops
+      - nodes_visited
+      - edges_traversed
+      properties:
+        actual_rows:
+          type: integer
+          format: int64
+          description: Actual number of rows returned.
+          minimum: 0
+        actual_time_ms:
+          type: number
+          format: double
+          description: Actual execution time in milliseconds.
+        edges_traversed:
+          type: integer
+          format: int64
+          description: Number of edges traversed.
+          minimum: 0
+        loops:
+          type: integer
+          format: int64
+          description: Number of loop iterations.
+          minimum: 0
+        nodes_visited:
+          type: integer
+          format: int64
+          description: Number of nodes visited (for graph traversal).
+          minimum: 0
     AddEdgeRequest:
       type: object
       description: Request to add an edge to the graph.
@@ -2041,6 +2077,9 @@ components:
       required:
       - query
       properties:
+        analyze:
+          type: boolean
+          description: When true, execute the query and return actual statistics alongside the plan.
         params:
           type: object
           description: Named parameters for the query.
@@ -2062,6 +2101,17 @@ components:
       - estimated_cost
       - features
       properties:
+        actual_stats:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/ActualStatsResponse'
+            description: 'Actual execution statistics (only when `analyze: true`).'
+        actual_time_ms:
+          type:
+          - number
+          - 'null'
+          format: double
+          description: 'Actual execution time in milliseconds (only when `analyze: true`).'
         cache_hit:
           type:
           - boolean
@@ -2073,9 +2123,22 @@ components:
         estimated_cost:
           $ref: '#/components/schemas/ExplainCost'
           description: Estimated cost metrics.
+        estimated_cost_ms:
+          type:
+          - number
+          - 'null'
+          format: double
+          description: Estimated cost in milliseconds (for side-by-side comparison with actual).
         features:
           $ref: '#/components/schemas/ExplainFeatures'
           description: Query features detected.
+        node_stats:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/NodeStatsResponse'
+          description: 'Per-node execution statistics (only when `analyze: true`).'
         plan:
           type: array
           items:
@@ -2608,6 +2671,38 @@ components:
           minimum: 0
         payload:
           description: Stored payload (null if none).
+    NodeStatsResponse:
+      type: object
+      description: Per-plan-node actual execution statistics for EXPLAIN ANALYZE responses.
+      required:
+      - node_label
+      - actual_time_ms
+      - actual_rows_in
+      - actual_rows_out
+      - loops
+      properties:
+        actual_rows_in:
+          type: integer
+          format: int64
+          description: Rows entering this node.
+          minimum: 0
+        actual_rows_out:
+          type: integer
+          format: int64
+          description: Rows leaving this node.
+          minimum: 0
+        actual_time_ms:
+          type: number
+          format: double
+          description: Actual wall-clock time for this node in milliseconds.
+        loops:
+          type: integer
+          format: int64
+          description: Number of loop iterations (1 for non-looping nodes).
+          minimum: 0
+        node_label:
+          type: string
+          description: Node label (e.g. "VectorSearch", "Filter", "Limit").
     ParallelTraverseRequest:
       type: object
       description: Request for parallel multi-source BFS traversal.

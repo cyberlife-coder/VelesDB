@@ -274,11 +274,9 @@ impl Pipeline {
 
         loop {
             let connector = &mut *self.connector;
-            let batch = crate::retry::with_retry(
-                &retry_config,
-                "extract_batch",
-                || connector.extract_batch(offset.clone(), batch_size),
-            )
+            let batch = crate::retry::with_retry(&retry_config, "extract_batch", || {
+                connector.extract_batch(offset.clone(), batch_size)
+            })
             .await?;
 
             if batch.points.is_empty() {
@@ -379,10 +377,8 @@ impl Pipeline {
             {
                 info!("Starting graph migration phase...");
                 let graph_connector = crate::connectors::create_connector(&self.config.source)?;
-                let mut graph_phase = crate::pipeline_graph::GraphMigrationPhase::new(
-                    &self.config,
-                    graph_connector,
-                );
+                let mut graph_phase =
+                    crate::pipeline_graph::GraphMigrationPhase::new(&self.config, graph_connector);
                 graph_phase.connect().await?;
                 let graph_stats = graph_phase.run(db).await?;
                 graph_phase.close().await?;
@@ -559,8 +555,7 @@ mod tests {
             {"id": "2", "vector": [0.3, 0.4], "payload": {}},
             {"id": "3", "vector": [0.5, 0.6], "payload": {}}
         ]);
-        std::fs::write(&json_path, json_content.to_string())
-            .expect("test: write json");
+        std::fs::write(&json_path, json_content.to_string()).expect("test: write json");
 
         let config = MigrationConfig {
             source: SourceConfig::JsonFile(JsonFileConfig {
@@ -585,8 +580,7 @@ mod tests {
             relations: vec![],
         };
 
-        let mut pipeline = crate::Pipeline::new(config)
-            .expect("test: create pipeline");
+        let mut pipeline = crate::Pipeline::new(config).expect("test: create pipeline");
         let stats = pipeline.run().await.expect("test: run pipeline");
 
         assert_eq!(stats.extracted, 3, "Should extract 3 points");

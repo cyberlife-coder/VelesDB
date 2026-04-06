@@ -552,6 +552,7 @@ fn test_explain_output_struct() {
             nodes_visited: 50,
             edges_traversed: 25,
         }),
+        node_stats: vec![],
     };
 
     assert_eq!(output.actual_stats.as_ref().unwrap().actual_rows, 100);

@@ -56,6 +56,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | SHOW COLLECTIONS | Stable | 3.4 |
 | DESCRIBE COLLECTION | Stable | 3.4 |
 | EXPLAIN query plan | Stable | 3.4 |
+| EXPLAIN ANALYZE execution stats | Stable | 3.8 |
 | CREATE INDEX / DROP INDEX | Stable | 3.5 |
 | ANALYZE | Stable | 3.5 |
 | TRUNCATE | Stable | 3.5 |
@@ -1553,6 +1554,110 @@ Example enriched output:
    ├── Filter (PreFilter)
    └── Limit 10
 ```
+
+### EXPLAIN ANALYZE (v3.8+)
+
+Executes the query with lightweight instrumentation and returns both the
+estimated plan and actual execution statistics side-by-side. Unlike `EXPLAIN`
+(which only plans), `EXPLAIN ANALYZE` runs the query to collect real metrics.
+
+> **Caution:** EXPLAIN ANALYZE executes the query. Use with care on write
+> queries (INSERT, UPDATE, DELETE) as they will modify data.
+
+#### Syntax
+
+```sql
+EXPLAIN ANALYZE <query>
+```
+
+#### Return Fields
+
+The result includes the estimated plan (identical to `EXPLAIN`) plus:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `plan` | object | Estimated query plan (same as EXPLAIN) |
+| `actual_stats` | object | Top-level actual execution statistics |
+| `node_stats` | array | Per-plan-node actual statistics |
+
+**`actual_stats` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `actual_rows` | u64 | Number of rows returned by execution |
+| `actual_time_ms` | f64 | Wall-clock execution time in milliseconds |
+| `loops` | u64 | Number of execution iterations (always 1) |
+| `nodes_visited` | u64 | Graph nodes visited (0 for non-MATCH queries) |
+| `edges_traversed` | u64 | Graph edges traversed (0 for non-MATCH queries) |
+
+**`node_stats` entry fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `node_label` | string | Plan node type (e.g. "VectorSearch", "Filter") |
+| `actual_time_ms` | f64 | Estimated wall-clock time for this node |
+| `actual_rows_in` | u64 | Rows entering this node |
+| `actual_rows_out` | u64 | Rows leaving this node |
+| `loops` | u64 | Loop iterations for this node |
+
+#### Examples
+
+```sql
+-- Analyze a vector search query
+EXPLAIN ANALYZE SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+
+-- Analyze a filtered query
+EXPLAIN ANALYZE SELECT * FROM products WHERE category = 'tech' AND price > 50 LIMIT 20
+
+-- Analyze a graph traversal
+EXPLAIN ANALYZE MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10
+```
+
+#### CLI Usage
+
+The CLI REPL provides the `.explain-analyze` command:
+
+```
+velesdb> .explain-analyze SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+
+Query Plan:
+└─ VectorSearch
+   ├─ Collection: docs
+   ├─ ef_search: 100
+   └─ Candidates: 10
+
+Estimated cost: 0.050ms
+
+Actual Statistics:
+  Actual rows:      10
+  Actual time:      1.234ms
+  Loops:            1
+  Nodes visited:    0
+  Edges traversed:  0
+
+Per-Node Statistics:
+  VectorSearch:  1.173ms (rows: 10 → 10)
+  Limit:         0.012ms (rows: 10 → 10)
+```
+
+When the estimated cost diverges from actual time by more than 10×, a `⚠`
+warning marker is displayed to highlight potential cost model inaccuracies.
+
+#### HTTP API
+
+Send a POST to `/query/explain` with `"analyze": true` in the request body:
+
+```json
+{
+  "query": "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+  "params": { "v": [0.1, 0.2, 0.3] },
+  "analyze": true
+}
+```
+
+The response includes `actual_stats` and `node_stats` fields alongside the
+plan. When `analyze` is `false` or absent, the endpoint behaves identically
+to the existing EXPLAIN-only mode.
 
 ---
 
