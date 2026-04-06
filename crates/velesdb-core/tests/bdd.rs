@@ -9,6 +9,8 @@ mod advanced;
 mod agent_memory;
 #[path = "bdd/aggregation.rs"]
 mod aggregation;
+#[path = "bdd/array_contains.rs"]
+mod array_contains;
 #[path = "bdd/bugfixes.rs"]
 mod bugfixes;
 #[path = "bdd/collection_type_migration.rs"]
