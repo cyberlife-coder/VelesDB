@@ -117,6 +117,142 @@ impl Database {
         filter.matches(&serde_json::Value::Object(obj))
     }
 
+    /// Builds a `ColumnStore` from a collection, filtering points by pushed-down conditions.
+    ///
+    /// When `filters` is empty, behaves identically to `build_join_column_store`.
+    /// Each condition's field names are stripped of table prefixes (e.g., `inventory.price` → `price`)
+    /// before evaluation against point payloads.
+    pub(super) fn build_filtered_join_column_store(
+        collection: &crate::collection::Collection,
+        filters: &[crate::velesql::Condition],
+    ) -> Result<ColumnStore> {
+        if filters.is_empty() {
+            return Self::build_join_column_store(collection);
+        }
+
+        let combined = Self::combine_filter_conditions(filters);
+        let stripped = Self::strip_table_prefix_from_condition(combined);
+        let filter = crate::Filter::new(crate::Condition::from(stripped));
+
+        let ids = collection.all_ids();
+        let points: Vec<_> = collection.get(&ids).into_iter().flatten().collect();
+        let matching: Vec<_> = points
+            .iter()
+            .filter(|p| Self::point_matches_filter(p, &filter))
+            .collect();
+
+        Self::build_column_store_from_points(&matching)
+    }
+
+    /// Evaluates a filter against a point's payload with `id` injected.
+    fn point_matches_filter(point: &crate::Point, filter: &crate::Filter) -> bool {
+        let mut obj = point
+            .payload
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        obj.insert("id".to_string(), serde_json::json!(point.id));
+        filter.matches(&serde_json::Value::Object(obj))
+    }
+
+    /// Combines multiple `velesql::Condition`s into a single AND tree.
+    fn combine_filter_conditions(
+        filters: &[crate::velesql::Condition],
+    ) -> crate::velesql::Condition {
+        let mut iter = filters.iter().cloned();
+        let first = iter.next().expect("filters is non-empty");
+        iter.fold(first, |acc, c| {
+            crate::velesql::Condition::And(Box::new(acc), Box::new(c))
+        })
+    }
+
+    /// Strips table prefixes from all column references in a `velesql::Condition`.
+    ///
+    /// Converts qualified names like `inventory.price` to `price` so that
+    /// `Filter::matches` can evaluate them against unqualified payload keys.
+    fn strip_table_prefix_from_condition(
+        condition: crate::velesql::Condition,
+    ) -> crate::velesql::Condition {
+        use crate::velesql::Condition as C;
+        match condition {
+            C::Comparison(mut cmp) => {
+                cmp.column = Self::strip_prefix(&cmp.column);
+                C::Comparison(cmp)
+            }
+            C::In(mut inc) => {
+                inc.column = Self::strip_prefix(&inc.column);
+                C::In(inc)
+            }
+            C::Between(mut btw) => {
+                btw.column = Self::strip_prefix(&btw.column);
+                C::Between(btw)
+            }
+            C::Like(mut lk) => {
+                lk.column = Self::strip_prefix(&lk.column);
+                C::Like(lk)
+            }
+            C::IsNull(mut isn) => {
+                isn.column = Self::strip_prefix(&isn.column);
+                C::IsNull(isn)
+            }
+            C::Match(mut m) => {
+                m.column = Self::strip_prefix(&m.column);
+                C::Match(m)
+            }
+            C::Contains(mut cc) => {
+                cc.column = Self::strip_prefix(&cc.column);
+                C::Contains(cc)
+            }
+            C::GeoDistance(mut gd) => {
+                gd.column = Self::strip_prefix(&gd.column);
+                C::GeoDistance(gd)
+            }
+            C::GeoBbox(mut gb) => {
+                gb.column = Self::strip_prefix(&gb.column);
+                C::GeoBbox(gb)
+            }
+            C::And(l, r) => C::And(
+                Box::new(Self::strip_table_prefix_from_condition(*l)),
+                Box::new(Self::strip_table_prefix_from_condition(*r)),
+            ),
+            C::Or(l, r) => C::Or(
+                Box::new(Self::strip_table_prefix_from_condition(*l)),
+                Box::new(Self::strip_table_prefix_from_condition(*r)),
+            ),
+            C::Not(inner) => C::Not(Box::new(Self::strip_table_prefix_from_condition(*inner))),
+            C::Group(inner) => C::Group(Box::new(Self::strip_table_prefix_from_condition(*inner))),
+            // Engine-handled conditions pass through unchanged.
+            other => other,
+        }
+    }
+
+    /// Strips the `table.` prefix from a column name, if present.
+    fn strip_prefix(column: &str) -> String {
+        column
+            .split_once('.')
+            .map_or_else(|| column.to_string(), |(_, col)| col.to_string())
+    }
+
+    /// Builds a `ColumnStore` from a slice of point references.
+    fn build_column_store_from_points(points: &[&crate::Point]) -> Result<ColumnStore> {
+        let owned: Vec<crate::Point> = points.iter().copied().cloned().collect();
+        let schema = Self::infer_column_schema(&owned);
+        let schema_refs: Vec<(&str, crate::column_store::ColumnType)> = schema
+            .iter()
+            .map(|(name, ty)| (name.as_str(), ty.clone()))
+            .collect();
+
+        let mut store = ColumnStore::with_primary_key(&schema_refs, "id")
+            .map_err(|e| Error::ColumnStoreError(e.to_string()))?;
+
+        for point in &owned {
+            Self::insert_point_row(point, &schema_refs, &mut store)?;
+        }
+
+        Ok(store)
+    }
+
     pub(super) fn build_join_column_store(
         collection: &crate::collection::Collection,
     ) -> Result<ColumnStore> {

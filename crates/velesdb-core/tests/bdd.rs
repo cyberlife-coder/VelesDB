@@ -17,6 +17,8 @@ mod bugfixes;
 mod collection_type_migration;
 #[path = "bdd/cross_collection.rs"]
 mod cross_collection;
+#[path = "bdd/cross_collection_join_optimization.rs"]
+mod cross_collection_join_optimization;
 #[path = "bdd/ddl_lifecycle.rs"]
 mod ddl_lifecycle;
 #[path = "bdd/dml_enhanced.rs"]
