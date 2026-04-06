@@ -57,6 +57,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BDD tests** — 14 new BDD tests for `AnyCollection` dispatch, persistence round-trip,
   typed registry integrity, and edge cases.
 
+### Added (migrate)
+- **Graph migration stats surfaced** — `MigrationStats` now includes `edges_created`,
+  `edges_failed`, and `relations_processed` from the graph migration phase. The wizard
+  success output displays these fields when a graph phase ran.
+- **`GraphMigrationPhase::close()`** — explicit connector close method; called after
+  `run()` in the pipeline for proper resource cleanup.
+- **Empty-batch guard in graph extraction loop** — prevents infinite loop when a
+  cursor-based connector returns `has_more=true` with an empty batch.
+- **Milvus `usize::try_from()` cast** — consistent with ChromaDB, replaces `as usize`
+  truncating cast with an explicit `try_from().unwrap_or(usize::MAX)`.
+
 ### Fixed
 - **LET bindings in SELECT projection (Issue #473)** — LET binding values now injected into
   result payloads during post-processing. LET bindings take precedence over payload fields
