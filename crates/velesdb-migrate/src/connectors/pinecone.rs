@@ -48,6 +48,8 @@ impl PineconeConnector {
         if let Some(base) = &self.config.base_url {
             return base.clone();
         }
+        // Invariant: callers (get_schema, extract_batch) always guard with
+        // `self.host.is_some()` before calling this method; "localhost" is unreachable.
         let host = self.host.as_deref().unwrap_or("localhost");
         format!("https://{host}")
     }
@@ -102,7 +104,7 @@ impl PineconeConnector {
 /// Converts a Pinecone vector response into an `ExtractedPoint`.
 fn pinecone_vec_to_point(v: PineconeVector) -> ExtractedPoint {
     let sparse = v.sparse_values.and_then(|sv| {
-        if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+        if crate::connectors::common::is_valid_sparse_vector(&sv.indices, &sv.values) {
             Some(sv.indices.into_iter().zip(sv.values).collect())
         } else {
             None
@@ -301,6 +303,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(deprecated)]
     fn test_pinecone_connector_new() {
         let config = PineconeConfig {
             api_key: "test-key".to_string(),
@@ -416,7 +419,7 @@ mod tests {
         };
 
         let sparse = v.sparse_values.and_then(|sv| {
-            if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+            if crate::connectors::common::is_valid_sparse_vector(&sv.indices, &sv.values) {
                 Some(sv.indices.into_iter().zip(sv.values).collect::<Vec<_>>())
             } else {
                 None

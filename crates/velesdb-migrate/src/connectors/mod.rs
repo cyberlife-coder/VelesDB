@@ -10,7 +10,9 @@ pub mod mongodb;
 pub mod pgvector;
 pub mod pinecone;
 pub mod qdrant;
+#[cfg(feature = "redis-source")]
 pub mod redis;
+pub mod relation_detector;
 pub mod weaviate;
 
 use async_trait::async_trait;
@@ -148,9 +150,14 @@ pub fn create_connector(config: &crate::config::SourceConfig) -> Result<Box<dyn 
         crate::config::SourceConfig::Elasticsearch(cfg) => Ok(Box::new(
             elasticsearch::ElasticsearchConnector::new(cfg.clone()),
         )),
+        #[cfg(feature = "redis-source")]
         crate::config::SourceConfig::Redis(cfg) => {
             Ok(Box::new(redis::RedisConnector::new(cfg.clone())))
         }
+        #[cfg(not(feature = "redis-source"))]
+        crate::config::SourceConfig::Redis(_) => Err(crate::error::Error::UnsupportedSource(
+            "Redis source requires the 'redis-source' feature".to_string(),
+        ))
     }
 }
 

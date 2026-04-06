@@ -39,6 +39,10 @@ pub struct MongoDBConfig {
     /// Optional filter query (MongoDB query syntax as JSON).
     #[serde(default)]
     pub filter: Option<serde_json::Value>,
+    /// Data source name for the MongoDB Data API.
+    /// Defaults to "mongodb-atlas". Adjust if using a different cluster configuration.
+    #[serde(default = "default_mongo_data_source")]
+    pub data_source: String,
 }
 
 fn default_vector_field() -> String {
@@ -47,6 +51,10 @@ fn default_vector_field() -> String {
 
 fn default_id_field() -> String {
     "_id".to_string()
+}
+
+fn default_mongo_data_source() -> String {
+    "mongodb-atlas".to_string()
 }
 
 /// Request body for MongoDB Data API find operation.
@@ -93,7 +101,6 @@ pub struct MongoDBConnector {
     config: MongoDBConfig,
     client: Client,
     schema: Option<SourceSchema>,
-    data_source: String,
 }
 
 impl MongoDBConnector {
@@ -103,7 +110,6 @@ impl MongoDBConnector {
             config,
             client: create_http_client(),
             schema: None,
-            data_source: "mongodb-atlas".to_string(),
         }
     }
 
@@ -153,7 +159,7 @@ impl MongoDBConnector {
         pipeline.push(serde_json::json!({ "$count": "total" }));
 
         let request = AggregateRequest {
-            data_source: self.data_source.clone(),
+            data_source: self.config.data_source.clone(),
             database: self.config.database.clone(),
             collection: self.config.collection.clone(),
             pipeline,
@@ -219,7 +225,7 @@ impl SourceConnector for MongoDBConnector {
 
         // Fetch a sample document to detect schema
         let request = FindRequest {
-            data_source: self.data_source.clone(),
+            data_source: self.config.data_source.clone(),
             database: self.config.database.clone(),
             collection: self.config.collection.clone(),
             filter: self.config.filter.clone(),
@@ -272,7 +278,7 @@ impl SourceConnector for MongoDBConnector {
         let skip = offset.and_then(|v| v.as_u64()).unwrap_or(0);
 
         let request = FindRequest {
-            data_source: self.data_source.clone(),
+            data_source: self.config.data_source.clone(),
             database: self.config.database.clone(),
             collection: self.config.collection.clone(),
             filter: self.config.filter.clone(),

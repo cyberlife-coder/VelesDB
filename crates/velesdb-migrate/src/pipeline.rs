@@ -24,6 +24,12 @@ pub struct MigrationStats {
     pub batches: u64,
     /// Duration in seconds.
     pub duration_secs: f64,
+    /// Graph edges created (0 if no graph migration phase ran).
+    pub edges_created: u64,
+    /// Graph edges that failed to create.
+    pub edges_failed: u64,
+    /// FK relations processed during graph migration.
+    pub relations_processed: usize,
 }
 
 impl MigrationStats {
@@ -264,12 +270,16 @@ impl Pipeline {
         };
 
         let batch_size = self.config.options.batch_size;
+        let retry_config = crate::retry::RetryConfig::for_transient_errors();
 
         loop {
-            let batch = self
-                .connector
-                .extract_batch(offset.clone(), batch_size)
-                .await?;
+            let connector = &mut *self.connector;
+            let batch = crate::retry::with_retry(
+                &retry_config,
+                "extract_batch",
+                || connector.extract_batch(offset.clone(), batch_size),
+            )
+            .await?;
 
             if batch.points.is_empty() {
                 break;
@@ -281,6 +291,7 @@ impl Pipeline {
             let transformed = self.transformer.transform_batch(batch.points);
 
             if let Some(ref db) = db {
+                #[allow(deprecated)] // TODO(MIGRATE-01): migrate to get_vector_collection()
                 let collection = db
                     .get_vector_collection(&self.config.destination.collection)
                     .ok_or_else(|| {
@@ -347,7 +358,7 @@ impl Pipeline {
                     }
                 }
             } else {
-                stats.loaded += transformed.len() as u64;
+                // dry_run: nothing loaded, stats.loaded stays 0
             }
 
             progress.set_position(stats.loaded.min(total));
@@ -360,6 +371,26 @@ impl Pipeline {
         }
 
         progress.finish_with_message("Migration complete");
+
+        // Graph migration phase: migrate FK relations as graph edges.
+        if let Some(ref db) = db {
+            if self.config.destination.graph_collection.is_some()
+                && !self.config.relations.is_empty()
+            {
+                info!("Starting graph migration phase...");
+                let graph_connector = crate::connectors::create_connector(&self.config.source)?;
+                let mut graph_phase = crate::pipeline_graph::GraphMigrationPhase::new(
+                    &self.config,
+                    graph_connector,
+                );
+                graph_phase.connect().await?;
+                let graph_stats = graph_phase.run(db).await?;
+                graph_phase.close().await?;
+                stats.edges_created = graph_stats.edges_created;
+                stats.edges_failed = graph_stats.edges_failed;
+                stats.relations_processed = graph_stats.relations_processed;
+            }
+        }
 
         self.connector.close().await?;
 
@@ -487,6 +518,9 @@ mod tests {
             failed: 0,
             batches: 10,
             duration_secs: 2.0,
+            edges_created: 0,
+            edges_failed: 0,
+            relations_processed: 0,
         };
 
         assert!((stats.throughput() - 500.0).abs() < 0.001);
@@ -508,6 +542,57 @@ mod tests {
         assert_ne!(first, other);
     }
 
+    #[tokio::test]
+    async fn test_pipeline_dry_run_loaded_stays_zero() {
+        use crate::config::{
+            DestinationConfig, DistanceMetric, MigrationConfig, MigrationOptions, SourceConfig,
+            StorageMode,
+        };
+        use crate::connectors::json_file::JsonFileConfig;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("test: create tempdir");
+        let json_path = dir.path().join("test_data.json");
+        // 3 points with 2-dimensional vectors
+        let json_content = serde_json::json!([
+            {"id": "1", "vector": [0.1, 0.2], "payload": {}},
+            {"id": "2", "vector": [0.3, 0.4], "payload": {}},
+            {"id": "3", "vector": [0.5, 0.6], "payload": {}}
+        ]);
+        std::fs::write(&json_path, json_content.to_string())
+            .expect("test: write json");
+
+        let config = MigrationConfig {
+            source: SourceConfig::JsonFile(JsonFileConfig {
+                path: json_path,
+                array_path: String::new(),
+                id_field: "id".to_string(),
+                vector_field: "vector".to_string(),
+                payload_fields: vec![],
+            }),
+            destination: DestinationConfig {
+                path: dir.path().to_path_buf(),
+                collection: "dry_run_test".to_string(),
+                dimension: 2,
+                metric: DistanceMetric::Cosine,
+                storage_mode: StorageMode::Full,
+                graph_collection: None,
+            },
+            options: MigrationOptions {
+                dry_run: true,
+                ..MigrationOptions::default()
+            },
+            relations: vec![],
+        };
+
+        let mut pipeline = crate::Pipeline::new(config)
+            .expect("test: create pipeline");
+        let stats = pipeline.run().await.expect("test: run pipeline");
+
+        assert_eq!(stats.extracted, 3, "Should extract 3 points");
+        assert_eq!(stats.loaded, 0, "dry_run must not increment loaded");
+    }
+
     #[test]
     fn test_checkpoint_path_uses_explicit_path_when_present() {
         let config = MigrationConfig {
@@ -523,11 +608,13 @@ mod tests {
                 dimension: 3,
                 metric: crate::config::DistanceMetric::Cosine,
                 storage_mode: crate::config::StorageMode::Full,
+                graph_collection: None,
             },
             options: crate::config::MigrationOptions {
                 checkpoint_path: Some(std::path::PathBuf::from("./custom-checkpoint.json")),
                 ..crate::config::MigrationOptions::default()
             },
+            relations: vec![],
         };
 
         assert_eq!(

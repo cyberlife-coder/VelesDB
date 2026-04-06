@@ -40,6 +40,9 @@ reqwest = { version = "0.12", features = ["json", "native-tls"], default-feature
 # Database clients
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "json"], default-features = false, optional = true }
 
+# Native RESP client for Redis Stack / RediSearch
+redis = { version = "0.26", features = ["tokio-comp", "aio"], optional = true }
+
 # Config parsing
 serde_yaml = "0.9"
 
@@ -70,14 +73,15 @@ name = "migration_benchmark"
 harness = false
 
 [features]
-default = ["postgres", "velesdb-core/default"]
+default = ["postgres", "redis-source", "velesdb-core/default"]
 postgres = ["sqlx"]
-all-sources = ["postgres"]
+redis-source = ["dep:redis"]
+all-sources = ["postgres", "redis-source"]
 loom = ["velesdb-core/loom"]
 
 # sqlx is optional behind "postgres" feature flag — cargo-machete can't detect it
 [package.metadata.cargo-machete]
-ignored = ["sqlx"]
+ignored = ["sqlx", "redis"]
 
 [lints]
 workspace = true

@@ -69,6 +69,8 @@ pub mod error;
 #[allow(clippy::pedantic)]
 pub mod pipeline;
 #[allow(clippy::pedantic)]
+pub mod pipeline_graph;
+#[allow(clippy::pedantic)]
 pub(crate) mod pipeline_points;
 #[allow(clippy::pedantic)]
 pub mod retry;

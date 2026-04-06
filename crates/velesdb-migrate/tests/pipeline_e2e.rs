@@ -8,12 +8,12 @@ use tempfile::{NamedTempFile, TempDir};
 use velesdb_core::Database;
 use velesdb_migrate::config::{
     DestinationConfig, DistanceMetric, MigrationConfig, MigrationOptions, PineconeConfig,
-    QdrantConfig, SourceConfig, StorageMode,
+    QdrantConfig, SourceConfig, StorageMode, SupabaseConfig,
 };
 use velesdb_migrate::connectors::elasticsearch::ElasticsearchConfig;
 use velesdb_migrate::connectors::{csv_file::CsvFileConfig, json_file::JsonFileConfig};
 use velesdb_migrate::Pipeline;
-use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::matchers::{body_partial_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn write_json_source(file: &mut NamedTempFile, rows: &[serde_json::Value]) {
@@ -51,12 +51,14 @@ fn json_config(source_path: &Path, destination_path: &Path, collection: &str) ->
             dimension: 2,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 2,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     }
 }
 
@@ -77,12 +79,14 @@ fn csv_config(source_path: &Path, destination_path: &Path, collection: &str) -> 
             dimension: 2,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 2,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     }
 }
 
@@ -182,7 +186,7 @@ async fn test_pipeline_dry_run_does_not_create_collection() {
     let mut pipeline = Pipeline::new(config).expect("pipeline");
     let stats = pipeline.run().await.expect("dry run");
 
-    assert_eq!(stats.loaded, 1);
+    assert_eq!(stats.loaded, 0, "dry_run must not increment loaded");
     assert!(Database::open(destination.path())
         .expect("open database")
         .get_any_collection("dry_run_docs")
@@ -375,12 +379,14 @@ async fn test_pipeline_qdrant_sparse_vectors_e2e() {
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 10,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -439,7 +445,7 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
     Mock::given(method("POST"))
         .and(path("/collections/test_err/points/scroll"))
         .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
-        .expect(1) // proves no retry
+        .expect(4) // 1 initial + 3 retries (RetryConfig::for_transient_errors)
         .mount(&mock_server)
         .await;
 
@@ -458,12 +464,14 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 10,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -478,8 +486,8 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
 }
 
 /// Verify that an HTTP 429 on the Qdrant scroll endpoint fails the pipeline
-/// immediately. The connector does not implement `with_retry`; this test
-/// documents that behavior and ensures no accidental retry loop is introduced.
+/// after exhausting retries. The pipeline wraps `extract_batch` in
+/// `with_retry(RetryConfig::for_transient_errors())` (3 retries).
 #[tokio::test]
 async fn test_pipeline_qdrant_429_fails_pipeline() {
     let mock_server = MockServer::start().await;
@@ -510,7 +518,7 @@ async fn test_pipeline_qdrant_429_fails_pipeline() {
                 .insert_header("Retry-After", "1")
                 .set_body_string("Too Many Requests"),
         )
-        .expect(1) // proves no retry
+        .expect(4) // 1 initial + 3 retries (RetryConfig::for_transient_errors)
         .mount(&mock_server)
         .await;
 
@@ -529,12 +537,14 @@ async fn test_pipeline_qdrant_429_fails_pipeline() {
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 10,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -591,12 +601,14 @@ async fn test_pipeline_qdrant_schema_mismatch() {
             dimension: 3, // mismatch with source=5
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 10,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -707,12 +719,14 @@ async fn test_pipeline_pinecone_sparse_vectors_e2e() {
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 10,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -840,12 +854,14 @@ async fn test_pipeline_elasticsearch_e2e() {
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 2,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -951,12 +967,14 @@ async fn test_pipeline_qdrant_pagination_multi_page() {
             dimension: 2,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 2,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -1082,12 +1100,14 @@ async fn test_pipeline_pinecone_pagination_multi_page() {
             dimension: 2,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
+            graph_collection: None,
         },
         options: MigrationOptions {
             batch_size: 2,
             workers: 1,
             ..MigrationOptions::default()
         },
+        relations: vec![],
     };
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
@@ -1099,4 +1119,103 @@ async fn test_pipeline_pinecone_pagination_multi_page() {
 
     let collection = open_collection(destination.path(), "pinecone_pag_docs");
     assert_eq!(collection.len(), 4);
+}
+
+#[tokio::test]
+async fn test_pipeline_supabase_e2e() {
+    let mock_server = MockServer::start().await;
+    let destination = TempDir::new().expect("destination dir");
+
+    // Mock 1: HEAD — count via content-range (separate method, no conflict).
+    Mock::given(method("HEAD"))
+        .and(path("/rest/v1/documents"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("content-range", "0-1/2"),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // Mock 2: connect() — GET /rest/v1/documents?limit=0
+    Mock::given(method("GET"))
+        .and(path("/rest/v1/documents"))
+        .and(query_param("limit", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // Mock 3: get_schema() sample — GET with limit=1
+    Mock::given(method("GET"))
+        .and(path("/rest/v1/documents"))
+        .and(query_param("limit", "1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": "1",
+                    "embedding": [0.1, 0.2, 0.3],
+                    "title": "Sample Doc"
+                }
+            ])),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // Mock 4: extract_batch() — GET with offset=0
+    Mock::given(method("GET"))
+        .and(path("/rest/v1/documents"))
+        .and(query_param("offset", "0"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": "1",
+                    "embedding": [0.1, 0.2, 0.3],
+                    "title": "Doc 1"
+                },
+                {
+                    "id": "2",
+                    "embedding": [0.4, 0.5, 0.6],
+                    "title": "Doc 2"
+                }
+            ])),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let config = MigrationConfig {
+        source: SourceConfig::Supabase(SupabaseConfig {
+            url: mock_server.uri(),
+            api_key: "test_key".to_string(),
+            table: "documents".to_string(),
+            vector_column: "embedding".to_string(),
+            id_column: "id".to_string(),
+            payload_columns: vec![],
+        }),
+        destination: DestinationConfig {
+            path: destination.path().to_path_buf(),
+            collection: "supabase_docs".to_string(),
+            dimension: 3,
+            metric: DistanceMetric::Cosine,
+            storage_mode: StorageMode::Full,
+            graph_collection: None,
+        },
+        options: MigrationOptions {
+            batch_size: 10,
+            workers: 1,
+            ..MigrationOptions::default()
+        },
+        relations: vec![],
+    };
+
+    let mut pipeline = Pipeline::new(config).expect("pipeline");
+    let stats = pipeline.run().await.expect("pipeline run");
+
+    assert_eq!(stats.extracted, 2, "Should extract 2 rows from Supabase");
+    assert_eq!(stats.loaded, 2, "Should load 2 points into VelesDB");
+    assert_eq!(stats.failed, 0, "No failures expected");
+
+    let collection = open_collection(destination.path(), "supabase_docs");
+    assert_eq!(collection.len(), 2, "Collection should contain 2 points");
 }

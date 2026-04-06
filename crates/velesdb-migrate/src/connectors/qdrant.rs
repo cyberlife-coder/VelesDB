@@ -155,7 +155,7 @@ impl QdrantVector {
             Self::Named(map) => {
                 for value in map.values() {
                     if let QdrantNamedVectorValue::Sparse(sv) = value {
-                        if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+                        if crate::connectors::common::is_valid_sparse_vector(&sv.indices, &sv.values) {
                             return Some(
                                 sv.indices
                                     .iter()
@@ -197,6 +197,8 @@ impl SourceConnector for QdrantConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
+        crate::connectors::common::validate_url(&self.config.url)?;
+
         info!("Connecting to Qdrant at {}", self.config.url);
 
         let resp = self.request(reqwest::Method::GET, "").send().await?;
@@ -403,5 +405,20 @@ mod tests {
             serde_json::from_str(json).expect("valid JSON");
         let v2 = QdrantVector::Named(map2);
         assert!(v2.into_dense().is_empty());
+    }
+
+    #[test]
+    fn test_connect_rejects_file_url() {
+        let config = QdrantConfig {
+            url: "file:///etc/passwd".to_string(),
+            collection: "test".to_string(),
+            api_key: None,
+            payload_fields: vec![],
+        };
+        let connector = QdrantConnector::new(config);
+        // validate_url rejects file:// synchronously at connect time
+        assert!(
+            crate::connectors::common::validate_url(&connector.config.url).is_err()
+        );
     }
 }

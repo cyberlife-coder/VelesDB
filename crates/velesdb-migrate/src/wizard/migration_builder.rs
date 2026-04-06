@@ -33,6 +33,7 @@ pub(crate) fn build_migration_config(
         dimension: schema.dimension,
         metric: DistanceMetric::Cosine,
         storage_mode,
+        graph_collection: None,
     };
 
     let options = MigrationOptions {
@@ -49,5 +50,6 @@ pub(crate) fn build_migration_config(
         source,
         destination,
         options,
+        relations: vec![],
     })
 }

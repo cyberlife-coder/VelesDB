@@ -30,6 +30,7 @@ pub(crate) fn build_qdrant(params: &SourceParams<'_>) -> SourceConfig {
     })
 }
 
+#[allow(deprecated)]
 pub(crate) fn build_pinecone(params: &SourceParams<'_>) -> Result<SourceConfig> {
     let api_key = require_api_key(params, "Pinecone")?;
     Ok(SourceConfig::Pinecone(crate::config::PineconeConfig {
@@ -123,6 +124,7 @@ pub(crate) fn build_mongodb(params: &SourceParams<'_>) -> Result<SourceConfig> {
             id_field: "_id".to_string(),
             payload_fields: vec![],
             filter: None,
+            data_source: "mongodb-atlas".to_string(),
         },
     ))
 }
@@ -142,7 +144,7 @@ pub(crate) fn build_elasticsearch(params: &SourceParams<'_>) -> SourceConfig {
 }
 
 pub(crate) fn build_redis(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::Redis(crate::connectors::redis::RedisConfig {
+    SourceConfig::Redis(crate::config::RedisConfig {
         url: params.url.to_string(),
         password: params.api_key.map(String::from),
         index: params.collection.to_string(),
