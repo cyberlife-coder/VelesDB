@@ -297,3 +297,77 @@ fn filter_geo_bbox_bitmap_matches_vec() {
     let bitmap_vec: Vec<usize> = bitmap_result.iter().map(|i| i as usize).collect();
     assert_eq!(vec_result, bitmap_vec);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IN bitmap filters (Issue #512 — Task 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_filter_in_string_bitmap_nominal() {
+    let store = store_with_rows(9, &["a", "b", "c"]);
+    let bitmap = store.filter_in_string_bitmap("name", &["a", "c"]);
+    // a=0,3,6  c=2,5,8
+    let ids: Vec<u32> = bitmap.iter().collect();
+    assert_eq!(ids, vec![0, 2, 3, 5, 6, 8]);
+}
+
+#[test]
+fn test_filter_in_string_bitmap_missing_column() {
+    let store = store_with_rows(5, &["a"]);
+    let bitmap = store.filter_in_string_bitmap("nonexistent", &["a"]);
+    assert!(bitmap.is_empty());
+}
+
+#[test]
+fn test_filter_in_string_bitmap_excludes_deleted() {
+    let mut store = store_with_rows(6, &["a", "b"]);
+    // Rows: 0=a, 1=b, 2=a, 3=b, 4=a, 5=b
+    // Delete rows 0 and 4 (both "a")
+    store.deleted_rows.insert(0);
+    store.deletion_bitmap.insert(0);
+    store.deleted_rows.insert(4);
+    store.deletion_bitmap.insert(4);
+
+    let bitmap = store.filter_in_string_bitmap("name", &["a"]);
+    // Only row 2 should remain (row 0 and 4 deleted)
+    let ids: Vec<u32> = bitmap.iter().collect();
+    assert_eq!(ids, vec![2]);
+}
+
+#[test]
+fn test_filter_in_string_bitmap_no_matches() {
+    let store = store_with_rows(4, &["a"]);
+    let bitmap = store.filter_in_string_bitmap("name", &["z", "q"]);
+    assert!(bitmap.is_empty());
+}
+
+#[test]
+fn test_filter_in_int_bitmap_nominal() {
+    let store = store_with_rows(10, &["a"]);
+    // age column: 0,1,2,...,9
+    let bitmap = store.filter_in_int_bitmap("age", &[2, 5, 7]);
+    let ids: Vec<u32> = bitmap.iter().collect();
+    assert_eq!(ids, vec![2, 5, 7]);
+}
+
+#[test]
+fn test_filter_in_int_bitmap_type_mismatch() {
+    let store = store_with_rows(5, &["a"]);
+    // "name" is a String column, not Int
+    let bitmap = store.filter_in_int_bitmap("name", &[1, 2]);
+    assert!(bitmap.is_empty());
+}
+
+#[test]
+fn test_filter_in_int_bitmap_excludes_deleted() {
+    let mut store = store_with_rows(6, &["a"]);
+    // age column: 0,1,2,3,4,5
+    // Delete row 2
+    store.deleted_rows.insert(2);
+    store.deletion_bitmap.insert(2);
+
+    let bitmap = store.filter_in_int_bitmap("age", &[1, 2, 3]);
+    // Row 2 deleted, so only rows 1 and 3
+    let ids: Vec<u32> = bitmap.iter().collect();
+    assert_eq!(ids, vec![1, 3]);
+}

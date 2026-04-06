@@ -1,8 +1,10 @@
 //! Tests for `explain` module
 
+use std::collections::HashSet;
+
 use super::ast::{
-    CompareOp, Comparison, Condition, SelectColumns, SelectStatement, Value, VectorExpr,
-    VectorSearch as VsCondition,
+    CompareOp, Comparison, Condition, InCondition, SelectColumns, SelectStatement, Value,
+    VectorExpr, VectorSearch as VsCondition,
 };
 use super::explain::*;
 
@@ -990,5 +992,122 @@ fn test_empty_with_options_skipped_in_json() {
     assert!(
         !json.contains("\"fusion_info\""),
         "None fusion_info should be skipped: {json}"
+    );
+}
+
+// ── EXPLAIN IN plan visibility tests (Task 7) ──────────────────────────
+
+#[test]
+fn test_explain_in_indexed_shows_prefilter() {
+    // Arrange: IN on an indexed field should produce IndexLookup + PreFilter
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: Some(Condition::In(InCondition {
+            column: "category".to_string(),
+            values: vec![
+                Value::String("tech".to_string()),
+                Value::String("science".to_string()),
+            ],
+            negated: false,
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let mut indexed_fields = HashSet::new();
+    indexed_fields.insert("category".to_string());
+    let plan = QueryPlan::from_select_with_indexed_fields(&stmt, &indexed_fields);
+
+    // Assert: should use PropertyIndex and show IndexLookup node
+    assert_eq!(plan.index_used, Some(IndexType::Property));
+    assert!(
+        matches!(plan.root, PlanNode::Sequence(ref nodes) if nodes.iter().any(|n| matches!(n, PlanNode::IndexLookup(_)))),
+        "Expected IndexLookup node in plan, got: {:?}",
+        plan.root
+    );
+}
+
+#[test]
+fn test_explain_in_unindexed_shows_postfilter() {
+    // Arrange: IN on a non-indexed field should produce TableScan + PostFilter
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: Some(Condition::In(InCondition {
+            column: "category".to_string(),
+            values: vec![
+                Value::String("tech".to_string()),
+                Value::String("science".to_string()),
+            ],
+            negated: false,
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    // No indexed fields → should fall back to TableScan
+    let plan = QueryPlan::from_select_with_indexed_fields(&stmt, &HashSet::new());
+
+    assert_eq!(plan.index_used, None);
+    assert_eq!(plan.filter_strategy, FilterStrategy::PostFilter);
+    assert!(
+        matches!(plan.root, PlanNode::Sequence(ref nodes) if nodes.iter().any(|n| matches!(n, PlanNode::TableScan(_)))),
+        "Expected TableScan node in plan, got: {:?}",
+        plan.root
+    );
+}
+
+#[test]
+fn test_explain_not_in_indexed_shows_prefilter() {
+    // Arrange: NOT IN on an indexed field should also produce IndexLookup
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: Some(Condition::In(InCondition {
+            column: "category".to_string(),
+            values: vec![
+                Value::String("draft".to_string()),
+                Value::String("deleted".to_string()),
+            ],
+            negated: true,
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let mut indexed_fields = HashSet::new();
+    indexed_fields.insert("category".to_string());
+    let plan = QueryPlan::from_select_with_indexed_fields(&stmt, &indexed_fields);
+
+    assert_eq!(plan.index_used, Some(IndexType::Property));
+    assert!(
+        matches!(plan.root, PlanNode::Sequence(ref nodes) if nodes.iter().any(|n| matches!(n, PlanNode::IndexLookup(_)))),
+        "Expected IndexLookup node for NOT IN on indexed field, got: {:?}",
+        plan.root
     );
 }
