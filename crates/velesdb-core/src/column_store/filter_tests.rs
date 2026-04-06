@@ -171,3 +171,129 @@ fn bitmap_or_combinator() {
     assert!(combined.contains(1));
     assert!(combined.contains(9));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GeoPoint filter tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::column_store::filter::{CompareOp, GeoBboxParams, GeoDistanceParams};
+
+/// Helper: creates a column store with a GeoPoint column and pushes test rows.
+fn geo_store() -> ColumnStore {
+    let mut store = ColumnStore::with_schema(&[("location", ColumnType::GeoPoint)]);
+    // Paris
+    store.push_row(&[("location", ColumnValue::GeoPoint(48.8566, 2.3522))]);
+    // London
+    store.push_row(&[("location", ColumnValue::GeoPoint(51.5074, -0.1278))]);
+    // NYC
+    store.push_row(&[("location", ColumnValue::GeoPoint(40.7128, -74.0060))]);
+    // Null
+    store.push_row(&[("location", ColumnValue::Null)]);
+    store
+}
+
+#[test]
+fn filter_geo_distance_finds_nearby_points() {
+    let store = geo_store();
+    let params = GeoDistanceParams {
+        column: "location",
+        lat: 48.8566,
+        lng: 2.3522,
+        operator: CompareOp::Lt,
+        threshold: 500_000.0, // 500 km
+    };
+    let result = store.filter_geo_distance(&params);
+    // Paris (0) is 0m away, London (1) is ~343km away — both within 500km
+    assert!(result.contains(&0));
+    assert!(result.contains(&1));
+    // NYC (2) is too far, null (3) excluded
+    assert!(!result.contains(&2));
+    assert!(!result.contains(&3));
+}
+
+#[test]
+fn filter_geo_distance_nonexistent_column_returns_empty() {
+    let store = geo_store();
+    let params = GeoDistanceParams {
+        column: "nonexistent",
+        lat: 0.0,
+        lng: 0.0,
+        operator: CompareOp::Lt,
+        threshold: 1_000_000.0,
+    };
+    assert!(store.filter_geo_distance(&params).is_empty());
+}
+
+#[test]
+fn filter_geo_distance_non_geopoint_column_returns_empty() {
+    let store = store_with_rows(5, &["a"]);
+    let params = GeoDistanceParams {
+        column: "age",
+        lat: 0.0,
+        lng: 0.0,
+        operator: CompareOp::Lt,
+        threshold: 1_000_000.0,
+    };
+    assert!(store.filter_geo_distance(&params).is_empty());
+}
+
+#[test]
+fn filter_geo_bbox_finds_points_in_box() {
+    let store = geo_store();
+    let params = GeoBboxParams {
+        column: "location",
+        lat_min: 48.0,
+        lng_min: 2.0,
+        lat_max: 49.0,
+        lng_max: 3.0,
+    };
+    let result = store.filter_geo_bbox(&params);
+    assert!(result.contains(&0)); // Paris
+    assert!(!result.contains(&1)); // London outside
+    assert!(!result.contains(&3)); // Null excluded
+}
+
+#[test]
+fn filter_geo_bbox_inverted_returns_empty() {
+    let store = geo_store();
+    let params = GeoBboxParams {
+        column: "location",
+        lat_min: 49.0,
+        lng_min: 3.0,
+        lat_max: 48.0,
+        lng_max: 2.0,
+    };
+    assert!(store.filter_geo_bbox(&params).is_empty());
+}
+
+#[test]
+fn filter_geo_distance_bitmap_matches_vec() {
+    let store = geo_store();
+    let params = GeoDistanceParams {
+        column: "location",
+        lat: 48.8566,
+        lng: 2.3522,
+        operator: CompareOp::Lt,
+        threshold: 500_000.0,
+    };
+    let vec_result = store.filter_geo_distance(&params);
+    let bitmap_result = store.filter_geo_distance_bitmap(&params);
+    let bitmap_vec: Vec<usize> = bitmap_result.iter().map(|i| i as usize).collect();
+    assert_eq!(vec_result, bitmap_vec);
+}
+
+#[test]
+fn filter_geo_bbox_bitmap_matches_vec() {
+    let store = geo_store();
+    let params = GeoBboxParams {
+        column: "location",
+        lat_min: 40.0,
+        lng_min: -75.0,
+        lat_max: 52.0,
+        lng_max: 3.0,
+    };
+    let vec_result = store.filter_geo_bbox(&params);
+    let bitmap_result = store.filter_geo_bbox_bitmap(&params);
+    let bitmap_vec: Vec<usize> = bitmap_result.iter().map(|i| i as usize).collect();
+    assert_eq!(vec_result, bitmap_vec);
+}

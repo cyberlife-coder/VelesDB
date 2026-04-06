@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CONTAINS value`, `CONTAINS ANY (v1, v2)`, `CONTAINS ALL (v1, v2)`. Bitmap-native filters
   (`filter_contains_bitmap`, `filter_contains_any_bitmap`, `filter_contains_all_bitmap`).
   SmallVec<8> storage for zero heap allocation on small arrays. 30 BDD + 22 unit tests.
+- **GeoPoint Column Type with GEO_DISTANCE and GEO_BBOX filters (Issue #514)** —
+  `ColumnType::GeoPoint` storing `(lat, lng)` coordinate pairs. Haversine-based
+  `GEO_DISTANCE(column, lat, lng) <op> meters` for proximity queries and
+  `GEO_BBOX(column, lat_min, lng_min, lat_max, lng_max)` for bounding-box containment.
+  Bitmap-native filter variants. Coordinate validation at insertion time.
+  Full VelesQL grammar, parser, AST, filter conversion, and payload matching integration.
+  12 BDD + 22 unit tests.
 - **Parent-document retrieval GROUP BY MAX_SIM (Issue #511)** — Vector-search-aware GROUP BY
   for chunked document collections. Groups search results by a parent field with score
   aggregation: `MAX(score)` (ColBERT-style MaxSim), `AVG(score)` (mean similarity), and

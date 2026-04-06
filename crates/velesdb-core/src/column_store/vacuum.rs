@@ -177,6 +177,10 @@ impl ColumnStore {
                     bytes,
                 )
             }
+            TypedColumn::GeoPoint(data) => {
+                let (new_data, bytes) = compact_vec(data, deleted, 16);
+                (TypedColumn::GeoPoint(new_data), bytes)
+            }
         }
     }
 

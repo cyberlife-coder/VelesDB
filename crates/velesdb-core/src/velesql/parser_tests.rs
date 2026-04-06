@@ -817,3 +817,91 @@ fn test_parse_quoted_identifier_column_alias() {
         _ => panic!("Expected columns"),
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GEO_DISTANCE / GEO_BBOX parser tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_parse_geo_distance_float_coords() {
+    let query =
+        Parser::parse("SELECT * FROM places WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500;")
+            .expect("parse GEO_DISTANCE");
+    let cond = query.select.where_clause.expect("WHERE clause");
+    if let Condition::GeoDistance(gd) = cond {
+        assert_eq!(gd.column, "location");
+        assert!((gd.lat - 48.8566).abs() < 1e-4);
+        assert!((gd.lng - 2.3522).abs() < 1e-4);
+        assert_eq!(gd.operator, CompareOp::Lt);
+        assert!((gd.threshold - 500.0).abs() < 1e-4);
+    } else {
+        panic!("Expected GeoDistance, got {cond:?}");
+    }
+}
+
+#[test]
+fn test_parse_geo_distance_integer_coords() {
+    let query = Parser::parse("SELECT * FROM places WHERE GEO_DISTANCE(location, 48, 2) < 500;")
+        .expect("parse GEO_DISTANCE with integers");
+    let cond = query.select.where_clause.expect("WHERE clause");
+    if let Condition::GeoDistance(gd) = cond {
+        assert_eq!(gd.column, "location");
+        assert!((gd.lat - 48.0).abs() < 1e-4);
+        assert!((gd.lng - 2.0).abs() < 1e-4);
+    } else {
+        panic!("Expected GeoDistance, got {cond:?}");
+    }
+}
+
+#[test]
+fn test_parse_geo_bbox() {
+    let query =
+        Parser::parse("SELECT * FROM places WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4);")
+            .expect("parse GEO_BBOX");
+    let cond = query.select.where_clause.expect("WHERE clause");
+    if let Condition::GeoBbox(gb) = cond {
+        assert_eq!(gb.column, "location");
+        assert!((gb.lat_min - 48.8).abs() < 1e-4);
+        assert!((gb.lng_min - 2.3).abs() < 1e-4);
+        assert!((gb.lat_max - 48.9).abs() < 1e-4);
+        assert!((gb.lng_max - 2.4).abs() < 1e-4);
+    } else {
+        panic!("Expected GeoBbox, got {cond:?}");
+    }
+}
+
+#[test]
+fn test_parse_geo_distance_combined_with_and() {
+    let query = Parser::parse(
+        "SELECT * FROM places WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500 AND category = 'hotel';",
+    )
+    .expect("parse GEO_DISTANCE AND comparison");
+    let cond = query.select.where_clause.expect("WHERE clause");
+    assert!(matches!(cond, Condition::And(_, _)));
+}
+
+#[test]
+fn test_parse_geo_distance_gte_operator() {
+    let query = Parser::parse(
+        "SELECT * FROM places WHERE GEO_DISTANCE(location, 48.8566, 2.3522) >= 1000;",
+    )
+    .expect("parse GEO_DISTANCE >=");
+    let cond = query.select.where_clause.expect("WHERE clause");
+    if let Condition::GeoDistance(gd) = cond {
+        assert_eq!(gd.operator, CompareOp::Gte);
+    } else {
+        panic!("Expected GeoDistance, got {cond:?}");
+    }
+}
+
+#[test]
+fn test_parse_has_vector_search_false_for_geo() {
+    let query =
+        Parser::parse("SELECT * FROM places WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500;")
+            .expect("parse GEO_DISTANCE");
+    let cond = query.select.where_clause.as_ref().expect("WHERE clause");
+    assert!(
+        !cond.has_vector_search(),
+        "GeoDistance should not be vector search"
+    );
+}

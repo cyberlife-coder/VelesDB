@@ -54,6 +54,8 @@ pub enum ColumnType {
     Bool,
     /// Array of scalar values (single-level nesting only).
     Array(Box<ColumnType>),
+    /// Geographic coordinate pair (latitude, longitude).
+    GeoPoint,
 }
 
 /// A value that can be stored in a column.
@@ -71,6 +73,8 @@ pub enum ColumnValue {
     Null,
     /// Array of scalar values.
     Array(Vec<ColumnValue>),
+    /// Geographic coordinate pair (latitude, longitude).
+    GeoPoint(f64, f64),
 }
 
 impl PartialEq for ColumnValue {
@@ -82,6 +86,9 @@ impl PartialEq for ColumnValue {
             (Self::Bool(a), Self::Bool(b)) => a == b,
             (Self::Null, Self::Null) => true,
             (Self::Array(a), Self::Array(b)) => a == b,
+            (Self::GeoPoint(lat1, lng1), Self::GeoPoint(lat2, lng2)) => {
+                lat1.to_bits() == lat2.to_bits() && lng1.to_bits() == lng2.to_bits()
+            }
             _ => false,
         }
     }
@@ -107,6 +114,8 @@ pub enum TypedColumn {
         /// Per-row array data (None = null row).
         data: Vec<Option<SmallVec<[ColumnValue; 8]>>>,
     },
+    /// Geographic point column: each row is an optional `(lat, lng)` pair.
+    GeoPoint(Vec<Option<(f64, f64)>>),
 }
 
 impl TypedColumn {
@@ -143,6 +152,12 @@ impl TypedColumn {
         }
     }
 
+    /// Creates a new geographic point column with the given capacity.
+    #[must_use]
+    pub fn new_geopoint(capacity: usize) -> Self {
+        Self::GeoPoint(Vec::with_capacity(capacity))
+    }
+
     /// Returns the number of values in the column.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -152,6 +167,7 @@ impl TypedColumn {
             Self::String(v) => v.len(),
             Self::Bool(v) => v.len(),
             Self::Array { data, .. } => data.len(),
+            Self::GeoPoint(v) => v.len(),
         }
     }
 
@@ -169,6 +185,7 @@ impl TypedColumn {
             Self::String(v) => v.push(None),
             Self::Bool(v) => v.push(None),
             Self::Array { data, .. } => data.push(None),
+            Self::GeoPoint(v) => v.push(None),
         }
     }
 
@@ -184,6 +201,11 @@ impl TypedColumn {
             (Self::Bool(col), ColumnValue::Bool(v)) => col.push(Some(*v)),
             (Self::Array { data, .. }, ColumnValue::Array(arr)) => {
                 data.push(Some(SmallVec::from_vec(arr.clone())));
+            }
+            (Self::GeoPoint(col), ColumnValue::GeoPoint(lat, lng)) => {
+                // Coordinate validation happens at insert_row level;
+                // push_typed is unchecked and stores as-is.
+                col.push(Some((*lat, *lng)));
             }
             (col, ColumnValue::Null | _) => col.push_null(),
         }
@@ -206,6 +228,9 @@ impl TypedColumn {
             Self::Bool(v) => v
                 .get(row_idx)
                 .and_then(|opt| opt.map(|v| serde_json::json!(v))),
+            Self::GeoPoint(v) => v
+                .get(row_idx)
+                .and_then(|opt| opt.map(|(lat, lng)| serde_json::json!({"lat": lat, "lng": lng}))),
             Self::String(_) | Self::Array { .. } => None,
         }
     }

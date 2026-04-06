@@ -25,8 +25,9 @@ pub use aggregation::{
 };
 pub use condition::{
     BetweenCondition, CompareOp, Comparison, Condition, ContainsCondition, ContainsMode,
-    GraphMatchPredicate, InCondition, IsNullCondition, LikeCondition, MatchCondition,
-    SimilarityCondition, SparseVectorExpr, SparseVectorSearch, VectorFusedSearch, VectorSearch,
+    GeoBboxCondition, GeoDistanceCondition, GraphMatchPredicate, InCondition, IsNullCondition,
+    LikeCondition, MatchCondition, SimilarityCondition, SparseVectorExpr, SparseVectorSearch,
+    VectorFusedSearch, VectorSearch,
 };
 pub use ddl::{
     AlterCollectionStatement, AnalyzeStatement, CreateCollectionKind, CreateCollectionStatement,

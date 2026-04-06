@@ -65,6 +65,41 @@ impl Condition {
                     _ => false,
                 })
             }
+            Self::GeoDistance {
+                field,
+                lat,
+                lng,
+                operator,
+                threshold,
+            } => get_field(payload, field).is_some_and(|v| {
+                let point_lat = v.get("lat").and_then(Value::as_f64);
+                let point_lng = v.get("lng").and_then(Value::as_f64);
+                match (point_lat, point_lng) {
+                    (Some(plat), Some(plng)) => {
+                        let dist = crate::column_store::haversine::haversine_distance(
+                            plat, plng, *lat, *lng,
+                        );
+                        compare_geo_distance(dist, *threshold, *operator)
+                    }
+                    _ => false,
+                }
+            }),
+            Self::GeoBbox {
+                field,
+                lat_min,
+                lng_min,
+                lat_max,
+                lng_max,
+            } => get_field(payload, field).is_some_and(|v| {
+                let point_lat = v.get("lat").and_then(Value::as_f64);
+                let point_lng = v.get("lng").and_then(Value::as_f64);
+                match (point_lat, point_lng) {
+                    (Some(plat), Some(plng)) => {
+                        plat >= *lat_min && plat <= *lat_max && plng >= *lng_min && plng <= *lng_max
+                    }
+                    _ => false,
+                }
+            }),
         }
     }
 }
@@ -206,4 +241,17 @@ fn like_match_impl(text: &[u8], pattern: &[u8]) -> bool {
     }
 
     prev[n]
+}
+
+/// Applies a comparison operator to a geo-distance value and threshold.
+fn compare_geo_distance(dist: f64, threshold: f64, op: crate::velesql::CompareOp) -> bool {
+    use crate::velesql::CompareOp;
+    match op {
+        CompareOp::Eq => (dist - threshold).abs() < f64::EPSILON,
+        CompareOp::NotEq => (dist - threshold).abs() >= f64::EPSILON,
+        CompareOp::Gt => dist > threshold,
+        CompareOp::Gte => dist >= threshold,
+        CompareOp::Lt => dist < threshold,
+        CompareOp::Lte => dist <= threshold,
+    }
 }

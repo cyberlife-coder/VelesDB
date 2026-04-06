@@ -23,6 +23,8 @@ mod ddl_lifecycle;
 mod dml_enhanced;
 #[path = "bdd/flush_operations.rs"]
 mod flush_operations;
+#[path = "bdd/geo_distance.rs"]
+mod geo_distance;
 #[path = "bdd/graph_queries.rs"]
 mod graph_queries;
 #[path = "bdd/helpers.rs"]

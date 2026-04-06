@@ -189,4 +189,30 @@ pub enum Condition {
         /// Values that must all be present in the array
         values: Vec<Value>,
     },
+    /// Geospatial distance filter: Haversine distance comparison.
+    GeoDistance {
+        /// Field name containing GeoPoint data
+        field: String,
+        /// Reference latitude in degrees
+        lat: f64,
+        /// Reference longitude in degrees
+        lng: f64,
+        /// Comparison operator
+        operator: crate::velesql::CompareOp,
+        /// Distance threshold in meters
+        threshold: f64,
+    },
+    /// Geospatial bounding box filter: coordinate containment check.
+    GeoBbox {
+        /// Field name containing GeoPoint data
+        field: String,
+        /// Minimum latitude
+        lat_min: f64,
+        /// Minimum longitude
+        lng_min: f64,
+        /// Maximum latitude
+        lat_max: f64,
+        /// Maximum longitude
+        lng_max: f64,
+    },
 }
