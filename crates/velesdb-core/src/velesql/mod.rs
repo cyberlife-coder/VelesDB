@@ -166,6 +166,8 @@ pub use ast::{
     CompoundQuery,
     Condition,
     // Values (used by cli, wasm)
+    ContainsCondition,
+    ContainsMode,
     CorrelatedColumn,
     CreateCollectionKind,
     CreateCollectionStatement,

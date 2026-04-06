@@ -168,4 +168,25 @@ pub enum Condition {
         /// Pattern with SQL wildcards
         pattern: String,
     },
+    /// Check if an array field contains a specific value.
+    ArrayContains {
+        /// Field name
+        field: String,
+        /// Value to search for in the array
+        value: Value,
+    },
+    /// Check if an array field contains at least one of the values.
+    ArrayContainsAny {
+        /// Field name
+        field: String,
+        /// Values to search for (at least one must match)
+        values: Vec<Value>,
+    },
+    /// Check if an array field contains all of the values.
+    ArrayContainsAll {
+        /// Field name
+        field: String,
+        /// Values that must all be present in the array
+        values: Vec<Value>,
+    },
 }

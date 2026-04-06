@@ -167,6 +167,8 @@ fn get_condition_source(
             classify_column(&m.column, graph_vars, join_tables)
         }
 
+        Condition::Contains(cc) => classify_column(&cc.column, graph_vars, join_tables),
+
         // Graph pattern predicates and vector conditions are classified as Graph
         // because VelesDB stores embeddings in the collection/graph layer.
         Condition::GraphMatch(_)

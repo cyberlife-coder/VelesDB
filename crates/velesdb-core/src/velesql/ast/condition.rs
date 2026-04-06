@@ -35,6 +35,8 @@ pub enum Condition {
     Match(MatchCondition),
     /// Graph match predicate inside WHERE: `MATCH (a)-[:REL]->(b)`
     GraphMatch(GraphMatchPredicate),
+    /// Array containment: `column CONTAINS value` / `CONTAINS ANY` / `CONTAINS ALL`
+    Contains(ContainsCondition),
     /// Logical AND
     And(Box<Condition>, Box<Condition>),
     /// Logical OR
@@ -180,6 +182,28 @@ pub struct MatchCondition {
     pub query: String,
 }
 
+/// Containment mode for array CONTAINS operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ContainsMode {
+    /// Single value: `column CONTAINS value`
+    Single,
+    /// At least one: `column CONTAINS ANY (v1, v2, ...)`
+    Any,
+    /// All values: `column CONTAINS ALL (v1, v2, ...)`
+    All,
+}
+
+/// CONTAINS condition for array columns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContainsCondition {
+    /// Column name.
+    pub column: String,
+    /// Containment mode.
+    pub mode: ContainsMode,
+    /// Values to check for containment.
+    pub values: Vec<Value>,
+}
+
 impl Condition {
     /// Returns `true` if this condition (or any nested sub-condition) contains
     /// a vector search (`NEAR`, `NEAR_FUSED`, or `SPARSE_NEAR`).
@@ -191,7 +215,15 @@ impl Condition {
             }
             Self::And(l, r) | Self::Or(l, r) => l.has_vector_search() || r.has_vector_search(),
             Self::Group(inner) | Self::Not(inner) => inner.has_vector_search(),
-            _ => false,
+            Self::Contains(_)
+            | Self::Comparison(_)
+            | Self::In(_)
+            | Self::Between(_)
+            | Self::Like(_)
+            | Self::IsNull(_)
+            | Self::Match(_)
+            | Self::GraphMatch(_)
+            | Self::Similarity(_) => false,
         }
     }
 }

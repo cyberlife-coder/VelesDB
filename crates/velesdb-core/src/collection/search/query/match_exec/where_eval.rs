@@ -166,7 +166,8 @@ impl Collection {
             | Condition::Between(_)
             | Condition::Like(_)
             | Condition::IsNull(_)
-            | Condition::Match(_) => Self::evaluate_metadata_condition_for_node(
+            | Condition::Match(_)
+            | Condition::Contains(_) => Self::evaluate_metadata_condition_for_node(
                 node_id,
                 bindings,
                 condition,

@@ -43,6 +43,28 @@ impl Condition {
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, false))),
             Self::ILike { field, pattern } => get_field(payload, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, true))),
+            Self::ArrayContains { field, value } => {
+                get_field(payload, field).is_some_and(|v| match v {
+                    Value::Array(arr) => arr.iter().any(|e| values_equal(e, value)),
+                    _ => false,
+                })
+            }
+            Self::ArrayContainsAny { field, values } => {
+                get_field(payload, field).is_some_and(|v| match v {
+                    Value::Array(arr) => values
+                        .iter()
+                        .any(|val| arr.iter().any(|e| values_equal(e, val))),
+                    _ => false,
+                })
+            }
+            Self::ArrayContainsAll { field, values } => {
+                get_field(payload, field).is_some_and(|v| match v {
+                    Value::Array(arr) => values
+                        .iter()
+                        .all(|val| arr.iter().any(|e| values_equal(e, val))),
+                    _ => false,
+                })
+            }
         }
     }
 }

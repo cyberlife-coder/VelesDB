@@ -334,6 +334,7 @@ primary_expr = {
     between_expr |
     like_expr |
     is_null_expr |
+    contains_expr |
     compare_expr
 }
 
@@ -397,6 +398,13 @@ between_expr = { where_column ~ ^"BETWEEN" ~ value ~ ^"AND" ~ value }
 // LIKE / ILIKE expression: column LIKE 'pattern' or column ILIKE 'pattern'
 like_expr = { where_column ~ like_op ~ string }
 like_op = { ^"ILIKE" | ^"LIKE" }
+
+// CONTAINS expression: column CONTAINS value | column CONTAINS ANY/ALL (values)
+contains_expr = {
+    where_column ~ ^"CONTAINS" ~ ^"ALL" ~ "(" ~ value_list ~ ")" |
+    where_column ~ ^"CONTAINS" ~ ^"ANY" ~ "(" ~ value_list ~ ")" |
+    where_column ~ ^"CONTAINS" ~ value
+}
 
 // IS NULL / IS NOT NULL
 is_null_expr = { where_column ~ ^"IS" ~ not_kw? ~ ^"NULL" }

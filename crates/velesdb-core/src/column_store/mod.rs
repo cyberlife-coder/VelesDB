@@ -86,9 +86,21 @@ impl ColumnStore {
     pub fn with_schema(fields: &[(&str, ColumnType)]) -> Self {
         let mut store = Self::new();
         for (name, col_type) in fields {
-            store.add_column(name, *col_type);
+            store.add_column(name, col_type);
         }
         store
+    }
+
+    /// Creates a column store with validated schema (rejects nested arrays).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ColumnStoreError::TypeMismatch` if any column uses nested arrays.
+    pub fn with_schema_validated(fields: &[(&str, ColumnType)]) -> Result<Self, ColumnStoreError> {
+        for (name, col_type) in fields {
+            Self::reject_nested_array(name, col_type)?;
+        }
+        Ok(Self::with_schema(fields))
     }
 
     /// Creates a column store with a primary key for O(1) lookups.
@@ -131,12 +143,18 @@ impl ColumnStore {
     }
 
     /// Adds a new column to the store.
-    pub fn add_column(&mut self, name: &str, col_type: ColumnType) {
+    ///
+    /// # Panics
+    ///
+    /// Does not panic. Nested arrays are silently treated as scalar arrays.
+    /// Use `add_column_validated` for strict schema validation.
+    pub fn add_column(&mut self, name: &str, col_type: &ColumnType) {
         let column = match col_type {
             ColumnType::Int => TypedColumn::new_int(0),
             ColumnType::Float => TypedColumn::new_float(0),
             ColumnType::String => TypedColumn::new_string(0),
             ColumnType::Bool => TypedColumn::new_bool(0),
+            ColumnType::Array(inner) => TypedColumn::new_array((**inner).clone(), 0),
         };
         self.columns.insert(name.to_string(), column);
     }
@@ -448,6 +466,19 @@ impl ColumnStore {
         self.columns.get(name)
     }
 
+    /// Rejects nested array types (`Array(Array(...))`) at schema creation time.
+    fn reject_nested_array(name: &str, col_type: &ColumnType) -> Result<(), ColumnStoreError> {
+        if let ColumnType::Array(inner) = col_type {
+            if matches!(inner.as_ref(), ColumnType::Array(_)) {
+                return Err(ColumnStoreError::TypeMismatch {
+                    expected: "scalar element type (Int, Float, String, Bool)".to_string(),
+                    actual: format!("nested Array in column '{name}'"),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Returns an iterator over column names.
     pub fn column_names(&self) -> impl Iterator<Item = &str> {
         self.columns.keys().map(String::as_str)
@@ -467,6 +498,41 @@ impl ColumnStore {
                 opt.and_then(|id| self.string_table.get(id).map(|s| serde_json::json!(s)))
             });
         }
+        // Array columns need special handling for string element resolution.
+        if let TypedColumn::Array { data, .. } = col {
+            return self.get_array_as_json(data, row_idx);
+        }
         col.get_as_json_non_string(row_idx)
+    }
+
+    /// Converts an array column cell to a JSON array, resolving string IDs.
+    fn get_array_as_json(
+        &self,
+        data: &[Option<smallvec::SmallVec<[ColumnValue; 8]>>],
+        row_idx: usize,
+    ) -> Option<serde_json::Value> {
+        let arr = data.get(row_idx)?.as_ref()?;
+        let json_arr: Vec<serde_json::Value> =
+            arr.iter().map(|v| self.column_value_to_json(v)).collect();
+        Some(serde_json::Value::Array(json_arr))
+    }
+
+    /// Converts a single `ColumnValue` to its JSON representation.
+    fn column_value_to_json(&self, value: &ColumnValue) -> serde_json::Value {
+        match value {
+            ColumnValue::Int(v) => serde_json::json!(v),
+            ColumnValue::Float(v) => serde_json::json!(v),
+            ColumnValue::Bool(v) => serde_json::json!(v),
+            ColumnValue::String(id) => self
+                .string_table
+                .get(*id)
+                .map_or(serde_json::Value::Null, |s| serde_json::json!(s)),
+            ColumnValue::Null => serde_json::Value::Null,
+            ColumnValue::Array(inner) => {
+                let arr: Vec<serde_json::Value> =
+                    inner.iter().map(|v| self.column_value_to_json(v)).collect();
+                serde_json::Value::Array(arr)
+            }
+        }
     }
 }

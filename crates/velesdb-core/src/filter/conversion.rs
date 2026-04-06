@@ -138,6 +138,24 @@ impl From<crate::velesql::Condition> for Condition {
                     }
                 }
             }
+            crate::velesql::Condition::Contains(cc) => {
+                let json_values: Vec<Value> =
+                    cc.values.into_iter().map(velesql_value_to_json).collect();
+                match cc.mode {
+                    crate::velesql::ContainsMode::Single => Self::ArrayContains {
+                        field: cc.column,
+                        value: json_values.into_iter().next().unwrap_or(Value::Null),
+                    },
+                    crate::velesql::ContainsMode::Any => Self::ArrayContainsAny {
+                        field: cc.column,
+                        values: json_values,
+                    },
+                    crate::velesql::ContainsMode::All => Self::ArrayContainsAll {
+                        field: cc.column,
+                        values: json_values,
+                    },
+                }
+            }
         }
     }
 }

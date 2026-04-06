@@ -344,6 +344,14 @@ impl QueryPlan {
             Condition::GraphMatch(_) => {
                 filter_conditions.push("MATCH (...)".to_string());
             }
+            Condition::Contains(cc) => {
+                let mode_str = match cc.mode {
+                    crate::velesql::ContainsMode::Single => "CONTAINS",
+                    crate::velesql::ContainsMode::Any => "CONTAINS ANY",
+                    crate::velesql::ContainsMode::All => "CONTAINS ALL",
+                };
+                filter_conditions.push(format!("{} {mode_str} ?", cc.column));
+            }
             Condition::And(left, right) | Condition::Or(left, right) => {
                 Self::analyze_condition(left, has_vector_search, filter_conditions);
                 Self::analyze_condition(right, has_vector_search, filter_conditions);

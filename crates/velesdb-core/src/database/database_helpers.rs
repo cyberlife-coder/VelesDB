@@ -126,7 +126,7 @@ impl Database {
         let schema = Self::infer_column_schema(&points);
         let schema_refs: Vec<(&str, crate::column_store::ColumnType)> = schema
             .iter()
-            .map(|(name, ty)| (name.as_str(), *ty))
+            .map(|(name, ty)| (name.as_str(), ty.clone()))
             .collect();
 
         let mut store = ColumnStore::with_primary_key(&schema_refs, "id")

@@ -27,6 +27,24 @@ fn compact_vec<T: Copy>(
     (new_data, bytes_reclaimed)
 }
 
+/// Clone-based variant of `compact_vec` for non-Copy types (e.g., `SmallVec`).
+fn compact_vec_clone<T: Clone>(
+    data: &[T],
+    deleted: &rustc_hash::FxHashSet<usize>,
+    element_bytes: u64,
+) -> (Vec<T>, u64) {
+    let mut new_data = Vec::with_capacity(data.len().saturating_sub(deleted.len()));
+    let mut bytes_reclaimed = 0u64;
+    for (idx, value) in data.iter().enumerate() {
+        if deleted.contains(&idx) {
+            bytes_reclaimed += element_bytes;
+        } else {
+            new_data.push(value.clone());
+        }
+    }
+    (new_data, bytes_reclaimed)
+}
+
 impl ColumnStore {
     /// Runs vacuum to remove tombstones and compact data.
     ///
@@ -145,6 +163,19 @@ impl ColumnStore {
             TypedColumn::Bool(data) => {
                 let (new_data, bytes) = compact_vec(data, deleted, 1);
                 (TypedColumn::Bool(new_data), bytes)
+            }
+            TypedColumn::Array {
+                element_type, data, ..
+            } => {
+                // Estimate ~64 bytes per array cell (SmallVec overhead).
+                let (new_data, bytes) = compact_vec_clone(data, deleted, 64);
+                (
+                    TypedColumn::Array {
+                        element_type: element_type.clone(),
+                        data: new_data,
+                    },
+                    bytes,
+                )
             }
         }
     }

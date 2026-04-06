@@ -148,6 +148,7 @@ impl Parser {
             Rule::between_expr => Self::parse_between_expr(inner),
             Rule::like_expr => Self::parse_like_expr(inner),
             Rule::is_null_expr => Self::parse_is_null_expr(inner),
+            Rule::contains_expr => Self::parse_contains_expr(inner),
             Rule::compare_expr => Self::parse_compare_expr(inner),
             _ => Err(ParseError::syntax(
                 0,
@@ -384,5 +385,69 @@ impl Parser {
             operator,
             value,
         }))
+    }
+
+    /// Parses a CONTAINS expression into a `Condition::Contains`.
+    ///
+    /// Handles three forms:
+    /// - `column CONTAINS ALL (v1, v2, ...)`
+    /// - `column CONTAINS ANY (v1, v2, ...)`
+    /// - `column CONTAINS value`
+    pub(crate) fn parse_contains_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let raw = pair.as_str();
+        let mut inner = pair.into_inner();
+        let column = Self::extract_leading_column(&mut inner)?;
+
+        let (mode, values) = Self::detect_contains_mode(&mut inner, raw)?;
+
+        Ok(Condition::Contains(
+            crate::velesql::ast::ContainsCondition {
+                column,
+                mode,
+                values,
+            },
+        ))
+    }
+
+    /// Detects the CONTAINS mode (ALL, ANY, or Single) and parses values.
+    fn detect_contains_mode(
+        inner: &mut pest::iterators::Pairs<Rule>,
+        raw: &str,
+    ) -> Result<
+        (
+            crate::velesql::ast::ContainsMode,
+            Vec<crate::velesql::ast::Value>,
+        ),
+        ParseError,
+    > {
+        let upper = raw.to_uppercase();
+        if upper.contains("CONTAINS ALL") {
+            let values = Self::collect_value_list(inner, raw)?;
+            Ok((crate::velesql::ast::ContainsMode::All, values))
+        } else if upper.contains("CONTAINS ANY") {
+            let values = Self::collect_value_list(inner, raw)?;
+            Ok((crate::velesql::ast::ContainsMode::Any, values))
+        } else {
+            let value = Self::next_value(inner, "Expected value after CONTAINS")?;
+            Ok((crate::velesql::ast::ContainsMode::Single, vec![value]))
+        }
+    }
+
+    /// Collects values from a `value_list` rule in the parse tree.
+    fn collect_value_list(
+        inner: &mut pest::iterators::Pairs<Rule>,
+        raw: &str,
+    ) -> Result<Vec<crate::velesql::ast::Value>, ParseError> {
+        let value_list = inner
+            .find(|p| p.as_rule() == Rule::value_list)
+            .ok_or_else(|| ParseError::syntax(0, raw, "Expected value list"))?;
+
+        value_list
+            .into_inner()
+            .filter(|p| p.as_rule() == Rule::value)
+            .map(Self::parse_value)
+            .collect()
     }
 }

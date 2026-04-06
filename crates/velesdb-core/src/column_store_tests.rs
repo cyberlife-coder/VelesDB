@@ -450,8 +450,8 @@ mod tests {
         let mut store = ColumnStore::new();
 
         // Act
-        store.add_column("price", ColumnType::Int);
-        store.add_column("rating", ColumnType::Float);
+        store.add_column("price", &ColumnType::Int);
+        store.add_column("rating", &ColumnType::Float);
 
         // Assert
         assert!(store.get_column("price").is_some());
