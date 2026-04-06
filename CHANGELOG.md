@@ -22,14 +22,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   include the point index (e.g., `"Point at index 4237 missing 'id' field"`). Closes #427.
 - **Python performance guide** — `docs/guides/PYTHON_PERFORMANCE.md` documents numpy fast-paths,
   `upsert_bulk_numpy()`, `batch_search()`, and threading patterns. Closes #409.
+- **Array Column Type with CONTAINS filter (Issue #510)** — `ColumnType::Array(Box<ColumnType>)`
+  for multi-value fields (tags, categories, amenities). Three VelesQL operators:
+  `CONTAINS value`, `CONTAINS ANY (v1, v2)`, `CONTAINS ALL (v1, v2)`. Bitmap-native filters
+  (`filter_contains_bitmap`, `filter_contains_any_bitmap`, `filter_contains_all_bitmap`).
+  SmallVec<8> storage for zero heap allocation on small arrays. 30 BDD + 22 unit tests.
 - **`AnyCollection` enum** — Type-erased collection handle for callers that don't know the
   collection type at compile time. Zero-cost dispatch via enum match (no vtable, no heap).
   Methods: `config()`, `flush()`, `point_count()`, `is_empty()`, `name()`, `execute_query_str()`,
-  `execute_aggregate()`, `diagnostics()`.
+  `execute_aggregate()`, `diagnostics()`, `into_vector_collection()`.
+- **`AnyCollection::into_vector_collection()`** — Converts any collection variant to
+  `VectorCollection` for SDK bindings that expose a single Collection type.
 - **`Database::get_any_collection()`** — Returns `Option<AnyCollection>` by checking
   vector → graph → metadata registries in order.
 - **BDD tests** — 14 new BDD tests for `AnyCollection` dispatch, persistence round-trip,
   typed registry integrity, and edge cases.
+
+### Fixed
+- **LET bindings in SELECT projection (Issue #473)** — LET binding values now injected into
+  result payloads during post-processing. LET bindings take precedence over payload fields
+  with the same name.
+- **Python SDK compilation errors** — Fixed `hybrid_search_with_filter` extra argument,
+  `dispatch_search` method names (`sparse_search`, `hybrid_sparse_search`).
+- **Python `get_collection()` returns None for graph/metadata** — Now uses `get_any_collection`
+  to find collections regardless of type.
+- **Python `create_metadata_collection()` disconnected instance** — Now returns the registered
+  instance via `get_any_collection` instead of creating a disconnected `VectorCollection::open`.
+- **Tauri `require_collection` vector-only** — Now uses `get_any_collection` so graph and
+  metadata collections are accessible through Tauri commands.
+- **Mobile SDK disconnected instance** — `get_collection` now uses `get_any_collection`
+  instead of falling back to `VectorCollection::open`.
 
 ### Migration Guide
 1. **`velesdb_core::Collection` removed** — Replace with `VectorCollection`, `GraphCollection`,
