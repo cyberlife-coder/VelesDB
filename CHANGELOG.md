@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CONTAINS value`, `CONTAINS ANY (v1, v2)`, `CONTAINS ALL (v1, v2)`. Bitmap-native filters
   (`filter_contains_bitmap`, `filter_contains_any_bitmap`, `filter_contains_all_bitmap`).
   SmallVec<8> storage for zero heap allocation on small arrays. 30 BDD + 22 unit tests.
+- **Parent-document retrieval GROUP BY MAX_SIM (Issue #511)** — Vector-search-aware GROUP BY
+  for chunked document collections. Groups search results by a parent field with score
+  aggregation: `MAX(score)` (ColBERT-style MaxSim), `AVG(score)` (mean similarity), and
+  `FIRST(column)` (excerpt from highest-scoring chunk). Single-pass O(N) FxHashMap grouping
+  with ≤20% latency overhead. 11 BDD + 8 unit tests.
 - **`AnyCollection` enum** — Type-erased collection handle for callers that don't know the
   collection type at compile time. Zero-cost dispatch via enum match (no vtable, no heap).
   Methods: `config()`, `flush()`, `point_count()`, `is_empty()`, `name()`, `execute_query_str()`,

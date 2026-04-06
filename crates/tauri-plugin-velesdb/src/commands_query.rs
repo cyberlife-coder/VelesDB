@@ -11,12 +11,30 @@ use tauri::{command, AppHandle, Runtime, State};
 use velesdb_core::velesql::SelectColumns;
 
 /// Detects aggregation queries (COUNT, SUM, AVG, etc. in SELECT).
+///
+/// Returns `false` for vector-search GROUP BY queries (NEAR + GROUP BY),
+/// which are handled as post-processing in `execute_query`.
 fn is_aggregation_query(parsed: &velesdb_core::velesql::Query) -> bool {
-    match &parsed.select.columns {
+    let has_aggs = match &parsed.select.columns {
         SelectColumns::Aggregations(_) => true,
         SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
         _ => false,
+    };
+    let is_agg = has_aggs || parsed.select.group_by.is_some();
+
+    // Vector-search GROUP BY is handled inside execute_query, not execute_aggregate.
+    if is_agg {
+        let has_vector_near = parsed
+            .select
+            .where_clause
+            .as_ref()
+            .is_some_and(velesdb_core::velesql::Condition::has_vector_search);
+        if has_vector_near && parsed.select.group_by.is_some() {
+            return false;
+        }
     }
+
+    is_agg
 }
 
 /// Executes a `VelesQL` query (EPIC-031 US-012).

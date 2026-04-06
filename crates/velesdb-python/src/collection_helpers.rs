@@ -21,9 +21,7 @@ use velesdb_core::{Filter, Point, SearchResult};
 pub fn core_err(e: velesdb_core::Error) -> PyErr {
     match &e {
         velesdb_core::Error::DimensionMismatch { expected, actual } => {
-            DimensionMismatchError::new_err(format!(
-                "Expected {expected} dimensions, got {actual}"
-            ))
+            DimensionMismatchError::new_err(format!("Expected {expected} dimensions, got {actual}"))
         }
         velesdb_core::Error::CollectionNotFound(name) => {
             CollectionNotFoundError::new_err(format!("Collection '{name}' not found"))
@@ -276,9 +274,7 @@ pub fn extract_point_id(
     index: usize,
 ) -> PyResult<u64> {
     dict.get("id")
-        .ok_or_else(|| {
-            PyValueError::new_err(format!("Point at index {index} missing 'id' field"))
-        })?
+        .ok_or_else(|| PyValueError::new_err(format!("Point at index {index} missing 'id' field")))?
         .extract(py)
 }
 

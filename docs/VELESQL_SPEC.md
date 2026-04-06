@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.6.0 | **Last Updated**: 2026-03-30
+**Version**: 3.7.0 | **Last Updated**: 2026-04-06
 
 ---
 
@@ -66,6 +66,9 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | SELECT EDGES graph query | Stable | 3.5 |
 | INSERT NODE graph mutation | Stable | 3.5 |
 | FLUSH / FLUSH FULL | Stable | 3.6 |
+| CONTAINS array filter | Stable | 3.7 |
+| GROUP BY MAX(score) / AVG(score) | Stable | 3.7 |
+| FIRST(column) projection | Stable | 3.7 |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -200,6 +203,9 @@ SELECT SUM(quantity) AS total FROM orders
 | `AVG(col)` | Average of numeric values | Column name |
 | `MIN(col)` | Minimum value | Column name |
 | `MAX(col)` | Maximum value | Column name |
+| `MAX(score)` | Max similarity score across group (v3.7+) | `score` pseudo-column |
+| `AVG(score)` | Mean similarity score across group (v3.7+) | `score` pseudo-column |
+| `FIRST(col)` | Value from highest-scoring row in group (v3.7+) | Column name |
 
 ### Similarity Score in SELECT
 
@@ -458,6 +464,54 @@ SELECT * FROM docs WHERE category IS NULL
 SELECT * FROM docs WHERE category IS NOT NULL
 SELECT * FROM users WHERE email IS NOT NULL AND verified = true
 ```
+
+### CONTAINS (Array Filter, v3.7+)
+
+Test whether an array field contains specific values. Three modes are supported:
+
+| Syntax | Description |
+|--------|-------------|
+| `column CONTAINS value` | Array contains the single value |
+| `column CONTAINS ANY (v1, v2, ...)` | Array contains at least one of the values |
+| `column CONTAINS ALL (v1, v2, ...)` | Array contains every listed value |
+
+```sql
+-- Single value containment
+SELECT * FROM hotels WHERE amenities CONTAINS 'pool' LIMIT 10
+
+-- At least one match (OR semantics)
+SELECT * FROM hotels WHERE amenities CONTAINS ANY ('spa', 'bar') LIMIT 10
+
+-- All values must be present (AND semantics)
+SELECT * FROM hotels WHERE amenities CONTAINS ALL ('pool', 'gym') LIMIT 10
+
+-- Combined with scalar filters
+SELECT * FROM hotels
+WHERE amenities CONTAINS 'pool' AND rating > 4.5
+LIMIT 10
+
+-- Combined with vector search
+SELECT * FROM hotels
+WHERE amenities CONTAINS 'spa' OR vector NEAR $v
+LIMIT 10
+
+-- Integer arrays
+SELECT * FROM items WHERE scores CONTAINS 10 LIMIT 10
+
+-- NOT negation
+SELECT * FROM hotels WHERE NOT (amenities CONTAINS 'pool') LIMIT 10
+
+-- Multiple array fields
+SELECT * FROM hotels
+WHERE amenities CONTAINS 'gym' AND tags CONTAINS 'luxury'
+LIMIT 10
+```
+
+Behavior on edge cases:
+- Empty array (`[]`): CONTAINS returns no match
+- Null/missing field: row excluded from results
+- Non-array field: CONTAINS returns no match (use `LIKE` for substring matching)
+- Non-existent field: returns empty result set
 
 ### Full-Text Search (MATCH)
 
@@ -772,6 +826,56 @@ GROUP BY category
 ORDER BY COUNT(*) DESC
 LIMIT 10
 ```
+
+### Vector-Search GROUP BY (Parent-Document Retrieval, v3.7+)
+
+When combined with a vector NEAR search, GROUP BY enables parent-document
+retrieval from chunked collections. This groups search results by a parent
+field and aggregates similarity scores across chunks.
+
+Use `MAX(score)` for ColBERT-style MaxSim (max score across chunks),
+`AVG(score)` for mean similarity, and `FIRST(column)` to surface the
+excerpt from the highest-scoring chunk.
+
+```sql
+-- Parent-document retrieval with MAX_SIM scoring
+SELECT parent_id, MAX(score) AS relevance, FIRST(text) AS excerpt
+FROM chunks
+WHERE vector NEAR $embedding
+GROUP BY parent_id
+ORDER BY relevance DESC
+LIMIT 20
+
+-- AVG_SIM scoring (mean across chunks)
+SELECT document_id, AVG(score) AS avg_sim
+FROM paragraphs
+WHERE vector NEAR $query
+GROUP BY document_id
+ORDER BY avg_sim DESC
+LIMIT 10
+
+-- Combined with metadata filter
+SELECT parent_id, MAX(score) AS relevance, FIRST(text) AS excerpt
+FROM chunks
+WHERE vector NEAR $v AND category = 'science'
+GROUP BY parent_id
+ORDER BY relevance DESC
+LIMIT 10
+```
+
+| Function | Description | Requires |
+|----------|-------------|----------|
+| `MAX(score)` | Maximum similarity score across chunks in group | `NEAR` + `GROUP BY` |
+| `AVG(score)` | Mean similarity score across chunks in group | `NEAR` + `GROUP BY` |
+| `FIRST(col)` | Value of `col` from the highest-scoring chunk | `GROUP BY` |
+
+Behavior:
+- Chunks missing the GROUP BY field are silently skipped
+- `FIRST(col)` returns `null` if the best chunk lacks the specified column
+- Multiple `FIRST` projections all come from the same highest-scoring chunk
+- `FIRST(*)` is not supported (parse error)
+- `MAX(score)` / `AVG(score)` without `NEAR` returns an error
+- `FIRST(col)` without `GROUP BY` returns an error
 
 ---
 
@@ -2027,7 +2131,7 @@ The following keywords cannot be used as identifiers without quoting:
 | JOINs | `JOIN`, `INNER`, `LEFT`, `RIGHT`, `FULL`, `OUTER`, `ON`, `USING` |
 | Bindings | `LET`, `RETURN`, `MATCH` |
 | Temporal | `NOW`, `INTERVAL` |
-| Misc | `DISTINCT`, `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` |
+| Misc | `DISTINCT`, `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `FIRST`, `CONTAINS` |
 
 ### Quoting Styles
 
@@ -2185,6 +2289,9 @@ VelesQL returns structured errors:
 | `AVG(col)` | Average value | `SELECT AVG(rating) FROM reviews` |
 | `MIN(col)` | Minimum value | `SELECT MIN(created_at) FROM logs` |
 | `MAX(col)` | Maximum value | `SELECT MAX(score) FROM results` |
+| `MAX(score)` | Max similarity in group | `SELECT MAX(score) AS rel FROM chunks ... GROUP BY parent_id` |
+| `AVG(score)` | Mean similarity in group | `SELECT AVG(score) AS avg FROM chunks ... GROUP BY parent_id` |
+| `FIRST(col)` | Value from best chunk | `SELECT FIRST(text) AS excerpt FROM chunks ... GROUP BY parent_id` |
 
 ### Value Types
 
