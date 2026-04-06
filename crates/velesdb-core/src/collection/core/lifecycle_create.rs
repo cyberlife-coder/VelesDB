@@ -3,7 +3,7 @@
 //! Extracted from `lifecycle.rs` to reduce NLOC below the 500 threshold.
 //! Contains all `create_*` public constructors and their shared helpers.
 
-use crate::collection::types::{Collection, CollectionConfig, CollectionType};
+use crate::collection::types::{Collection, CollectionConfig};
 use crate::distance::DistanceMetric;
 use crate::error::Result;
 use crate::quantization::StorageMode;
@@ -17,6 +17,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or the config cannot be saved.
+    #[allow(dead_code)] // Reason: Called in velesql tests and test_fixtures
     pub fn create(path: PathBuf, dimension: usize, metric: DistanceMetric) -> Result<Self> {
         Self::create_with_options(path, dimension, metric, StorageMode::default())
     }
@@ -151,29 +152,6 @@ impl Collection {
             async_index_builder: Some(async_builder_config),
         };
         Self::create_from_config(path, config, None)
-    }
-
-    /// Creates a new collection with a specific type (Vector or `MetadataOnly`).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the directory cannot be created or the config cannot be saved.
-    pub fn create_typed(
-        path: PathBuf,
-        name: &str,
-        collection_type: &CollectionType,
-    ) -> Result<Self> {
-        match collection_type {
-            CollectionType::Vector {
-                dimension,
-                metric,
-                storage_mode,
-            } => Self::create_with_options(path, *dimension, *metric, *storage_mode),
-            CollectionType::MetadataOnly => Self::create_metadata_only(path, name),
-            CollectionType::Graph { .. } => Err(crate::Error::GraphNotSupported(
-                "Graph collection creation not yet implemented".to_string(),
-            )),
-        }
     }
 
     /// Creates a new metadata-only collection (no vectors, no HNSW index).

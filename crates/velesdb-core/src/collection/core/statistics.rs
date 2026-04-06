@@ -43,6 +43,7 @@ impl Collection {
     /// # Panics
     ///
     /// Panics if `point_count` exceeds `u64::MAX` (extremely unlikely on 64-bit systems).
+    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn analyze(&self) -> Result<CollectionStats, Error> {
         let mut collector = StatsCollector::new();
 
@@ -155,6 +156,7 @@ impl Collection {
     /// Selectivity is 1/cardinality, representing the probability
     /// that a random row matches a specific value.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API for cost model — used by typed wrappers
     pub fn estimate_column_selectivity(&self, column: &str) -> f64 {
         let stats = self.get_stats();
         stats.estimate_selectivity(column)

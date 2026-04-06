@@ -119,6 +119,8 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if traversal fails.
+    #[allow(dead_code)] // Reason: Called via GraphCollection inner delegation + tests
+    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn traverse_bfs(
         &self,
         source: u64,
@@ -161,6 +163,8 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if traversal fails.
+    #[allow(dead_code)] // Reason: Called via GraphCollection inner delegation + tests
+    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn traverse_dfs(
         &self,
         source: u64,
@@ -242,6 +246,7 @@ impl Collection {
 
     /// Returns `true` if this collection was created as a graph collection.
     #[must_use]
+    #[allow(dead_code)] // Reason: Called via GraphCollection inner delegation + tests
     pub fn is_graph(&self) -> bool {
         self.config.read().graph_schema.is_some()
     }

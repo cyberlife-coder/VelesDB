@@ -1,5 +1,9 @@
 //! StreamIngester: bounded-channel ingestion with micro-batch drain.
 
+// Reason: StreamIngester methods and drain helpers are called from the
+// spawned drain thread — false positive from pub(crate) Collection visibility.
+#![allow(dead_code)]
+
 use crate::collection::types::Collection;
 use crate::point::Point;
 

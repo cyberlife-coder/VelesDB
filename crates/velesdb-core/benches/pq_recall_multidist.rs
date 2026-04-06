@@ -134,7 +134,7 @@ fn build_pq_collection(
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join(name);
 
-    let VectorCollection = VectorCollection::create(
+    let collection = VectorCollection::create(
         path,
         "bench",
         dimension,
@@ -152,8 +152,8 @@ fn build_pq_collection(
             Point::new(pid, v.clone(), Some(serde_json::json!({})))
         })
         .collect();
-    VectorCollection.upsert(points).expect("upsert");
-    (VectorCollection, dir)
+    collection.upsert(points).expect("upsert");
+    (collection, dir)
 }
 
 /// Build a VectorCollection via `Database` + `VelesQL` `TRAIN QUANTIZER` for explicit training.
@@ -197,7 +197,7 @@ fn build_trained_collection(
 
 /// Measure average recall@k using default `ef_search` (128).
 fn measure_recall(
-    VectorCollection: &VectorCollection,
+    collection: &VectorCollection,
     queries: &[Vec<f32>],
     dataset: &[Vec<f32>],
     k: usize,
@@ -209,7 +209,7 @@ fn measure_recall(
     let mut total_recall = 0.0;
     for query in queries {
         let gt = brute_force_topk(query, dataset, k);
-        let results = VectorCollection.search_ids(query, k).expect("search");
+        let results = collection.search_ids(query, k).expect("search");
         let result_ids: Vec<u64> = results.iter().map(|sr| sr.id).collect();
         total_recall += recall_at_k(&gt, &result_ids, k);
     }
@@ -220,7 +220,7 @@ fn measure_recall(
 
 /// Measure average recall@k with explicit `ef_search` override.
 fn measure_recall_with_ef(
-    VectorCollection: &VectorCollection,
+    collection: &VectorCollection,
     queries: &[Vec<f32>],
     dataset: &[Vec<f32>],
     k: usize,
@@ -233,7 +233,7 @@ fn measure_recall_with_ef(
     let mut total_recall = 0.0;
     for query in queries {
         let gt = brute_force_topk(query, dataset, k);
-        let results = VectorCollection
+        let results = collection
             .search_with_ef(query, k, ef_search)
             .expect("search_with_ef");
         let result_ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
