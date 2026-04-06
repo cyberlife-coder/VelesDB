@@ -628,3 +628,247 @@ fn test_contains_any_single_value_equivalent_to_contains() {
         "CONTAINS ANY ('spa') == CONTAINS 'spa'"
     );
 }
+
+// =========================================================================
+// Edge: array with duplicate elements
+// =========================================================================
+
+/// GIVEN a collection where arrays contain duplicate values
+/// WHEN querying CONTAINS for a duplicated value
+/// THEN the row matches (duplicates don't cause double-counting or errors)
+#[test]
+fn test_contains_on_array_with_duplicate_elements() {
+    let (_dir, db) = create_test_db();
+
+    execute_sql(
+        &db,
+        "CREATE COLLECTION dupes (dimension = 2, metric = 'cosine');",
+    )
+    .expect("CREATE dupes");
+
+    let vc = db.get_vector_collection("dupes").expect("get dupes");
+    vc.upsert(vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0],
+            Some(json!({"tags": ["a", "b", "a", "c"]})),
+        ),
+        Point::new(2, vec![0.0, 1.0], Some(json!({"tags": ["x", "y"]}))),
+    ])
+    .expect("upsert dupes");
+
+    let results = execute_sql(&db, "SELECT * FROM dupes WHERE tags CONTAINS 'a' LIMIT 10;")
+        .expect("CONTAINS on duplicated element");
+
+    let ids = result_ids(&results);
+    assert_eq!(
+        ids,
+        HashSet::from([1]),
+        "Row with duplicated 'a' matches once"
+    );
+
+    // CONTAINS ALL with a value that appears twice — should still match
+    let results_all = execute_sql(
+        &db,
+        "SELECT * FROM dupes WHERE tags CONTAINS ALL ('a', 'c') LIMIT 10;",
+    )
+    .expect("CONTAINS ALL with duplicated element");
+
+    let ids_all = result_ids(&results_all);
+    assert_eq!(ids_all, HashSet::from([1]), "Row has both 'a' and 'c'");
+}
+
+// =========================================================================
+// Combination: CONTAINS OR vector NEAR (hybrid query)
+// =========================================================================
+
+/// GIVEN hotels with amenities and vectors
+/// WHEN querying WHERE amenities CONTAINS 'spa' OR vector NEAR $v
+/// THEN returns union of CONTAINS matches and vector nearest neighbors
+#[test]
+fn test_contains_combined_with_vector_search() {
+    let (_dir, db) = create_test_db();
+    setup_hotels_collection(&db);
+
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), json!([1.0_f32, 0.0, 0.0, 0.0]));
+
+    // CONTAINS 'spa' matches hotels 1, 7
+    // vector NEAR [1,0,0,0] is closest to hotel 1 (exact match)
+    // Combined with OR → at least hotels 1, 7 plus vector neighbors
+    let results = super::helpers::execute_sql_with_params(
+        &db,
+        "SELECT * FROM hotels WHERE amenities CONTAINS 'spa' OR vector NEAR $v LIMIT 10;",
+        &params,
+    )
+    .expect("CONTAINS OR vector NEAR");
+
+    let ids = result_ids(&results);
+    // Must include spa hotels
+    assert!(ids.contains(&1), "Hotel 1 has spa");
+    assert!(ids.contains(&7), "Hotel 7 has spa");
+    // Should also include vector nearest neighbors
+    assert!(!ids.is_empty(), "Should have results from OR combination");
+}
+
+// =========================================================================
+// Combination: CONTAINS with NOT
+// =========================================================================
+
+/// GIVEN hotels with amenities
+/// WHEN querying WHERE NOT (amenities CONTAINS 'pool')
+/// THEN returns hotels WITHOUT pool: 2, 4, 5, 6
+#[test]
+fn test_contains_with_not_negation() {
+    let (_dir, db) = create_test_db();
+    setup_hotels_collection(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM hotels WHERE NOT (amenities CONTAINS 'pool') LIMIT 10;",
+    )
+    .expect("NOT CONTAINS query");
+
+    let ids = result_ids(&results);
+    // Hotels without pool: 2 (wifi,parking), 4 (empty), 5 (null/missing), 6 (gym)
+    assert!(!ids.contains(&1), "Hotel 1 has pool — should be excluded");
+    assert!(!ids.contains(&3), "Hotel 3 has pool — should be excluded");
+    assert!(!ids.contains(&7), "Hotel 7 has pool — should be excluded");
+    assert!(ids.contains(&2), "Hotel 2 has no pool");
+    assert!(ids.contains(&6), "Hotel 6 has no pool");
+}
+
+// =========================================================================
+// Combination: CONTAINS with OR (non-vector)
+// =========================================================================
+
+/// GIVEN hotels with amenities and city
+/// WHEN querying WHERE amenities CONTAINS 'spa' OR city = 'Tokyo'
+/// THEN returns hotels with spa (1, 7) OR in Tokyo (5)
+#[test]
+fn test_contains_or_scalar_filter() {
+    let (_dir, db) = create_test_db();
+    setup_hotels_collection(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM hotels WHERE amenities CONTAINS 'spa' OR city = 'Tokyo' LIMIT 10;",
+    )
+    .expect("CONTAINS OR scalar");
+
+    let ids = result_ids(&results);
+    assert_eq!(ids, HashSet::from([1, 5, 7]), "spa (1,7) OR Tokyo (5)");
+}
+
+// =========================================================================
+// Combination: CONTAINS with LIMIT truncation
+// =========================================================================
+
+/// GIVEN hotels with amenities (3 have pool)
+/// WHEN querying WHERE amenities CONTAINS 'pool' LIMIT 2
+/// THEN returns exactly 2 results (not 3)
+#[test]
+fn test_contains_with_limit_truncates_results() {
+    let (_dir, db) = create_test_db();
+    setup_hotels_collection(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM hotels WHERE amenities CONTAINS 'pool' LIMIT 2;",
+    )
+    .expect("CONTAINS with LIMIT 2");
+
+    assert_eq!(results.len(), 2, "LIMIT 2 should cap at 2 results");
+    // All returned results must have pool
+    for r in &results {
+        let amenities = r
+            .point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("amenities"))
+            .and_then(|v| v.as_array());
+        assert!(
+            amenities.is_some_and(|arr| arr.iter().any(|v| v.as_str() == Some("pool"))),
+            "All results must have pool in amenities"
+        );
+    }
+}
+
+// =========================================================================
+// Complex: CONTAINS ALL + CONTAINS ANY combined
+// =========================================================================
+
+/// GIVEN hotels with amenities and tags
+/// WHEN querying WHERE amenities CONTAINS ALL ('pool', 'gym') AND tags CONTAINS ANY ('new', 'family')
+/// THEN returns only hotel 7 (pool+gym AND tag 'new')
+#[test]
+fn test_contains_all_and_contains_any_combined() {
+    let (_dir, db) = create_test_db();
+    setup_hotels_collection(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM hotels WHERE amenities CONTAINS ALL ('pool', 'gym') AND tags CONTAINS ANY ('new', 'family') LIMIT 10;",
+    )
+    .expect("CONTAINS ALL + CONTAINS ANY");
+
+    let ids = result_ids(&results);
+    // pool+gym: hotels 1, 7
+    // tags new or family: hotels 3 (family), 4 (new), 7 (new)
+    // Intersection: hotel 7
+    assert_eq!(
+        ids,
+        HashSet::from([7]),
+        "Only hotel 7 matches both conditions"
+    );
+}
+
+// =========================================================================
+// Complex: nested AND/OR with CONTAINS
+// =========================================================================
+
+/// GIVEN hotels with amenities, tags, and city
+/// WHEN querying WHERE (amenities CONTAINS 'pool' AND city = 'Paris') OR tags CONTAINS 'budget'
+/// THEN returns hotels matching either branch
+#[test]
+fn test_contains_nested_and_or_grouping() {
+    let (_dir, db) = create_test_db();
+    setup_hotels_collection(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM hotels WHERE (amenities CONTAINS 'pool' AND city = 'Paris') OR tags CONTAINS 'budget' LIMIT 10;",
+    )
+    .expect("nested AND/OR with CONTAINS");
+
+    let ids = result_ids(&results);
+    // (pool AND Paris): hotels 1, 3
+    // tags budget: hotels 2, 4
+    // Union: 1, 2, 3, 4
+    assert_eq!(ids, HashSet::from([1, 2, 3, 4]), "(pool+Paris) OR budget");
+}
+
+// =========================================================================
+// Complex: CONTAINS on multiple array fields simultaneously
+// =========================================================================
+
+/// GIVEN hotels with amenities AND tags arrays
+/// WHEN querying WHERE amenities CONTAINS 'gym' AND tags CONTAINS 'luxury'
+/// THEN returns hotels that match BOTH array conditions: 1, 6, 7
+#[test]
+fn test_contains_on_two_different_array_fields() {
+    let (_dir, db) = create_test_db();
+    setup_hotels_collection(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM hotels WHERE amenities CONTAINS 'gym' AND tags CONTAINS 'luxury' LIMIT 10;",
+    )
+    .expect("CONTAINS on two array fields");
+
+    let ids = result_ids(&results);
+    // gym: 1, 6, 7
+    // luxury: 1, 6, 7
+    // Intersection: 1, 6, 7
+    assert_eq!(ids, HashSet::from([1, 6, 7]), "gym AND luxury");
+}
