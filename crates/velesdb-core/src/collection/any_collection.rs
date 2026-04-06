@@ -121,4 +121,24 @@ impl AnyCollection {
             Self::Metadata(c) => c.diagnostics(),
         }
     }
+
+    /// Converts this `AnyCollection` into a `VectorCollection`.
+    ///
+    /// For `Vector` variants, returns the inner `VectorCollection` directly.
+    /// For `Graph` and `Metadata` variants, wraps the inner `Collection` in a
+    /// `VectorCollection` newtype. This is safe because `VectorCollection` is a
+    /// pure newtype over `Collection` — all operations delegate to the same
+    /// `Arc`-wrapped state.
+    ///
+    /// This is primarily useful for SDK bindings (Python, Mobile, Tauri) that
+    /// expose a single `Collection` type to users regardless of the underlying
+    /// collection kind.
+    #[must_use]
+    pub fn into_vector_collection(self) -> VectorCollection {
+        match self {
+            Self::Vector(c) => c,
+            Self::Graph(c) => VectorCollection { inner: c.inner },
+            Self::Metadata(c) => VectorCollection { inner: c.inner },
+        }
+    }
 }

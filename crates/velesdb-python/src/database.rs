@@ -163,9 +163,16 @@ impl Database {
     /// Example:
     ///     >>> collection = db.get_collection("documents")
     #[pyo3(signature = (name))]
+    /// Get a collection by name.
+    ///
+    /// Returns the collection regardless of its type (vector, graph, or metadata).
+    /// Returns None if the collection does not exist.
     fn get_collection(&self, name: &str) -> PyResult<Option<Collection>> {
-        match self.inner.get_vector_collection(name) {
-            Some(collection) => Ok(Some(Collection::new(collection, name.to_string()))),
+        match self.inner.get_any_collection(name) {
+            Some(any_coll) => {
+                let vc = any_coll.into_vector_collection();
+                Ok(Some(Collection::new(vc, name.to_string())))
+            }
             None => Ok(None),
         }
     }
@@ -219,15 +226,11 @@ impl Database {
             PyRuntimeError::new_err(format!("Failed to create metadata collection: {e}"))
         })?;
 
+        // Use get_any_collection to get the registered instance (not a disconnected copy).
         let collection = self
             .inner
-            .get_vector_collection(name)
-            .or_else(|| {
-                // Metadata collections aren't in the vector registry;
-                // open via VectorCollection::open which loads any Collection type.
-                let path = self.inner.data_dir().join(name);
-                velesdb_core::VectorCollection::open(path).ok()
-            })
+            .get_any_collection(name)
+            .map(|c| c.into_vector_collection())
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
         Ok(Collection::new(collection, name.to_string()))

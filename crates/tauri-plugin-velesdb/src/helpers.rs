@@ -131,13 +131,15 @@ pub fn map_core_results(
 
 /// Looks up a collection by name, returning a typed error on miss.
 ///
-/// Eliminates the repeated `db.get_vector_collection(name).ok_or_else(|| ...)` pattern
-/// used by every command that operates on a collection.
+/// Returns a `VectorCollection` for any collection type (vector, graph, or metadata)
+/// by using `get_any_collection` and converting via `into_vector_collection`.
+/// This ensures graph and metadata collections are accessible through Tauri commands.
 pub fn require_collection(
     db: &velesdb_core::Database,
     name: &str,
 ) -> Result<velesdb_core::VectorCollection> {
-    db.get_vector_collection(name)
+    db.get_any_collection(name)
+        .map(velesdb_core::AnyCollection::into_vector_collection)
         .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
 }
 

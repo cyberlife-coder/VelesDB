@@ -4,6 +4,8 @@
 //! results). Tests exercise the full pipeline: SQL string → `Parser::parse()`
 //! → `Database::execute_query()` → verify returned `SearchResult` values.
 
+#![allow(clippy::doc_link_with_quotes)]
+
 use std::collections::HashSet;
 
 use serde_json::json;

@@ -170,35 +170,15 @@ impl VelesDatabase {
     /// Gets a collection by name.
     ///
     /// Returns `None` if the collection does not exist.
-    /// Checks vector, metadata, and graph registries in order.
+    /// Checks all registries (vector, graph, metadata) via `get_any_collection`.
     pub fn get_collection(&self, name: String) -> Result<Option<Arc<VelesCollection>>, VelesError> {
-        // Try typed vector collection first (most common case).
-        if let Some(coll) = self.inner.get_vector_collection(&name) {
-            return Ok(Some(Arc::new(VelesCollection { inner: coll })));
-        }
-        // For metadata-only and graph collections, the legacy registry holds the
-        // same shared inner Collection. VectorCollection wraps Collection 1:1
-        // (same Arc<> fields) so opening it from the same on-disk path is
-        // equivalent — but cheaper: just ask get_vector_collection which falls
-        // back to disk and checks config type. The disk fallback in
-        // get_vector_collection already guards against non-vector types, so we
-        // need to open directly from disk for metadata/graph.
-        // Simplest correct path: VectorCollection::open the path, which loads all
-        // Collection fields regardless of collection type.
-        let path = self.inner.data_dir().join(&name);
-        if path.join("config.json").exists() {
-            match velesdb_core::VectorCollection::open(path) {
-                Ok(coll) => return Ok(Some(Arc::new(VelesCollection { inner: coll }))),
-                Err(e) => {
-                    tracing::warn!(
-                        collection = %name,
-                        error = %e,
-                        "VectorCollection::open failed for existing config; collection skipped"
-                    );
-                }
+        match self.inner.get_any_collection(&name) {
+            Some(any_coll) => {
+                let vc = any_coll.into_vector_collection();
+                Ok(Some(Arc::new(VelesCollection { inner: vc })))
             }
+            None => Ok(None),
         }
-        Ok(None)
     }
 
     /// Lists all collection names.

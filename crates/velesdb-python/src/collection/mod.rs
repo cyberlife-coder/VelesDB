@@ -17,7 +17,6 @@ mod search;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
-#[allow(clippy::missing_errors_doc)] // CoreCollection = VectorCollection for backward compat.
 use velesdb_core::{
     Filter, FusionStrategy as CoreFusionStrategy, SearchResult, VectorCollection as CoreCollection,
 };
@@ -62,19 +61,20 @@ impl Collection {
             sparse_index_name.unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
 
         match (dense, sparse, filter) {
-            (Some(d), Some(s), Some(f)) => self
-                .inner
-                .hybrid_sparse_search(&d, &s, top_k, index_name, &DEFAULT_FUSION)
-                .map_err(core_err)
-                .map(|mut results| {
-                    results.retain(|r| {
-                        r.point
-                            .payload
-                            .as_ref()
-                            .map_or(false, |p| f.matches(p))
-                    });
-                    results
-                }),
+            (Some(d), Some(s), Some(f)) => {
+                // No native hybrid_sparse_search_with_filter — run unfiltered then post-filter
+                let mut results = self
+                    .inner
+                    .hybrid_sparse_search(&d, &s, top_k, index_name, &DEFAULT_FUSION)
+                    .map_err(core_err)?;
+                results.retain(|r| {
+                    r.point
+                        .payload
+                        .as_ref()
+                        .is_some_and(|p| f.matches(p))
+                });
+                Ok(results)
+            }
             (Some(d), Some(s), None) => self
                 .inner
                 .hybrid_sparse_search(&d, &s, top_k, index_name, &DEFAULT_FUSION)
