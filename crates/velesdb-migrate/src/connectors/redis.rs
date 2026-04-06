@@ -10,9 +10,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::config::RedisConfig;
-use crate::connectors::common::{build_numeric_offset_batch, parse_vector_from_json};
 #[cfg(test)]
 use crate::connectors::common::extract_payload_from_object;
+use crate::connectors::common::{build_numeric_offset_batch, parse_vector_from_json};
 use crate::connectors::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
 
@@ -42,7 +42,10 @@ impl RedisConnector {
     /// The array case delegates to the shared `parse_vector_from_json` helper;
     /// the string case is Redis-specific (comma/space-separated floats).
     #[cfg(test)]
-    pub(crate) fn parse_vector(&self, attrs: &HashMap<String, serde_json::Value>) -> Result<Vec<f32>> {
+    pub(crate) fn parse_vector(
+        &self,
+        attrs: &HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<f32>> {
         let vector_value = attrs.get(&self.config.vector_field).ok_or_else(|| {
             Error::Extraction(format!(
                 "Vector field '{}' not found in document",
@@ -94,9 +97,7 @@ impl RedisConnector {
     }
 
     /// Opens a multiplexed async Redis connection with optional AUTH.
-    async fn open_connection(
-        &self,
-    ) -> Result<redis::aio::MultiplexedConnection> {
+    async fn open_connection(&self) -> Result<redis::aio::MultiplexedConnection> {
         let client = redis::Client::open(self.config.url.as_str())
             .map_err(|e| Error::SourceConnection(format!("Redis client error: {e}")))?;
 
@@ -124,17 +125,15 @@ impl RedisConnector {
     async fn acquire_connection(
         &self,
     ) -> Result<tokio::sync::MutexGuard<'_, redis::aio::MultiplexedConnection>> {
-        let shared = self.connection.as_ref().ok_or_else(|| {
-            Error::SourceConnection("Not connected to Redis".to_string())
-        })?;
+        let shared = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| Error::SourceConnection("Not connected to Redis".to_string()))?;
         Ok(shared.lock().await)
     }
 
     /// Detects the vector dimension by fetching a single document from the index.
-    async fn detect_dimension(
-        &self,
-        con: &mut redis::aio::MultiplexedConnection,
-    ) -> Result<usize> {
+    async fn detect_dimension(&self, con: &mut redis::aio::MultiplexedConnection) -> Result<usize> {
         let resp: redis::Value = redis::cmd("FT.SEARCH")
             .arg(&self.config.index)
             .arg("*")
@@ -148,11 +147,12 @@ impl RedisConnector {
             .await
             .map_err(|e| Error::SourceConnection(format!("FT.SEARCH sample failed: {e}")))?;
 
-        let points = parse_ft_search_response(&resp, &self.config.vector_field, &self.config.key_prefix)?;
+        let points =
+            parse_ft_search_response(&resp, &self.config.vector_field, &self.config.key_prefix)?;
 
-        let first = points.first().ok_or_else(|| {
-            Error::Extraction("No documents found in Redis index".to_string())
-        })?;
+        let first = points
+            .first()
+            .ok_or_else(|| Error::Extraction("No documents found in Redis index".to_string()))?;
 
         Ok(first.vector.len())
     }
@@ -254,7 +254,11 @@ fn build_ft_search_cmd(
     payload_fields: &[String],
 ) -> redis::Cmd {
     let mut cmd = redis::cmd("FT.SEARCH");
-    cmd.arg(index).arg(query).arg("LIMIT").arg(offset).arg(limit);
+    cmd.arg(index)
+        .arg(query)
+        .arg("LIMIT")
+        .arg(offset)
+        .arg(limit);
 
     // Determine which fields to return.
     let return_fields: Vec<&str> = if payload_fields.is_empty() {
@@ -334,10 +338,7 @@ pub fn parse_ft_search_response(
         let attrs = parse_field_value_pairs(&items[idx], vector_field)?;
         idx += 1;
 
-        let id = key
-            .strip_prefix(key_prefix)
-            .unwrap_or(&key)
-            .to_string();
+        let id = key.strip_prefix(key_prefix).unwrap_or(&key).to_string();
 
         let vector = extract_vector_from_attrs(&attrs, vector_field)?;
         let payload = build_payload(&attrs, vector_field);
@@ -413,7 +414,9 @@ fn extract_vector_from_attrs(
     vector_field: &str,
 ) -> Result<Vec<f32>> {
     let value = attrs.get(vector_field).ok_or_else(|| {
-        Error::Extraction(format!("Vector field '{vector_field}' not found in document"))
+        Error::Extraction(format!(
+            "Vector field '{vector_field}' not found in document"
+        ))
     })?;
 
     match value {
@@ -532,10 +535,7 @@ fn extract_attributes(items: &[redis::Value], vector_field: &str) -> Vec<FieldIn
 /// Parses a single attribute definition from `FT.INFO`.
 ///
 /// Each attribute is a flat array: `["identifier", "name", "type", "TEXT", ...]`
-fn parse_single_attribute(
-    attr: &redis::Value,
-    vector_field: &str,
-) -> Option<FieldInfo> {
+fn parse_single_attribute(attr: &redis::Value, vector_field: &str) -> Option<FieldInfo> {
     let parts = match attr {
         redis::Value::Array(arr) => arr,
         _ => return None,
