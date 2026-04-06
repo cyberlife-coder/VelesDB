@@ -1395,6 +1395,29 @@ Returns a single row with:
 | `plan` | object | Structured query plan (JSON) |
 | `tree` | string | Human-readable plan tree |
 
+The `tree` field now surfaces additional context when the query uses `WITH`, `LET`, or `FUSION`
+clauses:
+
+- **`WITH` options** — `ef_search`, `mode`, `rerank`, `timeout_ms` are read from the `WITH` clause
+  and displayed as-is (no longer hardcoded to 100 for `ef_search`).
+- **`LET` bindings** — each named binding is listed under a `LET bindings:` node.
+- **`FUSION` details** — strategy name, `k`, and per-source weights appear under a `FUSION:` node.
+
+Example enriched output:
+
+```
+── VectorSearch (docs) ef_search=512
+   ├── WITH options:
+   │   ├── ef_search: 512
+   │   ├── mode: accurate
+   │   └── rerank: true
+   ├── LET bindings:
+   │   └── boost = vector_score * 1.5
+   ├── FUSION: rrf (k=60, vector_weight=0.7, bm25_weight=0.3)
+   ├── Filter (PreFilter)
+   └── Limit 10
+```
+
 ---
 
 ## DDL Statements (v3.3+) and Admin Statements (v3.5+)

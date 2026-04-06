@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_metadata_collection()`, or `get_any_collection()` instead.
 
 ### Added
+- **EXPLAIN now surfaces WITH/LET/FUSION** — `ef_search` is read from `WITH clause` instead of
+  hardcoded to 100; `WITH options`, `LET bindings`, and `FUSION` details (strategy, k, weights)
+  are now displayed in the EXPLAIN output tree. Closes #471.
+- **Python typed exception hierarchy** — `VelesDBError`, `DimensionMismatchError`, and
+  `CollectionNotFoundError` are now catchable as typed Python exceptions. Bulk upsert errors
+  include the point index (e.g., `"Point at index 4237 missing 'id' field"`). Closes #427.
+- **Python performance guide** — `docs/guides/PYTHON_PERFORMANCE.md` documents numpy fast-paths,
+  `upsert_bulk_numpy()`, `batch_search()`, and threading patterns. Closes #409.
 - **`AnyCollection` enum** — Type-erased collection handle for callers that don't know the
   collection type at compile time. Zero-cost dispatch via enum match (no vtable, no heap).
   Methods: `config()`, `flush()`, `point_count()`, `is_empty()`, `name()`, `execute_query_str()`,
