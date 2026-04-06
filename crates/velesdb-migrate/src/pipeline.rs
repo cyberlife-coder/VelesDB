@@ -377,6 +377,9 @@ impl Pipeline {
                     graph_connector,
                 );
                 graph_phase.connect().await?;
+                // Stats discarded here; graph phase runs for side effects only
+                // (edge insertion + graph collection flush). Surfacing these stats
+                // to MigrationStats is tracked in TODO(US-GRAPH-02).
                 let _graph_stats = graph_phase.run(db).await?;
                 graph_phase.close().await?;
             }
