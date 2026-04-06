@@ -5,7 +5,7 @@
 
 use std::fmt::{self, Write as _};
 
-use super::{FilterStrategy, IndexType, PlanNode, QueryPlan};
+use super::{FilterStrategy, FusionInfo, IndexType, PlanNode, QueryPlan};
 
 impl QueryPlan {
     /// Renders the plan as a tree string.
@@ -13,6 +13,10 @@ impl QueryPlan {
     pub fn to_tree(&self) -> String {
         let mut output = String::from("Query Plan:\n");
         Self::render_node(&self.root, &mut output, "", true);
+
+        Self::render_with_options(&self.with_options, &mut output);
+        Self::render_let_bindings(&self.let_bindings, &mut output);
+        Self::render_fusion_info(self.fusion_info.as_ref(), &mut output);
 
         let _ = write!(
             output,
@@ -36,6 +40,41 @@ impl QueryPlan {
         }
 
         output
+    }
+
+    /// Renders WITH clause options into the tree output.
+    fn render_with_options(options: &[(String, String)], output: &mut String) {
+        if options.is_empty() {
+            return;
+        }
+        let _ = writeln!(output, "\nWITH options:");
+        for (key, value) in options {
+            let _ = writeln!(output, "  {key} = {value}");
+        }
+    }
+
+    /// Renders LET bindings into the tree output.
+    fn render_let_bindings(bindings: &[String], output: &mut String) {
+        if bindings.is_empty() {
+            return;
+        }
+        let _ = writeln!(output, "\nLET bindings:");
+        for binding in bindings {
+            let _ = writeln!(output, "  {binding}");
+        }
+    }
+
+    /// Renders FUSION info into the tree output.
+    fn render_fusion_info(info: Option<&FusionInfo>, output: &mut String) {
+        let Some(fi) = info else { return };
+        let _ = writeln!(output, "\nFUSION:");
+        let _ = writeln!(output, "  Strategy: {}", fi.strategy);
+        if let Some(k) = fi.k {
+            let _ = writeln!(output, "  k: {k}");
+        }
+        if let Some(ref w) = fi.weights {
+            let _ = writeln!(output, "  Weights: {w}");
+        }
     }
 
     pub(crate) fn render_node(node: &PlanNode, output: &mut String, prefix: &str, is_last: bool) {

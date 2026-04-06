@@ -159,7 +159,7 @@ impl Database {
             return Ok(plan);
         }
 
-        let mut plan = crate::velesql::QueryPlan::from_select(&query.select);
+        let mut plan = crate::velesql::QueryPlan::from_query(query);
         plan.cache_hit = Some(false);
         plan.plan_reuse_count = Some(0);
         Ok(plan)
@@ -402,7 +402,7 @@ impl Database {
     /// Inserts a compiled plan into the cache after a cache miss (CACHE-02).
     fn populate_plan_cache(&self, query: &crate::velesql::Query) {
         let compiled = std::sync::Arc::new(crate::cache::CompiledPlan {
-            plan: crate::velesql::QueryPlan::from_select(&query.select),
+            plan: crate::velesql::QueryPlan::from_query(query),
             referenced_collections: Self::referenced_collection_names(query),
             compiled_at: std::time::Instant::now(),
             reuse_count: std::sync::atomic::AtomicU64::new(0),

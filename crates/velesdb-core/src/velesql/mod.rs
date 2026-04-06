@@ -245,8 +245,8 @@ pub use cache::{CacheStats, QueryCache};
 pub use error::{ParseError, ParseErrorKind};
 #[cfg(feature = "persistence")]
 pub use explain::{
-    FilterPlan, FilterStrategy, IndexLookupPlan, IndexType, LimitPlan, OffsetPlan, PlanNode,
-    QueryPlan, TableScanPlan, VectorSearchPlan,
+    FilterPlan, FilterStrategy, FusionInfo, IndexLookupPlan, IndexType, LimitPlan, OffsetPlan,
+    PlanNode, QueryPlan, TableScanPlan, VectorSearchPlan,
 };
 pub use parser::match_clause;
 pub use parser::Parser;

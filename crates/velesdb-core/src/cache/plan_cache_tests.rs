@@ -19,6 +19,9 @@ fn dummy_query_plan() -> QueryPlan {
         estimated_cost_ms: 1.0,
         index_used: None,
         filter_strategy: FilterStrategy::None,
+        with_options: Vec::new(),
+        let_bindings: Vec::new(),
+        fusion_info: None,
         cache_hit: None,
         plan_reuse_count: None,
     }
