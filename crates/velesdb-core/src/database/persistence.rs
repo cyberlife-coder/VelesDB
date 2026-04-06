@@ -50,12 +50,21 @@ impl Database {
     /// Directories with invalid names are skipped with a warning.
     fn loadable_collection_name(&self, entry: &std::fs::DirEntry) -> Option<String> {
         let path = entry.path();
-        if !path.is_dir() {
+        if !path.is_dir() || !path.join("config.json").exists() {
             return None;
         }
-        if !path.join("config.json").exists() {
+        let name = Self::validated_collection_name(&path)?;
+        if self.is_already_registered(&name) {
             return None;
         }
+        Some(name)
+    }
+
+    /// Extracts and validates the collection name from a directory path.
+    ///
+    /// Returns `None` if the directory name is not valid UTF-8 or fails
+    /// collection name validation (logged as a warning).
+    fn validated_collection_name(path: &std::path::Path) -> Option<String> {
         let name = path.file_name()?.to_str()?.to_string();
         if crate::validation::validate_collection_name(&name).is_err() {
             tracing::warn!(
@@ -65,13 +74,14 @@ impl Database {
             );
             return None;
         }
-        if self.vector_colls.read().contains_key(&name)
-            || self.graph_colls.read().contains_key(&name)
-            || self.metadata_colls.read().contains_key(&name)
-        {
-            return None;
-        }
         Some(name)
+    }
+
+    /// Checks whether a collection name is already registered in any typed registry.
+    fn is_already_registered(&self, name: &str) -> bool {
+        self.vector_colls.read().contains_key(name)
+            || self.graph_colls.read().contains_key(name)
+            || self.metadata_colls.read().contains_key(name)
     }
 
     /// Attempts to load a single collection directory, returning `true` on success.

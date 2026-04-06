@@ -167,6 +167,17 @@ pub(super) struct ExtractedComponents {
     pub(super) is_not_similarity_query: bool,
 }
 
+/// Bundles the parameters for [`Collection::finalize_query_results`] to stay
+/// within the 8-parameter limit.
+struct QueryFinalizationContext<'a> {
+    stmt: &'a crate::velesql::SelectStatement,
+    params: &'a std::collections::HashMap<String, serde_json::Value>,
+    limit: usize,
+    extracted: &'a ExtractedComponents,
+    ctx: &'a crate::guardrails::QueryContext,
+    let_bindings: &'a [crate::velesql::LetBinding],
+}
+
 impl Collection {
     /// Executes a `VelesQL` query on this collection with the `"default"` client id.
     ///
@@ -274,13 +285,15 @@ impl Collection {
         // Main dispatch + post-processing.
         let mut results = self.dispatch_main_select(stmt, params, &extracted, fetch_limit, ctx)?;
         self.finalize_query_results(
-            stmt,
             &mut results,
-            params,
-            limit,
-            &extracted,
-            ctx,
-            &query.let_bindings,
+            &QueryFinalizationContext {
+                stmt,
+                params,
+                limit,
+                extracted: &extracted,
+                ctx,
+                let_bindings: &query.let_bindings,
+            },
         )?;
         Ok(results)
     }
@@ -407,33 +420,27 @@ impl Collection {
     }
 
     /// Phase 3: Join analysis, guard-rail checks, post-processing, and stats update.
-    #[allow(clippy::too_many_arguments)]
     fn finalize_query_results(
         &self,
-        stmt: &crate::velesql::SelectStatement,
         results: &mut Vec<SearchResult>,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        limit: usize,
-        extracted: &ExtractedComponents,
-        ctx: &crate::guardrails::QueryContext,
-        let_bindings: &[crate::velesql::LetBinding],
+        fctx: &QueryFinalizationContext<'_>,
     ) -> Result<()> {
-        self.analyze_join_pushdown(stmt);
-        self.check_guardrails_and_record(ctx, results.len())?;
+        self.analyze_join_pushdown(fctx.stmt);
+        self.check_guardrails_and_record(fctx.ctx, results.len())?;
 
         *results = self.apply_select_postprocessing(
-            stmt,
+            fctx.stmt,
             std::mem::take(results),
-            params,
-            limit,
-            let_bindings,
+            fctx.params,
+            fctx.limit,
+            fctx.let_bindings,
         )?;
 
         // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
-        if extracted.vector_search.is_some() {
+        if fctx.extracted.vector_search.is_some() {
             // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
             #[allow(clippy::cast_possible_truncation)]
-            let vector_latency_us = ctx.elapsed().as_micros() as u64;
+            let vector_latency_us = fctx.ctx.elapsed().as_micros() as u64;
             self.query_planner
                 .stats()
                 .update_vector_latency(vector_latency_us);

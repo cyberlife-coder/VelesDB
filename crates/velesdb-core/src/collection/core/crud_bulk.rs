@@ -79,56 +79,86 @@ impl Collection {
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         let sparse_batch = Self::collect_sparse_batch(points);
 
-        // ── V2 optimized path: DirectVectorWriter + AsyncIndexBuilder ───
-        if let Some(ref aib) = self.async_index_builder {
-            // WAL + payload write (same durability guarantees as standard path).
-            self.store_vectors_and_payloads_inner(&vector_refs, points, fsync)?;
+        let count = if self.async_index_builder.is_some() {
+            self.upsert_bulk_v2_path(&vector_refs, points, &sparse_batch, fsync)?
+        } else {
+            self.upsert_bulk_standard_path(&vector_refs, points, &sparse_batch, fsync)?
+        };
 
-            // Bypass ShardedVectors: write directly to ContiguousVectors.
-            let writer = DirectVectorWriter::new(&self.index);
-            let results = writer.write_batch_direct(&vector_refs)?;
+        Ok(count)
+    }
 
-            // Enqueue for deferred HNSW construction.
-            let tuples: Vec<(u64, Vec<f32>)> =
-                points.iter().map(|p| (p.id, p.vector.clone())).collect();
+    /// V2 optimized path: `DirectVectorWriter` + `AsyncIndexBuilder`.
+    ///
+    /// Bypasses `ShardedVectors` for direct writes to `ContiguousVectors`,
+    /// then enqueues vectors for deferred HNSW construction.
+    fn upsert_bulk_v2_path(
+        &self,
+        vector_refs: &[(u64, &[f32])],
+        points: &[Point],
+        sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
+        fsync: bool,
+    ) -> Result<usize> {
+        let aib = self
+            .async_index_builder
+            .as_ref()
+            .expect("invariant: caller checked async_index_builder.is_some()");
 
-            let needs_flush = aib.enqueue(tuples);
+        // WAL + payload write (same durability guarantees as standard path).
+        self.store_vectors_and_payloads_inner(vector_refs, points, fsync)?;
 
-            // Sync to ShardedVectors for SIMD re-ranking BEFORE flush_sync,
-            // because flush_sync → insert_batch_parallel re-registers mappings
-            // with new internal indices, making the `results` from
-            // write_batch_direct stale.
-            writer.sync_to_sharded(&results)?;
+        // Bypass ShardedVectors: write directly to ContiguousVectors.
+        let writer = DirectVectorWriter::new(&self.index);
+        let results = writer.write_batch_direct(vector_refs)?;
 
-            if needs_flush {
-                // Buffer reached merge_threshold — flush synchronously.
-                aib.flush_sync(&self.index)?;
-            }
+        // Enqueue for deferred HNSW construction.
+        let tuples: Vec<(u64, Vec<f32>)> =
+            points.iter().map(|p| (p.id, p.vector.clone())).collect();
 
-            let count = vector_refs.len();
-            self.config.write().point_count = self.vector_storage.read().len();
-            self.apply_sparse_batch_bulk(&sparse_batch)?;
-            self.invalidate_caches_and_bump_generation();
+        let needs_flush = aib.enqueue(tuples);
 
-            // Track inserts for periodic HNSW save (Issue #423 Component 3).
-            #[allow(clippy::cast_possible_truncation)]
-            self.inserts_since_last_hnsw_save
-                .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
+        // Sync to ShardedVectors for SIMD re-ranking BEFORE flush_sync,
+        // because flush_sync → insert_batch_parallel re-registers mappings
+        // with new internal indices, making the `results` from
+        // write_batch_direct stale.
+        writer.sync_to_sharded(&results)?;
 
-            tracing::debug!(
-                "upsert_bulk V2 path: inserted {count} vectors via DirectVectorWriter + AsyncIndexBuilder"
-            );
-
-            return Ok(count);
+        if needs_flush {
+            // Buffer reached merge_threshold — flush synchronously.
+            aib.flush_sync(&self.index)?;
         }
 
-        // ── Standard path (ShardedVectors + synchronous HNSW) ───────────
-        self.store_vectors_and_payloads_inner(&vector_refs, points, fsync)?;
+        let count = vector_refs.len();
+        self.config.write().point_count = self.vector_storage.read().len();
+        self.apply_sparse_batch_bulk(sparse_batch)?;
+        self.invalidate_caches_and_bump_generation();
 
-        let inserted = self.bulk_index_or_defer(vector_refs);
+        // Track inserts for periodic HNSW save (Issue #423 Component 3).
+        #[allow(clippy::cast_possible_truncation)]
+        self.inserts_since_last_hnsw_save
+            .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
+
+        tracing::debug!(
+            "upsert_bulk V2 path: inserted {count} vectors via DirectVectorWriter + AsyncIndexBuilder"
+        );
+
+        Ok(count)
+    }
+
+    /// Standard path: `ShardedVectors` + synchronous HNSW insertion.
+    fn upsert_bulk_standard_path(
+        &self,
+        vector_refs: &[(u64, &[f32])],
+        points: &[Point],
+        sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
+        fsync: bool,
+    ) -> Result<usize> {
+        self.store_vectors_and_payloads_inner(vector_refs, points, fsync)?;
+
+        let inserted = self.bulk_index_or_defer(vector_refs.to_vec());
         self.config.write().point_count = self.vector_storage.read().len();
 
-        self.apply_sparse_batch_bulk(&sparse_batch)?;
+        self.apply_sparse_batch_bulk(sparse_batch)?;
         self.invalidate_caches_and_bump_generation();
 
         Ok(inserted)

@@ -26,6 +26,25 @@ fn generate_test_vector(dim: usize, seed: f32) -> Vec<f32> {
     (0..dim).map(|i| (seed + i as f32 * 0.1).sin()).collect()
 }
 
+/// Computes Jaccard similarity using a scalar reference implementation.
+///
+/// Used to validate SIMD-optimized `jaccard_similarity_native` across
+/// different vector dimensions.
+fn reference_jaccard(a: &[f32], b: &[f32]) -> f32 {
+    let (mut intersection, mut union) = (0u32, 0u32);
+    for (va, vb) in a.iter().zip(b.iter()) {
+        let in_a = *va > 0.5;
+        let in_b = *vb > 0.5;
+        intersection += u32::from(in_a && in_b);
+        union += u32::from(in_a || in_b);
+    }
+    if union == 0 {
+        1.0
+    } else {
+        intersection as f32 / union as f32
+    }
+}
+
 // --- Correctness Tests ---
 
 #[test]
@@ -390,25 +409,7 @@ fn test_jaccard_consistency_scalar_vs_reference() {
             .collect();
 
         let result = jaccard_similarity_native(&a, &b);
-
-        // Compute reference manually
-        let mut intersection = 0u32;
-        let mut union = 0u32;
-        for i in 0..dim {
-            let in_a = a[i] > 0.5;
-            let in_b = b[i] > 0.5;
-            if in_a && in_b {
-                intersection += 1;
-            }
-            if in_a || in_b {
-                union += 1;
-            }
-        }
-        let expected = if union == 0 {
-            1.0
-        } else {
-            intersection as f32 / union as f32
-        };
+        let expected = reference_jaccard(&a, &b);
 
         assert!(
             (result - expected).abs() < EPSILON,
