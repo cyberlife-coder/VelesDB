@@ -37,6 +37,8 @@ pub enum Condition {
     GraphMatch(GraphMatchPredicate),
     /// Array containment: `column CONTAINS value` / `CONTAINS ANY` / `CONTAINS ALL`
     Contains(ContainsCondition),
+    /// Strict text substring filter: `column CONTAINS_TEXT 'query'`
+    ContainsText(ContainsTextCondition),
     /// Geospatial distance: `GEO_DISTANCE(column, lat, lng) op threshold`
     GeoDistance(GeoDistanceCondition),
     /// Geospatial bounding box: `GEO_BBOX(column, lat_min, lng_min, lat_max, lng_max)`
@@ -186,6 +188,18 @@ pub struct MatchCondition {
     pub query: String,
 }
 
+/// Strict text substring filter: `column CONTAINS_TEXT 'query'`
+///
+/// Unlike [`MatchCondition`] (RRF-boosted text search), this performs
+/// exact case-sensitive substring matching as a metadata filter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContainsTextCondition {
+    /// Column name to search within.
+    pub column: String,
+    /// Substring to search for.
+    pub query: String,
+}
+
 /// Containment mode for array CONTAINS operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContainsMode {
@@ -250,6 +264,7 @@ impl Condition {
             Self::And(l, r) | Self::Or(l, r) => l.has_vector_search() || r.has_vector_search(),
             Self::Group(inner) | Self::Not(inner) => inner.has_vector_search(),
             Self::Contains(_)
+            | Self::ContainsText(_)
             | Self::Comparison(_)
             | Self::In(_)
             | Self::Between(_)

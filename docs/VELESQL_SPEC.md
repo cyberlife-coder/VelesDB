@@ -71,6 +71,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | GEO_DISTANCE / GEO_BBOX geospatial | Stable | 3.7 |
 | GROUP BY MAX(score) / AVG(score) | Stable | 3.7 |
 | FIRST(column) projection | Stable | 3.7 |
+| CONTAINS_TEXT strict text filter | Stable | 3.8 |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -576,10 +577,83 @@ LIMIT 10
 ```
 
 > **Known Limitations (v1.9.0)**:
-> - **No strict text filter**: `MATCH` in hybrid mode boosts but does not filter.
->   A dedicated text filter operator is planned (see issue #446).
 > - **Column parameter ignored**: The column name (e.g., `content`) is parsed but
 >   the execution engine searches all indexed text fields regardless.
+
+> **Tip**: For strict text filtering (exclude results that do not contain a keyword),
+> use `CONTAINS_TEXT` instead of `MATCH`. See the CONTAINS_TEXT section below.
+
+### Strict Text Filter (CONTAINS_TEXT, v3.8+)
+
+The `CONTAINS_TEXT` operator performs case-sensitive substring matching on a
+string payload field. Unlike `MATCH` (which boosts via RRF), `CONTAINS_TEXT`
+is a **strict filter**: any result whose target field does not contain the
+specified substring is excluded from the result set.
+
+```sql
+column CONTAINS_TEXT 'substring'
+```
+
+The keyword is case-insensitive (`contains_text`, `Contains_Text`, `CONTAINS_TEXT`
+are all valid). The substring match itself is case-sensitive.
+
+**Standalone metadata filter** — returns all documents where the field contains
+the substring:
+
+```sql
+SELECT * FROM docs WHERE content CONTAINS_TEXT 'rust' LIMIT 10
+```
+
+**With vector search (hybrid strict filter)** — applies as a post-filter on
+vector search results, guaranteeing every returned result contains the substring:
+
+```sql
+-- Every result is guaranteed to contain 'database' in the content field
+SELECT * FROM docs
+WHERE vector NEAR $v AND content CONTAINS_TEXT 'database'
+LIMIT 10
+```
+
+**Combined with MATCH (boost + strict filter)** — `MATCH` provides RRF score
+boosting while `CONTAINS_TEXT` enforces strict inclusion:
+
+```sql
+-- MATCH boosts results mentioning 'database' via RRF
+-- CONTAINS_TEXT guarantees every result actually contains 'database'
+SELECT * FROM docs
+WHERE vector NEAR $v
+  AND content MATCH 'database'
+  AND content CONTAINS_TEXT 'database'
+LIMIT 10
+```
+
+**Combined with other filters**:
+
+```sql
+SELECT * FROM docs
+WHERE content CONTAINS_TEXT 'rust' AND category = 'tech'
+LIMIT 10
+```
+
+#### MATCH vs CONTAINS_TEXT
+
+| Feature | `MATCH` | `CONTAINS_TEXT` |
+|---------|---------|-----------------|
+| Purpose | BM25 text search / RRF boost | Strict substring filter |
+| With NEAR | Boosts score via RRF fusion | Excludes non-matching results |
+| Non-matching results | May still appear (lower score) | Always excluded |
+| Matching | BM25 tokenized relevance | Case-sensitive `str::contains()` |
+| Best for | "Rank by text relevance" | "Must contain this text" |
+
+#### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| `CONTAINS_TEXT ''` (empty string) | Matches all string fields (every string contains `""`) |
+| Missing payload field | Returns `false` (row excluded) |
+| Non-string field (e.g., integer) | Returns `false` (row excluded) |
+| All results filtered out | Empty result set, no error |
+| Unicode text | Supported (case-sensitive byte-level matching) |
 
 ### Vector Search (NEAR)
 

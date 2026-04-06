@@ -334,6 +334,7 @@ primary_expr = {
     between_expr |
     like_expr |
     is_null_expr |
+    contains_text_expr |
     contains_expr |
     geo_distance_expr |
     geo_bbox_expr |
@@ -400,6 +401,9 @@ between_expr = { where_column ~ ^"BETWEEN" ~ value ~ ^"AND" ~ value }
 // LIKE / ILIKE expression: column LIKE 'pattern' or column ILIKE 'pattern'
 like_expr = { where_column ~ like_op ~ string }
 like_op = { ^"ILIKE" | ^"LIKE" }
+
+// CONTAINS_TEXT expression: strict text substring filter
+contains_text_expr = { where_column ~ ^"CONTAINS_TEXT" ~ string }
 
 // CONTAINS expression: column CONTAINS value | column CONTAINS ANY/ALL (values)
 contains_expr = {

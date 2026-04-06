@@ -4,8 +4,9 @@ use super::helpers::compare_op_from_str;
 use super::{extract_identifier, Rule};
 use crate::metrics::global_guardrails_metrics;
 use crate::velesql::ast::{
-    BetweenCondition, Comparison, Condition, GeoBboxCondition, GeoDistanceCondition, InCondition,
-    IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition,
+    BetweenCondition, Comparison, Condition, ContainsTextCondition, GeoBboxCondition,
+    GeoDistanceCondition, InCondition, IsNullCondition, LikeCondition, MatchCondition,
+    SimilarityCondition,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -148,6 +149,7 @@ impl Parser {
             Rule::between_expr => Self::parse_between_expr(inner),
             Rule::like_expr => Self::parse_like_expr(inner),
             Rule::is_null_expr => Self::parse_is_null_expr(inner),
+            Rule::contains_text_expr => Self::parse_contains_text_expr(inner),
             Rule::contains_expr => Self::parse_contains_expr(inner),
             Rule::geo_distance_expr => Self::parse_geo_distance_expr(inner),
             Rule::geo_bbox_expr => Self::parse_geo_bbox_expr(inner),
@@ -236,6 +238,26 @@ impl Parser {
         );
 
         Ok(Condition::Match(MatchCondition { column, query }))
+    }
+
+    /// Parses a `CONTAINS_TEXT` expression: `column CONTAINS_TEXT 'query'`
+    pub(crate) fn parse_contains_text_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let mut inner = pair.into_inner();
+        let column = Self::extract_leading_column(&mut inner)?;
+
+        let query = crate::velesql::parser::helpers::unescape_string_literal(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected CONTAINS_TEXT query"))?
+                .as_str(),
+        );
+
+        Ok(Condition::ContainsText(ContainsTextCondition {
+            column,
+            query,
+        }))
     }
 
     pub(crate) fn parse_graph_match_expr(
