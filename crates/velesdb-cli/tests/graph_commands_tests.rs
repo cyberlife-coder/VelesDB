@@ -6,7 +6,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
-#[allow(deprecated)]
 fn cmd() -> Command {
     Command::cargo_bin("velesdb").expect("velesdb binary not found")
 }

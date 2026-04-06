@@ -3,8 +3,6 @@
 //! EPIC-060: Comprehensive E2E tests for CLI commands.
 //! Tests all CLI subcommands and their options.
 
-#![allow(deprecated)]
-
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;

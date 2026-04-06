@@ -1,5 +1,4 @@
 #![allow(clippy::pedantic)]
-#![allow(deprecated)] // Tests use legacy Collection.
 
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
@@ -87,7 +86,7 @@ fn csv_config(source_path: &Path, destination_path: &Path, collection: &str) -> 
     }
 }
 
-fn open_collection(db_path: &Path, name: &str) -> velesdb_core::Collection {
+fn open_collection(db_path: &Path, name: &str) -> velesdb_core::VectorCollection {
     Database::open(db_path)
         .expect("open database")
         .get_vector_collection(name)

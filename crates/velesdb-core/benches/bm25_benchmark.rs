@@ -1,4 +1,3 @@
-#![allow(deprecated)] // Benches use legacy Collection.
 //! Benchmark suite for BM25 full-text search operations.
 //!
 //! Run with: `cargo bench --bench bm25_benchmark`

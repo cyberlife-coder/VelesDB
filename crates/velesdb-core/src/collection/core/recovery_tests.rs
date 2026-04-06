@@ -1,5 +1,3 @@
-#![allow(deprecated)] // Tests use legacy Collection via field access.
-
 use super::recovery;
 use crate::collection::Collection;
 use crate::distance::DistanceMetric;

@@ -1,5 +1,4 @@
 //! Tests for VelesDB Mobile UniFFI bindings.
-#![allow(deprecated)]
 
 use super::*;
 use tempfile::TempDir;

@@ -8,7 +8,6 @@ use std::fs;
 use tempfile::TempDir;
 
 /// Get the CLI binary command
-#[allow(deprecated)]
 fn velesdb_cmd() -> Command {
     Command::cargo_bin("velesdb").unwrap()
 }

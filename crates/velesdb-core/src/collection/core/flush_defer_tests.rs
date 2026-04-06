@@ -4,7 +4,6 @@
 //! Verifies that `flush()` skips HNSW `index.save()` by default (fast path),
 //! while `flush_full()` always persists the HNSW graph to disk.
 
-#![allow(deprecated)] // Tests use legacy Collection via field access.
 #![allow(
     clippy::cast_precision_loss,
     clippy::float_cmp,

@@ -340,7 +340,7 @@ fn test_search_with_filter_and_opts_bitmap_empty_returns_empty() {
         field: "category".to_string(),
         value: serde_json::Value::String("nonexistent".to_string()),
     });
-    let opts = crate::collection::Collection::search::query::QuerySearchOptions {
+    let opts = crate::collection::search::query::QuerySearchOptions {
         quality: Some(crate::SearchQuality::Balanced),
         ef_search: None,
         force_rerank: None,
@@ -385,7 +385,7 @@ fn test_search_with_filter_and_opts_no_bitmap_falls_back_to_post_filter() {
         field: "tag".to_string(),
         value: serde_json::Value::String("A".to_string()),
     });
-    let opts = crate::collection::Collection::search::query::QuerySearchOptions {
+    let opts = crate::collection::search::query::QuerySearchOptions {
         quality: Some(crate::SearchQuality::Accurate),
         ef_search: None,
         force_rerank: None,
