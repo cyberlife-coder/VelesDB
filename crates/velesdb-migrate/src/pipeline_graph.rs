@@ -39,6 +39,15 @@ impl<'a> GraphMigrationPhase<'a> {
         self.connector.connect().await
     }
 
+    /// Closes the underlying source connector, releasing any held resources.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connector close fails.
+    pub async fn close(&mut self) -> Result<()> {
+        self.connector.close().await
+    }
+
     /// Runs the graph migration.
     ///
     /// Iterates over all configured relations, extracts FK columns from the
@@ -121,6 +130,13 @@ impl<'a> GraphMigrationPhase<'a> {
 
         loop {
             let batch = self.connector.extract_batch(offset.clone(), batch_size).await?;
+
+            // Guard against connectors that return has_more=true with an empty batch
+            // (e.g. cursor-based connectors on transient gaps), which would otherwise
+            // cause an infinite loop restarting from offset=None.
+            if batch.points.is_empty() {
+                break;
+            }
 
             for point in &batch.points {
                 if let Some(edge) = build_edge(point, relation) {

@@ -159,10 +159,13 @@ impl SourceConnector for MilvusConnector {
         offset: Option<serde_json::Value>,
         batch_size: usize,
     ) -> Result<ExtractedBatch> {
-        let current_offset = offset
-            .as_ref()
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as usize;
+        let current_offset = usize::try_from(
+            offset
+                .as_ref()
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        )
+        .unwrap_or(usize::MAX);
 
         let vector_field = self
             .vector_field

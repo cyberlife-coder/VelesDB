@@ -378,6 +378,7 @@ impl Pipeline {
                 );
                 graph_phase.connect().await?;
                 let _graph_stats = graph_phase.run(db).await?;
+                graph_phase.close().await?;
             }
         }
 
