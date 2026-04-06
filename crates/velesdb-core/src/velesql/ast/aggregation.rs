@@ -21,6 +21,8 @@ pub enum AggregateType {
     Min,
     /// MAX(column)
     Max,
+    /// FIRST(column) — returns the value from the highest-scoring row in a group.
+    First,
 }
 
 /// Argument to an aggregate function.
@@ -30,6 +32,8 @@ pub enum AggregateArg {
     Wildcard,
     /// Column reference.
     Column(String),
+    /// The `score` pseudo-column representing `SearchResult.score`.
+    Score,
 }
 
 /// An aggregate function call in a SELECT statement.

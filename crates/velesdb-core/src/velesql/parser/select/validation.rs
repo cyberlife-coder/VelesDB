@@ -16,6 +16,7 @@ pub(crate) fn parse_aggregate_type(
         "AVG" => Ok(AggregateType::Avg),
         "MIN" => Ok(AggregateType::Min),
         "MAX" => Ok(AggregateType::Max),
+        "FIRST" => Ok(AggregateType::First),
         other => Err(ParseError::syntax(0, other, "Unknown aggregate function")),
     }
 }
@@ -26,14 +27,15 @@ pub(crate) fn validate_aggregate_wildcard(
     arg: &AggregateArg,
 ) -> Result<(), ParseError> {
     if matches!(arg, AggregateArg::Wildcard) && !matches!(agg_type, AggregateType::Count) {
-        return Err(ParseError::syntax(
-            0,
-            format!("{agg_type:?}(*)"),
+        let msg = if matches!(agg_type, AggregateType::First) {
+            "FIRST does not accept wildcard argument (*)".to_string()
+        } else {
             format!(
                 "{agg_type:?}(*) is invalid - only COUNT(*) accepts *. \
                  Use {agg_type:?}(column_name) instead"
-            ),
-        ));
+            )
+        };
+        return Err(ParseError::syntax(0, format!("{agg_type:?}(*)"), msg));
     }
     Ok(())
 }

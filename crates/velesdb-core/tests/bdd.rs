@@ -41,6 +41,8 @@ mod recall_contract;
 mod regression;
 #[path = "bdd/set_operations.rs"]
 mod set_operations;
+#[path = "bdd/vector_group_by.rs"]
+mod vector_group_by;
 #[path = "bdd/vector_search.rs"]
 mod vector_search;
 #[path = "bdd/where_filters.rs"]

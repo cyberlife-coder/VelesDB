@@ -306,8 +306,8 @@ qualified_wildcard = { identifier ~ "." ~ "*" }
 // Aggregate functions: COUNT, SUM, AVG, MIN, MAX
 aggregation_item = { aggregate_function ~ (^"AS" ~ identifier)? }
 aggregate_function = { aggregate_type ~ "(" ~ aggregate_arg ~ ")" }
-aggregate_type = { ^"COUNT" | ^"SUM" | ^"AVG" | ^"MIN" | ^"MAX" }
-aggregate_arg = { "*" | column_name }
+aggregate_type = { ^"FIRST" | ^"COUNT" | ^"SUM" | ^"AVG" | ^"MIN" | ^"MAX" }
+aggregate_arg = { "*" | ^"score" | column_name }
 
 column = { column_name ~ (^"AS" ~ identifier)? }
 // EPIC-052 US-005: Support nested field paths like metadata.source or profile.address.city

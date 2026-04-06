@@ -70,6 +70,7 @@ mod similarity_filter;
 mod sparse_dispatch;
 mod union_query;
 mod validation;
+pub(crate) mod vector_group_by;
 mod where_eval;
 #[cfg(test)]
 mod with_options_tests;
@@ -275,15 +276,33 @@ impl Collection {
         let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
         let extracted = self.extract_query_components(stmt, params)?;
 
+        // When vector GROUP BY is active, fetch more results from vector search
+        // so grouping has enough chunks to work with.
+        let is_vgb = vector_group_by::is_vector_group_by_query(stmt);
+        let effective_fetch_limit = if is_vgb { MAX_LIMIT } else { fetch_limit };
+
         // Early-return paths or LET-binding guard for special query shapes.
-        if let Some(results) =
-            self.try_early_return_or_guard_let(query, stmt, params, &extracted, fetch_limit, ctx)?
-        {
+        if let Some(results) = self.try_early_return_or_guard_let(
+            query,
+            stmt,
+            params,
+            &extracted,
+            effective_fetch_limit,
+            ctx,
+        )? {
             return Ok(results);
         }
 
         // Main dispatch + post-processing.
-        let mut results = self.dispatch_main_select(stmt, params, &extracted, fetch_limit, ctx)?;
+        let mut results =
+            self.dispatch_main_select(stmt, params, &extracted, effective_fetch_limit, ctx)?;
+
+        // Vector GROUP BY post-processing: group results by parent field
+        // before ORDER BY / LIMIT / OFFSET are applied.
+        if is_vgb {
+            results = self.apply_vector_group_by(stmt, &results);
+        }
+
         self.finalize_query_results(
             &mut results,
             &QueryFinalizationContext {
@@ -501,6 +520,40 @@ impl Collection {
 
     // NOTE: compute_cbo_strategy, dispatch_main_select, dispatch_match_query,
     // analyze_join_pushdown, apply_select_postprocessing moved to select_dispatch.rs
+
+    /// Applies vector-search GROUP BY post-processing on search results.
+    ///
+    /// Extracts aggregation functions from the SELECT columns and delegates
+    /// to [`vector_group_by::group_search_results`].
+    fn apply_vector_group_by(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        results: &[SearchResult],
+    ) -> Vec<SearchResult> {
+        let group_by = stmt
+            .group_by
+            .as_ref()
+            .expect("invariant: is_vector_group_by_query checked");
+        let aggregations = Self::extract_aggregations(&stmt.columns);
+        let limit_hint = stmt.limit.map(|l| usize::try_from(l).unwrap_or(MAX_LIMIT));
+        let config = vector_group_by::VectorGroupByConfig {
+            group_by_columns: &group_by.columns,
+            aggregations: &aggregations,
+            limit_hint,
+        };
+        vector_group_by::group_search_results(results, &config)
+    }
+
+    /// Extracts aggregate functions from `SelectColumns`.
+    fn extract_aggregations(
+        columns: &crate::velesql::SelectColumns,
+    ) -> Vec<crate::velesql::AggregateFunction> {
+        match columns {
+            crate::velesql::SelectColumns::Aggregations(aggs) => aggs.clone(),
+            crate::velesql::SelectColumns::Mixed { aggregations, .. } => aggregations.clone(),
+            _ => Vec::new(),
+        }
+    }
 
     /// Checks timeout and cardinality guard-rails, recording failure on violation.
     fn check_guardrails_and_record(

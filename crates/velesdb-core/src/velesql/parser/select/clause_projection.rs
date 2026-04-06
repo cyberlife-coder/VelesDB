@@ -213,7 +213,7 @@ impl Parser {
                 Rule::aggregate_type => {
                     agg_type = Some(validation::parse_aggregate_type(&inner_pair)?);
                 }
-                Rule::aggregate_arg => arg = Some(Self::parse_aggregate_arg(inner_pair)),
+                Rule::aggregate_arg => arg = Some(Self::parse_aggregate_arg(&inner_pair)),
                 _ => {}
             }
         }
@@ -223,14 +223,15 @@ impl Parser {
         ))
     }
 
-    pub(crate) fn parse_aggregate_arg(pair: pest::iterators::Pair<Rule>) -> AggregateArg {
-        let inner = pair.into_inner().next();
-        match inner {
-            Some(p) if p.as_rule() == Rule::column_name => {
-                AggregateArg::Column(p.as_str().to_string())
-            }
-            _ => AggregateArg::Wildcard,
+    pub(crate) fn parse_aggregate_arg(pair: &pest::iterators::Pair<Rule>) -> AggregateArg {
+        let raw = pair.as_str().trim();
+        if raw == "*" {
+            return AggregateArg::Wildcard;
         }
+        if raw.eq_ignore_ascii_case("score") {
+            return AggregateArg::Score;
+        }
+        AggregateArg::Column(raw.to_string())
     }
 
     #[allow(dead_code)]
