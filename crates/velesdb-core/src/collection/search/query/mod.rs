@@ -595,6 +595,52 @@ impl Collection {
         self.execute_query(&query, params)
     }
 
+    /// Executes a query with instrumentation and returns plan + actual stats.
+    ///
+    /// Builds the plan, times execution, and collects per-node statistics.
+    /// Used by `VectorCollection` and `GraphCollection` newtypes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is invalid or execution fails.
+    pub fn explain_analyze_query(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<crate::velesql::ExplainOutput> {
+        use crate::velesql::{build_leaf_node_stats, ActualStats, ExplainOutput, QueryPlan};
+
+        let plan = if let Some(mc) = query.match_clause.as_ref() {
+            let stats = crate::collection::search::query::match_planner::CollectionStats::default();
+            QueryPlan::from_match(mc, &stats)
+        } else {
+            QueryPlan::from_select(&query.select)
+        };
+
+        let start = std::time::Instant::now();
+        let results = self.execute_query(query, params)?;
+        let elapsed = start.elapsed();
+
+        let actual_rows = results.len() as u64;
+        let actual_time_ms = elapsed.as_secs_f64() * 1000.0;
+        let (nodes_visited, edges_traversed) = if query.is_match_query() {
+            (actual_rows, actual_rows)
+        } else {
+            (0, 0)
+        };
+
+        let stats = ActualStats {
+            actual_rows,
+            actual_time_ms,
+            loops: 1,
+            nodes_visited,
+            edges_traversed,
+        };
+
+        let node_stats = build_leaf_node_stats(&plan.root, actual_rows, actual_time_ms);
+        Ok(ExplainOutput::with_stats(plan, stats, node_stats))
+    }
+
     // NOTE: apply_distinct and compute_distinct_key moved to distinct.rs
     // (EPIC-061/US-003 refactoring)
 

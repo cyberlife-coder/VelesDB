@@ -115,25 +115,16 @@ fn explain_with_analyze(
 
     let (actual_stats_resp, actual_time, node_stats_resp) =
         if let Some(ref stats) = output.actual_stats {
-            let as_resp = ActualStatsResponse {
-                actual_rows: stats.actual_rows,
-                actual_time_ms: stats.actual_time_ms,
-                loops: stats.loops,
-                nodes_visited: stats.nodes_visited,
-                edges_traversed: stats.edges_traversed,
-            };
-            let ns_resp: Vec<NodeStatsResponse> = output
+            let ns: Vec<NodeStatsResponse> = output
                 .node_stats
                 .iter()
-                .map(|ns| NodeStatsResponse {
-                    node_label: ns.node_label.clone(),
-                    actual_time_ms: ns.actual_time_ms,
-                    actual_rows_in: ns.actual_rows_in,
-                    actual_rows_out: ns.actual_rows_out,
-                    loops: ns.loops,
-                })
+                .map(NodeStatsResponse::from)
                 .collect();
-            (Some(as_resp), Some(stats.actual_time_ms), Some(ns_resp))
+            (
+                Some(ActualStatsResponse::from(stats)),
+                Some(stats.actual_time_ms),
+                Some(ns),
+            )
         } else {
             (None, None, None)
         };

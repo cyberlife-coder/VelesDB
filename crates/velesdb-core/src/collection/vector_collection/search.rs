@@ -404,49 +404,17 @@ impl VectorCollection {
 
     /// Executes a query with instrumentation and returns plan + actual stats.
     ///
-    /// Combines `explain` (plan generation) with `execute_query` (execution),
-    /// measuring wall-clock time and collecting per-node statistics.
+    /// Delegates to [`Database::explain_analyze_query`].
     ///
     /// # Errors
     ///
-    /// - Returns an error if the query is invalid or execution fails.
+    /// Returns an error if the query is invalid or execution fails.
     pub fn explain_analyze_query(
         &self,
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<crate::velesql::ExplainOutput> {
-        use crate::velesql::{build_leaf_node_stats, ActualStats, ExplainOutput, QueryPlan};
-
-        let plan = if let Some(mc) = query.match_clause.as_ref() {
-            let stats = crate::collection::search::query::match_planner::CollectionStats::default();
-            QueryPlan::from_match(mc, &stats)
-        } else {
-            QueryPlan::from_select(&query.select)
-        };
-
-        let start = std::time::Instant::now();
-        let results = self.inner.execute_query(query, params)?;
-        let elapsed = start.elapsed();
-
-        let actual_rows = results.len() as u64;
-        let actual_time_ms = elapsed.as_secs_f64() * 1000.0;
-        let is_match = query.is_match_query();
-        let (nodes_visited, edges_traversed) = if is_match {
-            (actual_rows, actual_rows)
-        } else {
-            (0, 0)
-        };
-
-        let stats = ActualStats {
-            actual_rows,
-            actual_time_ms,
-            loops: 1,
-            nodes_visited,
-            edges_traversed,
-        };
-
-        let node_stats = build_leaf_node_stats(&plan.root, actual_rows, actual_time_ms);
-        Ok(ExplainOutput::with_stats(plan, stats, node_stats))
+        self.inner.explain_analyze_query(query, params)
     }
 
     /// Sends a point into the streaming ingestion channel.

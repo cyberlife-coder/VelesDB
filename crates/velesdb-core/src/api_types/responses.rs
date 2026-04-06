@@ -304,6 +304,18 @@ pub struct ActualStatsResponse {
     pub edges_traversed: u64,
 }
 
+impl From<&crate::velesql::ActualStats> for ActualStatsResponse {
+    fn from(s: &crate::velesql::ActualStats) -> Self {
+        Self {
+            actual_rows: s.actual_rows,
+            actual_time_ms: s.actual_time_ms,
+            loops: s.loops,
+            nodes_visited: s.nodes_visited,
+            edges_traversed: s.edges_traversed,
+        }
+    }
+}
+
 /// Per-plan-node actual execution statistics for EXPLAIN ANALYZE responses.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -318,6 +330,18 @@ pub struct NodeStatsResponse {
     pub actual_rows_out: u64,
     /// Number of loop iterations (1 for non-looping nodes).
     pub loops: u64,
+}
+
+impl From<&crate::velesql::NodeStats> for NodeStatsResponse {
+    fn from(ns: &crate::velesql::NodeStats) -> Self {
+        Self {
+            node_label: ns.node_label.clone(),
+            actual_time_ms: ns.actual_time_ms,
+            actual_rows_in: ns.actual_rows_in,
+            actual_rows_out: ns.actual_rows_out,
+            loops: ns.loops,
+        }
+    }
 }
 
 /// A step in the query execution plan.
