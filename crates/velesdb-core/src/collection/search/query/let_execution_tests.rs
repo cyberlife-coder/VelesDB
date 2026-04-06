@@ -443,3 +443,130 @@ fn test_evaluate_let_bindings_empty() {
     let result = evaluate_let_bindings(&[], 0.5, None, None);
     assert!(result.is_empty());
 }
+
+// ============================================================================
+// J. Issue #473: LET bindings appear in SELECT projection
+// ============================================================================
+
+/// `LET hybrid = 0.5 SELECT *, hybrid FROM col LIMIT 5`
+/// Each result must have a "hybrid" field with value 0.5.
+#[test]
+fn test_let_binding_appears_in_select_projection() {
+    let (_dir, col) = setup_let_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+
+    let results = col
+        .execute_query_str(
+            "LET hybrid = 0.5 \
+             SELECT * FROM docs WHERE vector NEAR $v LIMIT 5",
+            &params,
+        )
+        .expect("LET projection query");
+
+    assert_eq!(results.len(), 5);
+    for r in &results {
+        let payload = r.point.payload.as_ref().expect("payload should exist");
+        let hybrid_val = payload.get("hybrid").expect("hybrid field should exist");
+        let v = hybrid_val.as_f64().expect("hybrid should be a number");
+        assert!((v - 0.5).abs() < 1e-5, "hybrid should be 0.5, got {v}");
+    }
+}
+
+/// LET binding overrides a payload field with the same name.
+/// GIVEN: payload has field "idx" (set during setup)
+/// WHEN: LET idx = 99.0 SELECT * FROM col LIMIT 5
+/// THEN: "idx" in results is 99.0 (LET takes precedence)
+#[test]
+fn test_let_binding_overrides_payload_field() {
+    let (_dir, col) = setup_let_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+
+    let results = col
+        .execute_query_str(
+            "LET idx = 99.0 \
+             SELECT * FROM docs WHERE vector NEAR $v LIMIT 5",
+            &params,
+        )
+        .expect("LET override query");
+
+    assert_eq!(results.len(), 5);
+    for r in &results {
+        let payload = r.point.payload.as_ref().expect("payload should exist");
+        let idx_val = payload.get("idx").expect("idx field should exist");
+        let v = idx_val.as_f64().expect("idx should be a number");
+        assert!(
+            (v - 99.0).abs() < 1e-5,
+            "idx should be 99.0 (LET override), got {v}"
+        );
+    }
+}
+
+/// Multiple LET bindings all appear in projection.
+/// GIVEN: a collection with points
+/// WHEN: LET a = 1.0 LET b = 2.0 SELECT * FROM col LIMIT 5
+/// THEN: each result has "a" = 1.0 and "b" = 2.0
+#[test]
+fn test_multiple_let_bindings_in_projection() {
+    let (_dir, col) = setup_let_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+
+    let results = col
+        .execute_query_str(
+            "LET a = 1.0 LET b = 2.0 \
+             SELECT * FROM docs WHERE vector NEAR $v LIMIT 5",
+            &params,
+        )
+        .expect("multiple LET query");
+
+    assert_eq!(results.len(), 5);
+    for r in &results {
+        let payload = r.point.payload.as_ref().expect("payload should exist");
+        let a_val = payload
+            .get("a")
+            .expect("a field should exist")
+            .as_f64()
+            .expect("a should be number");
+        let b_val = payload
+            .get("b")
+            .expect("b field should exist")
+            .as_f64()
+            .expect("b should be number");
+        assert!((a_val - 1.0).abs() < 1e-5, "a should be 1.0, got {a_val}");
+        assert!((b_val - 2.0).abs() < 1e-5, "b should be 2.0, got {b_val}");
+    }
+}
+
+/// LET binding with similarity() expression appears in projection with correct per-result values.
+#[test]
+fn test_let_similarity_binding_in_projection() {
+    let (_dir, col) = setup_let_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+
+    let results = col
+        .execute_query_str(
+            "LET s = similarity() \
+             SELECT * FROM docs WHERE vector NEAR $v ORDER BY s DESC LIMIT 5",
+            &params,
+        )
+        .expect("LET similarity projection query");
+
+    assert_eq!(results.len(), 5);
+    for r in &results {
+        let payload = r.point.payload.as_ref().expect("payload should exist");
+        let s_val = payload
+            .get("s")
+            .expect("s field should exist")
+            .as_f64()
+            .expect("s should be number");
+        // The similarity score should be positive and ≤ 1.0 for cosine.
+        assert!(s_val > 0.0, "similarity should be positive, got {s_val}");
+        assert!(
+            s_val <= 1.0 + 1e-5,
+            "similarity should be ≤ 1.0, got {s_val}"
+        );
+    }
+}

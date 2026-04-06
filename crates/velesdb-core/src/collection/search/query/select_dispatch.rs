@@ -143,7 +143,8 @@ impl Collection {
         }
     }
 
-    /// Applies DISTINCT, ORDER BY (with LET bindings), OFFSET, and LIMIT.
+    /// Applies DISTINCT, ORDER BY (with LET bindings), OFFSET, LIMIT, and
+    /// LET payload injection (Issue #473).
     pub(super) fn apply_select_postprocessing(
         &self,
         stmt: &crate::velesql::SelectStatement,
@@ -169,6 +170,14 @@ impl Collection {
             results = results.into_iter().skip(skip).collect();
         }
         results.truncate(limit);
+
+        // Issue #473: Inject LET binding values into result payloads so they
+        // appear in SELECT projection and API responses.
+        if !let_bindings.is_empty() {
+            let per_result_let = Self::evaluate_let_for_results(let_bindings, &results);
+            inject_let_into_payloads(&mut results, &per_result_let);
+        }
+
         Ok(results)
     }
 
@@ -188,5 +197,26 @@ impl Collection {
                 )
             })
             .collect()
+    }
+}
+
+/// Injects evaluated LET binding values into each result's payload.
+///
+/// This makes LET bindings visible in SELECT projection and API responses.
+/// LET bindings take precedence over payload fields with the same name.
+fn inject_let_into_payloads(results: &mut [SearchResult], per_result_let: &[Vec<(String, f32)>]) {
+    for (result, bindings) in results.iter_mut().zip(per_result_let.iter()) {
+        if bindings.is_empty() {
+            continue;
+        }
+        let payload = result
+            .point
+            .payload
+            .get_or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if let serde_json::Value::Object(map) = payload {
+            for (name, value) in bindings {
+                map.insert(name.clone(), serde_json::Value::from(f64::from(*value)));
+            }
+        }
     }
 }
