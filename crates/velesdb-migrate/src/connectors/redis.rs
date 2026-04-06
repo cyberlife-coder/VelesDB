@@ -392,14 +392,14 @@ fn decode_resp_field(
     field_name: &str,
     vector_field: &str,
 ) -> serde_json::Value {
+    // Use field name, not byte content, to identify vector fields.
+    // The UTF-8 heuristic failed for zero-vectors (valid UTF-8 bytes).
     if field_name == vector_field {
         if let redis::Value::BulkString(bytes) = value {
-            if String::from_utf8(bytes.clone()).is_err() {
-                let floats = decode_vector_blob(bytes);
-                return serde_json::Value::Array(
-                    floats.into_iter().map(|f| serde_json::json!(f)).collect(),
-                );
-            }
+            let floats = decode_vector_blob(bytes);
+            return serde_json::Value::Array(
+                floats.into_iter().map(|f| serde_json::json!(f)).collect(),
+            );
         }
     }
     resp_value_to_json(value)
@@ -598,12 +598,10 @@ fn extract_int(value: &redis::Value) -> Option<u64> {
 fn resp_value_to_json(value: &redis::Value) -> serde_json::Value {
     match value {
         redis::Value::BulkString(bytes) => {
-            // Try UTF-8 string first; fall back to base64-ish representation.
+            // Preserve the original string type — do not coerce "42" to 42 or
+            // "true" to true, as that would silently corrupt metadata (e.g. zip codes).
             match String::from_utf8(bytes.clone()) {
-                Ok(s) => {
-                    // Attempt to parse as JSON (number, bool, array, object).
-                    serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))
-                }
+                Ok(s) => serde_json::Value::String(s),
                 Err(_) => serde_json::Value::String(format!("<binary:{} bytes>", bytes.len())),
             }
         }

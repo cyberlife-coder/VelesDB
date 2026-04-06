@@ -178,7 +178,13 @@ fn test_parse_ft_search_response_empty() {
 
 #[test]
 fn test_parse_ft_search_response_single_doc() {
-    // Simulate: FT.SEARCH returns 1 document with a JSON-array vector.
+    // Simulate: FT.SEARCH returns 1 document.
+    // RediSearch returns VECTOR fields as raw LE f32 binary blobs.
+    let mut vec_bytes = Vec::new();
+    vec_bytes.extend_from_slice(&0.1_f32.to_le_bytes());
+    vec_bytes.extend_from_slice(&0.2_f32.to_le_bytes());
+    vec_bytes.extend_from_slice(&0.3_f32.to_le_bytes());
+
     let resp = redis::Value::Array(vec![
         redis::Value::Int(1),
         // Document key
@@ -186,9 +192,9 @@ fn test_parse_ft_search_response_single_doc() {
         // Field-value pairs
         redis::Value::Array(vec![
             redis::Value::BulkString(b"embedding".to_vec()),
-            redis::Value::BulkString(b"[0.1, 0.2, 0.3]".to_vec()),
+            redis::Value::BulkString(vec_bytes),
             redis::Value::BulkString(b"title".to_vec()),
-            redis::Value::BulkString(b"\"Hello World\"".to_vec()),
+            redis::Value::BulkString(b"Hello World".to_vec()),
         ]),
     ]);
 
@@ -203,18 +209,48 @@ fn test_parse_ft_search_response_single_doc() {
 }
 
 #[test]
+fn test_parse_ft_search_response_zero_vector() {
+    // Regression: all-zero vectors are valid UTF-8 (null bytes), so the old
+    // UTF-8 heuristic failed to decode them. Verify they are decoded correctly.
+    let vec_bytes: Vec<u8> = std::iter::repeat(0u8).take(12).collect(); // 3 × f32 zeros
+
+    let resp = redis::Value::Array(vec![
+        redis::Value::Int(1),
+        redis::Value::BulkString(b"doc:zero".to_vec()),
+        redis::Value::Array(vec![
+            redis::Value::BulkString(b"embedding".to_vec()),
+            redis::Value::BulkString(vec_bytes),
+        ]),
+    ]);
+
+    let points =
+        parse_ft_search_response(&resp, "embedding", "doc:").expect("test: zero vector parse");
+
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].vector, vec![0.0_f32, 0.0, 0.0]);
+}
+
+#[test]
 fn test_parse_ft_search_response_multiple_docs() {
+    let mut vec1 = Vec::new();
+    vec1.extend_from_slice(&1.0_f32.to_le_bytes());
+    vec1.extend_from_slice(&2.0_f32.to_le_bytes());
+
+    let mut vec2 = Vec::new();
+    vec2.extend_from_slice(&3.0_f32.to_le_bytes());
+    vec2.extend_from_slice(&4.0_f32.to_le_bytes());
+
     let resp = redis::Value::Array(vec![
         redis::Value::Int(2),
         redis::Value::BulkString(b"doc:1".to_vec()),
         redis::Value::Array(vec![
             redis::Value::BulkString(b"embedding".to_vec()),
-            redis::Value::BulkString(b"[1.0, 2.0]".to_vec()),
+            redis::Value::BulkString(vec1),
         ]),
         redis::Value::BulkString(b"doc:2".to_vec()),
         redis::Value::Array(vec![
             redis::Value::BulkString(b"embedding".to_vec()),
-            redis::Value::BulkString(b"[3.0, 4.0]".to_vec()),
+            redis::Value::BulkString(vec2),
         ]),
     ]);
 
@@ -231,12 +267,13 @@ fn test_parse_ft_search_response_multiple_docs() {
 #[test]
 fn test_parse_ft_search_response_no_prefix_match() {
     // Document key doesn't start with the configured prefix.
+    let vec_bytes = 5.0_f32.to_le_bytes().to_vec();
     let resp = redis::Value::Array(vec![
         redis::Value::Int(1),
         redis::Value::BulkString(b"other:99".to_vec()),
         redis::Value::Array(vec![
             redis::Value::BulkString(b"embedding".to_vec()),
-            redis::Value::BulkString(b"[5.0]".to_vec()),
+            redis::Value::BulkString(vec_bytes),
         ]),
     ]);
 
@@ -250,9 +287,10 @@ fn test_parse_ft_search_response_no_prefix_match() {
 
 #[test]
 fn test_resp_value_to_json_types() {
-    // BulkString containing a number string parses to JSON number.
+    // BulkString always preserved as string — no type coercion.
+    // "42" must not silently become 42 (would corrupt zip codes, string IDs, etc.).
     let val = resp_value_to_json(&redis::Value::BulkString(b"42".to_vec()));
-    assert_eq!(val, serde_json::json!(42));
+    assert_eq!(val, serde_json::json!("42"));
 
     // BulkString containing a plain string stays as string.
     let val = resp_value_to_json(&redis::Value::BulkString(b"hello".to_vec()));

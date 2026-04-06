@@ -270,11 +270,12 @@ impl Pipeline {
         };
 
         let batch_size = self.config.options.batch_size;
+        let retry_config = crate::retry::RetryConfig::for_transient_errors();
 
         loop {
             let connector = &mut *self.connector;
             let batch = crate::retry::with_retry(
-                &crate::retry::RetryConfig::for_transient_errors(),
+                &retry_config,
                 "extract_batch",
                 || connector.extract_batch(offset.clone(), batch_size),
             )
@@ -517,6 +518,9 @@ mod tests {
             failed: 0,
             batches: 10,
             duration_secs: 2.0,
+            edges_created: 0,
+            edges_failed: 0,
+            relations_processed: 0,
         };
 
         assert!((stats.throughput() - 500.0).abs() < 0.001);
