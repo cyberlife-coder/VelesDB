@@ -76,9 +76,7 @@ impl Condition {
                 let point_lng = v.get("lng").and_then(Value::as_f64);
                 match (point_lat, point_lng) {
                     (Some(plat), Some(plng)) => {
-                        let dist = crate::column_store::haversine::haversine_distance(
-                            plat, plng, *lat, *lng,
-                        );
+                        let dist = haversine_distance_km(plat, plng, *lat, *lng);
                         compare_geo_distance(dist, *threshold, *operator)
                     }
                     _ => false,
@@ -241,6 +239,20 @@ fn like_match_impl(text: &[u8], pattern: &[u8]) -> bool {
     }
 
     prev[n]
+}
+
+/// Haversine great-circle distance. Returns distance in meters (WGS-84 mean radius).
+///
+/// Kept local so this module compiles without the `persistence` feature
+/// (which gates `column_store::haversine`).
+fn haversine_distance_km(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
+    const EARTH_RADIUS_M: f64 = 6_371_000.0;
+    let (lat1, lng1) = (lat1.to_radians(), lng1.to_radians());
+    let (lat2, lng2) = (lat2.to_radians(), lng2.to_radians());
+    let dlat = lat2 - lat1;
+    let dlng = lng2 - lng1;
+    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlng / 2.0).sin().powi(2);
+    EARTH_RADIUS_M * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())
 }
 
 /// Applies a comparison operator to a geo-distance value and threshold.
