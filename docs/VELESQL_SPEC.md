@@ -67,6 +67,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | INSERT NODE graph mutation | Stable | 3.5 |
 | FLUSH / FLUSH FULL | Stable | 3.6 |
 | CONTAINS array filter | Stable | 3.7 |
+| GEO_DISTANCE / GEO_BBOX geospatial | Stable | 3.7 |
 | GROUP BY MAX(score) / AVG(score) | Stable | 3.7 |
 | FIRST(column) projection | Stable | 3.7 |
 | FUSE BY fusion clause | Planned | -- |
@@ -2254,6 +2255,38 @@ VelesQL returns structured errors:
 | MATCH (text) | `column MATCH 'text'` | `WHERE content MATCH 'database'` |
 | `=` `!=` `>` `>=` `<` `<=` | `column op value` | `WHERE price > 100` |
 | IN | `column IN (values)` | `WHERE id IN (1, 2, 3)` |
+| GEO_DISTANCE | `GEO_DISTANCE(col, lat, lng) op meters` | `WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500` |
+| GEO_BBOX | `GEO_BBOX(col, lat_min, lng_min, lat_max, lng_max)` | `WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4)` |
+
+### Geospatial Functions
+
+#### GEO_DISTANCE
+
+Computes the Haversine great-circle distance in meters between a GeoPoint column value and a reference coordinate pair.
+
+```sql
+SELECT * FROM places WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500;
+SELECT * FROM places WHERE GEO_DISTANCE(location, 48, 2) >= 1000;
+```
+
+- Coordinates accept both float (`48.8566`) and integer (`48`) literals.
+- Returns distance in meters (SI unit).
+- Null GeoPoint values are excluded from results.
+- Non-GeoPoint or non-existent columns return empty results (no error).
+- Combinable with AND, OR, NOT, and other WHERE operators.
+
+#### GEO_BBOX
+
+Tests whether a GeoPoint column value falls within a latitude/longitude bounding box (inclusive).
+
+```sql
+SELECT * FROM places WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4);
+```
+
+- All four coordinate parameters accept float and integer literals.
+- Boundary is inclusive: points exactly on the edge are included.
+- Inverted coordinates (`lat_min > lat_max`) return empty results.
+- Null GeoPoint values are excluded from results.
 | NOT IN | `column NOT IN (values)` | `WHERE status NOT IN ('deleted')` |
 | BETWEEN | `column BETWEEN a AND b` | `WHERE price BETWEEN 10 AND 100` |
 | LIKE | `column LIKE 'pattern'` | `WHERE name LIKE 'John%'` |

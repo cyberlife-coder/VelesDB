@@ -34,6 +34,9 @@ mod batch_tests;
 mod filter;
 #[cfg(test)]
 mod filter_tests;
+pub(crate) mod haversine;
+#[cfg(test)]
+mod haversine_tests;
 mod string_table;
 mod types;
 mod vacuum;
@@ -44,6 +47,7 @@ use roaring::RoaringBitmap;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
+pub use filter::{CompareOp, GeoBboxParams, GeoDistanceParams};
 pub use string_table::StringTable;
 pub use types::{
     AutoVacuumConfig, BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStoreError,
@@ -155,6 +159,7 @@ impl ColumnStore {
             ColumnType::String => TypedColumn::new_string(0),
             ColumnType::Bool => TypedColumn::new_bool(0),
             ColumnType::Array(inner) => TypedColumn::new_array((**inner).clone(), 0),
+            ColumnType::GeoPoint => TypedColumn::new_geopoint(0),
         };
         self.columns.insert(name.to_string(), column);
     }
@@ -219,6 +224,13 @@ impl ColumnStore {
         &mut self,
         values: &[(&str, ColumnValue)],
     ) -> Result<usize, ColumnStoreError> {
+        // Validate GeoPoint coordinates regardless of primary key presence.
+        for (_, value) in values {
+            if let ColumnValue::GeoPoint(lat, lng) = value {
+                haversine::validate_coordinates(*lat, *lng)?;
+            }
+        }
+
         let Some(ref pk_col) = self.primary_key_column else {
             self.push_row(values);
             return Ok(self.row_count - 1);
@@ -284,6 +296,9 @@ impl ColumnStore {
         for (col_name, value) in values {
             if skip_col.is_some_and(|s| s == *col_name) {
                 continue;
+            }
+            if let ColumnValue::GeoPoint(lat, lng) = value {
+                haversine::validate_coordinates(*lat, *lng)?;
             }
             if let Some(col) = columns.get(*col_name) {
                 if !matches!(value, ColumnValue::Null) {
@@ -502,6 +517,12 @@ impl ColumnStore {
         if let TypedColumn::Array { data, .. } = col {
             return self.get_array_as_json(data, row_idx);
         }
+        // GeoPoint columns return {"lat": f64, "lng": f64}.
+        if let TypedColumn::GeoPoint(v) = col {
+            return v
+                .get(row_idx)
+                .and_then(|opt| opt.map(|(lat, lng)| serde_json::json!({"lat": lat, "lng": lng})));
+        }
         col.get_as_json_non_string(row_idx)
     }
 
@@ -532,6 +553,9 @@ impl ColumnStore {
                 let arr: Vec<serde_json::Value> =
                     inner.iter().map(|v| self.column_value_to_json(v)).collect();
                 serde_json::Value::Array(arr)
+            }
+            ColumnValue::GeoPoint(lat, lng) => {
+                serde_json::json!({"lat": lat, "lng": lng})
             }
         }
     }

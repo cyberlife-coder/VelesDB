@@ -4,8 +4,8 @@ use super::helpers::compare_op_from_str;
 use super::{extract_identifier, Rule};
 use crate::metrics::global_guardrails_metrics;
 use crate::velesql::ast::{
-    BetweenCondition, Comparison, Condition, InCondition, IsNullCondition, LikeCondition,
-    MatchCondition, SimilarityCondition,
+    BetweenCondition, Comparison, Condition, GeoBboxCondition, GeoDistanceCondition, InCondition,
+    IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -149,6 +149,8 @@ impl Parser {
             Rule::like_expr => Self::parse_like_expr(inner),
             Rule::is_null_expr => Self::parse_is_null_expr(inner),
             Rule::contains_expr => Self::parse_contains_expr(inner),
+            Rule::geo_distance_expr => Self::parse_geo_distance_expr(inner),
+            Rule::geo_bbox_expr => Self::parse_geo_bbox_expr(inner),
             Rule::compare_expr => Self::parse_compare_expr(inner),
             _ => Err(ParseError::syntax(
                 0,
@@ -449,5 +451,98 @@ impl Parser {
             .filter(|p| p.as_rule() == Rule::value)
             .map(Self::parse_value)
             .collect()
+    }
+
+    /// Parses a `geo_number` rule into an `f64`.
+    fn parse_geo_number(pair: pest::iterators::Pair<Rule>) -> Result<f64, ParseError> {
+        let inner = pair
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected numeric value"))?;
+        inner
+            .as_str()
+            .parse::<f64>()
+            .map_err(|_| ParseError::syntax(0, inner.as_str(), "Invalid numeric value"))
+    }
+
+    /// Parses a `GEO_DISTANCE(column, lat, lng) op threshold` expression.
+    pub(crate) fn parse_geo_distance_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let mut inner = pair.into_inner();
+        let column_pair = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
+        let column = Self::extract_column_name(&column_pair);
+
+        let lat = Self::parse_geo_number(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected latitude"))?,
+        )?;
+        let lng = Self::parse_geo_number(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected longitude"))?,
+        )?;
+
+        let op_pair = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected comparison operator"))?;
+        let operator = compare_op_from_str(op_pair.as_str())?;
+
+        let threshold = Self::parse_geo_number(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected distance threshold"))?,
+        )?;
+
+        Ok(Condition::GeoDistance(GeoDistanceCondition {
+            column,
+            lat,
+            lng,
+            operator,
+            threshold,
+        }))
+    }
+
+    /// Parses a `GEO_BBOX(column, lat_min, lng_min, lat_max, lng_max)` expression.
+    pub(crate) fn parse_geo_bbox_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let mut inner = pair.into_inner();
+        let column_pair = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
+        let column = Self::extract_column_name(&column_pair);
+
+        let lat_min = Self::parse_geo_number(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected lat_min"))?,
+        )?;
+        let lng_min = Self::parse_geo_number(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected lng_min"))?,
+        )?;
+        let lat_max = Self::parse_geo_number(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected lat_max"))?,
+        )?;
+        let lng_max = Self::parse_geo_number(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected lng_max"))?,
+        )?;
+
+        Ok(Condition::GeoBbox(GeoBboxCondition {
+            column,
+            lat_min,
+            lng_min,
+            lat_max,
+            lng_max,
+        }))
     }
 }

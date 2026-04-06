@@ -464,6 +464,18 @@ impl QueryPlan {
                 };
                 filter_conditions.push(format!("{} {mode_str} ?", cc.column));
             }
+            Condition::GeoDistance(gd) => {
+                filter_conditions.push(format!(
+                    "GEO_DISTANCE({}, {}, {}) {} ?",
+                    gd.column,
+                    gd.lat,
+                    gd.lng,
+                    gd.operator.as_str()
+                ));
+            }
+            Condition::GeoBbox(gb) => {
+                filter_conditions.push(format!("GEO_BBOX({}, ...)", gb.column));
+            }
             Condition::And(left, right) | Condition::Or(left, right) => {
                 Self::analyze_condition(left, has_vector_search, filter_conditions);
                 Self::analyze_condition(right, has_vector_search, filter_conditions);

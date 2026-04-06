@@ -286,6 +286,7 @@ impl ColumnStore {
                 | (TypedColumn::String(_), ColumnValue::String(_))
                 | (TypedColumn::Bool(_), ColumnValue::Bool(_))
                 | (TypedColumn::Array { .. }, ColumnValue::Array(_))
+                | (TypedColumn::GeoPoint(_), ColumnValue::GeoPoint(_, _))
                 | (_, ColumnValue::Null)
         );
 
@@ -324,6 +325,9 @@ impl ColumnStore {
             (TypedColumn::Array { data, .. }, ColumnValue::Array(arr)) => {
                 Self::checked_set_array(data, row_idx, arr)
             }
+            (TypedColumn::GeoPoint(vec), ColumnValue::GeoPoint(lat, lng)) => {
+                Self::checked_set_geopoint(vec, row_idx, lat, lng)
+            }
             (col, value) => Err(ColumnStoreError::TypeMismatch {
                 expected: Self::column_type_name(col),
                 actual: Self::value_type_name(&value),
@@ -344,6 +348,20 @@ impl ColumnStore {
         Ok(())
     }
 
+    /// Sets a GeoPoint column cell at `row_idx` with bounds checking.
+    fn checked_set_geopoint(
+        vec: &mut [Option<(f64, f64)>],
+        row_idx: usize,
+        lat: f64,
+        lng: f64,
+    ) -> Result<(), ColumnStoreError> {
+        if row_idx >= vec.len() {
+            return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
+        }
+        vec[row_idx] = Some((lat, lng));
+        Ok(())
+    }
+
     /// Sets a column cell to null at the given row index.
     fn set_column_null(col: &mut TypedColumn, row_idx: usize) -> Result<(), ColumnStoreError> {
         match col {
@@ -358,6 +376,7 @@ impl ColumnStore {
                 data[row_idx] = None;
                 Ok(())
             }
+            TypedColumn::GeoPoint(vec) => Self::checked_set(vec, row_idx, None),
         }
     }
 
@@ -381,6 +400,7 @@ impl ColumnStore {
             TypedColumn::String(_) => "String".to_string(),
             TypedColumn::Bool(_) => "Bool".to_string(),
             TypedColumn::Array { .. } => "Array".to_string(),
+            TypedColumn::GeoPoint(_) => "GeoPoint".to_string(),
         }
     }
 
@@ -392,6 +412,7 @@ impl ColumnStore {
             ColumnValue::Bool(_) => "Bool".to_string(),
             ColumnValue::Null => "Null".to_string(),
             ColumnValue::Array(_) => "Array".to_string(),
+            ColumnValue::GeoPoint(_, _) => "GeoPoint".to_string(),
         }
     }
 

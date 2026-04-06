@@ -167,7 +167,9 @@ impl Collection {
             | Condition::Like(_)
             | Condition::IsNull(_)
             | Condition::Match(_)
-            | Condition::Contains(_) => Self::evaluate_metadata_condition_for_node(
+            | Condition::Contains(_)
+            | Condition::GeoDistance(_)
+            | Condition::GeoBbox(_) => Self::evaluate_metadata_condition_for_node(
                 node_id,
                 bindings,
                 condition,

@@ -189,7 +189,9 @@ fn estimate_condition_selectivity(cond: &crate::filter::Condition) -> f64 {
         | Condition::ILike { .. }
         | Condition::ArrayContains { .. }
         | Condition::ArrayContainsAny { .. }
-        | Condition::ArrayContainsAll { .. } => 0.3,
+        | Condition::ArrayContainsAll { .. }
+        | Condition::GeoDistance { .. }
+        | Condition::GeoBbox { .. } => 0.3,
         Condition::In { values, .. } => {
             #[allow(clippy::cast_precision_loss)]
             let sel = values.len() as f64 * 0.05;

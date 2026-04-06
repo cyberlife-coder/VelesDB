@@ -156,6 +156,20 @@ impl From<crate::velesql::Condition> for Condition {
                     },
                 }
             }
+            crate::velesql::Condition::GeoDistance(gd) => Self::GeoDistance {
+                field: gd.column,
+                lat: gd.lat,
+                lng: gd.lng,
+                operator: gd.operator,
+                threshold: gd.threshold,
+            },
+            crate::velesql::Condition::GeoBbox(gb) => Self::GeoBbox {
+                field: gb.column,
+                lat_min: gb.lat_min,
+                lng_min: gb.lng_min,
+                lat_max: gb.lat_max,
+                lng_max: gb.lng_max,
+            },
         }
     }
 }

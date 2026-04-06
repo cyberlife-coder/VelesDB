@@ -37,6 +37,10 @@ pub enum Condition {
     GraphMatch(GraphMatchPredicate),
     /// Array containment: `column CONTAINS value` / `CONTAINS ANY` / `CONTAINS ALL`
     Contains(ContainsCondition),
+    /// Geospatial distance: `GEO_DISTANCE(column, lat, lng) op threshold`
+    GeoDistance(GeoDistanceCondition),
+    /// Geospatial bounding box: `GEO_BBOX(column, lat_min, lng_min, lat_max, lng_max)`
+    GeoBbox(GeoBboxCondition),
     /// Logical AND
     And(Box<Condition>, Box<Condition>),
     /// Logical OR
@@ -204,6 +208,36 @@ pub struct ContainsCondition {
     pub values: Vec<Value>,
 }
 
+/// GEO_DISTANCE condition: `GEO_DISTANCE(column, lat, lng) op threshold`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeoDistanceCondition {
+    /// Column name containing GeoPoint data.
+    pub column: String,
+    /// Reference latitude in degrees.
+    pub lat: f64,
+    /// Reference longitude in degrees.
+    pub lng: f64,
+    /// Comparison operator.
+    pub operator: CompareOp,
+    /// Distance threshold in meters.
+    pub threshold: f64,
+}
+
+/// GEO_BBOX condition: `GEO_BBOX(column, lat_min, lng_min, lat_max, lng_max)`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeoBboxCondition {
+    /// Column name containing GeoPoint data.
+    pub column: String,
+    /// Minimum latitude of the bounding box.
+    pub lat_min: f64,
+    /// Minimum longitude of the bounding box.
+    pub lng_min: f64,
+    /// Maximum latitude of the bounding box.
+    pub lat_max: f64,
+    /// Maximum longitude of the bounding box.
+    pub lng_max: f64,
+}
+
 impl Condition {
     /// Returns `true` if this condition (or any nested sub-condition) contains
     /// a vector search (`NEAR`, `NEAR_FUSED`, or `SPARSE_NEAR`).
@@ -223,7 +257,9 @@ impl Condition {
             | Self::IsNull(_)
             | Self::Match(_)
             | Self::GraphMatch(_)
-            | Self::Similarity(_) => false,
+            | Self::Similarity(_)
+            | Self::GeoDistance(_)
+            | Self::GeoBbox(_) => false,
         }
     }
 }

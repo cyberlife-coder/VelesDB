@@ -187,6 +187,9 @@ pub use ast::{
     FusionClause,
     FusionConfig,
     FusionStrategyType,
+    // Geospatial (Issue #514)
+    GeoBboxCondition,
+    GeoDistanceCondition,
     GraphCollectionParams,
     GraphMatchPredicate,
     GraphSchemaMode,
