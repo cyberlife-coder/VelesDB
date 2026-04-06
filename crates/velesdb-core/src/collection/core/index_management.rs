@@ -139,10 +139,12 @@ impl Collection {
     /// - `Eq`: exact-match lookup
     /// - `Neq`: universe bitmap minus exact-match (all indexed IDs except matches)
     /// - `Gt`, `Gte`, `Lt`, `Lte`: range scan via `BTreeMap::range()`
+    /// - `In`: union of per-value B-tree lookups
+    /// - `Not { In }`: universe bitmap minus IN bitmap (set complement)
     /// - `And`: intersection of child bitmaps
     /// - `Or`: union of child bitmaps (all children must resolve)
     ///
-    /// Returns `None` for `Not` and unsupported conditions.
+    /// Returns `None` for `Not` wrapping non-`In` conditions and unsupported conditions.
     fn bitmap_from_condition(
         indexes: &std::sync::Arc<
             parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
@@ -168,6 +170,12 @@ impl Collection {
             | crate::filter::Condition::Lt { field, value }
             | crate::filter::Condition::Lte { field, value } => {
                 Self::bitmap_for_range_field(indexes, field, value, cond)
+            }
+            crate::filter::Condition::In { field, values } => {
+                Self::bitmap_for_in_field(indexes, field, values)
+            }
+            crate::filter::Condition::Not { condition } => {
+                Self::bitmap_for_not_in(indexes, condition)
             }
             crate::filter::Condition::And { conditions } => {
                 Self::bitmap_from_and(indexes, conditions)
@@ -207,6 +215,54 @@ impl Collection {
             return Some(bm); // Empty bitmap = no matches (valid pre-filter)
         }
         Some(bm)
+    }
+
+    /// Builds a bitmap for `IN(field, values)` by unioning per-value B-tree lookups.
+    ///
+    /// Acquires the secondary index read-lock once and iterates all values under
+    /// the same guard. Values that don't convert to [`JsonValue`] or don't exist
+    /// in the index are silently skipped (contribute empty bitmap).
+    ///
+    /// Time complexity: O(N × log K) where N = `values.len()`, K = index keys.
+    /// Space: O(|result|) — single accumulator bitmap, no intermediate allocations.
+    fn bitmap_for_in_field(
+        indexes: &std::sync::Arc<
+            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
+        >,
+        field: &str,
+        values: &[serde_json::Value],
+    ) -> Option<roaring::RoaringBitmap> {
+        if values.is_empty() {
+            return Some(roaring::RoaringBitmap::new());
+        }
+        let guard = indexes.read();
+        let index = guard.get(field)?;
+        let mut acc = roaring::RoaringBitmap::new();
+        for v in values {
+            if let Some(key) = JsonValue::from_json(v) {
+                acc |= index.to_bitmap(&key);
+            }
+        }
+        Some(acc)
+    }
+
+    /// Handles `Condition::Not` by pattern-matching the inner condition.
+    ///
+    /// Currently only `Not { In { field, values } }` is supported — computes
+    /// `universe - in_bitmap`. All other `Not` variants return `None`.
+    fn bitmap_for_not_in(
+        indexes: &std::sync::Arc<
+            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
+        >,
+        inner: &crate::filter::Condition,
+    ) -> Option<roaring::RoaringBitmap> {
+        if let crate::filter::Condition::In { field, values } = inner {
+            let universe = Self::bitmap_universe_for_field(indexes, field)?;
+            let in_bm = Self::bitmap_for_in_field(indexes, field, values).unwrap_or_default();
+            Some(universe - in_bm)
+        } else {
+            None
+        }
     }
 
     /// Builds a range bitmap for Gt/Gte/Lt/Lte using `SecondaryIndex::range_bitmap`.

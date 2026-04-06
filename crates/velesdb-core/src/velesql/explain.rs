@@ -496,6 +496,12 @@ impl QueryPlan {
                 return Some((cmp.column.clone(), format!("{:?}", cmp.value)));
             }
         }
+        if let Condition::In(inc) = condition {
+            if indexed_fields.contains(&inc.column) {
+                let op = if inc.negated { "NOT IN" } else { "IN" };
+                return Some((inc.column.clone(), format!("{op} (...)")));
+            }
+        }
         None
     }
 

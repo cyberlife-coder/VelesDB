@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_metadata_collection()`, or `get_any_collection()` instead.
 
 ### Added
+- **Secondary index bitmap for IN/NOT IN filters (Issue #512)** — `bitmap_from_condition` now
+  handles `Condition::In` and `Condition::Not { In }` via secondary index B-tree lookups.
+  Builds a `RoaringBitmap` by unioning per-value lookups (O(N × log K)), restricting HNSW
+  traversal to matching points only. NOT IN uses universe bitmap subtraction. New
+  `ColumnStore::filter_in_string_bitmap` and `filter_in_int_bitmap` for JOIN-side IN filtering.
+  EXPLAIN plan now indicates bitmap pre-filter for IN on indexed fields. BDD + unit tests,
+  zero regression on existing queries.
 - **Cross-collection JOIN optimization (Issue #513)** — Filter pushdown and lookup join for
   `execute_single_select`. WHERE conditions referencing the joined table (e.g.,
   `inventory.price > 100`) are automatically pushed down before ColumnStore construction.

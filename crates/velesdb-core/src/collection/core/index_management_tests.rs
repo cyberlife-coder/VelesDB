@@ -731,4 +731,480 @@ mod tests {
         let debug_str = format!("{:?}", info);
         assert!(debug_str.contains("IndexInfo"));
     }
+
+    // =========================================================================
+    // IN bitmap pre-filter tests (Issue #512)
+    // =========================================================================
+
+    /// Helper: populates a "category" secondary index with tech=[1,5,10],
+    /// science=[2,7], art=[3].
+    fn populate_category_index(collection: &Collection) {
+        let indexes = collection.secondary_indexes.read();
+        if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
+            let mut t = tree.write();
+            t.insert(
+                crate::index::JsonValue::String("tech".to_string()),
+                vec![1, 5, 10],
+            );
+            t.insert(
+                crate::index::JsonValue::String("science".to_string()),
+                vec![2, 7],
+            );
+            t.insert(crate::index::JsonValue::String("art".to_string()), vec![3]);
+        }
+    }
+
+    #[test]
+    fn test_in_bitmap_empty_list_returns_empty() {
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+
+        let filter = crate::filter::Filter::new(crate::filter::Condition::In {
+            field: "category".to_string(),
+            values: vec![],
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+        assert!(bitmap.is_some(), "empty IN list should return Some(empty)");
+        assert!(bitmap.unwrap().is_empty(), "empty IN list => empty bitmap");
+    }
+
+    #[test]
+    fn test_in_bitmap_no_index_returns_none() {
+        let (collection, _temp) = create_test_collection();
+
+        // No index on "category"
+        let filter = crate::filter::Filter::new(crate::filter::Condition::In {
+            field: "category".to_string(),
+            values: vec![serde_json::Value::String("tech".to_string())],
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+        assert!(bitmap.is_none(), "no secondary index => None");
+    }
+
+    #[test]
+    fn test_in_bitmap_nonexistent_values_skipped() {
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        // IN list with values not in the index
+        let filter = crate::filter::Filter::new(crate::filter::Condition::In {
+            field: "category".to_string(),
+            values: vec![
+                serde_json::Value::String("nonexistent".to_string()),
+                serde_json::Value::String("also_missing".to_string()),
+            ],
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+        assert!(
+            bitmap.is_some(),
+            "indexed field should produce bitmap even with missing values"
+        );
+        assert!(
+            bitmap.unwrap().is_empty(),
+            "nonexistent values => empty bitmap"
+        );
+    }
+
+    #[test]
+    fn test_in_bitmap_single_value_matches_eq() {
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        // IN with single value should match Eq bitmap
+        let in_filter = crate::filter::Filter::new(crate::filter::Condition::In {
+            field: "category".to_string(),
+            values: vec![serde_json::Value::String("tech".to_string())],
+        });
+        let eq_filter = crate::filter::Filter::new(crate::filter::Condition::Eq {
+            field: "category".to_string(),
+            value: serde_json::Value::String("tech".to_string()),
+        });
+
+        let in_bm = collection.build_prefilter_bitmap(&in_filter).unwrap();
+        let eq_bm = collection.build_prefilter_bitmap(&eq_filter).unwrap();
+        assert_eq!(in_bm, eq_bm, "IN(single) should equal Eq bitmap");
+    }
+
+    #[test]
+    fn test_in_bitmap_multiple_values_union() {
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        // IN('tech', 'science') => union of {1,5,10} | {2,7} = {1,2,5,7,10}
+        let filter = crate::filter::Filter::new(crate::filter::Condition::In {
+            field: "category".to_string(),
+            values: vec![
+                serde_json::Value::String("tech".to_string()),
+                serde_json::Value::String("science".to_string()),
+            ],
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+        assert!(
+            bitmap.is_some(),
+            "IN on indexed field should produce bitmap"
+        );
+        let bm = bitmap.unwrap();
+        assert_eq!(bm.len(), 5);
+        assert!(bm.contains(1));
+        assert!(bm.contains(2));
+        assert!(bm.contains(5));
+        assert!(bm.contains(7));
+        assert!(bm.contains(10));
+    }
+
+    #[test]
+    fn test_in_bitmap_mixed_existing_missing_values() {
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        // IN('tech', 'nonexistent', 'art') => union of {1,5,10} | {} | {3}
+        let filter = crate::filter::Filter::new(crate::filter::Condition::In {
+            field: "category".to_string(),
+            values: vec![
+                serde_json::Value::String("tech".to_string()),
+                serde_json::Value::String("nonexistent".to_string()),
+                serde_json::Value::String("art".to_string()),
+            ],
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+        assert!(bitmap.is_some());
+        let bm = bitmap.unwrap();
+        assert_eq!(bm.len(), 4);
+        assert!(bm.contains(1));
+        assert!(bm.contains(3));
+        assert!(bm.contains(5));
+        assert!(bm.contains(10));
+    }
+
+    #[test]
+    fn test_in_bitmap_with_u64_overflow_ids() {
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+
+        let large_id = u64::from(u32::MAX) + 1;
+        {
+            let indexes = collection.secondary_indexes.read();
+            if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
+                let mut t = tree.write();
+                t.insert(
+                    crate::index::JsonValue::String("tech".to_string()),
+                    vec![1, large_id, 5],
+                );
+            }
+        }
+
+        let filter = crate::filter::Filter::new(crate::filter::Condition::In {
+            field: "category".to_string(),
+            values: vec![serde_json::Value::String("tech".to_string())],
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+        assert!(bitmap.is_some());
+        let bm = bitmap.unwrap();
+        // large_id should be silently skipped
+        assert_eq!(bm.len(), 2);
+        assert!(bm.contains(1));
+        assert!(bm.contains(5));
+    }
+
+    // =========================================================================
+    // NOT IN bitmap pre-filter tests (Issue #512 — Requirement 2)
+    // =========================================================================
+
+    #[test]
+    fn test_not_in_bitmap_returns_universe_minus_in() {
+        // GIVEN: index with tech=[1,5,10], science=[2,7], art=[3]
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        // WHEN: NOT IN ('tech', 'science')
+        let filter = crate::filter::Filter::new(crate::filter::Condition::Not {
+            condition: Box::new(crate::filter::Condition::In {
+                field: "category".to_string(),
+                values: vec![
+                    serde_json::Value::String("tech".to_string()),
+                    serde_json::Value::String("science".to_string()),
+                ],
+            }),
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+
+        // THEN: universe={1,2,3,5,7,10}, IN={1,2,5,7,10}, NOT IN={3}
+        assert!(
+            bitmap.is_some(),
+            "NOT IN on indexed field should produce bitmap"
+        );
+        let bm = bitmap.unwrap();
+        assert_eq!(bm.len(), 1);
+        assert!(bm.contains(3), "only art ID=3 should remain");
+    }
+
+    #[test]
+    fn test_not_in_bitmap_no_index_returns_none() {
+        let (collection, _temp) = create_test_collection();
+
+        // No index on "category"
+        let filter = crate::filter::Filter::new(crate::filter::Condition::Not {
+            condition: Box::new(crate::filter::Condition::In {
+                field: "category".to_string(),
+                values: vec![serde_json::Value::String("tech".to_string())],
+            }),
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+        assert!(bitmap.is_none(), "no secondary index => None");
+    }
+
+    #[test]
+    fn test_not_in_empty_list_returns_universe() {
+        // GIVEN: index with tech=[1,5,10], science=[2,7], art=[3]
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        // WHEN: NOT IN () — empty exclusion list
+        let filter = crate::filter::Filter::new(crate::filter::Condition::Not {
+            condition: Box::new(crate::filter::Condition::In {
+                field: "category".to_string(),
+                values: vec![],
+            }),
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+
+        // THEN: universe - empty = full universe {1,2,3,5,7,10}
+        assert!(bitmap.is_some(), "NOT IN () should return full universe");
+        let bm = bitmap.unwrap();
+        assert_eq!(bm.len(), 6);
+        assert!(bm.contains(1));
+        assert!(bm.contains(2));
+        assert!(bm.contains(3));
+        assert!(bm.contains(5));
+        assert!(bm.contains(7));
+        assert!(bm.contains(10));
+    }
+
+    #[test]
+    fn test_not_in_all_values_returns_empty() {
+        // GIVEN: index with tech=[1,5,10], science=[2,7], art=[3]
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        // WHEN: NOT IN (all values) — exclude everything
+        let filter = crate::filter::Filter::new(crate::filter::Condition::Not {
+            condition: Box::new(crate::filter::Condition::In {
+                field: "category".to_string(),
+                values: vec![
+                    serde_json::Value::String("tech".to_string()),
+                    serde_json::Value::String("science".to_string()),
+                    serde_json::Value::String("art".to_string()),
+                ],
+            }),
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+
+        // THEN: universe - universe = empty
+        assert!(bitmap.is_some(), "NOT IN (all) should return Some(empty)");
+        assert!(
+            bitmap.unwrap().is_empty(),
+            "excluding all values => empty bitmap"
+        );
+    }
+
+    #[test]
+    fn test_not_wrapping_non_in_returns_none() {
+        // Not { Eq } should still return None (only Not { In } is supported)
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        let filter = crate::filter::Filter::new(crate::filter::Condition::Not {
+            condition: Box::new(crate::filter::Condition::Eq {
+                field: "category".to_string(),
+                value: serde_json::Value::String("tech".to_string()),
+            }),
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+        assert!(bitmap.is_none(), "Not wrapping Eq should return None");
+    }
+
+    // =========================================================================
+    // AND/OR composition with IN bitmaps (Issue #512 — Requirement 4)
+    // =========================================================================
+
+    #[test]
+    fn test_and_with_in_and_eq_intersects() {
+        // GIVEN: category index with tech=[1,5,10], science=[2,7], art=[3]
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        // WHEN: And(In('tech','science'), Eq('art'))
+        // IN('tech','science') = {1,5,10} | {2,7} = {1,2,5,7,10}
+        // Eq('art') = {3}
+        // Intersection = empty (no overlap)
+        let filter = crate::filter::Filter::new(crate::filter::Condition::And {
+            conditions: vec![
+                crate::filter::Condition::In {
+                    field: "category".to_string(),
+                    values: vec![
+                        serde_json::Value::String("tech".to_string()),
+                        serde_json::Value::String("science".to_string()),
+                    ],
+                },
+                crate::filter::Condition::Eq {
+                    field: "category".to_string(),
+                    value: serde_json::Value::String("art".to_string()),
+                },
+            ],
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+
+        // THEN: intersection is empty — no ID is in both sets
+        assert!(bitmap.is_some(), "AND(In, Eq) on indexed field => Some");
+        assert!(
+            bitmap.unwrap().is_empty(),
+            "no overlap between IN and Eq => empty bitmap"
+        );
+    }
+
+    #[test]
+    fn test_and_with_in_and_range_intersects() {
+        // GIVEN: category index + price index
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        collection
+            .create_index("price")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+        populate_price_index(&collection);
+
+        // WHEN: And(In('tech','science'), Gte(price, 5))
+        // IN('tech','science') on category = {1,2,5,7,10}
+        // Gte(price, 5) => price index has 10→1, 20→2, 30→3, 40→4, 50→5
+        //   all prices >= 5, so Gte(5) = {1,2,3,4,5}
+        // Intersection = {1,2,5}
+        let filter = crate::filter::Filter::new(crate::filter::Condition::And {
+            conditions: vec![
+                crate::filter::Condition::In {
+                    field: "category".to_string(),
+                    values: vec![
+                        serde_json::Value::String("tech".to_string()),
+                        serde_json::Value::String("science".to_string()),
+                    ],
+                },
+                crate::filter::Condition::Gte {
+                    field: "price".to_string(),
+                    value: serde_json::json!(5),
+                },
+            ],
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+
+        // THEN: intersection of {1,2,5,7,10} & {1,2,3,4,5} = {1,2,5}
+        assert!(bitmap.is_some(), "AND(In, Gte) on indexed fields => Some");
+        let bm = bitmap.unwrap();
+        assert_eq!(bm.len(), 3);
+        assert!(bm.contains(1));
+        assert!(bm.contains(2));
+        assert!(bm.contains(5));
+    }
+
+    #[test]
+    fn test_or_with_in_and_eq_unions() {
+        // GIVEN: category index with tech=[1,5,10], science=[2,7], art=[3]
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        // WHEN: Or(In('tech'), Eq('science'))
+        // IN('tech') = {1,5,10}
+        // Eq('science') = {2,7}
+        // Union = {1,2,5,7,10}
+        let filter = crate::filter::Filter::new(crate::filter::Condition::Or {
+            conditions: vec![
+                crate::filter::Condition::In {
+                    field: "category".to_string(),
+                    values: vec![serde_json::Value::String("tech".to_string())],
+                },
+                crate::filter::Condition::Eq {
+                    field: "category".to_string(),
+                    value: serde_json::Value::String("science".to_string()),
+                },
+            ],
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+
+        // THEN: union of {1,5,10} | {2,7} = {1,2,5,7,10}
+        assert!(bitmap.is_some(), "OR(In, Eq) on indexed field => Some");
+        let bm = bitmap.unwrap();
+        assert_eq!(bm.len(), 5);
+        assert!(bm.contains(1));
+        assert!(bm.contains(2));
+        assert!(bm.contains(5));
+        assert!(bm.contains(7));
+        assert!(bm.contains(10));
+    }
+
+    #[test]
+    fn test_or_with_in_unindexed_returns_none() {
+        // GIVEN: category index exists, but "tags" has no index
+        let (collection, _temp) = create_test_collection();
+        collection
+            .create_index("category")
+            .expect("test: index creation");
+        populate_category_index(&collection);
+
+        // WHEN: Or(In(category, ['tech']), In(tags, ['rust']))
+        // category IN is indexed => Some, but tags IN is unindexed => None
+        // OR requires ALL children to resolve => entire OR returns None
+        let filter = crate::filter::Filter::new(crate::filter::Condition::Or {
+            conditions: vec![
+                crate::filter::Condition::In {
+                    field: "category".to_string(),
+                    values: vec![serde_json::Value::String("tech".to_string())],
+                },
+                crate::filter::Condition::In {
+                    field: "tags".to_string(),
+                    values: vec![serde_json::Value::String("rust".to_string())],
+                },
+            ],
+        });
+        let bitmap = collection.build_prefilter_bitmap(&filter);
+
+        // THEN: None because OR with unindexed child cannot produce complete bitmap
+        assert!(
+            bitmap.is_none(),
+            "OR with unindexed IN child must return None"
+        );
+    }
 }

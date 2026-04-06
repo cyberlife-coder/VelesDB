@@ -417,6 +417,14 @@ SELECT * FROM docs WHERE category NOT IN ('draft', 'deleted')
 SELECT * FROM docs WHERE id NOT IN (1, 2, 3)
 ```
 
+**Index acceleration**: When a secondary index exists on the filtered column,
+`IN` uses bitmap pre-filtering to restrict HNSW traversal to matching points
+only. The engine builds a `RoaringBitmap` by unioning per-value B-tree lookups
+(time complexity: O(N × log K) where N = list size, K = index cardinality).
+`NOT IN` on indexed fields computes the universe bitmap minus the IN bitmap
+(set subtraction). Queries on non-indexed fields fall back to post-filtering
+transparently. Results are identical in both paths.
+
 ### BETWEEN
 
 Test if a value falls within a range (inclusive):

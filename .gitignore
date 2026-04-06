@@ -149,3 +149,6 @@ todo_analysis_report_updated.md
 .claude/
 .codacy/flamegraph.svg
 .kiro/
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md

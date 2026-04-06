@@ -43,6 +43,8 @@ mod operators;
 mod recall_contract;
 #[path = "bdd/regression.rs"]
 mod regression;
+#[path = "bdd/secondary_index_bitmap_in.rs"]
+mod secondary_index_bitmap_in;
 #[path = "bdd/set_operations.rs"]
 mod set_operations;
 #[path = "bdd/vector_group_by.rs"]
