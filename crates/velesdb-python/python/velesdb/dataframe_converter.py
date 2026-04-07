@@ -135,6 +135,32 @@ def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
     return lib.DataFrame(rows)
 
 
+def _df_to_records(df: Any) -> list[dict]:
+    """Convert a DataFrame to a list of row dicts (backend-agnostic)."""
+    if "polars" in type(df).__module__:
+        return df.to_dicts()
+    return df.to_dict(orient="records")
+
+
+def _df_columns(df: Any) -> list[str]:
+    """Return column names as a list (backend-agnostic)."""
+    if "polars" in type(df).__module__:
+        return df.columns
+    return list(df.columns)
+
+
+def _row_to_point(row: dict) -> dict[str, Any]:
+    """Convert a single row dict to a point dict for upsert."""
+    point: dict[str, Any] = {"id": int(row["id"])}
+    vec = row.get("vector")
+    if vec is not None:
+        point["vector"] = list(vec) if not isinstance(vec, list) else vec
+    payload = {k: v for k, v in row.items() if k not in ("id", "vector")}
+    if payload:
+        point["payload"] = payload
+    return point
+
+
 def dataframe_to_points(df: Any) -> list[dict]:
     """Convert a DataFrame to a list of point dicts for upsert.
 
@@ -146,28 +172,23 @@ def dataframe_to_points(df: Any) -> list[dict]:
     Returns:
         List of point dicts with 'id', optional 'vector', and 'payload'.
     """
-    # Detect backend by type name to avoid importing
-    type_name = type(df).__module__
-    if "polars" in type_name:
-        records = df.to_dicts()
+    return [_row_to_point(row) for row in _df_to_records(df)]
+
+
+def _check_vector_dimension(df: Any, dimension: int) -> None:
+    """Validate first non-null vector dimension matches expected."""
+    if "polars" in type(df).__module__:
+        vectors = df["vector"].to_list()
     else:
-        records = df.to_dict(orient="records")
-
-    points = []
-    for row in records:
-        point: dict[str, Any] = {"id": int(row["id"])}
-        if "vector" in row and row["vector"] is not None:
-            vec = row["vector"]
-            point["vector"] = list(vec) if not isinstance(vec, list) else vec
-        # All remaining columns become payload
-        payload = {
-            k: v for k, v in row.items() if k not in ("id", "vector")
-        }
-        if payload:
-            point["payload"] = payload
-        points.append(point)
-
-    return points
+        vectors = df["vector"].tolist()
+    for vec in vectors:
+        if vec is not None:
+            if len(vec) != dimension:
+                raise ValueError(
+                    f"Vector dimension mismatch: expected {dimension}, "
+                    f"got {len(vec)}"
+                )
+            return
 
 
 def validate_upsert_dataframe(
@@ -183,11 +204,7 @@ def validate_upsert_dataframe(
     Raises:
         ValueError: If required columns are missing or dimensions mismatch.
     """
-    type_name = type(df).__module__
-    if "polars" in type_name:
-        columns = df.columns
-    else:
-        columns = list(df.columns)
+    columns = _df_columns(df)
 
     if "id" not in columns:
         raise ValueError("DataFrame must contain an 'id' column")
@@ -199,18 +216,4 @@ def validate_upsert_dataframe(
         )
 
     if "vector" in columns and dimension > 0:
-        # Check first non-null vector dimension
-        if "polars" in type_name:
-            vectors = df["vector"].to_list()
-        else:
-            vectors = df["vector"].tolist()
-
-        for vec in vectors:
-            if vec is not None:
-                actual = len(vec)
-                if actual != dimension:
-                    raise ValueError(
-                        f"Vector dimension mismatch: expected {dimension}, "
-                        f"got {actual}"
-                    )
-                break
+        _check_vector_dimension(df, dimension)
