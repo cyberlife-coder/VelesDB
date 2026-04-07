@@ -242,8 +242,9 @@ impl fmt::Display for QueryPlan {
 /// Formats a `WithValue` for human-readable EXPLAIN display.
 pub(super) fn format_with_value(v: &super::super::ast::WithValue) -> String {
     match v {
-        super::super::ast::WithValue::String(s)
-        | super::super::ast::WithValue::Identifier(s) => s.clone(),
+        super::super::ast::WithValue::String(s) | super::super::ast::WithValue::Identifier(s) => {
+            s.clone()
+        }
         super::super::ast::WithValue::Integer(i) => i.to_string(),
         super::super::ast::WithValue::Float(f) => f.to_string(),
         super::super::ast::WithValue::Boolean(b) => b.to_string(),
