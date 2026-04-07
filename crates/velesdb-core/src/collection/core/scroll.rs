@@ -47,11 +47,9 @@ impl Collection {
             ));
         }
 
-        // TODO(US-429): all_point_ids() + sort_unstable() is O(N log N) per batch,
-        // making full-collection scroll O((N/B) × N log N). Replace with a sorted
-        // iterator from storage or a cached ID list for large collections.
-        let mut ids = self.all_point_ids();
-        ids.sort_unstable();
+        // all_point_ids() returns IDs pre-sorted via BTreeSet (see crud_read_delete.rs).
+        // Binary search via partition_point is O(log N) per batch.
+        let ids = self.all_point_ids();
 
         let start = match cursor {
             Some(c) => ids.partition_point(|&id| id <= c),
