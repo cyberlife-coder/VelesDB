@@ -304,6 +304,7 @@ pub struct ActualStatsResponse {
     pub edges_traversed: u64,
 }
 
+#[cfg(feature = "persistence")]
 impl From<&crate::velesql::ActualStats> for ActualStatsResponse {
     fn from(s: &crate::velesql::ActualStats) -> Self {
         Self {
@@ -332,6 +333,7 @@ pub struct NodeStatsResponse {
     pub loops: u64,
 }
 
+#[cfg(feature = "persistence")]
 impl From<&crate::velesql::NodeStats> for NodeStatsResponse {
     fn from(ns: &crate::velesql::NodeStats) -> Self {
         Self {
