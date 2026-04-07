@@ -103,10 +103,12 @@ impl Collection {
         vector_storage: &dyn VectorStorage,
     ) -> Option<Point> {
         let payload = payload_storage.retrieve(id).ok().flatten();
+        // Graph nodes inserted via upsert_node_payload() have no vector in storage.
+        // Use unwrap_or_default() so payload-only nodes are included, not silently skipped.
         let vector = if is_metadata_only {
             Vec::new()
         } else {
-            vector_storage.retrieve(id).ok().flatten()?
+            vector_storage.retrieve(id).ok().flatten().unwrap_or_default()
         };
         Some(Point {
             id,
