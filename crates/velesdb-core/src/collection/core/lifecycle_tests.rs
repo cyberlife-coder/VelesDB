@@ -371,3 +371,83 @@ fn test_flush_with_inactive_delta_buffer_is_noop() {
     let results = collection.search(&[1.0, 0.0, 0.0, 0.0], 1).expect("search");
     assert_eq!(results.len(), 1, "search should still work after flush");
 }
+
+// ── WP-0C: EdgeStore gap recovery when edge_store.bin missing ───────
+
+/// Regression test (WP-0C): `Collection::open()` must recover gracefully when
+/// `edge_store.bin` does not exist on disk.
+///
+/// Collections created before the BUG-1 persistence fix never had an
+/// `edge_store.bin` file. When such a collection is reopened, the
+/// `load_or_default` pattern in `load_edge_store()` must fall back to an
+/// empty `ConcurrentEdgeStore`, and graph operations must work immediately.
+#[test]
+fn test_open_without_edge_store_bin_recovers_gracefully() {
+    use crate::collection::graph::{GraphEdge, GraphSchema};
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let col_path = temp_dir.path().join("graph_col");
+
+    // 1. Create a graph collection, flush to persist config.json, then drop.
+    {
+        let schema = GraphSchema::new();
+        let collection = Collection::create_graph_collection(
+            col_path.clone(),
+            "graph_col",
+            schema,
+            None,
+            DistanceMetric::Cosine,
+        )
+        .expect("graph collection should be created");
+
+        let edge = GraphEdge::new(1, 100, 200, "KNOWS").expect("valid edge");
+        collection.add_edge(edge).expect("add edge should succeed");
+
+        collection.flush().expect("flush should succeed");
+    }
+
+    // 2. Verify edge_store.bin was created by flush, then delete it to
+    //    simulate a pre-fix collection directory.
+    let edge_store_path = col_path.join("edge_store.bin");
+    assert!(
+        edge_store_path.exists(),
+        "edge_store.bin should exist after flush"
+    );
+    std::fs::remove_file(&edge_store_path).expect("remove edge_store.bin");
+    assert!(
+        !edge_store_path.exists(),
+        "edge_store.bin should be deleted"
+    );
+
+    // 3. Reopen the collection — must NOT fail despite missing edge_store.bin.
+    let reopened = Collection::open(col_path).expect("open should succeed without edge_store.bin");
+
+    // 4. The recovered edge store should be empty (edges from before are lost,
+    //    which is expected for pre-fix collections).
+    assert_eq!(
+        reopened.edge_count(),
+        0,
+        "edge store should be empty after recovery without edge_store.bin"
+    );
+
+    // 5. Graph operations must work on the recovered collection.
+    let edge_a = GraphEdge::new(10, 1, 2, "LIKES").expect("valid edge");
+    reopened
+        .add_edge(edge_a)
+        .expect("add edge should succeed after recovery");
+    assert_eq!(reopened.edge_count(), 1, "edge count after add");
+
+    let outgoing = reopened.get_outgoing_edges(1);
+    assert_eq!(outgoing.len(), 1, "should have one outgoing edge");
+    assert_eq!(outgoing[0].target(), 2, "target should be 2");
+    assert_eq!(outgoing[0].label(), "LIKES", "label should be LIKES");
+
+    // 6. Verify flush works on the recovered collection.
+    reopened
+        .flush()
+        .expect("flush should succeed after recovery");
+    assert!(
+        edge_store_path.exists(),
+        "edge_store.bin should be re-created after flush"
+    );
+}
