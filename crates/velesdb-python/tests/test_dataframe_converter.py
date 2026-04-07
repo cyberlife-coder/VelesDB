@@ -13,15 +13,31 @@ Run with: pytest tests/test_dataframe_converter.py -v
 
 from __future__ import annotations
 
+import importlib.util
+import math
+import pathlib
+import sys
 from typing import Any
 
 import pytest
 
-from velesdb.dataframe_converter import (
-    query_to_dataframe,
-    to_dataframe,
-    to_scroll_dataframe,
+# Load dataframe_converter directly from its source file to avoid triggering
+# velesdb/__init__.py, which eagerly imports the Rust extension (velesdb.velesdb).
+# This file explicitly does not require native bindings.
+_MODULE_PATH = (
+    pathlib.Path(__file__).parent.parent
+    / "python" / "velesdb" / "dataframe_converter.py"
 )
+_spec = importlib.util.spec_from_file_location("velesdb.dataframe_converter", _MODULE_PATH)
+_dc = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+sys.modules.setdefault("velesdb.dataframe_converter", _dc)
+_spec.loader.exec_module(_dc)  # type: ignore[union-attr]
+
+_row_to_point = _dc._row_to_point
+dataframe_to_points = _dc.dataframe_to_points
+query_to_dataframe = _dc.query_to_dataframe
+to_dataframe = _dc.to_dataframe
+to_scroll_dataframe = _dc.to_scroll_dataframe
 
 
 # ---------------------------------------------------------------------------
@@ -184,11 +200,14 @@ class TestToScrollDataframeKeyCollision:
         assert abs(df["weight"].iloc[0] - 1.5) < 1e-9
 
     def test_empty_batch_returns_empty_dataframe(self, pd):
-        """Empty input returns an empty DataFrame with id, vector, payload columns."""
+        """Empty input returns an empty DataFrame with exactly [id, vector] columns.
+
+        No payload column is present because there are no points to inspect —
+        the empty-batch fast-path cannot know the payload shape, so it only
+        guarantees the mandatory structural columns.
+        """
         df = to_scroll_dataframe([], backend="pandas")
-        assert "id" in df.columns
-        assert "vector" in df.columns
-        assert "payload" in df.columns
+        assert list(df.columns) == ["id", "vector"]
         assert len(df) == 0
 
     def test_multiple_rows_collision(self, pd):
@@ -223,3 +242,106 @@ class TestQueryToDataframe:
     def test_empty_returns_empty_dataframe(self, pd):
         df = query_to_dataframe([], backend="pandas")
         assert len(df) == 0
+
+
+# ---------------------------------------------------------------------------
+# to_scroll_dataframe — mixed-batch schema consistency (Issue 1)
+# ---------------------------------------------------------------------------
+
+class TestScrollDataframeMixedBatch:
+    """Schema must be consistent when a batch mixes dict and non-dict payloads."""
+
+    @pytest.fixture
+    def pd(self):
+        return pytest.importorskip("pandas")
+
+    def test_all_dict_payloads_flattened(self, pd):
+        """All dict payloads are flattened into top-level columns."""
+        batch = [
+            _make_scroll_point(1, [0.1], payload={"tag": "a", "score": 1.0}),
+            _make_scroll_point(2, [0.2], payload={"tag": "b", "score": 2.0}),
+        ]
+        df = to_scroll_dataframe(batch, backend="pandas")
+        assert "tag" in df.columns
+        assert "score" in df.columns
+        assert "payload" not in df.columns
+        assert list(df["tag"]) == ["a", "b"]
+
+    def test_all_none_payloads_produce_payload_column(self, pd):
+        """When no point has a dict payload, a raw 'payload' column is used."""
+        batch = [
+            _make_scroll_point(1, [0.1], payload=None),
+            _make_scroll_point(2, [0.2], payload=None),
+        ]
+        df = to_scroll_dataframe(batch, backend="pandas")
+        assert "payload" in df.columns
+        assert list(df["payload"]) == [None, None]
+
+    def test_mixed_dict_and_none_payloads_use_flattening(self, pd):
+        """Mixed batch: dict payloads are flattened; None rows have NaN for dict keys."""
+        batch = [
+            _make_scroll_point(1, [0.1], payload={"tag": "news"}),
+            _make_scroll_point(2, [0.2], payload=None),
+        ]
+        df = to_scroll_dataframe(batch, backend="pandas")
+        # Dict keys become columns; no raw "payload" column
+        assert "tag" in df.columns
+        assert "payload" not in df.columns
+        assert df["tag"].iloc[0] == "news"
+        # The None-payload row has NaN for the missing key
+        assert pd.isna(df["tag"].iloc[1])
+
+    def test_mixed_batch_preserves_id_and_vector(self, pd):
+        """Special columns id/vector are intact across a mixed-payload batch."""
+        batch = [
+            _make_scroll_point(10, [1.0, 2.0], payload={"x": 99}),
+            _make_scroll_point(20, [3.0, 4.0], payload=None),
+        ]
+        df = to_scroll_dataframe(batch, backend="pandas")
+        assert list(df["id"]) == [10, 20]
+        assert df["vector"].iloc[0] == [1.0, 2.0]
+        assert df["vector"].iloc[1] == [3.0, 4.0]
+
+
+# ---------------------------------------------------------------------------
+# NaN vector guard — _row_to_point and dataframe_to_points (Issue 3)
+# ---------------------------------------------------------------------------
+
+class TestNaNVectorGuard:
+    """NaN in the vector column must be treated as absent, not cause a TypeError."""
+
+    @pytest.fixture
+    def pd(self):
+        return pytest.importorskip("pandas")
+
+    def test_row_to_point_with_nan_vector_omits_vector(self):
+        """_row_to_point must omit 'vector' key when value is float NaN."""
+        row = {"id": 1, "vector": float("nan")}
+        point = _row_to_point(row)
+        assert "vector" not in point, (
+            f"Expected no 'vector' key for NaN input, got point={point!r}"
+        )
+
+    def test_row_to_point_with_none_vector_omits_vector(self):
+        """_row_to_point must omit 'vector' key when value is None."""
+        row = {"id": 2, "vector": None}
+        point = _row_to_point(row)
+        assert "vector" not in point
+
+    def test_row_to_point_with_valid_vector_included(self):
+        """_row_to_point must include 'vector' key when value is a valid list."""
+        row = {"id": 3, "vector": [0.1, 0.2, 0.3]}
+        point = _row_to_point(row)
+        assert point["vector"] == [0.1, 0.2, 0.3]
+
+    def test_dataframe_to_points_with_nan_vector_column(self, pd):
+        """dataframe_to_points must not raise TypeError when vector column has NaN."""
+        import pandas as pd_lib
+        df = pd_lib.DataFrame({"id": [1, 2], "vector": [None, [0.5, 0.6]]})
+        points = dataframe_to_points(df)
+        # Row 0: NaN/None vector — key must be absent
+        assert "vector" not in points[0], (
+            f"Expected no 'vector' for NaN row, got {points[0]!r}"
+        )
+        # Row 1: valid vector — key must be present
+        assert points[1]["vector"] == [0.5, 0.6]

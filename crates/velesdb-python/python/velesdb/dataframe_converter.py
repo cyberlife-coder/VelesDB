@@ -124,14 +124,26 @@ def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
             schema={"id": lib.Int64, "vector": lib.List(lib.Float32)}
         )
 
+    # Decide flattening strategy based on whether any point has a dict payload.
+    # - If at least one point has a dict payload: flatten all dict payloads into
+    #   top-level columns; non-dict payloads contribute no payload columns
+    #   (missing keys become NaN/null naturally).
+    # - If no point has a dict payload: store raw payload under a "payload" column.
+    # This guarantees a consistent schema regardless of per-point payload type.
+    has_dict_payload = any(isinstance(p.get("payload"), dict) for p in batch)
+
     rows = []
     for p in batch:
         row: dict[str, Any] = {}
         payload = p.get("payload")
-        if isinstance(payload, dict):
-            row.update(payload)
-        # Non-dict payloads (None, scalar) are omitted so all rows share
-        # the same schema — missing keys become NaN/null in pandas/polars.
+        if has_dict_payload:
+            if isinstance(payload, dict):
+                row.update(payload)
+            # Non-dict payloads in a mixed batch are silently skipped;
+            # their columns will be NaN/null in the final DataFrame.
+        else:
+            row["payload"] = payload
+        # Special columns are written last so payload keys cannot overwrite them.
         row["id"] = p.get("id")
         row["vector"] = list(p.get("vector", []))
         rows.append(row)
@@ -169,7 +181,7 @@ def _row_to_point(row: dict) -> dict[str, Any]:
     """
     point: dict[str, Any] = {"id": int(row["id"])}
     vec = row.get("vector")
-    if vec is not None:
+    if vec is not None and not (isinstance(vec, float) and math.isnan(vec)):
         point["vector"] = list(vec) if not isinstance(vec, list) else vec
     payload = {k: _nan_to_none(v) for k, v in row.items() if k not in ("id", "vector")}
     if payload:
@@ -202,7 +214,7 @@ def _check_vector_dimension(df: Any, dimension: int) -> None:
     else:
         vectors = df["vector"].tolist()
     for vec in vectors:
-        if vec is not None:
+        if vec is not None and not (isinstance(vec, float) and math.isnan(vec)):
             if len(vec) != dimension:
                 raise ValueError(
                     f"Vector dimension mismatch: expected {dimension}, "
