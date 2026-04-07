@@ -2,6 +2,17 @@
 
 Converts between VelesDB result types (list[dict]) and Pandas/Polars
 DataFrames. All pandas/polars imports are deferred to first use.
+
+.. warning:: Reserved column names
+
+   The structural columns ``id``, ``score`` (search results) and
+   ``vector`` (scroll batches) always take precedence over identically
+   named payload keys.  If a payload contains a field called ``id``,
+   ``score``, or ``vector``, it will be **silently overwritten** by the
+   structural value in the resulting DataFrame.  A subsequent
+   ``upsert_from_dataframe`` round-trip would therefore **lose** those
+   payload fields.  Avoid using reserved names as payload keys, or
+   rename them before converting to a DataFrame.
 """
 
 from __future__ import annotations
@@ -51,6 +62,9 @@ def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
 
     Each dict should have 'id', 'score', and optional payload keys.
     Missing payload fields are represented as None/NaN/null.
+
+    .. note:: Payload keys named ``id`` or ``score`` are overwritten by
+       the structural search-result values (see module-level warning).
 
     Args:
         results: List of search result dicts.
@@ -105,6 +119,9 @@ def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
     """Convert a scroll batch (list of point dicts) to a DataFrame.
 
     Each dict has 'id', 'vector', and 'payload' keys.
+
+    .. note:: Payload keys named ``id`` or ``vector`` are overwritten
+       by the structural point values (see module-level warning).
 
     Args:
         batch: List of point dicts from scroll.
