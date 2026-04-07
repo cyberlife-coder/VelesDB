@@ -55,6 +55,16 @@ exclude_paths:
   # TypeScript SDK REST/streaming backends — fetch URL constructed from
   # trusted application config (baseUrl), not user input. SSRF is FP.
   - "sdks/typescript/src/backends/**"
+  # Integration contains_text_search helpers — Codacy's online taint analysis
+  # flags VelesQL query construction as SQL injection. All user inputs are
+  # sanitized BEFORE the query is built:
+  #   - collection: validate_collection_name() → [a-zA-Z0-9_-]+ only
+  #   - column:     validate_column_name()     → [a-zA-Z0-9_.]+ only
+  #   - keyword:    keyword.replace("'","''")   → SQL-style quote escaping
+  # The static analyser cannot follow sanitization across Python call boundaries,
+  # producing persistent false positives despite repeated per-engine exclusions.
+  - "integrations/langchain/src/langchain_velesdb/search_ops.py"
+  - "integrations/llamaindex/src/llamaindex_velesdb/search_ops.py"
   # Root-level benchmark scripts (Python, not criterion)
   - "benchmarks/**"
   # Non-project directories (dependencies, tooling, build output)
