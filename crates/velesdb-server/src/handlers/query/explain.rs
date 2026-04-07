@@ -10,7 +10,8 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found};
+use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
+use axum::http::StatusCode;
 
 /// Explain a VelesQL query, optionally executing it with instrumentation.
 ///
@@ -109,7 +110,12 @@ fn explain_with_analyze(
     let output = match state.db.explain_analyze_query(parsed, &req.params) {
         Ok(o) => o,
         Err(e) => {
-            return Json(serde_json::json!({ "error": e.to_string() })).into_response();
+            let status = if e.to_string().contains("not found") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return velesql_error(status, "EXPLAIN_ANALYZE_ERROR", &e.to_string(), "", None);
         }
     };
 

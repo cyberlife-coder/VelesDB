@@ -610,12 +610,10 @@ impl Collection {
     ) -> Result<crate::velesql::ExplainOutput> {
         use crate::velesql::{build_leaf_node_stats, ActualStats, ExplainOutput, QueryPlan};
 
-        let plan = if let Some(mc) = query.match_clause.as_ref() {
-            let stats = crate::collection::search::query::match_planner::CollectionStats::default();
-            QueryPlan::from_match(mc, &stats)
-        } else {
-            QueryPlan::from_select(&query.select)
-        };
+        // Use from_query() (not from_select/from_match) to include LET bindings,
+        // keeping the plan consistent with the Database-level explain path.
+        // Cache fields are unavailable at the Collection level and remain None.
+        let plan = QueryPlan::from_query(query);
 
         let start = std::time::Instant::now();
         let results = self.execute_query(query, params)?;
