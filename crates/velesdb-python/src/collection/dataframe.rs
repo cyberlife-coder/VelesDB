@@ -99,7 +99,7 @@ impl Collection {
         } else {
             let parsed = crate::collection_helpers::parse_point_dicts(py, &points)?;
             let count = parsed.len();
-            self.inner.upsert(parsed).map_err(core_err)?;
+            py.allow_threads(|| self.inner.upsert(parsed).map_err(core_err))?;
             Ok(count)
         }
     }
