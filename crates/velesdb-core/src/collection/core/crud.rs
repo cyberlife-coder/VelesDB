@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap};
 ///
 /// Built once in `batch_store_all` and shared by both `write_deduped_payloads`
 /// and `write_deduped_vectors` to avoid redundant map construction (Issue #425).
-type DedupMap = HashMap<u64, usize>;
+pub(super) type DedupMap = HashMap<u64, usize>;
 
 pub(super) struct QuantizationGuards<'a> {
     pub(super) sq8: Option<RwLockWriteGuard<'a, HashMap<u64, QuantizedVector>>>,
@@ -80,9 +80,29 @@ impl Collection {
             validate_dimension_match(dimension, point.dimension())?;
         }
 
-        let sparse_batch = self.upsert_storage_and_index(&points, storage_mode)?;
+        let (sparse_batch, old_payloads) = self.upsert_storage_and_index(&points, storage_mode)?;
 
         self.apply_sparse_batch_upsert(&sparse_batch)?;
+
+        // Incremental histogram maintenance: decrement old values and
+        // increment new values in a single atomic read → modify → write
+        // cycle (Bug #49: avoids 2× I/O of separate delete + upsert calls).
+        // Only the last occurrence per ID is counted for new payloads
+        // (Bug #47: dedup to match last-writer-wins storage semantics).
+        let dedup = Self::build_dedup_map(&points);
+        let new_payloads: Vec<Option<serde_json::Value>> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if dedup.get(&p.id) == Some(&i) {
+                    p.payload.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.update_histograms_replace(&old_payloads, &new_payloads);
+
         self.invalidate_caches_and_bump_generation();
         Ok(())
     }
@@ -102,11 +122,15 @@ impl Collection {
     /// any missing vectors. The recovery window is bounded by one batch.
     ///
     /// Returns buffered sparse vectors for deferred insertion.
+    #[allow(clippy::type_complexity)] // Reason: tuple of (sparse_batch, old_payloads) — extracting a named type adds indirection without clarity
     fn upsert_storage_and_index(
         &self,
         points: &[Point],
         storage_mode: StorageMode,
-    ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
+    ) -> Result<(
+        Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>,
+        Vec<Option<serde_json::Value>>,
+    )> {
         // Phase 1: Batch storage under write locks (1 fsync per storage)
         let old_payloads = self.batch_store_all(points)?;
 
@@ -118,7 +142,7 @@ impl Collection {
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         self.bulk_index_or_defer(vector_refs);
 
-        Ok(sparse_batch)
+        Ok((sparse_batch, old_payloads))
     }
 
     /// Phase 1: Batch-stores vectors and payloads with minimal lock scope.
@@ -207,7 +231,7 @@ impl Collection {
     ///
     /// For intra-batch duplicates, only the first occurrence needs the pre-batch
     /// value; subsequent occurrences are handled by `seen_payloads` in Phase 2.
-    fn collect_old_payloads(
+    pub(crate) fn collect_old_payloads(
         points: &[Point],
         storage: &LogPayloadStorage,
     ) -> Vec<Option<serde_json::Value>> {
@@ -230,7 +254,7 @@ impl Collection {
     /// Issue #425: Computed once in `batch_store_all` and shared by both
     /// `write_deduped_payloads` and `write_deduped_vectors` to avoid
     /// redundant `HashMap` construction.
-    fn build_dedup_map(points: &[Point]) -> DedupMap {
+    pub(super) fn build_dedup_map(points: &[Point]) -> DedupMap {
         let mut map = HashMap::with_capacity(points.len());
         for (i, p) in points.iter().enumerate() {
             map.insert(p.id, i);
@@ -428,6 +452,12 @@ impl Collection {
         let mut payload_storage = self.payload_storage.write();
         let mut label_idx = self.label_index.write();
 
+        // Collect old payloads for histogram decrements before they are overwritten.
+        // Bug #46: use collect_old_payloads to deduplicate by ID — only the
+        // first occurrence retrieves the pre-batch value; duplicates get None
+        // so the old value is decremented exactly once.
+        let old_payloads_for_hist = Self::collect_old_payloads(&points, &payload_storage);
+
         for point in &points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
             if let Some(payload) = &point.payload {
@@ -458,6 +488,25 @@ impl Collection {
 
         // config(1) only — all higher-numbered locks released above.
         self.config.write().point_count = point_count;
+
+        // Incremental histogram maintenance for metadata-only collections:
+        // decrement old values and increment new values in one atomic cycle.
+        // Bug #47: only the last occurrence per ID is counted for new payloads
+        // to match last-writer-wins storage semantics.
+        let dedup = Self::build_dedup_map(&points);
+        let new_payloads: Vec<Option<serde_json::Value>> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if dedup.get(&p.id) == Some(&i) {
+                    p.payload.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.update_histograms_replace(&old_payloads_for_hist, &new_payloads);
+
         self.invalidate_caches_and_bump_generation();
         Ok(())
     }

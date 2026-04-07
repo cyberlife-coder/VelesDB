@@ -55,6 +55,16 @@ exclude_paths:
   # TypeScript SDK REST/streaming backends — fetch URL constructed from
   # trusted application config (baseUrl), not user input. SSRF is FP.
   - "sdks/typescript/src/backends/**"
+  # Integration contains_text_search helpers — Codacy's online taint analysis
+  # flags VelesQL query construction as SQL injection. All user inputs are
+  # sanitized BEFORE the query is built:
+  #   - collection: validate_collection_name() → [a-zA-Z0-9_-]+ only
+  #   - column:     validate_column_name()     → [a-zA-Z0-9_.]+ only
+  #   - keyword:    keyword.replace("'","''")   → SQL-style quote escaping
+  # The static analyser cannot follow sanitization across Python call boundaries,
+  # producing persistent false positives despite repeated per-engine exclusions.
+  - "integrations/langchain/src/langchain_velesdb/search_ops.py"
+  - "integrations/llamaindex/src/llamaindex_velesdb/search_ops.py"
   # Root-level benchmark scripts (Python, not criterion)
   - "benchmarks/**"
   # Non-project directories (dependencies, tooling, build output)
@@ -290,3 +300,20 @@ engines:
       # GitHub workflows — dtolnay/rust-toolchain downloads only official
       # Rust binaries from static.rust-lang.org; pinning is handled per-file
       - ".github/workflows/**"
+      # Audited unsafe Rust — also listed in global exclude_paths but opengrep's
+      # unsafe-usage rule bypasses the global exclusion for this engine.
+      # contiguous_ops.rs: RAII-guarded dealloc + ptr::copy_nonoverlapping for
+      # cache-locality reordering; all blocks have // SAFETY: comments.
+      - "crates/velesdb-core/src/contiguous_ops.rs"
+      # mmap_capacity.rs: MmapMut::map_mut after file resize (file was set_len'd
+      # to new_len before remapping, ensuring bounds are valid).
+      - "crates/velesdb-core/src/storage/mmap_capacity.rs"
+      # contains_text_search in LangChain/LlamaIndex integrations — opengrep's
+      # taint analysis cannot track sanitization across Python function calls.
+      # All three user-supplied parameters are sanitized before query construction:
+      #   - collection: validated by validate_collection_name() → [a-zA-Z0-9_-]+ only
+      #   - column:     validated by validate_column_name()     → [a-zA-Z0-9_.]+, must start with letter/underscore
+      #   - keyword:    escaped with keyword.replace("'", "''") → SQL-style quote doubling
+      # The resulting VelesQL query cannot be injected. False positive from static taint analysis.
+      - "integrations/langchain/src/langchain_velesdb/search_ops.py"
+      - "integrations/llamaindex/src/llamaindex_velesdb/search_ops.py"

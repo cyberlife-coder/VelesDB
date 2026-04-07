@@ -10,9 +10,11 @@
 //! PyO3 >= 0.21 supports this natively via inventory-based method registration.
 //! rust-analyzer may incorrectly flag `PyMethods` trait conflicts — verify with `cargo build`.
 
+mod dataframe;
 mod index;
 mod mutation;
 pub(crate) mod query;
+pub(crate) mod scroll;
 mod search;
 
 use pyo3::prelude::*;

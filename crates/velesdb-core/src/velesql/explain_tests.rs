@@ -553,6 +553,8 @@ fn test_explain_output_struct() {
             edges_traversed: 25,
         }),
         node_stats: vec![],
+        cost_factors: None,
+        calibration_source: None,
     };
 
     assert_eq!(output.actual_stats.as_ref().unwrap().actual_rows, 100);

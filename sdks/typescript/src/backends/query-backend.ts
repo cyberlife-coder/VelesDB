@@ -24,6 +24,7 @@ export interface QueryExplainApiResponse {
     operation: string;
     description: string;
     estimated_rows: number | null;
+    estimation_method?: string | null;
   }>;
   estimated_cost: {
     uses_index: boolean;
@@ -42,6 +43,21 @@ export interface QueryExplainApiResponse {
     limit: number | null;
     offset: number | null;
   };
+  actual_stats?: {
+    actual_rows: number;
+    actual_time_ms: number;
+    loops: number;
+    nodes_visited: number;
+    edges_traversed: number;
+  } | null;
+  node_stats?: Array<{
+    node_label: string;
+    actual_time_ms: number;
+    actual_rows_in: number;
+    actual_rows_out: number;
+    loops: number;
+    estimated: boolean;
+  }> | null;
 }
 
 /** REST API shape for collection sanity check responses. */
@@ -141,15 +157,21 @@ export async function query(
 export async function queryExplain(
   transport: QueryTransport,
   queryString: string,
-  params?: Record<string, unknown>
+  params?: Record<string, unknown>,
+  options?: { analyze?: boolean }
 ): Promise<ExplainResponse> {
+  const body: Record<string, unknown> = {
+    query: queryString,
+    params: params ?? {},
+  };
+  if (options?.analyze) {
+    body.analyze = true;
+  }
+
   const response = await transport.requestJson<QueryExplainApiResponse>(
     'POST',
     '/query/explain',
-    {
-      query: queryString,
-      params: params ?? {},
-    }
+    body
   );
 
   throwOnError(response);
@@ -164,6 +186,7 @@ export async function queryExplain(
       operation: step.operation,
       description: step.description,
       estimatedRows: step.estimated_rows,
+      estimationMethod: step.estimation_method ?? null,
     })),
     estimatedCost: {
       usesIndex: data.estimated_cost.uses_index,
@@ -182,6 +205,25 @@ export async function queryExplain(
       limit: data.features.limit,
       offset: data.features.offset,
     },
+    actualStats: data.actual_stats
+      ? {
+          actualRows: data.actual_stats.actual_rows,
+          actualTimeMs: data.actual_stats.actual_time_ms,
+          loops: data.actual_stats.loops,
+          nodesVisited: data.actual_stats.nodes_visited,
+          edgesTraversed: data.actual_stats.edges_traversed,
+        }
+      : data.actual_stats === null ? null : undefined,
+    nodeStats: data.node_stats
+      ? data.node_stats.map(ns => ({
+          nodeLabel: ns.node_label,
+          actualTimeMs: ns.actual_time_ms,
+          actualRowsIn: ns.actual_rows_in,
+          actualRowsOut: ns.actual_rows_out,
+          loops: ns.loops,
+          estimated: ns.estimated,
+        }))
+      : data.node_stats === null ? null : undefined,
   };
 }
 

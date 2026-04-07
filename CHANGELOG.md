@@ -14,6 +14,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_metadata_collection()`, or `get_any_collection()` instead.
 
 ### Added
+- **Cost model calibration from histograms (Issue #467)** —
+  `OperationCostFactors` are now calibrated dynamically during `analyze()` from
+  collection statistics and equi-depth histograms, replacing the former hard-coded
+  constants (`FILTER_SCAN_IO_WEIGHT=0.2`, `FILTER_SCAN_CPU_WEIGHT=0.8`,
+  `HNSW_IO_WEIGHT=0.5`, `HNSW_CPU_WEIGHT=1.0`). New public types/fields:
+  `CostFactorBounds` (safety bounds), `OperationCostFactors::hdd_optimized()`,
+  `OperationCostFactors::clamped()`, `OperationCostFactors::is_default()`,
+  `CollectionStats::calibrated_cost_factors`. CBO behavior change:
+  `QueryPlanner::choose_strategy_with_cbo()` now derives I/O/CPU weights from
+  calibrated factors instead of duplicating `0.2`/`0.8` literals. `ExplainOutput`
+  gains `cost_factors` and `calibration_source` fields for observability.
+  Backward compatible: default factors produce identical costs to the old
+  constants; older `collection.stats.json` files without `calibrated_cost_factors`
+  deserialize to `None` via `#[serde(default)]`.
+- **Histogram-based selectivity estimation — CBO foundation (Issue #468)** —
+  Equi-depth histograms built during `ANALYZE` on Int, Float, and String columns
+  (10K-row sample, 64 buckets default). `CostEstimator` now dispatches on all 6
+  `CompareOp` variants (Eq/NotEq/Lt/Lte/Gt/Gte) with O(log B) binary search on
+  bucket boundaries. Histogram-aware selectivity for `IN`, `BETWEEN`, and prefix
+  `LIKE` predicates. Explicit heuristic constants for `Match` (0.1),
+  `ContainsText` (0.05), `Contains` (0.1), `GeoDistance` (0.1), `GeoBbox` (0.2)
+  — eliminates the `_ => 0.5` catch-all. Incremental bucket maintenance on
+  upsert/delete with 20% staleness threshold. `FilterPlan` gains
+  `estimated_rows` and `estimation_method` fields. Histograms persist in
+  `collection.stats.json` with `#[serde(default)]` backward compatibility.
+  4 BDD integration tests + 30 unit tests + 6 persistence tests.
+- **Python DataFrame integration + Scroll cursor + Polars support (Issue #429)** —
+  New `Collection.scroll()` generator for server-side cursor-based iteration over
+  collection points (yields batches of `list[dict]` or DataFrames). New
+  `Collection.to_dataframe()`, `Collection.query_to_dataframe()`, and
+  `Collection.upsert_from_dataframe()` convenience methods for Pandas/Polars
+  DataFrame conversion. Pandas and Polars are optional dependencies
+  (`pip install velesdb[pandas]`, `pip install velesdb[polars]`). All DataFrame
+  imports are deferred — zero overhead when not used. Rust-native `scroll_batch`
+  on `Collection` core with ascending-ID cursor, optional payload filtering,
+  and O(log n + batch_size) per batch. Type stubs updated for all new methods.
 - **Strict text filter `CONTAINS_TEXT` operator (Issue #446)** — New VelesQL operator
   `column CONTAINS_TEXT 'keyword'` performs case-sensitive substring matching as a strict
   metadata filter. Unlike `MATCH` (RRF boost), `CONTAINS_TEXT` guarantees every returned

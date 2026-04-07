@@ -20,6 +20,9 @@ from langchain_velesdb.security import (
     validate_weight,
     validate_batch_size,
     validate_sparse_vector,
+    validate_query,
+    validate_collection_name,
+    validate_column_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -369,6 +372,55 @@ class SearchOpsMixin:
             results = self._collection.text_search(query, top_k=k)
 
         return _results_to_docs_with_score(results)
+
+    def contains_text_search(
+        self,
+        collection: str,
+        column: str,
+        keyword: str,
+        k: int = 10,
+    ) -> List[Document]:
+        """Search for documents where a column contains a text substring.
+
+        Builds and executes a VelesQL CONTAINS_TEXT query.
+
+        Args:
+            collection: Collection name for the FROM clause.
+            column: Column name to search.
+            keyword: Substring to match (case-sensitive).
+            k: Maximum number of results. Defaults to 10.
+
+        Returns:
+            List of LangChain Documents matching the query.
+
+        Raises:
+            ValueError: If collection is not initialized or k < 1.
+            SecurityError: If the built query fails validation.
+        """
+        if k < 1:
+            raise ValueError("k must be a positive integer")
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        collection = validate_collection_name(collection)
+        column = validate_column_name(column)
+        keyword_escaped = keyword.replace("'", "''")
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        # All identifiers validated: collection→[a-zA-Z0-9_-]+, column→[a-zA-Z0-9_.]+,
+        # keyword_escaped has single-quotes doubled. Not a real SQL engine — VelesQL only.
+        query_str = (
+            f"SELECT * FROM {collection} "
+            f"WHERE {column} CONTAINS_TEXT '{keyword_escaped}' "
+            f"LIMIT {k}"
+        )
+        validate_query(query_str)
+
+        results = self._collection.query(query_str)
+        documents: List[Document] = []
+        for result in results:
+            text, metadata = payload_to_doc_parts(result)
+            documents.append(Document(page_content=text, metadata=metadata))
+        return documents
 
     def _validate_and_embed_queries(
         self,

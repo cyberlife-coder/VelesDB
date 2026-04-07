@@ -190,6 +190,8 @@ fn map_stats_to_response(
                     min_value: v.min_value.clone(),
                     max_value: v.max_value.clone(),
                     avg_size_bytes: v.avg_size_bytes,
+                    histogram_buckets: v.histogram.as_ref().map(|h| h.buckets.len()),
+                    histogram_stale: v.histogram.as_ref().map(|h| h.stale),
                 },
             )
         })

@@ -2,6 +2,24 @@
 //!
 //! Provides cost estimation for different operation types based on
 //! collection statistics, enabling cost-based query optimization.
+//!
+//! # Calibrated cost factors
+//!
+//! `OperationCostFactors` holds the per-operation weights used by the CBO.
+//! Since Issue #467, these factors are **calibrated dynamically** from
+//! [`CollectionStats`] during `analyze()` via [`calibrate_cost_factors()`],
+//! replacing the former hard-coded constants. The calibration pipeline
+//! adjusts each factor based on observed collection characteristics:
+//!
+//! - **`seq_page_cost`** — scaled by the page ratio (`total_size_bytes / 8 KB`)
+//! - **`cpu_tuple_cost`** — scaled by average row size (`avg_row_size_bytes / 256`)
+//! - **`cpu_index_cost`** — scaled by average column density from histograms
+//! - **`random_page_cost`** — scaled by histogram skew (bucket imbalance)
+//! - **stale penalty** — all factors inflated by 1.2× when any histogram is stale
+//!
+//! All calibrated values are clamped within [`CostFactorBounds`] to prevent
+//! degenerate estimates. Hardware profiles (`ssd_optimized`, `in_memory`,
+//! `hdd_optimized`) serve as the base before calibration adjustments.
 
 // Reason: Numeric casts in cost model are intentional:
 // - All casts are for cost estimation/statistics (not user data)
@@ -16,51 +34,135 @@
 #![allow(clippy::cast_possible_wrap)]
 
 use crate::collection::stats::{CollectionStats, IndexStats};
+use serde::{Deserialize, Serialize};
+use tracing::debug;
 
-/// Cost factors for different operations (configurable).
+/// Facteurs de coût pour les différentes opérations du CBO.
 ///
-/// These values are calibrated defaults that can be tuned based on
-/// actual hardware characteristics.
-#[derive(Debug, Clone)]
+/// Ces valeurs sont calibrées dynamiquement à partir des statistiques de la
+/// collection lors de `analyze()`. Les constructeurs statiques (`default()`,
+/// `ssd_optimized()`, `in_memory()`, `hdd_optimized()`) fournissent des
+/// bases pré-configurées pour différents profils matériels.
+///
+/// # Bornes de sécurité
+///
+/// Chaque facteur est borné dans un intervalle pour éviter les estimations
+/// dégénérées (voir [`CostFactorBounds`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OperationCostFactors {
-    /// Cost per sequential page access (8KB page)
+    /// Coût par accès séquentiel de page (8 KB). Borné dans \[0.01, 10.0\].
+    #[serde(default = "default_seq_page_cost")]
     pub seq_page_cost: f64,
-    /// Cost per random page access
+    /// Coût par accès aléatoire de page. Borné dans \[0.1, 20.0\].
+    #[serde(default = "default_random_page_cost")]
     pub random_page_cost: f64,
-    /// Cost per tuple/row processed
+    /// Coût CPU par tuple traité. Borné dans \[0.001, 0.1\].
+    #[serde(default = "default_cpu_tuple_cost")]
     pub cpu_tuple_cost: f64,
-    /// Cost per index entry lookup
+    /// Coût CPU par lookup d'index. Borné dans \[0.001, 0.05\].
+    #[serde(default = "default_cpu_index_cost")]
     pub cpu_index_cost: f64,
-    /// Cost per vector distance calculation
+    /// Coût CPU par calcul de distance vectorielle. Borné dans \[0.01, 1.0\].
+    #[serde(default = "default_cpu_distance_cost")]
     pub cpu_distance_cost: f64,
-    /// Cost per graph edge traversal
+    /// Coût CPU par traversée d'arête de graphe. Borné dans \[0.005, 0.2\].
+    #[serde(default = "default_cpu_edge_cost")]
     pub cpu_edge_cost: f64,
+}
+
+/// Returns the default value for `seq_page_cost`.
+fn default_seq_page_cost() -> f64 {
+    1.0
+}
+
+/// Returns the default value for `random_page_cost`.
+fn default_random_page_cost() -> f64 {
+    4.0
+}
+
+/// Returns the default value for `cpu_tuple_cost`.
+fn default_cpu_tuple_cost() -> f64 {
+    0.01
+}
+
+/// Returns the default value for `cpu_index_cost`.
+fn default_cpu_index_cost() -> f64 {
+    0.005
+}
+
+/// Returns the default value for `cpu_distance_cost`.
+fn default_cpu_distance_cost() -> f64 {
+    0.1
+}
+
+/// Returns the default value for `cpu_edge_cost`.
+fn default_cpu_edge_cost() -> f64 {
+    0.02
 }
 
 impl Default for OperationCostFactors {
     fn default() -> Self {
         Self {
-            seq_page_cost: 1.0,
-            random_page_cost: 4.0,
-            cpu_tuple_cost: 0.01,
-            cpu_index_cost: 0.005,
-            cpu_distance_cost: 0.1,
-            cpu_edge_cost: 0.02,
+            seq_page_cost: default_seq_page_cost(),
+            random_page_cost: default_random_page_cost(),
+            cpu_tuple_cost: default_cpu_tuple_cost(),
+            cpu_index_cost: default_cpu_index_cost(),
+            cpu_distance_cost: default_cpu_distance_cost(),
+            cpu_edge_cost: default_cpu_edge_cost(),
         }
     }
 }
 
+/// Bornes de sécurité pour les facteurs de coût calibrés.
+///
+/// Empêche les estimations dégénérées causées par des statistiques aberrantes.
+/// Chaque borne est un tuple `(min, max)` inclusif.
+pub(crate) struct CostFactorBounds;
+
+impl CostFactorBounds {
+    /// Bornes pour `seq_page_cost`.
+    pub const SEQ_PAGE_COST: (f64, f64) = (0.01, 10.0);
+    /// Bornes pour `random_page_cost`.
+    pub const RANDOM_PAGE_COST: (f64, f64) = (0.1, 20.0);
+    /// Bornes pour `cpu_tuple_cost`.
+    pub const CPU_TUPLE_COST: (f64, f64) = (0.001, 0.1);
+    /// Bornes pour `cpu_index_cost`.
+    pub const CPU_INDEX_COST: (f64, f64) = (0.001, 0.05);
+    /// Bornes pour `cpu_distance_cost`.
+    pub const CPU_DISTANCE_COST: (f64, f64) = (0.01, 1.0);
+    /// Bornes pour `cpu_edge_cost`.
+    pub const CPU_EDGE_COST: (f64, f64) = (0.005, 0.2);
+}
+
+/// Clamps `value` into `[min, max]` and emits a `debug!` log if clamped.
+fn clamp_with_log(name: &str, value: f64, bounds: (f64, f64)) -> f64 {
+    let clamped = value.clamp(bounds.0, bounds.1);
+    if (clamped - value).abs() > f64::EPSILON {
+        debug!(
+            field = name,
+            original = value,
+            clamped = clamped,
+            "cost factor clamped to bounds"
+        );
+    }
+    clamped
+}
+
 impl OperationCostFactors {
     /// Creates factors optimized for SSD storage.
+    ///
+    /// SSDs have lower random access penalty compared to HDDs.
     #[must_use]
     pub fn ssd_optimized() -> Self {
         Self {
-            random_page_cost: 1.5, // SSDs have lower random access penalty
+            random_page_cost: 1.5,
             ..Default::default()
         }
     }
 
     /// Creates factors optimized for in-memory operations.
+    ///
+    /// Both sequential and random page costs are minimal.
     #[must_use]
     pub fn in_memory() -> Self {
         Self {
@@ -68,6 +170,64 @@ impl OperationCostFactors {
             random_page_cost: 0.1,
             ..Default::default()
         }
+    }
+
+    /// Creates factors optimized for HDD storage (rotational disks).
+    ///
+    /// `random_page_cost = 8.0` reflects the seek latency of rotational disks.
+    /// `seq_page_cost = 1.0` remains standard (sequential reads are efficient on HDD).
+    #[must_use]
+    pub fn hdd_optimized() -> Self {
+        Self {
+            random_page_cost: 8.0,
+            ..Default::default()
+        }
+    }
+
+    /// Applies safety bounds to all cost factors.
+    ///
+    /// Each factor is clamped into its allowed interval defined by
+    /// [`CostFactorBounds`]. Emits a `debug!` log for every clamped field.
+    #[must_use]
+    pub fn clamped(self) -> Self {
+        Self {
+            seq_page_cost: clamp_with_log(
+                "seq_page_cost",
+                self.seq_page_cost,
+                CostFactorBounds::SEQ_PAGE_COST,
+            ),
+            random_page_cost: clamp_with_log(
+                "random_page_cost",
+                self.random_page_cost,
+                CostFactorBounds::RANDOM_PAGE_COST,
+            ),
+            cpu_tuple_cost: clamp_with_log(
+                "cpu_tuple_cost",
+                self.cpu_tuple_cost,
+                CostFactorBounds::CPU_TUPLE_COST,
+            ),
+            cpu_index_cost: clamp_with_log(
+                "cpu_index_cost",
+                self.cpu_index_cost,
+                CostFactorBounds::CPU_INDEX_COST,
+            ),
+            cpu_distance_cost: clamp_with_log(
+                "cpu_distance_cost",
+                self.cpu_distance_cost,
+                CostFactorBounds::CPU_DISTANCE_COST,
+            ),
+            cpu_edge_cost: clamp_with_log(
+                "cpu_edge_cost",
+                self.cpu_edge_cost,
+                CostFactorBounds::CPU_EDGE_COST,
+            ),
+        }
+    }
+
+    /// Returns `true` if all factors equal the default values.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -233,6 +393,249 @@ impl CostEstimator {
             b
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Calibration constants
+// ---------------------------------------------------------------------------
+
+/// Default page size in bytes (8 KB).
+const PAGE_SIZE: f64 = 8192.0;
+
+/// Skew threshold above which `random_page_cost` is increased.
+const SKEW_THRESHOLD: f64 = 10.0;
+
+/// Penalty multiplier applied to all factors when any histogram is stale.
+const STALE_PENALTY: f64 = 1.2;
+
+// ---------------------------------------------------------------------------
+// Calibration sub-functions (Task 3.1)
+// ---------------------------------------------------------------------------
+
+/// Adjusts `seq_page_cost` based on the page ratio of the collection.
+///
+/// Computes `ratio_pages = total_size_bytes / PAGE_SIZE`. For collections
+/// that fit in memory (`ratio_pages < 1.0`), the cost is reduced
+/// proportionally. The adjustment factor is clamped to `[0.1, 1.0]`.
+///
+/// # Formula
+///
+/// ```text
+/// ratio_pages = total_size_bytes / 8192
+/// factor = clamp(ratio_pages / max(ratio_pages, 1.0), 0.1, 1.0)
+/// result = base * factor
+/// ```
+pub(crate) fn adjust_seq_page_cost(base: f64, stats: &CollectionStats) -> f64 {
+    let ratio_pages = stats.total_size_bytes as f64 / PAGE_SIZE;
+    let divisor = ratio_pages.max(1.0);
+    let factor = (ratio_pages / divisor).clamp(0.1, 1.0);
+    debug!(
+        ratio_pages = ratio_pages,
+        factor = factor,
+        "adjust_seq_page_cost"
+    );
+    base * factor
+}
+
+/// Adjusts `cpu_tuple_cost` based on average row size.
+///
+/// Larger rows require more CPU to process. The row-size factor is
+/// `avg_row_size_bytes / 256.0`, clamped to `[0.5, 4.0]`.
+/// When `avg_row_size_bytes` is 0, returns `base` unchanged (Req 9.4).
+///
+/// # Formula
+///
+/// ```text
+/// row_size_factor = clamp(avg_row_size_bytes / 256.0, 0.5, 4.0)
+/// result = base * row_size_factor
+/// ```
+pub(crate) fn adjust_cpu_tuple_cost(base: f64, stats: &CollectionStats) -> f64 {
+    if stats.avg_row_size_bytes == 0 {
+        debug!("avg_row_size_bytes is 0, skipping cpu_tuple_cost adjustment");
+        return base;
+    }
+    let row_size_factor = (stats.avg_row_size_bytes as f64 / 256.0).clamp(0.5, 4.0);
+    debug!(
+        avg_row_size = stats.avg_row_size_bytes,
+        factor = row_size_factor,
+        "adjust_cpu_tuple_cost"
+    );
+    base * row_size_factor
+}
+
+/// Adjusts `cpu_index_cost` based on average column density from histograms.
+///
+/// Density is `avg(distinct_count / total_rows)` across columns that have a
+/// histogram. Low-density columns (many duplicates) make indexes less
+/// selective, increasing the cost. When no histograms are available, returns
+/// `base` unchanged.
+///
+/// # Formula
+///
+/// ```text
+/// density = avg(distinct_count / total_rows) for columns with histogram
+/// factor = clamp(1.0 + (1.0 - density), 1.0, 3.0)
+/// result = base * factor
+/// ```
+pub(crate) fn adjust_cpu_index_cost(base: f64, stats: &CollectionStats) -> f64 {
+    let density = compute_avg_density(stats);
+    if let Some(d) = density {
+        let factor = (1.0 + (1.0 - d)).clamp(1.0, 3.0);
+        debug!(density = d, factor = factor, "adjust_cpu_index_cost");
+        base * factor
+    } else {
+        debug!("no histograms available, skipping cpu_index_cost adjustment");
+        base
+    }
+}
+
+/// Computes the average column density across all columns with a histogram.
+///
+/// Returns `None` when no column has a non-empty histogram with
+/// `total_count > 0`.
+fn compute_avg_density(stats: &CollectionStats) -> Option<f64> {
+    let mut sum = 0.0_f64;
+    let mut count = 0_u64;
+    for col in stats.column_stats.values() {
+        if let Some(hist) = col.histogram.as_ref() {
+            if hist.total_count > 0 && !hist.buckets.is_empty() {
+                let distinct: u64 = hist.buckets.iter().map(|b| b.distinct_count).sum();
+                let density = distinct as f64 / hist.total_count as f64;
+                sum += density.clamp(0.0, 1.0);
+                count += 1;
+            }
+        }
+    }
+    if count == 0 {
+        None
+    } else {
+        Some(sum / count as f64)
+    }
+}
+
+/// Adjusts `random_page_cost` based on histogram skew.
+///
+/// Skew is `max(max_bucket_count / min_bucket_count)` across all histograms.
+/// When skew exceeds `SKEW_THRESHOLD` (10.0), the cost is increased using
+/// `log2(skew / threshold)`. Buckets with `count == 0` are skipped to avoid
+/// division by zero.
+///
+/// # Formula
+///
+/// ```text
+/// skew = max(max_bucket / min_bucket) across all histograms
+/// if skew > 10.0:
+///   factor = clamp(1.0 + log2(skew / 10.0), 1.0, 2.0)
+///   result = base * factor
+/// else:
+///   result = base
+/// ```
+pub(crate) fn adjust_for_skew(base: f64, stats: &CollectionStats) -> f64 {
+    let skew = compute_max_skew(stats);
+    if let Some(s) = skew {
+        if s > SKEW_THRESHOLD {
+            let factor = (1.0 + (s / SKEW_THRESHOLD).log2()).clamp(1.0, 2.0);
+            debug!(skew = s, factor = factor, "adjust_for_skew");
+            return base * factor;
+        }
+    }
+    debug!("skew below threshold or no histograms, no adjustment");
+    base
+}
+
+/// Computes the maximum skew ratio across all histograms.
+///
+/// Returns `None` when no histogram has at least two buckets with non-zero
+/// counts.
+fn compute_max_skew(stats: &CollectionStats) -> Option<f64> {
+    let mut max_skew: Option<f64> = None;
+    for col in stats.column_stats.values() {
+        if let Some(hist) = col.histogram.as_ref() {
+            let non_zero: Vec<u64> = hist
+                .buckets
+                .iter()
+                .map(|b| b.count)
+                .filter(|&c| c > 0)
+                .collect();
+            if non_zero.len() >= 2 {
+                let max_b = non_zero.iter().copied().max().unwrap_or(1);
+                let min_b = non_zero.iter().copied().min().unwrap_or(1);
+                if min_b > 0 {
+                    let skew = max_b as f64 / min_b as f64;
+                    max_skew = Some(max_skew.map_or(skew, |prev: f64| prev.max(skew)));
+                }
+            }
+        }
+    }
+    max_skew
+}
+
+/// Multiplies all cost factors by the given penalty.
+///
+/// Used to inflate costs when histogram data is stale, reflecting the
+/// increased uncertainty in cost estimates.
+pub(crate) fn apply_stale_penalty(
+    factors: &OperationCostFactors,
+    penalty: f64,
+) -> OperationCostFactors {
+    debug!(penalty = penalty, "applying stale histogram penalty");
+    OperationCostFactors {
+        seq_page_cost: factors.seq_page_cost * penalty,
+        random_page_cost: factors.random_page_cost * penalty,
+        cpu_tuple_cost: factors.cpu_tuple_cost * penalty,
+        cpu_index_cost: factors.cpu_index_cost * penalty,
+        cpu_distance_cost: factors.cpu_distance_cost * penalty,
+        cpu_edge_cost: factors.cpu_edge_cost * penalty,
+    }
+}
+
+/// Returns `true` if any histogram in the collection stats is marked stale.
+pub(crate) fn has_stale_histogram(stats: &CollectionStats) -> bool {
+    stats
+        .column_stats
+        .values()
+        .any(|col| col.histogram.as_ref().is_some_and(|h| h.stale))
+}
+
+// ---------------------------------------------------------------------------
+// Calibration orchestrator (Task 3.2)
+// ---------------------------------------------------------------------------
+
+/// Calibrates cost factors from collection statistics.
+///
+/// Derives I/O and CPU weights from observed collection characteristics
+/// (size, row width, column density, histogram skew, staleness) instead of
+/// relying on hard-coded constants.
+///
+/// # Algorithm
+///
+/// 1. If `row_count == 0` → return `OperationCostFactors::default()`
+/// 2. Adjust `seq_page_cost` from page ratio
+/// 3. Adjust `cpu_tuple_cost` from average row size
+/// 4. Adjust `cpu_index_cost` from average column density
+/// 5. Adjust `random_page_cost` from histogram skew
+/// 6. If any histogram is stale → multiply all factors by `STALE_PENALTY`
+/// 7. Clamp all factors within `CostFactorBounds`
+pub(crate) fn calibrate_cost_factors(
+    stats: &CollectionStats,
+    base: &OperationCostFactors,
+) -> OperationCostFactors {
+    if stats.row_count == 0 {
+        debug!("row_count is 0, returning default cost factors");
+        return OperationCostFactors::default();
+    }
+
+    let mut factors = base.clone();
+    factors.seq_page_cost = adjust_seq_page_cost(base.seq_page_cost, stats);
+    factors.cpu_tuple_cost = adjust_cpu_tuple_cost(base.cpu_tuple_cost, stats);
+    factors.cpu_index_cost = adjust_cpu_index_cost(base.cpu_index_cost, stats);
+    factors.random_page_cost = adjust_for_skew(base.random_page_cost, stats);
+
+    if has_stale_histogram(stats) {
+        factors = apply_stale_penalty(&factors, STALE_PENALTY);
+    }
+
+    factors.clamped()
 }
 
 #[cfg(test)]

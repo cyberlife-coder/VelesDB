@@ -34,6 +34,8 @@ import type {
   SemanticEntry,
   EpisodicEvent,
   ProceduralPattern,
+  ScrollRequest,
+  ScrollResponse,
 } from '../types';
 import { ConnectionError } from '../types';
 import {
@@ -68,6 +70,9 @@ import {
   collectionSanity as _collectionSanity,
 } from './query-backend';
 import type { QueryTransport } from './query-backend';
+import {
+  scroll as _scroll,
+} from './scroll-backend';
 import {
   getCollectionStats as _getCollectionStats,
   analyzeCollection as _analyzeCollection,
@@ -398,14 +403,23 @@ export class RestBackend implements IVelesDBBackend {
     return _query(this.asQueryTransport(), c, q, p, o);
   }
 
-  async queryExplain(q: string, p?: Record<string, unknown>): Promise<ExplainResponse> {
+  async queryExplain(q: string, p?: Record<string, unknown>, o?: { analyze?: boolean }): Promise<ExplainResponse> {
     this.ensureInitialized();
-    return _queryExplain(this.asQueryTransport(), q, p);
+    return _queryExplain(this.asQueryTransport(), q, p, o);
   }
 
   async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
     this.ensureInitialized();
     return _collectionSanity(this.asQueryTransport(), collection);
+  }
+
+  // ==========================================================================
+  // Scroll — delegates to scroll-backend.ts
+  // ==========================================================================
+
+  async scroll(collection: string, request?: ScrollRequest): Promise<ScrollResponse> {
+    this.ensureInitialized();
+    return _scroll(this.asCrudTransport(), collection, request);
   }
 
   // ==========================================================================

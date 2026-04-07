@@ -43,3 +43,21 @@ class GraphOpsBase:
         if self._collection is None:
             raise ValueError("Collection not initialized. Add documents first.")
         return self._collection.explain(query_str)
+
+    def explain_query(self, query_str: str, **kwargs: Any) -> dict:
+        """Get the query execution plan for a VelesQL query.
+
+        Alias for ``explain()`` with a more discoverable name.
+
+        Args:
+            query_str: VelesQL query string.
+            **kwargs: Additional arguments.
+
+        Returns:
+            Query execution plan dict.
+
+        Raises:
+            SecurityError: If query fails validation.
+            ValueError: If the collection is not initialized.
+        """
+        return self.explain(query_str, **kwargs)

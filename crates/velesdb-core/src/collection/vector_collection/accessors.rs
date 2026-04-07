@@ -55,6 +55,22 @@ impl VectorCollection {
         self.inner.all_ids()
     }
 
+    /// Returns the next batch of points for scroll iteration.
+    ///
+    /// Delegates to [`Collection::scroll_batch`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `batch_size` is 0.
+    pub fn scroll_batch(
+        &self,
+        cursor: Option<u64>,
+        batch_size: usize,
+        filter: Option<&crate::filter::Filter>,
+    ) -> crate::error::Result<crate::collection::ScrollBatch> {
+        self.inner.scroll_batch(cursor, batch_size, filter)
+    }
+
     /// Returns the current collection config.
     #[must_use]
     pub fn config(&self) -> CollectionConfig {
