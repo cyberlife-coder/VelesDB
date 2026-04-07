@@ -141,8 +141,16 @@ impl WizardUI {
 
         if stats.relations_processed > 0 {
             println!();
-            println!("   {} {}", bold.apply_to("Graph edges created:"), stats.edges_created);
-            println!("   {} {}", bold.apply_to("Relations processed: "), stats.relations_processed);
+            println!(
+                "   {} {}",
+                bold.apply_to("Graph edges created:"),
+                stats.edges_created
+            );
+            println!(
+                "   {} {}",
+                bold.apply_to("Relations processed: "),
+                stats.relations_processed
+            );
             if stats.edges_failed > 0 {
                 println!(
                     "   {} {} (skipped)",

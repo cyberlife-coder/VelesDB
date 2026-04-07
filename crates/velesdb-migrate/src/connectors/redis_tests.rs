@@ -126,7 +126,7 @@ fn test_find_info_int_stride2_correctness() {
     let items = vec![
         redis::Value::BulkString(b"some_key".to_vec()),
         redis::Value::BulkString(b"num_docs".to_vec()), // value at odd index — must NOT match
-        redis::Value::BulkString(b"num_docs".to_vec()),  // key at even index — must match
+        redis::Value::BulkString(b"num_docs".to_vec()), // key at even index — must match
         redis::Value::BulkString(b"42".to_vec()),
     ];
     // WHEN: stride is 2, only the key at index 2 matches, returning 42
@@ -350,8 +350,7 @@ fn test_parse_ft_search_response_binary_blob_vector() {
     ]);
 
     // WHEN: parsing the response
-    let points =
-        parse_ft_search_response(&resp, "embedding", "doc:").expect("test: binary blob");
+    let points = parse_ft_search_response(&resp, "embedding", "doc:").expect("test: binary blob");
 
     // THEN: vector is correctly decoded from LE f32 bytes
     assert_eq!(points.len(), 1);
@@ -379,11 +378,13 @@ async fn test_extract_batch_fails_when_not_connected() {
     let result = connector.extract_batch(None, 10).await;
 
     // THEN: an error is returned indicating not connected
-    assert!(result.is_err(), "extract_batch should fail without connect()");
+    assert!(
+        result.is_err(),
+        "extract_batch should fail without connect()"
+    );
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("Not connected"),
         "expected 'Not connected' in error, got: {err}"
     );
 }
-

@@ -25,9 +25,7 @@ pub fn detect_relations(schema: &SourceSchema) -> Vec<RelationConfig> {
         .collect()
 }
 
-fn detect_single_relation(
-    field: &crate::connectors::FieldInfo,
-) -> Option<RelationConfig> {
+fn detect_single_relation(field: &crate::connectors::FieldInfo) -> Option<RelationConfig> {
     // Strategy 1: column name ends with _id (common FK convention)
     if let Some(base) = field.name.strip_suffix("_id") {
         if base.is_empty() {
@@ -45,7 +43,11 @@ fn detect_single_relation(
 
     // Strategy 2: Weaviate cross-reference -- field_type starts with uppercase
     // (Weaviate class names are PascalCase, e.g., "Author", "Category")
-    if field.field_type.chars().next().is_some_and(|c| c.is_uppercase())
+    if field
+        .field_type
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_uppercase())
         && !field.field_type.is_empty()
         && field.field_type.chars().all(|c| c.is_alphanumeric())
     {

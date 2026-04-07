@@ -57,10 +57,7 @@ impl<'a> GraphMigrationPhase<'a> {
     ///
     /// Returns an error if the database or graph collection cannot be
     /// opened or created.
-    pub async fn run(
-        &self,
-        db: &velesdb_core::Database,
-    ) -> Result<GraphMigrationStats> {
+    pub async fn run(&self, db: &velesdb_core::Database) -> Result<GraphMigrationStats> {
         let graph_name = self
             .config
             .destination
@@ -70,11 +67,9 @@ impl<'a> GraphMigrationPhase<'a> {
 
         ensure_graph_collection_exists(db, graph_name)?;
 
-        let gc = db
-            .get_graph_collection(graph_name)
-            .ok_or_else(|| {
-                Error::DestinationConnection("Graph collection not found".to_string())
-            })?;
+        let gc = db.get_graph_collection(graph_name).ok_or_else(|| {
+            Error::DestinationConnection("Graph collection not found".to_string())
+        })?;
 
         let relations = &self.config.relations;
         if relations.is_empty() {
@@ -92,10 +87,7 @@ impl<'a> GraphMigrationPhase<'a> {
         for relation in relations {
             info!(
                 "Migrating relation: {} -> {}.{} [{}]",
-                relation.from_column,
-                relation.to_table,
-                relation.to_column,
-                relation.edge_label
+                relation.from_column, relation.to_table, relation.to_column, relation.edge_label
             );
 
             let edges = self
@@ -129,7 +121,10 @@ impl<'a> GraphMigrationPhase<'a> {
         let mut offset = None;
 
         loop {
-            let batch = self.connector.extract_batch(offset.clone(), batch_size).await?;
+            let batch = self
+                .connector
+                .extract_batch(offset.clone(), batch_size)
+                .await?;
 
             // Guard against connectors that return has_more=true with an empty batch
             // (e.g. cursor-based connectors on transient gaps), which would otherwise
@@ -159,17 +154,12 @@ impl<'a> GraphMigrationPhase<'a> {
     }
 }
 
-fn ensure_graph_collection_exists(
-    db: &velesdb_core::Database,
-    name: &str,
-) -> Result<()> {
+fn ensure_graph_collection_exists(db: &velesdb_core::Database, name: &str) -> Result<()> {
     if db.get_graph_collection(name).is_some() {
         return Ok(());
     }
     db.create_graph_collection(name, velesdb_core::GraphSchema::schemaless())
-        .map_err(|e| {
-            Error::DestinationConnection(format!("Cannot create graph collection: {e}"))
-        })
+        .map_err(|e| Error::DestinationConnection(format!("Cannot create graph collection: {e}")))
 }
 
 fn build_edge(
@@ -185,13 +175,14 @@ fn build_edge(
     let key = format!("{from_node_id}-{to_node_id}-{}", relation.edge_label);
     let id = crate::pipeline::fnv1a64(key.as_bytes());
 
-    let edge = match velesdb_core::GraphEdge::new(id, from_node_id, to_node_id, &relation.edge_label) {
-        Ok(e) => e,
-        Err(e) => {
-            warn!("Failed to create edge {}: {}", id, e);
-            return None;
-        }
-    };
+    let edge =
+        match velesdb_core::GraphEdge::new(id, from_node_id, to_node_id, &relation.edge_label) {
+            Ok(e) => e,
+            Err(e) => {
+                warn!("Failed to create edge {}: {}", id, e);
+                return None;
+            }
+        };
 
     Some(attach_weight(edge, point, relation))
 }
@@ -295,7 +286,11 @@ mod tests {
         let e2 = build_edge(&point, &relation).expect("test: e2 should be Some");
 
         // THEN: both produce the same deterministic ID
-        assert_eq!(e1.id(), e2.id(), "Edge IDs must be deterministic for the same input");
+        assert_eq!(
+            e1.id(),
+            e2.id(),
+            "Edge IDs must be deterministic for the same input"
+        );
     }
 
     #[test]
@@ -310,6 +305,10 @@ mod tests {
         let e2 = build_edge(&point, &rel2).expect("test: e2 should be Some");
 
         // THEN: different labels produce different IDs
-        assert_ne!(e1.id(), e2.id(), "Different edge labels must produce different IDs");
+        assert_ne!(
+            e1.id(),
+            e2.id(),
+            "Different edge labels must produce different IDs"
+        );
     }
 }

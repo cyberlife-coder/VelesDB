@@ -1129,9 +1129,7 @@ async fn test_pipeline_supabase_e2e() {
     // Mock 1: HEAD — count via content-range (separate method, no conflict).
     Mock::given(method("HEAD"))
         .and(path("/rest/v1/documents"))
-        .respond_with(
-            ResponseTemplate::new(200).insert_header("content-range", "0-1/2"),
-        )
+        .respond_with(ResponseTemplate::new(200).insert_header("content-range", "0-1/2"))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -1149,15 +1147,13 @@ async fn test_pipeline_supabase_e2e() {
     Mock::given(method("GET"))
         .and(path("/rest/v1/documents"))
         .and(query_param("limit", "1"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "id": "1",
-                    "embedding": [0.1, 0.2, 0.3],
-                    "title": "Sample Doc"
-                }
-            ])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": "1",
+                "embedding": [0.1, 0.2, 0.3],
+                "title": "Sample Doc"
+            }
+        ])))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -1166,20 +1162,18 @@ async fn test_pipeline_supabase_e2e() {
     Mock::given(method("GET"))
         .and(path("/rest/v1/documents"))
         .and(query_param("offset", "0"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "id": "1",
-                    "embedding": [0.1, 0.2, 0.3],
-                    "title": "Doc 1"
-                },
-                {
-                    "id": "2",
-                    "embedding": [0.4, 0.5, 0.6],
-                    "title": "Doc 2"
-                }
-            ])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": "1",
+                "embedding": [0.1, 0.2, 0.3],
+                "title": "Doc 1"
+            },
+            {
+                "id": "2",
+                "embedding": [0.4, 0.5, 0.6],
+                "title": "Doc 2"
+            }
+        ])))
         .expect(1)
         .mount(&mock_server)
         .await;

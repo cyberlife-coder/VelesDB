@@ -155,7 +155,10 @@ impl QdrantVector {
             Self::Named(map) => {
                 for value in map.values() {
                     if let QdrantNamedVectorValue::Sparse(sv) = value {
-                        if crate::connectors::common::is_valid_sparse_vector(&sv.indices, &sv.values) {
+                        if crate::connectors::common::is_valid_sparse_vector(
+                            &sv.indices,
+                            &sv.values,
+                        ) {
                             return Some(
                                 sv.indices
                                     .iter()
@@ -417,8 +420,6 @@ mod tests {
         };
         let connector = QdrantConnector::new(config);
         // validate_url rejects file:// synchronously at connect time
-        assert!(
-            crate::connectors::common::validate_url(&connector.config.url).is_err()
-        );
+        assert!(crate::connectors::common::validate_url(&connector.config.url).is_err());
     }
 }
