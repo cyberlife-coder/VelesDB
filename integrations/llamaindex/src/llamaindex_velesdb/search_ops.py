@@ -316,9 +316,10 @@ class SearchOpsMixin:
         if self._collection is None:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
 
+        keyword_escaped = keyword.replace("'", "''")
         query_str = (
             f"SELECT * FROM {collection} "
-            f"WHERE {column} CONTAINS_TEXT '{keyword}' "
+            f"WHERE {column} CONTAINS_TEXT '{keyword_escaped}' "
             f"LIMIT {k}"
         )
         validate_query(query_str)

@@ -400,9 +400,10 @@ class SearchOpsMixin:
         if self._collection is None:
             raise ValueError("Collection not initialized. Add documents first.")
 
+        keyword_escaped = keyword.replace("'", "''")
         query_str = (
             f"SELECT * FROM {collection} "
-            f"WHERE {column} CONTAINS_TEXT '{keyword}' "
+            f"WHERE {column} CONTAINS_TEXT '{keyword_escaped}' "
             f"LIMIT {k}"
         )
         validate_query(query_str)
