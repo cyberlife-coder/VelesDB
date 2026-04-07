@@ -23,6 +23,8 @@ mod cross_collection_join_optimization;
 mod ddl_lifecycle;
 #[path = "bdd/dml_enhanced.rs"]
 mod dml_enhanced;
+#[path = "bdd/explain_analyze.rs"]
+mod explain_analyze;
 #[path = "bdd/flush_operations.rs"]
 mod flush_operations;
 #[path = "bdd/geo_distance.rs"]

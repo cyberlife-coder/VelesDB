@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_metadata_collection()`, or `get_any_collection()` instead.
 
 ### Added
+- **EXPLAIN ANALYZE: ActualStats population during query execution (Issue #466)** —
+  New `explain_analyze_query()` method on `Database` that executes a query with lightweight
+  instrumentation and returns both the estimated plan and actual execution statistics
+  (`actual_rows`, `actual_time_ms`, `loops`, `nodes_visited`, `edges_traversed`).
+  Per-node statistics (`NodeStats`) provide time and row counts for each plan node.
+  CLI `.explain-analyze` command displays plan + actual stats side-by-side with `⚠` divergence
+  warnings. HTTP `/query/explain` endpoint supports `"analyze": true` for JSON stats.
+  Python bindings expose `explain_analyze()` on `Collection` and `GraphCollection`.
+  `ExplainOutput` and `ActualStats` structs activated (removed `#[allow(dead_code)]`).
+  Zero overhead on non-ANALYZE queries. Foundational for CBO feedback loop (#467–#469).
 - **Secondary index bitmap for IN/NOT IN filters (Issue #512)** — `bitmap_from_condition` now
   handles `Condition::In` and `Condition::Not { In }` via secondary index B-tree lookups.
   Builds a `RoaringBitmap` by unioning per-value lookups (O(N × log K)), restricting HNSW

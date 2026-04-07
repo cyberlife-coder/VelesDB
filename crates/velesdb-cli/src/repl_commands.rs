@@ -57,6 +57,7 @@ pub fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Com
         ".clear" => repl_config_cmds::cmd_clear(),
         // Query / index commands
         ".explain" => repl_query_cmds::cmd_explain(db, &parts),
+        ".explain-analyze" => repl_query_cmds::cmd_explain_analyze(db, &parts),
         ".analyze" => repl_query_cmds::cmd_analyze(db, &parts),
         ".indexes" => repl_query_cmds::cmd_indexes(db, &parts),
         ".delete" => repl_query_cmds::cmd_delete(db, &parts),

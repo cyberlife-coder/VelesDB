@@ -270,6 +270,80 @@ pub struct ExplainResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable))]
     pub plan_reuse_count: Option<u64>,
+    /// Estimated cost in milliseconds (for side-by-side comparison with actual).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable))]
+    pub estimated_cost_ms: Option<f64>,
+    /// Actual execution time in milliseconds (only when `analyze: true`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable))]
+    pub actual_time_ms: Option<f64>,
+    /// Actual execution statistics (only when `analyze: true`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable))]
+    pub actual_stats: Option<ActualStatsResponse>,
+    /// Per-node execution statistics (only when `analyze: true`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable))]
+    pub node_stats: Option<Vec<NodeStatsResponse>>,
+}
+
+/// Actual execution statistics for EXPLAIN ANALYZE responses.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ActualStatsResponse {
+    /// Actual number of rows returned.
+    pub actual_rows: u64,
+    /// Actual execution time in milliseconds.
+    pub actual_time_ms: f64,
+    /// Number of loop iterations.
+    pub loops: u64,
+    /// Number of nodes visited (for graph traversal).
+    pub nodes_visited: u64,
+    /// Number of edges traversed.
+    pub edges_traversed: u64,
+}
+
+#[cfg(feature = "persistence")]
+impl From<&crate::velesql::ActualStats> for ActualStatsResponse {
+    fn from(s: &crate::velesql::ActualStats) -> Self {
+        Self {
+            actual_rows: s.actual_rows,
+            actual_time_ms: s.actual_time_ms,
+            loops: s.loops,
+            nodes_visited: s.nodes_visited,
+            edges_traversed: s.edges_traversed,
+        }
+    }
+}
+
+/// Per-plan-node actual execution statistics for EXPLAIN ANALYZE responses.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct NodeStatsResponse {
+    /// Node label (e.g. "VectorSearch", "Filter", "Limit").
+    pub node_label: String,
+    /// Actual wall-clock time for this node in milliseconds.
+    pub actual_time_ms: f64,
+    /// Rows entering this node.
+    pub actual_rows_in: u64,
+    /// Rows leaving this node.
+    pub actual_rows_out: u64,
+    /// Number of loop iterations (1 for non-looping nodes).
+    pub loops: u64,
+}
+
+#[cfg(feature = "persistence")]
+impl From<&crate::velesql::NodeStats> for NodeStatsResponse {
+    fn from(ns: &crate::velesql::NodeStats) -> Self {
+        Self {
+            node_label: ns.node_label.clone(),
+            actual_time_ms: ns.actual_time_ms,
+            actual_rows_in: ns.actual_rows_in,
+            actual_rows_out: ns.actual_rows_out,
+            loops: ns.loops,
+        }
+    }
 }
 
 /// A step in the query execution plan.

@@ -1,7 +1,7 @@
 //! REPL commands for query analysis and index management.
 //!
-//! Covers: `.explain`, `.analyze`, `.indexes`, `.delete`, `.flush`,
-//! `.create-index`, `.drop-index`.
+//! Covers: `.explain`, `.explain-analyze`, `.analyze`, `.indexes`, `.delete`,
+//! `.flush`, `.create-index`, `.drop-index`.
 
 use colored::Colorize;
 use velesdb_core::Database;
@@ -28,6 +28,88 @@ pub(crate) fn cmd_explain(db: &Database, parts: &[&str]) -> CommandResult {
         Err(e) => return CommandResult::Error(format!("Explain error: {e}")),
     }
     CommandResult::Continue
+}
+
+/// Execute a query with instrumentation and display plan + actual statistics.
+pub(crate) fn cmd_explain_analyze(db: &Database, parts: &[&str]) -> CommandResult {
+    if parts.len() < 2 {
+        println!("Usage: .explain-analyze <VelesQL query>\n");
+        return CommandResult::Continue;
+    }
+    let query_str = parts[1..].join(" ");
+
+    let parsed = match velesdb_core::velesql::Parser::parse(&query_str) {
+        Ok(q) => q,
+        Err(e) => return CommandResult::Error(format!("Parse error: {}", e.message)),
+    };
+
+    let params = std::collections::HashMap::new();
+    match db.explain_analyze_query(&parsed, &params) {
+        Ok(output) => {
+            println!("\n{}", output.plan.to_tree());
+            print_actual_stats(&output);
+            print_node_stats(&output);
+        }
+        Err(e) => return CommandResult::Error(format!("Explain analyze error: {e}")),
+    }
+    CommandResult::Continue
+}
+
+/// Display the "Actual Statistics" section of EXPLAIN ANALYZE output.
+fn print_actual_stats(output: &velesdb_core::velesql::ExplainOutput) {
+    let Some(ref stats) = output.actual_stats else {
+        return;
+    };
+    println!("{}", "Actual Statistics:".bold().underline());
+    println!("  {} {}", "Actual rows:".cyan(), stats.actual_rows);
+    println!("  {} {:.3}ms", "Actual time:".cyan(), stats.actual_time_ms);
+    println!("  {} {}", "Loops:".cyan(), stats.loops);
+    println!("  {} {}", "Nodes visited:".cyan(), stats.nodes_visited);
+    println!("  {} {}", "Edges traversed:".cyan(), stats.edges_traversed);
+
+    let estimated = output.plan.estimated_cost_ms;
+    let actual = stats.actual_time_ms;
+    let diverges = divergence_exceeds_threshold(estimated, actual);
+    if diverges {
+        println!(
+            "  {} estimated {:.3}ms vs actual {:.3}ms (>10\u{00d7} divergence)",
+            "\u{26a0}".yellow(),
+            estimated,
+            actual,
+        );
+    }
+    println!();
+}
+
+/// Display per-node statistics from EXPLAIN ANALYZE output.
+fn print_node_stats(output: &velesdb_core::velesql::ExplainOutput) {
+    if output.node_stats.is_empty() {
+        return;
+    }
+    println!("{}", "Per-Node Statistics:".bold().underline());
+    for ns in &output.node_stats {
+        println!(
+            "  {}  {:.3}ms (rows: {} \u{2192} {})",
+            format!("{}:", ns.node_label).cyan(),
+            ns.actual_time_ms,
+            ns.actual_rows_in,
+            ns.actual_rows_out,
+        );
+    }
+    println!();
+}
+
+/// Returns `true` when estimated cost diverges from actual time by more than 10×.
+fn divergence_exceeds_threshold(estimated_ms: f64, actual_ms: f64) -> bool {
+    if estimated_ms <= 0.0 || actual_ms <= 0.0 {
+        return false;
+    }
+    let ratio = if estimated_ms > actual_ms {
+        estimated_ms / actual_ms
+    } else {
+        actual_ms / estimated_ms
+    };
+    ratio > 10.0
 }
 
 pub(crate) fn cmd_analyze(db: &Database, parts: &[&str]) -> CommandResult {

@@ -402,6 +402,21 @@ impl VectorCollection {
         self.inner.execute_query(query, params)
     }
 
+    /// Executes a query with instrumentation and returns plan + actual stats.
+    ///
+    /// Delegates to [`Database::explain_analyze_query`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is invalid or execution fails.
+    pub fn explain_analyze_query(
+        &self,
+        query: &crate::velesql::Query,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<crate::velesql::ExplainOutput> {
+        self.inner.explain_analyze_query(query, params)
+    }
+
     /// Sends a point into the streaming ingestion channel.
     ///
     /// Returns `Ok(())` on success (202 semantics). Returns
