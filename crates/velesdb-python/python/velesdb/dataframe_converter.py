@@ -67,10 +67,12 @@ def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
 
     rows = []
     for r in results:
-        row: dict[str, Any] = {"id": r.get("id"), "score": r.get("score")}
+        row: dict[str, Any] = {}
         payload = r.get("payload")
         if isinstance(payload, dict):
             row.update(payload)
+        row["id"] = r.get("id")
+        row["score"] = r.get("score")
         rows.append(row)
 
     return lib.DataFrame(rows)
@@ -121,15 +123,14 @@ def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
 
     rows = []
     for p in batch:
-        row: dict[str, Any] = {
-            "id": p.get("id"),
-            "vector": list(p.get("vector", [])),
-        }
+        row: dict[str, Any] = {}
         payload = p.get("payload")
         if isinstance(payload, dict):
             row.update(payload)
         else:
             row["payload"] = payload
+        row["id"] = p.get("id")
+        row["vector"] = list(p.get("vector", []))
         rows.append(row)
 
     return lib.DataFrame(rows)
