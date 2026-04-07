@@ -46,7 +46,8 @@ pub(crate) fn cmd_explain_analyze(db: &Database, parts: &[&str]) -> CommandResul
     // Detect $param references in the query string. EXPLAIN ANALYZE executes
     // the query so unbound parameters produce a confusing runtime error.
     // Guide the user toward the HTTP API which accepts a 'params' map.
-    if query_str.contains('$') {
+    // Only flag `$` outside single-quoted VelesQL string literals.
+    if contains_unquoted_dollar(&query_str) {
         return CommandResult::Error(
             "EXPLAIN ANALYZE executes the query — parameterized queries ($param) \
              cannot be analyzed from the REPL. Use the HTTP endpoint \
@@ -122,6 +123,24 @@ fn divergence_exceeds_threshold(estimated_ms: f64, actual_ms: f64) -> bool {
         actual_ms / estimated_ms
     };
     ratio > 10.0
+}
+
+/// Returns `true` if `s` contains a `$` character that is NOT inside a
+/// single-quoted VelesQL string literal (`'...'`).
+///
+/// VelesQL uses single-quoted strings (`'hello'`), so any `$` that appears
+/// between balanced `'` delimiters is treated as a literal character, not as
+/// a parameter reference.
+fn contains_unquoted_dollar(s: &str) -> bool {
+    let mut in_string = false;
+    for ch in s.chars() {
+        match ch {
+            '\'' => in_string = !in_string,
+            '$' if !in_string => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 pub(crate) fn cmd_analyze(db: &Database, parts: &[&str]) -> CommandResult {
@@ -354,4 +373,47 @@ pub(crate) fn cmd_drop_index(db: &Database, parts: &[&str]) -> CommandResult {
         }
     }
     CommandResult::Continue
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_dollar_is_detected() {
+        assert!(contains_unquoted_dollar("SELECT * FROM t WHERE id = $id"));
+    }
+
+    #[test]
+    fn dollar_inside_single_quoted_string_is_ignored() {
+        assert!(!contains_unquoted_dollar(
+            "SELECT * FROM t WHERE name = '$foo'"
+        ));
+    }
+
+    #[test]
+    fn dollar_outside_quotes_with_quoted_string_present() {
+        assert!(contains_unquoted_dollar(
+            "SELECT * FROM t WHERE name = '$foo' AND id = $id"
+        ));
+    }
+
+    #[test]
+    fn no_dollar_at_all() {
+        assert!(!contains_unquoted_dollar(
+            "SELECT * FROM t WHERE name = 'hello'"
+        ));
+    }
+
+    #[test]
+    fn multiple_quoted_strings_no_bare_dollar() {
+        assert!(!contains_unquoted_dollar(
+            "SELECT * FROM t WHERE a = '$x' AND b = '$y'"
+        ));
+    }
+
+    #[test]
+    fn empty_string() {
+        assert!(!contains_unquoted_dollar(""));
+    }
 }
