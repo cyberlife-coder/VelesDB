@@ -318,6 +318,71 @@ export interface AgentMemoryConfig {
   dimension?: number;
 }
 
+// ============================================================================
+// Scroll Types
+// ============================================================================
+
+/** Request parameters for cursor-based scroll pagination. */
+export interface ScrollRequest {
+  /** Cursor position to resume from. Omit to start from beginning. */
+  cursor?: number;
+  /** Number of points per page (1–10000, default 100). */
+  batchSize?: number;
+  /** Optional filter object. */
+  filter?: Record<string, unknown>;
+}
+
+/** Response from scroll pagination. */
+export interface ScrollResponse {
+  /** Points in this page. */
+  points: Array<{
+    id: string | number;
+    vector?: number[];
+    payload?: Record<string, unknown>;
+  }>;
+  /** Cursor for next page, or null if no more results. */
+  nextCursor: number | null;
+}
+
+// ============================================================================
+// Column Stats Types
+// ============================================================================
+
+/** Per-column statistics including histogram metadata. */
+export interface ColumnStatsDetail {
+  name: string;
+  nullCount: number;
+  distinctCount: number;
+  minValue: unknown | null;
+  maxValue: unknown | null;
+  avgSizeBytes: number;
+  histogramBuckets: number | null;
+  histogramStale: boolean | null;
+}
+
+// ============================================================================
+// EXPLAIN ANALYZE Types
+// ============================================================================
+
+/** Actual execution statistics from EXPLAIN ANALYZE. */
+export interface ActualStats {
+  actualRows: number;
+  actualTimeMs: number;
+  loops: number;
+  nodesVisited: number;
+  edgesTraversed: number;
+}
+
+/** Per-node execution statistics from EXPLAIN ANALYZE. */
+export interface NodeStats {
+  nodeLabel: string;
+  actualTimeMs: number;
+  actualRowsIn: number;
+  actualRowsOut: number;
+  loops: number;
+  estimated: boolean;
+}
+
 /** Collection statistics response */
 export interface CollectionStatsResponse {
   totalPoints: number;
@@ -327,6 +392,7 @@ export interface CollectionStatsResponse {
   avgRowSizeBytes: number;
   payloadSizeBytes: number;
   lastAnalyzedEpochMs: number;
+  columnStats?: Record<string, ColumnStatsDetail>;
 }
 
 /** Collection configuration response */
@@ -408,6 +474,7 @@ export interface ExplainPlanStep {
   operation: string;
   description: string;
   estimatedRows: number | null;
+  estimationMethod: string | null;
 }
 
 export interface ExplainCost {
@@ -436,6 +503,8 @@ export interface ExplainResponse {
   plan: ExplainPlanStep[];
   estimatedCost: ExplainCost;
   features: ExplainFeatures;
+  actualStats?: ActualStats | null;
+  nodeStats?: NodeStats[] | null;
 }
 
 export interface CollectionSanityChecks {
@@ -562,7 +631,10 @@ export interface IVelesDBBackend {
   ): Promise<QueryApiResponse>;
 
   /** Explain a VelesQL query without executing it */
-  queryExplain(queryString: string, params?: Record<string, unknown>): Promise<ExplainResponse>;
+  queryExplain(queryString: string, params?: Record<string, unknown>, options?: { analyze?: boolean }): Promise<ExplainResponse>;
+
+  /** Scroll through collection points with cursor-based pagination */
+  scroll(collection: string, request?: ScrollRequest): Promise<ScrollResponse>;
 
   /** Run collection sanity checks */
   collectionSanity(collection: string): Promise<CollectionSanityResponse>;

@@ -321,7 +321,7 @@ impl From<&crate::velesql::ActualStats> for ActualStatsResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct NodeStatsResponse {
-    /// Node label (e.g. "VectorSearch", "Filter", "Limit").
+    /// Node label (e.g. `VectorSearch`, `Filter`, `Limit`).
     pub node_label: String,
     /// Heuristic estimate of wall-clock time for this node in milliseconds.
     /// Derived from total execution time using fixed fractions, not real
@@ -365,6 +365,10 @@ pub struct ExplainStep {
     pub description: String,
     /// Estimated rows processed/produced.
     pub estimated_rows: Option<usize>,
+    /// How the row estimate was produced (e.g. "histogram", "cardinality", "heuristic").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable))]
+    pub estimation_method: Option<String>,
 }
 
 /// Estimated cost metrics for the query.
@@ -437,6 +441,52 @@ pub struct ListIndexesResponse {
 }
 
 // ============================================================================
+// Scroll Responses
+// ============================================================================
+
+/// Request body for the scroll endpoint.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ScrollRequest {
+    /// Resume after this point ID (exclusive). Omit to start from beginning.
+    #[serde(default)]
+    pub cursor: Option<u64>,
+    /// Maximum points per batch (1–10 000, default 100).
+    #[serde(default = "default_scroll_batch_size")]
+    pub batch_size: u32,
+    /// Optional filter expression.
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
+}
+
+/// Default batch size for scroll requests.
+fn default_scroll_batch_size() -> u32 {
+    100
+}
+
+/// Response from the scroll endpoint.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ScrollResponse {
+    /// Points in this batch (ascending ID order).
+    pub points: Vec<ScrollPoint>,
+    /// Cursor for the next batch. Null when iteration is complete.
+    pub next_cursor: Option<u64>,
+}
+
+/// A single point in a scroll response.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ScrollPoint {
+    /// Point ID.
+    pub id: u64,
+    /// Vector data.
+    pub vector: Vec<f32>,
+    /// Optional payload.
+    pub payload: Option<serde_json::Value>,
+}
+
+// ============================================================================
 // Collection Statistics Responses
 // ============================================================================
 
@@ -488,6 +538,14 @@ pub struct ColumnStatsResponse {
     pub max_value: Option<String>,
     /// Average value size in bytes.
     pub avg_size_bytes: u64,
+    /// Number of histogram buckets, or null if no histogram.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable))]
+    pub histogram_buckets: Option<usize>,
+    /// Whether the histogram is stale, or null if no histogram.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable))]
+    pub histogram_stale: Option<bool>,
 }
 
 /// Per-index statistics in a collection stats response.

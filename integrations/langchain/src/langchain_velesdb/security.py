@@ -20,6 +20,7 @@ from velesdb_common.security import (  # noqa: F401
     SecurityError,
     validate_batch_size,
     validate_collection_name,
+    validate_column_name,
     validate_dimension,
     validate_k,
     validate_metric,

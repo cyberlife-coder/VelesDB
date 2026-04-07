@@ -98,6 +98,7 @@ impl Collection {
 
     /// Builds a `Point` from storage. Always returns `Some`; points without a
     /// stored vector get an empty vector slice.
+    #[allow(clippy::unnecessary_wraps)] // Reason: Option return used by caller's if-let pattern
     fn build_point(
         id: u64,
         is_metadata_only: bool,

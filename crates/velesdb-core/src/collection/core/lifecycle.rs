@@ -98,6 +98,7 @@ impl Collection {
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
+            stats_io_mutex: Arc::new(Mutex::new(())),
             write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             inserts_since_last_hnsw_save: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             #[cfg(feature = "persistence")]

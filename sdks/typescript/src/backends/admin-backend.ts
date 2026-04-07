@@ -8,6 +8,7 @@
 import type {
   CollectionStatsResponse,
   CollectionConfigResponse,
+  ColumnStatsDetail,
 } from '../types';
 import type { BaseTransport } from './shared';
 import { throwOnError, returnNullOnNotFound, collectionPath } from './shared';
@@ -24,9 +25,37 @@ interface StatsApiResponse {
   avg_row_size_bytes: number;
   payload_size_bytes: number;
   last_analyzed_epoch_ms: number;
+  column_stats?: Record<string, {
+    name: string;
+    null_count: number;
+    distinct_count: number;
+    min_value: unknown | null;
+    max_value: unknown | null;
+    avg_size_bytes: number;
+    histogram_buckets: number | null;
+    histogram_stale: boolean | null;
+  }>;
 }
 
 export function mapStatsResponse(data: StatsApiResponse): CollectionStatsResponse {
+  let columnStats: Record<string, ColumnStatsDetail> | undefined;
+
+  if (data.column_stats) {
+    columnStats = {};
+    for (const [key, col] of Object.entries(data.column_stats)) {
+      columnStats[key] = {
+        name: col.name,
+        nullCount: col.null_count,
+        distinctCount: col.distinct_count,
+        minValue: col.min_value,
+        maxValue: col.max_value,
+        avgSizeBytes: col.avg_size_bytes,
+        histogramBuckets: col.histogram_buckets,
+        histogramStale: col.histogram_stale,
+      };
+    }
+  }
+
   return {
     totalPoints: data.total_points,
     totalSizeBytes: data.total_size_bytes,
@@ -35,6 +64,7 @@ export function mapStatsResponse(data: StatsApiResponse): CollectionStatsRespons
     avgRowSizeBytes: data.avg_row_size_bytes,
     payloadSizeBytes: data.payload_size_bytes,
     lastAnalyzedEpochMs: data.last_analyzed_epoch_ms,
+    columnStats,
   };
 }
 

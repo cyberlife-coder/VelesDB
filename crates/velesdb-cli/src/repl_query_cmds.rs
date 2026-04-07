@@ -3,7 +3,10 @@
 //! Covers: `.explain`, `.explain-analyze`, `.analyze`, `.indexes`, `.delete`,
 //! `.flush`, `.create-index`, `.drop-index`.
 
+use std::collections::HashMap;
+
 use colored::Colorize;
+use velesdb_core::collection::stats::{ColumnStats, IndexStats};
 use velesdb_core::Database;
 
 use crate::repl_commands::{parse_flag, CommandResult};
@@ -180,35 +183,54 @@ pub(crate) fn cmd_analyze(db: &Database, parts: &[&str]) -> CommandResult {
                 "Avg Row Size:".cyan(),
                 stats.avg_row_size_bytes
             );
-
-            if !stats.field_stats.is_empty() {
-                println!("\n  {}", "Field Statistics:".bold());
-                for (field, fs) in &stats.field_stats {
-                    println!(
-                        "    {} distinct={}, null={}",
-                        field.cyan(),
-                        fs.distinct_values,
-                        fs.null_count
-                    );
-                }
-            }
-
-            if !stats.index_stats.is_empty() {
-                println!("\n  {}", "Index Statistics:".bold());
-                for (idx_name, is) in &stats.index_stats {
-                    println!(
-                        "    {} entries={}, size={} bytes",
-                        idx_name.cyan(),
-                        is.entry_count,
-                        is.size_bytes
-                    );
-                }
-            }
+            print_field_stats(&stats.field_stats);
+            print_index_stats(&stats.index_stats);
             println!();
         }
         Err(e) => return CommandResult::Error(format!("Analyze error: {e}")),
     }
     CommandResult::Continue
+}
+
+/// Prints per-field statistics from a collection analysis.
+fn print_field_stats(field_stats: &HashMap<String, ColumnStats>) {
+    if field_stats.is_empty() {
+        return;
+    }
+    println!("\n  {}", "Field Statistics:".bold());
+    for (field, fs) in field_stats {
+        println!(
+            "    {} distinct={}, null={}",
+            field.cyan(),
+            fs.distinct_values,
+            fs.null_count
+        );
+        if let Some(ref hist) = fs.histogram {
+            if !hist.buckets.is_empty() {
+                println!(
+                    "      histogram: {} buckets, stale={}",
+                    hist.buckets.len(),
+                    hist.stale
+                );
+            }
+        }
+    }
+}
+
+/// Prints per-index statistics from a collection analysis.
+fn print_index_stats(index_stats: &HashMap<String, IndexStats>) {
+    if index_stats.is_empty() {
+        return;
+    }
+    println!("\n  {}", "Index Statistics:".bold());
+    for (idx_name, is) in index_stats {
+        println!(
+            "    {} entries={}, size={} bytes",
+            idx_name.cyan(),
+            is.entry_count,
+            is.size_bytes
+        );
+    }
 }
 
 pub(crate) fn cmd_indexes(db: &Database, parts: &[&str]) -> CommandResult {

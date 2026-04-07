@@ -114,3 +114,103 @@ fn get_collection_stats_loads_from_disk() {
         .expect("should load from disk");
     assert_eq!(loaded.total_points, 8);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 8.1: Histogram persistence in collection.stats.json
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn analyze_collection_persists_histograms() {
+    let (dir, db) = temp_database();
+    db.create_collection("hist_persist", 4, DistanceMetric::Cosine)
+        .expect("create");
+
+    let coll = db
+        .get_vector_collection("hist_persist")
+        .expect("collection");
+    // Insert points with numeric payloads so histograms get built
+    let points: Vec<Point> = (1..=100)
+        .map(|i| Point {
+            id: i,
+            vector: vec![i as f32; 4],
+            payload: Some(serde_json::json!({"score": i})),
+            sparse_vectors: None,
+        })
+        .collect();
+    coll.upsert(points).expect("upsert");
+
+    let stats = db.analyze_collection("hist_persist").expect("analyze");
+
+    // Verify histograms were built for the "score" column
+    let has_histogram = stats
+        .field_stats
+        .get("score")
+        .or_else(|| stats.column_stats.get("score"))
+        .and_then(|cs| cs.histogram.as_ref())
+        .is_some_and(|h| !h.buckets.is_empty());
+    assert!(
+        has_histogram,
+        "histogram should be built for 'score' column"
+    );
+
+    // Verify the stats file on disk contains histogram data
+    let stats_path = dir
+        .path()
+        .join("hist_persist")
+        .join("collection.stats.json");
+    let bytes = std::fs::read(&stats_path).expect("read stats file");
+    let json_str = String::from_utf8_lossy(&bytes);
+    assert!(
+        json_str.contains("\"histogram\""),
+        "stats JSON should contain histogram data"
+    );
+    assert!(
+        json_str.contains("\"total_count\""),
+        "stats JSON should contain total_count"
+    );
+}
+
+#[test]
+fn histogram_survives_database_reopen() {
+    let dir = TempDir::new().expect("tempdir");
+
+    // Phase 1: create, insert, analyze
+    {
+        let db = Database::open(dir.path()).expect("open");
+        db.create_collection("hist_reopen", 4, DistanceMetric::Cosine)
+            .expect("create");
+        let coll = db.get_vector_collection("hist_reopen").expect("collection");
+        let points: Vec<Point> = (1..=50)
+            .map(|i| Point {
+                id: i,
+                vector: vec![i as f32; 4],
+                payload: Some(serde_json::json!({"value": i * 10})),
+                sparse_vectors: None,
+            })
+            .collect();
+        coll.upsert(points).expect("upsert");
+        db.analyze_collection("hist_reopen").expect("analyze");
+    }
+
+    // Phase 2: reopen and verify histograms are restored
+    let db2 = Database::open(dir.path()).expect("reopen");
+    let loaded = db2
+        .get_collection_stats("hist_reopen")
+        .expect("get stats")
+        .expect("stats should load from disk");
+
+    let hist = loaded
+        .field_stats
+        .get("value")
+        .or_else(|| loaded.column_stats.get("value"))
+        .and_then(|cs| cs.histogram.as_ref())
+        .expect("histogram should be restored after reopen");
+
+    assert!(!hist.buckets.is_empty(), "histogram should have buckets");
+    assert!(hist.total_count > 0, "total_count should be positive");
+    assert_eq!(
+        hist.incremental_updates, 0,
+        "fresh analyze has zero updates"
+    );
+    assert!(!hist.stale, "fresh histogram should not be stale");
+}

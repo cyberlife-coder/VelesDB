@@ -4,8 +4,10 @@
 // cardinalities where ±1 ULP has no operational impact on query planning.
 #![allow(clippy::cast_precision_loss)]
 
-use crate::collection::stats::{CollectionStats, Histogram};
-use crate::velesql::ast::Condition;
+use crate::collection::stats::next_after;
+use crate::collection::stats::CollectionStats;
+use crate::collection::stats::Histogram;
+use crate::velesql::ast::{CompareOp, Condition, Value};
 
 const FILTER_SCAN_IO_WEIGHT: f64 = 0.2;
 const FILTER_SCAN_CPU_WEIGHT: f64 = 0.8;
@@ -41,11 +43,30 @@ pub struct CostEstimator<'a> {
     stats: &'a CollectionStats,
 }
 
+/// Converts a VelesQL `Value` to `f64` for histogram lookup.
+///
+/// Returns `Some(f64)` for Integer, `UnsignedInteger`, Float, and Boolean.
+/// Returns `None` for Parameter, Null, String, Temporal, and Subquery.
+fn value_to_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Integer(i) => Some(*i as f64),
+        Value::UnsignedInteger(u) => Some(*u as f64),
+        Value::Float(f) => Some(*f),
+        Value::Boolean(b) => Some(if *b { 1.0 } else { 0.0 }),
+        _ => None,
+    }
+}
+
 impl<'a> CostEstimator<'a> {
     #[must_use]
     /// Creates a new estimator backed by collection statistics.
     pub const fn new(stats: &'a CollectionStats) -> Self {
         Self { stats }
+    }
+
+    /// Returns the histogram for a column, delegating to `CollectionStats`.
+    fn get_histogram(&self, column: &str) -> Option<&Histogram> {
+        self.stats.get_column_histogram(column)
     }
 
     #[must_use]
@@ -69,23 +90,26 @@ impl<'a> CostEstimator<'a> {
     }
 
     #[must_use]
-    /// Estimates predicate selectivity in the [0.0, 1.0] range.
+    /// Estimates predicate selectivity in the `[0.0, 1.0]` range.
+    ///
+    /// Dispatches on every `Condition` variant — no catch-all. Comparison,
+    /// In, Between, and Like use histogram data when available; text/geo
+    /// predicates return explicit heuristic constants; compound predicates
+    /// use product (AND), inclusion-exclusion (OR), and complement (NOT).
     pub fn estimate_condition_selectivity(&self, condition: &Condition) -> f64 {
         match condition {
-            Condition::Comparison(cmp) => self.estimate_comparison_selectivity(cmp.column.as_str()),
+            Condition::Comparison(cmp) => self.estimate_comparison_selectivity_with_histogram(
+                &cmp.column,
+                cmp.operator,
+                &cmp.value,
+            ),
             Condition::In(cond) => {
-                let base = self.stats.estimate_selectivity(cond.column.as_str());
-                let sel = (base * cond.values.len() as f64).clamp(0.0, 1.0);
-                if cond.negated {
-                    1.0 - sel
-                } else {
-                    sel
-                }
+                self.estimate_in_selectivity(&cond.column, &cond.values, cond.negated)
             }
-            Condition::Between(cond) => self.estimate_range_selectivity(cond.column.as_str()),
-            Condition::Like(cond) => {
-                (self.stats.estimate_selectivity(cond.column.as_str()) * 2.0).clamp(0.01, 1.0)
+            Condition::Between(cond) => {
+                self.estimate_between_selectivity(&cond.column, &cond.low, &cond.high)
             }
+            Condition::Like(cond) => self.estimate_like_selectivity(&cond.column, &cond.pattern),
             Condition::IsNull(cond) => self
                 .stats
                 .field_stats
@@ -93,6 +117,10 @@ impl<'a> CostEstimator<'a> {
                 .map_or(0.1, |s| {
                     s.null_count as f64 / self.stats.total_points.max(1) as f64
                 }),
+            Condition::Match(_) | Condition::Contains(_) | Condition::GeoDistance(_) => 0.1,
+            Condition::ContainsText(_) => 0.05,
+            Condition::GeoBbox(_) => 0.2,
+            Condition::GraphMatch(_) => 0.5,
             Condition::And(left, right) => {
                 self.estimate_condition_selectivity(left)
                     * self.estimate_condition_selectivity(right)
@@ -104,26 +132,127 @@ impl<'a> CostEstimator<'a> {
             }
             Condition::Not(inner) => 1.0 - self.estimate_condition_selectivity(inner),
             Condition::Group(inner) => self.estimate_condition_selectivity(inner),
-            _ => 0.5,
+            Condition::VectorSearch(_)
+            | Condition::VectorFusedSearch(_)
+            | Condition::SparseVectorSearch(_)
+            | Condition::Similarity(_) => 1.0,
         }
     }
 
-    fn estimate_comparison_selectivity(&self, column: &str) -> f64 {
-        self.stats.estimate_selectivity(column).clamp(0.001, 1.0)
+    /// Estimates selectivity for a `Comparison` condition using histogram data.
+    ///
+    /// Dispatches on `CompareOp`: Eq → histogram equality, NotEq → complement,
+    /// Lt/Lte/Gt/Gte → histogram less-than with appropriate adjustments.
+    /// Falls back to `CollectionStats::estimate_selectivity()` when no histogram
+    /// is available or the value cannot be converted to `f64`.
+    fn estimate_comparison_selectivity_with_histogram(
+        &self,
+        column: &str,
+        op: CompareOp,
+        value: &Value,
+    ) -> f64 {
+        // Parameter values are unknown at plan time — use heuristic.
+        if matches!(value, Value::Parameter(_)) {
+            return 0.1;
+        }
+
+        let Some(v) = value_to_f64(value) else {
+            return self.stats.estimate_selectivity(column);
+        };
+
+        let Some(hist) = self.get_histogram(column) else {
+            return self.stats.estimate_selectivity(column);
+        };
+
+        let sel = match op {
+            CompareOp::Eq => hist.estimate_eq_selectivity(v),
+            CompareOp::NotEq => 1.0 - hist.estimate_eq_selectivity(v),
+            CompareOp::Lt => hist.estimate_lt_selectivity(v),
+            CompareOp::Lte => hist.estimate_lt_selectivity(next_after(v)),
+            CompareOp::Gt => 1.0 - hist.estimate_lt_selectivity(next_after(v)),
+            CompareOp::Gte => 1.0 - hist.estimate_lt_selectivity(v),
+        };
+        sel.clamp(0.0, 1.0)
     }
 
-    fn estimate_range_selectivity(&self, column: &str) -> f64 {
-        self.stats
-            .field_stats
+    /// Estimates selectivity for a `Between` condition using histogram range.
+    ///
+    /// Converts low/high to `f64` and delegates to `Histogram::estimate_range_selectivity`.
+    /// Falls back to `0.3` when no histogram is available or conversion fails.
+    fn estimate_between_selectivity(&self, column: &str, low: &Value, high: &Value) -> f64 {
+        let (Some(low_f), Some(high_f)) = (value_to_f64(low), value_to_f64(high)) else {
+            return 0.3;
+        };
+
+        match self.get_histogram(column) {
+            // BETWEEN is inclusive on both ends (low <= x <= high).
+            // Use next_after(high_f) so bucket_range_fraction includes values
+            // at the exact upper boundary — consistent with CompareOp::Lte.
+            Some(h) => h.estimate_range_selectivity(low_f, next_after(high_f)),
+            None => 0.3,
+        }
+    }
+
+    /// Estimates selectivity for an `In` condition.
+    ///
+    /// Sums per-value equality selectivities via histogram lookups when available.
+    /// Falls back to `base_selectivity × list_size` without a histogram.
+    /// If negated (NOT IN), returns `1.0 - sel`.
+    fn estimate_in_selectivity(&self, column: &str, values: &[Value], negated: bool) -> f64 {
+        let sel = if let Some(h) = self.get_histogram(column) {
+            let numeric_sels: Vec<f64> = values
+                .iter()
+                .filter_map(value_to_f64)
+                .map(|v| h.estimate_eq_selectivity(v))
+                .collect();
+            if numeric_sels.is_empty() {
+                // All values are non-numeric (e.g. strings) — fall back to
+                // cardinality-based estimate so we don't silently return 0.0.
+                let base = self.stats.estimate_selectivity(column);
+                (base * values.len() as f64).clamp(0.0, 1.0)
+            } else {
+                let sum: f64 = numeric_sels.into_iter().sum();
+                sum.clamp(0.0, 1.0)
+            }
+        } else {
+            let base = self.stats.estimate_selectivity(column);
+            (base * values.len() as f64).clamp(0.0, 1.0)
+        };
+
+        if negated {
+            1.0 - sel
+        } else {
+            sel
+        }
+    }
+
+    /// Estimates selectivity for a `Like` condition.
+    ///
+    /// Prefix patterns (ending with `%`, not starting with `%`) use histogram
+    /// range estimation on the ordinal prefix range when available.
+    /// Non-prefix patterns return `0.05`.
+    fn estimate_like_selectivity(&self, column: &str, pattern: &str) -> f64 {
+        let is_prefix = pattern.ends_with('%') && !pattern.starts_with('%');
+        if !is_prefix {
+            return 0.05;
+        }
+
+        let Some(_hist) = self.get_histogram(column) else {
+            return 0.1;
+        };
+
+        // For string columns the histogram is built on ordinal ranks.
+        // A prefix pattern 'abc%' matches a contiguous range of ordinal
+        // values. Without the full string→rank mapping at plan time we
+        // approximate: the prefix covers roughly 1/distinct_count of the
+        // domain, scaled by the number of buckets that span that range.
+        // This is more accurate than the previous 1/bucket_count heuristic.
+        let distinct = self
+            .stats
+            .column_stats
             .get(column)
-            .and_then(|s| s.histogram.as_ref())
-            .map_or(0.3, histogram_range_selectivity)
+            .or_else(|| self.stats.field_stats.get(column))
+            .map_or(1, |cs| cs.distinct_count.max(1));
+        (1.0 / distinct as f64).clamp(0.01, 1.0)
     }
-}
-
-fn histogram_range_selectivity(histogram: &Histogram) -> f64 {
-    if histogram.buckets.is_empty() {
-        return 0.3;
-    }
-    1.0 / histogram.buckets.len() as f64
 }

@@ -45,7 +45,7 @@ pub use handlers::{
     create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
     get_collection, get_collection_config, get_collection_stats, get_guardrails, get_point,
     health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
-    multi_query_search, query, readiness_check, search, search_ids, stream_insert,
+    multi_query_search, query, readiness_check, scroll_points, search, search_ids, stream_insert,
     stream_upsert_points, text_search, update_guardrails, upsert_points,
 };
 
@@ -114,6 +114,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::points::stream_insert,
         handlers::points::get_point,
         handlers::points::delete_point,
+        handlers::points::scroll_points,
         handlers::search::search,
         handlers::search::batch_search,
         handlers::search::multi_query_search,
@@ -182,6 +183,9 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             CollectionStatsResponse,
             ColumnStatsResponse,
             IndexStatsResponse,
+            ScrollRequest,
+            ScrollResponse,
+            ScrollPoint,
             GuardRailsConfigRequest,
             GuardRailsConfigResponse,
             handlers::graph::TraverseRequest,

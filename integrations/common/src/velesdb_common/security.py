@@ -345,6 +345,35 @@ def validate_collection_name(name: str) -> str:
     return name
 
 
+def validate_column_name(name: str) -> str:
+    """Validate column name.
+
+    Args:
+        name: Column name (may include dots for nested payload fields).
+
+    Returns:
+        Validated name.
+
+    Raises:
+        SecurityError: If name is invalid.
+    """
+    if not isinstance(name, str):
+        raise SecurityError(
+            f"Column name must be a string, got {type(name).__name__}"
+        )
+    if not name:
+        raise SecurityError("Column name cannot be empty")
+    if len(name) > 256:
+        raise SecurityError("Column name exceeds maximum length of 256")
+    # Allow alphanumeric, underscore, dot; must start with letter or underscore
+    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_.]*$", name):
+        raise SecurityError(
+            "Column name must start with a letter or underscore and can only "
+            "contain alphanumeric characters, underscores, and dots"
+        )
+    return name
+
+
 def validate_url(url: str) -> str:
     """Validate server URL.
 

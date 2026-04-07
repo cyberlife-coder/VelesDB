@@ -175,6 +175,16 @@ export class VelesQLBuilder {
    * 
    * @param condition - WHERE condition
    * @param params - Optional parameters
+   * 
+   * @example
+   * ```typescript
+   * // Substring matching with CONTAINS_TEXT
+   * velesql()
+   *   .match('d', 'Document')
+   *   .where("content CONTAINS_TEXT 'keyword'")
+   *   .limit(10)
+   *   .toVelesQL();
+   * ```
    */
   where(condition: string, params?: Record<string, unknown>): VelesQLBuilder {
     const newParams = params ? { ...this.state.params, ...params } : this.state.params;

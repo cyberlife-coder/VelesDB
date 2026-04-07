@@ -9,6 +9,7 @@
 mod crud;
 mod crud_bulk;
 mod crud_helpers;
+mod crud_histogram;
 mod crud_indexing;
 mod crud_read_delete;
 #[cfg(test)]

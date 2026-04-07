@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_metadata_collection()`, or `get_any_collection()` instead.
 
 ### Added
+- **Histogram-based selectivity estimation — CBO foundation (Issue #468)** —
+  Equi-depth histograms built during `ANALYZE` on Int, Float, and String columns
+  (10K-row sample, 64 buckets default). `CostEstimator` now dispatches on all 6
+  `CompareOp` variants (Eq/NotEq/Lt/Lte/Gt/Gte) with O(log B) binary search on
+  bucket boundaries. Histogram-aware selectivity for `IN`, `BETWEEN`, and prefix
+  `LIKE` predicates. Explicit heuristic constants for `Match` (0.1),
+  `ContainsText` (0.05), `Contains` (0.1), `GeoDistance` (0.1), `GeoBbox` (0.2)
+  — eliminates the `_ => 0.5` catch-all. Incremental bucket maintenance on
+  upsert/delete with 20% staleness threshold. `FilterPlan` gains
+  `estimated_rows` and `estimation_method` fields. Histograms persist in
+  `collection.stats.json` with `#[serde(default)]` backward compatibility.
+  4 BDD integration tests + 30 unit tests + 6 persistence tests.
 - **Python DataFrame integration + Scroll cursor + Polars support (Issue #429)** —
   New `Collection.scroll()` generator for server-side cursor-based iteration over
   collection points (yields batches of `list[dict]` or DataFrames). New

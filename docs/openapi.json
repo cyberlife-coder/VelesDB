@@ -1539,6 +1539,68 @@
         }
       }
     },
+    "/collections/{name}/points/scroll": {
+      "post": {
+        "tags": [
+          "points"
+        ],
+        "summary": "Scroll through collection points with cursor-based pagination.",
+        "operationId": "scroll_points",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Scroll batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrollResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{name}/points/stream": {
       "post": {
         "tags": [
@@ -2412,6 +2474,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Query validation/execution error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VelesqlErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2772,6 +2844,21 @@
             "format": "int64",
             "description": "Number of distinct values (cardinality).",
             "minimum": 0
+          },
+          "histogram_buckets": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Number of histogram buckets, or null if no histogram.",
+            "minimum": 0
+          },
+          "histogram_stale": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the histogram is stale, or null if no histogram."
           },
           "max_value": {
             "type": [
@@ -3226,6 +3313,13 @@
             ],
             "description": "Estimated rows processed/produced.",
             "minimum": 0
+          },
+          "estimation_method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the row estimate was produced (e.g. \"histogram\", \"cardinality\", \"heuristic\")."
           },
           "operation": {
             "type": "string",
@@ -3891,25 +3985,30 @@
           "actual_time_ms",
           "actual_rows_in",
           "actual_rows_out",
-          "loops"
+          "loops",
+          "estimated"
         ],
         "properties": {
           "actual_rows_in": {
             "type": "integer",
             "format": "int64",
-            "description": "Rows entering this node.",
+            "description": "Rows entering this node (heuristic approximation).",
             "minimum": 0
           },
           "actual_rows_out": {
             "type": "integer",
             "format": "int64",
-            "description": "Rows leaving this node.",
+            "description": "Rows leaving this node (heuristic approximation).",
             "minimum": 0
           },
           "actual_time_ms": {
             "type": "number",
             "format": "double",
-            "description": "Actual wall-clock time for this node in milliseconds."
+            "description": "Heuristic estimate of wall-clock time for this node in milliseconds.\nDerived from total execution time using fixed fractions, not real\nper-node instrumentation. Will be replaced by measured timing (#467)."
+          },
+          "estimated": {
+            "type": "boolean",
+            "description": "When `true`, time and row counts are heuristic estimates, not real\nper-node measurements. Will become `false` once instrumented timing\nlands (#467)."
           },
           "loops": {
             "type": "integer",
@@ -4134,6 +4233,82 @@
           "velesql_contract_version": {
             "type": "string",
             "description": "`VelesQL` contract version used by this response."
+          }
+        }
+      },
+      "ScrollPoint": {
+        "type": "object",
+        "description": "A single point in a scroll response.",
+        "required": [
+          "id",
+          "vector"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Point ID.",
+            "minimum": 0
+          },
+          "payload": {
+            "description": "Optional payload."
+          },
+          "vector": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "Vector data."
+          }
+        }
+      },
+      "ScrollRequest": {
+        "type": "object",
+        "description": "Request body for the scroll endpoint.",
+        "properties": {
+          "batch_size": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum points per batch (1–10 000, default 100).",
+            "minimum": 0
+          },
+          "cursor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Resume after this point ID (exclusive). Omit to start from beginning.",
+            "minimum": 0
+          },
+          "filter": {
+            "description": "Optional filter expression."
+          }
+        }
+      },
+      "ScrollResponse": {
+        "type": "object",
+        "description": "Response from the scroll endpoint.",
+        "required": [
+          "points"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Cursor for the next batch. Null when iteration is complete.",
+            "minimum": 0
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScrollPoint"
+            },
+            "description": "Points in this batch (ascending ID order)."
           }
         }
       },

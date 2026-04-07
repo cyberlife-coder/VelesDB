@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.7.0 | **Last Updated**: 2026-04-06
+**Version**: 3.9.0 | **Last Updated**: 2026-04-07
 
 ---
 
@@ -1674,6 +1674,15 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `actual_rows_out` | u64 | Rows leaving this node |
 | `loops` | u64 | Loop iterations for this node |
 
+**Filter plan fields (v3.9+):**
+
+When histogram data is available, `Filter` plan nodes include additional fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `estimated_rows` | u64? | Histogram-based cardinality estimate (selectivity × total_rows) |
+| `estimation_method` | string? | `"histogram"`, `"cardinality"`, or `"no histogram"` |
+
 #### Examples
 
 ```sql
@@ -1855,7 +1864,7 @@ Dropping a non-existent index succeeds silently (no error).
 - Indexes are in-memory only; they are not persisted to disk in the current
   implementation.
 
-### ANALYZE (v3.5+)
+### ANALYZE (v3.5+, histograms v3.9+)
 
 Computes cost-based optimizer (CBO) statistics for a collection. The statistics
 are cached in memory and persisted to disk (`collection.stats.json`).
@@ -1869,6 +1878,25 @@ ANALYZE COLLECTION docs   -- optional COLLECTION keyword
 Returns a JSON payload with collection statistics including `total_points`,
 `row_count`, `deleted_count`, `avg_row_size_bytes`, `payload_size_bytes`,
 and per-field cardinality information.
+
+#### Histogram Construction (v3.9+)
+
+`ANALYZE` builds equi-depth histograms on Int, Float, and String columns to
+enable accurate selectivity estimation for the CBO. Key characteristics:
+
+- **Sampling**: up to 10,000 rows sampled per column (separate from the
+  1,000-row payload stats sample).
+- **Bucket count**: 64 buckets by default. Fewer buckets when distinct values
+  < 64 (one bucket per distinct value).
+- **String columns**: mapped to ordinal ranks (lexicographic sort order) for
+  histogram construction.
+- **Persistence**: histograms are serialized as part of `collection.stats.json`
+  and restored on database startup.
+- **Incremental maintenance**: upsert/delete operations update histogram bucket
+  counts incrementally (O(log B) binary search). After 20% cumulative updates,
+  the histogram is marked stale and a `debug!` log recommends re-running ANALYZE.
+- **Backward compatibility**: new histogram fields use `#[serde(default)]` so
+  pre-histogram stats files deserialize without error.
 
 ### TRUNCATE (v3.5+)
 
