@@ -51,9 +51,12 @@ export interface QueryExplainApiResponse {
     edges_traversed: number;
   } | null;
   node_stats?: Array<{
-    operation: string;
-    time_ms: number;
-    rows: number;
+    node_label: string;
+    actual_time_ms: number;
+    actual_rows_in: number;
+    actual_rows_out: number;
+    loops: number;
+    estimated: boolean;
   }> | null;
 }
 
@@ -213,9 +216,12 @@ export async function queryExplain(
       : data.actual_stats === null ? null : undefined,
     nodeStats: data.node_stats
       ? data.node_stats.map(ns => ({
-          operation: ns.operation,
-          timeMs: ns.time_ms,
-          rows: ns.rows,
+          nodeLabel: ns.node_label,
+          actualTimeMs: ns.actual_time_ms,
+          actualRowsIn: ns.actual_rows_in,
+          actualRowsOut: ns.actual_rows_out,
+          loops: ns.loops,
+          estimated: ns.estimated,
         }))
       : data.node_stats === null ? null : undefined,
   };

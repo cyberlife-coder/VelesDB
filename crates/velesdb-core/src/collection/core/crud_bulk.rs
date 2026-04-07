@@ -14,7 +14,7 @@ use crate::point::Point;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 impl Collection {
     /// Bulk insert optimized for high-throughput import.
@@ -139,8 +139,20 @@ impl Collection {
         self.apply_sparse_batch_bulk(sparse_batch)?;
 
         // Incremental histogram maintenance: decrement old values, increment new.
-        let payloads: Vec<Option<serde_json::Value>> =
-            points.iter().map(|p| p.payload.clone()).collect();
+        // Bug #47: only the last occurrence per ID is counted for new payloads
+        // to match last-writer-wins storage semantics.
+        let dedup = Self::build_dedup_map(points);
+        let payloads: Vec<Option<serde_json::Value>> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if dedup.get(&p.id) == Some(&i) {
+                    p.payload.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
         self.update_histograms_replace(&old_payloads, &payloads);
 
         self.invalidate_caches_and_bump_generation();
@@ -179,8 +191,20 @@ impl Collection {
         self.apply_sparse_batch_bulk(sparse_batch)?;
 
         // Incremental histogram maintenance: decrement old values, increment new.
-        let payloads: Vec<Option<serde_json::Value>> =
-            points.iter().map(|p| p.payload.clone()).collect();
+        // Bug #47: only the last occurrence per ID is counted for new payloads
+        // to match last-writer-wins storage semantics.
+        let dedup = Self::build_dedup_map(points);
+        let payloads: Vec<Option<serde_json::Value>> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if dedup.get(&p.id) == Some(&i) {
+                    p.payload.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
         self.update_histograms_replace(&old_payloads, &payloads);
 
         self.invalidate_caches_and_bump_generation();
@@ -258,10 +282,20 @@ impl Collection {
             .collect();
 
         // Collect pre-batch payloads BEFORE overwriting — for histogram decrements.
+        // Bug #46: deduplicate by ID — only the first occurrence retrieves the
+        // pre-batch value; duplicates get None so the old value is decremented
+        // exactly once.
         let old_payloads: Vec<Option<serde_json::Value>> = if payloads.is_some() {
             let storage = self.payload_storage.read();
+            let mut seen = HashSet::new();
             ids.iter()
-                .map(|&id| storage.retrieve(id).ok().flatten())
+                .map(|&id| {
+                    if seen.insert(id) {
+                        storage.retrieve(id).ok().flatten()
+                    } else {
+                        None
+                    }
+                })
                 .collect()
         } else {
             Vec::new()
@@ -287,8 +321,24 @@ impl Collection {
         self.config.write().point_count = self.vector_storage.read().len();
 
         // Incremental histogram maintenance: decrement old values, increment new.
+        // Bug #47: only the last occurrence per ID is counted for new payloads
+        // to match last-writer-wins storage semantics.
         if let Some(ps) = payloads {
-            let owned: Vec<Option<serde_json::Value>> = ps.to_vec();
+            let mut dedup_map: HashMap<u64, usize> = HashMap::with_capacity(ids.len());
+            for (i, &id) in ids.iter().enumerate() {
+                dedup_map.insert(id, i);
+            }
+            let owned: Vec<Option<serde_json::Value>> = ps
+                .iter()
+                .enumerate()
+                .map(|(i, opt)| {
+                    if dedup_map.get(&ids[i]) == Some(&i) {
+                        opt.clone()
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             self.update_histograms_replace(&old_payloads, &owned);
         }
 

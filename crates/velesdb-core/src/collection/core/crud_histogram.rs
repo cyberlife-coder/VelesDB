@@ -169,6 +169,30 @@ impl Collection {
         true
     }
 
+    /// Writes full `CollectionStats` to disk under the `stats_io_mutex`.
+    ///
+    /// Called by `Database::analyze_collection` to ensure the write does not
+    /// race with incremental histogram updates (Bug #51). Returns `Ok(())`
+    /// on success, or an I/O / serialisation error.
+    pub fn write_stats_guarded(&self, stats: &CollectionStats) -> crate::error::Result<()> {
+        let stats_path = self.path.join("collection.stats.json");
+        let _guard = self.stats_io_mutex.lock();
+
+        let serialized = serde_json::to_vec_pretty(stats).map_err(|e| {
+            crate::error::Error::Serialization(format!("failed to serialize stats: {e}"))
+        })?;
+
+        let tmp_path = stats_path.with_file_name(".stats.json.tmp");
+        std::fs::write(&tmp_path, serialized)?;
+
+        if let Err(e) = std::fs::rename(&tmp_path, &stats_path) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e.into());
+        }
+
+        Ok(())
+    }
+
     /// Writes `CollectionStats` back to disk atomically.
     ///
     /// Serialises to a temporary file in the same directory, then renames over

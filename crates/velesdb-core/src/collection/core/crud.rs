@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap};
 ///
 /// Built once in `batch_store_all` and shared by both `write_deduped_payloads`
 /// and `write_deduped_vectors` to avoid redundant map construction (Issue #425).
-type DedupMap = HashMap<u64, usize>;
+pub(super) type DedupMap = HashMap<u64, usize>;
 
 pub(super) struct QuantizationGuards<'a> {
     pub(super) sq8: Option<RwLockWriteGuard<'a, HashMap<u64, QuantizedVector>>>,
@@ -84,13 +84,24 @@ impl Collection {
 
         self.apply_sparse_batch_upsert(&sparse_batch)?;
 
-        // Incremental histogram maintenance: decrement old values THEN
-        // increment new values BEFORE cache invalidation so stats reflect
-        // the net mutation correctly for existing-point upserts.
-        self.update_histograms_on_delete(&old_payloads);
-        let new_payloads: Vec<Option<serde_json::Value>> =
-            points.iter().map(|p| p.payload.clone()).collect();
-        self.update_histograms_on_upsert(&new_payloads);
+        // Incremental histogram maintenance: decrement old values and
+        // increment new values in a single atomic read → modify → write
+        // cycle (Bug #49: avoids 2× I/O of separate delete + upsert calls).
+        // Only the last occurrence per ID is counted for new payloads
+        // (Bug #47: dedup to match last-writer-wins storage semantics).
+        let dedup = Self::build_dedup_map(&points);
+        let new_payloads: Vec<Option<serde_json::Value>> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if dedup.get(&p.id) == Some(&i) {
+                    p.payload.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.update_histograms_replace(&old_payloads, &new_payloads);
 
         self.invalidate_caches_and_bump_generation();
         Ok(())
@@ -243,7 +254,7 @@ impl Collection {
     /// Issue #425: Computed once in `batch_store_all` and shared by both
     /// `write_deduped_payloads` and `write_deduped_vectors` to avoid
     /// redundant `HashMap` construction.
-    fn build_dedup_map(points: &[Point]) -> DedupMap {
+    pub(super) fn build_dedup_map(points: &[Point]) -> DedupMap {
         let mut map = HashMap::with_capacity(points.len());
         for (i, p) in points.iter().enumerate() {
             map.insert(p.id, i);
@@ -442,10 +453,10 @@ impl Collection {
         let mut label_idx = self.label_index.write();
 
         // Collect old payloads for histogram decrements before they are overwritten.
-        let old_payloads_for_hist: Vec<Option<serde_json::Value>> = points
-            .iter()
-            .map(|p| payload_storage.retrieve(p.id).ok().flatten())
-            .collect();
+        // Bug #46: use collect_old_payloads to deduplicate by ID — only the
+        // first occurrence retrieves the pre-batch value; duplicates get None
+        // so the old value is decremented exactly once.
+        let old_payloads_for_hist = Self::collect_old_payloads(&points, &payload_storage);
 
         for point in &points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
@@ -479,11 +490,22 @@ impl Collection {
         self.config.write().point_count = point_count;
 
         // Incremental histogram maintenance for metadata-only collections:
-        // decrement old values (collected before the storage loop), then increment new values.
-        self.update_histograms_on_delete(&old_payloads_for_hist);
-        let new_payloads: Vec<Option<serde_json::Value>> =
-            points.iter().map(|p| p.payload.clone()).collect();
-        self.update_histograms_on_upsert(&new_payloads);
+        // decrement old values and increment new values in one atomic cycle.
+        // Bug #47: only the last occurrence per ID is counted for new payloads
+        // to match last-writer-wins storage semantics.
+        let dedup = Self::build_dedup_map(&points);
+        let new_payloads: Vec<Option<serde_json::Value>> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if dedup.get(&p.id) == Some(&i) {
+                    p.payload.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.update_histograms_replace(&old_payloads_for_hist, &new_payloads);
 
         self.invalidate_caches_and_bump_generation();
         Ok(())

@@ -375,9 +375,12 @@ export interface ActualStats {
 
 /** Per-node execution statistics from EXPLAIN ANALYZE. */
 export interface NodeStats {
-  operation: string;
-  timeMs: number;
-  rows: number;
+  nodeLabel: string;
+  actualTimeMs: number;
+  actualRowsIn: number;
+  actualRowsOut: number;
+  loops: number;
+  estimated: boolean;
 }
 
 /** Collection statistics response */
