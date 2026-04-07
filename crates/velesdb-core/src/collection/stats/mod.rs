@@ -22,6 +22,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+mod histogram;
+pub(crate) use histogram::HistogramBuilder;
+pub use histogram::{Histogram, HistogramBucket};
+
 #[cfg(test)]
 mod tests;
 
@@ -101,6 +105,19 @@ impl CollectionStats {
         0.1
     }
 
+    /// Returns the histogram for a column, checking both `column_stats` and `field_stats`.
+    ///
+    /// Returns `None` when neither map contains the column or the histogram is
+    /// absent / empty.
+    #[must_use]
+    pub fn get_column_histogram(&self, column: &str) -> Option<&Histogram> {
+        self.column_stats
+            .get(column)
+            .or_else(|| self.field_stats.get(column))
+            .and_then(|cs| cs.histogram.as_ref())
+            .filter(|h| !h.buckets.is_empty())
+    }
+
     /// Sets the last analyzed timestamp to now
     pub fn mark_analyzed(&mut self) {
         self.last_analyzed_epoch_ms = Some(
@@ -131,24 +148,6 @@ pub struct ColumnStats {
     pub avg_size_bytes: u64,
     /// Optional histogram for selectivity estimates.
     pub histogram: Option<Histogram>,
-}
-
-/// Histogram bucket storing approximate distribution details.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct HistogramBucket {
-    /// Inclusive lower bound for the bucket.
-    pub lower_bound: f64,
-    /// Exclusive upper bound for the bucket.
-    pub upper_bound: f64,
-    /// Number of sampled rows in the bucket.
-    pub count: u64,
-}
-
-/// Simple histogram used by the CBO.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Histogram {
-    /// Ordered list of histogram buckets.
-    pub buckets: Vec<HistogramBucket>,
 }
 
 impl ColumnStats {
@@ -259,6 +258,21 @@ impl StatsCollector {
     /// Adds index statistics
     pub fn add_index_stats(&mut self, stats: IndexStats) {
         self.stats.index_stats.insert(stats.name.clone(), stats);
+    }
+
+    /// Builds a histogram for a column from sampled values and stores it.
+    ///
+    /// Called by `Collection::analyze()` for each Int, Float, and String column.
+    /// Uses `HistogramBuilder` to construct an equi-depth histogram, then attaches
+    /// it to the corresponding `ColumnStats` entry (creating one if absent).
+    pub fn build_histogram(&mut self, column_name: &str, values: &mut [f64], num_buckets: usize) {
+        let histogram = HistogramBuilder::new(num_buckets).build(values);
+        if let Some(col) = self.stats.column_stats.get_mut(column_name) {
+            col.histogram = Some(histogram.clone());
+        }
+        if let Some(col) = self.stats.field_stats.get_mut(column_name) {
+            col.histogram = Some(histogram);
+        }
     }
 
     /// Builds the final CollectionStats

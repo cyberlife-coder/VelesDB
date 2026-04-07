@@ -91,6 +91,12 @@ impl QueryPlan {
             PlanNode::Filter(f) => {
                 let _ = writeln!(output, "{prefix}{connector}Filter");
                 let _ = writeln!(output, "{child_prefix}├─ Conditions: {}", f.conditions);
+                if let Some(rows) = f.estimated_rows {
+                    let _ = writeln!(output, "{child_prefix}├─ Estimated rows: {rows}");
+                }
+                if let Some(ref method) = f.estimation_method {
+                    let _ = writeln!(output, "{child_prefix}├─ Estimation method: {method}");
+                }
                 let _ = writeln!(
                     output,
                     "{child_prefix}└─ Selectivity: {:.1}%",

@@ -83,6 +83,13 @@ impl Collection {
         let sparse_batch = self.upsert_storage_and_index(&points, storage_mode)?;
 
         self.apply_sparse_batch_upsert(&sparse_batch)?;
+
+        // Incremental histogram maintenance: update persisted histogram bucket
+        // counts BEFORE cache invalidation so stats reflect the mutation.
+        let payloads: Vec<Option<serde_json::Value>> =
+            points.iter().map(|p| p.payload.clone()).collect();
+        self.update_histograms_on_upsert(&payloads);
+
         self.invalidate_caches_and_bump_generation();
         Ok(())
     }
@@ -458,6 +465,12 @@ impl Collection {
 
         // config(1) only — all higher-numbered locks released above.
         self.config.write().point_count = point_count;
+
+        // Incremental histogram maintenance for metadata-only collections.
+        let payloads: Vec<Option<serde_json::Value>> =
+            points.iter().map(|p| p.payload.clone()).collect();
+        self.update_histograms_on_upsert(&payloads);
+
         self.invalidate_caches_and_bump_generation();
         Ok(())
     }

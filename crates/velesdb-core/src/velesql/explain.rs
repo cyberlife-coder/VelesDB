@@ -92,13 +92,21 @@ pub struct VectorSearchPlan {
     pub candidates: u32,
 }
 
-/// Filter plan details.
+/// Filter plan details with histogram-based estimation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FilterPlan {
     /// Filter conditions as string representation.
     pub conditions: String,
     /// Estimated selectivity (0.0 - 1.0).
     pub selectivity: f64,
+    /// Estimated number of rows after filtering (selectivity × total_rows).
+    /// Populated when collection stats are available during plan construction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_rows: Option<u64>,
+    /// How the estimate was produced: `"histogram"`, `"cardinality"`, or `"no histogram"`.
+    /// Populated during plan construction based on histogram availability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimation_method: Option<String>,
 }
 
 /// Limit plan details.
@@ -453,6 +461,8 @@ impl QueryPlan {
             nodes.push(PlanNode::Filter(FilterPlan {
                 conditions: filter_conditions.join(" AND "),
                 selectivity,
+                estimated_rows: None,
+                estimation_method: None,
             }));
         }
 
@@ -709,6 +719,13 @@ fn estimate_rows_in(node: &PlanNode, rows_out: u64) -> u64 {
         PlanNode::Filter(f) => {
             if f.selectivity > 0.0 && f.selectivity < 1.0 {
                 // Invert selectivity: if 50 % of rows pass, twice as many entered.
+                // Reason: rows_out and selectivity are bounded positive values;
+                // precision loss and truncation are acceptable for estimation.
+                #[allow(
+                    clippy::cast_precision_loss,
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss
+                )]
                 let estimated = (rows_out as f64 / f.selectivity).ceil() as u64;
                 estimated.max(rows_out)
             } else {
