@@ -147,6 +147,42 @@ pub(crate) fn build_explain_analyze_dict(
         PyList::new(py, &node_dicts).unwrap_or_else(|_| PyList::empty(py)),
     );
 
+    // cost_factors (dict or None)
+    if let Some(ref factors) = output.cost_factors {
+        let cf = PyDict::new(py);
+        let _ = cf.set_item(PyString::intern(py, "seq_page_cost"), factors.seq_page_cost);
+        let _ = cf.set_item(
+            PyString::intern(py, "random_page_cost"),
+            factors.random_page_cost,
+        );
+        let _ = cf.set_item(
+            PyString::intern(py, "cpu_tuple_cost"),
+            factors.cpu_tuple_cost,
+        );
+        let _ = cf.set_item(
+            PyString::intern(py, "cpu_index_cost"),
+            factors.cpu_index_cost,
+        );
+        let _ = cf.set_item(
+            PyString::intern(py, "cpu_distance_cost"),
+            factors.cpu_distance_cost,
+        );
+        let _ = cf.set_item(PyString::intern(py, "cpu_edge_cost"), factors.cpu_edge_cost);
+        let _ = dict.set_item(PyString::intern(py, "cost_factors"), cf);
+    } else {
+        let _ = dict.set_item(PyString::intern(py, "cost_factors"), py.None());
+    }
+
+    // calibration_source (str or None)
+    let _ = dict.set_item(
+        PyString::intern(py, "calibration_source"),
+        output
+            .calibration_source
+            .as_deref()
+            .map(|s| PyString::intern(py, s).into_any().unbind())
+            .unwrap_or_else(|| py.None()),
+    );
+
     dict.into_any().unbind()
 }
 

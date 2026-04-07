@@ -94,6 +94,8 @@ fn print_actual_stats(output: &velesdb_core::velesql::ExplainOutput) {
             actual,
         );
     }
+
+    print_cost_metadata(output);
     println!();
 }
 
@@ -115,6 +117,26 @@ fn print_node_stats(output: &velesdb_core::velesql::ExplainOutput) {
         );
     }
     println!();
+}
+
+/// Display cost factors and calibration source from EXPLAIN ANALYZE output.
+///
+/// Prints "N/A" when `cost_factors` or `calibration_source` is `None`.
+fn print_cost_metadata(output: &velesdb_core::velesql::ExplainOutput) {
+    let source = output.calibration_source.as_deref().unwrap_or("N/A");
+    println!("  {} {}", "Calibration source:".cyan(), source);
+
+    if let Some(ref factors) = output.cost_factors {
+        println!("  {}", "Cost factors:".cyan());
+        println!("    seq_page_cost:    {:.4}", factors.seq_page_cost);
+        println!("    random_page_cost: {:.4}", factors.random_page_cost);
+        println!("    cpu_tuple_cost:   {:.6}", factors.cpu_tuple_cost);
+        println!("    cpu_index_cost:   {:.6}", factors.cpu_index_cost);
+        println!("    cpu_distance_cost:{:.4}", factors.cpu_distance_cost);
+        println!("    cpu_edge_cost:    {:.4}", factors.cpu_edge_cost);
+    } else {
+        println!("  {} N/A", "Cost factors:".cyan());
+    }
 }
 
 /// Returns `true` when estimated cost diverges from actual time by more than 10×.

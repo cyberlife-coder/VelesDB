@@ -16,6 +16,7 @@ impl Collection {
     /// writes `collection.stats.json` only when the file exists.
     ///
     /// Called BEFORE `invalidate_caches_and_bump_generation()` in the upsert path.
+    #[allow(dead_code)]
     pub(super) fn update_histograms_on_upsert(&self, payloads: &[Option<serde_json::Value>]) {
         self.update_histograms_for_payloads(payloads, true);
     }

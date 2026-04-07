@@ -3,6 +3,7 @@
 //! Provides the `analyze()` method for collecting runtime statistics
 //! to support cost-based query planning.
 
+use crate::collection::query_cost::cost_model::{calibrate_cost_factors, OperationCostFactors};
 use crate::collection::stats::{CollectionStats, IndexStats, StatsCollector};
 use crate::collection::Collection;
 use crate::error::Error;
@@ -87,7 +88,13 @@ impl Collection {
             collector.add_index_stats(bm25_stats);
         }
 
-        Ok(collector.build())
+        let mut stats = collector.build();
+
+        // Calibrate cost factors from observed collection characteristics
+        let calibrated = calibrate_cost_factors(&stats, &OperationCostFactors::default());
+        stats.calibrated_cost_factors = Some(calibrated);
+
+        Ok(stats)
     }
 
     /// Samples up to 1000 payloads to compute size, distinct values, and null counts.

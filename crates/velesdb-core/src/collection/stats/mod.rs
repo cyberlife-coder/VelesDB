@@ -19,6 +19,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
+use crate::collection::query_cost::cost_model::OperationCostFactors;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -53,6 +54,12 @@ pub struct CollectionStats {
     pub index_stats: HashMap<String, IndexStats>,
     /// Timestamp of last ANALYZE
     pub last_analyzed_epoch_ms: Option<u64>,
+    /// Calibrated cost factors derived from collection statistics.
+    ///
+    /// `None` if the collection has never been analyzed or stats are invalid.
+    /// Persisted in `collection.stats.json` to survive restarts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibrated_cost_factors: Option<OperationCostFactors>,
 }
 
 impl CollectionStats {

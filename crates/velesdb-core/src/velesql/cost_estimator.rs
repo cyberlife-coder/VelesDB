@@ -1,18 +1,47 @@
 //! Cost estimator for hybrid MATCH + NEAR query planning.
+//!
+//! Uses [`OperationCostFactors`] (calibrated or default) to compute I/O and
+//! CPU costs for query plan nodes.
+//!
+//! # Transition from hard-coded constants (Issue #467)
+//!
+//! The former constants `FILTER_SCAN_IO_WEIGHT` (0.2), `FILTER_SCAN_CPU_WEIGHT`
+//! (0.8), `HNSW_IO_WEIGHT` (0.5), and `HNSW_CPU_WEIGHT` (1.0) have been
+//! removed. Cost computation now derives I/O and CPU weights from the fields
+//! of [`OperationCostFactors`], which are calibrated dynamically during
+//! `analyze()` based on collection statistics and histograms.
+//!
+//! Backward-compatible formulas (using `COMPAT_FILTER_IO`, `COMPAT_HNSW_IO`,
+//! etc.) ensure that **default factors produce identical costs** to the old
+//! hard-coded constants. When calibrated factors differ from defaults, costs
+//! scale proportionally via `(calibrated / default)` ratios.
 
 // Reason: usize/u64 → f64 for selectivity ratios and log2 inputs; these are
 // cardinalities where ±1 ULP has no operational impact on query planning.
 #![allow(clippy::cast_precision_loss)]
 
+use crate::collection::query_cost::cost_model::OperationCostFactors;
 use crate::collection::stats::next_after;
 use crate::collection::stats::CollectionStats;
 use crate::collection::stats::Histogram;
 use crate::velesql::ast::{CompareOp, Condition, Value};
 
-const FILTER_SCAN_IO_WEIGHT: f64 = 0.2;
-const FILTER_SCAN_CPU_WEIGHT: f64 = 0.8;
-const HNSW_IO_WEIGHT: f64 = 0.5;
-const HNSW_CPU_WEIGHT: f64 = 1.0;
+// ---------------------------------------------------------------------------
+// Backward-compatibility constants
+// ---------------------------------------------------------------------------
+// These reproduce the historical I/O and CPU ratios when factors == default.
+// The formulas multiply these by (factors.field / default.field) so that
+// calibrated factors scale the cost proportionally while default factors
+// yield the exact same costs as the old hard-coded constants.
+
+/// Historical I/O ratio for filter scan cost.
+const COMPAT_FILTER_IO: f64 = 0.2;
+/// Historical CPU ratio for filter scan cost.
+const COMPAT_FILTER_CPU: f64 = 0.8;
+/// Historical I/O ratio for HNSW search cost.
+const COMPAT_HNSW_IO: f64 = 0.5;
+/// Historical CPU ratio for HNSW search cost.
+const COMPAT_HNSW_CPU: f64 = 1.0;
 
 /// Composite cost estimate.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -37,10 +66,44 @@ impl Cost {
     }
 }
 
+/// Reference to cost factors — either calibrated from stats, or default.
+///
+/// Zero-allocation on cache-hit path: `Calibrated` borrows from
+/// `CollectionStats`, `Default` is a unit variant resolved inline.
+#[derive(Debug)]
+enum CostFactorsRef<'a> {
+    /// Calibrated factors stored in `CollectionStats` (zero-copy borrow).
+    Calibrated(&'a OperationCostFactors),
+    /// Default factors (no allocation needed).
+    Default,
+}
+
+impl CostFactorsRef<'_> {
+    /// Returns a reference to the effective factors.
+    ///
+    /// For `Calibrated`, returns the borrowed reference directly.
+    /// For `Default`, returns a reference to a lazily-initialized static default.
+    fn get(&self) -> &OperationCostFactors {
+        match self {
+            Self::Calibrated(f) => f,
+            Self::Default => {
+                use std::sync::LazyLock;
+                static DEFAULT_FACTORS: LazyLock<OperationCostFactors> =
+                    LazyLock::new(OperationCostFactors::default);
+                &DEFAULT_FACTORS
+            }
+        }
+    }
+}
+
 /// Cost estimator based on collection statistics.
+///
+/// Uses `OperationCostFactors` (calibrated or default) to compute I/O and
+/// CPU costs. Zero-allocation on cache-hit path via `CostFactorsRef`.
 #[derive(Debug)]
 pub struct CostEstimator<'a> {
     stats: &'a CollectionStats,
+    factors: CostFactorsRef<'a>,
 }
 
 /// Converts a VelesQL `Value` to `f64` for histogram lookup.
@@ -57,11 +120,34 @@ fn value_to_f64(value: &Value) -> Option<f64> {
     }
 }
 
+/// Lazily-initialized default factors for ratio computation.
+fn default_factors() -> &'static OperationCostFactors {
+    use std::sync::LazyLock;
+    static DEFAULT: LazyLock<OperationCostFactors> = LazyLock::new(OperationCostFactors::default);
+    &DEFAULT
+}
+
 impl<'a> CostEstimator<'a> {
     #[must_use]
-    /// Creates a new estimator backed by collection statistics.
-    pub const fn new(stats: &'a CollectionStats) -> Self {
-        Self { stats }
+    /// Creates a new estimator with calibrated factors from the collection (if available).
+    ///
+    /// If `stats.calibrated_cost_factors` is `Some`, uses the calibrated factors.
+    /// Otherwise, uses `OperationCostFactors::default()`.
+    pub fn new(stats: &'a CollectionStats) -> Self {
+        let factors = match &stats.calibrated_cost_factors {
+            Some(f) => CostFactorsRef::Calibrated(f),
+            None => CostFactorsRef::Default,
+        };
+        Self { stats, factors }
+    }
+
+    /// Creates an estimator with explicit factors (for tests or override).
+    #[must_use]
+    pub fn with_factors(stats: &'a CollectionStats, factors: &'a OperationCostFactors) -> Self {
+        Self {
+            stats,
+            factors: CostFactorsRef::Calibrated(factors),
+        }
     }
 
     /// Returns the histogram for a column, delegating to `CollectionStats`.
@@ -71,22 +157,49 @@ impl<'a> CostEstimator<'a> {
 
     #[must_use]
     /// Estimates filter cost using selectivity derived from stats.
+    ///
+    /// Uses backward-compatible formulas:
+    /// - `io_cost  = scan_rows * COMPAT_FILTER_IO  * (factors.seq_page_cost / default.seq_page_cost)`
+    /// - `cpu_cost = scan_rows * COMPAT_FILTER_CPU * (factors.cpu_tuple_cost / default.cpu_tuple_cost)`
+    ///
+    /// With default factors, this produces identical costs to the old constants.
     pub fn estimate_filter_cost(&self, filter: &Condition) -> Cost {
         let selectivity = self.estimate_condition_selectivity(filter).clamp(0.0, 1.0);
         let total = self.stats.total_points.max(self.stats.row_count) as f64;
         let scan_rows = (total * selectivity).max(1.0);
+
+        let f = self.factors.get();
+        let d = default_factors();
+        let io_ratio = f.seq_page_cost / d.seq_page_cost;
+        let cpu_ratio = f.cpu_tuple_cost / d.cpu_tuple_cost;
+
         Cost::new(
-            scan_rows * FILTER_SCAN_IO_WEIGHT,
-            scan_rows * FILTER_SCAN_CPU_WEIGHT,
+            scan_rows * COMPAT_FILTER_IO * io_ratio,
+            scan_rows * COMPAT_FILTER_CPU * cpu_ratio,
         )
     }
 
     #[must_use]
     /// Estimates HNSW search cost for top-k retrieval.
+    ///
+    /// Uses backward-compatible formulas:
+    /// - `io_cost  = probe * COMPAT_HNSW_IO  * (factors.random_page_cost / default.random_page_cost)`
+    /// - `cpu_cost = probe * COMPAT_HNSW_CPU * (factors.cpu_distance_cost / default.cpu_distance_cost)`
+    ///
+    /// With default factors, this produces identical costs to the old constants.
     pub fn estimate_hnsw_search_cost(&self, k: usize) -> Cost {
         let total = self.stats.total_points.max(self.stats.row_count).max(1) as f64;
         let probe = (k.max(1) as f64) * total.log2().max(1.0);
-        Cost::new(probe * HNSW_IO_WEIGHT, probe * HNSW_CPU_WEIGHT)
+
+        let f = self.factors.get();
+        let d = default_factors();
+        let io_ratio = f.random_page_cost / d.random_page_cost;
+        let cpu_ratio = f.cpu_distance_cost / d.cpu_distance_cost;
+
+        Cost::new(
+            probe * COMPAT_HNSW_IO * io_ratio,
+            probe * COMPAT_HNSW_CPU * cpu_ratio,
+        )
     }
 
     #[must_use]

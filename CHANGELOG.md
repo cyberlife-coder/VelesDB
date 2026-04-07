@@ -14,6 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_metadata_collection()`, or `get_any_collection()` instead.
 
 ### Added
+- **Cost model calibration from histograms (Issue #467)** —
+  `OperationCostFactors` are now calibrated dynamically during `analyze()` from
+  collection statistics and equi-depth histograms, replacing the former hard-coded
+  constants (`FILTER_SCAN_IO_WEIGHT=0.2`, `FILTER_SCAN_CPU_WEIGHT=0.8`,
+  `HNSW_IO_WEIGHT=0.5`, `HNSW_CPU_WEIGHT=1.0`). New public types/fields:
+  `CostFactorBounds` (safety bounds), `OperationCostFactors::hdd_optimized()`,
+  `OperationCostFactors::clamped()`, `OperationCostFactors::is_default()`,
+  `CollectionStats::calibrated_cost_factors`. CBO behavior change:
+  `QueryPlanner::choose_strategy_with_cbo()` now derives I/O/CPU weights from
+  calibrated factors instead of duplicating `0.2`/`0.8` literals. `ExplainOutput`
+  gains `cost_factors` and `calibration_source` fields for observability.
+  Backward compatible: default factors produce identical costs to the old
+  constants; older `collection.stats.json` files without `calibrated_cost_factors`
+  deserialize to `None` via `#[serde(default)]`.
 - **Histogram-based selectivity estimation — CBO foundation (Issue #468)** —
   Equi-depth histograms built during `ANALYZE` on Int, Float, and String columns
   (10K-row sample, 64 buckets default). `CostEstimator` now dispatches on all 6
