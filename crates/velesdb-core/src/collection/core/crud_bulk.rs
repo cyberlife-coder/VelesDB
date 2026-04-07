@@ -11,7 +11,7 @@ use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::hnsw::direct_writer::DirectVectorWriter;
 use crate::point::Point;
-use crate::storage::VectorStorage;
+use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 
 use std::collections::BTreeMap;
@@ -104,6 +104,12 @@ impl Collection {
             .as_ref()
             .expect("invariant: caller checked async_index_builder.is_some()");
 
+        // Collect pre-batch payloads before overwriting — used for histogram decrements.
+        let old_payloads = {
+            let storage = self.payload_storage.read();
+            Self::collect_old_payloads(points, &storage)
+        };
+
         // WAL + payload write (same durability guarantees as standard path).
         self.store_vectors_and_payloads_inner(vector_refs, points, fsync)?;
 
@@ -132,9 +138,10 @@ impl Collection {
         self.config.write().point_count = self.vector_storage.read().len();
         self.apply_sparse_batch_bulk(sparse_batch)?;
 
-        // Incremental histogram maintenance for bulk V2 path.
+        // Incremental histogram maintenance: decrement old values, increment new.
         let payloads: Vec<Option<serde_json::Value>> =
             points.iter().map(|p| p.payload.clone()).collect();
+        self.update_histograms_on_delete(&old_payloads);
         self.update_histograms_on_upsert(&payloads);
 
         self.invalidate_caches_and_bump_generation();
@@ -159,6 +166,12 @@ impl Collection {
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
         fsync: bool,
     ) -> Result<usize> {
+        // Collect pre-batch payloads before overwriting — used for histogram decrements.
+        let old_payloads = {
+            let storage = self.payload_storage.read();
+            Self::collect_old_payloads(points, &storage)
+        };
+
         self.store_vectors_and_payloads_inner(vector_refs, points, fsync)?;
 
         let inserted = self.bulk_index_or_defer(vector_refs.to_vec());
@@ -166,9 +179,10 @@ impl Collection {
 
         self.apply_sparse_batch_bulk(sparse_batch)?;
 
-        // Incremental histogram maintenance for bulk standard path.
+        // Incremental histogram maintenance: decrement old values, increment new.
         let payloads: Vec<Option<serde_json::Value>> =
             points.iter().map(|p| p.payload.clone()).collect();
+        self.update_histograms_on_delete(&old_payloads);
         self.update_histograms_on_upsert(&payloads);
 
         self.invalidate_caches_and_bump_generation();
@@ -245,6 +259,16 @@ impl Collection {
             .map(|(i, &id)| (id, &vectors[i * dimension..(i + 1) * dimension]))
             .collect();
 
+        // Collect pre-batch payloads BEFORE overwriting — for histogram decrements.
+        let old_payloads: Vec<Option<serde_json::Value>> = if payloads.is_some() {
+            let storage = self.payload_storage.read();
+            ids.iter()
+                .map(|&id| storage.retrieve(id).ok().flatten())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         // Payload entries for batch WAL write (only ids that have payloads).
         let payload_entries: Vec<(u64, &serde_json::Value)> = payloads
             .into_iter()
@@ -264,9 +288,10 @@ impl Collection {
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
 
-        // Incremental histogram maintenance for raw bulk path.
+        // Incremental histogram maintenance: decrement old values, increment new.
         if let Some(ps) = payloads {
             let owned: Vec<Option<serde_json::Value>> = ps.to_vec();
+            self.update_histograms_on_delete(&old_payloads);
             self.update_histograms_on_upsert(&owned);
         }
 

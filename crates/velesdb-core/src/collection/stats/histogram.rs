@@ -184,6 +184,7 @@ impl Histogram {
     pub fn increment_bucket(&mut self, value: f64) {
         if let Some(idx) = self.find_bucket(value) {
             self.buckets[idx].count += 1;
+            self.total_count += 1;
             self.incremental_updates += 1;
             self.check_staleness();
         }
@@ -197,6 +198,7 @@ impl Histogram {
     pub fn decrement_bucket(&mut self, value: f64) {
         if let Some(idx) = self.find_bucket(value) {
             self.buckets[idx].count = self.buckets[idx].count.saturating_sub(1);
+            self.total_count = self.total_count.saturating_sub(1);
             self.incremental_updates += 1;
             self.check_staleness();
         }

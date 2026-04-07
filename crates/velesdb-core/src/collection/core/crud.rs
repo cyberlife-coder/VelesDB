@@ -220,7 +220,7 @@ impl Collection {
     ///
     /// For intra-batch duplicates, only the first occurrence needs the pre-batch
     /// value; subsequent occurrences are handled by `seen_payloads` in Phase 2.
-    fn collect_old_payloads(
+    pub(crate) fn collect_old_payloads(
         points: &[Point],
         storage: &LogPayloadStorage,
     ) -> Vec<Option<serde_json::Value>> {
