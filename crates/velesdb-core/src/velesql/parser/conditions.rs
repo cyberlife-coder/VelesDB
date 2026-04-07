@@ -227,16 +227,7 @@ impl Parser {
     pub(crate) fn parse_match_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
-        let mut inner = pair.into_inner();
-        let column = Self::extract_leading_column(&mut inner)?;
-
-        let query = crate::velesql::parser::helpers::unescape_string_literal(
-            inner
-                .next()
-                .ok_or_else(|| ParseError::syntax(0, "", "Expected match query"))?
-                .as_str(),
-        );
-
+        let (column, query) = Self::parse_column_string_pair(pair, "Expected match query")?;
         Ok(Condition::Match(MatchCondition { column, query }))
     }
 
@@ -244,20 +235,27 @@ impl Parser {
     pub(crate) fn parse_contains_text_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
-        let mut inner = pair.into_inner();
-        let column = Self::extract_leading_column(&mut inner)?;
-
-        let query = crate::velesql::parser::helpers::unescape_string_literal(
-            inner
-                .next()
-                .ok_or_else(|| ParseError::syntax(0, "", "Expected CONTAINS_TEXT query"))?
-                .as_str(),
-        );
-
+        let (column, query) = Self::parse_column_string_pair(pair, "Expected CONTAINS_TEXT query")?;
         Ok(Condition::ContainsText(ContainsTextCondition {
             column,
             query,
         }))
+    }
+
+    /// Shared helper for `column KEYWORD 'string'` patterns (MATCH, CONTAINS_TEXT).
+    fn parse_column_string_pair(
+        pair: pest::iterators::Pair<Rule>,
+        error_msg: &str,
+    ) -> Result<(String, String), ParseError> {
+        let mut inner = pair.into_inner();
+        let column = Self::extract_leading_column(&mut inner)?;
+        let query = crate::velesql::parser::helpers::unescape_string_literal(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", error_msg))?
+                .as_str(),
+        );
+        Ok((column, query))
     }
 
     pub(crate) fn parse_graph_match_expr(
