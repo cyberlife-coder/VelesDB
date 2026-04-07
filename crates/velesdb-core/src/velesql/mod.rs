@@ -168,6 +168,7 @@ pub use ast::{
     // Values (used by cli, wasm)
     ContainsCondition,
     ContainsMode,
+    ContainsTextCondition,
     CorrelatedColumn,
     CreateCollectionKind,
     CreateCollectionStatement,

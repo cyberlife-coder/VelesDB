@@ -169,6 +169,8 @@ fn get_condition_source(
 
         Condition::Contains(cc) => classify_column(&cc.column, graph_vars, join_tables),
 
+        Condition::ContainsText(ct) => classify_column(&ct.column, graph_vars, join_tables),
+
         Condition::GeoDistance(gd) => classify_column(&gd.column, graph_vars, join_tables),
 
         Condition::GeoBbox(gb) => classify_column(&gb.column, graph_vars, join_tables),

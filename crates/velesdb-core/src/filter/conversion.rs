@@ -113,6 +113,10 @@ impl From<crate::velesql::Condition> for Condition {
                 field: m.column,
                 value: m.query,
             },
+            crate::velesql::Condition::ContainsText(ct) => Self::Contains {
+                field: ct.column,
+                value: ct.query,
+            },
             crate::velesql::Condition::Between(btw) => Self::And {
                 conditions: vec![
                     Self::Gte {

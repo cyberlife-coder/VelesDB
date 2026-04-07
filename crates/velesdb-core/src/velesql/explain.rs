@@ -495,6 +495,9 @@ impl QueryPlan {
             Condition::Match(m) => {
                 filter_conditions.push(format!("{} MATCH ?", m.column));
             }
+            Condition::ContainsText(ct) => {
+                filter_conditions.push(format!("{} CONTAINS_TEXT ?", ct.column));
+            }
             Condition::GraphMatch(_) => {
                 filter_conditions.push("MATCH (...)".to_string());
             }

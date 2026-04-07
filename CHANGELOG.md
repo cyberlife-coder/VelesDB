@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_metadata_collection()`, or `get_any_collection()` instead.
 
 ### Added
+- **Strict text filter `CONTAINS_TEXT` operator (Issue #446)** — New VelesQL operator
+  `column CONTAINS_TEXT 'keyword'` performs case-sensitive substring matching as a strict
+  metadata filter. Unlike `MATCH` (RRF boost), `CONTAINS_TEXT` guarantees every returned
+  result contains the specified substring. Maps to existing `filter::Condition::Contains`
+  at runtime — no new filter evaluation logic. Five touch points: grammar rule, AST variant
+  (`ContainsTextCondition`), parser function, filter conversion, and EXPLAIN formatting
+  (`column CONTAINS_TEXT ?`). Supports hybrid search (`vector NEAR $v AND content CONTAINS_TEXT 'keyword'`),
+  standalone metadata filtering, and combination with `MATCH` for boost + strict filter.
+  Case-insensitive keyword parsing. 10 BDD integration tests.
 - **EXPLAIN ANALYZE: ActualStats population during query execution (Issue #466)** —
   New `explain_analyze_query()` method on `Database` that executes a query with lightweight
   instrumentation and returns both the estimated plan and actual execution statistics

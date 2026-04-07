@@ -4,8 +4,9 @@ use super::helpers::compare_op_from_str;
 use super::{extract_identifier, Rule};
 use crate::metrics::global_guardrails_metrics;
 use crate::velesql::ast::{
-    BetweenCondition, Comparison, Condition, GeoBboxCondition, GeoDistanceCondition, InCondition,
-    IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition,
+    BetweenCondition, Comparison, Condition, ContainsTextCondition, GeoBboxCondition,
+    GeoDistanceCondition, InCondition, IsNullCondition, LikeCondition, MatchCondition,
+    SimilarityCondition,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -148,6 +149,7 @@ impl Parser {
             Rule::between_expr => Self::parse_between_expr(inner),
             Rule::like_expr => Self::parse_like_expr(inner),
             Rule::is_null_expr => Self::parse_is_null_expr(inner),
+            Rule::contains_text_expr => Self::parse_contains_text_expr(inner),
             Rule::contains_expr => Self::parse_contains_expr(inner),
             Rule::geo_distance_expr => Self::parse_geo_distance_expr(inner),
             Rule::geo_bbox_expr => Self::parse_geo_bbox_expr(inner),
@@ -225,17 +227,35 @@ impl Parser {
     pub(crate) fn parse_match_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
+        let (column, query) = Self::parse_column_string_pair(pair, "Expected match query")?;
+        Ok(Condition::Match(MatchCondition { column, query }))
+    }
+
+    /// Parses a `CONTAINS_TEXT` expression: `column CONTAINS_TEXT 'query'`
+    pub(crate) fn parse_contains_text_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let (column, query) = Self::parse_column_string_pair(pair, "Expected CONTAINS_TEXT query")?;
+        Ok(Condition::ContainsText(ContainsTextCondition {
+            column,
+            query,
+        }))
+    }
+
+    /// Shared helper for `column KEYWORD 'string'` patterns (MATCH, CONTAINS_TEXT).
+    fn parse_column_string_pair(
+        pair: pest::iterators::Pair<Rule>,
+        error_msg: &str,
+    ) -> Result<(String, String), ParseError> {
         let mut inner = pair.into_inner();
         let column = Self::extract_leading_column(&mut inner)?;
-
         let query = crate::velesql::parser::helpers::unescape_string_literal(
             inner
                 .next()
-                .ok_or_else(|| ParseError::syntax(0, "", "Expected match query"))?
+                .ok_or_else(|| ParseError::syntax(0, "", error_msg))?
                 .as_str(),
         );
-
-        Ok(Condition::Match(MatchCondition { column, query }))
+        Ok((column, query))
     }
 
     pub(crate) fn parse_graph_match_expr(

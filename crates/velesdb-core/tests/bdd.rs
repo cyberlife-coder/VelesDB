@@ -15,6 +15,8 @@ mod array_contains;
 mod bugfixes;
 #[path = "bdd/collection_type_migration.rs"]
 mod collection_type_migration;
+#[path = "bdd/contains_text_filter.rs"]
+mod contains_text_filter;
 #[path = "bdd/cross_collection.rs"]
 mod cross_collection;
 #[path = "bdd/cross_collection_join_optimization.rs"]
