@@ -50,10 +50,9 @@ impl ScrollIterator {
             return Ok(None);
         }
 
+        // next_cursor is always Some(id) for non-empty batches (points.last().map(|p| p.id)).
+        // Exhaustion is handled via the empty-batch early return above.
         self.cursor = batch.next_cursor;
-        if batch.next_cursor.is_none() {
-            self.exhausted = true;
-        }
 
         let dicts: Vec<PyObject> = batch.points.iter().map(|p| point_to_dict(py, p)).collect();
         let py_list = pyo3::types::PyList::new(py, &dicts)?;

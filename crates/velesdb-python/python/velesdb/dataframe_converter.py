@@ -127,8 +127,8 @@ def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
         payload = p.get("payload")
         if isinstance(payload, dict):
             row.update(payload)
-        else:
-            row["payload"] = payload
+        # Non-dict payloads (None, scalar) are omitted so all rows share
+        # the same schema — missing keys become NaN/null in pandas/polars.
         row["id"] = p.get("id")
         row["vector"] = list(p.get("vector", []))
         rows.append(row)

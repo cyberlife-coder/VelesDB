@@ -95,7 +95,8 @@ impl Collection {
         points
     }
 
-    /// Builds a `Point` from storage, returning `None` if the point is missing.
+    /// Builds a `Point` from storage. Always returns `Some`; points without a
+    /// stored vector get an empty vector slice.
     fn build_point(
         id: u64,
         is_metadata_only: bool,
