@@ -406,8 +406,8 @@ fn strip_alias_owned(column: &str, bindings: Option<&HashMap<String, u64>>) -> S
 
 /// Extracts the column name from a metadata condition variant.
 ///
-/// Returns `Some(&str)` for condition types that carry a `column` field
-/// (In, Between, Like, IsNull, Match). Non-metadata variants return `None`.
+/// Returns `Some(&str)` for condition types that carry a `column` field.
+/// Non-metadata variants return `None`.
 fn column_of_metadata_condition(condition: &crate::velesql::Condition) -> Option<&str> {
     use crate::velesql::Condition;
     match condition {
@@ -416,6 +416,10 @@ fn column_of_metadata_condition(condition: &crate::velesql::Condition) -> Option
         Condition::Like(lk) => Some(&lk.column),
         Condition::IsNull(isn) => Some(&isn.column),
         Condition::Match(m) => Some(&m.column),
+        Condition::ContainsText(ct) => Some(&ct.column),
+        Condition::Contains(c) => Some(&c.column),
+        Condition::GeoDistance(gd) => Some(&gd.column),
+        Condition::GeoBbox(gb) => Some(&gb.column),
         _ => None,
     }
 }
@@ -452,6 +456,22 @@ fn rewrite_condition_aliases(
         Condition::Match(mut m) => {
             m.column = strip_alias_owned(&m.column, bindings);
             Condition::Match(m)
+        }
+        Condition::ContainsText(mut ct) => {
+            ct.column = strip_alias_owned(&ct.column, bindings);
+            Condition::ContainsText(ct)
+        }
+        Condition::Contains(mut c) => {
+            c.column = strip_alias_owned(&c.column, bindings);
+            Condition::Contains(c)
+        }
+        Condition::GeoDistance(mut gd) => {
+            gd.column = strip_alias_owned(&gd.column, bindings);
+            Condition::GeoDistance(gd)
+        }
+        Condition::GeoBbox(mut gb) => {
+            gb.column = strip_alias_owned(&gb.column, bindings);
+            Condition::GeoBbox(gb)
         }
         // Non-metadata conditions pass through unchanged.
         other => other,
