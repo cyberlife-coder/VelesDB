@@ -333,6 +333,10 @@ pub struct NodeStatsResponse {
     pub actual_rows_out: u64,
     /// Number of loop iterations (1 for non-looping nodes).
     pub loops: u64,
+    /// When `true`, time and row counts are heuristic estimates, not real
+    /// per-node measurements. Will become `false` once instrumented timing
+    /// lands (#467).
+    pub estimated: bool,
 }
 
 #[cfg(feature = "persistence")]
@@ -344,6 +348,7 @@ impl From<&crate::velesql::NodeStats> for NodeStatsResponse {
             actual_rows_in: ns.actual_rows_in,
             actual_rows_out: ns.actual_rows_out,
             loops: ns.loops,
+            estimated: ns.estimated,
         }
     }
 }

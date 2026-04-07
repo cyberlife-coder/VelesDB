@@ -101,12 +101,14 @@ fn print_node_stats(output: &velesdb_core::velesql::ExplainOutput) {
     }
     println!("{}", "Per-Node Statistics:".bold().underline());
     for ns in &output.node_stats {
+        let suffix = if ns.estimated { " (estimated)" } else { "" };
         println!(
-            "  {}  {:.3}ms (rows: {} \u{2192} {})",
+            "  {}  {:.3}ms (rows: {} \u{2192} {}){}",
             format!("{}:", ns.node_label).cyan(),
             ns.actual_time_ms,
             ns.actual_rows_in,
             ns.actual_rows_out,
+            suffix,
         );
     }
     println!();

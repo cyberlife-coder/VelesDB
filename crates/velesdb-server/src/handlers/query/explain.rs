@@ -26,6 +26,7 @@ use velesdb_core::Error as CoreError;
     responses(
         (status = 200, description = "Query plan", body = ExplainResponse),
         (status = 400, description = "Query syntax error", body = crate::types::QueryErrorResponse),
+        (status = 422, description = "Query validation/execution error", body = crate::types::VelesqlErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]

@@ -138,6 +138,7 @@ pub(crate) fn build_explain_analyze_dict(
             let _ = d.set_item(PyString::intern(py, "actual_rows_in"), ns.actual_rows_in);
             let _ = d.set_item(PyString::intern(py, "actual_rows_out"), ns.actual_rows_out);
             let _ = d.set_item(PyString::intern(py, "loops"), ns.loops);
+            let _ = d.set_item(PyString::intern(py, "estimated"), ns.estimated);
             d.into_any().unbind()
         })
         .collect();

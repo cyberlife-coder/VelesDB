@@ -233,6 +233,11 @@ pub struct NodeStats {
     pub actual_rows_out: u64,
     /// Number of loop iterations (1 for non-looping nodes).
     pub loops: u64,
+    /// When `true`, `actual_time_ms`, `actual_rows_in` and `actual_rows_out`
+    /// are heuristic estimates derived from fixed proportions, not real
+    /// per-node measurements. Will become `false` once instrumented timing
+    /// lands (#467–#469).
+    pub estimated: bool,
 }
 
 /// Type of index used in the query.
@@ -710,6 +715,7 @@ fn collect_leaf_stats(
             actual_rows_in: actual_rows,
             actual_rows_out: actual_rows,
             loops: 1,
+            estimated: true,
         });
     }
 }
