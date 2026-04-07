@@ -29,6 +29,8 @@ import type {
   CollectionStatsResponse,
   CollectionConfigResponse,
   AgentMemoryConfig,
+  ScrollRequest,
+  ScrollResponse,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -442,13 +444,14 @@ export class VelesDB {
    *
    * @param queryString - VelesQL query string to explain
    * @param params - Optional query parameters (vectors, scalars)
+   * @param options - Optional options (e.g., `{ analyze: true }` for EXPLAIN ANALYZE)
    * @returns Explain response with the query execution plan
    */
-  async queryExplain(queryString: string, params?: Record<string, unknown>): Promise<ExplainResponse> {
+  async queryExplain(queryString: string, params?: Record<string, unknown>, options?: { analyze?: boolean }): Promise<ExplainResponse> {
     this.ensureInitialized();
     requireNonEmptyString(queryString, 'Query string');
 
-    return this.backend.queryExplain(queryString, params);
+    return this.backend.queryExplain(queryString, params, options);
   }
 
   async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
@@ -456,6 +459,27 @@ export class VelesDB {
     requireNonEmptyString(collection, 'Collection name');
 
     return this.backend.collectionSanity(collection);
+  }
+
+  /**
+   * Scroll through collection points with cursor-based pagination
+   *
+   * @param collection - Collection name
+   * @param request - Optional scroll parameters (cursor, batchSize, filter)
+   * @returns Scroll response with points and next cursor
+   * @throws {ValidationError} If collection name is empty or batchSize is out of range [1, 10000]
+   */
+  async scroll(collection: string, request?: ScrollRequest): Promise<ScrollResponse> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection name');
+
+    if (request?.batchSize !== undefined) {
+      if (request.batchSize < 1 || request.batchSize > 10000) {
+        throw new ValidationError('batchSize must be between 1 and 10000');
+      }
+    }
+
+    return this.backend.scroll(collection, request);
   }
 
   /**

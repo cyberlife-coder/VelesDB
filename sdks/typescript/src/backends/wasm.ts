@@ -32,6 +32,8 @@ import type {
   SemanticEntry,
   EpisodicEvent,
   ProceduralPattern,
+  ScrollRequest,
+  ScrollResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 import type { SparseVector } from '../types';
@@ -565,14 +567,22 @@ export class WasmBackend implements IVelesDBBackend {
   }
 
 
-  async queryExplain(_queryString: string, _params?: Record<string, unknown>): Promise<ExplainResponse> {
+  async queryExplain(_queryString: string, _params?: Record<string, unknown>, _options?: { analyze?: boolean }): Promise<ExplainResponse> {
     this.ensureInitialized();
+    if (_options?.analyze) {
+      wasmNotSupported('EXPLAIN ANALYZE');
+    }
     wasmNotSupported('Query explain');
   }
 
   async collectionSanity(_collection: string): Promise<CollectionSanityResponse> {
     this.ensureInitialized();
     wasmNotSupported('Collection sanity endpoint');
+  }
+
+  async scroll(_collection: string, _request?: ScrollRequest): Promise<ScrollResponse> {
+    this.ensureInitialized();
+    wasmNotSupported('scroll');
   }
 
   async isEmpty(collectionName: string): Promise<boolean> {
