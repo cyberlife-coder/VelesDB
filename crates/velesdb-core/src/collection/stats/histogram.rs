@@ -108,31 +108,13 @@ impl Histogram {
         if self.buckets.is_empty() || self.total_count == 0 {
             return 0.0;
         }
-        let first = &self.buckets[0];
-        if value <= first.lower_bound {
+        if value <= self.buckets[0].lower_bound {
             return 0.0;
         }
-        let last = &self.buckets[self.buckets.len() - 1];
-        if value >= last.upper_bound {
+        if value >= self.buckets[self.buckets.len() - 1].upper_bound {
             return 1.0;
         }
-        let mut count_below: f64 = 0.0;
-        for bucket in &self.buckets {
-            if bucket.upper_bound <= value {
-                // Entire bucket is below value
-                count_below += bucket.count as f64;
-            } else if bucket.lower_bound < value {
-                // Partial bucket: linear interpolation
-                let width = bucket.upper_bound - bucket.lower_bound;
-                if width > 0.0 {
-                    let fraction = (value - bucket.lower_bound) / width;
-                    count_below += bucket.count as f64 * fraction;
-                }
-                break;
-            } else {
-                break;
-            }
-        }
+        let count_below = accumulate_lt_count(&self.buckets, value);
         (count_below / self.total_count as f64).clamp(0.0, 1.0)
     }
 
@@ -144,32 +126,33 @@ impl Histogram {
     /// Result is clamped to `[0.0, 1.0]`.
     #[must_use]
     pub fn estimate_range_selectivity(&self, low: f64, high: f64) -> f64 {
-        if low > high || self.buckets.is_empty() || self.total_count == 0 {
-            return 0.0;
-        }
-        let last = &self.buckets[self.buckets.len() - 1];
-        if low >= last.upper_bound || high <= self.buckets[0].lower_bound {
-            return 0.0;
-        }
-        if low <= self.buckets[0].lower_bound && high >= last.upper_bound {
-            return 1.0;
+        if let Some(shortcut) = self.range_selectivity_shortcut(low, high) {
+            return shortcut;
         }
         let mut count_in_range: f64 = 0.0;
         for bucket in &self.buckets {
-            if bucket.upper_bound <= low || bucket.lower_bound >= high {
-                continue;
+            if let Some(fraction) = bucket_range_fraction(bucket, low, high) {
+                count_in_range += bucket.count as f64 * fraction;
             }
-            let width = bucket.upper_bound - bucket.lower_bound;
-            if width <= 0.0 {
-                continue;
-            }
-            // Clamp the effective range to this bucket
-            let eff_low = low.max(bucket.lower_bound);
-            let eff_high = high.min(bucket.upper_bound);
-            let fraction = (eff_high - eff_low) / width;
-            count_in_range += bucket.count as f64 * fraction;
         }
         (count_in_range / self.total_count as f64).clamp(0.0, 1.0)
+    }
+
+    /// Returns a short-circuit selectivity if the range can be resolved without
+    /// iterating buckets (empty histogram, out-of-bounds, or full coverage).
+    fn range_selectivity_shortcut(&self, low: f64, high: f64) -> Option<f64> {
+        if low > high || self.buckets.is_empty() || self.total_count == 0 {
+            return Some(0.0);
+        }
+        let first_lower = self.buckets[0].lower_bound;
+        let last_upper = self.buckets[self.buckets.len() - 1].upper_bound;
+        if low >= last_upper || high <= first_lower {
+            return Some(0.0);
+        }
+        if low <= first_lower && high >= last_upper {
+            return Some(1.0);
+        }
+        None
     }
 
     /// Increments the count of the bucket containing `value`.
@@ -205,6 +188,47 @@ impl Histogram {
             self.stale = true;
         }
     }
+}
+
+/// Accumulates the count of rows below `value` across sorted buckets.
+///
+/// For each bucket: if entirely below `value`, adds its full count;
+/// if partially overlapping, adds a linearly interpolated fraction;
+/// stops at the first bucket beyond `value`.
+fn accumulate_lt_count(buckets: &[HistogramBucket], value: f64) -> f64 {
+    let mut count_below: f64 = 0.0;
+    for bucket in buckets {
+        if bucket.upper_bound <= value {
+            count_below += bucket.count as f64;
+        } else if bucket.lower_bound < value {
+            let width = bucket.upper_bound - bucket.lower_bound;
+            if width > 0.0 {
+                count_below += bucket.count as f64 * ((value - bucket.lower_bound) / width);
+            }
+            break;
+        } else {
+            break;
+        }
+    }
+    count_below
+}
+
+/// Returns the fraction of `bucket` that overlaps the range `[low, high]`.
+///
+/// Returns `None` if the bucket is entirely outside the range or has zero width.
+/// Otherwise returns `Some((eff_high - eff_low) / width)` where the effective
+/// bounds are clamped to the bucket boundaries.
+fn bucket_range_fraction(bucket: &HistogramBucket, low: f64, high: f64) -> Option<f64> {
+    if bucket.upper_bound <= low || bucket.lower_bound >= high {
+        return None;
+    }
+    let width = bucket.upper_bound - bucket.lower_bound;
+    if width <= 0.0 {
+        return None;
+    }
+    let eff_low = low.max(bucket.lower_bound);
+    let eff_high = high.min(bucket.upper_bound);
+    Some((eff_high - eff_low) / width)
 }
 
 /// Default number of histogram buckets.
