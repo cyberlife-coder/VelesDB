@@ -101,18 +101,19 @@ impl Histogram {
     /// Result is clamped to `[0.0, 1.0]`.
     #[must_use]
     pub fn estimate_eq_selectivity(&self, value: f64) -> f64 {
-        if self.total_count == 0 {
+        let total = self.bucket_sum();
+        if total == 0 {
             return 0.0;
         }
         let sel = if let Some(idx) = self.find_bucket(value) {
             let bucket = &self.buckets[idx];
             if bucket.distinct_count > 0 {
-                bucket.count as f64 / (bucket.distinct_count as f64 * self.total_count as f64)
+                bucket.count as f64 / (bucket.distinct_count as f64 * total as f64)
             } else {
-                1.0 / self.total_count.max(1) as f64
+                1.0 / total.max(1) as f64
             }
         } else {
-            1.0 / self.total_count.max(1) as f64
+            1.0 / total.max(1) as f64
         };
         sel.clamp(0.0, 1.0)
     }
@@ -125,7 +126,8 @@ impl Histogram {
     /// bucket upper bound. Result is clamped to `[0.0, 1.0]`.
     #[must_use]
     pub fn estimate_lt_selectivity(&self, value: f64) -> f64 {
-        if self.buckets.is_empty() || self.total_count == 0 {
+        let total = self.bucket_sum();
+        if self.buckets.is_empty() || total == 0 {
             return 0.0;
         }
         if value <= self.buckets[0].lower_bound {
@@ -135,7 +137,7 @@ impl Histogram {
             return 1.0;
         }
         let count_below = accumulate_lt_count(&self.buckets, value);
-        (count_below / self.total_count as f64).clamp(0.0, 1.0)
+        (count_below / total as f64).clamp(0.0, 1.0)
     }
 
     /// Estimates range selectivity for `[low, high]`.
@@ -149,19 +151,20 @@ impl Histogram {
         if let Some(shortcut) = self.range_selectivity_shortcut(low, high) {
             return shortcut;
         }
+        let total = self.bucket_sum();
         let mut count_in_range: f64 = 0.0;
         for bucket in &self.buckets {
             if let Some(fraction) = bucket_range_fraction(bucket, low, high) {
                 count_in_range += bucket.count as f64 * fraction;
             }
         }
-        (count_in_range / self.total_count as f64).clamp(0.0, 1.0)
+        (count_in_range / total as f64).clamp(0.0, 1.0)
     }
 
     /// Returns a short-circuit selectivity if the range can be resolved without
     /// iterating buckets (empty histogram, out-of-bounds, or full coverage).
     fn range_selectivity_shortcut(&self, low: f64, high: f64) -> Option<f64> {
-        if low > high || self.buckets.is_empty() || self.total_count == 0 {
+        if low > high || self.buckets.is_empty() || self.bucket_sum() == 0 {
             return Some(0.0);
         }
         let first_lower = self.buckets[0].lower_bound;
@@ -184,7 +187,6 @@ impl Histogram {
     pub fn increment_bucket(&mut self, value: f64) {
         if let Some(idx) = self.find_bucket(value) {
             self.buckets[idx].count += 1;
-            self.total_count += 1;
             self.incremental_updates += 1;
             self.check_staleness();
         }
@@ -198,10 +200,18 @@ impl Histogram {
     pub fn decrement_bucket(&mut self, value: f64) {
         if let Some(idx) = self.find_bucket(value) {
             self.buckets[idx].count = self.buckets[idx].count.saturating_sub(1);
-            self.total_count = self.total_count.saturating_sub(1);
             self.incremental_updates += 1;
             self.check_staleness();
         }
+    }
+
+    /// Returns the sum of all bucket counts — the effective total for selectivity.
+    ///
+    /// `total_count` captures the ANALYZE-time snapshot and is used only for
+    /// staleness detection. After incremental updates the actual denominator
+    /// is the live sum of bucket counts, keeping estimates accurate.
+    fn bucket_sum(&self) -> u64 {
+        self.buckets.iter().map(|b| b.count).sum()
     }
 
     /// Checks if incremental updates exceed the 20% staleness threshold.
