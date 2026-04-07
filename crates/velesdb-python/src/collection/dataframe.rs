@@ -76,14 +76,31 @@ impl Collection {
         let points_list = converter.call_method1("dataframe_to_points", (&df,))?;
         let points: Vec<std::collections::HashMap<String, PyObject>> = points_list.extract()?;
 
-        // Delegate to existing upsert path
-        let parsed = crate::collection_helpers::parse_point_dicts(py, &points)?;
-        let count = parsed.len();
+        // Delegate to the appropriate upsert path based on collection type.
+        // parse_point_dicts requires a vector field, so metadata-only collections
+        // must use a separate path that constructs Point::metadata_only(id, payload).
         if metadata_only {
-            self.inner.upsert_metadata(parsed).map_err(core_err)?;
+            let mut core_points = Vec::with_capacity(points.len());
+            for (index, point_dict) in points.iter().enumerate() {
+                let id = crate::collection_helpers::extract_point_id(py, point_dict, index)?;
+                let payload =
+                    crate::collection_helpers::parse_payload(py, point_dict.get("payload"))?
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyValueError::new_err(format!(
+                                "Point at index {index} must have 'payload' field \
+                                 (metadata-only collection)"
+                            ))
+                        })?;
+                core_points.push(velesdb_core::Point::metadata_only(id, payload));
+            }
+            let count = core_points.len();
+            py.allow_threads(|| self.inner.upsert_metadata(core_points).map_err(core_err))?;
+            Ok(count)
         } else {
+            let parsed = crate::collection_helpers::parse_point_dicts(py, &points)?;
+            let count = parsed.len();
             self.inner.upsert(parsed).map_err(core_err)?;
+            Ok(count)
         }
-        Ok(count)
     }
 }
