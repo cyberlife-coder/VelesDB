@@ -321,7 +321,7 @@ impl From<&crate::velesql::ActualStats> for ActualStatsResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct NodeStatsResponse {
-    /// Node label (e.g. "VectorSearch", "Filter", "Limit").
+    /// Node label (e.g. `VectorSearch`, `Filter`, `Limit`).
     pub node_label: String,
     /// Heuristic estimate of wall-clock time for this node in milliseconds.
     /// Derived from total execution time using fixed fractions, not real

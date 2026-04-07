@@ -21,6 +21,8 @@ from langchain_velesdb.security import (
     validate_batch_size,
     validate_sparse_vector,
     validate_query,
+    validate_collection_name,
+    validate_column_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -400,6 +402,8 @@ class SearchOpsMixin:
         if self._collection is None:
             raise ValueError("Collection not initialized. Add documents first.")
 
+        validate_collection_name(collection)
+        validate_column_name(column)
         keyword_escaped = keyword.replace("'", "''")
         query_str = (
             f"SELECT * FROM {collection} "

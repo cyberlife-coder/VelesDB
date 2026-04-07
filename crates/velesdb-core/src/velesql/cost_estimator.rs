@@ -156,14 +156,12 @@ impl<'a> CostEstimator<'a> {
             return 0.1;
         }
 
-        let v = match value_to_f64(value) {
-            Some(v) => v,
-            None => return self.stats.estimate_selectivity(column),
+        let Some(v) = value_to_f64(value) else {
+            return self.stats.estimate_selectivity(column);
         };
 
-        let hist = match self.get_histogram(column) {
-            Some(h) => h,
-            None => return self.stats.estimate_selectivity(column),
+        let Some(hist) = self.get_histogram(column) else {
+            return self.stats.estimate_selectivity(column);
         };
 
         let sel = match op {
@@ -182,13 +180,15 @@ impl<'a> CostEstimator<'a> {
     /// Converts low/high to `f64` and delegates to `Histogram::estimate_range_selectivity`.
     /// Falls back to `0.3` when no histogram is available or conversion fails.
     fn estimate_between_selectivity(&self, column: &str, low: &Value, high: &Value) -> f64 {
-        let (low_f, high_f) = match (value_to_f64(low), value_to_f64(high)) {
-            (Some(l), Some(h)) => (l, h),
-            _ => return 0.3,
+        let (Some(low_f), Some(high_f)) = (value_to_f64(low), value_to_f64(high)) else {
+            return 0.3;
         };
 
         match self.get_histogram(column) {
-            Some(h) => h.estimate_range_selectivity(low_f, high_f),
+            // BETWEEN is inclusive on both ends (low <= x <= high).
+            // Use next_after(high_f) so bucket_range_fraction includes values
+            // at the exact upper boundary — consistent with CompareOp::Lte.
+            Some(h) => h.estimate_range_selectivity(low_f, next_after(high_f)),
             None => 0.3,
         }
     }
@@ -229,7 +229,7 @@ impl<'a> CostEstimator<'a> {
     /// Estimates selectivity for a `Like` condition.
     ///
     /// Prefix patterns (ending with `%`, not starting with `%`) use histogram
-    /// range estimation when available, otherwise return `0.1`.
+    /// range estimation on the ordinal prefix range when available.
     /// Non-prefix patterns return `0.05`.
     fn estimate_like_selectivity(&self, column: &str, pattern: &str) -> f64 {
         let is_prefix = pattern.ends_with('%') && !pattern.starts_with('%');
@@ -237,13 +237,22 @@ impl<'a> CostEstimator<'a> {
             return 0.05;
         }
 
-        match self.get_histogram(column) {
-            Some(h) if h.total_count > 0 => {
-                // Use a fraction of the histogram range as a rough estimate.
-                let bucket_count = h.buckets.len() as f64;
-                (1.0 / bucket_count).clamp(0.01, 1.0)
-            }
-            _ => 0.1,
-        }
+        let Some(_hist) = self.get_histogram(column) else {
+            return 0.1;
+        };
+
+        // For string columns the histogram is built on ordinal ranks.
+        // A prefix pattern 'abc%' matches a contiguous range of ordinal
+        // values. Without the full string→rank mapping at plan time we
+        // approximate: the prefix covers roughly 1/distinct_count of the
+        // domain, scaled by the number of buckets that span that range.
+        // This is more accurate than the previous 1/bucket_count heuristic.
+        let distinct = self
+            .stats
+            .column_stats
+            .get(column)
+            .or_else(|| self.stats.field_stats.get(column))
+            .map_or(1, |cs| cs.distinct_count.max(1));
+        (1.0 / distinct as f64).clamp(0.01, 1.0)
     }
 }

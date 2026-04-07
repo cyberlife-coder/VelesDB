@@ -31,10 +31,37 @@ impl Collection {
         self.update_histograms_for_payloads(payloads, false);
     }
 
+    /// Decrements old payload histograms and increments new ones in a single
+    /// read → modify → write cycle. Used by bulk upsert paths where points
+    /// replace existing data (old values must be decremented, new values
+    /// incremented). Avoids the 2× I/O of calling delete + upsert separately.
+    pub(super) fn update_histograms_replace(
+        &self,
+        old_payloads: &[Option<serde_json::Value>],
+        new_payloads: &[Option<serde_json::Value>],
+    ) {
+        let stats_path = self.path.join("collection.stats.json");
+        let _guard = self.stats_io_mutex.lock();
+
+        let Some(mut stats) = Self::read_persisted_stats(&stats_path) else {
+            return;
+        };
+        if !Self::has_any_histogram(&stats) {
+            return;
+        }
+
+        let mut modified = Self::apply_histogram_updates(&mut stats, old_payloads, false);
+        modified |= Self::apply_histogram_updates(&mut stats, new_payloads, true);
+
+        if modified {
+            Self::write_persisted_stats(&stats_path, &stats);
+        }
+    }
+
     /// Core histogram update logic shared by upsert and delete paths.
     ///
-    /// Reads persisted stats from disk, updates histogram bucket counts for
-    /// each column/value pair, logs staleness warnings, and writes back.
+    /// Acquires `stats_io_mutex` to serialise the read → modify → write cycle,
+    /// preventing two concurrent upserts from overwriting each other's changes.
     /// No-op when the stats file does not exist or contains no histograms.
     fn update_histograms_for_payloads(
         &self,
@@ -42,9 +69,12 @@ impl Collection {
         increment: bool,
     ) {
         let stats_path = self.path.join("collection.stats.json");
-        let mut stats = match Self::read_persisted_stats(&stats_path) {
-            Some(s) => s,
-            None => return,
+
+        // LOCK ORDER: stats_io_mutex (12) — no other lock held.
+        let _guard = self.stats_io_mutex.lock();
+
+        let Some(mut stats) = Self::read_persisted_stats(&stats_path) else {
+            return;
         };
 
         if !Self::has_any_histogram(&stats) {
@@ -115,9 +145,8 @@ impl Collection {
         value: f64,
         increment: bool,
     ) -> bool {
-        let col_stats = match map.get_mut(column) {
-            Some(cs) => cs,
-            None => return false,
+        let Some(col_stats) = map.get_mut(column) else {
+            return false;
         };
         let histogram = match col_stats.histogram.as_mut() {
             Some(h) if !h.buckets.is_empty() => h,
@@ -140,14 +169,29 @@ impl Collection {
         true
     }
 
-    /// Writes `CollectionStats` back to disk. Logs a warning on failure.
+    /// Writes `CollectionStats` back to disk atomically.
+    ///
+    /// Serialises to a temporary file in the same directory, then renames over
+    /// the target path. On most file-systems `rename` is atomic, so a crash
+    /// mid-write cannot leave a corrupted JSON file. If the rename fails the
+    /// temporary file is cleaned up on a best-effort basis.
     fn write_persisted_stats(stats_path: &std::path::Path, stats: &CollectionStats) {
         let Ok(serialized) = serde_json::to_vec_pretty(stats) else {
             tracing::warn!("Failed to serialize stats for histogram update");
             return;
         };
-        if let Err(e) = std::fs::write(stats_path, serialized) {
-            tracing::warn!("Failed to write updated stats: {}", e);
+
+        let tmp_path = stats_path.with_file_name(".stats.json.tmp");
+
+        if let Err(e) = std::fs::write(&tmp_path, serialized) {
+            tracing::warn!("Failed to write temp stats file: {e}");
+            return;
+        }
+
+        if let Err(e) = std::fs::rename(&tmp_path, stats_path) {
+            tracing::warn!("Failed to rename temp stats file: {e}");
+            // Best-effort cleanup of the orphaned temp file.
+            let _ = std::fs::remove_file(&tmp_path);
         }
     }
 }

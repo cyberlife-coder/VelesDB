@@ -24,6 +24,8 @@ from llamaindex_velesdb.security import (
     validate_weight,
     validate_sparse_vector,
     validate_query,
+    validate_collection_name,
+    validate_column_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -316,6 +318,8 @@ class SearchOpsMixin:
         if self._collection is None:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
 
+        validate_collection_name(collection)
+        validate_column_name(column)
         keyword_escaped = keyword.replace("'", "''")
         query_str = (
             f"SELECT * FROM {collection} "

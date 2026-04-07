@@ -141,8 +141,7 @@ impl Collection {
         // Incremental histogram maintenance: decrement old values, increment new.
         let payloads: Vec<Option<serde_json::Value>> =
             points.iter().map(|p| p.payload.clone()).collect();
-        self.update_histograms_on_delete(&old_payloads);
-        self.update_histograms_on_upsert(&payloads);
+        self.update_histograms_replace(&old_payloads, &payloads);
 
         self.invalidate_caches_and_bump_generation();
 
@@ -182,8 +181,7 @@ impl Collection {
         // Incremental histogram maintenance: decrement old values, increment new.
         let payloads: Vec<Option<serde_json::Value>> =
             points.iter().map(|p| p.payload.clone()).collect();
-        self.update_histograms_on_delete(&old_payloads);
-        self.update_histograms_on_upsert(&payloads);
+        self.update_histograms_replace(&old_payloads, &payloads);
 
         self.invalidate_caches_and_bump_generation();
 
@@ -291,8 +289,7 @@ impl Collection {
         // Incremental histogram maintenance: decrement old values, increment new.
         if let Some(ps) = payloads {
             let owned: Vec<Option<serde_json::Value>> = ps.to_vec();
-            self.update_histograms_on_delete(&old_payloads);
-            self.update_histograms_on_upsert(&owned);
+            self.update_histograms_replace(&old_payloads, &owned);
         }
 
         self.invalidate_caches_and_bump_generation();

@@ -225,6 +225,7 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 //   9. sparse_indexes
 //  10. delta_buffer
 //  11. deferred_indexer / async_index_builder (internal locks)
+//  12. stats_io_mutex                         (disk I/O only, no other lock held)
 
 /// A collection of vectors with associated metadata.
 ///
@@ -305,6 +306,13 @@ pub(crate) struct Collection {
 
     /// Cached CBO statistics with TTL (avoids O(n) scan per query).
     pub(crate) cached_stats: Arc<Mutex<Option<(CollectionStats, std::time::Instant)>>>,
+
+    /// Guards read → modify → write cycles on `collection.stats.json`.
+    ///
+    /// Lock order position: **12** (after `deferred_indexer`/`async_index_builder`
+    /// at 11). Protects only disk I/O — no other lock is held while this one is
+    /// held, so it cannot participate in a deadlock chain.
+    pub(super) stats_io_mutex: Arc<Mutex<()>>,
 
     /// Monotonic write generation counter (CACHE-01).
     ///
