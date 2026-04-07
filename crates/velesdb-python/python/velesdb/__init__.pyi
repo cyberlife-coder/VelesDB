@@ -396,6 +396,31 @@ class Collection:
         """Return execution plan for a VelesQL query."""
         ...
 
+    def explain_analyze(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Execute a query with instrumentation and return plan with actual stats.
+
+        Args:
+            query_str: VelesQL query string.
+            params: Optional query parameters.
+
+        Returns:
+            Dict with keys:
+                - ``plan`` (dict): The execution plan.
+                - ``actual_stats`` (dict or None): Execution statistics with
+                  ``actual_rows``, ``actual_time_ms``, ``loops``,
+                  ``nodes_visited``, ``edges_traversed``.
+                - ``node_stats`` (list[dict] or None): Per-node statistics
+                  with ``node_label``, ``actual_time_ms``, ``actual_rows``.
+
+        Raises:
+            RuntimeError: If the query is invalid or execution fails.
+        """
+        ...
+
     # --- Scroll cursor (issue #429) ---
 
     @overload
@@ -685,7 +710,17 @@ class Database:
             name: Collection name to analyze
 
         Returns:
-            Dict with statistics (total_points, row_count, deleted_count, etc.)
+            Dict with keys:
+                - ``total_points`` (int): Total number of points including deleted.
+                - ``row_count`` (int): Number of active (non-deleted) rows.
+                - ``deleted_count`` (int): Number of soft-deleted points.
+                - ``avg_row_size_bytes`` (int): Average row size in bytes.
+                - ``payload_size_bytes`` (int): Total payload storage size.
+                - ``column_stats`` (dict): Mapping of column names to per-column
+                  stat dicts. Each per-column dict may include:
+                  ``histogram_buckets`` (int or None) — number of histogram
+                  buckets if a histogram was built, and ``histogram_stale``
+                  (bool or None) — whether the histogram is stale.
 
         Raises:
             RuntimeError: If the collection does not exist or analysis fails
@@ -699,7 +734,13 @@ class Database:
             name: Collection name
 
         Returns:
-            Dict with statistics or None if the collection has never been analyzed
+            Dict with same structure as ``analyze_collection()`` return value,
+            including top-level keys ``total_points``, ``row_count``,
+            ``deleted_count``, ``avg_row_size_bytes``, ``payload_size_bytes``,
+            ``column_stats``. Per-column stats may include
+            ``histogram_buckets`` (int or None) and ``histogram_stale``
+            (bool or None). Returns None if the collection has never been
+            analyzed.
         """
         ...
 
@@ -958,6 +999,31 @@ class PyGraphCollection:
 
         Returns:
             Dict with tree, estimated_cost_ms, filter_strategy, index_used
+        """
+        ...
+
+    def explain_analyze(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Execute a query with instrumentation and return plan with actual stats.
+
+        Args:
+            query_str: VelesQL query string.
+            params: Optional query parameters.
+
+        Returns:
+            Dict with keys:
+                - ``plan`` (dict): The execution plan.
+                - ``actual_stats`` (dict or None): Execution statistics with
+                  ``actual_rows``, ``actual_time_ms``, ``loops``,
+                  ``nodes_visited``, ``edges_traversed``.
+                - ``node_stats`` (list[dict] or None): Per-node statistics
+                  with ``node_label``, ``actual_time_ms``, ``actual_rows``.
+
+        Raises:
+            RuntimeError: If the query is invalid or execution fails.
         """
         ...
 

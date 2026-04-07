@@ -23,6 +23,7 @@ from llamaindex_velesdb.security import (
     validate_batch_size,
     validate_weight,
     validate_sparse_vector,
+    validate_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -284,6 +285,45 @@ class SearchOpsMixin:
 
         results = self._collection.text_search(query_str, top_k=similarity_top_k)
 
+        return self._build_query_result(results)
+
+    def contains_text_search(
+        self,
+        collection: str,
+        column: str,
+        keyword: str,
+        k: int = 10,
+    ) -> VectorStoreQueryResult:
+        """Search for documents where a column contains a text substring.
+
+        Builds and executes a VelesQL CONTAINS_TEXT query.
+
+        Args:
+            collection: Collection name for the FROM clause.
+            column: Column name to search.
+            keyword: Substring to match (case-sensitive).
+            k: Maximum number of results. Defaults to 10.
+
+        Returns:
+            VectorStoreQueryResult with matching nodes.
+
+        Raises:
+            ValueError: If k < 1.
+            SecurityError: If the built query fails validation.
+        """
+        if k < 1:
+            raise ValueError("k must be a positive integer")
+        if self._collection is None:
+            return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
+
+        query_str = (
+            f"SELECT * FROM {collection} "
+            f"WHERE {column} CONTAINS_TEXT '{keyword}' "
+            f"LIMIT {k}"
+        )
+        validate_query(query_str)
+
+        results = self._collection.query(query_str)
         return self._build_query_result(results)
 
     def batch_query(
