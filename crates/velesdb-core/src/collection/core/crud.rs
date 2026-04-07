@@ -481,12 +481,15 @@ impl Collection {
             }
         }
 
+        // LOCK ORDER: drop label_index(7) before acquiring config(1) and stats_io_mutex(12).
+        drop(label_idx);
+
         // LOCK ORDER: flush while payload_storage(3) still held, then drop before acquiring config(1).
         let point_count = payload_storage.ids().len();
         payload_storage.flush()?;
         drop(payload_storage);
 
-        // config(1) only — all higher-numbered locks released above.
+        // config(1) only — payload_storage(3) and label_index(7) both released above.
         self.config.write().point_count = point_count;
 
         // Incremental histogram maintenance for metadata-only collections:
