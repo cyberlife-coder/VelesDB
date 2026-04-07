@@ -190,6 +190,15 @@ pub(crate) fn cmd_analyze(db: &Database, parts: &[&str]) -> CommandResult {
                         fs.distinct_values,
                         fs.null_count
                     );
+                    if let Some(ref hist) = fs.histogram {
+                        if !hist.buckets.is_empty() {
+                            println!(
+                                "      histogram: {} buckets, stale={}",
+                                hist.buckets.len(),
+                                hist.stale
+                            );
+                        }
+                    }
                 }
             }
 

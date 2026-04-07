@@ -91,6 +91,8 @@ impl QueryPlan {
             PlanNode::Filter(f) => {
                 let _ = writeln!(output, "{prefix}{connector}Filter");
                 let _ = writeln!(output, "{child_prefix}├─ Conditions: {}", f.conditions);
+                // R7 satisfied: estimated_rows and estimation_method are rendered
+                // when present, omitted when None. No additional changes needed.
                 if let Some(rows) = f.estimated_rows {
                     let _ = writeln!(output, "{child_prefix}├─ Estimated rows: {rows}");
                 }

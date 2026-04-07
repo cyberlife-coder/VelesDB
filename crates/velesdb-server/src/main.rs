@@ -32,10 +32,10 @@ use velesdb_server::{
     flush_collection, get_collection, get_collection_config, get_collection_stats, get_edge_count,
     get_edges, get_guardrails, get_node_degree, get_node_edges, get_node_payload, get_point,
     graph_search, health_check, hybrid_search, is_empty, list_collections, list_indexes,
-    list_nodes, match_query, multi_query_search, query, readiness_check, remove_edge, search,
-    search_ids, stream_insert, stream_traverse, stream_upsert_points, text_search, traverse_graph,
-    traverse_parallel, update_guardrails, upsert_node_payload, upsert_points, AppState,
-    OnboardingMetrics,
+    list_nodes, match_query, multi_query_search, query, readiness_check, remove_edge,
+    scroll_points, search, search_ids, stream_insert, stream_traverse, stream_upsert_points,
+    text_search, traverse_graph, traverse_parallel, update_guardrails, upsert_node_payload,
+    upsert_points, AppState, OnboardingMetrics,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -144,6 +144,7 @@ fn core_routes() -> Router<Arc<AppState>> {
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),
         )
+        .route("/collections/{name}/points/scroll", post(scroll_points))
 }
 
 fn search_routes() -> Router<Arc<AppState>> {

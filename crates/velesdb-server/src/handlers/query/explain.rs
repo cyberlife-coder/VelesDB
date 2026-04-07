@@ -62,7 +62,7 @@ fn explain_plan_only(
 ) -> axum::response::Response {
     let select = &parsed.select;
     let features = detect_explain_features(select);
-    let plan = build_explain_plan(select, &features);
+    let mut plan = build_explain_plan(select, &features);
     let estimated_cost = estimate_cost(features.has_vector_search);
     let query_type = if parsed.is_match_query() {
         "MATCH"
@@ -70,11 +70,15 @@ fn explain_plan_only(
         "SELECT"
     };
 
-    let (cache_hit, plan_reuse_count) = state
-        .db
-        .explain_query(parsed)
-        .ok()
-        .map_or((None, None), |qp| (qp.cache_hit, qp.plan_reuse_count));
+    let (cache_hit, plan_reuse_count) =
+        state
+            .db
+            .explain_query(parsed)
+            .ok()
+            .map_or((None, None), |qp| {
+                merge_core_estimation(&mut plan, &qp);
+                (qp.cache_hit, qp.plan_reuse_count)
+            });
 
     Json(ExplainResponse {
         query: req.query.clone(),
@@ -101,7 +105,7 @@ fn explain_with_analyze(
 ) -> axum::response::Response {
     let select = &parsed.select;
     let features = detect_explain_features(select);
-    let plan = build_explain_plan(select, &features);
+    let mut plan = build_explain_plan(select, &features);
     let estimated_cost = estimate_cost(features.has_vector_search);
     let query_type = if parsed.is_match_query() {
         "MATCH"
@@ -124,6 +128,9 @@ fn explain_with_analyze(
             );
         }
     };
+
+    // Merge core estimation metadata into server plan (graceful: already have output).
+    merge_core_estimation(&mut plan, &output.plan);
 
     let (actual_stats_resp, actual_time, node_stats_resp) =
         if let Some(ref stats) = output.actual_stats {
@@ -212,6 +219,7 @@ fn build_source_step(
             operation: "VectorSearch".to_string(),
             description: "ANN search using HNSW index with NEAR clause".to_string(),
             estimated_rows: select.limit.map(|l| l as usize),
+            estimation_method: None,
         }
     } else {
         ExplainStep {
@@ -219,6 +227,7 @@ fn build_source_step(
             operation: "FullScan".to_string(),
             description: format!("Scan collection '{}'", select.from),
             estimated_rows: None,
+            estimation_method: None,
         }
     }
 }
@@ -235,6 +244,7 @@ fn append_filter_and_join_steps(
             operation: "Filter".to_string(),
             description: "Apply WHERE clause predicates".to_string(),
             estimated_rows: None,
+            estimation_method: None,
         });
         *step_num += 1;
     }
@@ -245,6 +255,7 @@ fn append_filter_and_join_steps(
             operation: format!("{:?}Join", join.join_type),
             description: format!("Join with '{}'", join.table),
             estimated_rows: None,
+            estimation_method: None,
         });
         *step_num += 1;
     }
@@ -261,6 +272,7 @@ fn append_aggregation_steps(
             operation: "GroupBy".to_string(),
             description: "Group rows by specified columns".to_string(),
             estimated_rows: None,
+            estimation_method: None,
         });
         *step_num += 1;
     }
@@ -271,6 +283,7 @@ fn append_aggregation_steps(
             operation: "Aggregate".to_string(),
             description: "Compute aggregate functions (COUNT, SUM, etc.)".to_string(),
             estimated_rows: None,
+            estimation_method: None,
         });
         *step_num += 1;
     }
@@ -281,6 +294,7 @@ fn append_aggregation_steps(
             operation: "Sort".to_string(),
             description: "Sort results by ORDER BY clause".to_string(),
             estimated_rows: None,
+            estimation_method: None,
         });
         *step_num += 1;
     }
@@ -301,6 +315,7 @@ fn append_pagination_step(
                 select.offset.unwrap_or(0)
             ),
             estimated_rows: select.limit.map(|l| l as usize),
+            estimation_method: None,
         });
     }
 }
@@ -335,5 +350,38 @@ pub(super) fn condition_has_vector_search(cond: &Condition) -> bool {
         }
         Condition::Group(inner) | Condition::Not(inner) => condition_has_vector_search(inner),
         _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Core plan merge helpers (Task 2.2)
+// ---------------------------------------------------------------------------
+
+/// Recursively extracts the first `FilterPlan` from a core `PlanNode` tree.
+fn extract_filter_plan(
+    node: &velesdb_core::velesql::PlanNode,
+) -> Option<&velesdb_core::velesql::FilterPlan> {
+    match node {
+        velesdb_core::velesql::PlanNode::Filter(fp) => Some(fp),
+        velesdb_core::velesql::PlanNode::Sequence(nodes) => {
+            nodes.iter().find_map(extract_filter_plan)
+        }
+        _ => None,
+    }
+}
+
+/// Merges core `FilterPlan` estimation data into server `ExplainStep` entries.
+///
+/// Copies `estimated_rows` and `estimation_method` from the core plan's
+/// `FilterPlan` into every server step whose `operation` is `"Filter"`.
+#[allow(clippy::cast_possible_truncation)]
+fn merge_core_estimation(plan: &mut [ExplainStep], core_plan: &velesdb_core::velesql::QueryPlan) {
+    if let Some(fp) = extract_filter_plan(&core_plan.root) {
+        for step in plan.iter_mut() {
+            if step.operation == "Filter" {
+                step.estimated_rows = fp.estimated_rows.map(|r| r as usize);
+                step.estimation_method = fp.estimation_method.clone();
+            }
+        }
     }
 }
