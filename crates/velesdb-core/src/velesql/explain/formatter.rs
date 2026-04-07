@@ -5,7 +5,9 @@
 
 use std::fmt::{self, Write as _};
 
-use super::{FilterStrategy, FusionInfo, IndexType, PlanNode, QueryPlan};
+use super::{
+    FilterPlan, FilterStrategy, FusionInfo, IndexType, MatchTraversalPlan, PlanNode, QueryPlan,
+};
 
 impl QueryPlan {
     /// Renders the plan as a tree string.
@@ -89,21 +91,7 @@ impl QueryPlan {
                 let _ = writeln!(output, "{child_prefix}└─ Candidates: {}", vs.candidates);
             }
             PlanNode::Filter(f) => {
-                let _ = writeln!(output, "{prefix}{connector}Filter");
-                let _ = writeln!(output, "{child_prefix}├─ Conditions: {}", f.conditions);
-                // R7 satisfied: estimated_rows and estimation_method are rendered
-                // when present, omitted when None. No additional changes needed.
-                if let Some(rows) = f.estimated_rows {
-                    let _ = writeln!(output, "{child_prefix}├─ Estimated rows: {rows}");
-                }
-                if let Some(ref method) = f.estimation_method {
-                    let _ = writeln!(output, "{child_prefix}├─ Estimation method: {method}");
-                }
-                let _ = writeln!(
-                    output,
-                    "{child_prefix}└─ Selectivity: {:.1}%",
-                    f.selectivity * 100.0
-                );
+                Self::render_filter_node(f, output, prefix, connector, &child_prefix);
             }
             PlanNode::Limit(l) => {
                 let _ = writeln!(output, "{prefix}{connector}Limit: {}", l.count);
@@ -128,35 +116,70 @@ impl QueryPlan {
                 }
             }
             PlanNode::MatchTraversal(mt) => {
-                let _ = writeln!(output, "{prefix}{connector}MatchTraversal");
-                let _ = writeln!(output, "{child_prefix}├─ Strategy: {}", mt.strategy);
-                if !mt.start_labels.is_empty() {
-                    let _ = writeln!(
-                        output,
-                        "{child_prefix}├─ Start Labels: [{}]",
-                        mt.start_labels.join(", ")
-                    );
-                }
-                let _ = writeln!(output, "{child_prefix}├─ Max Depth: {}", mt.max_depth);
-                let _ = writeln!(
-                    output,
-                    "{child_prefix}├─ Relationships: {}",
-                    mt.relationship_count
-                );
-                if let Some(threshold) = mt.similarity_threshold {
-                    let _ = writeln!(
-                        output,
-                        "{child_prefix}└─ Similarity Threshold: {:.2}",
-                        threshold
-                    );
-                } else {
-                    let _ = writeln!(
-                        output,
-                        "{child_prefix}└─ Similarity: {}",
-                        if mt.has_similarity { "yes" } else { "no" }
-                    );
-                }
+                Self::render_match_traversal_node(mt, output, prefix, connector, &child_prefix);
             }
+        }
+    }
+
+    /// Renders a `Filter` plan node into the tree output.
+    fn render_filter_node(
+        f: &FilterPlan,
+        output: &mut String,
+        prefix: &str,
+        connector: &str,
+        child_prefix: &str,
+    ) {
+        let _ = writeln!(output, "{prefix}{connector}Filter");
+        let _ = writeln!(output, "{child_prefix}├─ Conditions: {}", f.conditions);
+        // R7: estimated_rows and estimation_method are rendered when present.
+        if let Some(rows) = f.estimated_rows {
+            let _ = writeln!(output, "{child_prefix}├─ Estimated rows: {rows}");
+        }
+        if let Some(ref method) = f.estimation_method {
+            let _ = writeln!(output, "{child_prefix}├─ Estimation method: {method}");
+        }
+        let _ = writeln!(
+            output,
+            "{child_prefix}└─ Selectivity: {:.1}%",
+            f.selectivity * 100.0
+        );
+    }
+
+    /// Renders a `MatchTraversal` plan node into the tree output.
+    fn render_match_traversal_node(
+        mt: &MatchTraversalPlan,
+        output: &mut String,
+        prefix: &str,
+        connector: &str,
+        child_prefix: &str,
+    ) {
+        let _ = writeln!(output, "{prefix}{connector}MatchTraversal");
+        let _ = writeln!(output, "{child_prefix}├─ Strategy: {}", mt.strategy);
+        if !mt.start_labels.is_empty() {
+            let _ = writeln!(
+                output,
+                "{child_prefix}├─ Start Labels: [{}]",
+                mt.start_labels.join(", ")
+            );
+        }
+        let _ = writeln!(output, "{child_prefix}├─ Max Depth: {}", mt.max_depth);
+        let _ = writeln!(
+            output,
+            "{child_prefix}├─ Relationships: {}",
+            mt.relationship_count
+        );
+        if let Some(threshold) = mt.similarity_threshold {
+            let _ = writeln!(
+                output,
+                "{child_prefix}└─ Similarity Threshold: {:.2}",
+                threshold
+            );
+        } else {
+            let _ = writeln!(
+                output,
+                "{child_prefix}└─ Similarity: {}",
+                if mt.has_similarity { "yes" } else { "no" }
+            );
         }
     }
 
