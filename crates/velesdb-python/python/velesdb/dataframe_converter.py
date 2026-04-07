@@ -6,6 +6,7 @@ DataFrames. All pandas/polars imports are deferred to first use.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -116,9 +117,11 @@ def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
 
     if not batch:
         if backend == "pandas":
-            return lib.DataFrame(columns=["id", "vector", "payload"])
+            return lib.DataFrame(columns=["id", "vector"])
+        # Omit "payload" column: non-empty batches flatten dict payloads into
+        # individual columns (no "payload" key), so the empty schema must match.
         return lib.DataFrame(
-            schema={"id": lib.Int64, "vector": lib.List(lib.Float32), "payload": lib.Utf8}
+            schema={"id": lib.Int64, "vector": lib.List(lib.Float32)}
         )
 
     rows = []
@@ -150,13 +153,25 @@ def _df_columns(df: Any) -> list[str]:
     return list(df.columns)
 
 
+def _nan_to_none(value: Any) -> Any:
+    """Convert float NaN to None for JSON-safe serialization."""
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
+
+
 def _row_to_point(row: dict) -> dict[str, Any]:
-    """Convert a single row dict to a point dict for upsert."""
+    """Convert a single row dict to a point dict for upsert.
+
+    Note: only the first non-null vector is dimension-checked by
+    validate_upsert_dataframe; subsequent mismatches surface as Rust errors.
+    Pandas NaN values are converted to None for JSON compatibility.
+    """
     point: dict[str, Any] = {"id": int(row["id"])}
     vec = row.get("vector")
     if vec is not None:
         point["vector"] = list(vec) if not isinstance(vec, list) else vec
-    payload = {k: v for k, v in row.items() if k not in ("id", "vector")}
+    payload = {k: _nan_to_none(v) for k, v in row.items() if k not in ("id", "vector")}
     if payload:
         point["payload"] = payload
     return point
@@ -177,7 +192,11 @@ def dataframe_to_points(df: Any) -> list[dict]:
 
 
 def _check_vector_dimension(df: Any, dimension: int) -> None:
-    """Validate first non-null vector dimension matches expected."""
+    """Validate that the first non-null vector has the expected dimension.
+
+    Note: only the first non-null vector is checked for performance. Later
+    vectors with wrong dimensions surface as errors from the Rust core.
+    """
     if "polars" in type(df).__module__:
         vectors = df["vector"].to_list()
     else:

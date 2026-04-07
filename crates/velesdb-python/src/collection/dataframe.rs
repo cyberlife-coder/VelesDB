@@ -49,7 +49,10 @@ impl Collection {
     /// Args:
     ///     df: A pandas.DataFrame or polars.DataFrame with 'id', optional 'vector',
     ///         and payload columns.
-    ///     backend: "pandas" or "polars" (default "pandas").
+    ///     backend: Accepted for API consistency but ignored — the DataFrame type
+    ///         is detected automatically via its module path. Passing
+    ///         ``backend='polars'`` with a pandas DataFrame (or vice versa) is
+    ///         harmless; the correct path is chosen based on the actual object type.
     ///
     /// Returns:
     ///     Number of upserted points.

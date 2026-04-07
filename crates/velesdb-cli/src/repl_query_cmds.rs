@@ -43,6 +43,18 @@ pub(crate) fn cmd_explain_analyze(db: &Database, parts: &[&str]) -> CommandResul
         Err(e) => return CommandResult::Error(format!("Parse error: {}", e.message)),
     };
 
+    // Detect $param references in the query string. EXPLAIN ANALYZE executes
+    // the query so unbound parameters produce a confusing runtime error.
+    // Guide the user toward the HTTP API which accepts a 'params' map.
+    if query_str.contains('$') {
+        return CommandResult::Error(
+            "EXPLAIN ANALYZE executes the query — parameterized queries ($param) \
+             cannot be analyzed from the REPL. Use the HTTP endpoint \
+             POST /query/explain with {\"analyze\": true, \"params\": {...}} instead."
+                .to_string(),
+        );
+    }
+
     let params = std::collections::HashMap::new();
     match db.explain_analyze_query(&parsed, &params) {
         Ok(output) => {

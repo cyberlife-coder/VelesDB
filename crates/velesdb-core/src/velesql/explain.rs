@@ -222,11 +222,14 @@ pub struct ActualStats {
 pub struct NodeStats {
     /// Node label (e.g. "VectorSearch", "Filter", "Limit").
     pub node_label: String,
-    /// Actual wall-clock time for this node in milliseconds.
+    /// Heuristic estimate of wall-clock time for this node in milliseconds.
+    /// Derived by distributing the total `actual_time_ms` across nodes using
+    /// fixed fractions — NOT a real per-node measurement. Foundational for the
+    /// CBO feedback loop; will be replaced by instrumented timing (#467–#469).
     pub actual_time_ms: f64,
-    /// Rows entering this node.
+    /// Rows entering this node (heuristic: set to top-level actual_rows).
     pub actual_rows_in: u64,
-    /// Rows leaving this node.
+    /// Rows leaving this node (heuristic: set to top-level actual_rows).
     pub actual_rows_out: u64,
     /// Number of loop iterations (1 for non-looping nodes).
     pub loops: u64,

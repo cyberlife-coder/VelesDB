@@ -47,6 +47,9 @@ impl Collection {
             ));
         }
 
+        // TODO(US-429): all_point_ids() + sort_unstable() is O(N log N) per batch,
+        // making full-collection scroll O((N/B) × N log N). Replace with a sorted
+        // iterator from storage or a cached ID list for large collections.
         let mut ids = self.all_point_ids();
         ids.sort_unstable();
 
@@ -109,7 +112,11 @@ impl Collection {
         let vector = if is_metadata_only {
             Vec::new()
         } else {
-            vector_storage.retrieve(id).ok().flatten().unwrap_or_default()
+            vector_storage
+                .retrieve(id)
+                .ok()
+                .flatten()
+                .unwrap_or_default()
         };
         Some(Point {
             id,
