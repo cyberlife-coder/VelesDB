@@ -9,6 +9,26 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Returns the next representable `f64` above `val`.
+///
+/// Unlike `val + f64::EPSILON`, this works correctly for all magnitudes.
+/// `f64::EPSILON` is only the ULP at 1.0; for values ≥ 2.0, adding EPSILON
+/// is a no-op because EPSILON is smaller than the unit-in-last-place.
+///
+/// Uses IEEE 754 bit manipulation: incrementing (or decrementing for negative
+/// values) the integer representation of a float yields the next float.
+pub(crate) fn next_after(v: f64) -> f64 {
+    if v.is_nan() || v == f64::INFINITY {
+        return v;
+    }
+    if v == 0.0 {
+        return f64::from_bits(1);
+    }
+    let bits = v.to_bits();
+    let next_bits = if v > 0.0 { bits + 1 } else { bits - 1 };
+    f64::from_bits(next_bits)
+}
+
 /// A single bucket in an equi-depth histogram.
 ///
 /// Represents a contiguous range `[lower_bound, upper_bound)` of column values
@@ -321,7 +341,7 @@ fn build_single_value_buckets(sorted: &[f64]) -> Vec<HistogramBucket> {
     let val = sorted[0];
     vec![HistogramBucket {
         lower_bound: val,
-        upper_bound: val + f64::EPSILON,
+        upper_bound: next_after(val),
         count: sorted.len() as u64,
         distinct_count: 1,
     }]
@@ -342,7 +362,7 @@ fn build_per_distinct_buckets(sorted: &[f64], distinct: usize) -> Vec<HistogramB
         let next_bound = if i < sorted.len() {
             sorted[i]
         } else {
-            val + f64::EPSILON
+            next_after(val)
         };
         buckets.push(HistogramBucket {
             lower_bound: val,
@@ -379,6 +399,6 @@ fn upper_bound_for_chunk(chunk: &[f64], sorted: &[f64], existing: &[HistogramBuc
     if chunk_end_offset < sorted.len() {
         sorted[chunk_end_offset]
     } else {
-        chunk[chunk.len() - 1] + f64::EPSILON
+        next_after(chunk[chunk.len() - 1])
     }
 }

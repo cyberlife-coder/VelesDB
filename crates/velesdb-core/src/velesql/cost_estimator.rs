@@ -4,6 +4,7 @@
 // cardinalities where ±1 ULP has no operational impact on query planning.
 #![allow(clippy::cast_precision_loss)]
 
+use crate::collection::stats::next_after;
 use crate::collection::stats::CollectionStats;
 use crate::collection::stats::Histogram;
 use crate::velesql::ast::{CompareOp, Condition, Value};
@@ -169,8 +170,8 @@ impl<'a> CostEstimator<'a> {
             CompareOp::Eq => hist.estimate_eq_selectivity(v),
             CompareOp::NotEq => 1.0 - hist.estimate_eq_selectivity(v),
             CompareOp::Lt => hist.estimate_lt_selectivity(v),
-            CompareOp::Lte => hist.estimate_lt_selectivity(v + f64::EPSILON),
-            CompareOp::Gt => 1.0 - hist.estimate_lt_selectivity(v + f64::EPSILON),
+            CompareOp::Lte => hist.estimate_lt_selectivity(next_after(v)),
+            CompareOp::Gt => 1.0 - hist.estimate_lt_selectivity(next_after(v)),
             CompareOp::Gte => 1.0 - hist.estimate_lt_selectivity(v),
         };
         sel.clamp(0.0, 1.0)
@@ -199,12 +200,20 @@ impl<'a> CostEstimator<'a> {
     /// If negated (NOT IN), returns `1.0 - sel`.
     fn estimate_in_selectivity(&self, column: &str, values: &[Value], negated: bool) -> f64 {
         let sel = if let Some(h) = self.get_histogram(column) {
-            let sum: f64 = values
+            let numeric_sels: Vec<f64> = values
                 .iter()
                 .filter_map(value_to_f64)
                 .map(|v| h.estimate_eq_selectivity(v))
-                .sum();
-            sum.clamp(0.0, 1.0)
+                .collect();
+            if numeric_sels.is_empty() {
+                // All values are non-numeric (e.g. strings) — fall back to
+                // cardinality-based estimate so we don't silently return 0.0.
+                let base = self.stats.estimate_selectivity(column);
+                (base * values.len() as f64).clamp(0.0, 1.0)
+            } else {
+                let sum: f64 = numeric_sels.into_iter().sum();
+                sum.clamp(0.0, 1.0)
+            }
         } else {
             let base = self.stats.estimate_selectivity(column);
             (base * values.len() as f64).clamp(0.0, 1.0)

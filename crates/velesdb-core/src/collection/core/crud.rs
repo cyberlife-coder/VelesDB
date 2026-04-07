@@ -80,15 +80,17 @@ impl Collection {
             validate_dimension_match(dimension, point.dimension())?;
         }
 
-        let sparse_batch = self.upsert_storage_and_index(&points, storage_mode)?;
+        let (sparse_batch, old_payloads) = self.upsert_storage_and_index(&points, storage_mode)?;
 
         self.apply_sparse_batch_upsert(&sparse_batch)?;
 
-        // Incremental histogram maintenance: update persisted histogram bucket
-        // counts BEFORE cache invalidation so stats reflect the mutation.
-        let payloads: Vec<Option<serde_json::Value>> =
+        // Incremental histogram maintenance: decrement old values THEN
+        // increment new values BEFORE cache invalidation so stats reflect
+        // the net mutation correctly for existing-point upserts.
+        self.update_histograms_on_delete(&old_payloads);
+        let new_payloads: Vec<Option<serde_json::Value>> =
             points.iter().map(|p| p.payload.clone()).collect();
-        self.update_histograms_on_upsert(&payloads);
+        self.update_histograms_on_upsert(&new_payloads);
 
         self.invalidate_caches_and_bump_generation();
         Ok(())
@@ -113,7 +115,10 @@ impl Collection {
         &self,
         points: &[Point],
         storage_mode: StorageMode,
-    ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
+    ) -> Result<(
+        Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>,
+        Vec<Option<serde_json::Value>>,
+    )> {
         // Phase 1: Batch storage under write locks (1 fsync per storage)
         let old_payloads = self.batch_store_all(points)?;
 
@@ -125,7 +130,7 @@ impl Collection {
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         self.bulk_index_or_defer(vector_refs);
 
-        Ok(sparse_batch)
+        Ok((sparse_batch, old_payloads))
     }
 
     /// Phase 1: Batch-stores vectors and payloads with minimal lock scope.
@@ -435,6 +440,12 @@ impl Collection {
         let mut payload_storage = self.payload_storage.write();
         let mut label_idx = self.label_index.write();
 
+        // Collect old payloads for histogram decrements before they are overwritten.
+        let old_payloads_for_hist: Vec<Option<serde_json::Value>> = points
+            .iter()
+            .map(|p| payload_storage.retrieve(p.id).ok().flatten())
+            .collect();
+
         for point in &points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
             if let Some(payload) = &point.payload {
@@ -466,10 +477,12 @@ impl Collection {
         // config(1) only — all higher-numbered locks released above.
         self.config.write().point_count = point_count;
 
-        // Incremental histogram maintenance for metadata-only collections.
-        let payloads: Vec<Option<serde_json::Value>> =
+        // Incremental histogram maintenance for metadata-only collections:
+        // decrement old values (collected before the storage loop), then increment new values.
+        self.update_histograms_on_delete(&old_payloads_for_hist);
+        let new_payloads: Vec<Option<serde_json::Value>> =
             points.iter().map(|p| p.payload.clone()).collect();
-        self.update_histograms_on_upsert(&payloads);
+        self.update_histograms_on_upsert(&new_payloads);
 
         self.invalidate_caches_and_bump_generation();
         Ok(())

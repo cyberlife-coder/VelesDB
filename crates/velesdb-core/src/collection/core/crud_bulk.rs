@@ -131,6 +131,12 @@ impl Collection {
         let count = vector_refs.len();
         self.config.write().point_count = self.vector_storage.read().len();
         self.apply_sparse_batch_bulk(sparse_batch)?;
+
+        // Incremental histogram maintenance for bulk V2 path.
+        let payloads: Vec<Option<serde_json::Value>> =
+            points.iter().map(|p| p.payload.clone()).collect();
+        self.update_histograms_on_upsert(&payloads);
+
         self.invalidate_caches_and_bump_generation();
 
         // Track inserts for periodic HNSW save (Issue #423 Component 3).
@@ -159,6 +165,12 @@ impl Collection {
         self.config.write().point_count = self.vector_storage.read().len();
 
         self.apply_sparse_batch_bulk(sparse_batch)?;
+
+        // Incremental histogram maintenance for bulk standard path.
+        let payloads: Vec<Option<serde_json::Value>> =
+            points.iter().map(|p| p.payload.clone()).collect();
+        self.update_histograms_on_upsert(&payloads);
+
         self.invalidate_caches_and_bump_generation();
 
         Ok(inserted)
@@ -251,6 +263,13 @@ impl Collection {
 
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
+
+        // Incremental histogram maintenance for raw bulk path.
+        if let Some(ps) = payloads {
+            let owned: Vec<Option<serde_json::Value>> = ps.to_vec();
+            self.update_histograms_on_upsert(&owned);
+        }
+
         self.invalidate_caches_and_bump_generation();
 
         Ok(inserted)

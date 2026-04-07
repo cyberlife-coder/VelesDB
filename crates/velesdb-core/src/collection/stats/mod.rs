@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 mod histogram;
+pub(crate) use histogram::next_after;
 pub(crate) use histogram::HistogramBuilder;
 pub use histogram::{Histogram, HistogramBucket};
 
@@ -267,12 +268,16 @@ impl StatsCollector {
     /// it to the corresponding `ColumnStats` entry (creating one if absent).
     pub fn build_histogram(&mut self, column_name: &str, values: &mut [f64], num_buckets: usize) {
         let histogram = HistogramBuilder::new(num_buckets).build(values);
-        if let Some(col) = self.stats.column_stats.get_mut(column_name) {
-            col.histogram = Some(histogram.clone());
-        }
-        if let Some(col) = self.stats.field_stats.get_mut(column_name) {
-            col.histogram = Some(histogram);
-        }
+        self.stats
+            .column_stats
+            .entry(column_name.to_owned())
+            .or_insert_with(|| ColumnStats::new(column_name))
+            .histogram = Some(histogram.clone());
+        self.stats
+            .field_stats
+            .entry(column_name.to_owned())
+            .or_insert_with(|| ColumnStats::new(column_name))
+            .histogram = Some(histogram);
     }
 
     /// Builds the final CollectionStats
