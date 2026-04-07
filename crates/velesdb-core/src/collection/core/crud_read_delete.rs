@@ -210,9 +210,12 @@ impl Collection {
     /// IDs from `vector_storage` (points with vectors) and
     /// `payload_storage` (points with payloads). Points inserted with
     /// `None` payload are included via the vector storage path.
+    /// Returns IDs in ascending sorted order.
+    /// Uses `BTreeSet` for deduplication and sorted iteration in one pass,
+    /// so callers (e.g. `scroll_batch`) need not sort separately.
     #[must_use]
     pub fn all_point_ids(&self) -> Vec<u64> {
-        let mut ids: std::collections::HashSet<u64> =
+        let mut ids: std::collections::BTreeSet<u64> =
             self.vector_storage.read().ids().into_iter().collect();
         for id in self.payload_storage.read().ids() {
             ids.insert(id);

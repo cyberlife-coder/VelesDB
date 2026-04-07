@@ -222,14 +222,22 @@ pub struct ActualStats {
 pub struct NodeStats {
     /// Node label (e.g. "VectorSearch", "Filter", "Limit").
     pub node_label: String,
-    /// Actual wall-clock time for this node in milliseconds.
+    /// Heuristic estimate of wall-clock time for this node in milliseconds.
+    /// Derived by distributing the total `actual_time_ms` across nodes using
+    /// fixed fractions — NOT a real per-node measurement. Foundational for the
+    /// CBO feedback loop; will be replaced by instrumented timing (#467–#469).
     pub actual_time_ms: f64,
-    /// Rows entering this node.
+    /// Rows entering this node (heuristic: set to top-level actual_rows).
     pub actual_rows_in: u64,
-    /// Rows leaving this node.
+    /// Rows leaving this node (heuristic: set to top-level actual_rows).
     pub actual_rows_out: u64,
     /// Number of loop iterations (1 for non-looping nodes).
     pub loops: u64,
+    /// When `true`, `actual_time_ms`, `actual_rows_in` and `actual_rows_out`
+    /// are heuristic estimates derived from fixed proportions, not real
+    /// per-node measurements. Will become `false` once instrumented timing
+    /// lands (#467–#469).
+    pub estimated: bool,
 }
 
 /// Type of index used in the query.
@@ -674,54 +682,126 @@ fn format_with_value(v: &super::ast::WithValue) -> String {
 // Shared node-stats helpers (used by Database and VectorCollection)
 // ---------------------------------------------------------------------------
 
-/// Returns the label and estimated time fraction for a plan node.
-fn node_label_and_time_fraction(node: &PlanNode, total_time_ms: f64) -> (&'static str, f64) {
+/// Returns the label and a relative time weight for a plan node.
+///
+/// Weights are unitless and will be **normalized** so that all leaf nodes
+/// in a plan sum to exactly `total_time_ms`.  This avoids the previous bug
+/// where fixed fractions could exceed 100 % when multiple heavy nodes
+/// (e.g. `VectorSearch` + `TableScan`) appeared in the same plan.
+fn node_label_and_weight(node: &PlanNode) -> (&'static str, f64) {
     match node {
-        PlanNode::VectorSearch(_) => ("VectorSearch", total_time_ms * 0.95),
-        PlanNode::TableScan(_) => ("TableScan", total_time_ms * 0.95),
-        PlanNode::MatchTraversal(_) => ("MatchTraversal", total_time_ms * 0.95),
-        PlanNode::IndexLookup(_) => ("IndexLookup", total_time_ms * 0.90),
-        PlanNode::Filter(_) => ("Filter", total_time_ms * 0.03),
-        PlanNode::Limit(_) => ("Limit", total_time_ms * 0.01),
-        PlanNode::Offset(_) => ("Offset", total_time_ms * 0.01),
+        PlanNode::VectorSearch(_) => ("VectorSearch", 0.95),
+        PlanNode::TableScan(_) => ("TableScan", 0.95),
+        PlanNode::MatchTraversal(_) => ("MatchTraversal", 0.95),
+        PlanNode::IndexLookup(_) => ("IndexLookup", 0.90),
+        PlanNode::Filter(_) => ("Filter", 0.03),
+        PlanNode::Limit(_) => ("Limit", 0.01),
+        PlanNode::Offset(_) => ("Offset", 0.01),
         PlanNode::Sequence(_) => ("Sequence", 0.0),
     }
 }
 
-/// Recursively collects `NodeStats` for each leaf node in the plan tree.
-fn collect_leaf_stats(
-    node: &PlanNode,
-    actual_rows: u64,
-    total_time_ms: f64,
-    out: &mut Vec<NodeStats>,
-) {
+/// Estimates the number of rows entering a node given the number leaving it,
+/// working *backwards* through the pipeline so that the last node's
+/// `rows_out` equals `actual_rows`.
+fn estimate_rows_in(node: &PlanNode, rows_out: u64) -> u64 {
+    match node {
+        PlanNode::Filter(f) => {
+            if f.selectivity > 0.0 && f.selectivity < 1.0 {
+                // Invert selectivity: if 50 % of rows pass, twice as many entered.
+                let estimated = (rows_out as f64 / f.selectivity).ceil() as u64;
+                estimated.max(rows_out)
+            } else {
+                rows_out
+            }
+        }
+        PlanNode::Offset(o) => {
+            // Offset skips `count` rows, so more rows entered than left.
+            rows_out.saturating_add(o.count)
+        }
+        // Limit / scan / search: we cannot tell how many rows were available
+        // beyond what was returned, so rows_in = rows_out (conservative).
+        _ => rows_out,
+    }
+}
+
+/// Intermediate representation used while building stats.
+struct LeafEntry<'a> {
+    label: &'static str,
+    weight: f64,
+    node: &'a PlanNode,
+}
+
+/// Recursively collects leaf-node metadata in pipeline order.
+fn collect_leaves<'a>(node: &'a PlanNode, out: &mut Vec<LeafEntry<'a>>) {
     if let PlanNode::Sequence(children) = node {
         for child in children {
-            collect_leaf_stats(child, actual_rows, total_time_ms, out);
+            collect_leaves(child, out);
         }
     } else {
-        let (label, time_ms) = node_label_and_time_fraction(node, total_time_ms);
-        out.push(NodeStats {
-            node_label: label.to_string(),
-            actual_time_ms: time_ms,
-            actual_rows_in: actual_rows,
-            actual_rows_out: actual_rows,
-            loops: 1,
+        let (label, weight) = node_label_and_weight(node);
+        out.push(LeafEntry {
+            label,
+            weight,
+            node,
         });
     }
 }
 
 /// Builds per-node stats for all leaf nodes in the plan tree.
 ///
-/// Walks the `PlanNode` tree and creates a `NodeStats` entry for each
-/// non-Sequence node, distributing the total execution time proportionally.
+/// 1. Collects leaf nodes in pipeline order.
+/// 2. **Normalizes** time weights so they always sum to `total_time_ms`.
+/// 3. Propagates `actual_rows` **backwards** through the pipeline so that
+///    `Filter` and `Offset` nodes show realistic `rows_in` / `rows_out`
+///    estimates instead of blindly copying the top-level row count.
 #[must_use]
 pub fn build_leaf_node_stats(
     root: &PlanNode,
     actual_rows: u64,
     total_time_ms: f64,
 ) -> Vec<NodeStats> {
-    let mut stats = Vec::new();
-    collect_leaf_stats(root, actual_rows, total_time_ms, &mut stats);
-    stats
+    let mut leaves = Vec::new();
+    collect_leaves(root, &mut leaves);
+
+    if leaves.is_empty() {
+        return Vec::new();
+    }
+
+    let total_weight: f64 = leaves.iter().map(|l| l.weight).sum();
+
+    // --- Row propagation (reverse pass) ---
+    // The last node's rows_out equals the top-level actual_rows.
+    // Each preceding node's rows_out is the next node's rows_in.
+    let len = leaves.len();
+    let mut rows_in = vec![actual_rows; len];
+    let mut rows_out = vec![actual_rows; len];
+
+    rows_out[len - 1] = actual_rows;
+    rows_in[len - 1] = estimate_rows_in(leaves[len - 1].node, actual_rows);
+
+    for i in (0..len - 1).rev() {
+        rows_out[i] = rows_in[i + 1];
+        rows_in[i] = estimate_rows_in(leaves[i].node, rows_out[i]);
+    }
+
+    leaves
+        .iter()
+        .enumerate()
+        .map(|(i, leaf)| {
+            let time_ms = if total_weight > 0.0 {
+                total_time_ms * leaf.weight / total_weight
+            } else {
+                0.0
+            };
+            NodeStats {
+                node_label: leaf.label.to_string(),
+                actual_time_ms: time_ms,
+                actual_rows_in: rows_in[i],
+                actual_rows_out: rows_out[i],
+                loops: 1,
+                estimated: true,
+            }
+        })
+        .collect()
 }

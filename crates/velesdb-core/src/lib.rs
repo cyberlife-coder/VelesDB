@@ -181,6 +181,8 @@ pub use collection::{
     IndexInfo,
     MetadataCollection,
     NodeType,
+    // Scroll cursor (Issue #429)
+    ScrollBatch,
     TraversalConfig,
     TraversalPath,
     TraversalResult,

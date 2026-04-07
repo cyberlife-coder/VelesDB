@@ -12,6 +12,7 @@ use crate::AppState;
 
 use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
 use axum::http::StatusCode;
+use velesdb_core::Error as CoreError;
 
 /// Explain a VelesQL query, optionally executing it with instrumentation.
 ///
@@ -25,6 +26,7 @@ use axum::http::StatusCode;
     responses(
         (status = 200, description = "Query plan", body = ExplainResponse),
         (status = 400, description = "Query syntax error", body = crate::types::QueryErrorResponse),
+        (status = 422, description = "Query validation/execution error", body = crate::types::VelesqlErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
@@ -109,13 +111,17 @@ fn explain_with_analyze(
 
     let output = match state.db.explain_analyze_query(parsed, &req.params) {
         Ok(o) => o,
+        Err(CoreError::CollectionNotFound(name)) => {
+            return velesql_collection_not_found(&name);
+        }
         Err(e) => {
-            let status = if e.to_string().contains("not found") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::BAD_REQUEST
-            };
-            return velesql_error(status, "EXPLAIN_ANALYZE_ERROR", &e.to_string(), "", None);
+            return velesql_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "VELESQL_EXPLAIN_ANALYZE_ERROR",
+                &e.to_string(),
+                "Validate query semantics and parameter types against the target collection",
+                None,
+            );
         }
     };
 

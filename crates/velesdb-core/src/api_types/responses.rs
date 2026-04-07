@@ -323,14 +323,20 @@ impl From<&crate::velesql::ActualStats> for ActualStatsResponse {
 pub struct NodeStatsResponse {
     /// Node label (e.g. "VectorSearch", "Filter", "Limit").
     pub node_label: String,
-    /// Actual wall-clock time for this node in milliseconds.
+    /// Heuristic estimate of wall-clock time for this node in milliseconds.
+    /// Derived from total execution time using fixed fractions, not real
+    /// per-node instrumentation. Will be replaced by measured timing (#467).
     pub actual_time_ms: f64,
-    /// Rows entering this node.
+    /// Rows entering this node (heuristic approximation).
     pub actual_rows_in: u64,
-    /// Rows leaving this node.
+    /// Rows leaving this node (heuristic approximation).
     pub actual_rows_out: u64,
     /// Number of loop iterations (1 for non-looping nodes).
     pub loops: u64,
+    /// When `true`, time and row counts are heuristic estimates, not real
+    /// per-node measurements. Will become `false` once instrumented timing
+    /// lands (#467).
+    pub estimated: bool,
 }
 
 #[cfg(feature = "persistence")]
@@ -342,6 +348,7 @@ impl From<&crate::velesql::NodeStats> for NodeStatsResponse {
             actual_rows_in: ns.actual_rows_in,
             actual_rows_out: ns.actual_rows_out,
             loops: ns.loops,
+            estimated: ns.estimated,
         }
     }
 }

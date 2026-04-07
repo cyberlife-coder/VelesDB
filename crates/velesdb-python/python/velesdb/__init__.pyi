@@ -3,7 +3,7 @@
 High-performance vector database with native Python bindings.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, overload
 import numpy as np
 
 __version__: str
@@ -394,6 +394,110 @@ class Collection:
 
     def explain(self, query_str: str) -> Dict[str, Any]:
         """Return execution plan for a VelesQL query."""
+        ...
+
+    # --- Scroll cursor (issue #429) ---
+
+    @overload
+    def scroll(
+        self,
+        *,
+        batch_size: int = 100,
+        filter: Optional[Dict[str, Any]] = None,
+        as_dataframe: bool = False,
+        backend: str = "pandas",
+    ) -> Iterator[List[Dict[str, Any]]]: ...
+
+    @overload
+    def scroll(
+        self,
+        *,
+        batch_size: int = 100,
+        filter: Optional[Dict[str, Any]] = None,
+        as_dataframe: bool = True,
+        backend: str = "pandas",
+    ) -> Iterator[Any]: ...
+
+    def scroll(
+        self,
+        *,
+        batch_size: int = 100,
+        filter: Optional[Dict[str, Any]] = None,
+        as_dataframe: bool = False,
+        backend: str = "pandas",
+    ) -> Union[Iterator[List[Dict[str, Any]]], Iterator[Any]]:
+        """Yield batches of points from the collection.
+
+        Args:
+            batch_size: Points per batch (default 100).
+            filter: Optional payload filter dict.
+            as_dataframe: If True, yield DataFrames instead of list[dict].
+            backend: "pandas" or "polars" (default "pandas").
+
+        Returns:
+            Iterator of batches (list[dict] or DataFrame).
+
+        Raises:
+            ValueError: If batch_size is 0.
+            ImportError: If as_dataframe=True and backend is not installed.
+        """
+        ...
+
+    # --- DataFrame methods (issue #429) ---
+
+    def to_dataframe(
+        self,
+        results: List[Dict[str, Any]],
+        *,
+        backend: str = "pandas",
+    ) -> Any:
+        """Convert search results to a DataFrame.
+
+        Args:
+            results: List of search result dicts (id, score, payload).
+            backend: "pandas" or "polars" (default "pandas").
+
+        Returns:
+            A pandas.DataFrame or polars.DataFrame.
+        """
+        ...
+
+    def query_to_dataframe(
+        self,
+        results: List[Dict[str, Any]],
+        *,
+        backend: str = "pandas",
+    ) -> Any:
+        """Convert VelesQL query results to a DataFrame.
+
+        Args:
+            results: List of result dicts from Collection.query().
+            backend: "pandas" or "polars" (default "pandas").
+
+        Returns:
+            A pandas.DataFrame or polars.DataFrame.
+        """
+        ...
+
+    def upsert_from_dataframe(
+        self,
+        df: Any,
+        *,
+        backend: str = "pandas",
+    ) -> int:
+        """Upsert points from a DataFrame.
+
+        Args:
+            df: A pandas.DataFrame or polars.DataFrame with 'id',
+                optional 'vector', and payload columns.
+            backend: "pandas" or "polars" (default "pandas").
+
+        Returns:
+            Number of upserted points.
+
+        Raises:
+            ValueError: If required columns are missing or dimensions mismatch.
+        """
         ...
 
 
