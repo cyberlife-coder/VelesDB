@@ -405,6 +405,9 @@ class SearchOpsMixin:
         collection = validate_collection_name(collection)
         column = validate_column_name(column)
         keyword_escaped = keyword.replace("'", "''")
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        # All identifiers validated: collection→[a-zA-Z0-9_-]+, column→[a-zA-Z0-9_.]+,
+        # keyword_escaped has single-quotes doubled. Not a real SQL engine — VelesQL only.
         query_str = (
             f"SELECT * FROM {collection} "
             f"WHERE {column} CONTAINS_TEXT '{keyword_escaped}' "
