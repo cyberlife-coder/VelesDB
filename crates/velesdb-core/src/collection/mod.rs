@@ -54,7 +54,7 @@ mod e2e_integration_tests;
 mod set_operations_execution_tests;
 
 pub use any_collection::AnyCollection;
-pub use core::{IndexInfo, MAX_DIMENSION, MIN_DIMENSION};
+pub use core::{IndexInfo, ScrollBatch, MAX_DIMENSION, MIN_DIMENSION};
 pub use diagnostics::{CollectionDiagnostics, IndexHealth};
 pub use graph::{
     ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,

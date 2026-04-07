@@ -1,0 +1,216 @@
+"""DataFrame conversion utilities for VelesDB.
+
+Converts between VelesDB result types (list[dict]) and Pandas/Polars
+DataFrames. All pandas/polars imports are deferred to first use.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def _import_pandas() -> Any:
+    """Deferred pandas import with helpful error message."""
+    try:
+        import pandas  # noqa: F811
+        return pandas
+    except ImportError:
+        raise ImportError(
+            "pandas is required for DataFrame support. "
+            "Install it with: pip install velesdb[pandas]"
+        ) from None
+
+
+def _import_polars() -> Any:
+    """Deferred polars import with helpful error message."""
+    try:
+        import polars  # noqa: F811
+        return polars
+    except ImportError:
+        raise ImportError(
+            "polars is required for DataFrame support. "
+            "Install it with: pip install velesdb[polars]"
+        ) from None
+
+
+def _get_backend(backend: str) -> Any:
+    """Return the backend module for the given name."""
+    if backend == "pandas":
+        return _import_pandas()
+    elif backend == "polars":
+        return _import_polars()
+    else:
+        raise ValueError(
+            f"Unsupported backend '{backend}'. Use 'pandas' or 'polars'"
+        )
+
+
+def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
+    """Convert search results to a DataFrame.
+
+    Each dict should have 'id', 'score', and optional payload keys.
+    Missing payload fields are represented as None/NaN/null.
+
+    Args:
+        results: List of search result dicts.
+        backend: "pandas" or "polars" (default "pandas").
+
+    Returns:
+        A pandas.DataFrame or polars.DataFrame.
+    """
+    lib = _get_backend(backend)
+
+    if not results:
+        if backend == "pandas":
+            return lib.DataFrame(columns=["id", "score"])
+        return lib.DataFrame(schema={"id": lib.Int64, "score": lib.Float64})
+
+    rows = []
+    for r in results:
+        row: dict[str, Any] = {"id": r.get("id"), "score": r.get("score")}
+        payload = r.get("payload")
+        if isinstance(payload, dict):
+            row.update(payload)
+        rows.append(row)
+
+    return lib.DataFrame(rows)
+
+
+def query_to_dataframe(rows: list[dict], backend: str = "pandas") -> Any:
+    """Convert VelesQL query results to a DataFrame.
+
+    One column per unique key across all dicts. Missing keys become null.
+
+    Args:
+        rows: List of result dicts from Collection.query().
+        backend: "pandas" or "polars" (default "pandas").
+
+    Returns:
+        A pandas.DataFrame or polars.DataFrame.
+    """
+    lib = _get_backend(backend)
+
+    if not rows:
+        if backend == "pandas":
+            return lib.DataFrame()
+        return lib.DataFrame()
+
+    return lib.DataFrame(rows)
+
+
+def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
+    """Convert a scroll batch (list of point dicts) to a DataFrame.
+
+    Each dict has 'id', 'vector', and 'payload' keys.
+
+    Args:
+        batch: List of point dicts from scroll.
+        backend: "pandas" or "polars" (default "pandas").
+
+    Returns:
+        A pandas.DataFrame or polars.DataFrame.
+    """
+    lib = _get_backend(backend)
+
+    if not batch:
+        if backend == "pandas":
+            return lib.DataFrame(columns=["id", "vector", "payload"])
+        return lib.DataFrame(
+            schema={"id": lib.Int64, "vector": lib.List(lib.Float32), "payload": lib.Utf8}
+        )
+
+    rows = []
+    for p in batch:
+        row: dict[str, Any] = {
+            "id": p.get("id"),
+            "vector": list(p.get("vector", [])),
+        }
+        payload = p.get("payload")
+        if isinstance(payload, dict):
+            row.update(payload)
+        else:
+            row["payload"] = payload
+        rows.append(row)
+
+    return lib.DataFrame(rows)
+
+
+def dataframe_to_points(df: Any) -> list[dict]:
+    """Convert a DataFrame to a list of point dicts for upsert.
+
+    Expected columns: 'id' (required), 'vector' (optional), plus payload columns.
+
+    Args:
+        df: A pandas.DataFrame or polars.DataFrame.
+
+    Returns:
+        List of point dicts with 'id', optional 'vector', and 'payload'.
+    """
+    # Detect backend by type name to avoid importing
+    type_name = type(df).__module__
+    if "polars" in type_name:
+        records = df.to_dicts()
+    else:
+        records = df.to_dict(orient="records")
+
+    points = []
+    for row in records:
+        point: dict[str, Any] = {"id": int(row["id"])}
+        if "vector" in row and row["vector"] is not None:
+            vec = row["vector"]
+            point["vector"] = list(vec) if not isinstance(vec, list) else vec
+        # All remaining columns become payload
+        payload = {
+            k: v for k, v in row.items() if k not in ("id", "vector")
+        }
+        if payload:
+            point["payload"] = payload
+        points.append(point)
+
+    return points
+
+
+def validate_upsert_dataframe(
+    df: Any, metadata_only: bool, dimension: int
+) -> None:
+    """Validate DataFrame schema before upsert.
+
+    Args:
+        df: A pandas.DataFrame or polars.DataFrame.
+        metadata_only: Whether the target collection is metadata-only.
+        dimension: Expected vector dimension.
+
+    Raises:
+        ValueError: If required columns are missing or dimensions mismatch.
+    """
+    type_name = type(df).__module__
+    if "polars" in type_name:
+        columns = df.columns
+    else:
+        columns = list(df.columns)
+
+    if "id" not in columns:
+        raise ValueError("DataFrame must contain an 'id' column")
+
+    if not metadata_only and "vector" not in columns:
+        raise ValueError(
+            "DataFrame must contain a 'vector' column for "
+            "non-metadata-only collections"
+        )
+
+    if "vector" in columns and dimension > 0:
+        # Check first non-null vector dimension
+        if "polars" in type_name:
+            vectors = df["vector"].to_list()
+        else:
+            vectors = df["vector"].tolist()
+
+        for vec in vectors:
+            if vec is not None:
+                actual = len(vec)
+                if actual != dimension:
+                    raise ValueError(
+                        f"Vector dimension mismatch: expected {dimension}, "
+                        f"got {actual}"
+                    )
+                break

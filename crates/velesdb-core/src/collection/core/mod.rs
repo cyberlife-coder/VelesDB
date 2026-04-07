@@ -30,10 +30,14 @@ mod lifecycle_tests;
 mod recovery;
 #[cfg(all(test, feature = "persistence"))]
 mod recovery_tests;
+mod scroll;
+#[cfg(all(test, feature = "persistence"))]
+mod scroll_tests;
 mod statistics;
 
 pub use crate::validation::{MAX_DIMENSION, MIN_DIMENSION};
 pub use index_management::IndexInfo;
+pub use scroll::ScrollBatch;
 
 // All implementations are in submodules, no re-exports needed here
 // as they extend the Collection type defined in types.rs

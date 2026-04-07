@@ -76,6 +76,9 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SearchResult>()?;
     m.add_class::<FusionStrategy>()?;
 
+    // Scroll iterator (issue #429)
+    m.add_class::<collection::scroll::ScrollIterator>()?;
+
     // Persistent graph collection (Phase 1)
     m.add_class::<PyGraphCollection>()?;
     m.add_class::<PyGraphSchema>()?;

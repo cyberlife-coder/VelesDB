@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_metadata_collection()`, or `get_any_collection()` instead.
 
 ### Added
+- **Python DataFrame integration + Scroll cursor + Polars support (Issue #429)** —
+  New `Collection.scroll()` generator for server-side cursor-based iteration over
+  collection points (yields batches of `list[dict]` or DataFrames). New
+  `Collection.to_dataframe()`, `Collection.query_to_dataframe()`, and
+  `Collection.upsert_from_dataframe()` convenience methods for Pandas/Polars
+  DataFrame conversion. Pandas and Polars are optional dependencies
+  (`pip install velesdb[pandas]`, `pip install velesdb[polars]`). All DataFrame
+  imports are deferred — zero overhead when not used. Rust-native `scroll_batch`
+  on `Collection` core with ascending-ID cursor, optional payload filtering,
+  and O(log n + batch_size) per batch. Type stubs updated for all new methods.
 - **Strict text filter `CONTAINS_TEXT` operator (Issue #446)** — New VelesQL operator
   `column CONTAINS_TEXT 'keyword'` performs case-sensitive substring matching as a strict
   metadata filter. Unlike `MATCH` (RRF boost), `CONTAINS_TEXT` guarantees every returned
