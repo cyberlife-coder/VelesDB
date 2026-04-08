@@ -70,7 +70,7 @@ pub use prefetch::{
 //   or on architectures where the feature is guaranteed.
 // - Condition 3: Unaligned loads use `*_loadu_*`/masked-load intrinsics or equivalent
 //   APIs that permit unaligned access.
-// Reason: Intrinsics and pointer math are required for hot-path SIMD performance.
+// SAFETY: Intrinsics and pointer math are required for hot-path SIMD performance.
 
 // =============================================================================
 // ISA kernel submodules

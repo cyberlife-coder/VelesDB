@@ -236,7 +236,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             return (base, 0);
         };
 
-        // Reason: f64 product of two small positive values fits in usize.
+        // SAFETY: f64 product of two small positive values fits in usize.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let scaled = (base as f64 * scale) as usize;
 
@@ -358,7 +358,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     pub fn transform_score(&self, raw_distance: f32) -> f32 {
         match self.distance.metric() {
             DistanceMetric::Cosine => (1.0 - raw_distance).clamp(0.0, 1.0),
-            // Reason: CachedSimdDistance stores squared L2 during HNSW traversal
+            // SAFETY: CachedSimdDistance stores squared L2 during HNSW traversal
             // to avoid per-comparison sqrt. Apply sqrt here on the final k results.
             DistanceMetric::Euclidean => raw_distance.sqrt(),
             DistanceMetric::Hamming | DistanceMetric::Jaccard => raw_distance,

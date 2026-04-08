@@ -20,7 +20,7 @@ use std::path::Path;
 ///
 /// `Standard` uses full f32 distances. `RaBitQ` uses binary graph traversal
 /// (32x compression) with f32 re-ranking for final results.
-// Reason: `Standard` (272 B) is the hot path — boxing it would add pointer
+// SAFETY: `Standard` (272 B) is the hot path — boxing it would add pointer
 // indirection on every search call. `RaBitQ` is boxed intentionally to avoid
 // inflating `Standard`-mode layout across cache lines.
 #[allow(clippy::large_enum_variant)]
@@ -461,12 +461,12 @@ impl NativeHnswInner {
 // SAFETY: `NativeHnswInner` is `Send` because ownership transfer preserves invariants.
 // - Condition 1: Internal mutability is synchronized via `parking_lot::RwLock`/atomics.
 // - Condition 2: No thread-affine resources are stored in the wrapper.
-// Reason: Moving the index wrapper between threads is sound.
+// SAFETY: Moving the index wrapper between threads is sound.
 unsafe impl Send for NativeHnswInner {}
 // SAFETY: `NativeHnswInner` is `Sync` because shared references are concurrency-safe.
 // - Condition 1: Concurrent access to mutable graph state is lock/atomic protected.
 // - Condition 2: Exposed APIs do not bypass synchronization primitives.
-// Reason: `&NativeHnswInner` can be shared safely across threads.
+// SAFETY: `&NativeHnswInner` can be shared safely across threads.
 unsafe impl Sync for NativeHnswInner {}
 
 // ============================================================================

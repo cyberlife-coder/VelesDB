@@ -225,7 +225,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // SAFETY: `entry` is a valid node_id from entry_point (always a
             // successfully inserted node).
             // - Condition 1: entry < vectors.len() (from a prior successful insert).
-            // Reason: Hot-path greedy descent — bounds check eliminated.
+            // SAFETY: Hot-path greedy descent — bounds check eliminated.
             let entry_vec = unsafe { vectors.get_unchecked(entry) };
             let mut best_dist = self.distance.distance(query, entry_vec);
 
@@ -300,7 +300,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // SAFETY: neighbor is a valid node_id from the graph's
             // neighbor list, only containing IDs of inserted nodes.
             // - Condition 1: neighbor < vectors.len().
-            // Reason: Inner loop of greedy descent — bounds check eliminated.
+            // SAFETY: Inner loop of greedy descent — bounds check eliminated.
             let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
             let dist = self.distance.distance(query, neighbor_vec);
             if dist < *best_dist {
@@ -352,7 +352,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 // SAFETY: ep is a valid node_id from entry_point or random probe,
                 // always IDs of successfully inserted nodes.
                 // - Condition 1: ep < vectors.len().
-                // Reason: Entry-point initialization in search hot path.
+                // SAFETY: Entry-point initialization in search hot path.
                 let ep_vec = unsafe { vectors.get_unchecked(ep) };
                 let dist = self.distance.distance(query, ep_vec);
                 state.push_candidate(ep, dist);

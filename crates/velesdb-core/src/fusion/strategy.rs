@@ -215,7 +215,7 @@ impl FusionStrategy {
 
     /// Average fusion: mean of scores for each document.
     #[allow(clippy::cast_precision_loss)]
-    // Reason: scores.len() is the number of queries a document appeared in;
+    // SAFETY: scores.len() is the number of queries a document appeared in;
     // this is a small count that fits exactly in f32.
     fn fuse_average(results: Vec<Vec<(u64, f32)>>) -> Result<Vec<(u64, f32)>, FusionError> {
         let mut fused: Vec<(u64, f32)> = Self::collect_doc_scores(results)
@@ -250,11 +250,11 @@ impl FusionStrategy {
 
     /// RRF fusion: reciprocal rank fusion.
     #[allow(clippy::cast_precision_loss)]
-    // Reason: k (u32, typically 60) and rank+1 (small loop index) both fit
+    // SAFETY: k (u32, typically 60) and rank+1 (small loop index) both fit
     // exactly in f32 (exact up to 2^24).
     fn fuse_rrf(results: Vec<Vec<(u64, f32)>>, k: u32) -> Result<Vec<(u64, f32)>, FusionError> {
         let mut doc_rrf: HashMap<u64, f32> = HashMap::new();
-        // Reason: k is the RRF constant (default 60, max u32); u32 → f32 is
+        // SAFETY: k is the RRF constant (default 60, max u32); u32 → f32 is
         // exact for values <= 16_777_216, so no precision loss in practice.
         let k_f32 = k as f32;
 
@@ -279,7 +279,7 @@ impl FusionStrategy {
 
     /// Weighted fusion: combination of avg, max, and hit ratio.
     #[allow(clippy::cast_precision_loss)]
-    // Reason: total_queries and scores.len() are small counts (number of
+    // SAFETY: total_queries and scores.len() are small counts (number of
     // queries/hits per document); both fit exactly in f32.
     fn fuse_weighted(
         results: Vec<Vec<(u64, f32)>>,

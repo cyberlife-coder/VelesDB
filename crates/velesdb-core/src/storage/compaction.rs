@@ -13,7 +13,7 @@
 //! - Linux: `fallocate(FALLOC_FL_PUNCH_HOLE)`
 //! - Windows: `FSCTL_SET_ZERO_DATA`
 
-// Reason: Numeric casts in this file are intentional and bounded.
+// SAFETY: Numeric casts in this file are intentional and bounded.
 // Each cast site carries an inline #[allow] with a per-site justification.
 
 use super::sharded_index::ShardedIndex;
@@ -102,7 +102,7 @@ fn punch_hole_linux(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     // SAFETY: `libc::fallocate` requires a valid fd and offsets.
     // - Condition 1: `fd` comes from `file.as_raw_fd()` on an open file handle.
     // - Condition 2: `offset`/`len` are caller-provided ranges for the same file.
-    // Reason: Hole punching is only exposed through this syscall on Linux.
+    // SAFETY: Hole punching is only exposed through this syscall on Linux.
     let ret = unsafe { libc::fallocate(fd, mode, offset_off_t, len_off_t) };
 
     if ret == 0 {
@@ -147,13 +147,13 @@ fn punch_hole_windows(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     // SAFETY: `DeviceIoControl` requires valid handle/argument pointers.
     // - Condition 1: `handle` comes from `file.as_raw_handle()` for an open file.
     // - Condition 2: `info` and `bytes_returned` pointers are valid for the call duration.
-    // Reason: Windows sparse-zero operation is only reachable via this API.
+    // SAFETY: Windows sparse-zero operation is only reachable via this API.
     let result = unsafe {
         DeviceIoControl(
             handle,
             FSCTL_SET_ZERO_DATA,
             std::ptr::addr_of!(info).cast(),
-            // Reason: FileZeroDataInformation struct size is always <= 16 bytes; fits in u32.
+            // SAFETY: FileZeroDataInformation struct size is always <= 16 bytes; fits in u32.
             #[allow(clippy::cast_possible_truncation)]
             {
                 std::mem::size_of::<FileZeroDataInformation>() as u32
@@ -190,7 +190,7 @@ fn punch_hole_fallback(file: &File, offset: u64, len: u64) -> io::Result<bool> {
 
     // Write zeros in chunks to avoid large allocations
     let zeros = vec![0u8; FALLBACK_CHUNK_SIZE];
-    // Reason: `len` represents a byte range within a single file; on supported
+    // SAFETY: `len` represents a byte range within a single file; on supported
     // platforms (64-bit Linux/Windows) usize == u64, so no truncation occurs.
     // On 32-bit targets this function is only reachable for lengths <= usize::MAX.
     #[allow(clippy::cast_possible_truncation)]
@@ -350,7 +350,7 @@ impl CompactionContext<'_> {
             .open(&temp_path)?;
 
         // Size the temp file for active vectors
-        // Reason: active_size = active_count * vector_size; both are bounded by
+        // SAFETY: active_size = active_count * vector_size; both are bounded by
         // available memory (usize), so usize -> u64 widens and never truncates.
         #[allow(clippy::cast_possible_truncation)]
         let new_size = (active_size as u64).max(self.initial_size);
@@ -359,7 +359,7 @@ impl CompactionContext<'_> {
         // SAFETY: `MmapMut::map_mut` requires a writable file sized for mapping.
         // - Condition 1: `temp_file` was opened read/write and resized via `set_len`.
         // - Condition 2: Mapping length is derived from the file's current size.
-        // Reason: Compaction copies active bytes through a mutable mmap.
+        // SAFETY: Compaction copies active bytes through a mutable mmap.
         let mut temp_mmap = unsafe { MmapMut::map_mut(&temp_file)? };
 
         // 3. Copy active vectors to new file with new offsets
@@ -393,7 +393,7 @@ impl CompactionContext<'_> {
         // SAFETY: `MmapMut::map_mut` requires a writable file sized for mapping.
         // - Condition 1: `new_data_file` is opened read/write after atomic replace.
         // - Condition 2: File contents are fully materialized by the preceding flush/rename flow.
-        // Reason: Reloading mmap is required to switch storage to compacted bytes.
+        // SAFETY: Reloading mmap is required to switch storage to compacted bytes.
         let new_mmap = unsafe { MmapMut::map_mut(&new_data_file)? };
 
         // 7. Write compaction marker to WAL
@@ -412,7 +412,7 @@ impl CompactionContext<'_> {
         // an intermediate empty state visible to concurrent readers.
         *self.mmap.write() = new_mmap;
         self.index.replace_all(new_index);
-        // Reason: Release ordering pairs with the Acquire loads in
+        // SAFETY: Release ordering pairs with the Acquire loads in
         // `should_compact` and `compact` to ensure readers on ARM/weak-memory
         // architectures observe the updated mmap and index before seeing the
         // new offset value.

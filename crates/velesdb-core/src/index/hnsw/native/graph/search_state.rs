@@ -185,7 +185,7 @@ pub(super) fn gather_unvisited_neighbors<'a>(
             // SAFETY: neighbor is a valid node_id from the graph's neighbor list,
             // only containing IDs of successfully inserted nodes.
             // - Condition 1: neighbor < vectors.len().
-            // Reason: Batch gathering of unvisited neighbor vectors.
+            // SAFETY: Batch gathering of unvisited neighbor vectors.
             let vec = unsafe { vectors.get_unchecked(neighbor) };
             batch.push((neighbor, vec));
         }

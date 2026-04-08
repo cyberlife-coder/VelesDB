@@ -196,7 +196,7 @@ impl Drop for HnswIndex {
         // - Condition 1: `inner` is wrapped in ManuallyDrop to suppress automatic drop.
         // - Condition 2: Write lock guarantees no concurrent access during drop.
         // - Condition 3: This Drop impl is the only site that calls ManuallyDrop::drop.
-        // Reason: Drop order invariant — `inner` must be destroyed before `io_holder`
+        // SAFETY: Drop order invariant — `inner` must be destroyed before `io_holder`
         // to remain forward-compatible with backends that borrow from io_holder.
         unsafe {
             ManuallyDrop::drop(&mut *self.inner.write());

@@ -261,7 +261,7 @@ impl MatchQueryPlanner {
             2.0
         };
 
-        // Reason: limit, graph_factor and selectivity are all positive, so ceil() >= 0.
+        // SAFETY: limit, graph_factor and selectivity are all positive, so ceil() >= 0.
         #[allow(clippy::cast_sign_loss)]
         let estimated = (limit as f64 * graph_factor / selectivity).ceil() as usize;
         estimated.clamp(limit, limit * 100)

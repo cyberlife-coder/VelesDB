@@ -43,7 +43,7 @@ impl Parser {
     ///
     /// Extracts collection name, column list, and one or more value rows from a
     /// `insert_stmt` or `upsert_stmt` grammar pair.
-    #[allow(clippy::type_complexity)] // Reason: one-off tuple for internal parser helper.
+    #[allow(clippy::type_complexity)] // SAFETY: one-off tuple for internal parser helper.
     fn parse_insert_or_upsert_body(
         pair: pest::iterators::Pair<Rule>,
         context: &str,

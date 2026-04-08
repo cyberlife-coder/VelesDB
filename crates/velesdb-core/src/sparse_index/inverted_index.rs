@@ -118,7 +118,7 @@ impl SparseInvertedIndex {
     /// Preserves the current per-term upsert semantics of repeated `insert()`:
     /// later entries in the batch overwrite earlier entries for the same
     /// `(term_id, doc_id)` pair, while untouched terms from prior inserts remain.
-    // Reason: called from `collection::core::crud::upsert_bulk` and `internal_bench::sparse_insert_batch`.
+    // SAFETY: called from `collection::core::crud::upsert_bulk` and `internal_bench::sparse_insert_batch`.
     // The dead_code lint has a false positive because the call site reaches this method through
     // a `RwLockWriteGuard<BTreeMap<_,SparseInvertedIndex>>` deref chain which the lint does not trace.
     #[allow(dead_code)]

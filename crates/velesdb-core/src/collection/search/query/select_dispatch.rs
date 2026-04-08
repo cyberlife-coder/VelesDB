@@ -42,7 +42,7 @@ impl Collection {
             let limit = usize::try_from(limit).unwrap_or(MAX_LIMIT).min(MAX_LIMIT);
             results.truncate(limit);
         }
-        // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
+        // SAFETY: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
         #[allow(clippy::cast_possible_truncation)]
         let graph_latency_us = ctx.elapsed().as_micros() as u64;
         self.query_planner

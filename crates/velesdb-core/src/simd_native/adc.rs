@@ -40,7 +40,7 @@ pub(crate) fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Ve
         SimdLevel::Avx2 | SimdLevel::Avx512 => {
             // SAFETY: AVX2 ADC gather kernel requires CPU feature.
             // - Condition 1: `simd_level()` selected `Avx2` or `Avx512` after runtime detection.
-            // Reason: call gather-based ADC kernel for higher throughput.
+            // SAFETY: call gather-based ADC kernel for higher throughput.
             codes
                 .iter()
                 .enumerate()
@@ -58,7 +58,7 @@ pub(crate) fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Ve
         SimdLevel::Neon => {
             // SAFETY: NEON ADC kernel requires aarch64 target.
             // - Condition 1: `simd_level()` selected `Neon` after runtime detection.
-            // Reason: call NEON ADC kernel for higher throughput.
+            // SAFETY: call NEON ADC kernel for higher throughput.
             codes
                 .iter()
                 .enumerate()
@@ -69,7 +69,7 @@ pub(crate) fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Ve
                     }
                     // SAFETY: NEON is available (checked by `simd_level()` in outer match).
                     // - Condition 1: `simd_level()` selected `Neon`, confirming aarch64 NEON support.
-                    // Reason: Call per-code NEON ADC kernel for throughput inside the iterator.
+                    // SAFETY: Call per-code NEON ADC kernel for throughput inside the iterator.
                     unsafe { adc_single_neon(lut, c, m, k) }
                 })
                 .collect()

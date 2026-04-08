@@ -38,7 +38,7 @@ pub fn cosine_avx2_2acc(a: &[f32], b: &[f32]) -> Option<f32> {
         // SAFETY: Feature detection above guarantees AVX2+FMA availability.
         // - Condition 1: `is_x86_feature_detected!("avx2")` confirms AVX2 support.
         // - Condition 2: `is_x86_feature_detected!("fma")` confirms FMA support.
-        // Reason: Direct call to AVX2 2-accumulator cosine kernel for benchmarking.
+        // SAFETY: Direct call to AVX2 2-accumulator cosine kernel for benchmarking.
         Some(unsafe { crate::simd_native::cosine_fused_avx2_2acc(a, b) })
     } else {
         None
@@ -53,7 +53,7 @@ pub fn cosine_avx2_4acc(a: &[f32], b: &[f32]) -> Option<f32> {
         // SAFETY: Feature detection above guarantees AVX2+FMA availability.
         // - Condition 1: `is_x86_feature_detected!("avx2")` confirms AVX2 support.
         // - Condition 2: `is_x86_feature_detected!("fma")` confirms FMA support.
-        // Reason: Direct call to AVX2 4-accumulator cosine kernel for benchmarking.
+        // SAFETY: Direct call to AVX2 4-accumulator cosine kernel for benchmarking.
         Some(unsafe { crate::simd_native::cosine_fused_avx2(a, b) })
     } else {
         None
@@ -67,7 +67,7 @@ pub fn cosine_avx512(a: &[f32], b: &[f32]) -> Option<f32> {
     if std::arch::is_x86_feature_detected!("avx512f") {
         // SAFETY: Feature detection above guarantees AVX-512F availability.
         // - Condition 1: `is_x86_feature_detected!("avx512f")` confirms AVX-512F support.
-        // Reason: Direct call to AVX-512 cosine kernel for benchmarking.
+        // SAFETY: Direct call to AVX-512 cosine kernel for benchmarking.
         Some(unsafe { crate::simd_native::cosine_fused_avx512(a, b) })
     } else {
         None

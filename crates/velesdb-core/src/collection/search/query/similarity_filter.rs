@@ -39,7 +39,7 @@ impl Collection {
         drop(config);
 
         #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        // Reason: threshold is a user-provided f64 similarity score in [0.0, 1.0] range;
+        // SAFETY: threshold is a user-provided f64 similarity score in [0.0, 1.0] range;
         // precision loss and truncation to f32 are acceptable for comparison purposes.
         let threshold_f32 = threshold as f32;
 

@@ -57,12 +57,12 @@ pub struct ContiguousVectors {
 // SAFETY: `ContiguousVectors` is `Send` because it owns its allocation.
 // - Condition 1: The backing buffer is uniquely owned by the struct.
 // - Condition 2: Mutation requires `&mut self` or lock-guarded interior access.
-// Reason: Moving ownership of this container between threads is sound.
+// SAFETY: Moving ownership of this container between threads is sound.
 unsafe impl Send for ContiguousVectors {}
 // SAFETY: `ContiguousVectors` is `Sync` because shared access is read-only.
 // - Condition 1: All writes happen through methods requiring mutable or exclusive lock access.
 // - Condition 2: Returned shared slices borrow immutably and cannot mutate internal state.
-// Reason: Concurrent shared references cannot violate aliasing rules.
+// SAFETY: Concurrent shared references cannot violate aliasing rules.
 unsafe impl Sync for ContiguousVectors {}
 
 impl fmt::Debug for ContiguousVectors {
@@ -106,7 +106,7 @@ impl ContiguousVectors {
         // SAFETY: `alloc_zeroed` requires a valid non-zero layout.
         // - Condition 1: `dimension > 0` and `capacity >= 16` guarantee non-zero size.
         // - Condition 2: `layout` is built via `Layout::from_size_align` and therefore valid.
-        // Reason: Zero-initialized allocation guarantees all f32 slots are 0.0,
+        // SAFETY: Zero-initialized allocation guarantees all f32 slots are 0.0,
         // preventing UB when `insert_at` creates sparse gaps (indices 0..N not all written).
         let ptr = unsafe { alloc_zeroed(layout) };
 
@@ -194,7 +194,7 @@ impl ContiguousVectors {
         // - Condition 1: `data` is a valid, aligned `NonNull<f32>` pointer.
         // - Condition 2: `total <= capacity * dimension` ensures the slice is within the allocation.
         // - Condition 3: All bytes in the allocation are initialized (zeroed or written).
-        // Reason: Zero-copy GPU upload requires a contiguous &[f32] view.
+        // SAFETY: Zero-copy GPU upload requires a contiguous &[f32] view.
         unsafe { std::slice::from_raw_parts(self.data.as_ptr(), total) }
     }
 
@@ -281,7 +281,7 @@ impl ContiguousVectors {
         // SAFETY: We ensured capacity covers index, data is non-null (NonNull invariant)
         // - Condition 1: Capacity was verified to cover the target index.
         // - Condition 2: Both source and destination pointers are valid and properly aligned.
-        // Reason: Efficient bulk memory copy for vector insertion.
+        // SAFETY: Efficient bulk memory copy for vector insertion.
         unsafe {
             ptr::copy_nonoverlapping(
                 vector.as_ptr(),
@@ -344,7 +344,7 @@ impl ContiguousVectors {
             // - Condition 1: offset + dimension is within allocated buffer.
             // - Condition 2: Both pointers are valid and aligned for f32.
             // - Condition 3: &mut self guarantees exclusive access — no data race.
-            // Reason: Batch push with single pre-allocation.
+            // SAFETY: Batch push with single pre-allocation.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     vector.as_ptr(),
@@ -375,7 +375,7 @@ impl ContiguousVectors {
         // SAFETY: Index is within bounds (checked against count, which is <= capacity)
         // - Condition 1: index < count ensures access is within initialized range.
         // - Condition 2: data is non-null per NonNull invariant.
-        // Reason: Zero-copy slice creation from contiguous storage.
+        // SAFETY: Zero-copy slice creation from contiguous storage.
         Some(unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension) })
     }
 
@@ -401,7 +401,7 @@ impl ContiguousVectors {
         // SAFETY: Caller guarantees index < count, data is non-null (NonNull invariant)
         // - Condition 1: Caller contract ensures index < count.
         // - Condition 2: data is non-null per NonNull invariant.
-        // Reason: Performance-critical path requiring unchecked access.
+        // SAFETY: Performance-critical path requiring unchecked access.
         std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension)
     }
 
@@ -417,7 +417,7 @@ impl ContiguousVectors {
             // data is non-null per NonNull invariant.
             // - Condition 1: Bounds check ensures offset + dimension <= capacity * dimension.
             // - Condition 2: NonNull guarantees pointer validity.
-            // Reason: Create slice for cross-platform multi-cache-line prefetch.
+            // SAFETY: Create slice for cross-platform multi-cache-line prefetch.
             let vector = unsafe {
                 std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension)
             };
@@ -451,7 +451,7 @@ impl ContiguousVectors {
         // SAFETY: self.data was allocated with old_layout, is non-null (NonNull invariant)
         // - Condition 1: old_layout matches the allocation parameters.
         // - Condition 2: Pointer is non-null per NonNull invariant.
-        // Reason: Free old buffer after data migration to new buffer.
+        // SAFETY: Free old buffer after data migration to new buffer.
         unsafe {
             dealloc(self.data.as_ptr().cast::<u8>(), old_layout);
         }
@@ -495,7 +495,7 @@ impl ContiguousVectors {
             // - Condition 1: Source pointer (src) is valid and properly aligned.
             // - Condition 2: Destination pointer (new_data) is valid and properly aligned.
             // - Condition 3: Pointers are non-overlapping (old and new allocations are distinct).
-            // Reason: Migrate data to newly allocated buffer during resize.
+            // SAFETY: Migrate data to newly allocated buffer during resize.
             unsafe {
                 ptr::copy_nonoverlapping(src.as_ptr(), new_data.as_ptr(), copy_size);
             }

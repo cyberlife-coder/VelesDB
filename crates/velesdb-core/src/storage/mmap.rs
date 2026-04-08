@@ -200,7 +200,7 @@ impl MmapStorage {
         // - Condition 1: File was opened with read+write permissions.
         // - Condition 2: set_len() was called to ensure the file has INITIAL_SIZE bytes.
         // - Condition 3: MmapMut requires readable and writable file, guaranteed by OpenOptions.
-        // Reason: Memory mapping requires unsafe due to potential for undefined behavior if file is truncated externally.
+        // SAFETY: Memory mapping requires unsafe due to potential for undefined behavior if file is truncated externally.
         unsafe { MmapMut::map_mut(data_file) }
     }
 
@@ -287,7 +287,7 @@ impl MmapStorage {
         // - Condition 1: `end <= mmap.len()` guarantees the addressed range exists.
         // - Condition 2: `offset` is aligned to `align_of::<f32>()`.
         // - Condition 3: `mmap` read lock pins the mapping while guard is alive.
-        // Reason: Zero-copy read path needs raw pointer conversion to `[f32]`.
+        // SAFETY: Zero-copy read path needs raw pointer conversion to `[f32]`.
         let ptr = unsafe { mmap.as_ptr().add(offset).cast::<f32>() };
 
         let epoch_at_creation = self.remap_epoch.load(Ordering::Acquire);

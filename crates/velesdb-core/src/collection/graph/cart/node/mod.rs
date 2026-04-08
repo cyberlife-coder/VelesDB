@@ -16,12 +16,12 @@ mod growth;
 mod growth_tests;
 
 /// Node variants for the Compressed Adaptive Radix Tree.
-// Reason: Node256 is larger than other variants by design for high-degree vertices
+// SAFETY: Node256 is larger than other variants by design for high-degree vertices
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum CARTNode {
     /// Smallest internal node: 4 keys, 4 children.
-    // Reason: Node4 variant currently unused but required for CART completeness
+    // SAFETY: Node4 variant currently unused but required for CART completeness
     #[allow(dead_code)]
     Node4 {
         num_children: u8,

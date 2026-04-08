@@ -78,10 +78,10 @@ impl JsonValue {
         match value {
             crate::velesql::Value::String(s) => Some(Self::String(s.clone())),
             #[allow(clippy::cast_precision_loss)]
-            // Reason: index keys normalize all numerics to f64 for ordering.
+            // SAFETY: index keys normalize all numerics to f64 for ordering.
             crate::velesql::Value::Integer(i) => Some(Self::Number(F64Key::from(*i as f64))),
             #[allow(clippy::cast_precision_loss)]
-            // Reason: index keys normalize all numerics to f64 for ordering.
+            // SAFETY: index keys normalize all numerics to f64 for ordering.
             crate::velesql::Value::UnsignedInteger(u) => {
                 Some(Self::Number(F64Key::from(*u as f64)))
             }

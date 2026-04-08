@@ -35,7 +35,7 @@ struct GraphFileHeader {
 
 /// Reads a little-endian `u32` from the reader and returns it as `usize`.
 #[allow(clippy::cast_possible_truncation)]
-// Reason: u32 always fits in usize (min 32-bit targets)
+// SAFETY: u32 always fits in usize (min 32-bit targets)
 fn read_u32_field(reader: &mut BufReader<File>) -> std::io::Result<usize> {
     let mut buf = [0u8; 4];
     reader.read_exact(&mut buf)?;
@@ -44,7 +44,7 @@ fn read_u32_field(reader: &mut BufReader<File>) -> std::io::Result<usize> {
 
 /// Reads a little-endian `u64` from the reader and returns it as `usize`.
 #[allow(clippy::cast_possible_truncation)]
-// Reason: graph sizes are bounded well below usize::MAX on all supported targets
+// SAFETY: graph sizes are bounded well below usize::MAX on all supported targets
 fn read_u64_field(reader: &mut BufReader<File>) -> std::io::Result<usize> {
     let mut buf = [0u8; 8];
     reader.read_exact(&mut buf)?;
@@ -78,7 +78,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let vectors_guard = self.vectors.read();
         let mut writer = BufWriter::new(File::create(&vectors_path)?);
 
-        // Reason: Vector dimensions are always < 65536 and vector count fits u64.
+        // SAFETY: Vector dimensions are always < 65536 and vector count fits u64.
         #[allow(clippy::cast_possible_truncation)]
         let (count, dimension): (u64, u32) = match vectors_guard.as_ref() {
             Some(v) => (v.len() as u64, v.dimension() as u32),
@@ -128,7 +128,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let layers = self.layers.read();
         let mut writer = BufWriter::new(File::create(&graph_path)?);
 
-        // Reason: HNSW params are always small (<256 layers, <1024 connections).
+        // SAFETY: HNSW params are always small (<256 layers, <1024 connections).
         #[allow(clippy::cast_possible_truncation)]
         let header = GraphFileHeader {
             num_layers: layers.len() as u32,
@@ -182,12 +182,12 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
             for node_neighbors in &layer.neighbors {
                 let neighbors = node_neighbors.read();
-                // Reason: num_neighbors <= max_connections < 1024
+                // SAFETY: num_neighbors <= max_connections < 1024
                 #[allow(clippy::cast_possible_truncation)]
                 let num_neighbors = neighbors.len() as u32;
                 writer.write_all(&num_neighbors.to_le_bytes())?;
                 for &neighbor in neighbors.iter() {
-                    // Reason: NodeId stored as u32 in file format v1
+                    // SAFETY: NodeId stored as u32 in file format v1
                     #[allow(clippy::cast_possible_truncation)]
                     let neighbor_u32 = neighbor as u32;
                     writer.write_all(&neighbor_u32.to_le_bytes())?;

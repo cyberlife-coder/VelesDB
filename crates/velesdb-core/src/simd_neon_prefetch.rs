@@ -42,7 +42,7 @@ pub fn prefetch_read_l1(ptr: *const u8) {
     // SAFETY: `asm!(prfm ...)` emits a prefetch hint only.
     // - Condition 1: `prfm` does not dereference memory architecturally.
     // - Condition 2: Invalid pointers are tolerated by hardware for prefetch hints.
-    // Reason: Stable Rust lacks a fully-stable aarch64 prefetch intrinsic.
+    // SAFETY: Stable Rust lacks a fully-stable aarch64 prefetch intrinsic.
     unsafe {
         core::arch::asm!(
             "prfm pldl1keep, [{ptr}]",
@@ -61,7 +61,7 @@ pub fn prefetch_read_l2(ptr: *const u8) {
     // SAFETY: `asm!(prfm ...)` emits a prefetch hint only.
     // - Condition 1: `prfm` does not dereference memory architecturally.
     // - Condition 2: `nostack` and `preserves_flags` match instruction behavior.
-    // Reason: Stable Rust lacks a fully-stable aarch64 prefetch intrinsic.
+    // SAFETY: Stable Rust lacks a fully-stable aarch64 prefetch intrinsic.
     unsafe {
         core::arch::asm!(
             "prfm pldl2keep, [{ptr}]",
@@ -80,7 +80,7 @@ pub fn prefetch_read_l3(ptr: *const u8) {
     // SAFETY: `asm!(prfm ...)` emits a prefetch hint only.
     // - Condition 1: Invalid pointers are tolerated by hardware for prefetch hints.
     // - Condition 2: The instruction does not write through `ptr`.
-    // Reason: We need explicit L3-prefetch locality selection on stable.
+    // SAFETY: We need explicit L3-prefetch locality selection on stable.
     unsafe {
         core::arch::asm!(
             "prfm pldl3keep, [{ptr}]",
@@ -99,7 +99,7 @@ pub fn prefetch_write_l1(ptr: *const u8) {
     // SAFETY: `asm!(prfm ...)` emits a write-prefetch hint only.
     // - Condition 1: This does not perform a memory store.
     // - Condition 2: Calling convention is preserved by `nostack` and `preserves_flags`.
-    // Reason: We need explicit store-intent prefetch on aarch64.
+    // SAFETY: We need explicit store-intent prefetch on aarch64.
     unsafe {
         core::arch::asm!(
             "prfm pstl1keep, [{ptr}]",
@@ -141,7 +141,7 @@ pub fn prefetch_vector_neon(vector: &[f32]) {
     if vector_bytes > ARM_CACHE_LINE {
         // SAFETY: Prefetch is a non-faulting hint; pointer within vector bounds.
         // - Condition 1: vector_bytes > 128 guarantees the offset is in range.
-        // Reason: Prefetch second Apple Silicon cache line.
+        // SAFETY: Prefetch second Apple Silicon cache line.
         let ptr = unsafe { base.add(ARM_CACHE_LINE) };
         prefetch_read_l2(ptr);
     }

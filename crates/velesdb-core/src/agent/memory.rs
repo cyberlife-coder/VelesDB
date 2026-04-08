@@ -52,7 +52,7 @@ pub struct AgentMemory {
     episodic: EpisodicMemory,
     procedural: ProceduralMemory,
     ttl: Arc<MemoryTtl>,
-    // Reason: temporal_index will be used for time-based queries in future implementation
+    // SAFETY: temporal_index will be used for time-based queries in future implementation
     #[allow(dead_code)]
     temporal_index: Arc<TemporalIndex>,
     eviction_config: EvictionConfig,

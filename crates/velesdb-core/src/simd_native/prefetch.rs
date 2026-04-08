@@ -53,7 +53,7 @@ pub fn prefetch_vector(vector: &[f32]) {
         // - Condition 1: The pointer is derived from a valid slice reference (non-empty check above)
         // - Condition 2: Prefetch instructions are hints and never fault, even with invalid addresses
         // - Condition 3: x86_64 architecture guarantees _mm_prefetch availability
-        // Reason: Software prefetching for cache optimization before SIMD data access.
+        // SAFETY: Software prefetching for cache optimization before SIMD data access.
         unsafe {
             use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
             _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
@@ -85,7 +85,7 @@ pub fn prefetch_vector_from_u16(data: &[u16]) {
         // SAFETY: _mm_prefetch is a hint instruction that cannot cause memory faults.
         // - Condition 1: The pointer is derived from a valid slice reference.
         // - Condition 2: Prefetch hints never fault, even with invalid addresses.
-        // Reason: Software prefetching for ADC code vectors before gather operations.
+        // SAFETY: Software prefetching for ADC code vectors before gather operations.
         unsafe {
             use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
             _mm_prefetch(data.as_ptr().cast::<i8>(), _MM_HINT_T0);
@@ -118,7 +118,7 @@ pub fn prefetch_vector_u64(data: &[u64]) {
         // SAFETY: _mm_prefetch is a hint instruction that cannot cause memory faults.
         // - Condition 1: The pointer is derived from a valid slice reference.
         // - Condition 2: Prefetch hints never fault, even with invalid addresses.
-        // Reason: Software prefetching for RaBitQ binary codes before XOR+popcount.
+        // SAFETY: Software prefetching for RaBitQ binary codes before XOR+popcount.
         unsafe {
             use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
             _mm_prefetch(data.as_ptr().cast::<i8>(), _MM_HINT_T0);
@@ -175,7 +175,7 @@ fn prefetch_multi_x86(vector: &[f32]) {
     // SAFETY: _mm_prefetch is a non-faulting hint instruction.
     // - Condition 1: Pointers derived from valid slice reference.
     // - Condition 2: Offsets checked against vector_bytes.
-    // Reason: Multi-level cache warming for large vectors before SIMD processing.
+    // SAFETY: Multi-level cache warming for large vectors before SIMD processing.
     unsafe {
         _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
 
@@ -218,7 +218,7 @@ fn prefetch_multi_arm64(vector: &[f32]) {
     if vector_bytes > ARM_CL {
         // SAFETY: Prefetch is a non-faulting hint; offset < vector_bytes.
         // - Condition 1: `vector_bytes > ARM_CL` ensures offset is within allocation.
-        // Reason: Prefetch next cache line into L1 for spatial locality.
+        // SAFETY: Prefetch next cache line into L1 for spatial locality.
         let ptr = unsafe { base.add(ARM_CL) };
         crate::simd_neon_prefetch::prefetch_read_l1(ptr);
     }
@@ -226,7 +226,7 @@ fn prefetch_multi_arm64(vector: &[f32]) {
     if vector_bytes > ARM_CL * 2 {
         // SAFETY: Prefetch is a non-faulting hint; offset < vector_bytes.
         // - Condition 1: `vector_bytes > ARM_CL * 2` ensures offset is within allocation.
-        // Reason: Prefetch farther cache line into L2 for streaming access.
+        // SAFETY: Prefetch farther cache line into L2 for streaming access.
         let ptr = unsafe { base.add(ARM_CL * 2) };
         crate::simd_neon_prefetch::prefetch_read_l2(ptr);
     }
@@ -234,7 +234,7 @@ fn prefetch_multi_arm64(vector: &[f32]) {
     if vector_bytes > ARM_CL * 4 {
         // SAFETY: Prefetch is a non-faulting hint; offset < vector_bytes.
         // - Condition 1: `vector_bytes > ARM_CL * 4` ensures offset is within allocation.
-        // Reason: Prefetch distant cache line into L3 for large vector lookahead.
+        // SAFETY: Prefetch distant cache line into L3 for large vector lookahead.
         let ptr = unsafe { base.add(ARM_CL * 4) };
         crate::simd_neon_prefetch::prefetch_read_l3(ptr);
     }

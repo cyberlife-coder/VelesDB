@@ -15,7 +15,7 @@ mod advisor;
 mod composite;
 mod range;
 
-// Reason: EPIC-047 types are dead_code (not yet used externally), suppress unused import warnings
+// SAFETY: EPIC-047 types are dead_code (not yet used externally), suppress unused import warnings
 #[allow(unused_imports)]
 pub use advisor::{
     IndexAdvisor, IndexSuggestion, PatternStats, PredicateType, QueryPattern, QueryPatternTracker,

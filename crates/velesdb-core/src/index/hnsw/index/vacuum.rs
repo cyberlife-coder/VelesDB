@@ -147,7 +147,7 @@ impl HnswIndex {
             // - Condition 1: We hold exclusive write lock on inner_guard (no other access possible)
             // - Condition 2: This is called exactly once before replacement (no double-drop)
             // - Condition 3: The old value is immediately replaced with new_inner (no use-after-free)
-            // Reason: Explicit drop required before assignment to ManuallyDrop field.
+            // SAFETY: Explicit drop required before assignment to ManuallyDrop field.
             unsafe {
                 ManuallyDrop::drop(&mut *inner_guard);
             }

@@ -147,7 +147,7 @@ impl CachedSimdDistance {
 }
 
 impl DistanceEngine for CachedSimdDistance {
-    #[allow(clippy::inline_always)] // Reason: HNSW hot loop --- single branch + fn pointer call
+    #[allow(clippy::inline_always)] // SAFETY: HNSW hot loop --- single branch + fn pointer call
     #[inline(always)]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         match self.metric {
@@ -155,7 +155,7 @@ impl DistanceEngine for CachedSimdDistance {
                 1.0 - self.engine.cosine_similarity(a, b).clamp(-1.0, 1.0)
             }
             DistanceMetric::Cosine => 1.0 - self.engine.cosine_similarity(a, b),
-            // Reason: Returns squared L2 (no sqrt) because HNSW traversal only
+            // SAFETY: Returns squared L2 (no sqrt) because HNSW traversal only
             // needs ordering and sqrt is monotone. The sqrt is deferred to
             // `transform_score()` which is applied to the final k results only.
             // This saves one f32::sqrt() per distance computation in the hot loop.

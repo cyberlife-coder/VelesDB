@@ -253,7 +253,7 @@ impl Collection {
         if let Some(text_query) = Self::extract_match_query(cond) {
             let fusion = search_opts.fusion_clause.as_ref();
             let vector_weight = fusion.and_then(|fc| fc.vector_weight).map(|w| {
-                // Reason: f64 → f32 for API compat; weight is clamped 0.0–1.0.
+                // SAFETY: f64 → f32 for API compat; weight is clamped 0.0–1.0.
                 #[allow(clippy::cast_possible_truncation)]
                 let w_f32 = w as f32;
                 w_f32
