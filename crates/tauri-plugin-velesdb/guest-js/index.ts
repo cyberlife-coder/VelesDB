@@ -170,7 +170,7 @@ export interface BatchSearchRequest {
 }
 
 /** Fusion strategy for multi-query search. */
-export type FusionStrategy = 'rrf' | 'average' | 'maximum' | 'weighted';
+export type FusionStrategy = 'rrf' | 'average' | 'maximum' | 'weighted' | 'relative_score';
 
 /** Fusion parameters for multi-query search. */
 export interface FusionParams {
@@ -182,6 +182,10 @@ export interface FusionParams {
   maxWeight?: number;
   /** Weighted fusion: hit weight (default: 0.1). */
   hitWeight?: number;
+  /** Relative score fusion: dense branch weight (default: 0.5). */
+  denseWeight?: number;
+  /** Relative score fusion: sparse branch weight (default: 0.5). */
+  sparseWeight?: number;
 }
 
 /** Request for multi-query fusion search. */
@@ -192,7 +196,7 @@ export interface MultiQuerySearchRequest {
   vectors: number[][];
   /** Number of results to return. Default: 10. */
   topK?: number;
-  /** Fusion strategy: 'rrf', 'average', 'maximum', 'weighted'. Default: 'rrf'. */
+  /** Fusion strategy: 'rrf', 'average', 'maximum', 'weighted', 'relative_score'. Default: 'rrf'. */
   fusion?: FusionStrategy;
   /** Fusion parameters. */
   fusionParams?: FusionParams;

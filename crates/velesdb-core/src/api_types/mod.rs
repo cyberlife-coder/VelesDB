@@ -80,6 +80,18 @@ pub const fn default_hit_weight() -> f32 {
     0.2
 }
 
+/// Default dense weight for relative score fusion.
+#[must_use]
+pub const fn default_dense_weight() -> f32 {
+    0.5
+}
+
+/// Default sparse weight for relative score fusion.
+#[must_use]
+pub const fn default_sparse_weight() -> f32 {
+    0.5
+}
+
 /// Default index type: hash.
 #[must_use]
 pub fn default_index_type() -> String {

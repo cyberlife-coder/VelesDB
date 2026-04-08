@@ -101,10 +101,15 @@ async fn deprecation_header(
 ) -> axum::response::Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert("deprecation", "true".parse().expect("test: static header value"));
+    headers.insert(
+        "deprecation",
+        "true".parse().expect("test: static header value"),
+    );
     headers.insert(
         "x-api-deprecated",
-        "Use /v1/ prefix".parse().expect("test: static header value"),
+        "Use /v1/ prefix"
+            .parse()
+            .expect("test: static header value"),
     );
     response
 }

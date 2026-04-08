@@ -161,8 +161,7 @@ async fn v1_and_legacy_health_return_same_body() {
     let body_legacy = axum::body::to_bytes(resp_legacy.into_body(), usize::MAX)
         .await
         .expect("test: read body");
-    let json_legacy: Value =
-        serde_json::from_slice(&body_legacy).expect("test: parse JSON");
+    let json_legacy: Value = serde_json::from_slice(&body_legacy).expect("test: parse JSON");
 
     assert_eq!(
         json_v1["status"], json_legacy["status"],

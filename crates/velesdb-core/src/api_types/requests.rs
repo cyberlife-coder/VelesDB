@@ -8,9 +8,9 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use super::{
-    default_avg_weight, default_collection_type, default_fusion_strategy, default_hit_weight,
-    default_index_type, default_max_weight, default_metric, default_rrf_k, default_storage_mode,
-    default_top_k, default_vector_weight, serde_id,
+    default_avg_weight, default_collection_type, default_dense_weight, default_fusion_strategy,
+    default_hit_weight, default_index_type, default_max_weight, default_metric, default_rrf_k,
+    default_sparse_weight, default_storage_mode, default_top_k, default_vector_weight, serde_id,
 };
 
 // ============================================================================
@@ -289,7 +289,7 @@ pub struct MultiQuerySearchRequest {
     #[serde(default = "default_top_k")]
     #[cfg_attr(feature = "openapi", schema(example = 10))]
     pub top_k: usize,
-    /// Fusion strategy: "average", "maximum", "rrf", "weighted".
+    /// Fusion strategy: "average", "maximum", "rrf", "weighted", "relative_score".
     #[serde(default = "default_fusion_strategy")]
     #[cfg_attr(feature = "openapi", schema(example = "rrf"))]
     pub strategy: String,
@@ -309,6 +309,14 @@ pub struct MultiQuerySearchRequest {
     #[serde(default = "default_hit_weight")]
     #[cfg_attr(feature = "openapi", schema(example = 0.2))]
     pub hit_weight: f32,
+    /// Relative score fusion: weight for the dense (vector) branch.
+    #[serde(default = "default_dense_weight")]
+    #[cfg_attr(feature = "openapi", schema(example = 0.5))]
+    pub dense_weight: f32,
+    /// Relative score fusion: weight for the sparse branch.
+    #[serde(default = "default_sparse_weight")]
+    #[cfg_attr(feature = "openapi", schema(example = 0.5))]
+    pub sparse_weight: f32,
     /// Optional metadata filter.
     #[serde(default)]
     pub filter: Option<serde_json::Value>,

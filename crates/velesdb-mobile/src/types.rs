@@ -128,6 +128,13 @@ pub enum FusionStrategy {
         /// Weight for hit ratio (0.0-1.0).
         hit_weight: f32,
     },
+    /// Relative Score Fusion for dense + sparse hybrid search.
+    RelativeScore {
+        /// Weight for the dense (vector) branch (0.0-1.0).
+        dense_weight: f32,
+        /// Weight for the sparse branch (0.0-1.0).
+        sparse_weight: f32,
+    },
 }
 
 impl From<FusionStrategy> for CoreFusionStrategy {
@@ -144,6 +151,13 @@ impl From<FusionStrategy> for CoreFusionStrategy {
                 avg_weight,
                 max_weight,
                 hit_weight,
+            },
+            FusionStrategy::RelativeScore {
+                dense_weight,
+                sparse_weight,
+            } => CoreFusionStrategy::RelativeScore {
+                dense_weight,
+                sparse_weight,
             },
         }
     }

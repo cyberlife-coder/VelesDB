@@ -41,10 +41,25 @@ pub fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> &'static str {
     mode.canonical_name()
 }
 
+/// Extracts a named f64 param from JSON, accepting both `camelCase` and `snake_case` keys.
+#[allow(clippy::cast_possible_truncation)]
+// Reason: JSON f64 → f32 for weights; values are small config numbers (0.0-1.0).
+fn extract_weight(
+    params: Option<&serde_json::Value>,
+    camel: &str,
+    snake: &str,
+    default: f64,
+) -> f32 {
+    params
+        .and_then(|p| p.get(camel).or_else(|| p.get(snake)))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(default) as f32
+}
+
 /// Parses fusion strategy from string and optional params.
 #[must_use]
-// Reason: JSON f64 → f32 for weights, u64 → u32 for k; values are small config numbers.
 #[allow(clippy::cast_possible_truncation)]
+// Reason: JSON u64 → u32 for k; value is a small config number (typically 60).
 pub fn parse_fusion_strategy(
     fusion: &str,
     params: Option<&serde_json::Value>,
@@ -60,25 +75,15 @@ pub fn parse_fusion_strategy(
         }
         "average" => FusionStrategy::Average,
         "maximum" => FusionStrategy::Maximum,
-        "weighted" => {
-            let avg_weight = params
-                .and_then(|p| p.get("avgWeight").or_else(|| p.get("avg_weight")))
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(0.6) as f32;
-            let max_weight = params
-                .and_then(|p| p.get("maxWeight").or_else(|| p.get("max_weight")))
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(0.3) as f32;
-            let hit_weight = params
-                .and_then(|p| p.get("hitWeight").or_else(|| p.get("hit_weight")))
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(0.1) as f32;
-            FusionStrategy::Weighted {
-                avg_weight,
-                max_weight,
-                hit_weight,
-            }
-        }
+        "weighted" => FusionStrategy::Weighted {
+            avg_weight: extract_weight(params, "avgWeight", "avg_weight", 0.6),
+            max_weight: extract_weight(params, "maxWeight", "max_weight", 0.3),
+            hit_weight: extract_weight(params, "hitWeight", "hit_weight", 0.1),
+        },
+        "relative_score" | "rsf" => FusionStrategy::RelativeScore {
+            dense_weight: extract_weight(params, "denseWeight", "dense_weight", 0.5),
+            sparse_weight: extract_weight(params, "sparseWeight", "sparse_weight", 0.5),
+        },
         unknown => {
             tracing::warn!(
                 strategy = unknown,
