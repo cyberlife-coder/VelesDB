@@ -149,6 +149,8 @@ impl FusionStrategy {
             } => format!(
                 "FusionStrategy.relative_score(dense_weight={dense_weight}, sparse_weight={sparse_weight})"
             ),
+            // Forward-compat: future variants added behind #[non_exhaustive].
+            _ => format!("FusionStrategy(<unknown variant: {:?}>)", self.inner),
         }
     }
 }
