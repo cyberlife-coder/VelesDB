@@ -151,7 +151,7 @@ impl ScoreBreakdown {
     }
 
     /// Compute final score using the specified strategy.
-    pub fn compute_final(&mut self, strategy: &FusionStrategy) {
+    pub fn compute_final(&mut self, strategy: &ScoreFusionMethod) {
         self.final_score = strategy.combine(self);
     }
 
@@ -184,8 +184,11 @@ impl ScoreBreakdown {
 }
 
 /// Strategy for combining multiple scores (EPIC-049 US-004).
+///
+/// Named `ScoreFusionMethod` to distinguish from the public
+/// [`crate::fusion::FusionStrategy`] enum used for multi-query result fusion.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum FusionStrategy {
+pub enum ScoreFusionMethod {
     /// Reciprocal Rank Fusion (RRF) - good for combining ranked lists.
     #[default]
     Rrf,
@@ -206,7 +209,7 @@ pub enum FusionStrategy {
     Average,
 }
 
-impl FusionStrategy {
+impl ScoreFusionMethod {
     /// Combine scores from a breakdown using this strategy.
     #[must_use]
     pub fn combine(&self, breakdown: &ScoreBreakdown) -> f32 {
