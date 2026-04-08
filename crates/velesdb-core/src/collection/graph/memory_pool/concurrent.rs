@@ -112,7 +112,7 @@ impl ConcurrentPoolHandle {
 }
 
 // Compile-time check: ConcurrentMemoryPool must be Send + Sync
-// Reason: Compile-time assertion for Send + Sync bounds verification
+// SAFETY: Compile-time assertion for Send + Sync bounds verification
 #[allow(dead_code)]
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}

@@ -1,6 +1,6 @@
 //! StreamIngester: bounded-channel ingestion with micro-batch drain.
 
-// Reason: StreamIngester methods and drain helpers are called from the
+// SAFETY: StreamIngester methods and drain helpers are called from the
 // spawned drain thread — false positive from pub(crate) Collection visibility.
 #![allow(dead_code)]
 
@@ -211,7 +211,7 @@ impl Drop for StreamIngester {
 /// 1. Shutdown notification — flush remaining batch and exit.
 /// 2. Timer tick — flush partial batch if non-empty.
 /// 3. Channel receive — push to batch; flush when `batch_size` reached.
-// Reason: tokio::select! macro expansion inflates cognitive complexity beyond
+// SAFETY: tokio::select! macro expansion inflates cognitive complexity beyond
 // what the actual logic warrants. Each branch delegates to a helper function.
 #[allow(clippy::cognitive_complexity)]
 async fn drain_loop(

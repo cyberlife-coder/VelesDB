@@ -53,7 +53,7 @@ use super::types::Collection;
 ///
 /// Returns an error if any point has a mismatched dimension or if
 /// the blocking task panics.
-#[allow(dead_code)] // Reason: Called from async_ops_tests.rs
+#[allow(dead_code)] // SAFETY: Called from async_ops_tests.rs
 pub(crate) async fn upsert_bulk_async(
     collection: Arc<Collection>,
     points: Vec<Point>,
@@ -95,7 +95,7 @@ pub(crate) async fn upsert_bulk_async(
 /// # Errors
 ///
 /// Returns an error if any insert operation fails.
-#[allow(dead_code)] // Reason: Called from async_ops_tests.rs
+#[allow(dead_code)] // SAFETY: Called from async_ops_tests.rs
 pub(crate) async fn upsert_bulk_streaming<F>(
     collection: Arc<Collection>,
     points: Vec<Point>,
@@ -146,7 +146,7 @@ where
 ///
 /// H3: Intermediate batches skip fsync (deferred sync) to eliminate
 /// per-batch I/O overhead.
-#[allow(dead_code)] // Reason: Called by upsert_bulk_streaming above
+#[allow(dead_code)] // SAFETY: Called by upsert_bulk_streaming above
 async fn upsert_chunk(
     coll: Arc<Collection>,
     chunk_vec: Vec<Point>,
@@ -171,7 +171,7 @@ async fn upsert_chunk(
 /// # Errors
 ///
 /// Returns an error if file operations fail or if the blocking task panics.
-#[allow(dead_code)] // Reason: Called from async_ops_tests.rs
+#[allow(dead_code)] // SAFETY: Called from async_ops_tests.rs
 pub(crate) async fn flush_async(collection: Arc<Collection>) -> Result<()> {
     tokio::task::spawn_blocking(move || collection.flush())
         .await
@@ -192,7 +192,7 @@ pub(crate) async fn flush_async(collection: Arc<Collection>) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error if the query dimension doesn't match.
-#[allow(dead_code)] // Reason: Called from async_ops_tests.rs
+#[allow(dead_code)] // SAFETY: Called from async_ops_tests.rs
 pub(crate) async fn search_async(
     collection: Arc<Collection>,
     query: Vec<f32>,

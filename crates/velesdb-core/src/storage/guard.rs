@@ -75,13 +75,13 @@ pub struct VectorSliceGuard<'a> {
 // SAFETY: `VectorSliceGuard` is `Send` because it carries read-only mapped data.
 // - Condition 1: `_guard` pins the mapping and prevents concurrent remap mutation.
 // - Condition 2: Epoch checks reject stale pointers after remap.
-// Reason: Transferring read-only guard ownership across threads preserves invariants.
+// SAFETY: Transferring read-only guard ownership across threads preserves invariants.
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for VectorSliceGuard<'_> {}
 // SAFETY: `VectorSliceGuard` is `Sync` because shared access is immutable.
 // - Condition 1: Exposed data is `&[f32]` only; no mutable alias is produced.
 // - Condition 2: Underlying map lifetime is tied to `_guard` and epoch validation.
-// Reason: Concurrent reads of stable mapped memory are sound.
+// SAFETY: Concurrent reads of stable mapped memory are sound.
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Sync for VectorSliceGuard<'_> {}
 
@@ -106,7 +106,7 @@ impl VectorSliceGuard<'_> {
         // SAFETY: `from_raw_parts` requires a valid pointer/len pair.
         // - Condition 1: `ptr` and `len` were validated when guard was created.
         // - Condition 2: Epoch equality above guarantees no remap invalidated `ptr`.
-        // Reason: Zero-copy slice access avoids allocations while preserving safety invariants.
+        // SAFETY: Zero-copy slice access avoids allocations while preserving safety invariants.
         Ok(unsafe { std::slice::from_raw_parts(self.ptr, self.len) })
     }
 

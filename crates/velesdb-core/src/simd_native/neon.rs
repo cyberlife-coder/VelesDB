@@ -35,7 +35,7 @@ pub(crate) fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
     // - Condition 1: NEON is always present on aarch64; no runtime detection needed.
     // - Condition 2: Immediate value 0.0 is a valid f32 constant accepted by the instruction.
-    // Reason: Initialise the SIMD accumulator register to zero before the reduction loop.
+    // SAFETY: Initialise the SIMD accumulator register to zero before the reduction loop.
     let mut sum = unsafe { vdupq_n_f32(0.0) };
 
     let a_ptr = a.as_ptr();
@@ -46,7 +46,7 @@ pub(crate) fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
         // SAFETY: `vld1q_f32` loads 4 f32 values from an unaligned address on aarch64.
         // - Condition 1: `offset + 4 <= simd_len * 4 <= len`, so both pointers stay within slice bounds.
         // - Condition 2: `vld1q_f32` is documented to support unaligned loads on ARM64.
-        // Reason: Core NEON computation for dot product accumulation per 4-element block.
+        // SAFETY: Core NEON computation for dot product accumulation per 4-element block.
         unsafe {
             let va = vld1q_f32(a_ptr.add(offset));
             let vb = vld1q_f32(b_ptr.add(offset));
@@ -57,7 +57,7 @@ pub(crate) fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
     // - Condition 1: NEON is always present on aarch64; intrinsic is always available.
     // - Condition 2: `sum` is a valid float32x4_t value set by `vdupq_n_f32`/`vfmaq_f32`.
-    // Reason: Horizontal reduction of the SIMD accumulator to a scalar dot-product result.
+    // SAFETY: Horizontal reduction of the SIMD accumulator to a scalar dot-product result.
     let mut result = unsafe { vaddvq_f32(sum) };
 
     let base = simd_len * 4;
@@ -94,7 +94,7 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `add` on a raw pointer derived from a valid slice.
     // - Condition 1: `len / 16 * 16 <= len`, so `end_main` is within or at the end of the slice.
     // - Condition 2: `add(len)` yields the one-past-the-end pointer, which is valid for comparison.
-    // Reason: Establish loop bounds for the 16-element-wide main body and scalar tail.
+    // SAFETY: Establish loop bounds for the 16-element-wide main body and scalar tail.
     let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
     let end_ptr = unsafe { a.as_ptr().add(len) };
 
@@ -115,14 +115,14 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 
     // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
     // - Condition 1: NEON is always present on aarch64; `vaddvq_f32` is guaranteed available.
-    // Reason: Horizontal reduction of the combined SIMD accumulator to a scalar result.
+    // SAFETY: Horizontal reduction of the combined SIMD accumulator to a scalar result.
     let mut result = unsafe { vaddvq_f32(combined) };
 
     while a_ptr < end_ptr {
         // SAFETY: Raw pointer dereference for scalar tail processing.
         // - Condition 1: Loop condition `a_ptr < end_ptr` guarantees both pointers are within slice bounds.
         // - Condition 2: `b_ptr` advances in step with `a_ptr` so it remains within the `b` slice.
-        // Reason: Handle the remaining 0-15 elements that the 16-wide SIMD loop did not cover.
+        // SAFETY: Handle the remaining 0-15 elements that the 16-wide SIMD loop did not cover.
         unsafe {
             result += *a_ptr * *b_ptr;
             a_ptr = a_ptr.add(1);
@@ -153,12 +153,12 @@ pub(crate) fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
         // and len >= 64 (checked above).
         // - Condition 1: NEON is always present on aarch64.
         // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
-        // Reason: Delegate to the 4-accumulator ILP variant for large vectors.
+        // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
         return unsafe { cosine_fused_neon_4acc(a, b) };
     }
     // SAFETY: `cosine_fused_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
-    // Reason: Single-accumulator variant for small/medium vectors.
+    // SAFETY: Single-accumulator variant for small/medium vectors.
     unsafe { cosine_fused_neon_1acc(a, b) }
 }
 
@@ -174,7 +174,7 @@ unsafe fn cosine_fused_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
     // - Condition 1: NEON is always present on aarch64.
     // - Condition 2: Immediate value 0.0 is valid for the instruction.
-    // Reason: Initialise three SIMD accumulators (dot, norm_a, norm_b).
+    // SAFETY: Initialise three SIMD accumulators (dot, norm_a, norm_b).
     let mut dot_acc = vdupq_n_f32(0.0);
     let mut na_acc = vdupq_n_f32(0.0);
     let mut nb_acc = vdupq_n_f32(0.0);
@@ -187,7 +187,7 @@ unsafe fn cosine_fused_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
         // SAFETY: `vld1q_f32`/`vfmaq_f32` are non-faulting NEON operations.
         // - Condition 1: `offset + 4 <= simd_len * 4 <= len`, pointers within bounds.
         // - Condition 2: `vld1q_f32` supports unaligned loads on ARM64.
-        // Reason: Single-pass accumulation of dot, norm_a_sq, norm_b_sq.
+        // SAFETY: Single-pass accumulation of dot, norm_a_sq, norm_b_sq.
         let va = vld1q_f32(a_ptr.add(offset));
         let vb = vld1q_f32(b_ptr.add(offset));
         dot_acc = vfmaq_f32(dot_acc, va, vb);
@@ -197,7 +197,7 @@ unsafe fn cosine_fused_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 
     // SAFETY: `vaddvq_f32` reduces a 128-bit register to scalar on aarch64.
     // - Condition 1: All accumulators are valid float32x4_t values.
-    // Reason: Horizontal reduction of the three accumulators.
+    // SAFETY: Horizontal reduction of the three accumulators.
     let mut dot = vaddvq_f32(dot_acc);
     let mut norm_a_sq = vaddvq_f32(na_acc);
     let mut norm_b_sq = vaddvq_f32(nb_acc);
@@ -226,7 +226,7 @@ unsafe fn cosine_fused_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `add` on a raw pointer derived from a valid slice.
     // - Condition 1: `main_end <= len`, so pointer stays within the allocation.
     // - Condition 2: `add(len)` yields one-past-end, valid for comparison.
-    // Reason: Establish loop bounds for 16-wide main body and scalar tail.
+    // SAFETY: Establish loop bounds for 16-wide main body and scalar tail.
     let end_main = a.as_ptr().add(main_end);
     let end_ptr = a.as_ptr().add(len);
 
@@ -258,7 +258,7 @@ unsafe fn reduce_4acc_neon(
     use std::arch::aarch64::*;
     // SAFETY: `vaddq_f32`/`vaddvq_f32` are non-faulting register operations.
     // - Condition 1: All accumulators hold valid float32x4_t values.
-    // Reason: Reduce 4 accumulators to scalar result.
+    // SAFETY: Reduce 4 accumulators to scalar result.
     let ab01 = vaddq_f32(a0, a1);
     let ab23 = vaddq_f32(a2, a3);
     vaddvq_f32(vaddq_f32(ab01, ab23))
@@ -279,7 +279,7 @@ unsafe fn cosine_fused_neon_main_loop(
     // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
     // - Condition 1: NEON is always present on aarch64.
     // - Condition 2: Immediate 0.0 is valid.
-    // Reason: Initialise 12 accumulators (3 products x 4-way ILP).
+    // SAFETY: Initialise 12 accumulators (3 products x 4-way ILP).
     let (mut d0, mut d1, mut d2, mut d3) = (
         vdupq_n_f32(0.0),
         vdupq_n_f32(0.0),
@@ -302,7 +302,7 @@ unsafe fn cosine_fused_neon_main_loop(
     while a_ptr < end_main {
         // SAFETY: Loop condition guarantees 16 elements remain before `end_main`.
         // - Condition 1: `vld1q_f32` supports unaligned loads on ARM64.
-        // Reason: 16-wide single-pass accumulation with 4-way ILP.
+        // SAFETY: 16-wide single-pass accumulation with 4-way ILP.
         let va0 = vld1q_f32(a_ptr);
         let vb0 = vld1q_f32(b_ptr);
         d0 = vfmaq_f32(d0, va0, vb0);
@@ -352,7 +352,7 @@ unsafe fn cosine_fused_neon_scalar_tail(
     while a_ptr < end_ptr {
         // SAFETY: Loop condition guarantees both pointers are within slice bounds.
         // - Condition 1: `b_ptr` advances in step with `a_ptr`.
-        // Reason: Handle remaining elements the 16-wide loop did not cover.
+        // SAFETY: Handle remaining elements the 16-wide loop did not cover.
         let x = *a_ptr;
         let y = *b_ptr;
         dot += x * y;
@@ -388,7 +388,7 @@ pub(crate) fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
     }
     // SAFETY: `squared_l2_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
-    // Reason: Single-accumulator variant for small/medium vectors.
+    // SAFETY: Single-accumulator variant for small/medium vectors.
     unsafe { squared_l2_neon_1acc(a, b) }
 }
 
@@ -404,7 +404,7 @@ unsafe fn squared_l2_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
     // - Condition 1: NEON is always present on aarch64; no runtime detection needed.
     // - Condition 2: Immediate value 0.0 is a valid f32 constant accepted by the instruction.
-    // Reason: Initialise the SIMD accumulator register to zero before the squared-diff loop.
+    // SAFETY: Initialise the SIMD accumulator register to zero before the squared-diff loop.
     let mut sum = vdupq_n_f32(0.0);
 
     let a_ptr = a.as_ptr();
@@ -415,7 +415,7 @@ unsafe fn squared_l2_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
         // SAFETY: `vld1q_f32`/`vsubq_f32`/`vfmaq_f32` are non-faulting NEON operations.
         // - Condition 1: `offset + 4 <= simd_len * 4 <= len`, so both pointers stay within slice bounds.
         // - Condition 2: `vld1q_f32` is documented to support unaligned loads on ARM64.
-        // Reason: Compute squared element-wise differences for the L2 distance accumulator.
+        // SAFETY: Compute squared element-wise differences for the L2 distance accumulator.
         let va = vld1q_f32(a_ptr.add(offset));
         let vb = vld1q_f32(b_ptr.add(offset));
         let diff = vsubq_f32(va, vb);
@@ -425,7 +425,7 @@ unsafe fn squared_l2_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
     // - Condition 1: NEON is always present on aarch64; intrinsic is always available.
     // - Condition 2: `sum` is a valid float32x4_t value set by `vdupq_n_f32`/`vfmaq_f32`.
-    // Reason: Horizontal reduction of the squared-difference accumulator to a scalar result.
+    // SAFETY: Horizontal reduction of the squared-difference accumulator to a scalar result.
     let mut result = vaddvq_f32(sum);
 
     let base = simd_len * 4;
@@ -455,7 +455,7 @@ fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `add` on a raw pointer derived from a valid slice.
     // - Condition 1: `len / 16 * 16 <= len`, so `end_main` is within or at the end of the slice.
     // - Condition 2: `add(len)` yields the one-past-the-end pointer, which is valid for comparison.
-    // Reason: Establish loop bounds for the 16-element-wide main body and scalar tail.
+    // SAFETY: Establish loop bounds for the 16-element-wide main body and scalar tail.
     let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
     let end_ptr = unsafe { a.as_ptr().add(len) };
 
@@ -478,14 +478,14 @@ fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 
     // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
     // - Condition 1: NEON is always present on aarch64; `vaddvq_f32` is guaranteed available.
-    // Reason: Horizontal reduction of the combined SIMD accumulator to a scalar result.
+    // SAFETY: Horizontal reduction of the combined SIMD accumulator to a scalar result.
     let mut result = unsafe { vaddvq_f32(combined) };
 
     while a_ptr < end_ptr {
         // SAFETY: Raw pointer dereference for scalar tail processing.
         // - Condition 1: Loop condition `a_ptr < end_ptr` guarantees both pointers are within slice bounds.
         // - Condition 2: `b_ptr` advances in step with `a_ptr` so it remains within the `b` slice.
-        // Reason: Handle the remaining 0-15 elements that the 16-wide SIMD loop did not cover.
+        // SAFETY: Handle the remaining 0-15 elements that the 16-wide SIMD loop did not cover.
         unsafe {
             let d = *a_ptr - *b_ptr;
             result += d * d;
@@ -515,12 +515,12 @@ pub(crate) fn hamming_neon(a: &[f32], b: &[f32]) -> f32 {
         // and len >= 64 (checked above).
         // - Condition 1: NEON is always present on aarch64.
         // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
-        // Reason: Delegate to the 4-accumulator ILP variant for large vectors.
+        // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
         return unsafe { hamming_neon_4acc(a, b) };
     }
     // SAFETY: `hamming_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
-    // Reason: Single-accumulator variant for small/medium vectors.
+    // SAFETY: Single-accumulator variant for small/medium vectors.
     unsafe { hamming_neon_1acc(a, b) }
 }
 
@@ -539,13 +539,13 @@ unsafe fn hamming_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vdupq_n_u32` is a non-faulting register initialisation on aarch64.
     // - Condition 1: NEON is always present on aarch64; no runtime detection needed.
     // - Condition 2: Immediate value 0 is a valid u32 constant accepted by the instruction.
-    // Reason: Initialise the SIMD diff-count accumulator to zero before the reduction loop.
+    // SAFETY: Initialise the SIMD diff-count accumulator to zero before the reduction loop.
     let mut diff_count = vdupq_n_u32(0);
 
     // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
     // - Condition 1: NEON is always present on aarch64.
     // - Condition 2: Immediate value 0.5 is a valid f32 constant.
-    // Reason: Create threshold vector for binary comparison.
+    // SAFETY: Create threshold vector for binary comparison.
     let threshold = vdupq_n_f32(0.5);
 
     let a_ptr = a.as_ptr();
@@ -558,7 +558,7 @@ unsafe fn hamming_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
         // - Condition 1: `offset + 4 <= simd_len * 4 <= len`, so both pointers stay within
         //   slice bounds.
         // - Condition 2: `vld1q_f32` supports unaligned loads on ARM64.
-        // Reason: Binary-threshold each lane, XOR masks, shift to 0/1, accumulate count.
+        // SAFETY: Binary-threshold each lane, XOR masks, shift to 0/1, accumulate count.
         let va = vld1q_f32(a_ptr.add(offset));
         let vb = vld1q_f32(b_ptr.add(offset));
 
@@ -577,7 +577,7 @@ unsafe fn hamming_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vaddvq_u32` reduces a 128-bit u32 register to a scalar u32 on aarch64.
     // - Condition 1: NEON is always present on aarch64; intrinsic is always available.
     // - Condition 2: `diff_count` is a valid uint32x4_t value set by `vdupq_n_u32`/`vaddq_u32`.
-    // Reason: Horizontal reduction of the diff-count accumulator to a scalar result.
+    // SAFETY: Horizontal reduction of the diff-count accumulator to a scalar result.
     let mut result = vaddvq_u32(diff_count);
 
     // Scalar tail for remainder 0-3 elements
@@ -609,7 +609,7 @@ unsafe fn hamming_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vdupq_n_u32` / `vdupq_n_f32` are non-faulting register initialisations.
     // - Condition 1: NEON is always present on aarch64.
     // - Condition 2: Immediate values 0 / 0.5 are valid constants.
-    // Reason: Initialise 4 diff-count accumulators and threshold vector.
+    // SAFETY: Initialise 4 diff-count accumulators and threshold vector.
     let mut dc0 = vdupq_n_u32(0);
     let mut dc1 = vdupq_n_u32(0);
     let mut dc2 = vdupq_n_u32(0);
@@ -625,7 +625,7 @@ unsafe fn hamming_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
         // - Condition 1: `offset + 16 <= main_end <= len`, so all 16 pointers stay within
         //   slice bounds across the 4 blocks.
         // - Condition 2: `vld1q_f32` is documented to support unaligned loads on ARM64.
-        // Reason: 16-wide single-pass binary comparison with 4-way ILP.
+        // SAFETY: 16-wide single-pass binary comparison with 4-way ILP.
 
         // Block 0
         let va0 = vld1q_f32(a_ptr.add(offset));
@@ -657,7 +657,7 @@ unsafe fn hamming_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     // Binary tree reduction: (dc0+dc1) + (dc2+dc3) then horizontal sum
     // SAFETY: `vaddq_u32`/`vaddvq_u32` are non-faulting register operations.
     // - Condition 1: All accumulators hold valid uint32x4_t values.
-    // Reason: Reduce 4 accumulators to scalar diff count.
+    // SAFETY: Reduce 4 accumulators to scalar diff count.
     let ab01 = vaddq_u32(dc0, dc1);
     let ab23 = vaddq_u32(dc2, dc3);
     let mut result = vaddvq_u32(vaddq_u32(ab01, ab23));
@@ -702,7 +702,7 @@ pub(crate) fn hamming_binary_neon(a: &[u64], b: &[u64]) -> u32 {
         // SAFETY: `vld1q_u64` loads 2 u64 from an unaligned address on aarch64.
         // - Condition 1: `i + 2 <= len`, so both pointers stay within slice bounds.
         // - Condition 2: `vld1q_u64` supports unaligned loads on ARM64.
-        // Reason: NEON XOR + byte-popcount for binary Hamming distance.
+        // SAFETY: NEON XOR + byte-popcount for binary Hamming distance.
         unsafe {
             let va = vld1q_u64(a.as_ptr().add(i));
             let vb = vld1q_u64(b.as_ptr().add(i));
@@ -740,12 +740,12 @@ pub(crate) fn jaccard_neon(a: &[f32], b: &[f32]) -> f32 {
         // and len >= 64 (checked above).
         // - Condition 1: NEON is always present on aarch64.
         // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
-        // Reason: Delegate to the 4-accumulator ILP variant for large vectors.
+        // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
         return unsafe { jaccard_neon_4acc(a, b) };
     }
     // SAFETY: `jaccard_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
-    // Reason: Single-accumulator variant for small/medium vectors.
+    // SAFETY: Single-accumulator variant for small/medium vectors.
     unsafe { jaccard_neon_1acc(a, b) }
 }
 
@@ -764,7 +764,7 @@ unsafe fn jaccard_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
     // - Condition 1: NEON is always present on aarch64; no runtime detection needed.
     // - Condition 2: Immediate value 0.0 is a valid f32 constant accepted by the instruction.
-    // Reason: Initialise intersection and union SIMD accumulators to zero.
+    // SAFETY: Initialise intersection and union SIMD accumulators to zero.
     let mut inter_acc = vdupq_n_f32(0.0);
     let mut union_acc = vdupq_n_f32(0.0);
 
@@ -778,7 +778,7 @@ unsafe fn jaccard_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
         // - Condition 1: `offset + 4 <= simd_len * 4 <= len`, so both pointers stay
         //   within slice bounds.
         // - Condition 2: `vld1q_f32` supports unaligned loads on ARM64.
-        // Reason: Accumulate min (intersection) and max (union) per 4-element block.
+        // SAFETY: Accumulate min (intersection) and max (union) per 4-element block.
         let va = vld1q_f32(a_ptr.add(offset));
         let vb = vld1q_f32(b_ptr.add(offset));
         inter_acc = vaddq_f32(inter_acc, vminq_f32(va, vb));
@@ -788,7 +788,7 @@ unsafe fn jaccard_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
     // - Condition 1: NEON is always present on aarch64; intrinsic is always available.
     // - Condition 2: Both accumulators are valid float32x4_t values.
-    // Reason: Horizontal reduction of intersection and union accumulators.
+    // SAFETY: Horizontal reduction of intersection and union accumulators.
     let mut inter = vaddvq_f32(inter_acc);
     let mut union_sum = vaddvq_f32(union_acc);
 
@@ -824,7 +824,7 @@ unsafe fn jaccard_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
     // - Condition 1: NEON is always present on aarch64.
     // - Condition 2: Immediate value 0.0 is valid for the instruction.
-    // Reason: Initialise 8 accumulators (4 intersection + 4 union) for ILP.
+    // SAFETY: Initialise 8 accumulators (4 intersection + 4 union) for ILP.
     let mut i0 = vdupq_n_f32(0.0);
     let mut i1 = vdupq_n_f32(0.0);
     let mut i2 = vdupq_n_f32(0.0);
@@ -844,7 +844,7 @@ unsafe fn jaccard_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
         // - Condition 1: `offset + 16 <= main_end <= len`, so all 16 pointers stay
         //   within slice bounds across the 4 blocks.
         // - Condition 2: `vld1q_f32` supports unaligned loads on ARM64.
-        // Reason: 16-wide single-pass min/max accumulation with 4-way ILP.
+        // SAFETY: 16-wide single-pass min/max accumulation with 4-way ILP.
 
         // Block 0
         let va0 = vld1q_f32(a_ptr.add(offset));
@@ -876,7 +876,7 @@ unsafe fn jaccard_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     // Binary tree reduction for intersection: (i0+i1) + (i2+i3)
     // SAFETY: `vaddq_f32`/`vaddvq_f32` are non-faulting register operations.
     // - Condition 1: All accumulators hold valid float32x4_t values.
-    // Reason: Reduce 4 intersection and 4 union accumulators to scalar results.
+    // SAFETY: Reduce 4 intersection and 4 union accumulators to scalar results.
     let inter_01 = vaddq_f32(i0, i1);
     let inter_23 = vaddq_f32(i2, i3);
     let mut inter = vaddvq_f32(vaddq_f32(inter_01, inter_23));

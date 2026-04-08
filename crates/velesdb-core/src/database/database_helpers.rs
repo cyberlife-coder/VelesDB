@@ -53,7 +53,7 @@ impl Database {
             ));
         }
         #[allow(clippy::cast_possible_truncation)]
-        // Reason: range validated above against f32::MIN..=f32::MAX.
+        // SAFETY: range validated above against f32::MIN..=f32::MAX.
         let as_f32 = f as f32;
         Ok(as_f32)
     }

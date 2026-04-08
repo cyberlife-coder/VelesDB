@@ -118,7 +118,7 @@ fn build_show_result(idx: usize, name: &str, coll_type: &str) -> SearchResult {
     payload.insert("type".to_string(), serde_json::json!(coll_type));
 
     #[allow(clippy::cast_possible_truncation)]
-    // Reason: collection count will never exceed u64::MAX in practice.
+    // SAFETY: collection count will never exceed u64::MAX in practice.
     let id = idx as u64;
 
     SearchResult::new(

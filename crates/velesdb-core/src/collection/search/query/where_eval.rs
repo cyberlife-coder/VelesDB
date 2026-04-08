@@ -211,7 +211,7 @@ impl Collection {
         let score = self.compute_metric_score(record_vector, &query_vec);
         let metric = self.config.read().metric;
         #[allow(clippy::cast_possible_truncation)]
-        // Reason: similarity thresholds are approximate floating bounds.
+        // SAFETY: similarity thresholds are approximate floating bounds.
         let threshold = sim.threshold as f32;
         Ok(Self::compare_score(
             score,

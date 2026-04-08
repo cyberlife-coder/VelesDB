@@ -69,7 +69,7 @@ impl ContiguousVectors {
         // SAFETY: self.data was allocated with old_layout, is non-null (NonNull invariant).
         // - Condition 1: old_layout matches the allocation parameters.
         // - Condition 2: Pointer is non-null per NonNull invariant.
-        // Reason: Free old buffer after data migration to reordered buffer.
+        // SAFETY: Free old buffer after data migration to reordered buffer.
         unsafe { dealloc(self.data.as_ptr().cast::<u8>(), old_layout) };
 
         self.data = new_ptr;
@@ -96,7 +96,7 @@ impl ContiguousVectors {
             // Both buffers are distinct (non-overlapping) allocations with room for `dim` f32s.
             // - Condition 1: old_idx < count ensures src offset is in bounds.
             // - Condition 2: new_idx < count ensures dst offset is in bounds.
-            // Reason: Out-of-place copy for cache-locality reordering.
+            // SAFETY: Out-of-place copy for cache-locality reordering.
             unsafe {
                 ptr::copy_nonoverlapping(
                     self.data.as_ptr().add(old_idx * dim),
@@ -159,7 +159,7 @@ impl Drop for ContiguousVectors {
         // SAFETY: data was allocated with this layout, is non-null (NonNull invariant)
         // - Condition 1: Layout matches original allocation parameters.
         // - Condition 2: Pointer is non-null per NonNull invariant.
-        // Reason: Release allocated memory when ContiguousVectors is dropped.
+        // SAFETY: Release allocated memory when ContiguousVectors is dropped.
         unsafe {
             dealloc(self.data.as_ptr().cast::<u8>(), layout);
         }

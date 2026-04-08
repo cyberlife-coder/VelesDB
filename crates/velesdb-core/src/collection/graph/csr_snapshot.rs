@@ -334,7 +334,7 @@ impl SnapshotBuilder {
                         let idx = label_table_vec.len();
                         label_table_vec.push(label_str.to_string());
                         #[allow(clippy::cast_possible_truncation)]
-                        // Reason: label count bounded by schema size
+                        // SAFETY: label count bounded by schema size
                         {
                             idx as u32
                         }

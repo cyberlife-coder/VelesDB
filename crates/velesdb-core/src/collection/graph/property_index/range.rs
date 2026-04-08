@@ -16,7 +16,7 @@ use std::ops::Bound;
 // =============================================================================
 
 /// Wrapper for total ordering on JSON values.
-// Reason: OrderedValue part of EPIC-047 range index feature
+// SAFETY: OrderedValue part of EPIC-047 range index feature
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderedValue(pub(crate) Value);

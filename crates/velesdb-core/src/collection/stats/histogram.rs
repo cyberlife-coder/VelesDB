@@ -3,7 +3,7 @@
 //! Provides [`Histogram`] and [`HistogramBucket`] used by the CBO to estimate
 //! predicate selectivity via binary search on bucket boundaries.
 
-// Reason: u64→f64 casts are intentional for selectivity ratio computation.
+// SAFETY: u64→f64 casts are intentional for selectivity ratio computation.
 // Values are bounded by collection size; precision loss is acceptable for statistics.
 #![allow(clippy::cast_precision_loss)]
 
@@ -338,7 +338,7 @@ fn count_distinct(sorted: &[f64]) -> usize {
     if sorted.is_empty() {
         return 0;
     }
-    // Reason: exact equality is intentional — values come from the same sorted
+    // SAFETY: exact equality is intentional — values come from the same sorted
     // input, so bit-identical duplicates must be grouped together.
     1 + sorted.windows(2).filter(|w| w[0] != w[1]).count()
 }
@@ -367,7 +367,7 @@ fn build_per_distinct_buckets(sorted: &[f64], distinct: usize) -> Vec<HistogramB
     while i < sorted.len() {
         let val = sorted[i];
         let start = i;
-        // Reason: exact equality is intentional — grouping bit-identical values.
+        // SAFETY: exact equality is intentional — grouping bit-identical values.
         while i < sorted.len() && sorted[i] == val {
             i += 1;
         }
@@ -430,7 +430,7 @@ pub(crate) fn merge_zero_width_buckets(buckets: Vec<HistogramBucket>) -> Vec<His
     let mut pending_distinct: u64 = 0;
     let mut result: Vec<HistogramBucket> = Vec::with_capacity(buckets.len());
     for bucket in buckets {
-        // Reason: exact equality is intentional — zero-width means the chunk
+        // SAFETY: exact equality is intentional — zero-width means the chunk
         // contained only identical values whose upper bound equals the next
         // chunk's lower bound.
         if bucket.lower_bound == bucket.upper_bound {

@@ -47,7 +47,7 @@ impl Collection {
 
         // Absent field → Ok(None): the point simply has no vector for this field.
         // This is normal for sparse multi-vector schemas and must not be treated as an error.
-        // Reason: returning Err here caused all callers to silently skip ALL points when the
+        // SAFETY: returning Err here caused all callers to silently skip ALL points when the
         // field name had a typo, making wrong queries return empty results with no error.
         let Some(value) = payload.get(field) else {
             return Ok(None);
@@ -62,7 +62,7 @@ impl Collection {
         };
 
         #[allow(clippy::cast_possible_truncation)]
-        // Reason: JSON vector components are f64 embeddings; f32 truncation is intentional
+        // SAFETY: JSON vector components are f64 embeddings; f32 truncation is intentional
         // since the entire vector store operates on f32 precision.
         let vec: Option<Vec<f32>> = array.iter().map(|v| v.as_f64().map(|f| f as f32)).collect();
 

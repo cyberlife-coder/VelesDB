@@ -95,7 +95,7 @@ impl<T> MemoryPool<T> {
             // SAFETY: `drop_in_place` requires an initialized value at the pointer.
             // - Condition 1: `initialized.contains(index)` proves `store()` previously wrote here.
             // - Condition 2: Pointer comes from this pool's owned chunk storage.
-            // Reason: Replacing existing value must run the old destructor first.
+            // SAFETY: Replacing existing value must run the old destructor first.
             unsafe {
                 std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr());
             }
@@ -117,7 +117,7 @@ impl<T> MemoryPool<T> {
             // SAFETY: `assume_init_ref` requires slot initialization.
             // - Condition 1: `initialized` set confirms `store()` initialized this slot.
             // - Condition 2: Index bounds are checked by `chunk_idx < self.chunks.len()`.
-            // Reason: Return borrowed view without copying pooled object.
+            // SAFETY: Return borrowed view without copying pooled object.
             Some(unsafe { self.chunks[chunk_idx][slot_idx].assume_init_ref() })
         } else {
             None
@@ -138,7 +138,7 @@ impl<T> MemoryPool<T> {
                 // SAFETY: `drop_in_place` requires an initialized value.
                 // - Condition 1: `initialized.remove(index)` confirms previous initialization.
                 // - Condition 2: Pointer refers to this pool's owned chunk memory.
-                // Reason: Deallocation must run destructor before slot reuse.
+                // SAFETY: Deallocation must run destructor before slot reuse.
                 unsafe {
                     std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr());
                 }
@@ -224,7 +224,7 @@ impl<T> MemoryPool<T> {
             // SAFETY: `_mm_prefetch` accepts any address as a cache hint.
             // - Condition 1: `ptr` is derived from a valid in-bounds slot pointer.
             // - Condition 2: Prefetch does not dereference or mutate memory.
-            // Reason: Cache warming reduces traversal latency.
+            // SAFETY: Cache warming reduces traversal latency.
             unsafe {
                 std::arch::x86_64::_mm_prefetch(ptr.cast::<i8>(), std::arch::x86_64::_MM_HINT_T0);
             }
@@ -240,7 +240,7 @@ impl<T> MemoryPool<T> {
         // SAFETY: `set_len` is valid because elements are `MaybeUninit<T>`.
         // - Condition 1: Capacity was allocated for `chunk_size` elements.
         // - Condition 2: `MaybeUninit<T>` has no initialization requirement.
-        // Reason: Preallocate pool slots without constructing `T` values.
+        // SAFETY: Preallocate pool slots without constructing `T` values.
         unsafe {
             chunk.set_len(self.chunk_size);
         }
@@ -261,7 +261,7 @@ impl<T> MemoryPool<T> {
         // SAFETY: `set_len` is valid because elements are `MaybeUninit<T>`.
         // - Condition 1: Capacity was allocated for `chunk_size` elements.
         // - Condition 2: `MaybeUninit<T>` has no initialization requirement.
-        // Reason: Batch growth reserves uninitialized slots for later writes.
+        // SAFETY: Batch growth reserves uninitialized slots for later writes.
         unsafe {
             chunk.set_len(self.chunk_size);
         }
@@ -299,7 +299,7 @@ impl<T> Drop for MemoryPool<T> {
                 // SAFETY: `drop_in_place` requires initialized memory.
                 // - Condition 1: `initialized` set only contains slots written via `store()`.
                 // - Condition 2: Index translation resolves into this pool's owned chunk.
-                // Reason: Drop must clean initialized elements and skip uninitialized slots.
+                // SAFETY: Drop must clean initialized elements and skip uninitialized slots.
                 unsafe {
                     std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr());
                 }

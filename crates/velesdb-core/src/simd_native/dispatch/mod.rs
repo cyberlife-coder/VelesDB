@@ -197,12 +197,12 @@ impl std::fmt::Debug for DistanceEngine {
 // SAFETY: `DistanceEngine` stores only plain function pointers and a `usize`.
 // - Condition 1: All fields are `fn(...)` pointers and `usize`, both inherently `Send`.
 // - Condition 2: No interior mutability or non-`Send` types like `Rc`, raw pointers, or thread-local refs.
-// Reason: Function pointers are safe to transfer across threads.
+// SAFETY: Function pointers are safe to transfer across threads.
 unsafe impl Send for DistanceEngine {}
 // SAFETY: Function pointers are immutable references to static code.
 // - Condition 1: All fields are `fn(...)` pointers and `usize`, both inherently `Sync`.
 // - Condition 2: No mutable shared state; the struct is read-only after construction.
-// Reason: Multiple threads can safely share a `&DistanceEngine` for distance computation.
+// SAFETY: Multiple threads can safely share a `&DistanceEngine` for distance computation.
 unsafe impl Sync for DistanceEngine {}
 
 impl DistanceEngine {

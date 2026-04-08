@@ -44,7 +44,7 @@ impl Collection {
     /// # Panics
     ///
     /// Panics if `point_count` exceeds `u64::MAX` (extremely unlikely on 64-bit systems).
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
+    #[allow(clippy::unnecessary_wraps)] // SAFETY: Public API contract — callers expect Result
     pub fn analyze(&self) -> Result<CollectionStats, Error> {
         let mut collector = StatsCollector::new();
 
@@ -205,7 +205,7 @@ impl Collection {
     ///
     /// Sorts unique strings lexicographically and maps each input string
     /// to its 0-based index in the sorted unique list.
-    // Reason: ordinal rank indices are bounded by sample size (≤10,000);
+    // SAFETY: ordinal rank indices are bounded by sample size (≤10,000);
     // usize→f64 is exact for values < 2^53.
     #[allow(clippy::cast_precision_loss)]
     fn compute_ordinal_ranks(strings: &[String]) -> Vec<f64> {
@@ -256,7 +256,7 @@ impl Collection {
     /// Selectivity is 1/cardinality, representing the probability
     /// that a random row matches a specific value.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API for cost model — used by typed wrappers
+    #[allow(dead_code)] // SAFETY: Public API for cost model — used by typed wrappers
     pub fn estimate_column_selectivity(&self, column: &str) -> f64 {
         let stats = self.get_stats();
         stats.estimate_selectivity(column)
@@ -293,7 +293,7 @@ mod tests {
         // Insert some vectors using Point
         let points: Vec<Point> = (0..10)
             .map(|i| {
-                #[allow(clippy::cast_precision_loss)] // Reason: i < 20 in test; u64→f32 exact.
+                #[allow(clippy::cast_precision_loss)] // SAFETY: i < 20 in test; u64→f32 exact.
                 Point::new(
                     i,
                     vec![i as f32; 4],

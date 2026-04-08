@@ -59,7 +59,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if any point has a mismatched dimension.
-    #[allow(dead_code)] // Reason: Called via async_ops::upsert_chunk delegation
+    #[allow(dead_code)] // SAFETY: Called via async_ops::upsert_chunk delegation
     pub(crate) fn upsert_bulk_deferred_sync(&self, points: &[Point]) -> Result<usize> {
         self.upsert_bulk_inner(points, false)
     }

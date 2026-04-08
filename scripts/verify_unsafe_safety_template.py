@@ -42,9 +42,10 @@ CONDITION_BULLET_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# Pattern to match Reason line
+# Pattern to match Reason/SAFETY justification line
+# Accepts both legacy `// Reason:` and canonical `// SAFETY:` prefix
 REASON_PATTERN = re.compile(
-    r'//\s*Reason\s*:',
+    r'//\s*(?:Reason|SAFETY)\s*:',
     re.IGNORECASE
 )
 

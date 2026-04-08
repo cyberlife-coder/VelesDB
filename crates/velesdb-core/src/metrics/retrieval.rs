@@ -144,7 +144,7 @@ pub fn average_metrics<T: Eq + Hash + Copy>(
     }
 
     #[allow(clippy::cast_precision_loss)]
-    // Reason: n is the number of query-result pairs (bounded by input slice length);
+    // SAFETY: n is the number of query-result pairs (bounded by input slice length);
     // f64 is exact for integers up to 2^53, so no precision loss in practice.
     let n_f64 = n as f64;
     (
@@ -156,7 +156,7 @@ pub fn average_metrics<T: Eq + Hash + Copy>(
 
 /// Computes the Discounted Cumulative Gain for a relevance slice truncated to `k`.
 #[allow(clippy::cast_precision_loss)]
-// Reason: i is a loop index (0..k where k ≤ slice length); f64 is exact for
+// SAFETY: i is a loop index (0..k where k ≤ slice length); f64 is exact for
 // integers up to 2^53, so casting a small index to f64 loses no precision.
 fn compute_dcg(relevances: &[f64], k: usize) -> f64 {
     relevances

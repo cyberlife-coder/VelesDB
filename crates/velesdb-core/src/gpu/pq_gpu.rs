@@ -146,7 +146,7 @@ fn create_kmeans_buffers(
         usage: wgpu::BufferUsages::STORAGE,
     });
 
-    // Reason: n is bounded by training set size (thousands of vectors).
+    // SAFETY: n is bounded by training set size (thousands of vectors).
     // n * 4 bytes is well within u64::MAX even for billions of vectors.
     #[allow(clippy::cast_possible_truncation)]
     let assignments_size = (n * std::mem::size_of::<u32>()) as u64;
@@ -165,7 +165,7 @@ fn create_kmeans_buffers(
     });
 
     // Params: [num_vectors, num_centroids, subspace_dim, padding]
-    // Reason: n, k, and subspace_dim are bounded by training set size (thousands)
+    // SAFETY: n, k, and subspace_dim are bounded by training set size (thousands)
     // and centroid count (<=65535), well within u32 range.
     #[allow(clippy::cast_possible_truncation)]
     let params_data = [n as u32, k as u32, subspace_dim as u32, 0_u32];
@@ -236,7 +236,7 @@ fn dispatch_and_readback(
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bind_group, &[]);
 
-        // Reason: n is bounded by training set size. div_ceil(256) reduces
+        // SAFETY: n is bounded by training set size. div_ceil(256) reduces
         // the value further. Even 4B vectors / 256 = 16M workgroups, fitting in u32.
         #[allow(clippy::cast_possible_truncation)]
         let workgroups = n.div_ceil(256) as u32;
@@ -254,7 +254,7 @@ fn dispatch_and_readback(
 
     // Read back results using shared helper.
     let assignments_u32 = super::helpers::readback_buffer::<u32>(device, &buffers.staging, n)?;
-    // Reason: u32 → usize is lossless on all platforms where wgpu runs
+    // SAFETY: u32 → usize is lossless on all platforms where wgpu runs
     // (32-bit and 64-bit). `From<u32>` is not implemented for `usize` in
     // libstd, so we use the infallible `as` cast.
     #[allow(clippy::cast_lossless)]

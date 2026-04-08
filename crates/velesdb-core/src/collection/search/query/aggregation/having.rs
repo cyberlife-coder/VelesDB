@@ -152,7 +152,7 @@ impl Collection {
         let thresh = match threshold {
             Value::Integer(i) => *i as f64,
             #[allow(clippy::cast_precision_loss)]
-            // Reason: aggregate comparison converts to f64; precision loss is
+            // SAFETY: aggregate comparison converts to f64; precision loss is
             // acceptable for large u64 values in HAVING threshold context.
             Value::UnsignedInteger(u) => *u as f64,
             Value::Float(f) => *f,

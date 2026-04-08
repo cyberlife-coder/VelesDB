@@ -31,7 +31,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns Ok(()) on success. Index creation is idempotent.
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
+    #[allow(clippy::unnecessary_wraps)] // SAFETY: Public API contract — callers expect Result
     pub fn create_index(&self, field_name: &str) -> Result<()> {
         let mut indexes = self.secondary_indexes.write();
         let is_new = !indexes.contains_key(field_name);
@@ -337,7 +337,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns Ok(()) on success. Index creation is idempotent.
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
+    #[allow(clippy::unnecessary_wraps)] // SAFETY: Public API contract — callers expect Result
     pub fn create_property_index(&self, label: &str, property: &str) -> Result<()> {
         let mut index = self.property_index.write();
         index.create_index(label, property);
@@ -354,7 +354,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns Ok(()) on success. Index creation is idempotent.
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
+    #[allow(clippy::unnecessary_wraps)] // SAFETY: Public API contract — callers expect Result
     pub fn create_range_index(&self, label: &str, property: &str) -> Result<()> {
         let mut index = self.range_index.write();
         index.create_index(label, property);
@@ -437,7 +437,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if underlying index stores fail while dropping.
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
+    #[allow(clippy::unnecessary_wraps)] // SAFETY: Public API contract — callers expect Result
     pub fn drop_index(&self, label: &str, property: &str) -> Result<bool> {
         // Try property index first
         let dropped_prop = self.property_index.write().drop_index(label, property);

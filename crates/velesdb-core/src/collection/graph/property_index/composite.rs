@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 /// Index type for composite indexes.
-// Reason: CompositeIndexType part of EPIC-047 composite graph index feature
+// SAFETY: CompositeIndexType part of EPIC-047 composite graph index feature
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompositeIndexType {
@@ -23,7 +23,7 @@ pub enum CompositeIndexType {
 ///
 /// Provides O(1) lookups for nodes matching a label and specific property values.
 /// Useful for queries like `MATCH (n:Person {name: 'Alice', city: 'Paris'})`.
-// Reason: CompositeGraphIndex part of EPIC-047 composite graph index feature
+// SAFETY: CompositeGraphIndex part of EPIC-047 composite graph index feature
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CompositeGraphIndex {
@@ -37,7 +37,7 @@ pub struct CompositeGraphIndex {
     hash_index: HashMap<u64, Vec<u64>>,
 }
 
-// Reason: CompositeGraphIndex impl part of EPIC-047 composite graph index feature
+// SAFETY: CompositeGraphIndex impl part of EPIC-047 composite graph index feature
 #[allow(dead_code)]
 impl CompositeGraphIndex {
     /// Creates a new composite index.
@@ -174,7 +174,7 @@ impl CompositeGraphIndex {
 }
 
 /// Manager for multiple composite indexes.
-// Reason: CompositeIndexManager part of EPIC-047 composite graph index feature
+// SAFETY: CompositeIndexManager part of EPIC-047 composite graph index feature
 #[allow(dead_code)]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CompositeIndexManager {
@@ -182,7 +182,7 @@ pub struct CompositeIndexManager {
     indexes: HashMap<String, CompositeGraphIndex>,
 }
 
-// Reason: CompositeIndexManager impl part of EPIC-047 composite graph index feature
+// SAFETY: CompositeIndexManager impl part of EPIC-047 composite graph index feature
 #[allow(dead_code)]
 impl CompositeIndexManager {
     /// Creates a new index manager.
