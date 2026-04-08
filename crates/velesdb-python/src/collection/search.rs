@@ -431,15 +431,232 @@ impl Collection {
 }
 
 /// Parse a Python quality mode string into [`SearchQuality`].
+///
+/// Supports named modes (`fast`, `balanced`, `accurate`, `perfect`, `autotune`)
+/// plus advanced modes:
+/// - `"custom:<ef>"` for a custom `ef_search` value
+/// - `"adaptive:<min_ef>:<max_ef>"` for two-phase adaptive search
 fn parse_search_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
-    match mode.to_lowercase().as_str() {
+    let lower = mode.to_lowercase();
+    match lower.as_str() {
         "fast" => Ok(velesdb_core::SearchQuality::Fast),
         "balanced" => Ok(velesdb_core::SearchQuality::Balanced),
         "accurate" => Ok(velesdb_core::SearchQuality::Accurate),
         "perfect" => Ok(velesdb_core::SearchQuality::Perfect),
         "autotune" | "auto_tune" | "auto" => Ok(velesdb_core::SearchQuality::AutoTune),
-        other => Err(PyValueError::new_err(format!(
-            "Unknown search quality: '{other}'. Valid: fast, balanced, accurate, perfect, autotune"
-        ))),
+        other => parse_advanced_quality(other),
+    }
+}
+
+/// Parse advanced quality modes: `custom:<ef>` and `adaptive:<min_ef>:<max_ef>`.
+fn parse_advanced_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
+    if let Some(ef_str) = mode.strip_prefix("custom:") {
+        let ef = ef_str.parse::<usize>().map_err(|_| {
+            PyValueError::new_err(format!(
+                "Invalid custom ef_search value: '{ef_str}'. Expected a positive integer, \
+                 e.g. 'custom:256'"
+            ))
+        })?;
+        return Ok(velesdb_core::SearchQuality::Custom(ef));
+    }
+    if let Some(params) = mode.strip_prefix("adaptive:") {
+        return parse_adaptive_params(params);
+    }
+    Err(PyValueError::new_err(format!(
+        "Unknown search quality: '{mode}'. Valid: fast, balanced, accurate, perfect, \
+         autotune, custom:<ef>, adaptive:<min_ef>:<max_ef>"
+    )))
+}
+
+/// Parse `<min_ef>:<max_ef>` for the adaptive quality mode.
+fn parse_adaptive_params(params: &str) -> PyResult<velesdb_core::SearchQuality> {
+    let parts: Vec<&str> = params.split(':').collect();
+    if parts.len() != 2 {
+        return Err(PyValueError::new_err(format!(
+            "Invalid adaptive format: 'adaptive:{params}'. \
+             Expected 'adaptive:<min_ef>:<max_ef>', e.g. 'adaptive:32:512'"
+        )));
+    }
+    let min_ef = parts[0]
+        .parse::<usize>()
+        .map_err(|_| PyValueError::new_err(format!("Invalid adaptive min_ef: '{}'", parts[0])))?;
+    let max_ef = parts[1]
+        .parse::<usize>()
+        .map_err(|_| PyValueError::new_err(format!("Invalid adaptive max_ef: '{}'", parts[1])))?;
+    if min_ef > max_ef {
+        return Err(PyValueError::new_err(format!(
+            "Adaptive min_ef ({min_ef}) must be <= max_ef ({max_ef})"
+        )));
+    }
+    Ok(velesdb_core::SearchQuality::Adaptive { min_ef, max_ef })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Initialize the Python interpreter once (idempotent, required by PyO3
+    /// error constructors such as `PyValueError::new_err`).
+    fn init_python() {
+        pyo3::prepare_freethreaded_python();
+    }
+
+    // ---- Named modes ----
+
+    #[test]
+    fn test_parse_named_modes() {
+        init_python();
+        assert!(matches!(
+            parse_search_quality("fast").unwrap(),
+            velesdb_core::SearchQuality::Fast
+        ));
+        assert!(matches!(
+            parse_search_quality("balanced").unwrap(),
+            velesdb_core::SearchQuality::Balanced
+        ));
+        assert!(matches!(
+            parse_search_quality("accurate").unwrap(),
+            velesdb_core::SearchQuality::Accurate
+        ));
+        assert!(matches!(
+            parse_search_quality("perfect").unwrap(),
+            velesdb_core::SearchQuality::Perfect
+        ));
+        assert!(matches!(
+            parse_search_quality("autotune").unwrap(),
+            velesdb_core::SearchQuality::AutoTune
+        ));
+        assert!(matches!(
+            parse_search_quality("auto").unwrap(),
+            velesdb_core::SearchQuality::AutoTune
+        ));
+    }
+
+    #[test]
+    fn test_parse_named_modes_case_insensitive() {
+        init_python();
+        assert!(matches!(
+            parse_search_quality("FAST").unwrap(),
+            velesdb_core::SearchQuality::Fast
+        ));
+        assert!(matches!(
+            parse_search_quality("Balanced").unwrap(),
+            velesdb_core::SearchQuality::Balanced
+        ));
+    }
+
+    // ---- Custom mode ----
+
+    #[test]
+    fn test_parse_custom_valid() {
+        init_python();
+        let q = parse_search_quality("custom:256").unwrap();
+        assert!(matches!(q, velesdb_core::SearchQuality::Custom(256)));
+    }
+
+    #[test]
+    fn test_parse_custom_case_insensitive() {
+        init_python();
+        let q = parse_search_quality("Custom:128").unwrap();
+        assert!(matches!(q, velesdb_core::SearchQuality::Custom(128)));
+    }
+
+    #[test]
+    fn test_parse_custom_invalid_value() {
+        init_python();
+        let err = parse_search_quality("custom:abc").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid custom ef_search"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_parse_custom_empty_value() {
+        init_python();
+        let err = parse_search_quality("custom:").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid custom ef_search"), "got: {msg}");
+    }
+
+    // ---- Adaptive mode ----
+
+    #[test]
+    fn test_parse_adaptive_valid() {
+        init_python();
+        let q = parse_search_quality("adaptive:32:512").unwrap();
+        assert!(matches!(
+            q,
+            velesdb_core::SearchQuality::Adaptive {
+                min_ef: 32,
+                max_ef: 512
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_adaptive_equal_bounds() {
+        init_python();
+        let q = parse_search_quality("adaptive:100:100").unwrap();
+        assert!(matches!(
+            q,
+            velesdb_core::SearchQuality::Adaptive {
+                min_ef: 100,
+                max_ef: 100
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_adaptive_case_insensitive() {
+        init_python();
+        let q = parse_search_quality("Adaptive:16:256").unwrap();
+        assert!(matches!(
+            q,
+            velesdb_core::SearchQuality::Adaptive {
+                min_ef: 16,
+                max_ef: 256
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_adaptive_inverted_range() {
+        init_python();
+        let err = parse_search_quality("adaptive:512:32").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("must be <= max_ef"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_parse_adaptive_missing_max() {
+        init_python();
+        let err = parse_search_quality("adaptive:32").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid adaptive format"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_parse_adaptive_non_numeric() {
+        init_python();
+        let err = parse_search_quality("adaptive:a:b").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid adaptive min_ef"), "got: {msg}");
+    }
+
+    // ---- Unknown mode ----
+
+    #[test]
+    fn test_parse_unknown_mode() {
+        init_python();
+        let err = parse_search_quality("nonexistent").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Unknown search quality"), "got: {msg}");
+        assert!(
+            msg.contains("custom:<ef>"),
+            "error should mention custom syntax: {msg}"
+        );
+        assert!(
+            msg.contains("adaptive:<min_ef>:<max_ef>"),
+            "error should mention adaptive syntax: {msg}"
+        );
     }
 }
