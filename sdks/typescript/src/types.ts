@@ -373,13 +373,25 @@ export interface ActualStats {
   edgesTraversed: number;
 }
 
-/** Per-node execution statistics from EXPLAIN ANALYZE. */
+/**
+ * Per-node **estimated** execution statistics from EXPLAIN ANALYZE.
+ *
+ * All values are synthetic heuristics derived from the plan-global
+ * `actualTimeMs` — they are NOT individually measured per node.
+ * Field names keep the `actual` prefix for API stability; check
+ * the `estimated` flag to distinguish heuristic values from future
+ * instrumented measurements.
+ */
 export interface NodeStats {
   nodeLabel: string;
+  /** Estimated wall-clock time for this node (ms). */
   actualTimeMs: number;
+  /** Estimated rows entering this node. */
   actualRowsIn: number;
+  /** Estimated rows leaving this node. */
   actualRowsOut: number;
   loops: number;
+  /** When true, all values are heuristic estimates, not measured. */
   estimated: boolean;
 }
 

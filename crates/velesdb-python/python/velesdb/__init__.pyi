@@ -413,8 +413,10 @@ class Collection:
                 - ``actual_stats`` (dict or None): Execution statistics with
                   ``actual_rows``, ``actual_time_ms``, ``loops``,
                   ``nodes_visited``, ``edges_traversed``.
-                - ``node_stats`` (list[dict] or None): Per-node statistics
-                  with ``node_label``, ``actual_time_ms``, ``actual_rows``.
+                - ``node_stats`` (list[dict] or None): Per-node **estimated**
+                  statistics (heuristic, not measured) with ``node_label``,
+                  ``actual_time_ms``, ``actual_rows``. Check ``estimated``
+                  flag to distinguish heuristic values from future measured ones.
 
         Raises:
             RuntimeError: If the query is invalid or execution fails.
@@ -1019,8 +1021,10 @@ class PyGraphCollection:
                 - ``actual_stats`` (dict or None): Execution statistics with
                   ``actual_rows``, ``actual_time_ms``, ``loops``,
                   ``nodes_visited``, ``edges_traversed``.
-                - ``node_stats`` (list[dict] or None): Per-node statistics
-                  with ``node_label``, ``actual_time_ms``, ``actual_rows``.
+                - ``node_stats`` (list[dict] or None): Per-node **estimated**
+                  statistics (heuristic, not measured) with ``node_label``,
+                  ``actual_time_ms``, ``actual_rows``. Check ``estimated``
+                  flag to distinguish heuristic values from future measured ones.
 
         Raises:
             RuntimeError: If the query is invalid or execution fails.

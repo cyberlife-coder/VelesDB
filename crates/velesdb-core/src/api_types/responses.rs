@@ -324,19 +324,26 @@ impl From<&crate::velesql::ActualStats> for ActualStatsResponse {
     }
 }
 
-/// Per-plan-node actual execution statistics for EXPLAIN ANALYZE responses.
+/// Per-plan-node **estimated** execution statistics for EXPLAIN ANALYZE responses.
+///
+/// All values are synthetic heuristics derived from the plan-global
+/// `actual_time_ms` — they are **not** individually measured per node.
+/// Field names keep the `actual_` prefix for API stability; check the
+/// `estimated` flag to distinguish heuristic values from future
+/// instrumented measurements (#467).
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct NodeStatsResponse {
     /// Node label (e.g. `VectorSearch`, `Filter`, `Limit`).
     pub node_label: String,
-    /// Heuristic estimate of wall-clock time for this node in milliseconds.
-    /// Derived from total execution time using fixed fractions, not real
-    /// per-node instrumentation. Will be replaced by measured timing (#467).
+    /// Estimated wall-clock time for this node in milliseconds.
+    /// Derived from total execution time using normalized weight fractions,
+    /// not real per-node instrumentation. Will be replaced by measured
+    /// timing (#467).
     pub actual_time_ms: f64,
-    /// Rows entering this node (heuristic approximation).
+    /// Estimated rows entering this node (heuristic approximation).
     pub actual_rows_in: u64,
-    /// Rows leaving this node (heuristic approximation).
+    /// Estimated rows leaving this node (heuristic approximation).
     pub actual_rows_out: u64,
     /// Number of loop iterations (1 for non-looping nodes).
     pub loops: u64,

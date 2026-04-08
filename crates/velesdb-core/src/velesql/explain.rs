@@ -259,19 +259,30 @@ pub struct ActualStats {
     pub edges_traversed: u64,
 }
 
-/// Per-plan-node actual execution statistics.
+/// Per-plan-node **estimated** execution statistics.
+///
+/// All values in this struct are synthetic heuristics derived from the
+/// plan-global `ActualStats::actual_time_ms` using fixed weight fractions
+/// — they are **not** individually measured per node.  The `estimated`
+/// field is always `true` until real per-node instrumentation lands
+/// (#467–#469).
+///
+/// Field names use the `actual_` prefix for forward-compatibility with
+/// the future instrumented variant; the `estimated` flag distinguishes
+/// the two modes at runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeStats {
     /// Node label (e.g. "VectorSearch", "Filter", "Limit").
     pub node_label: String,
-    /// Heuristic estimate of wall-clock time for this node in milliseconds.
+    /// Estimated wall-clock time for this node in milliseconds.
     /// Derived by distributing the total `actual_time_ms` across nodes using
-    /// fixed fractions — NOT a real per-node measurement. Foundational for the
-    /// CBO feedback loop; will be replaced by instrumented timing (#467–#469).
+    /// normalized weight fractions — NOT a real per-node measurement.
+    /// Foundational for the CBO feedback loop; will be replaced by
+    /// instrumented timing (#467–#469).
     pub actual_time_ms: f64,
-    /// Rows entering this node (heuristic: set to top-level actual_rows).
+    /// Estimated rows entering this node (heuristic approximation).
     pub actual_rows_in: u64,
-    /// Rows leaving this node (heuristic: set to top-level actual_rows).
+    /// Estimated rows leaving this node (heuristic approximation).
     pub actual_rows_out: u64,
     /// Number of loop iterations (1 for non-looping nodes).
     pub loops: u64,
