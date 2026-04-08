@@ -89,6 +89,8 @@ pub enum StorageMode {
     Sq8,
     /// Binary: 1-bit quantization (1 bit/dimension). 32x compression, ~5-10% recall loss.
     Binary,
+    /// Product Quantization (PQ): aggressive lossy compression (8x-16x typical).
+    ProductQuantization,
     /// `RaBitQ`: 1-bit with rotation + scalar correction. 32x compression, ~1-2% recall loss.
     Rabitq,
 }
@@ -99,6 +101,7 @@ impl From<StorageMode> for velesdb_core::StorageMode {
             StorageMode::Full => velesdb_core::StorageMode::Full,
             StorageMode::Sq8 => velesdb_core::StorageMode::SQ8,
             StorageMode::Binary => velesdb_core::StorageMode::Binary,
+            StorageMode::ProductQuantization => velesdb_core::StorageMode::ProductQuantization,
             StorageMode::Rabitq => velesdb_core::StorageMode::RaBitQ,
         }
     }
