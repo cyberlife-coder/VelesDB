@@ -623,8 +623,12 @@ class SearchOpsMixin:
                 max_weight=max_weight,
                 hit_weight=hit_weight,
             )
+        elif fusion in ("relative_score", "rsf"):
+            dense_weight = params.get("dense_weight", 0.5)
+            sparse_weight = params.get("sparse_weight", 0.5)
+            return velesdb.FusionStrategy.relative_score(dense_weight, sparse_weight)
         else:
             raise ValueError(
                 f"Unknown fusion strategy '{fusion}'. "
-                "Use 'average', 'maximum', 'rrf', or 'weighted'."
+                "Use 'average', 'maximum', 'rrf', 'weighted', or 'relative_score'."
             )

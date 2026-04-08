@@ -435,10 +435,9 @@ class SearchOpsMixin:
             return velesdb.FusionStrategy.weighted(
                 avg_weight=avg_w, max_weight=max_w, hit_weight=hit_w,
             )
+        if fusion in ("relative_score", "rsf"):
+            dense_weight = params.get("dense_weight", 0.5)
+            sparse_weight = params.get("sparse_weight", 0.5)
+            return velesdb.FusionStrategy.relative_score(dense_weight, sparse_weight)
 
-        # Unknown strategy — default to RRF rather than raising to remain
-        # consistent with the original implementation's fallback behaviour.
-        logger.warning(
-            "Unknown fusion strategy '%s'; falling back to RRF (k=60).", fusion
-        )
-        return velesdb.FusionStrategy.rrf(k=60)
+        raise ValueError(f"Unknown fusion strategy: {fusion}")
