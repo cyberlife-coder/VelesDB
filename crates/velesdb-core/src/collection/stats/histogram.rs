@@ -387,6 +387,11 @@ fn build_per_distinct_buckets(sorted: &[f64], distinct: usize) -> Vec<HistogramB
 }
 
 /// Builds equi-depth buckets by splitting sorted values into equal-sized chunks.
+///
+/// After chunking, merges any zero-width buckets (`lower_bound == upper_bound`)
+/// into adjacent buckets. Zero-width buckets arise from duplicate-heavy data where
+/// a chunk boundary falls inside a run of identical values — their counts inflate
+/// `bucket_sum()` without contributing to any selectivity lookup.
 fn build_equidepth_buckets(sorted: &[f64], num_buckets: usize) -> Vec<HistogramBucket> {
     let chunk_size = sorted.len().div_ceil(num_buckets);
     let mut buckets = Vec::with_capacity(num_buckets);
@@ -400,7 +405,53 @@ fn build_equidepth_buckets(sorted: &[f64], num_buckets: usize) -> Vec<HistogramB
             distinct_count: slice_distinct_count(chunk),
         });
     }
-    buckets
+    merge_zero_width_buckets(buckets)
+}
+
+/// Merges zero-width buckets (`lower_bound == upper_bound`) into adjacent buckets.
+///
+/// Zero-width buckets are absorbed into the nearest **non-zero-width** neighbor.
+/// Leading zero-width buckets are merged forward into the first non-zero-width
+/// bucket; trailing ones are merged backward into the last non-zero-width bucket.
+///
+/// Counts and distinct counts are summed into the absorbing bucket. If every
+/// bucket is zero-width (all values identical), the input is returned unchanged —
+/// this case is already handled by `build_single_value_buckets` upstream.
+#[allow(clippy::float_cmp)]
+pub(crate) fn merge_zero_width_buckets(buckets: Vec<HistogramBucket>) -> Vec<HistogramBucket> {
+    if buckets.is_empty() {
+        return buckets;
+    }
+    // Accumulator for leading/pending zero-width bucket counts.
+    let mut pending_count: u64 = 0;
+    let mut pending_distinct: u64 = 0;
+    let mut result: Vec<HistogramBucket> = Vec::with_capacity(buckets.len());
+    for bucket in buckets {
+        // Reason: exact equality is intentional — zero-width means the chunk
+        // contained only identical values whose upper bound equals the next
+        // chunk's lower bound.
+        if bucket.lower_bound == bucket.upper_bound {
+            pending_count += bucket.count;
+            pending_distinct += bucket.distinct_count;
+        } else {
+            // Absorb any pending zero-width counts into this non-zero-width bucket.
+            let mut merged = bucket;
+            merged.count += pending_count;
+            merged.distinct_count += pending_distinct;
+            pending_count = 0;
+            pending_distinct = 0;
+            result.push(merged);
+        }
+    }
+    // Trailing zero-width buckets: merge into the last non-zero-width bucket.
+    if pending_count > 0 {
+        if let Some(last) = result.last_mut() {
+            last.count += pending_count;
+            last.distinct_count += pending_distinct;
+        }
+        // else: all buckets were zero-width — handled by build_single_value_buckets
+    }
+    result
 }
 
 /// Computes the upper bound for an equi-depth chunk.
