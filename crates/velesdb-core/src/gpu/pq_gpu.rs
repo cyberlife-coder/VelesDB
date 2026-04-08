@@ -321,7 +321,7 @@ mod tests {
                             v.iter().zip(c.iter()).map(|(a, b)| (a - b) * (a - b)).sum();
                         (idx, dist)
                     })
-                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
                     .map(|(idx, _)| idx)
                     .unwrap()
             })
