@@ -15,8 +15,8 @@ All error types are defined in `crates/velesdb-core/src/error.rs` and derive fro
 ## Recoverability
 
 Most errors are recoverable (the caller can fix the input and retry). The following
-four error codes are **not recoverable** and indicate corruption, resource exhaustion,
-or internal bugs:
+five error codes are **not recoverable** and indicate corruption, resource exhaustion,
+version incompatibility, or internal bugs:
 
 | Code | Variant | Why |
 |------|---------|-----|
@@ -24,6 +24,7 @@ or internal bugs:
 | VELES-013 | `Internal` | Unexpected bug; please report |
 | VELES-026 | `EpochMismatch` | Stale mmap guard; re-acquire required |
 | VELES-033 | `AllocationFailed` | Out of memory; cannot continue |
+| VELES-036 | `IncompatibleSchemaVersion` | Collection created by a newer VelesDB; upgrade required |
 
 ---
 
@@ -307,6 +308,22 @@ or internal bugs:
 - **Resolution**: Rename the collection using only allowed characters. Use `velesdb_core::validate_collection_name()` to check names before creation.
 - **Recoverable**: Yes
 
+### VELES-035: SnapshotBuildFailed
+
+- **Variant**: `SnapshotBuildFailed(String)`
+- **Message**: `Snapshot build failed: {details}`
+- **Cause**: Building a CSR (Compressed Sparse Row) snapshot from the edge store failed. This can happen during graph snapshot rebuild if the system runs out of memory or an internal allocation fails.
+- **Resolution**: Check available system memory. Reduce the number of edges in the collection, or increase system RAM. If the problem persists after restart, report it as a bug.
+- **Recoverable**: Yes
+
+### VELES-036: IncompatibleSchemaVersion
+
+- **Variant**: `IncompatibleSchemaVersion { found: u32, supported: u32 }`
+- **Message**: `Collection created with newer schema version (v{found}), current VelesDB supports up to v{supported}`
+- **Cause**: The collection's `config.json` contains a `schema_version` higher than what the running VelesDB binary supports. This happens when opening a collection that was created or migrated by a newer version of VelesDB.
+- **Resolution**: Upgrade VelesDB to a version that supports schema version v{found} or higher. Do not attempt to manually edit `config.json` -- this will likely corrupt the collection.
+- **Recoverable**: **No** -- requires a VelesDB upgrade.
+
 ---
 
 ## Programmatic Usage
@@ -394,6 +411,8 @@ try {
 | VELES-032 | `InvalidDimension` | Yes | Validation |
 | VELES-033 | `AllocationFailed` | **No** | Resource |
 | VELES-034 | `InvalidCollectionName` | Yes | Validation |
+| VELES-035 | `SnapshotBuildFailed` | Yes | Graph |
+| VELES-036 | `IncompatibleSchemaVersion` | **No** | Schema |
 
 ## Python SDK Exception Hierarchy
 

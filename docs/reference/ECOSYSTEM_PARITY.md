@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-04-04 (v1.11.1)
+Last updated: 2026-04-08 (v1.12.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -87,6 +87,109 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 | CLI parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-cli/tests/velesql_parser_conformance.rs` |
 | WASM parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-wasm/tests/velesql_parser_conformance.rs` |
 
+## Enum Propagation Matrix
+
+Tracks whether core enums are fully propagated to each ecosystem component.
+
+Legend: ✅ full (all variants) | N/A not applicable (brute-force only, no HNSW)
+
+### DistanceMetric — 9/9 (100%)
+
+All 5 variants (`Cosine`, `Euclidean`, `DotProduct`, `Hamming`, `Jaccard`) are supported in all 9 components.
+
+| Component | Status |
+|-----------|--------|
+| Core | ✅ (source of truth) |
+| Server | ✅ |
+| Python | ✅ |
+| WASM | ✅ |
+| Mobile | ✅ |
+| CLI | ✅ |
+| TS SDK | ✅ |
+| Tauri | ✅ |
+| LangChain | ✅ |
+| LlamaIndex | ✅ |
+
+### StorageMode — 9/9 (100%)
+
+All 5 variants (`Full`, `SQ8`, `Binary`, `ProductQuantization`, `RaBitQ`) are supported in all 9 components.
+
+| Component | Status |
+|-----------|--------|
+| Core | ✅ (source of truth) |
+| Server | ✅ |
+| Python | ✅ |
+| WASM | ✅ |
+| Mobile | ✅ |
+| CLI | ✅ |
+| TS SDK | ✅ |
+| Tauri | ✅ |
+| LangChain | ✅ |
+| LlamaIndex | ✅ |
+
+### FusionStrategy — 9/9 (100%)
+
+All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are supported in all 9 components.
+
+| Component | Status |
+|-----------|--------|
+| Core | ✅ (source of truth) |
+| Server | ✅ |
+| Python | ✅ |
+| WASM | ✅ |
+| Mobile | ✅ |
+| CLI | ✅ |
+| TS SDK | ✅ |
+| Tauri | ✅ |
+| LangChain | ✅ |
+| LlamaIndex | ✅ |
+
+### SearchQuality — 6/9
+
+4 HNSW presets (`Fast`, `Balanced`, `Accurate`, `Perfect`) plus `Custom(usize)` and `Adaptive`. WASM, Mobile, and Tauri use brute-force search (no HNSW), so `SearchQuality` is not applicable.
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Core | ✅ (source of truth) | |
+| Server | ✅ | |
+| Python | ✅ | |
+| WASM | N/A | Brute-force only, no HNSW index |
+| Mobile | N/A | Brute-force only, no HNSW index |
+| CLI | ✅ | |
+| TS SDK | ✅ | |
+| Tauri | N/A | Brute-force only, no HNSW index |
+| LangChain | ✅ | |
+| LlamaIndex | ✅ | |
+
+### CollectionType — 8/9
+
+3 types (`Vector`, `MetadataOnly`, `Graph`). Mobile does not expose graph collection creation.
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Core | ✅ (source of truth) | |
+| Server | ✅ | |
+| Python | ✅ | |
+| WASM | ✅ | |
+| Mobile | ⚠️ 2/3 | `Vector` and `MetadataOnly` only -- graph collection creation not exposed |
+| CLI | ✅ | |
+| TS SDK | ✅ | |
+| Tauri | ✅ | |
+| LangChain | ✅ | |
+| LlamaIndex | ✅ | |
+
+### Propagation Summary
+
+| Enum | Coverage | Status |
+|------|----------|--------|
+| `DistanceMetric` | 9/9 | 100% |
+| `StorageMode` | 9/9 | 100% |
+| `FusionStrategy` | 9/9 | 100% |
+| `SearchQuality` | 6/9 | N/A for WASM/Mobile/Tauri (brute-force) |
+| `CollectionType` | 8/9 | Mobile missing graph creation |
+
+---
+
 ## Remaining Gaps and Action Items
 
 1. Add explicit CLI end-to-end assertions for REST error shape (`code/hint/details`) beyond parser conformance.
@@ -97,3 +200,4 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 6. Expose named sparse indexes in LangChain and LlamaIndex integrations.
 7. Propagate `@collection` cross-collection MATCH to WASM, Mobile, Tauri, LangChain, and LlamaIndex.
 8. Add cross-collection vector search (`similarity()` on `@collection`-annotated nodes).
+9. Expose graph collection creation in `velesdb-mobile` (`create_graph_collection`).

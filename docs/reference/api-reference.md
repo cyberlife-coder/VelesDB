@@ -8,6 +8,39 @@ Complete REST API documentation for VelesDB.
 http://localhost:8080
 ```
 
+### API Versioning
+
+All routes are available under two prefixes:
+
+| Prefix | Status | Example |
+|--------|--------|---------|
+| `/v1/` | **Canonical** (recommended) | `POST /v1/collections` |
+| `/` (no prefix) | **Legacy** (deprecated) | `POST /collections` |
+
+Legacy (unversioned) routes return deprecation headers in every response:
+
+| Header | Value |
+|--------|-------|
+| `deprecation` | `true` |
+| `x-api-deprecated` | `Use /v1/ prefix` |
+
+New integrations should use the `/v1/` prefix exclusively. Legacy routes will be removed in a future major version.
+
+### Rate Limiting
+
+Per-IP rate limiting is enabled by default (100 requests/second per IP). When a client exceeds the limit, the server responds with `429 Too Many Requests`.
+
+**Rate-limit response headers** (present on every response when rate limiting is enabled):
+
+| Header | Type | Description |
+|--------|------|-------------|
+| `x-ratelimit-limit` | integer | Maximum requests allowed per second |
+| `x-ratelimit-remaining` | integer | Remaining requests in the current window |
+| `x-ratelimit-after` | integer | Seconds until the bucket refills |
+| `retry-after` | integer | Seconds to wait before retrying (only on 429 responses) |
+
+**Configuration**: See [CONFIGURATION.md](../guides/CONFIGURATION.md#rate-limiting) for CLI, environment variable, and TOML options.
+
 ---
 
 ## Health Check
@@ -334,7 +367,7 @@ For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), 
 | 201 | Created |
 | 400 | Bad Request (invalid input) |
 | 404 | Not Found |
-| 429 | Too Many Requests (streaming backpressure) |
+| 429 | Too Many Requests (rate limit exceeded or streaming backpressure) |
 | 500 | Internal Server Error |
 
 ---
