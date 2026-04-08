@@ -24,14 +24,18 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/**'
-  # PR désactivées pour économiser les minutes GitHub Actions
-  # Validation locale OBLIGATOIRE avant push: exécuter /local-ci
-  # pull_request:
-  #   branches: [main, develop]
-  #   paths:
-  #     - 'crates/**'
-  #     - 'Cargo.toml'
-  #     - 'Cargo.lock'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/**'
+      - 'sdks/typescript/**'
+      - 'conformance/**'
+      - 'benchmarks/**'
+      - 'scripts/**'
+      - 'docs/reference/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/**'
 
 # Annuler les runs précédents pour la même branche/PR
 concurrency:
@@ -72,7 +76,7 @@ jobs:
       - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
         with:
           shared-key: "velesdb-ci"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -177,7 +181,7 @@ jobs:
       - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
         with:
           shared-key: "velesdb-ci"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Run tests
         run: |
@@ -211,6 +215,33 @@ jobs:
   # This saves ~10-15 min of CI time per push
   # Run manually: Actions → Quality Deep → Run workflow
   # ===========================================================================
+
+  # ===========================================================================
+  # WASM Build Check (compile-only, no tests — fast gate)
+  # NOTE: compat-matrix.yml also checks WASM; this job provides a dedicated
+  # signal visible in the ci-success summary.
+  # ===========================================================================
+  wasm-check:
+    name: WASM Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
+        with:
+          shared-key: "velesdb-ci-wasm"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      - name: Install wasm32 target (belt-and-suspenders)
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Check WASM build (no default features)
+        run: cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
 
   # ===========================================================================
   # Python Integration Tests (uniquement si integrations/ modifié)
@@ -466,13 +497,14 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, velesql-conformance, perf-smoke, sonarcloud]
+    needs: [lint, test, security, wasm-check, velesql-conformance, perf-smoke, sonarcloud]
     if: always()
     steps:
       - name: Check results
         run: |
           [[ "${{ needs.lint.result }}" == "success" ]] && \
           [[ "${{ needs.test.result }}" == "success" ]] && \
+          [[ "${{ needs.wasm-check.result }}" == "success" ]] && \
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \
           [[ "${{ needs.perf-smoke.result }}" == "success" ]] && \
           [[ "${{ needs.security.result }}" == "success" ]] && \
