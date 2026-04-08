@@ -86,23 +86,32 @@ pub struct ConcurrentEdgeStore {
 
 impl ConcurrentEdgeStore {
     /// Creates a new concurrent edge store with the default number of shards.
+    ///
+    /// Uses `DEFAULT_NUM_SHARDS` (compile-time constant > 0), so this
+    /// constructor cannot fail in practice.
+    #[allow(clippy::missing_panics_doc)] // Invariant: DEFAULT_NUM_SHARDS > 0
     #[must_use]
     pub fn new() -> Self {
-        Self::with_shards(DEFAULT_NUM_SHARDS)
+        // DEFAULT_NUM_SHARDS is a compile-time constant > 0, so this cannot fail.
+        Self::with_shards(DEFAULT_NUM_SHARDS).expect("invariant: DEFAULT_NUM_SHARDS > 0")
     }
 
     /// Creates a new concurrent edge store with a specific number of shards.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `num_shards` is 0 (would cause division-by-zero in shard_index).
-    #[must_use]
-    pub fn with_shards(num_shards: usize) -> Self {
-        assert!(num_shards > 0, "num_shards must be at least 1");
+    /// Returns `Error::Config` if `num_shards` is 0 (would cause
+    /// division-by-zero in shard_index).
+    pub fn with_shards(num_shards: usize) -> crate::error::Result<Self> {
+        if num_shards == 0 {
+            return Err(crate::error::Error::Config(
+                "num_shards must be at least 1".to_string(),
+            ));
+        }
         let shards = (0..num_shards)
             .map(|_| RwLock::new(EdgeStore::new()))
             .collect();
-        Self {
+        Ok(Self {
             shards,
             num_shards,
             edge_ids: RwLock::new(FxHashMap::default()),
@@ -110,12 +119,13 @@ impl ConcurrentEdgeStore {
             csr_snapshot: ArcSwap::from_pointee(SnapshotBuilder::empty()),
             csr_dirty: AtomicBool::new(false),
             label_table: RwLock::new(LabelTable::new()),
-        }
+        })
     }
 
     /// Creates a concurrent edge store with optimal shard count for estimated edge count.
     ///
     /// **FLAG-6: Uses integer bit manipulation for ceiling log2.**
+    #[allow(clippy::missing_panics_doc)] // Invariant: optimal_shards >= 1 (clamped)
     #[must_use]
     pub fn with_estimated_edges(estimated_edges: usize) -> Self {
         let optimal_shards = if estimated_edges < MIN_EDGES_PER_SHARD {
@@ -129,7 +139,8 @@ impl ConcurrentEdgeStore {
             };
             (1usize << power_of_2).clamp(1, MAX_SHARDS)
         };
-        Self::with_shards(optimal_shards)
+        // optimal_shards is always >= 1 (clamped above), so this cannot fail.
+        Self::with_shards(optimal_shards).expect("invariant: optimal_shards >= 1")
     }
 
     /// Returns the shard index for a given node ID.

@@ -83,35 +83,38 @@ impl FusionConfig {
 
     /// Creates a weighted fusion config.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if weights are negative or if their sum is not approximately 1.0 (±0.001).
-    #[must_use]
-    pub fn weighted(avg_weight: f64, max_weight: f64, hit_weight: f64) -> Self {
+    /// Returns `Error::Config` if any weight is negative or if their sum
+    /// is not approximately 1.0 (tolerance ±0.001).
+    pub fn weighted(
+        avg_weight: f64,
+        max_weight: f64,
+        hit_weight: f64,
+    ) -> crate::error::Result<Self> {
         // Validate weights are non-negative
-        assert!(
-            avg_weight >= 0.0 && max_weight >= 0.0 && hit_weight >= 0.0,
-            "FusionConfig::weighted: all weights must be non-negative, got avg={}, max={}, hit={}",
-            avg_weight,
-            max_weight,
-            hit_weight
-        );
+        if avg_weight < 0.0 || max_weight < 0.0 || hit_weight < 0.0 {
+            return Err(crate::error::Error::Config(format!(
+                "FusionConfig::weighted: all weights must be non-negative, \
+                 got avg={avg_weight}, max={max_weight}, hit={hit_weight}"
+            )));
+        }
 
         // Validate weights sum to 1.0 (with tolerance for floating-point errors)
         let sum = avg_weight + max_weight + hit_weight;
-        assert!(
-            (sum - 1.0).abs() < 0.001,
-            "FusionConfig::weighted: weights must sum to 1.0, got sum={}",
-            sum
-        );
+        if (sum - 1.0).abs() >= 0.001 {
+            return Err(crate::error::Error::Config(format!(
+                "FusionConfig::weighted: weights must sum to 1.0, got sum={sum}"
+            )));
+        }
 
         let mut params = std::collections::HashMap::new();
         params.insert("avg_weight".to_string(), avg_weight);
         params.insert("max_weight".to_string(), max_weight);
         params.insert("hit_weight".to_string(), hit_weight);
-        Self {
+        Ok(Self {
             strategy: "weighted".to_string(),
             params,
-        }
+        })
     }
 }

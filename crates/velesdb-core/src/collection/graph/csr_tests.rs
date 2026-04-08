@@ -505,7 +505,7 @@ fn test_bfs_csr_limit_respected() {
 fn test_snapshot_rebuild_after_add() {
     use super::edge_concurrent::ConcurrentEdgeStore;
 
-    let store = ConcurrentEdgeStore::with_shards(4);
+    let store = ConcurrentEdgeStore::with_shards(4).expect("test: valid shard count");
     store
         .add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("valid"))
         .expect("add");
@@ -527,7 +527,7 @@ fn test_snapshot_rebuild_after_add() {
 fn test_snapshot_rebuild_after_remove() {
     use super::edge_concurrent::ConcurrentEdgeStore;
 
-    let store = ConcurrentEdgeStore::with_shards(4);
+    let store = ConcurrentEdgeStore::with_shards(4).expect("test: valid shard count");
     store
         .add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("valid"))
         .expect("add");
@@ -552,7 +552,7 @@ fn test_snapshot_rebuild_after_remove() {
 fn test_get_outgoing_backward_compat() {
     use super::edge_concurrent::ConcurrentEdgeStore;
 
-    let store = ConcurrentEdgeStore::with_shards(4);
+    let store = ConcurrentEdgeStore::with_shards(4).expect("test: valid shard count");
     store
         .add_edge(GraphEdge::new(1, 100, 200, "A").expect("valid"))
         .expect("add");
@@ -572,7 +572,7 @@ fn test_get_outgoing_backward_compat() {
 fn test_traverse_bfs_csr_on_concurrent_store() {
     use super::edge_concurrent::ConcurrentEdgeStore;
 
-    let store = ConcurrentEdgeStore::with_shards(4);
+    let store = ConcurrentEdgeStore::with_shards(4).expect("test: valid shard count");
     // Chain: 1 -> 2 -> 3
     store
         .add_edge(GraphEdge::new(1, 1, 2, "NEXT").expect("valid"))
@@ -594,7 +594,7 @@ fn test_traverse_bfs_csr_on_concurrent_store() {
 fn test_snapshot_rebuild_after_remove_node_edges() {
     use super::edge_concurrent::ConcurrentEdgeStore;
 
-    let store = ConcurrentEdgeStore::with_shards(4);
+    let store = ConcurrentEdgeStore::with_shards(4).expect("test: valid shard count");
     store
         .add_edge(GraphEdge::new(1, 10, 20, "A").expect("valid"))
         .expect("add");

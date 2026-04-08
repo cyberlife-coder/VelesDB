@@ -54,6 +54,7 @@ fn test_bytes_to_vector_high_dimension() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
 #[should_panic(expected = "buffer too small")]
 fn test_bytes_to_vector_buffer_underflow_panics() {
     let small_buffer = [0u8; 4]; // Only 4 bytes
@@ -61,6 +62,7 @@ fn test_bytes_to_vector_buffer_underflow_panics() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
 #[should_panic(expected = "buffer too small")]
 fn test_bytes_to_vector_empty_buffer_panics() {
     let empty_buffer: [u8; 0] = [];

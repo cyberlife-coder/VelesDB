@@ -27,7 +27,10 @@ impl ConcurrentTrigramIndex {
 
     /// Insert a document (write lock).
     pub fn insert(&self, doc_id: u64, text: &str) {
-        self.inner.write().insert(doc_id, text);
+        self.inner
+            .write()
+            .insert(doc_id, text)
+            .expect("test: insert should succeed");
     }
 
     /// Remove a document (write lock).

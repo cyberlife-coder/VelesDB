@@ -163,7 +163,10 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
 
         // Train on accumulated samples
         let refs: Vec<&[f32]> = self.training_buffer.iter().map(Vec::as_slice).collect();
-        let quantizer = Arc::new(ScalarQuantizer::train(&refs));
+        // Training buffer is guarded by `is_empty()` check above, so this cannot fail.
+        let quantizer = Arc::new(
+            ScalarQuantizer::train(&refs).expect("invariant: training_buffer is non-empty"),
+        );
 
         // Create quantized store and quantize all existing vectors
         let mut store = QuantizedVectorStore::new(Arc::clone(&quantizer), self.inner.len() + 1000);

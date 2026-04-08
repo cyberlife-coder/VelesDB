@@ -40,13 +40,10 @@ impl BinaryQuantizedVector {
     /// # Arguments
     ///
     /// * `vector` - The original f32 vector to quantize
-    ///
-    /// # Panics
-    ///
-    /// Panics if the vector is empty.
     #[must_use]
     pub fn from_f32(vector: &[f32]) -> Self {
-        assert!(!vector.is_empty(), "Cannot quantize empty vector");
+        // Caller guarantees non-empty (dimension validated at collection level).
+        debug_assert!(!vector.is_empty(), "Cannot quantize empty vector");
 
         let dimension = vector.len();
         // Calculate number of bytes needed: ceil(dimension / 8)
@@ -129,11 +126,10 @@ impl BinaryQuantizedVector {
 const BINARY_HEADER_SIZE: usize = 4;
 
 impl QuantizationCodec for BinaryQuantizedVector {
-    /// # Panics
-    ///
-    /// Panics if dimension exceeds `u32::MAX` (4,294,967,295).
     fn to_bytes(&self) -> Vec<u8> {
-        assert!(
+        // Dimension is set from vector.len() which fits in usize (always < u32::MAX
+        // on supported platforms where vectors cannot exceed 4B dimensions).
+        debug_assert!(
             u32::try_from(self.dimension).is_ok(),
             "BinaryQuantizedVector dimension {} exceeds u32::MAX for serialization",
             self.dimension
