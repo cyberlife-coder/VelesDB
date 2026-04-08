@@ -38,6 +38,8 @@ pub fn fuse_results(
     let mut fused: Vec<(u64, f32)> = match strategy.to_lowercase().as_str() {
         "average" | "avg" => fuse_average(&scores),
         "maximum" | "max" => fuse_maximum(&scores),
+        "weighted" => fuse_weighted(&scores, all_results.len()),
+        "relative_score" | "rsf" => fuse_relative_score(all_results),
         _ => fuse_rrf(&ranks, rrf_k),
     };
 
@@ -65,6 +67,50 @@ fn fuse_maximum(scores: &HashMap<u64, Vec<f32>>) -> Vec<(u64, f32)> {
             (*id, max)
         })
         .collect()
+}
+
+/// Weighted fusion: combines average score, max score, and hit ratio.
+///
+/// `score = 0.5 * avg + 0.3 * max + 0.2 * (hits / total_queries)`
+fn fuse_weighted(scores: &HashMap<u64, Vec<f32>>, total_queries: usize) -> Vec<(u64, f32)> {
+    scores
+        .iter()
+        .map(|(id, s)| {
+            let avg = s.iter().sum::<f32>() / s.len() as f32;
+            let max = s.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let hit_ratio = s.len() as f32 / total_queries.max(1) as f32;
+            (*id, 0.5 * avg + 0.3 * max + 0.2 * hit_ratio)
+        })
+        .collect()
+}
+
+/// Relative Score Fusion: min-max normalizes each query independently.
+///
+/// Each query's scores are normalized to `[0, 1]`, then averaged per document.
+fn fuse_relative_score(all_results: &[Vec<(u64, f32)>]) -> Vec<(u64, f32)> {
+    let mut normalized: HashMap<u64, Vec<f32>> = HashMap::new();
+    for results in all_results {
+        let (min_s, max_s) = min_max_scores(results);
+        let range = max_s - min_s;
+        for &(id, score) in results {
+            let norm = if range > f32::EPSILON {
+                (score - min_s) / range
+            } else {
+                1.0
+            };
+            normalized.entry(id).or_default().push(norm);
+        }
+    }
+    fuse_average(&normalized)
+}
+
+/// Returns `(min, max)` scores from a result set.
+fn min_max_scores(results: &[(u64, f32)]) -> (f32, f32) {
+    results
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &(_, s)| {
+            (min.min(s), max.max(s))
+        })
 }
 
 /// Reciprocal Rank Fusion: position-based scoring.
@@ -140,5 +186,44 @@ mod tests {
 
         assert_eq!(fused.len(), 2);
         assert_eq!(fused[0].0, 1); // Higher RRF score (rank 0)
+    }
+
+    #[test]
+    fn test_fuse_weighted() {
+        let results = vec![vec![(1, 0.8), (2, 0.6)], vec![(1, 0.6), (2, 0.8)]];
+
+        let fused = fuse_results(&results, "weighted", 60);
+
+        // Both docs appear in 2/2 queries => hit_ratio = 1.0
+        // ID 1: avg=0.7, max=0.8 => 0.5*0.7 + 0.3*0.8 + 0.2*1.0 = 0.79
+        // ID 2: avg=0.7, max=0.8 => same
+        assert_eq!(fused.len(), 2);
+        for (_, score) in &fused {
+            assert!((score - 0.79).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn test_fuse_relative_score() {
+        let results = vec![vec![(1, 0.9), (2, 0.1)], vec![(1, 0.5), (2, 0.5)]];
+
+        let fused = fuse_results(&results, "relative_score", 60);
+
+        // Query 0: range=0.8, ID 1 norm=(0.9-0.1)/0.8=1.0, ID 2 norm=0.0
+        // Query 1: range=0, both get 1.0 (default when range==0)
+        // ID 1: avg(1.0, 1.0)=1.0;  ID 2: avg(0.0, 1.0)=0.5
+        assert_eq!(fused.len(), 2);
+        assert_eq!(fused[0].0, 1);
+        assert!((fused[0].1 - 1.0).abs() < 0.01);
+        assert_eq!(fused[1].0, 2);
+        assert!((fused[1].1 - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_fuse_rsf_alias() {
+        let results = vec![vec![(1, 0.9), (2, 0.1)]];
+        let fused = fuse_results(&results, "rsf", 60);
+        // "rsf" should behave like "relative_score"
+        assert_eq!(fused.len(), 2);
     }
 }

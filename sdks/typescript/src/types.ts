@@ -31,7 +31,7 @@ export interface VelesDBConfig {
 }
 
 /** Collection type */
-export type CollectionType = 'vector' | 'metadata_only';
+export type CollectionType = 'vector' | 'metadata_only' | 'graph';
 
 /** HNSW index parameters for collection creation */
 export interface HnswParams {
