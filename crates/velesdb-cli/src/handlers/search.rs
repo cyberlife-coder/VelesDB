@@ -64,8 +64,12 @@ fn parse_fusion_strategy(strategy: &str, rrf_k: u32) -> Result<FusionStrategy> {
             max_weight: 0.3,
             hit_weight: 0.2,
         }),
+        "relative_score" | "rsf" => Ok(FusionStrategy::RelativeScore {
+            dense_weight: 0.5,
+            sparse_weight: 0.5,
+        }),
         _ => anyhow::bail!(
-            "Invalid strategy '{}'. Valid: average, maximum, rrf, weighted",
+            "Invalid strategy '{}'. Valid: average, maximum, rrf, weighted, relative_score",
             strategy
         ),
     }

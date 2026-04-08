@@ -116,9 +116,19 @@ pub(crate) fn cmd_hybrid_sparse(db: &Database, parts: &[&str]) -> CommandResult 
         "rrf" => velesdb_core::FusionStrategy::rrf_default(),
         "average" => velesdb_core::FusionStrategy::Average,
         "max" | "maximum" => velesdb_core::FusionStrategy::Maximum,
+        "weighted" => velesdb_core::FusionStrategy::Weighted {
+            avg_weight: 0.5,
+            max_weight: 0.3,
+            hit_weight: 0.2,
+        },
+        "relative_score" | "rsf" => velesdb_core::FusionStrategy::RelativeScore {
+            dense_weight: 0.5,
+            sparse_weight: 0.5,
+        },
         other => {
             return CommandResult::Error(format!(
-                "Unknown fusion strategy: '{other}'. Use rrf, average, or max."
+                "Unknown fusion strategy: '{other}'. \
+                 Use rrf, average, max, weighted, or relative_score."
             ));
         }
     };
