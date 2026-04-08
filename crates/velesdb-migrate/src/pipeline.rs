@@ -243,6 +243,8 @@ impl Pipeline {
                 crate::config::DistanceMetric::Cosine => velesdb_core::DistanceMetric::Cosine,
                 crate::config::DistanceMetric::Euclidean => velesdb_core::DistanceMetric::Euclidean,
                 crate::config::DistanceMetric::Dot => velesdb_core::DistanceMetric::DotProduct,
+                crate::config::DistanceMetric::Hamming => velesdb_core::DistanceMetric::Hamming,
+                crate::config::DistanceMetric::Jaccard => velesdb_core::DistanceMetric::Jaccard,
             };
 
             let storage_mode = match self.config.destination.storage_mode {
