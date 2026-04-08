@@ -237,6 +237,9 @@ jobs:
           shared-key: "velesdb-ci-wasm"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
+      - name: Install wasm32 target (belt-and-suspenders)
+        run: rustup target add wasm32-unknown-unknown
+
       - name: Check WASM build (no default features)
         run: cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
 
