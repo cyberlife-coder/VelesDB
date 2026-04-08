@@ -25,6 +25,7 @@ from llamaindex_velesdb.security import (
     validate_batch_size,
     validate_collection_name,
     validate_sparse_vector,
+    validate_url,
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
@@ -155,6 +156,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ba
     collection_name: str = "llamaindex"
     metric: str = "cosine"
     storage_mode: str = "full"
+    server_url: Optional[str] = None
 
     _db: Optional[velesdb.Database] = PrivateAttr(default=None)
     _collection: Optional[velesdb.Collection] = PrivateAttr(default=None)
@@ -168,6 +170,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ba
         collection_name: str = "llamaindex",
         metric: str = "cosine",
         storage_mode: str = "full",
+        server_url: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize VelesDB vector store.
@@ -192,6 +195,8 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ba
                 - "rabitq": RaBitQ with scalar correction (32x compression, good recall).
 
                 Examples: ``storage_mode="int8"`` is equivalent to ``storage_mode="sq8"``.
+            server_url: Optional URL of a VelesDB server for server mode. When
+                provided, must be a valid http:// or https:// URL.
             **kwargs: Additional arguments.
 
         Raises:
@@ -202,12 +207,15 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ba
         validated_collection = validate_collection_name(collection_name)
         validated_metric = validate_metric(metric)
         validated_storage_mode = validate_storage_mode(storage_mode)
+        if server_url is not None:
+            validate_url(server_url)
 
         super().__init__(
             path=validated_path,
             storage_mode=validated_storage_mode,
             collection_name=validated_collection,
             metric=validated_metric,
+            server_url=server_url,
             **kwargs,
         )
 

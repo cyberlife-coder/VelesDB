@@ -794,5 +794,72 @@ class TestV15Features:
         assert __version__ == "1.7.0"
 
 
+class TestServerUrlValidation:
+    """Tests for validate_url() call in server mode (WP-2B)."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        """Create a temporary directory for tests."""
+        path = tempfile.mkdtemp()
+        yield path
+        shutil.rmtree(path, ignore_errors=True)
+
+    def test_valid_https_server_url_is_accepted(self, temp_dir):
+        """A valid https:// server_url must not raise."""
+        store = VelesDBVectorStore(
+            path=temp_dir,
+            collection_name="url-test",
+            server_url="https://velesdb.example.com:8080",
+        )
+        assert store.server_url == "https://velesdb.example.com:8080"
+
+    def test_valid_http_server_url_is_accepted(self, temp_dir):
+        """A valid http:// server_url must not raise."""
+        store = VelesDBVectorStore(
+            path=temp_dir,
+            collection_name="url-test-http",
+            server_url="http://localhost:8080",
+        )
+        assert store.server_url == "http://localhost:8080"
+
+    def test_no_server_url_is_accepted(self, temp_dir):
+        """Omitting server_url (local mode) must not raise."""
+        store = VelesDBVectorStore(path=temp_dir, collection_name="url-test-none")
+        assert store.server_url is None
+
+    def test_invalid_scheme_raises_security_error(self, temp_dir):
+        """A server_url without http/https scheme must raise SecurityError."""
+        from llamaindex_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError, match="http"):
+            VelesDBVectorStore(
+                path=temp_dir,
+                collection_name="url-test-bad",
+                server_url="ftp://velesdb.example.com",
+            )
+
+    def test_empty_server_url_raises_security_error(self, temp_dir):
+        """An empty server_url string must raise SecurityError."""
+        from llamaindex_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError):
+            VelesDBVectorStore(
+                path=temp_dir,
+                collection_name="url-test-empty",
+                server_url="",
+            )
+
+    def test_server_url_with_newline_raises_security_error(self, temp_dir):
+        """A server_url containing a newline must raise SecurityError."""
+        from llamaindex_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError):
+            VelesDBVectorStore(
+                path=temp_dir,
+                collection_name="url-test-injection",
+                server_url="https://ok.example.com\nX-Injected: evil",
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
