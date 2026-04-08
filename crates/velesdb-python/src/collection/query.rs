@@ -82,8 +82,9 @@ pub(crate) fn build_explain_dict(
 ///
 /// Returns a Python dict with keys: `plan`, `actual_stats`, `node_stats`.
 /// The `plan` sub-dict mirrors `build_explain_dict` output.
-/// `actual_stats` is a dict with actual execution metrics (or `None`).
-/// `node_stats` is a list of per-node statistic dicts.
+/// `actual_stats` is a dict with measured execution metrics (or `None`).
+/// `node_stats` is a list of per-node **estimated** statistic dicts
+/// (heuristic values derived from `actual_stats`, not individually measured).
 pub(crate) fn build_explain_analyze_dict(
     py: Python<'_>,
     output: &velesdb_core::velesql::ExplainOutput,

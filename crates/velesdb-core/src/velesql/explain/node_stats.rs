@@ -18,9 +18,7 @@ pub(super) fn estimate_cost(root: &PlanNode, has_vector_search: bool) -> f64 {
     let base_cost = if has_vector_search { 0.05 } else { 1.0 };
 
     match root {
-        PlanNode::Sequence(nodes) => nodes
-            .iter()
-            .fold(base_cost, |acc, n| acc + node_cost(n)),
+        PlanNode::Sequence(nodes) => nodes.iter().fold(base_cost, |acc, n| acc + node_cost(n)),
         _ => base_cost + node_cost(root),
     }
 }
