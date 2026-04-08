@@ -122,6 +122,7 @@ fn bench_hnsw_recall(c: &mut Criterion) {
                     SearchQuality::Custom(_) => "custom",
                     SearchQuality::Adaptive { .. } => "adaptive",
                     SearchQuality::AutoTune => "autotune",
+                    _ => "unknown",
                 };
 
                 group.bench_function(
