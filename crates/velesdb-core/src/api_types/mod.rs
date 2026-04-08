@@ -6,6 +6,7 @@
 
 mod requests;
 mod responses;
+pub mod serde_id;
 #[cfg(test)]
 mod tests;
 

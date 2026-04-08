@@ -4,11 +4,13 @@
 
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+use velesdb_core::api_types::serde_id;
 
 /// A single traversal result item.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TraversalResultItem {
     /// Target node ID reached.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub target_id: u64,
     /// Depth of traversal (number of hops from source).
     pub depth: u32,
@@ -28,6 +30,7 @@ pub struct EdgeQueryParams {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TraverseRequest {
     /// Source node ID to start traversal from.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub source: u64,
     /// Traversal strategy: "bfs" or "dfs".
     #[serde(default = "default_strategy")]
@@ -101,10 +104,13 @@ pub struct EdgesResponse {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct EdgeResponse {
     /// Edge ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Source node ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub source: u64,
     /// Target node ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub target: u64,
     /// Edge label (relationship type).
     pub label: String,
@@ -116,10 +122,13 @@ pub struct EdgeResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AddEdgeRequest {
     /// Edge ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Source node ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub source: u64,
     /// Target node ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub target: u64,
     /// Edge label (relationship type).
     pub label: String,
@@ -175,6 +184,7 @@ pub struct UpsertNodePayloadRequest {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct NodePayloadResponse {
     /// Node ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub node_id: u64,
     /// Stored payload (null if none).
     pub payload: Option<serde_json::Value>,
@@ -221,6 +231,7 @@ pub struct GraphSearchResponse {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct GraphSearchResultItem {
     /// Node ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Similarity score.
     pub score: f32,
@@ -236,6 +247,7 @@ pub struct GraphSearchResultItem {
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct StreamTraverseParams {
     /// Source node ID to start traversal from.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     #[param(example = 123)]
     pub start_node: u64,
     /// Traversal algorithm: "bfs" or "dfs".
@@ -272,6 +284,7 @@ fn default_stream_limit() -> usize {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct StreamNodeEvent {
     /// Target node ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Depth from source.
     pub depth: u32,

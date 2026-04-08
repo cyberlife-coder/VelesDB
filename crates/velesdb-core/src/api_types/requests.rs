@@ -10,7 +10,7 @@ use utoipa::ToSchema;
 use super::{
     default_avg_weight, default_collection_type, default_fusion_strategy, default_hit_weight,
     default_index_type, default_max_weight, default_metric, default_rrf_k, default_storage_mode,
-    default_top_k, default_vector_weight,
+    default_top_k, default_vector_weight, serde_id,
 };
 
 // ============================================================================
@@ -162,6 +162,7 @@ pub struct UpsertPointsRequest {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct PointRequest {
     /// Point ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Vector data.
     pub vector: Vec<f32>,
@@ -180,6 +181,7 @@ pub struct PointRequest {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct StreamInsertRequest {
     /// Point ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Dense vector data.
     pub vector: Vec<f32>,
