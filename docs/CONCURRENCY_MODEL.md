@@ -332,7 +332,7 @@ for neighbor in neighbors {
 
 5. **Enlarged crash recovery window during batch upsert**:
    - The 3-phase upsert pipeline (`batch_store_all` -> `per_point_updates` -> `bulk_index_or_defer`) writes vectors and payloads to storage before inserting into the HNSW graph. A crash between Phase 1 and Phase 3 leaves vectors in storage but missing from the HNSW index.
-   - Mitigation: On `Collection::open()`, gap detection compares `storage.ids()` against `index.mappings` and re-indexes any missing vectors. See [Crash Recovery Testing](contributing/CRASH_RECOVERY_TESTING.md) and [SOUNDNESS.md](SOUNDNESS.md#hnsw-batch-insertion-ordering) for details.
+   - Mitigation: On `Collection::open()`, gap detection compares `storage.ids()` against `index.mappings` and re-indexes any missing vectors. See [HNSW Crash Recovery](#hnsw-crash-recovery) for the full recovery architecture and [SOUNDNESS.md](SOUNDNESS.md#hnsw-batch-insertion-ordering) for batch insertion ordering invariants.
 
 ## Best Practices
 
@@ -390,6 +390,207 @@ for neighbor in neighbors {
    }
    ```
 
+## HNSW Crash Recovery
+
+### Problem Statement
+
+HNSW graph persistence is intentionally deferred: `Collection::flush()` only
+saves the HNSW graph to disk when `inserts_since_last_hnsw_save` exceeds
+`HNSW_SAVE_THRESHOLD` (10 000 inserts). This amortizes the cost of
+serializing the full HNSW graph (metadata, mappings, vectors, and graph
+structure) across many write operations instead of paying it on every flush.
+
+The trade-off is an enlarged crash recovery window: if the process crashes
+between a vector storage write and the next HNSW save, the HNSW index on
+disk will be missing those vectors. Two complementary recovery layers
+ensure no data is lost.
+
+### Recovery Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Collection::open()                              │
+│                                                                        │
+│  1. MmapStorage::new()                                                 │
+│     ├─ Load vectors.idx (ID → offset mapping)                          │
+│     ├─ Replay vectors.wal → restore writes since last flush_index()    │
+│     └─ Truncate WAL after successful replay                            │
+│                                                                        │
+│  2. load_or_create_hnsw()                                              │
+│     └─ Load hnsw.bin (graph), native_mappings.bin, native_vectors.bin  │
+│                                                                        │
+│  3. reconcile_point_count()                                            │
+│     └─ Set config.point_count = storage.len() (authoritative source)   │
+│                                                                        │
+│  4. run_crash_recovery()                                               │
+│     └─ recover_hnsw_gap(vector_storage, index, dimension)              │
+│        ├─ Early exit: if storage.len() == hnsw.len() → no gap          │
+│        ├─ find_gap_ids: storage.ids() \ index.mappings                 │
+│        ├─ retrieve_valid_vectors: load from mmap, validate dimension   │
+│        └─ reindex_vectors: insert_batch_parallel into HNSW             │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Layer 1: Vector Storage WAL Replay
+
+**Module**: `crates/velesdb-core/src/storage/mmap/wal_replay.rs`
+
+Every `MmapStorage::store()` and `store_batch()` call writes a CRC32-framed
+entry to `vectors.wal` before updating the mmap and in-memory index. The
+WAL format uses a single-byte opcode prefix:
+
+| Op | Name | Frame Layout |
+|----|------|-------------|
+| `0x01` | Store | `[op:1B][id:8B LE][len:4B LE][data:N B][crc32:4B LE]` |
+| `0x02` | Delete | `[op:1B][id:8B LE][crc32:4B LE]` |
+
+On `MmapStorage::new()`, the constructor calls `replay_wal_to_index()` which:
+
+1. Opens `vectors.wal` and validates it uses the CRC32-framed format
+   (legacy pre-#317 WAL files without CRC are detected and skipped).
+2. Reads entries sequentially, verifying each CRC32 checksum. A CRC
+   mismatch or truncated entry indicates a crash mid-write; replay stops
+   at the corruption boundary (all prior valid entries are applied).
+3. For store entries: writes the vector data into the mmap at the correct
+   offset and updates the sharded index.
+4. For delete entries: removes the ID from the sharded index.
+5. Truncates the WAL file to zero after successful replay, preventing
+   double-replay on the next startup.
+
+This layer recovers vectors that were written to the WAL but not yet
+persisted to `vectors.idx` (the index file is only written by
+`flush_index()` or `flush_full()`, not by the fast `flush()` path).
+
+### Layer 2: HNSW Gap Detection
+
+**Module**: `crates/velesdb-core/src/collection/core/recovery.rs`
+
+After storage is fully reconstructed (Layer 1), `Collection::open()` calls
+`run_crash_recovery()`, which invokes `recover_hnsw_gap()`:
+
+1. **Early exit heuristic**: If `storage.len() == 0` or
+   `storage.len() == hnsw.len()`, returns 0 (no gap). This check is
+   O(1) and avoids a full scan in the common case.
+
+2. **Gap ID detection** (`find_gap_ids`): Iterates all IDs in
+   `storage.ids()` and filters those not present in
+   `index.mappings.contains(id)`. This is O(storage_count) with O(1)
+   per-ID lookup in the sharded mappings.
+
+3. **Vector retrieval** (`retrieve_valid_vectors`): Loads each gap
+   vector from mmap storage, skipping entries with mismatched dimension
+   (corruption) or missing data (concurrent deletion between `ids()` and
+   `retrieve()` calls).
+
+4. **Re-indexing** (`reindex_vectors`): Batch-inserts all valid gap
+   vectors into the HNSW graph via `insert_batch_parallel`. The re-index
+   uses the same parallel rayon-based insertion as normal upserts.
+
+### Gap Sources
+
+Three distinct write paths can leave vectors in storage but absent from HNSW:
+
+| Gap Source | Mechanism | Typical Window |
+|-----------|-----------|---------------|
+| **Normal insert gap** | `batch_store_all` writes vectors before `bulk_index_or_defer` inserts into HNSW. Crash between Phase 1 and Phase 3 of the 3-phase upsert pipeline. | Duration of Phase 2 (secondary indexes, quantization, text indexing) |
+| **Deferred indexer gap** | `DeferredIndexer` buffers vectors in memory (up to `merge_threshold`, default 1 024) before batch-merging into HNSW. Crash before merge loses the buffer. | Up to `merge_threshold` vectors (memory-only, not WAL-protected) |
+| **Delta buffer gap** | `DeltaBuffer` accumulates vectors during background HNSW rebuild. Crash before `deactivate_and_drain` loses the buffer. | Duration of the rebuild operation |
+
+All three gaps are recovered by the same `recover_hnsw_gap` mechanism
+because the recovery compares the final storage state against the HNSW
+mappings, regardless of how the gap originated.
+
+### Known Limitation: Delete-Insert Ambiguity
+
+If a crash occurs between an HNSW delete and the corresponding storage
+delete being persisted, a previously deleted vector may appear in storage
+but not in HNSW. This is indistinguishable from an insert gap. Recovery
+will re-index the deleted vector, effectively "resurrecting" it. This is
+an intentional trade-off: resurrecting a deleted vector is preferable to
+silently losing an inserted one. The window for this scenario is very
+small (within a single `delete()` call).
+
+### Startup Latency Impact
+
+Recovery latency depends on the number of gap vectors:
+
+| Gap Size | Expected Recovery Time | Dominant Cost |
+|----------|----------------------|---------------|
+| 0 (no gap) | < 1 ms | O(1) early exit heuristic |
+| 1–100 vectors | < 10 ms | Storage retrieval + HNSW insert |
+| 100–1 000 vectors | 10–100 ms | Parallel HNSW batch insert |
+| 1 000–10 000 vectors | 100 ms–1 s | Parallel HNSW batch insert (rayon) |
+| > 10 000 vectors | > 1 s | Proportional to gap size; mitigated by `HNSW_SAVE_THRESHOLD` |
+
+The `HNSW_SAVE_THRESHOLD` (10 000) bounds the maximum gap size in practice:
+`flush()` forces an HNSW save after 10 000 inserts, so the worst-case
+recovery inserts at most ~10 000 vectors into the graph. A graceful
+shutdown via `flush_full()` saves the HNSW graph unconditionally, reducing
+the gap to zero for planned restarts.
+
+### Configuration Knobs
+
+| Parameter | Default | Location | Effect |
+|-----------|---------|----------|--------|
+| `HNSW_SAVE_THRESHOLD` | 10 000 | `Collection::flush()` in `flush.rs` | Maximum inserts before `flush()` forces an HNSW save. Lower values reduce worst-case recovery time but increase flush latency. |
+| `DurabilityMode` | `Fsync` | `MmapStorage` | Controls WAL write behavior. `Fsync`: full durability. `FlushOnly`: user-space flush only (faster, risk of OS-crash data loss). `None`: no WAL writes (for bulk import; no WAL replay possible). |
+| `DeferredIndexerConfig.merge_threshold` | 1 024 | `collection.streaming.deferred` | Number of buffered vectors before deferred merge into HNSW. Larger values increase the deferred indexer gap window. |
+| `DeferredIndexerConfig.max_buffer_age_ms` | 5 000 | `collection.streaming.deferred` | Maximum age of buffered vectors before a time-based merge. Provides a time bound on the deferred gap. |
+
+### Flush Variants
+
+| Method | WAL fsync | mmap flush | vectors.idx | HNSW save | Use Case |
+|--------|-----------|-----------|-------------|-----------|----------|
+| `Collection::flush()` | Yes | Yes | No | Only if > 10K inserts | Normal operation, periodic durability |
+| `Collection::flush_full()` | Yes | Yes | Yes | Always | Graceful shutdown, before compaction |
+| `MmapStorage::flush()` | Yes | Yes | No | N/A | Storage-level fast barrier |
+| `MmapStorage::flush_full()` | Yes | Yes | Yes | N/A | Storage-level complete barrier |
+
+### Persistence Format
+
+HNSW index persistence uses atomic write-tmp-fsync-rename for crash safety.
+Each save writes four files:
+
+| File | Contents | Format |
+|------|----------|--------|
+| `native_meta.bin` | Dimension, metric, vector storage flag, storage mode | postcard-serialized tuple |
+| `native_mappings.bin` | `id_to_idx`, `idx_to_id`, `next_idx` | postcard-serialized HashMaps |
+| `native_vectors.bin` | `Vec<(internal_idx, Vec<f32>)>` | postcard-serialized vector pairs |
+| `native_hnsw` (dir/file) | Graph structure (layers, edges, neighbors) | Custom binary via `file_dump` |
+
+### HNSW Delta WAL (Incremental Graph Logging)
+
+**Module**: `crates/velesdb-core/src/storage/hnsw_delta_wal.rs`
+
+In addition to the vector storage WAL, VelesDB provides an HNSW delta WAL
+that logs incremental graph mutations (edge additions, edge removals,
+entry-point changes). This enables O(delta) recovery instead of full graph
+rebuild O(N*M).
+
+| Op | Name | Frame Layout |
+|----|------|-------------|
+| `0x01` | AddEdge | `[op:1B][from:4B LE][to:4B LE][layer:1B][crc32:4B LE]` (14 bytes) |
+| `0x02` | RemoveEdge | `[op:1B][from:4B LE][to:4B LE][layer:1B][crc32:4B LE]` (14 bytes) |
+| `0x03` | SetEntry | `[op:1B][node:4B LE][max_layer:1B][crc32:4B LE]` (10 bytes) |
+
+Each entry is CRC32-framed. On recovery, `HnswDeltaReader::read_all()`
+reads entries sequentially until EOF or the first corrupted frame, which
+marks the crash boundary.
+
+### Test Coverage
+
+Recovery behavior is validated by the following test suite:
+
+| Test | File | Scenario |
+|------|------|----------|
+| `test_no_gap_returns_zero` | `recovery_tests.rs` | No gap: storage and HNSW counts match |
+| `test_empty_collection_no_recovery` | `recovery_tests.rs` | Empty collection: early exit |
+| `test_crash_gap_detected_and_recovered` | `recovery_tests.rs` | Simulated gap: 2 vectors in storage but not HNSW |
+| `test_gap_recovery_on_collection_reopen` | `recovery_tests.rs` | End-to-end: create, gap, flush, drop, reopen, verify search |
+| `test_metadata_only_skips_recovery` | `recovery_tests.rs` | Metadata-only collections skip recovery |
+| WAL replay tests | `wal_recovery_tests.rs` | CRC validation, legacy format detection, truncation |
+| HNSW delta WAL tests | `hnsw_delta_wal_tests.rs` | Delta entry serialization, CRC verification, crash boundary |
+
 ## Testing Concurrency
 
 ### Running Loom Tests
@@ -423,4 +624,4 @@ invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-
 
 ---
 
-*Last updated: 2026-04-02 (EPIC-023 + RaBitQ concurrency + CAS entry-point + CsrSnapshot + parent-pointer BFS)*
+*Last updated: 2026-04-08 (WP-1F: HNSW crash recovery documentation)*
