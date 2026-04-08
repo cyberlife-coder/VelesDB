@@ -21,10 +21,22 @@ def _scroll_one_batch(
 ) -> tuple:
     """Pull one batch from a velesdb Collection using its scroll iterator.
 
-    Drives the native ``collection.scroll()`` iterator from the beginning,
-    skipping batches whose highest point-ID does not exceed *cursor*.
-    Returns the first batch whose last point-ID is greater than *cursor*
-    (or the very first batch when *cursor* is ``None``).
+    Creates a fresh ``collection.scroll()`` iterator on every call and skips
+    batches until the one past *cursor* is found.
+
+    .. warning::
+        **Complexity: O(page_index * batch_size)** — this function re-scans
+        from the beginning of the collection on each call because the native
+        SDK does not yet expose a cursor-based ``scroll_batch`` method at the
+        Python level (the Rust ``VectorCollection.scroll_batch`` method is
+        internal to the ``ScrollIterator`` PyO3 class).  For large collections
+        with many pages, callers should either:
+
+        * keep the ``ScrollIterator`` alive across calls (use
+          ``collection.scroll(batch_size=N)`` as a Python generator and drive
+          it with ``next()``), or
+        * wait for a future ``Collection.scroll_batch(cursor, batch_size)``
+          Python binding that will provide true O(1) cursor seek.
 
     Args:
         collection: A ``velesdb.Collection`` instance.
