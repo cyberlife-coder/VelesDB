@@ -166,7 +166,9 @@ class Collection:
 
         Args:
             vector: Query vector (list or numpy array).
-            quality: One of 'fast', 'balanced', 'accurate', 'perfect', 'autotune'.
+            quality: One of 'fast', 'balanced', 'accurate', 'perfect', 'autotune',
+                     'custom:<ef>' (e.g. 'custom:256'), or 'adaptive:<min>:<max>'
+                     (e.g. 'adaptive:32:512').
             top_k: Number of results (default: 10).
 
         Returns:
