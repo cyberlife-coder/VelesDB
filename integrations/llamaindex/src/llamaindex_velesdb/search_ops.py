@@ -15,7 +15,7 @@ from llama_index.core.vector_stores.types import (
     VectorStoreQueryResult,
 )
 
-import velesdb
+from velesdb_common.fusion import build_fusion_strategy as _build_fusion_strategy_fn
 
 from llamaindex_velesdb.security import (
     validate_k,
@@ -409,35 +409,83 @@ class SearchOpsMixin:
         self,
         fusion: str,
         fusion_params: Optional[dict] = None,
-    ) -> "velesdb.FusionStrategy":
+    ) -> object:
         """Build a FusionStrategy from string name and params.
 
+        Delegates to :func:`velesdb_common.fusion.build_fusion_strategy`
+        to avoid duplication with the LangChain integration.
+        """
+        return _build_fusion_strategy_fn(fusion, fusion_params)
+
+    def query_with_ef(
+        self,
+        query_embedding: List[float],
+        ef_search: int,
+        top_k: int = 10,
+        **kwargs: Any,
+    ) -> VectorStoreQueryResult:
+        """Query with a custom HNSW ``ef_search`` parameter.
+
+        Exposes the same capability as LangChain's
+        ``similarity_search_with_ef``, allowing callers to trade recall for
+        latency by controlling the HNSW search beam width at query time.
+
         Args:
-            fusion: Fusion strategy name ("rrf", "average", "maximum", "weighted").
-            fusion_params: Optional parameters for the strategy.
+            query_embedding: Dense query vector.
+            ef_search: HNSW ``ef`` value for this query.  Larger values
+                increase recall at the cost of higher latency.
+            top_k: Number of results to return.  Defaults to 10.
+            **kwargs: Additional arguments (reserved for future use).
 
         Returns:
-            A velesdb.FusionStrategy instance.
+            Query result with nodes and similarities.
+
+        Raises:
+            SecurityError: If ``top_k`` fails validation.
         """
-        params = fusion_params or {}
+        validate_k(top_k)
+        dimension = len(query_embedding)
+        collection = self._get_collection(dimension)
+        results = collection.search_with_ef(
+            query_embedding, top_k=top_k, ef_search=ef_search,
+        )
+        return self._build_query_result(results)
 
-        if fusion == "rrf":
-            k = params.get("k", 60)
-            return velesdb.FusionStrategy.rrf(k=k)
-        if fusion == "average":
-            return velesdb.FusionStrategy.average()
-        if fusion == "maximum":
-            return velesdb.FusionStrategy.maximum()
-        if fusion == "weighted":
-            avg_w = params.get("avg_weight", 0.6)
-            max_w = params.get("max_weight", 0.3)
-            hit_w = params.get("hit_weight", 0.1)
-            return velesdb.FusionStrategy.weighted(
-                avg_weight=avg_w, max_weight=max_w, hit_weight=hit_w,
-            )
-        if fusion in ("relative_score", "rsf"):
-            dense_weight = params.get("dense_weight", 0.5)
-            sparse_weight = params.get("sparse_weight", 0.5)
-            return velesdb.FusionStrategy.relative_score(dense_weight, sparse_weight)
+    def query_ids(
+        self,
+        query_embedding: List[float],
+        top_k: int = 10,
+        **kwargs: Any,
+    ) -> List[str]:
+        """Query returning only node IDs (no payloads fetched).
 
-        raise ValueError(f"Unknown fusion strategy: {fusion}")
+        Mirrors LangChain's ``similarity_search_ids`` — useful for
+        re-ranking pipelines that need candidate IDs before fetching full
+        payloads, keeping the round-trip cheap.
+
+        Args:
+            query_embedding: Dense query vector.
+            top_k: Number of IDs to return.  Defaults to 10.
+            **kwargs: Additional arguments (reserved for future use).
+
+        Returns:
+            List of node ID strings, ordered by descending similarity.
+
+        Raises:
+            SecurityError: If ``top_k`` fails validation.
+        """
+        validate_k(top_k)
+        dimension = len(query_embedding)
+        collection = self._get_collection(dimension)
+        raw = collection.search_ids(query_embedding, top_k=top_k)
+        # search_ids returns [{id, score}, ...]; extract the node_id string
+        # stored in the payload, falling back to the numeric point ID.
+        ids: List[str] = []
+        for entry in raw:
+            payload = entry.get("payload", {})
+            node_id = payload.get("node_id")
+            if node_id is not None:
+                ids.append(str(node_id))
+            else:
+                ids.append(str(entry.get("id", "")))
+        return ids

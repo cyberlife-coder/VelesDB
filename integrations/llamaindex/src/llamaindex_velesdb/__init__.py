@@ -24,7 +24,7 @@ try:
         VelesDBProceduralMemory,
     )
     _HAS_MEMORY = True
-except ImportError:
+except ModuleNotFoundError:
     VelesDBSemanticMemory = None  # type: ignore
     VelesDBEpisodicMemory = None  # type: ignore
     VelesDBProceduralMemory = None  # type: ignore

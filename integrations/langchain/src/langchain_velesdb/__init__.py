@@ -32,7 +32,7 @@ try:
         VelesDBProceduralMemory,
     )
     _HAS_MEMORY = True
-except ImportError:
+except ModuleNotFoundError:
     VelesDBChatMemory = None  # type: ignore
     VelesDBSemanticMemory = None  # type: ignore
     VelesDBProceduralMemory = None  # type: ignore

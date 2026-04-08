@@ -50,6 +50,23 @@ export async function trainPq(
   return response.data?.message ?? 'PQ training initiated';
 }
 
+/**
+ * Why streamInsert does NOT use transport.requestJson:
+ *
+ * 1. **Backpressure signalling** — the streaming endpoint returns HTTP 429 to
+ *    signal backpressure (the ingestion channel is full), which is semantically
+ *    different from a rate-limit 429.  requestJson maps every non-2xx status to
+ *    a generic VelesDBError; here we must catch 429 *before* that mapping and
+ *    raise BackpressureError so callers can react with back-off logic.
+ *
+ * 2. **Custom endpoint** — the target URL is
+ *    `<collection>/stream/insert`, not the shared `/query` endpoint used by
+ *    requestJson, so the helper's URL construction does not apply.
+ *
+ * 3. **202 Accepted** — the endpoint may return 202 (enqueued, not yet
+ *    persisted) as a success code; requestJson treats only 2xx as success
+ *    but does not special-case 202 vs 200 for streaming semantics.
+ */
 export async function streamInsert(
   transport: StreamingTransport,
   collection: string,
