@@ -102,7 +102,7 @@ VelesDBVectorStore(
 | **Utilities** | |
 | `get_collection_info()` | Get collection metadata |
 | `is_empty()` | Check if collection is empty |
-| `scroll(batch_size, filter)` | Iterate all points in stable batches without a query vector |
+| `scroll(batch_size)` | Iterate all points in stable batches without a query vector |
 
 ## Advanced Features
 

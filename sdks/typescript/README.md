@@ -306,34 +306,35 @@ const hits = await db.searchIds('docs', queryVector, { k: 100 });
 
 Iterate over all points in a collection in stable, paginated batches without a
 query vector. Useful for export pipelines, re-embedding, and full-collection
-inspection. Pagination is cursor-based — pass the `nextOffset` from each
+inspection. Pagination is cursor-based — pass the `nextCursor` from each
 `ScrollResponse` until it is `null`.
 
 ```typescript
 import { ScrollRequest, ScrollResponse } from '@wiscale/velesdb-sdk';
 
-let offset: number | null = 0;
-while (offset !== null) {
-  const page: ScrollResponse = await db.scroll('docs', {
-    batchSize: 100,
-    offset,
-    filter: { category: 'tech' },  // optional payload filter
-    withVectors: false,             // set true to include raw vectors
-  } satisfies ScrollRequest);
+let cursor: string | number | null = null;
+let hasMore = true;
+while (hasMore) {
+  const req: ScrollRequest = { batchSize: 100 };
+  if (cursor !== null) {
+    req.cursor = cursor;
+  }
+
+  const page: ScrollResponse = await db.scroll('docs', req);
 
   for (const point of page.points) {
     console.log(point.id, point.payload);
   }
-  offset = page.nextOffset;
+  cursor = page.nextCursor;
+  hasMore = cursor !== null;
 }
 ```
 
 | Field (`ScrollRequest`) | Type | Default | Description |
 |-------------------------|------|---------|-------------|
+| `cursor` | `string \| number` | - | Cursor from previous `ScrollResponse.nextCursor` |
 | `batchSize` | `number` | `100` | Points per page |
-| `offset` | `number \| null` | `0` | Cursor from previous `ScrollResponse.nextOffset` |
 | `filter` | `object` | - | Optional payload filter expression |
-| `withVectors` | `boolean` | `false` | Include raw vectors in each point |
 
 #### `db.textSearch(collection, query, options?)`
 

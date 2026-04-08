@@ -18,7 +18,7 @@ interface ScrollApiResponse {
     vector?: number[];
     payload?: Record<string, unknown>;
   }>;
-  next_cursor: number | null;
+  next_cursor: string | number | null;
 }
 
 /**
