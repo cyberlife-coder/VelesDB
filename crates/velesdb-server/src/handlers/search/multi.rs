@@ -57,12 +57,17 @@ pub async fn multi_query_search(
             max_weight: req.max_weight,
             hit_weight: req.hit_weight,
         },
+        "relative_score" | "rsf" => FusionStrategy::RelativeScore {
+            dense_weight: req.dense_weight,
+            sparse_weight: req.sparse_weight,
+        },
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: format!(
-                        "Invalid strategy: {}. Valid: average, maximum, rrf, weighted",
+                        "Invalid strategy: {}. Valid: average, maximum, rrf, weighted, \
+                         relative_score",
                         req.strategy
                     ),
                     code: None,
