@@ -137,7 +137,7 @@ fn test_search_result_serialize() {
     };
     let json = serde_json::to_string(&result).unwrap();
 
-    assert!(json.contains("\"id\":42"));
+    assert!(json.contains("\"id\":\"42\""));
     assert!(json.contains("\"score\":0.95"));
     assert!(json.contains("\"title\":\"Test\""));
 }
