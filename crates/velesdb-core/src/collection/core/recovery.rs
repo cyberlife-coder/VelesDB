@@ -128,7 +128,30 @@ use crate::storage::LogPayloadStorage;
 pub(super) fn load_config(path: &std::path::Path) -> Result<CollectionConfig> {
     let config_path = path.join("config.json");
     let config_data = std::fs::read_to_string(&config_path)?;
-    serde_json::from_str(&config_data).map_err(|e| Error::Serialization(e.to_string()))
+    let config: CollectionConfig =
+        serde_json::from_str(&config_data).map_err(|e| Error::Serialization(e.to_string()))?;
+    validate_schema_version(&config)?;
+    Ok(config)
+}
+
+/// Rejects collections written by a newer VelesDB with a higher schema
+/// version. Treats `schema_version == 0` as v1 (silent migration of
+/// pre-versioned collections).
+fn validate_schema_version(config: &CollectionConfig) -> Result<()> {
+    use crate::collection::types::CURRENT_SCHEMA_VERSION;
+
+    let version = if config.schema_version == 0 {
+        1
+    } else {
+        config.schema_version
+    };
+    if version > CURRENT_SCHEMA_VERSION {
+        return Err(Error::IncompatibleSchemaVersion {
+            found: version,
+            supported: CURRENT_SCHEMA_VERSION,
+        });
+    }
+    Ok(())
 }
 
 /// Reconciles `point_count` from the actual storage (config.json may be

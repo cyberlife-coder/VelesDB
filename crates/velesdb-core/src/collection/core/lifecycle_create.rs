@@ -3,7 +3,7 @@
 //! Extracted from `lifecycle.rs` to reduce NLOC below the 500 threshold.
 //! Contains all `create_*` public constructors and their shared helpers.
 
-use crate::collection::types::{Collection, CollectionConfig};
+use crate::collection::types::{Collection, CollectionConfig, CURRENT_SCHEMA_VERSION};
 use crate::distance::DistanceMetric;
 use crate::error::Result;
 use crate::quantization::StorageMode;
@@ -75,6 +75,7 @@ impl Collection {
             dimension,
             metric,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode,
             metadata_only: false,
             graph_schema: None,
@@ -109,6 +110,7 @@ impl Collection {
             dimension,
             metric,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode,
             metadata_only: false,
             graph_schema: None,
@@ -141,6 +143,7 @@ impl Collection {
             dimension,
             metric,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode: StorageMode::Full,
             metadata_only: false,
             graph_schema: None,
@@ -169,6 +172,7 @@ impl Collection {
             dimension: 0,
             metric: DistanceMetric::Cosine,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode: StorageMode::Full,
             metadata_only: true,
             graph_schema: None,
@@ -201,6 +205,7 @@ impl Collection {
             dimension: embedding_dim.unwrap_or(0),
             metric,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode: StorageMode::Full,
             metadata_only: false,
             graph_schema: Some(schema),
