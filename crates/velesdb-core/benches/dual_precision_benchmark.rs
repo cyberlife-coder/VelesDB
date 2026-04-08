@@ -147,7 +147,7 @@ fn bench_quantized_distance(c: &mut Criterion) {
     let v1: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.01).sin()).collect();
     let v2: Vec<f32> = (0..dim).map(|i| (i as f32 * 0.01).cos()).collect();
 
-    let quantizer = ScalarQuantizer::train(&[&v1, &v2]);
+    let quantizer = ScalarQuantizer::train(&[&v1, &v2]).expect("bench: train quantizer");
     let q1 = quantizer.quantize(&v1);
     let q2 = quantizer.quantize(&v2);
 

@@ -223,7 +223,7 @@ fn test_trigram_search_performance_10k() {
     // Insert 10K documents
     for i in 0..10_000u64 {
         let text = format!("document number {i} with some content");
-        index.insert(i, &text);
+        index.insert(i, &text).expect("test: insert");
     }
 
     // Search should be fast
@@ -377,9 +377,13 @@ fn test_threshold_pruning_performance() {
     // Insert 1000 documents, only 10% should match
     for i in 0..1000u64 {
         if i % 10 == 0 {
-            index.insert(i, &format!("matching document number {i}"));
+            index
+                .insert(i, &format!("matching document number {i}"))
+                .expect("test: insert");
         } else {
-            index.insert(i, &format!("other content {i}"));
+            index
+                .insert(i, &format!("other content {i}"))
+                .expect("test: insert");
         }
     }
 

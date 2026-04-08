@@ -236,6 +236,7 @@ async fn deprecation_header(
     response
 }
 
+#[allow(clippy::similar_names)] // Reason: `routes` (handler tree) and `router` (final router) are distinct concepts.
 fn build_router(
     state: Arc<AppState>,
     auth_state: AuthState,

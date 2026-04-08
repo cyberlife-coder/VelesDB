@@ -26,6 +26,10 @@ impl ConcurrentTrigramIndex {
     }
 
     /// Insert a document (write lock).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying `TrigramIndex::insert` returns an error (test-only code).
     pub fn insert(&self, doc_id: u64, text: &str) {
         self.inner
             .write()

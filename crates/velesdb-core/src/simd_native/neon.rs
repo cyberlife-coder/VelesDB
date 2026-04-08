@@ -114,6 +114,7 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     };
 
     // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
+    // - Condition 1: NEON is always present on aarch64; `vaddvq_f32` is guaranteed available.
     // Reason: Horizontal reduction of the combined SIMD accumulator to a scalar result.
     let mut result = unsafe { vaddvq_f32(combined) };
 
@@ -150,10 +151,13 @@ pub(crate) fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
         // SAFETY: `cosine_fused_neon_4acc` requires NEON (guaranteed on aarch64)
         // and len >= 64 (checked above).
+        // - Condition 1: NEON is always present on aarch64.
+        // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
         // Reason: Delegate to the 4-accumulator ILP variant for large vectors.
         return unsafe { cosine_fused_neon_4acc(a, b) };
     }
     // SAFETY: `cosine_fused_neon_1acc` requires NEON (guaranteed on aarch64).
+    // - Condition 1: NEON is always present on aarch64.
     // Reason: Single-accumulator variant for small/medium vectors.
     unsafe { cosine_fused_neon_1acc(a, b) }
 }
@@ -383,6 +387,7 @@ pub(crate) fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
         return squared_l2_neon_4acc(a, b);
     }
     // SAFETY: `squared_l2_neon_1acc` requires NEON (guaranteed on aarch64).
+    // - Condition 1: NEON is always present on aarch64.
     // Reason: Single-accumulator variant for small/medium vectors.
     unsafe { squared_l2_neon_1acc(a, b) }
 }
@@ -472,6 +477,7 @@ fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     };
 
     // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
+    // - Condition 1: NEON is always present on aarch64; `vaddvq_f32` is guaranteed available.
     // Reason: Horizontal reduction of the combined SIMD accumulator to a scalar result.
     let mut result = unsafe { vaddvq_f32(combined) };
 
@@ -507,10 +513,13 @@ pub(crate) fn hamming_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
         // SAFETY: `hamming_neon_4acc` requires NEON (guaranteed on aarch64)
         // and len >= 64 (checked above).
+        // - Condition 1: NEON is always present on aarch64.
+        // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
         // Reason: Delegate to the 4-accumulator ILP variant for large vectors.
         return unsafe { hamming_neon_4acc(a, b) };
     }
     // SAFETY: `hamming_neon_1acc` requires NEON (guaranteed on aarch64).
+    // - Condition 1: NEON is always present on aarch64.
     // Reason: Single-accumulator variant for small/medium vectors.
     unsafe { hamming_neon_1acc(a, b) }
 }
@@ -729,10 +738,13 @@ pub(crate) fn jaccard_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
         // SAFETY: `jaccard_neon_4acc` requires NEON (guaranteed on aarch64)
         // and len >= 64 (checked above).
+        // - Condition 1: NEON is always present on aarch64.
+        // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
         // Reason: Delegate to the 4-accumulator ILP variant for large vectors.
         return unsafe { jaccard_neon_4acc(a, b) };
     }
     // SAFETY: `jaccard_neon_1acc` requires NEON (guaranteed on aarch64).
+    // - Condition 1: NEON is always present on aarch64.
     // Reason: Single-accumulator variant for small/medium vectors.
     unsafe { jaccard_neon_1acc(a, b) }
 }

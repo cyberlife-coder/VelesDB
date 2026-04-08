@@ -191,6 +191,9 @@ impl ContiguousVectors {
         // (`alloc_zeroed`) and resize (`AllocGuard::new_zeroed`) zero-initialize the buffer.
         // `count * dimension <= capacity * dimension`, `data` is non-null per `NonNull`
         // invariant. Even sparse `insert_at` gaps contain valid 0.0 f32 values.
+        // - Condition 1: `data` is a valid, aligned `NonNull<f32>` pointer.
+        // - Condition 2: `total <= capacity * dimension` ensures the slice is within the allocation.
+        // - Condition 3: All bytes in the allocation are initialized (zeroed or written).
         // Reason: Zero-copy GPU upload requires a contiguous &[f32] view.
         unsafe { std::slice::from_raw_parts(self.data.as_ptr(), total) }
     }

@@ -167,6 +167,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         vectors: &crate::perf_optimizations::ContiguousVectors,
     ) {
         // SAFETY: new_node was just inserted, so new_node < vectors.len().
+        // - Condition 1: `new_node` index is valid because it was just registered in vectors.
         // Reason: Finding the most redundant neighbor (closest to new_node).
         let new_vec = unsafe { vectors.get_unchecked(new_node) };
 
