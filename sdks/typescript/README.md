@@ -119,6 +119,11 @@ const results = await db.search('products', queryVector, { k: 10 });
 
 > **REST backend note:** Document IDs must be numeric integers in the range `0..Number.MAX_SAFE_INTEGER`. String IDs are only supported with the WASM backend.
 
+> **Versioned routes:** The REST backend uses `/v1/` as the canonical route prefix
+> (e.g. `POST /v1/collections/{name}/search`). Legacy routes without the prefix
+> are accepted for backward compatibility but are deprecated and will be removed
+> in a future major version. Always target `/v1/` in custom HTTP clients.
+
 ## API Reference
 
 ### Client
@@ -297,6 +302,39 @@ const hits = await db.searchIds('docs', queryVector, { k: 100 });
 // Returns: Array<{ id: number, score: number }>
 ```
 
+#### `db.scroll(collection, request)`
+
+Iterate over all points in a collection in stable, paginated batches without a
+query vector. Useful for export pipelines, re-embedding, and full-collection
+inspection. Pagination is cursor-based — pass the `nextOffset` from each
+`ScrollResponse` until it is `null`.
+
+```typescript
+import { ScrollRequest, ScrollResponse } from '@wiscale/velesdb-sdk';
+
+let offset: number | null = 0;
+while (offset !== null) {
+  const page: ScrollResponse = await db.scroll('docs', {
+    batchSize: 100,
+    offset,
+    filter: { category: 'tech' },  // optional payload filter
+    withVectors: false,             // set true to include raw vectors
+  } satisfies ScrollRequest);
+
+  for (const point of page.points) {
+    console.log(point.id, point.payload);
+  }
+  offset = page.nextOffset;
+}
+```
+
+| Field (`ScrollRequest`) | Type | Default | Description |
+|-------------------------|------|---------|-------------|
+| `batchSize` | `number` | `100` | Points per page |
+| `offset` | `number \| null` | `0` | Cursor from previous `ScrollResponse.nextOffset` |
+| `filter` | `object` | - | Optional payload filter expression |
+| `withVectors` | `boolean` | `false` | Include raw vectors in each point |
+
 #### `db.textSearch(collection, query, options?)`
 
 Full-text search using BM25 scoring.
@@ -325,7 +363,7 @@ Multi-query fusion search for RAG pipelines using Multiple Query Generation (MQG
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `k` | `number` | `10` | Number of results |
-| `fusion` | `'rrf' \| 'average' \| 'maximum' \| 'weighted'` | `'rrf'` | Fusion strategy |
+| `fusion` | `'rrf' \| 'average' \| 'maximum' \| 'weighted' \| 'relative_score'` | `'rrf'` | Fusion strategy |
 | `fusionParams` | `object` | `{ k: 60 }` | Strategy-specific parameters |
 | `filter` | `object` | - | Payload filter expression |
 
@@ -343,9 +381,16 @@ const results = await db.multiQuerySearch('docs', [emb1, emb2], {
   fusion: 'weighted',
   fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 }
 });
+
+// Relative Score Fusion — linear blend of dense and sparse scores
+const results = await db.multiQuerySearch('docs', [emb1, emb2], {
+  k: 10,
+  fusion: 'relative_score',
+  fusionParams: { denseWeight: 0.7, sparseWeight: 0.3 }
+});
 ```
 
-> **Note:** WASM supports `rrf`, `average`, `maximum`. The `weighted` strategy is REST-only.
+> **Note:** WASM supports `rrf`, `average`, `maximum`. The `weighted` and `relative_score` strategies are REST-only.
 
 ---
 

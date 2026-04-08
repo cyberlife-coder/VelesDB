@@ -102,6 +102,7 @@ VelesDBVectorStore(
 - `from_texts(texts, embedding, ...)` - Create store from texts (class method)
 - `get_collection_info()` - Get collection metadata (name, dimension, point_count)
 - `is_empty()` - Check if collection is empty
+- `scroll(batch_size=100, filter=None)` - Iterate over all points in stable batches without a query vector
 
 ## Advanced Features
 
@@ -144,6 +145,39 @@ for doc, score in results_with_scores:
 - `"average"` - Mean score across all queries
 - `"maximum"` - Maximum score from any query
 - `"weighted"` - Custom combination of avg, max, and hit ratio
+- `"relative_score"` - Linear blend of dense and sparse scores
+
+```python
+# Relative Score Fusion — explicit control over dense vs sparse weight
+results = vectorstore.multi_query_search(
+    queries=["semantic search", "keyword retrieval"],
+    k=10,
+    fusion="relative_score",
+    fusion_params={"dense_weight": 0.7, "sparse_weight": 0.3}
+)
+```
+
+### Advanced Search
+
+#### `similarity_search_with_ef(query, ef_search, k)`
+
+Search with an explicit HNSW `ef_search` parameter to trade query latency for recall.
+Higher `ef_search` increases recall at the cost of slower search.
+
+```python
+# Use a high ef_search for maximum recall at query time
+results = vectorstore.similarity_search_with_ef(
+    query="machine learning",
+    ef_search=256,
+    k=10
+)
+```
+
+### Server Mode: URL Validation
+
+When connecting to a remote `velesdb-server` via the `url` parameter,
+`validate_url` is called automatically during initialization to reject
+malformed URLs before any network request is issued.
 
 ### Hybrid Search (Vector + BM25)
 

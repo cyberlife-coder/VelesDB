@@ -285,6 +285,12 @@ count = collection.stream_insert([
     {"id": 100, "vector": [...], "payload": {"key": "value"}}
 ])
 
+# Scroll through all points in stable batches (no vector required)
+# Useful for export, reindexing, or full-collection inspection.
+for batch in collection.scroll(batch_size=100, filter=None):
+    for point in batch:
+        print(point["id"], point["payload"])
+
 # MATCH graph traversal query (VelesQL)
 results = collection.match_query(
     "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name",

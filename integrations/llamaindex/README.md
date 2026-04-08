@@ -102,6 +102,7 @@ VelesDBVectorStore(
 | **Utilities** | |
 | `get_collection_info()` | Get collection metadata |
 | `is_empty()` | Check if collection is empty |
+| `scroll(batch_size, filter)` | Iterate all points in stable batches without a query vector |
 
 ## Advanced Features
 
@@ -143,6 +144,48 @@ for node in results.nodes:
 - `"average"` - Mean score across all queries
 - `"maximum"` - Maximum score from any query
 - `"weighted"` - Custom combination of avg, max, and hit ratio
+- `"relative_score"` - Linear blend of dense and sparse scores
+
+```python
+# Relative Score Fusion
+results = vector_store.multi_query_search(
+    query_embeddings=[emb1, emb2],
+    similarity_top_k=10,
+    fusion="relative_score",
+    fusion_params={"dense_weight": 0.7, "sparse_weight": 0.3}
+)
+```
+
+### Advanced Search
+
+#### `query_with_ef(query_embedding, ef_search, top_k)`
+
+Search with an explicit HNSW `ef_search` parameter to trade query latency for recall.
+
+```python
+# Higher ef_search = better recall, slower query
+results = vector_store.query_with_ef(
+    query_embedding=embedding,
+    ef_search=256,
+    top_k=10
+)
+```
+
+#### `query_ids(query_embedding, top_k)`
+
+Search returning only node IDs and scores — no payloads transferred.
+Faster than `query()` when only IDs are needed (e.g., for post-processing pipelines).
+
+```python
+hits = vector_store.query_ids(query_embedding=embedding, top_k=50)
+# [{"id": "abc", "score": 0.92}, ...]
+```
+
+### Server Mode: URL Validation
+
+When connecting to a remote `velesdb-server` via the `path` parameter as a URL,
+`validate_url` is called automatically during initialization to reject
+malformed URLs before any network request is issued.
 
 ### Hybrid Search (Vector + BM25)
 
