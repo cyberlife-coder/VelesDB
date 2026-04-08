@@ -32,7 +32,9 @@ try:
         VelesDBProceduralMemory,
     )
     _HAS_MEMORY = True
-except ModuleNotFoundError:
+except ImportError as e:
+    import logging
+    logging.getLogger(__name__).debug("Optional import failed: %s", e)
     VelesDBChatMemory = None  # type: ignore
     VelesDBSemanticMemory = None  # type: ignore
     VelesDBProceduralMemory = None  # type: ignore
