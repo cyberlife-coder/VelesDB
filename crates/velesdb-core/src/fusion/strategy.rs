@@ -42,6 +42,7 @@ impl std::error::Error for FusionError {}
 /// - `RRF`: Position-based fusion, robust to score scale differences
 /// - `Weighted`: Custom combination with explicit control over factors
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum FusionStrategy {
     /// Average score across all queries where the document appears.
     ///
