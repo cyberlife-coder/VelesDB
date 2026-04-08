@@ -87,6 +87,14 @@ fn fuse_weighted(scores: &HashMap<u64, Vec<f32>>, total_queries: usize) -> Vec<(
 /// Relative Score Fusion: min-max normalizes each query independently.
 ///
 /// Each query's scores are normalized to `[0, 1]`, then averaged per document.
+/// When all scores in a branch are equal (range < epsilon), the normalized
+/// value defaults to 0.5 — consistent with the core engine's
+/// `min_max_normalize` in `crates/velesdb-core/src/fusion/strategy.rs`.
+///
+/// **Note:** This WASM implementation is a simplified approximation of the
+/// core `RelativeScore` strategy. The core version is designed for exactly
+/// two branches (dense + sparse) with explicit weights. This WASM version
+/// averages across N branches with equal weights.
 fn fuse_relative_score(all_results: &[Vec<(u64, f32)>]) -> Vec<(u64, f32)> {
     let mut normalized: HashMap<u64, Vec<f32>> = HashMap::new();
     for results in all_results {
@@ -96,7 +104,7 @@ fn fuse_relative_score(all_results: &[Vec<(u64, f32)>]) -> Vec<(u64, f32)> {
             let norm = if range > f32::EPSILON {
                 (score - min_s) / range
             } else {
-                1.0
+                0.5
             };
             normalized.entry(id).or_default().push(norm);
         }
@@ -210,13 +218,13 @@ mod tests {
         let fused = fuse_results(&results, "relative_score", 60);
 
         // Query 0: range=0.8, ID 1 norm=(0.9-0.1)/0.8=1.0, ID 2 norm=0.0
-        // Query 1: range=0, both get 1.0 (default when range==0)
-        // ID 1: avg(1.0, 1.0)=1.0;  ID 2: avg(0.0, 1.0)=0.5
+        // Query 1: range=0, both get 0.5 (default when range==0, matches core)
+        // ID 1: avg(1.0, 0.5)=0.75;  ID 2: avg(0.0, 0.5)=0.25
         assert_eq!(fused.len(), 2);
         assert_eq!(fused[0].0, 1);
-        assert!((fused[0].1 - 1.0).abs() < 0.01);
+        assert!((fused[0].1 - 0.75).abs() < 0.01);
         assert_eq!(fused[1].0, 2);
-        assert!((fused[1].1 - 0.5).abs() < 0.01);
+        assert!((fused[1].1 - 0.25).abs() < 0.01);
     }
 
     #[test]
@@ -225,5 +233,25 @@ mod tests {
         let fused = fuse_results(&results, "rsf", 60);
         // "rsf" should behave like "relative_score"
         assert_eq!(fused.len(), 2);
+    }
+
+    /// BUG regression (PR #556): when all scores in a branch are equal
+    /// (range ~ 0), the normalized value must be 0.5 — consistent with
+    /// the core engine's `min_max_normalize`.
+    #[test]
+    fn test_fuse_relative_score_equal_scores_default_half() {
+        // All scores identical within each branch → range ≈ 0
+        let results = vec![vec![(1, 0.7), (2, 0.7)], vec![(1, 0.3), (2, 0.3)]];
+
+        let fused = fuse_results(&results, "relative_score", 60);
+
+        // Both branches collapse to 0.5 per document → avg = 0.5
+        assert_eq!(fused.len(), 2);
+        for (_, score) in &fused {
+            assert!(
+                (score - 0.5).abs() < 0.01,
+                "equal-score branch must normalize to 0.5, got {score}"
+            );
+        }
     }
 }

@@ -463,7 +463,10 @@ pub struct ListIndexesResponse {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ScrollRequest {
     /// Resume after this point ID (exclusive). Omit to start from beginning.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
+    )]
     pub cursor: Option<u64>,
     /// Maximum points per batch (1–10 000, default 100).
     #[serde(default = "default_scroll_batch_size")]
@@ -479,21 +482,28 @@ fn default_scroll_batch_size() -> u32 {
 }
 
 /// Response from the scroll endpoint.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ScrollResponse {
     /// Points in this batch (ascending ID order).
     pub points: Vec<ScrollPoint>,
     /// Cursor for the next batch. Null when iteration is complete.
+    #[serde(
+        serialize_with = "serde_id::serialize_option_id_as_string",
+        deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
+    )]
     pub next_cursor: Option<u64>,
 }
 
 /// A single point in a scroll response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ScrollPoint {
     /// Point ID.
-    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
+    #[serde(
+        serialize_with = "serde_id::serialize_id_as_string",
+        deserialize_with = "serde_id::deserialize_id_from_string_or_number"
+    )]
     pub id: u64,
     /// Vector data.
     pub vector: Vec<f32>,
