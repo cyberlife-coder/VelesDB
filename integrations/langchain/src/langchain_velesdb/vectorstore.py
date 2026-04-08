@@ -6,6 +6,7 @@ as the underlying vector database for storing and retrieving embeddings.
 Search and query operations are implemented in focused mixin modules:
 - :mod:`langchain_velesdb.search_ops` — vector/hybrid/text/batch/multi-query search
 - :mod:`langchain_velesdb.graph_ops` — VelesQL and MATCH query operations
+- :mod:`langchain_velesdb.scroll_ops` — cursor-paginated scroll iteration
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from velesdb_common.ids import stable_hash_id as _stable_hash_id
 from langchain_velesdb._common import payload_to_doc_parts
 from langchain_velesdb.search_ops import SearchOpsMixin
 from langchain_velesdb.graph_ops import GraphOpsMixin
+from langchain_velesdb.scroll_ops import ScrollOpsMixin, _scroll_one_batch  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +65,7 @@ def _build_point(
     return point
 
 
-class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, VectorStore):
+class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, ScrollOpsMixin, VectorStore):
     """VelesDB vector store for LangChain.
 
     A high-performance vector store backed by VelesDB, designed for
@@ -533,4 +535,5 @@ __all__ = [
     "VelesDBVectorStore",
     "SearchOpsMixin",
     "GraphOpsMixin",
+    "ScrollOpsMixin",
 ]
