@@ -26,15 +26,15 @@ classifiers = [
 ]
 
 dependencies = [
-    "llama-index-core>=0.10.0",
+    "llama-index-core>=0.10.0,<1.0.0",
     "velesdb>=1.9.0",
     "velesdb-common>=1.9.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0",
-    "pytest-asyncio>=0.21",
+    "pytest>=7.0,<9.0",
+    "pytest-asyncio>=0.21,<1.0.0",
 ]
 
 [project.urls]
