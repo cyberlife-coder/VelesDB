@@ -302,6 +302,31 @@ class TestScrollDataframeMixedBatch:
         assert df["vector"].iloc[0] == [1.0, 2.0]
         assert df["vector"].iloc[1] == [3.0, 4.0]
 
+    def test_all_non_dict_payloads_use_payload_column(self, pd):
+        """Non-None, non-dict payloads (e.g. strings) are stored under 'payload'."""
+        batch = [
+            _make_scroll_point(1, [0.1], payload="label-a"),
+            _make_scroll_point(2, [0.2], payload="label-b"),
+        ]
+        df = to_scroll_dataframe(batch, backend="pandas")
+        assert "payload" in df.columns
+        assert "id" in df.columns
+        assert list(df["payload"]) == ["label-a", "label-b"]
+
+    def test_mixed_dict_and_non_dict_non_none_payloads_use_flattening(self, pd):
+        """Mixed batch with dict + string: dict keys become columns, string rows are null."""
+        batch = [
+            _make_scroll_point(1, [0.1], payload={"category": "sport"}),
+            _make_scroll_point(2, [0.2], payload="raw-string"),
+        ]
+        df = to_scroll_dataframe(batch, backend="pandas")
+        # At least one dict payload triggers flattening; string payload is treated
+        # as non-dict and contributes no columns — its 'category' cell is NaN.
+        assert "category" in df.columns
+        assert "payload" not in df.columns
+        assert df["category"].iloc[0] == "sport"
+        assert pd.isna(df["category"].iloc[1])
+
 
 # ---------------------------------------------------------------------------
 # NaN vector guard — _row_to_point and dataframe_to_points (Issue 3)
