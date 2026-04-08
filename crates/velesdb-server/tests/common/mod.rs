@@ -92,3 +92,35 @@ pub fn create_test_app_with_auth(temp_dir: &TempDir, api_keys: Vec<String>) -> R
             auth_middleware,
         ))
 }
+
+/// Middleware that adds deprecation headers for unversioned legacy routes.
+/// Mirrors the production middleware in `main.rs`.
+async fn deprecation_header(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert("deprecation", "true".parse().expect("test: static header value"));
+    headers.insert(
+        "x-api-deprecated",
+        "Use /v1/ prefix".parse().expect("test: static header value"),
+    );
+    response
+}
+
+/// Helper to create test app with `/v1/` versioned routes and legacy
+/// unversioned routes (with deprecation headers). Mirrors `build_router()`
+/// from the production binary.
+pub fn create_versioned_test_app(temp_dir: &TempDir) -> Router {
+    let state = create_app_state(temp_dir);
+    let routes = base_routes();
+
+    // Canonical versioned API under /v1/
+    let versioned = Router::new().nest("/v1", routes.clone());
+
+    // Legacy unversioned routes with deprecation headers
+    let legacy = routes.layer(axum::middleware::from_fn(deprecation_header));
+
+    versioned.merge(legacy).with_state(state)
+}

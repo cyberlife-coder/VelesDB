@@ -3,6 +3,7 @@
 
 use axum::{
     extract::DefaultBodyLimit,
+    middleware::Next,
     routing::{delete, get, post},
     Router,
 };
@@ -209,8 +210,35 @@ fn api_routes() -> Router<Arc<AppState>> {
     core_routes().merge(search_routes()).merge(graph_routes())
 }
 
+/// Middleware that adds deprecation headers to responses served on
+/// unversioned (legacy) routes. Clients should migrate to `/v1/` prefix.
+async fn deprecation_header(
+    request: axum::extract::Request,
+    next: Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    // SAFETY rationale: these are compile-time constant ASCII strings;
+    // `parse()` cannot fail, but we use `expect` to satisfy no-unwrap policy
+    // with an explanation (this is binary code, not library).
+    headers.insert("deprecation", "true".parse().expect("static header value"));
+    headers.insert(
+        "x-api-deprecated",
+        "Use /v1/ prefix".parse().expect("static header value"),
+    );
+    response
+}
+
 fn build_router(state: Arc<AppState>, auth_state: AuthState) -> Router {
-    let api_router = api_routes();
+    let routes = api_routes();
+
+    // Canonical versioned API under /v1/
+    let versioned = Router::new().nest("/v1", routes.clone());
+
+    // Legacy unversioned routes with deprecation headers for backward compat
+    let legacy = routes.layer(axum::middleware::from_fn(deprecation_header));
+
+    let api_router = versioned.merge(legacy);
 
     #[cfg(feature = "prometheus")]
     let api_router = {
