@@ -27,6 +27,7 @@ pub mod auth;
 pub mod config;
 mod handlers;
 pub mod onboarding;
+pub mod rate_limit;
 mod security_addon;
 pub mod tls;
 mod types;

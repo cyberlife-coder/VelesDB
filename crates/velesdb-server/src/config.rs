@@ -24,6 +24,7 @@ struct ServerSection {
     port: Option<u16>,
     data_dir: Option<String>,
     shutdown_timeout_secs: Option<u64>,
+    rate_limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -51,7 +52,12 @@ pub struct ServerConfig {
     pub tls_cert: Option<String>,
     pub tls_key: Option<String>,
     pub shutdown_timeout_secs: u64,
+    /// Maximum requests per second per IP address (0 = disabled).
+    pub rate_limit: u32,
 }
+
+/// Default burst budget for rate limiting (requests per second per IP).
+const DEFAULT_RATE_LIMIT: u32 = 100;
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -63,6 +69,7 @@ impl Default for ServerConfig {
             tls_cert: None,
             tls_key: None,
             shutdown_timeout_secs: 30,
+            rate_limit: DEFAULT_RATE_LIMIT,
         }
     }
 }
@@ -95,6 +102,7 @@ impl ServerConfig {
         let shutdown_timeout_secs = server
             .shutdown_timeout_secs
             .unwrap_or(defaults.shutdown_timeout_secs);
+        let rate_limit = server.rate_limit.unwrap_or(defaults.rate_limit);
         let api_keys = auth.api_keys.unwrap_or(defaults.api_keys);
         let tls_cert = tls.cert.or(defaults.tls_cert);
         let tls_key = tls.key.or(defaults.tls_key);
@@ -106,6 +114,7 @@ impl ServerConfig {
         let api_keys = cli.api_keys.unwrap_or(api_keys);
         let tls_cert = cli.tls_cert.or(tls_cert);
         let tls_key = cli.tls_key.or(tls_key);
+        let rate_limit = cli.rate_limit.unwrap_or(rate_limit);
 
         Self {
             host,
@@ -115,6 +124,7 @@ impl ServerConfig {
             tls_cert,
             tls_key,
             shutdown_timeout_secs,
+            rate_limit,
         }
     }
 
@@ -158,6 +168,11 @@ impl ServerConfig {
     pub fn tls_enabled(&self) -> bool {
         self.tls_cert.is_some() && self.tls_key.is_some()
     }
+
+    /// Returns `true` when rate limiting is enabled (rate_limit > 0).
+    pub fn rate_limit_enabled(&self) -> bool {
+        self.rate_limit > 0
+    }
 }
 
 // ============================================================================
@@ -175,6 +190,7 @@ pub struct CliOverrides {
     pub api_keys: Option<Vec<String>>,
     pub tls_cert: Option<String>,
     pub tls_key: Option<String>,
+    pub rate_limit: Option<u32>,
 }
 
 // ============================================================================
@@ -245,8 +261,10 @@ mod tests {
         assert!(cfg.tls_cert.is_none());
         assert!(cfg.tls_key.is_none());
         assert_eq!(cfg.shutdown_timeout_secs, 30);
+        assert_eq!(cfg.rate_limit, 100);
         assert!(!cfg.auth_enabled());
         assert!(!cfg.tls_enabled());
+        assert!(cfg.rate_limit_enabled());
     }
 
     #[test]
@@ -448,5 +466,62 @@ data_dir = "/toml/data"
         assert_eq!(cfg.port, 3000); // CLI wins
         assert_eq!(cfg.host, "0.0.0.0"); // TOML wins (no CLI override)
         assert_eq!(cfg.data_dir, "/toml/data"); // TOML wins (no CLI override)
+    }
+
+    #[test]
+    fn test_rate_limit_from_toml() {
+        let toml_content = r#"
+[server]
+rate_limit = 50
+"#;
+        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let cli = CliOverrides::default();
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert_eq!(cfg.rate_limit, 50);
+        assert!(cfg.rate_limit_enabled());
+    }
+
+    #[test]
+    fn test_rate_limit_disabled_via_toml() {
+        let toml_content = r#"
+[server]
+rate_limit = 0
+"#;
+        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let cli = CliOverrides::default();
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert_eq!(cfg.rate_limit, 0);
+        assert!(!cfg.rate_limit_enabled());
+    }
+
+    #[test]
+    fn test_rate_limit_cli_overrides_toml() {
+        let toml_content = r#"
+[server]
+rate_limit = 50
+"#;
+        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let cli = CliOverrides {
+            rate_limit: Some(200),
+            ..Default::default()
+        };
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert_eq!(cfg.rate_limit, 200);
+    }
+
+    #[test]
+    fn test_rate_limit_cli_disables() {
+        let file_cfg = FileConfig::default();
+        let cli = CliOverrides {
+            rate_limit: Some(0),
+            ..Default::default()
+        };
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert_eq!(cfg.rate_limit, 0);
+        assert!(!cfg.rate_limit_enabled());
     }
 }

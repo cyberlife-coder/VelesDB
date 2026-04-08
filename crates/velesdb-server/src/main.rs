@@ -9,6 +9,7 @@ use axum::{
 };
 use clap::Parser;
 use std::future::IntoFuture;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
@@ -67,6 +68,10 @@ struct Args {
     /// TLS private key file (PEM)
     #[arg(long, env = "VELESDB_TLS_KEY")]
     tls_key: Option<String>,
+
+    /// Rate limit: max requests per second per IP (0 = disabled)
+    #[arg(long, env = "VELESDB_RATE_LIMIT")]
+    rate_limit: Option<u32>,
 }
 
 fn configure_tracing() {
@@ -92,6 +97,11 @@ fn log_startup(cfg: &ServerConfig) {
     }
     if cfg.tls_enabled() {
         tracing::info!("TLS enabled");
+    }
+    if cfg.rate_limit_enabled() {
+        tracing::info!("Rate limiting enabled: {} req/s per IP", cfg.rate_limit);
+    } else {
+        tracing::info!("Rate limiting disabled");
     }
 }
 
@@ -218,9 +228,6 @@ async fn deprecation_header(
 ) -> axum::response::Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    // SAFETY rationale: these are compile-time constant ASCII strings;
-    // `parse()` cannot fail, but we use `expect` to satisfy no-unwrap policy
-    // with an explanation (this is binary code, not library).
     headers.insert("deprecation", "true".parse().expect("static header value"));
     headers.insert(
         "x-api-deprecated",
@@ -229,7 +236,11 @@ async fn deprecation_header(
     response
 }
 
-fn build_router(state: Arc<AppState>, auth_state: AuthState) -> Router {
+fn build_router(
+    state: Arc<AppState>,
+    auth_state: AuthState,
+    rate_limit: u32,
+) -> anyhow::Result<Router> {
     let routes = api_routes();
 
     // Canonical versioned API under /v1/
@@ -255,13 +266,20 @@ fn build_router(state: Arc<AppState>, auth_state: AuthState) -> Router {
         api_router.merge(Router::<()>::new().merge(swagger_ui))
     };
 
-    api_router
+    let router = api_router
         .layer(axum::middleware::from_fn_with_state(
             auth_state,
             auth_middleware,
         ))
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http());
+
+    if rate_limit > 0 {
+        let config = velesdb_server::rate_limit::build_rate_limit_config(rate_limit)?;
+        Ok(router.layer(velesdb_server::rate_limit::GovernorLayer::new(config)))
+    } else {
+        Ok(router)
+    }
 }
 
 fn warn_if_exposed(host: &str) {
@@ -315,9 +333,14 @@ async fn serve(
         notify_clone.notify_one();
     };
 
-    let server = axum::serve(listener, app)
-        .with_graceful_shutdown(graceful_shutdown)
-        .into_future();
+    // into_make_service_with_connect_info provides peer IP to the
+    // rate limiter's SmartIpKeyExtractor.
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(graceful_shutdown)
+    .into_future();
 
     // Start server in a task so we can apply drain timeout after signal
     let server_handle = tokio::spawn(server);
@@ -478,6 +501,7 @@ fn build_cli_overrides(args: Args) -> CliOverrides {
         api_keys: parse_api_keys_env(),
         tls_cert: args.tls_cert,
         tls_key: args.tls_key,
+        rate_limit: args.rate_limit,
     }
 }
 
@@ -503,7 +527,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = init_app_state(&cfg.data_dir)?;
     let auth_state = AuthState::new(cfg.api_keys.clone());
-    let app = build_router(state.clone(), auth_state);
+    let app = build_router(state.clone(), auth_state, cfg.rate_limit)?;
 
     if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
         serve_tls(

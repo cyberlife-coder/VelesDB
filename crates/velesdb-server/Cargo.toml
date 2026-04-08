@@ -36,6 +36,10 @@ clap = { version = "4.4", features = ["derive", "env"] }
 toml = { workspace = true }
 parking_lot = "0.12"
 
+# Rate limiting
+tower_governor = "0.8"
+governor = "0.10"
+
 # TLS support via rustls
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 tokio-rustls = "0.26"
