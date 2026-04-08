@@ -122,6 +122,21 @@ impl CollectionType {
     }
 }
 
+/// Current on-disk schema version for `config.json`.
+///
+/// Increment this constant when the persisted format changes in a way that
+/// older VelesDB versions cannot safely read. The `Collection::open()` path
+/// rejects any `schema_version > CURRENT_SCHEMA_VERSION` with a clear error.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// Returns the default schema version for backward-compatible deserialization.
+///
+/// Old `config.json` files written before schema versioning was introduced
+/// will deserialize with this default, which is equivalent to version 1.
+fn default_schema_version() -> u32 {
+    1
+}
+
 /// Metadata for a collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionConfig {
@@ -136,6 +151,17 @@ pub struct CollectionConfig {
 
     /// Number of points in the collection.
     pub point_count: usize,
+
+    /// On-disk schema version for forward-compatibility detection.
+    ///
+    /// When a newer VelesDB version writes a `config.json` with a higher
+    /// schema version, older versions will refuse to open the collection
+    /// rather than silently corrupting data.
+    ///
+    /// Backward compatible: old `config.json` files without this field
+    /// deserialize to `1` (the initial version).
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
 
     /// Storage mode for vectors (Full, SQ8, Binary).
     #[serde(default)]
@@ -466,6 +492,7 @@ mod rescore_config_tests {
             dimension: 128,
             metric: DistanceMetric::Euclidean,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode: StorageMode::ProductQuantization,
             metadata_only: false,
             graph_schema: None,

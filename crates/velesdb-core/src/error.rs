@@ -206,6 +206,21 @@ pub enum Error {
     /// (e.g., allocation failure during rebuild).
     #[error("[VELES-035] Snapshot build failed: {0}")]
     SnapshotBuildFailed(String),
+
+    /// Incompatible schema version (VELES-036).
+    ///
+    /// The collection was created with a newer `VelesDB` version that uses a
+    /// schema format this version cannot read. Upgrade `VelesDB` to open it.
+    #[error(
+        "[VELES-036] Collection created with newer schema version (v{found}), \
+         current VelesDB supports up to v{supported}"
+    )]
+    IncompatibleSchemaVersion {
+        /// The schema version found in `config.json`.
+        found: u32,
+        /// The maximum schema version this binary supports.
+        supported: u32,
+    },
 }
 
 impl Error {
@@ -248,6 +263,7 @@ impl Error {
             Self::AllocationFailed(_) => "VELES-033",
             Self::InvalidCollectionName { .. } => "VELES-034",
             Self::SnapshotBuildFailed(_) => "VELES-035",
+            Self::IncompatibleSchemaVersion { .. } => "VELES-036",
         }
     }
 
@@ -262,6 +278,7 @@ impl Error {
                 | Self::Internal(_)
                 | Self::EpochMismatch(_)
                 | Self::AllocationFailed(_)
+                | Self::IncompatibleSchemaVersion { .. }
         )
     }
 }
