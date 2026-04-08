@@ -32,12 +32,14 @@ from velesdb_common.ids import stable_hash_id as _stable_hash_id
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter
 from llamaindex_velesdb.search_ops import SearchOpsMixin
 from llamaindex_velesdb.graph_ops import GraphOpsMixin
+from llamaindex_velesdb.scroll_ops import ScrollOpsMixin, _scroll_one_batch  # noqa: F401
 
 # Re-export for backward compatibility and discoverability.
 __all__ = [
     "VelesDBVectorStore",
     "SearchOpsMixin",
     "GraphOpsMixin",
+    "ScrollOpsMixin",
     "metadata_filters_to_core_filter",
 ]
 
@@ -119,7 +121,7 @@ def _build_stream_points(
     return points
 
 
-class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore):
+class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, ScrollOpsMixin, BasePydanticVectorStore):
     """VelesDB vector store for LlamaIndex.
 
     A high-performance vector store backed by VelesDB, designed for
