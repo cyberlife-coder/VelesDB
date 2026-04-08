@@ -325,7 +325,7 @@ export interface AgentMemoryConfig {
 /** Request parameters for cursor-based scroll pagination. */
 export interface ScrollRequest {
   /** Cursor position to resume from. Omit to start from beginning. */
-  cursor?: number;
+  cursor?: string | number;
   /** Number of points per page (1–10000, default 100). */
   batchSize?: number;
   /** Optional filter object. */
@@ -341,7 +341,7 @@ export interface ScrollResponse {
     payload?: Record<string, unknown>;
   }>;
   /** Cursor for next page, or null if no more results. */
-  nextCursor: number | null;
+  nextCursor: string | number | null;
 }
 
 // ============================================================================
