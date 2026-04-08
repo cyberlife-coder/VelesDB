@@ -96,6 +96,26 @@ fn test_using_fusion_maximum() {
 }
 
 #[test]
+fn test_using_fusion_average() {
+    let sql = "SELECT * FROM docs USING FUSION(strategy = 'average')";
+    let result = Parser::parse(sql);
+    assert!(
+        result.is_ok(),
+        "Failed to parse FUSION average: {:?}",
+        result.err()
+    );
+
+    let query = result.unwrap();
+    let fusion = query
+        .select
+        .fusion_clause
+        .as_ref()
+        .expect("FUSION clause should be present");
+
+    assert_eq!(fusion.strategy, crate::velesql::FusionStrategyType::Average);
+}
+
+#[test]
 fn test_fusion_with_where_clause() {
     // USING FUSION combined with WHERE clause
     let sql = "SELECT * FROM docs WHERE category = 'tech' USING FUSION(strategy = 'rrf', k = 60)";

@@ -7,6 +7,9 @@
 // - u64/usize->f64 for statistics: precision loss acceptable for query planning
 // - All values are bounded by collection sizes and query counts
 // - Used for index selection heuristics, not financial calculations
+// Reason: EPIC-047 US-005 — all types in this module are scaffolded for the
+// auto-index-advisor feature and will be wired once the query planner integrates.
+#![allow(dead_code)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
@@ -14,7 +17,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Predicate types for query pattern tracking.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PredicateType {
     /// Equality check (=)
@@ -28,7 +30,6 @@ pub enum PredicateType {
 }
 
 /// A query pattern for index suggestion analysis.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct QueryPattern {
     /// Labels involved
@@ -40,7 +41,6 @@ pub struct QueryPattern {
 }
 
 /// Statistics for a query pattern.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PatternStats {
     /// Number of times this pattern was seen
@@ -54,7 +54,6 @@ pub struct PatternStats {
 }
 
 /// Tracks query patterns for index suggestion.
-#[allow(dead_code)]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct QueryPatternTracker {
     /// Pattern -> stats mapping
@@ -63,7 +62,6 @@ pub struct QueryPatternTracker {
     slow_query_threshold_ms: u64,
 }
 
-#[allow(dead_code)]
 impl QueryPatternTracker {
     /// Creates a new tracker with default threshold (100ms).
     #[must_use]
@@ -115,7 +113,6 @@ impl QueryPatternTracker {
 }
 
 /// An index suggestion.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexSuggestion {
     /// DDL statement to create the index
@@ -131,14 +128,12 @@ pub struct IndexSuggestion {
 }
 
 /// Advisor that suggests indexes based on query patterns.
-#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub struct IndexAdvisor {
     /// Existing index names (to avoid duplicates)
     existing_indexes: std::collections::HashSet<String>,
 }
 
-#[allow(dead_code)]
 impl IndexAdvisor {
     /// Creates a new advisor.
     #[must_use]
