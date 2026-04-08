@@ -525,6 +525,7 @@ impl Collection {
     ///
     /// Extracts aggregation functions from the SELECT columns and delegates
     /// to [`vector_group_by::group_search_results`].
+    #[allow(clippy::unused_self)] // Instance method for consistency with other query pipeline stages.
     fn apply_vector_group_by(
         &self,
         stmt: &crate::velesql::SelectStatement,

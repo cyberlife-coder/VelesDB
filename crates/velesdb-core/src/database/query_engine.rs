@@ -519,7 +519,7 @@ impl Database {
     /// Orchestrates filter pushdown and join strategy selection:
     /// 1. Analyze WHERE for pushdown-eligible conditions
     /// 2. Strip pushed conditions from base query
-    /// 3. For each JOIN: lookup, filtered, or full ColumnStore path
+    /// 3. For each JOIN: lookup, filtered, or full `ColumnStore` path
     fn execute_single_select(
         &self,
         query: &crate::velesql::Query,

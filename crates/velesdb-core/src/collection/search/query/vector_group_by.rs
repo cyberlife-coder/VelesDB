@@ -138,16 +138,14 @@ pub(crate) fn group_search_results(
 
     // Single-pass accumulation.
     for (idx, result) in results.iter().enumerate() {
-        let key = match extract_group_key(result.point.payload.as_ref(), config.group_by_columns) {
-            Some(k) => k,
-            None => {
-                tracing::debug!(
-                    id = result.point.id,
-                    fields = ?config.group_by_columns,
-                    "Skipping chunk: missing group-by field"
-                );
-                continue;
-            }
+        let Some(key) = extract_group_key(result.point.payload.as_ref(), config.group_by_columns)
+        else {
+            tracing::debug!(
+                id = result.point.id,
+                fields = ?config.group_by_columns,
+                "Skipping chunk: missing group-by field"
+            );
+            continue;
         };
         groups
             .entry(key)

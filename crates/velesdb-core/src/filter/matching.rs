@@ -7,6 +7,72 @@ use serde_json::Value;
 const LIKE_MAX_PATTERN_BYTES: usize = 4096;
 const LIKE_MAX_DYN_OPS: usize = 2_000_000;
 
+/// Evaluates array-level conditions (single, any, all).
+fn match_array_condition(payload: &Value, field: &str, values: &[Value], mode: ArrayMode) -> bool {
+    get_field(payload, field).is_some_and(|v| match v {
+        Value::Array(arr) => match mode {
+            ArrayMode::Single => values
+                .first()
+                .is_some_and(|val| arr.iter().any(|e| values_equal(e, val))),
+            ArrayMode::Any => values
+                .iter()
+                .any(|val| arr.iter().any(|e| values_equal(e, val))),
+            ArrayMode::All => values
+                .iter()
+                .all(|val| arr.iter().any(|e| values_equal(e, val))),
+        },
+        _ => false,
+    })
+}
+
+/// Array condition matching mode.
+#[derive(Clone, Copy)]
+enum ArrayMode {
+    Single,
+    Any,
+    All,
+}
+
+/// Evaluates geospatial conditions (distance, bounding box).
+fn match_geo_distance(
+    payload: &Value,
+    field: &str,
+    lat: f64,
+    lng: f64,
+    operator: crate::velesql::CompareOp,
+    threshold: f64,
+) -> bool {
+    get_field(payload, field).is_some_and(|v| {
+        extract_geo_point(v).is_some_and(|(plat, plng)| {
+            let dist = haversine_distance_m(plat, plng, lat, lng);
+            compare_geo_distance(dist, threshold, operator)
+        })
+    })
+}
+
+/// Evaluates a geospatial bounding box check.
+fn match_geo_bbox(
+    payload: &Value,
+    field: &str,
+    lat_min: f64,
+    lng_min: f64,
+    lat_max: f64,
+    lng_max: f64,
+) -> bool {
+    get_field(payload, field).is_some_and(|v| {
+        extract_geo_point(v).is_some_and(|(plat, plng)| {
+            plat >= lat_min && plat <= lat_max && plng >= lng_min && plng <= lng_max
+        })
+    })
+}
+
+/// Extracts `(lat, lng)` from a JSON object with `"lat"` and `"lng"` keys.
+fn extract_geo_point(v: &Value) -> Option<(f64, f64)> {
+    let lat = v.get("lat").and_then(Value::as_f64)?;
+    let lng = v.get("lng").and_then(Value::as_f64)?;
+    Some((lat, lng))
+}
+
 impl Condition {
     /// Evaluates the condition against a payload.
     #[must_use]
@@ -43,27 +109,17 @@ impl Condition {
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, false))),
             Self::ILike { field, pattern } => get_field(payload, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, true))),
-            Self::ArrayContains { field, value } => {
-                get_field(payload, field).is_some_and(|v| match v {
-                    Value::Array(arr) => arr.iter().any(|e| values_equal(e, value)),
-                    _ => false,
-                })
-            }
+            Self::ArrayContains { field, value } => match_array_condition(
+                payload,
+                field,
+                std::slice::from_ref(value),
+                ArrayMode::Single,
+            ),
             Self::ArrayContainsAny { field, values } => {
-                get_field(payload, field).is_some_and(|v| match v {
-                    Value::Array(arr) => values
-                        .iter()
-                        .any(|val| arr.iter().any(|e| values_equal(e, val))),
-                    _ => false,
-                })
+                match_array_condition(payload, field, values, ArrayMode::Any)
             }
             Self::ArrayContainsAll { field, values } => {
-                get_field(payload, field).is_some_and(|v| match v {
-                    Value::Array(arr) => values
-                        .iter()
-                        .all(|val| arr.iter().any(|e| values_equal(e, val))),
-                    _ => false,
-                })
+                match_array_condition(payload, field, values, ArrayMode::All)
             }
             Self::GeoDistance {
                 field,
@@ -71,33 +127,14 @@ impl Condition {
                 lng,
                 operator,
                 threshold,
-            } => get_field(payload, field).is_some_and(|v| {
-                let point_lat = v.get("lat").and_then(Value::as_f64);
-                let point_lng = v.get("lng").and_then(Value::as_f64);
-                match (point_lat, point_lng) {
-                    (Some(plat), Some(plng)) => {
-                        let dist = haversine_distance_m(plat, plng, *lat, *lng);
-                        compare_geo_distance(dist, *threshold, *operator)
-                    }
-                    _ => false,
-                }
-            }),
+            } => match_geo_distance(payload, field, *lat, *lng, *operator, *threshold),
             Self::GeoBbox {
                 field,
                 lat_min,
                 lng_min,
                 lat_max,
                 lng_max,
-            } => get_field(payload, field).is_some_and(|v| {
-                let point_lat = v.get("lat").and_then(Value::as_f64);
-                let point_lng = v.get("lng").and_then(Value::as_f64);
-                match (point_lat, point_lng) {
-                    (Some(plat), Some(plng)) => {
-                        plat >= *lat_min && plat <= *lat_max && plng >= *lng_min && plng <= *lng_max
-                    }
-                    _ => false,
-                }
-            }),
+            } => match_geo_bbox(payload, field, *lat_min, *lng_min, *lat_max, *lng_max),
         }
     }
 }

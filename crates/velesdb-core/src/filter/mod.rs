@@ -191,7 +191,7 @@ pub enum Condition {
     },
     /// Geospatial distance filter: Haversine distance comparison.
     GeoDistance {
-        /// Field name containing GeoPoint data
+        /// Field name containing `GeoPoint` data
         field: String,
         /// Reference latitude in degrees
         lat: f64,
@@ -204,7 +204,7 @@ pub enum Condition {
     },
     /// Geospatial bounding box filter: coordinate containment check.
     GeoBbox {
-        /// Field name containing GeoPoint data
+        /// Field name containing `GeoPoint` data
         field: String,
         /// Minimum latitude
         lat_min: f64,
