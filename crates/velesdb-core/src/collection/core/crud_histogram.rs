@@ -9,18 +9,6 @@ use crate::collection::stats::CollectionStats;
 use crate::collection::types::Collection;
 
 impl Collection {
-    /// Incrementally updates persisted histograms for upserted payloads.
-    ///
-    /// For each column that has a histogram in the persisted stats, converts
-    /// the payload value to `f64` and calls `increment_bucket`. Reads and
-    /// writes `collection.stats.json` only when the file exists.
-    ///
-    /// Called BEFORE `invalidate_caches_and_bump_generation()` in the upsert path.
-    #[allow(dead_code)]
-    pub(super) fn update_histograms_on_upsert(&self, payloads: &[Option<serde_json::Value>]) {
-        self.update_histograms_for_payloads(payloads, true);
-    }
-
     /// Incrementally updates persisted histograms for deleted payloads.
     ///
     /// For each column that has a histogram in the persisted stats, converts
