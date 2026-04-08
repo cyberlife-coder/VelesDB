@@ -38,6 +38,7 @@ from velesdb_common.security import (
     validate_url,
     validate_weight,
 )
+from velesdb_common.fusion import build_fusion_strategy
 from velesdb_common.graph import (
     build_graph_rest_payload,
     is_timeout_exception,
@@ -46,6 +47,8 @@ from velesdb_common.graph import (
 )
 
 __all__ = [
+    # fusion
+    "build_fusion_strategy",
     # collection admin
     "CollectionAdminMixin",
     # graph ops

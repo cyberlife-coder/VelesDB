@@ -11,9 +11,8 @@ from typing import Any, List, Optional, Tuple
 
 from langchain_core.documents import Document
 
-import velesdb
-
 from langchain_velesdb._common import payload_to_doc_parts, validate_queries_batch
+from velesdb_common.fusion import build_fusion_strategy as _build_fusion_strategy_fn
 from langchain_velesdb.security import (
     validate_k,
     validate_text,
@@ -603,32 +602,10 @@ class SearchOpsMixin:
         self,
         fusion: str,
         fusion_params: Optional[dict] = None,
-    ) -> "velesdb.FusionStrategy":
-        """Build a FusionStrategy from string name and params."""
-        params = fusion_params or {}
+    ) -> object:
+        """Build a FusionStrategy from string name and params.
 
-        if fusion == "average":
-            return velesdb.FusionStrategy.average()
-        elif fusion == "maximum":
-            return velesdb.FusionStrategy.maximum()
-        elif fusion == "rrf":
-            k = params.get("k", 60)
-            return velesdb.FusionStrategy.rrf(k=k)
-        elif fusion == "weighted":
-            avg_weight = params.get("avg_weight", 0.6)
-            max_weight = params.get("max_weight", 0.3)
-            hit_weight = params.get("hit_weight", 0.1)
-            return velesdb.FusionStrategy.weighted(
-                avg_weight=avg_weight,
-                max_weight=max_weight,
-                hit_weight=hit_weight,
-            )
-        elif fusion in ("relative_score", "rsf"):
-            dense_weight = params.get("dense_weight", 0.5)
-            sparse_weight = params.get("sparse_weight", 0.5)
-            return velesdb.FusionStrategy.relative_score(dense_weight, sparse_weight)
-        else:
-            raise ValueError(
-                f"Unknown fusion strategy '{fusion}'. "
-                "Use 'average', 'maximum', 'rrf', 'weighted', or 'relative_score'."
-            )
+        Delegates to :func:`velesdb_common.fusion.build_fusion_strategy`
+        to avoid duplication with the LlamaIndex integration.
+        """
+        return _build_fusion_strategy_fn(fusion, fusion_params)
