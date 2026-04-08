@@ -29,6 +29,7 @@ from langchain_velesdb.security import (
     validate_batch_size,
     validate_collection_name,
     validate_sparse_vector,
+    validate_url,
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
@@ -93,6 +94,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ve
         collection_name: str = "langchain",
         metric: str = "cosine",
         storage_mode: str = "full",
+        server_url: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize VelesDB vector store.
@@ -118,6 +120,8 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ve
                 - "rabitq": RaBitQ with scalar correction (32x compression, good recall).
 
                 Examples: ``storage_mode="f32"`` is equivalent to ``storage_mode="full"``.
+            server_url: Optional URL of a VelesDB server for server mode. When
+                provided, must be a valid http:// or https:// URL.
             **kwargs: Additional arguments passed to the database.
 
         Raises:
@@ -127,6 +131,9 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ve
         self._collection_name = validate_collection_name(collection_name)
         self._metric = validate_metric(metric)
         self._storage_mode = validate_storage_mode(storage_mode)
+        if server_url is not None:
+            validate_url(server_url)
+        self.server_url = server_url
 
         self._embedding = embedding
         self._db: Optional[velesdb.Database] = None
