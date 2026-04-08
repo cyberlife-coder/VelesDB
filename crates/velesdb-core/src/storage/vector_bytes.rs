@@ -46,18 +46,18 @@ pub(super) fn vector_to_bytes(vector: &[f32]) -> &[u8] {
 #[inline]
 pub(super) fn bytes_to_vector(bytes: &[u8], dimension: usize) -> Vec<f32> {
     let vector_size = dimension * std::mem::size_of::<f32>();
-    // Caller-guaranteed invariant: mmap reader bounds-checks before calling.
-    debug_assert!(
+    // Hard assert: this guards a `copy_nonoverlapping` below. In release builds
+    // a `debug_assert!` would be elided, allowing out-of-bounds reads (UB).
+    assert!(
         bytes.len() >= vector_size,
-        "bytes_to_vector: buffer too small ({} < {})",
+        "bytes_to_vector: buffer too small ({} < {vector_size})",
         bytes.len(),
-        vector_size
     );
 
     let mut vector = vec![0.0f32; dimension];
     // SAFETY: `copy_nonoverlapping` requires valid, non-overlapping ranges.
-    // - Condition 1: Source has at least `vector_size` bytes (debug_assert above,
-    //   caller bounds-checks in mmap_io before calling).
+    // - Condition 1: Source has at least `vector_size` bytes (assert above,
+    //   plus caller bounds-checks in mmap_io before calling).
     // - Condition 2: Destination is freshly allocated `Vec<f32>` storage.
     // Reason: Copying into aligned owned memory avoids alignment UB from direct cast reads.
     unsafe {

@@ -809,3 +809,33 @@ fn id_deserialization_negative_rejected() {
     let result = serde_json::from_value::<IdScoreResult>(input);
     assert!(result.is_err());
 }
+
+/// BUG-3 regression: `ScrollPoint::id` must serialize as a string, consistent
+/// with all other response types (`SearchResultResponse`, `IdScoreResult`).
+#[test]
+fn scroll_point_id_serialized_as_string() {
+    let above_safe = (1_u64 << 53) + 1;
+    let point = ScrollPoint {
+        id: above_safe,
+        vector: vec![0.1, 0.2],
+        payload: None,
+    };
+    let json = serde_json::to_value(&point).unwrap();
+    assert_eq!(
+        json["id"],
+        json!("9007199254740993"),
+        "ScrollPoint::id must serialize as a JSON string"
+    );
+}
+
+/// `ScrollPoint` small ID also serializes as a string.
+#[test]
+fn scroll_point_small_id_serialized_as_string() {
+    let point = ScrollPoint {
+        id: 42,
+        vector: vec![1.0],
+        payload: Some(json!({"key": "value"})),
+    };
+    let json = serde_json::to_value(&point).unwrap();
+    assert_eq!(json["id"], json!("42"));
+}

@@ -53,16 +53,17 @@ fn test_bytes_to_vector_high_dimension() {
     assert_eq!(vector, recovered);
 }
 
+/// BUG-2 regression: `assert!` (not `debug_assert!`) guards the
+/// `copy_nonoverlapping` below. Must panic in both debug AND release.
 #[test]
-#[cfg(debug_assertions)]
 #[should_panic(expected = "buffer too small")]
 fn test_bytes_to_vector_buffer_underflow_panics() {
     let small_buffer = [0u8; 4]; // Only 4 bytes
     bytes_to_vector(&small_buffer, 4); // Expects 16 bytes (4 * sizeof(f32))
 }
 
+/// BUG-2 regression: empty buffer must panic even in release builds.
 #[test]
-#[cfg(debug_assertions)]
 #[should_panic(expected = "buffer too small")]
 fn test_bytes_to_vector_empty_buffer_panics() {
     let empty_buffer: [u8; 0] = [];

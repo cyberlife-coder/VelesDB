@@ -692,3 +692,65 @@ fn test_zero_width_merge_preserves_count() {
     let total: u64 = merged.iter().map(|b| b.count).sum();
     assert_eq!(total, 45);
 }
+
+#[test]
+fn test_zero_width_merge_does_not_double_count_distinct() {
+    // Regression test for BUG-4: when a zero-width bucket shares its single
+    // distinct value with the absorbing bucket, distinct_count must not be
+    // inflated by summing. Using max() prevents double-counting.
+    let buckets = vec![
+        // Zero-width bucket: all values are 5.0 (distinct_count=1).
+        HistogramBucket {
+            lower_bound: 5.0,
+            upper_bound: 5.0,
+            count: 30,
+            distinct_count: 1,
+        },
+        // Absorbing bucket: range [5.0, 10.0) already contains 5.0 among
+        // its 5 distinct values.
+        HistogramBucket {
+            lower_bound: 5.0,
+            upper_bound: 10.0,
+            count: 20,
+            distinct_count: 5,
+        },
+    ];
+    let merged = histogram::merge_zero_width_buckets(buckets);
+
+    assert_eq!(merged.len(), 1, "both buckets should merge into one");
+    assert_eq!(merged[0].count, 50, "row counts should be summed");
+    // distinct_count must be max(1, 5) = 5, NOT 1 + 5 = 6.
+    assert_eq!(
+        merged[0].distinct_count, 5,
+        "distinct_count should use max (not sum) to avoid double-counting"
+    );
+}
+
+#[test]
+fn test_zero_width_merge_trailing_does_not_double_count_distinct() {
+    // Trailing zero-width buckets merged backward must also use max, not sum.
+    let buckets = vec![
+        HistogramBucket {
+            lower_bound: 0.0,
+            upper_bound: 10.0,
+            count: 40,
+            distinct_count: 8,
+        },
+        // Trailing zero-width bucket with distinct value in absorber's range.
+        HistogramBucket {
+            lower_bound: 10.0,
+            upper_bound: 10.0,
+            count: 10,
+            distinct_count: 1,
+        },
+    ];
+    let merged = histogram::merge_zero_width_buckets(buckets);
+
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].count, 50);
+    // max(8, 1) = 8, not 8 + 1 = 9.
+    assert_eq!(
+        merged[0].distinct_count, 8,
+        "trailing zero-width merge should use max for distinct_count"
+    );
+}

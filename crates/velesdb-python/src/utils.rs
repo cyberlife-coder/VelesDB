@@ -9,19 +9,22 @@ use pyo3::IntoPyObjectExt;
 use std::collections::HashMap;
 use velesdb_core::{DistanceMetric, StorageMode};
 
-/// Rejects vectors that contain NaN values.
+/// Rejects vectors that contain non-finite values (NaN or Infinity).
 ///
 /// NaN propagates silently through distance computations and corrupts
-/// search results.  This check is applied to every vector entering the
-/// engine from Python.
+/// search results. Infinity corrupts distance calculations by producing
+/// infinite or NaN distances. This check is applied to every vector
+/// entering the engine from Python.
 ///
 /// # Errors
 ///
-/// Returns `PyValueError` when any component is NaN.
+/// Returns `PyValueError` when any component is NaN or Infinity.
 #[inline]
 pub fn reject_nan_vector(vector: &[f32]) -> PyResult<()> {
-    if vector.iter().any(|v| v.is_nan()) {
-        return Err(PyValueError::new_err("vector contains NaN values"));
+    if vector.iter().any(|v| !v.is_finite()) {
+        return Err(PyValueError::new_err(
+            "vector contains non-finite values (NaN or Infinity)",
+        ));
     }
     Ok(())
 }
@@ -200,12 +203,24 @@ mod tests {
     #[test]
     fn test_reject_nan_vector_contains_nan() {
         let err = reject_nan_vector(&[1.0, f32::NAN, 3.0]).unwrap_err();
-        assert!(err.to_string().contains("NaN"));
+        assert!(err.to_string().contains("non-finite"));
     }
 
     #[test]
     fn test_reject_nan_vector_empty() {
         assert!(reject_nan_vector(&[]).is_ok());
+    }
+
+    #[test]
+    fn test_reject_nan_vector_positive_infinity() {
+        let err = reject_nan_vector(&[1.0, f32::INFINITY, 3.0]).unwrap_err();
+        assert!(err.to_string().contains("non-finite"));
+    }
+
+    #[test]
+    fn test_reject_nan_vector_negative_infinity() {
+        let err = reject_nan_vector(&[1.0, f32::NEG_INFINITY, 3.0]).unwrap_err();
+        assert!(err.to_string().contains("non-finite"));
     }
 
     #[test]
@@ -215,7 +230,7 @@ mod tests {
             let list = vec![1.0_f32, f32::NAN, 3.0];
             let obj: PyObject = list.into_pyobject(py).unwrap().into();
             let err = extract_vector(py, &obj).unwrap_err();
-            assert!(err.to_string().contains("NaN"));
+            assert!(err.to_string().contains("non-finite"));
         });
     }
 

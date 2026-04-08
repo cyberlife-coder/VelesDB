@@ -414,9 +414,12 @@ fn build_equidepth_buckets(sorted: &[f64], num_buckets: usize) -> Vec<HistogramB
 /// Leading zero-width buckets are merged forward into the first non-zero-width
 /// bucket; trailing ones are merged backward into the last non-zero-width bucket.
 ///
-/// Counts and distinct counts are summed into the absorbing bucket. If every
-/// bucket is zero-width (all values identical), the input is returned unchanged —
-/// this case is already handled by `build_single_value_buckets` upstream.
+/// Row counts are summed into the absorbing bucket. Distinct counts use `max`
+/// rather than addition because the zero-width bucket's single distinct value
+/// is a subset of the absorbing bucket's value range (they share a boundary),
+/// so summing would double-count shared distinct values. If every bucket is
+/// zero-width (all values identical), the input is returned unchanged — this
+/// case is already handled by `build_single_value_buckets` upstream.
 #[allow(clippy::float_cmp)]
 pub(crate) fn merge_zero_width_buckets(buckets: Vec<HistogramBucket>) -> Vec<HistogramBucket> {
     if buckets.is_empty() {
@@ -432,12 +435,14 @@ pub(crate) fn merge_zero_width_buckets(buckets: Vec<HistogramBucket>) -> Vec<His
         // chunk's lower bound.
         if bucket.lower_bound == bucket.upper_bound {
             pending_count += bucket.count;
-            pending_distinct += bucket.distinct_count;
+            pending_distinct = pending_distinct.max(bucket.distinct_count);
         } else {
             // Absorb any pending zero-width counts into this non-zero-width bucket.
             let mut merged = bucket;
             merged.count += pending_count;
-            merged.distinct_count += pending_distinct;
+            // Use max to avoid double-counting: the zero-width bucket's distinct
+            // values are a subset of the absorbing bucket's range.
+            merged.distinct_count = merged.distinct_count.max(pending_distinct);
             pending_count = 0;
             pending_distinct = 0;
             result.push(merged);
@@ -447,7 +452,7 @@ pub(crate) fn merge_zero_width_buckets(buckets: Vec<HistogramBucket>) -> Vec<His
     if pending_count > 0 {
         if let Some(last) = result.last_mut() {
             last.count += pending_count;
-            last.distinct_count += pending_distinct;
+            last.distinct_count = last.distinct_count.max(pending_distinct);
         }
         // else: all buckets were zero-width — handled by build_single_value_buckets
     }
