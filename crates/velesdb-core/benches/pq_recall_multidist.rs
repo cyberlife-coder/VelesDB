@@ -7,7 +7,7 @@
 //! Extends the uniform random coverage in `pq_recall_benchmark.rs` to validate
 //! HNSW+PQ behavior on realistic distribution shapes.
 
-#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_precision_loss, clippy::doc_markdown)]
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;

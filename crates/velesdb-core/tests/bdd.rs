@@ -1,5 +1,9 @@
 #![cfg(feature = "persistence")]
-#![allow(clippy::cast_precision_loss, clippy::uninlined_format_args)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::uninlined_format_args,
+    clippy::doc_markdown
+)]
 
 #[path = "bdd/admin_operations.rs"]
 mod admin_operations;

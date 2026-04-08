@@ -11,7 +11,7 @@
 //! neighbors, enabling HNSW (M=24, `ef_construction=300`, `ef_search=128`) to
 //! achieve recall@10 above 0.92, satisfying PQ-07.
 
-#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_precision_loss, clippy::doc_markdown)]
 
 use std::collections::{HashMap, HashSet};
 

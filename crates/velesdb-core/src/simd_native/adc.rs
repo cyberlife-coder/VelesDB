@@ -67,6 +67,9 @@ pub(crate) fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Ve
                     if i + 1 < codes.len() {
                         super::prefetch::prefetch_vector_from_u16(codes[i + 1]);
                     }
+                    // SAFETY: NEON is available (checked by `simd_level()` in outer match).
+                    // - Condition 1: `simd_level()` selected `Neon`, confirming aarch64 NEON support.
+                    // Reason: Call per-code NEON ADC kernel for throughput inside the iterator.
                     unsafe { adc_single_neon(lut, c, m, k) }
                 })
                 .collect()

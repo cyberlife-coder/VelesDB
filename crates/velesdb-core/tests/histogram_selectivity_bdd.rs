@@ -10,7 +10,8 @@
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_lossless,
-    clippy::uninlined_format_args
+    clippy::uninlined_format_args,
+    clippy::doc_markdown
 )]
 
 use serde_json::json;
@@ -189,7 +190,7 @@ fn histogram_nominal_flow_analyze_and_explain() {
 #[test]
 fn histogram_incremental_maintenance_on_upsert_and_delete() {
     // GIVEN a collection with 100 points, ANALYZE called
-    let (_dir, db) = temp_database();
+    let (dir, db) = temp_database();
     db.create_collection("incremental", 4, DistanceMetric::Cosine)
         .expect("create");
     insert_scored_points(&db, "incremental", 1, 100);
@@ -221,7 +222,7 @@ fn histogram_incremental_maintenance_on_upsert_and_delete() {
 
     // THEN histogram bucket counts are updated (read from persisted stats on disk)
     // Incremental updates are written to collection.stats.json, not the in-memory cache.
-    let stats_after = load_persisted_stats(&_dir, "incremental");
+    let stats_after = load_persisted_stats(&dir, "incremental");
 
     let hist_after = stats_after
         .field_stats
@@ -250,7 +251,7 @@ fn histogram_incremental_maintenance_on_upsert_and_delete() {
     coll.delete(&ids_to_delete).expect("delete");
 
     // THEN histogram bucket counts are decremented
-    let stats_post_delete = load_persisted_stats(&_dir, "incremental");
+    let stats_post_delete = load_persisted_stats(&dir, "incremental");
 
     let hist_post_delete = stats_post_delete
         .field_stats

@@ -217,18 +217,24 @@ fn prefetch_multi_arm64(vector: &[f32]) {
     // Line 1 → L1 (offset 128B)
     if vector_bytes > ARM_CL {
         // SAFETY: Prefetch is a non-faulting hint; offset < vector_bytes.
+        // - Condition 1: `vector_bytes > ARM_CL` ensures offset is within allocation.
+        // Reason: Prefetch next cache line into L1 for spatial locality.
         let ptr = unsafe { base.add(ARM_CL) };
         crate::simd_neon_prefetch::prefetch_read_l1(ptr);
     }
     // Line 2 → L2 (offset 256B)
     if vector_bytes > ARM_CL * 2 {
-        // SAFETY: Same; offset 256 < vector_bytes.
+        // SAFETY: Prefetch is a non-faulting hint; offset < vector_bytes.
+        // - Condition 1: `vector_bytes > ARM_CL * 2` ensures offset is within allocation.
+        // Reason: Prefetch farther cache line into L2 for streaming access.
         let ptr = unsafe { base.add(ARM_CL * 2) };
         crate::simd_neon_prefetch::prefetch_read_l2(ptr);
     }
     // Line 3 → L3 (offset 512B)
     if vector_bytes > ARM_CL * 4 {
-        // SAFETY: Same; offset 512 < vector_bytes.
+        // SAFETY: Prefetch is a non-faulting hint; offset < vector_bytes.
+        // - Condition 1: `vector_bytes > ARM_CL * 4` ensures offset is within allocation.
+        // Reason: Prefetch distant cache line into L3 for large vector lookahead.
         let ptr = unsafe { base.add(ARM_CL * 4) };
         crate::simd_neon_prefetch::prefetch_read_l3(ptr);
     }

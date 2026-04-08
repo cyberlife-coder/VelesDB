@@ -434,7 +434,7 @@ fn test_builder_default_buckets_on_zero() {
     let h = builder.build(&mut values);
     // With 1000 values and 64 buckets, we get ceil(1000/64)=16 per chunk → ~63 buckets
     assert!(h.buckets.len() <= 64);
-    assert!(h.buckets.len() > 0);
+    assert!(!h.buckets.is_empty());
     assert_eq!(h.total_count, 1000);
 }
 
@@ -679,13 +679,13 @@ fn test_zero_width_merge_preserves_count() {
 
     // First bucket: original non-zero-width (count=10), unchanged.
     assert_eq!(merged[0].count, 10);
-    assert_eq!(merged[0].lower_bound, 0.0);
+    assert!((merged[0].lower_bound - 0.0).abs() < f64::EPSILON);
     assert!((merged[0].upper_bound - 5.0).abs() < f64::EPSILON);
 
     // Second bucket: original (count=15) + absorbed zero-width (count=20) = 35.
     // The zero-width bucket is merged forward into the next non-zero-width bucket.
     assert_eq!(merged[1].count, 35);
-    assert_eq!(merged[1].lower_bound, 5.0);
+    assert!((merged[1].lower_bound - 5.0).abs() < f64::EPSILON);
     assert!((merged[1].upper_bound - 10.0).abs() < f64::EPSILON);
 
     // Total count preserved.

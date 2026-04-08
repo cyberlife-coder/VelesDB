@@ -212,7 +212,7 @@ fn test_parse_ft_search_response_single_doc() {
 fn test_parse_ft_search_response_zero_vector() {
     // Regression: all-zero vectors are valid UTF-8 (null bytes), so the old
     // UTF-8 heuristic failed to decode them. Verify they are decoded correctly.
-    let vec_bytes: Vec<u8> = std::iter::repeat(0u8).take(12).collect(); // 3 × f32 zeros
+    let vec_bytes: Vec<u8> = vec![0u8; 12]; // 3 × f32 zeros
 
     let resp = redis::Value::Array(vec![
         redis::Value::Int(1),
