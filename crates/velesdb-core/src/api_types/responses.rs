@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
 
+use super::serde_id;
+
 // ============================================================================
 // Collection Responses
 // ============================================================================
@@ -58,6 +60,7 @@ pub struct CollectionConfigResponse {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SearchResultResponse {
     /// Point ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Similarity score.
     pub score: f32,
@@ -96,6 +99,10 @@ pub struct SearchIdsResponse {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct IdScoreResult {
     /// Point ID.
+    #[serde(
+        serialize_with = "serde_id::serialize_id_as_string",
+        deserialize_with = "serde_id::deserialize_id_from_string_or_number"
+    )]
     pub id: u64,
     /// Similarity score.
     pub score: f32,

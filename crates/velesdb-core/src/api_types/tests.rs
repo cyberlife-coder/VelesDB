@@ -676,3 +676,136 @@ fn deserialize_fusion_request() {
     assert!((req.dense_w.unwrap() - 0.7).abs() < f32::EPSILON);
     assert!((req.sparse_w.unwrap() - 0.3).abs() < f32::EPSILON);
 }
+
+// ============================================================================
+// F. u64 ID serialization as JSON string [WP-0D]
+// ============================================================================
+
+/// IDs above `Number.MAX_SAFE_INTEGER` (2^53 - 1) must serialize as strings.
+#[test]
+fn id_serialization_above_max_safe_integer() {
+    let above_safe = (1_u64 << 53) + 1; // 9_007_199_254_740_993
+    let result = SearchResultResponse {
+        id: above_safe,
+        score: 0.99,
+        payload: None,
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["id"], json!("9007199254740993"));
+}
+
+/// Small IDs also serialize as strings for consistency.
+#[test]
+fn id_serialization_small_id() {
+    let result = SearchResultResponse {
+        id: 42,
+        score: 0.5,
+        payload: None,
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["id"], json!("42"));
+}
+
+/// Zero ID serializes correctly.
+#[test]
+fn id_serialization_zero() {
+    let result = SearchResultResponse {
+        id: 0,
+        score: 0.0,
+        payload: None,
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["id"], json!("0"));
+}
+
+/// `u64::MAX` serializes as a string.
+#[test]
+fn id_serialization_u64_max() {
+    let result = SearchResultResponse {
+        id: u64::MAX,
+        score: 1.0,
+        payload: None,
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["id"], json!("18446744073709551615"));
+}
+
+/// Deserialization from a JSON string: `"9007199254740993"` -> u64.
+#[test]
+fn id_deserialization_from_string() {
+    let input = json!({ "id": "9007199254740993", "score": 0.9 });
+    let result: IdScoreResult = serde_json::from_value(input).unwrap();
+    assert_eq!(result.id, 9_007_199_254_740_993);
+}
+
+/// Deserialization from a JSON number (backward compat): `12345` -> u64.
+#[test]
+fn id_deserialization_from_number() {
+    let input = json!({ "id": 12345, "score": 0.8 });
+    let result: IdScoreResult = serde_json::from_value(input).unwrap();
+    assert_eq!(result.id, 12345);
+}
+
+/// Round-trip: serialize then deserialize preserves the exact u64 value.
+#[test]
+fn id_serialization_round_trip() {
+    let above_safe = (1_u64 << 53) + 1;
+    let original = IdScoreResult {
+        id: above_safe,
+        score: 0.75,
+    };
+    let serialized = serde_json::to_value(&original).unwrap();
+    assert_eq!(serialized["id"], json!("9007199254740993"));
+    let deserialized: IdScoreResult = serde_json::from_value(serialized).unwrap();
+    assert_eq!(deserialized.id, above_safe);
+}
+
+/// Request types accept string IDs (forward-compat for JS clients).
+#[test]
+fn id_deserialization_point_request_from_string() {
+    let input = json!({
+        "id": "9007199254740993",
+        "vector": [0.1, 0.2],
+        "payload": null
+    });
+    let req: PointRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.id, 9_007_199_254_740_993);
+}
+
+/// Request types still accept numeric IDs (backward compat).
+#[test]
+fn id_deserialization_point_request_from_number() {
+    let input = json!({
+        "id": 42,
+        "vector": [0.1, 0.2]
+    });
+    let req: PointRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.id, 42);
+}
+
+/// `StreamInsertRequest` accepts string IDs.
+#[test]
+fn id_deserialization_stream_insert_from_string() {
+    let input = json!({
+        "id": "18446744073709551615",
+        "vector": [1.0, 2.0, 3.0]
+    });
+    let req: StreamInsertRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.id, u64::MAX);
+}
+
+/// Invalid string ID is rejected.
+#[test]
+fn id_deserialization_invalid_string_rejected() {
+    let input = json!({ "id": "not_a_number", "score": 0.5 });
+    let result = serde_json::from_value::<IdScoreResult>(input);
+    assert!(result.is_err());
+}
+
+/// Negative number ID is rejected.
+#[test]
+fn id_deserialization_negative_rejected() {
+    let input = json!({ "id": -1, "score": 0.5 });
+    let result = serde_json::from_value::<IdScoreResult>(input);
+    assert!(result.is_err());
+}
