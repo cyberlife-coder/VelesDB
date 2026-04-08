@@ -17,12 +17,14 @@ pub enum FusionStrategyType {
     Maximum,
     /// Reciprocal Sparse Fusion for dense + sparse hybrid search.
     Rsf,
+    /// Average score across all queries where the document appears.
+    Average,
 }
 
 /// USING FUSION clause for hybrid search (EPIC-040 US-005).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FusionClause {
-    /// Fusion strategy (rrf, weighted, maximum, rsf).
+    /// Fusion strategy (rrf, weighted, maximum, rsf, average).
     pub strategy: FusionStrategyType,
     /// RRF k parameter (default 60).
     pub k: Option<u32>,

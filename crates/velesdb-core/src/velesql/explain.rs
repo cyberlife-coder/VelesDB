@@ -449,6 +449,7 @@ impl QueryPlan {
             super::ast::FusionStrategyType::Weighted => "Weighted",
             super::ast::FusionStrategyType::Maximum => "Maximum",
             super::ast::FusionStrategyType::Rsf => "RSF",
+            super::ast::FusionStrategyType::Average => "Average",
         };
         let weights = Self::format_fusion_weights(fc);
         Some(FusionInfo {

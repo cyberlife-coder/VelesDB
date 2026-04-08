@@ -125,7 +125,9 @@ impl Collection {
                     FusionStrategyType::Rrf => crate::fusion::FusionStrategy::RRF {
                         k: fc.k.unwrap_or(60),
                     },
-                    _ => crate::fusion::FusionStrategy::rrf_default(),
+                    FusionStrategyType::Average => crate::fusion::FusionStrategy::Average,
+                    FusionStrategyType::Maximum => crate::fusion::FusionStrategy::Maximum,
+                    FusionStrategyType::Weighted => crate::fusion::FusionStrategy::rrf_default(),
                 }
             })
     }
