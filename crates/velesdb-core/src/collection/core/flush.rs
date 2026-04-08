@@ -44,7 +44,7 @@ impl Collection {
         // Drain async index builder buffer (V2 bulk insert path) into HNSW.
         // Without this, sub-threshold batches from upsert_bulk would remain
         // invisible to search until the buffer reaches merge_threshold.
-        self.drain_async_index_builder();
+        self.drain_async_index_builder()?;
         // Issue #423 Component 3: Save HNSW only when insert threshold
         // exceeded. Otherwise defer to flush_full() (shutdown/compaction).
         self.save_hnsw_if_threshold_exceeded()?;
@@ -68,7 +68,7 @@ impl Collection {
         self.payload_storage.write().flush()?;
         self.drain_delta_into_index();
         self.drain_deferred_into_index();
-        self.drain_async_index_builder();
+        self.drain_async_index_builder()?;
         // Always save HNSW on full flush and reset the counter.
         self.index.save(&self.path)?;
         self.inserts_since_last_hnsw_save
@@ -190,7 +190,14 @@ impl Collection {
     /// `AsyncIndexBuilder` would be stored but invisible to ANN search.
     ///
     /// No-op when the async index builder is not configured.
-    fn drain_async_index_builder(&self) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the async index builder flush fails (e.g. lock
+    /// contention or internal batch-insert error). The error is logged at
+    /// `warn` level before propagation so that operational dashboards can
+    /// alert on repeated failures.
+    fn drain_async_index_builder(&self) -> Result<()> {
         if let Some(ref aib) = self.async_index_builder {
             match aib.flush_sync(&self.index) {
                 Ok(count) if count > 0 => {
@@ -198,10 +205,12 @@ impl Collection {
                 }
                 Err(e) => {
                     tracing::warn!("flush: async index builder drain failed: {e}");
+                    return Err(e);
                 }
                 _ => {}
             }
         }
+        Ok(())
     }
 
     /// Persists property index, range index, and edge store (EPIC-009 US-005).
