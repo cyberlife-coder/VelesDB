@@ -31,12 +31,35 @@ collection_directory/
 {
   "dimension": 128,
   "distance_metric": "cosine",
+  "schema_version": 1,
   "hnsw_config": {
     "m": 16,
     "ef_construction": 100
   }
 }
 ```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `dimension` | u32 | — | Vector dimension |
+| `distance_metric` | string | `"cosine"` | Distance metric |
+| `schema_version` | u32 | `1` | On-disk format version (see below) |
+| `hnsw_config` | object | — | HNSW index parameters |
+
+### schema_version
+
+The `schema_version` field tracks the on-disk format version for forward-compatibility protection.
+
+| Value | Behavior |
+|-------|----------|
+| absent | Treated as `1` (backward compatibility with pre-versioned collections) |
+| `0` | Treated as `1` (backward compatibility) |
+| `1` | Current version -- normal operation |
+| `> CURRENT_SCHEMA_VERSION` | Rejected with `VELES-036 IncompatibleSchemaVersion` |
+
+This field is validated at collection load time (`Collection::open()`). When a newer VelesDB writes a collection with a higher schema version, older binaries refuse to open it rather than silently corrupting data. The current schema version is defined as `CURRENT_SCHEMA_VERSION = 1` in `crates/velesdb-core/src/collection/types.rs`.
 
 ## Vector Storage (vectors.bin)
 
@@ -222,7 +245,7 @@ All multi-byte integers are stored in **little-endian** format.
 
 ### Format Version
 
-Currently implicit (v1.0.0). Future versions will include explicit version headers.
+Explicit via `schema_version` in `config.json` (current: v1). See [schema_version](#schema_version) above.
 
 ### Compatibility Rules
 

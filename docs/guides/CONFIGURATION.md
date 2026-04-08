@@ -190,6 +190,10 @@ data_dir = "./velesdb_data"
 # Default: 30
 shutdown_timeout_secs = 30
 
+# Rate limit: requêtes max par seconde par IP (0 = désactivé)
+# Default: 100
+rate_limit = 100
+
 # Nombre de workers (threads)
 # Range: 1 - 256
 # Default: nombre de CPUs
@@ -320,6 +324,7 @@ All options can be set via environment variables with the `VELESDB_` prefix:
 | `VELESDB_HOST` | `server.host` | `0.0.0.0` |
 | `VELESDB_PORT` | `server.port` | `8080` |
 | `VELESDB_DATA_DIR` | `server.data_dir` | `/var/lib/velesdb` |
+| `VELESDB_RATE_LIMIT` | `server.rate_limit` | `100` |
 | `VELESDB_API_KEYS` | `auth.api_keys` | `key1,key2,key3` (comma-separated) |
 | `VELESDB_TLS_CERT` | `tls.cert` | `/etc/ssl/cert.pem` |
 | `VELESDB_TLS_KEY` | `tls.key` | `/etc/ssl/key.pem` |
@@ -441,6 +446,7 @@ SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 | `shutdown_timeout_secs` | int | — | — | `30` | Connection drain timeout (seconds) |
 | `workers` | int | — | — | `0` | Workers (0=auto) |
 | `max_body_size` | int | — | — | `104857600` | Max body (bytes) |
+| `rate_limit` | int | `VELESDB_RATE_LIMIT` | `--rate-limit` | `100` | Max req/s per IP (0=disabled) |
 | `cors_enabled` | bool | — | — | `false` | Enable CORS |
 | `cors_origins` | array | — | — | `["*"]` | CORS origins |
 
@@ -636,6 +642,88 @@ velesdb config show
 
 # Générer un fichier de configuration par défaut
 velesdb config init > velesdb.toml
+```
+
+---
+
+## Rate Limiting
+
+VelesDB Server includes per-IP rate limiting backed by a token-bucket algorithm (`tower-governor`). The rate limiter uses `SmartIpKeyExtractor`, which inspects `x-forwarded-for`, `x-real-ip`, and `forwarded` headers before falling back to the peer IP, making it safe behind reverse proxies.
+
+### Configuration
+
+| Source | Setting | Example |
+|--------|---------|---------|
+| CLI | `--rate-limit N` | `velesdb-server --rate-limit 200` |
+| Environment | `VELESDB_RATE_LIMIT` | `VELESDB_RATE_LIMIT=200` |
+| TOML | `[server] rate_limit` | `rate_limit = 200` |
+
+- **Default**: `100` (requests per second per IP)
+- **Disable**: Set to `0` to disable rate limiting entirely
+
+### Behavior
+
+When a client exceeds the limit, the server responds with HTTP `429 Too Many Requests` and includes rate-limit headers:
+
+| Header | Description |
+|--------|-------------|
+| `x-ratelimit-limit` | Maximum requests allowed per second |
+| `x-ratelimit-remaining` | Remaining requests in the current window |
+| `x-ratelimit-after` | Seconds until the bucket refills |
+| `retry-after` | Seconds to wait before retrying (only on 429) |
+
+A background thread prunes stale IP entries from the rate limiter map every 60 seconds.
+
+### Examples
+
+```toml
+# Production: 200 req/s per IP
+[server]
+rate_limit = 200
+
+# Development: disabled
+[server]
+rate_limit = 0
+```
+
+```bash
+# CLI override
+velesdb-server --rate-limit 50
+
+# Environment override
+VELESDB_RATE_LIMIT=0 velesdb-server
+```
+
+---
+
+## Schema Versioning
+
+Each collection's `config.json` includes a `schema_version` field (type `u32`) that tracks the on-disk format version. This prevents a newer VelesDB from writing data that an older version cannot read.
+
+### Behavior
+
+| Condition | Result |
+|-----------|--------|
+| `schema_version` absent or `0` | Treated as `1` (backward compatibility with pre-versioned collections) |
+| `schema_version` equals current | Normal operation |
+| `schema_version` > current | Error `VELES-036 IncompatibleSchemaVersion` -- upgrade VelesDB to open this collection |
+
+- **Current version**: `1` (defined as `CURRENT_SCHEMA_VERSION` in `crates/velesdb-core/src/collection/types.rs`)
+- The version is validated at collection load time, before any data is read or modified
+- The `VELES-036` error is **not recoverable** -- the only resolution is to upgrade VelesDB
+
+### config.json Example
+
+```json
+{
+  "dimension": 768,
+  "distance_metric": "cosine",
+  "schema_version": 1,
+  "hnsw_config": {
+    "m": 16,
+    "ef_construction": 100
+  }
+}
 ```
 
 ---
