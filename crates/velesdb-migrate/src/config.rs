@@ -261,7 +261,12 @@ pub enum DistanceMetric {
     /// Euclidean distance. Best for unnormalized embeddings.
     Euclidean,
     /// Dot product. Fast but requires normalized vectors.
+    #[serde(alias = "DotProduct", alias = "dot_product")]
     Dot,
+    /// Hamming distance for binary vectors.
+    Hamming,
+    /// Jaccard similarity for set-like vectors.
+    Jaccard,
 }
 
 /// Storage mode for `VelesDB`.
