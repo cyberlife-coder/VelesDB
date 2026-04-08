@@ -68,25 +68,78 @@ fn convert_comparison(
     }
 }
 
+/// Converts an IN condition, optionally negated via NOT.
+fn convert_in(inc: crate::velesql::InCondition) -> Condition {
+    let in_cond = Condition::In {
+        field: inc.column,
+        values: inc.values.into_iter().map(velesql_value_to_json).collect(),
+    };
+    if inc.negated {
+        Condition::Not {
+            condition: Box::new(in_cond),
+        }
+    } else {
+        in_cond
+    }
+}
+
+/// Converts a BETWEEN condition into `Gte AND Lte`.
+fn convert_between(btw: crate::velesql::BetweenCondition) -> Condition {
+    Condition::And {
+        conditions: vec![
+            Condition::Gte {
+                field: btw.column.clone(),
+                value: velesql_numeric_to_json(&btw.low),
+            },
+            Condition::Lte {
+                field: btw.column,
+                value: velesql_numeric_to_json(&btw.high),
+            },
+        ],
+    }
+}
+
+/// Converts a LIKE/ILIKE condition based on case-sensitivity.
+fn convert_like(lk: crate::velesql::LikeCondition) -> Condition {
+    if lk.case_insensitive {
+        Condition::ILike {
+            field: lk.column,
+            pattern: lk.pattern,
+        }
+    } else {
+        Condition::Like {
+            field: lk.column,
+            pattern: lk.pattern,
+        }
+    }
+}
+
+/// Converts CONTAINS (single/any/all) array conditions.
+fn convert_contains(cc: crate::velesql::ContainsCondition) -> Condition {
+    let json_values: Vec<Value> = cc.values.into_iter().map(velesql_value_to_json).collect();
+    match cc.mode {
+        crate::velesql::ContainsMode::Single => Condition::ArrayContains {
+            field: cc.column,
+            value: json_values.into_iter().next().unwrap_or(Value::Null),
+        },
+        crate::velesql::ContainsMode::Any => Condition::ArrayContainsAny {
+            field: cc.column,
+            values: json_values,
+        },
+        crate::velesql::ContainsMode::All => Condition::ArrayContainsAll {
+            field: cc.column,
+            values: json_values,
+        },
+    }
+}
+
 impl From<crate::velesql::Condition> for Condition {
     fn from(cond: crate::velesql::Condition) -> Self {
         match cond {
             crate::velesql::Condition::Comparison(cmp) => {
                 convert_comparison(cmp.column, cmp.operator, cmp.value)
             }
-            crate::velesql::Condition::In(inc) => {
-                let in_cond = Self::In {
-                    field: inc.column,
-                    values: inc.values.into_iter().map(velesql_value_to_json).collect(),
-                };
-                if inc.negated {
-                    Self::Not {
-                        condition: Box::new(in_cond),
-                    }
-                } else {
-                    in_cond
-                }
-            }
+            crate::velesql::Condition::In(inc) => convert_in(inc),
             crate::velesql::Condition::IsNull(isn) => {
                 if isn.is_null {
                     Self::IsNull { field: isn.column }
@@ -117,49 +170,9 @@ impl From<crate::velesql::Condition> for Condition {
                 field: ct.column,
                 value: ct.query,
             },
-            crate::velesql::Condition::Between(btw) => Self::And {
-                conditions: vec![
-                    Self::Gte {
-                        field: btw.column.clone(),
-                        value: velesql_numeric_to_json(&btw.low),
-                    },
-                    Self::Lte {
-                        field: btw.column,
-                        value: velesql_numeric_to_json(&btw.high),
-                    },
-                ],
-            },
-            crate::velesql::Condition::Like(lk) => {
-                if lk.case_insensitive {
-                    Self::ILike {
-                        field: lk.column,
-                        pattern: lk.pattern,
-                    }
-                } else {
-                    Self::Like {
-                        field: lk.column,
-                        pattern: lk.pattern,
-                    }
-                }
-            }
-            crate::velesql::Condition::Contains(cc) => {
-                let json_values: Vec<Value> =
-                    cc.values.into_iter().map(velesql_value_to_json).collect();
-                match cc.mode {
-                    crate::velesql::ContainsMode::Single => Self::ArrayContains {
-                        field: cc.column,
-                        value: json_values.into_iter().next().unwrap_or(Value::Null),
-                    },
-                    crate::velesql::ContainsMode::Any => Self::ArrayContainsAny {
-                        field: cc.column,
-                        values: json_values,
-                    },
-                    crate::velesql::ContainsMode::All => Self::ArrayContainsAll {
-                        field: cc.column,
-                        values: json_values,
-                    },
-                }
-            }
+            crate::velesql::Condition::Between(btw) => convert_between(btw),
+            crate::velesql::Condition::Like(lk) => convert_like(lk),
+            crate::velesql::Condition::Contains(cc) => convert_contains(cc),
             crate::velesql::Condition::GeoDistance(gd) => Self::GeoDistance {
                 field: gd.column,
                 lat: gd.lat,
