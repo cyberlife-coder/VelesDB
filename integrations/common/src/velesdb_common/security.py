@@ -229,6 +229,8 @@ def validate_text(text: str, max_length: int = MAX_TEXT_LENGTH) -> str:
     """
     if not isinstance(text, str):
         raise SecurityError(f"Text must be a string, got {type(text).__name__}")
+    if not text.strip():
+        raise SecurityError("Text cannot be empty or whitespace-only")
     if len(text) > max_length:
         raise SecurityError(f"Text exceeds maximum length of {max_length}")
     return text
