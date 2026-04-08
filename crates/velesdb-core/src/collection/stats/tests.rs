@@ -584,3 +584,111 @@ fn test_histogram_serde_default_metadata_fields() {
     assert_eq!(hist.buckets.len(), 1);
     assert_eq!(hist.buckets[0].distinct_count, 0);
 }
+
+// --- WP-2A: Zero-width bucket inflation regression tests ---
+
+#[test]
+fn test_no_zero_width_buckets_with_heavy_duplicates() {
+    // Regression test: duplicate-heavy data used to produce zero-width buckets
+    // whose counts inflated bucket_sum(), deflating selectivity estimates.
+    let builder = HistogramBuilder::new(4);
+    // 20 copies of 5.0 mixed with a few distinct values → forces chunk boundaries
+    // inside the 5.0 run, previously creating zero-width buckets.
+    let mut values = vec![5.0; 20];
+    values.extend_from_slice(&[1.0, 2.0, 3.0, 10.0, 20.0]);
+    let h = builder.build(&mut values);
+
+    // Every bucket must have non-zero width.
+    for (i, bucket) in h.buckets.iter().enumerate() {
+        assert!(
+            bucket.upper_bound > bucket.lower_bound,
+            "bucket {i} is zero-width: lower={}, upper={}",
+            bucket.lower_bound,
+            bucket.upper_bound,
+        );
+    }
+
+    // Total count across buckets must equal number of values.
+    let bucket_sum: u64 = h.buckets.iter().map(|b| b.count).sum();
+    assert_eq!(bucket_sum, 25, "bucket_sum must equal total input count");
+    assert_eq!(h.total_count, 25);
+}
+
+#[test]
+fn test_selectivity_not_inflated_by_duplicates() {
+    // Build a histogram from data with heavy duplicates and verify that
+    // bucket_sum() equals total_count (no inflation from zero-width ghosts).
+    let builder = HistogramBuilder::new(4);
+    let mut values: Vec<f64> = vec![1.0; 50];
+    values.extend_from_slice(&[2.0, 3.0, 4.0, 5.0]);
+    let h = builder.build(&mut values);
+
+    // Core invariant: bucket_sum must equal total_count — no inflation.
+    let bucket_sum: u64 = h.buckets.iter().map(|b| b.count).sum();
+    assert_eq!(
+        bucket_sum, h.total_count,
+        "bucket_sum ({bucket_sum}) != total_count ({}): zero-width inflation detected",
+        h.total_count
+    );
+
+    // No zero-width buckets should remain.
+    for (i, bucket) in h.buckets.iter().enumerate() {
+        assert!(
+            bucket.upper_bound > bucket.lower_bound,
+            "bucket {i} is zero-width after merge"
+        );
+    }
+
+    // Selectivity for 1.0 must be findable (not silently lost in a zero-width bucket).
+    let sel = h.estimate_eq_selectivity(1.0);
+    assert!(
+        sel > 0.0,
+        "selectivity for dominant value should be > 0, got {sel}"
+    );
+}
+
+#[test]
+fn test_zero_width_merge_preserves_count() {
+    // Directly test the merge helper: fabricate buckets including zero-width ones
+    // and verify counts are preserved after merging.
+    let buckets = vec![
+        HistogramBucket {
+            lower_bound: 0.0,
+            upper_bound: 5.0,
+            count: 10,
+            distinct_count: 5,
+        },
+        // Zero-width: lower == upper == 5.0
+        HistogramBucket {
+            lower_bound: 5.0,
+            upper_bound: 5.0,
+            count: 20,
+            distinct_count: 1,
+        },
+        HistogramBucket {
+            lower_bound: 5.0,
+            upper_bound: 10.0,
+            count: 15,
+            distinct_count: 5,
+        },
+    ];
+    let merged = histogram::merge_zero_width_buckets(buckets);
+
+    // The zero-width bucket should have been absorbed.
+    assert_eq!(merged.len(), 2, "zero-width bucket should be merged");
+
+    // First bucket: original non-zero-width (count=10), unchanged.
+    assert_eq!(merged[0].count, 10);
+    assert_eq!(merged[0].lower_bound, 0.0);
+    assert!((merged[0].upper_bound - 5.0).abs() < f64::EPSILON);
+
+    // Second bucket: original (count=15) + absorbed zero-width (count=20) = 35.
+    // The zero-width bucket is merged forward into the next non-zero-width bucket.
+    assert_eq!(merged[1].count, 35);
+    assert_eq!(merged[1].lower_bound, 5.0);
+    assert!((merged[1].upper_bound - 10.0).abs() < f64::EPSILON);
+
+    // Total count preserved.
+    let total: u64 = merged.iter().map(|b| b.count).sum();
+    assert_eq!(total, 45);
+}
