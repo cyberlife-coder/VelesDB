@@ -839,3 +839,85 @@ fn scroll_point_small_id_serialized_as_string() {
     let json = serde_json::to_value(&point).unwrap();
     assert_eq!(json["id"], json!("42"));
 }
+
+// ============================================================================
+// G. ScrollResponse::next_cursor serialization as string [BUG PR #554]
+// ============================================================================
+
+/// `next_cursor` above 2^53 must serialize as a JSON string, not a number.
+#[test]
+fn scroll_response_next_cursor_serialized_as_string() {
+    let above_safe = (1_u64 << 53) + 1; // 9_007_199_254_740_993
+    let resp = ScrollResponse {
+        points: vec![],
+        next_cursor: Some(above_safe),
+    };
+    let json = serde_json::to_value(&resp).unwrap();
+    assert_eq!(
+        json["next_cursor"],
+        json!("9007199254740993"),
+        "next_cursor must serialize as a JSON string for JS precision safety"
+    );
+}
+
+/// `next_cursor: None` serializes as JSON null.
+#[test]
+fn scroll_response_next_cursor_none_serialized_as_null() {
+    let resp = ScrollResponse {
+        points: vec![],
+        next_cursor: None,
+    };
+    let json = serde_json::to_value(&resp).unwrap();
+    assert!(json["next_cursor"].is_null());
+}
+
+/// Round-trip: `ScrollResponse` with cursor = 2^53 + 1 preserves exact value.
+#[test]
+fn scroll_response_cursor_round_trip_above_max_safe_integer() {
+    let above_safe = (1_u64 << 53) + 1;
+    let original = ScrollResponse {
+        points: vec![ScrollPoint {
+            id: 1,
+            vector: vec![0.1],
+            payload: None,
+        }],
+        next_cursor: Some(above_safe),
+    };
+    let serialized = serde_json::to_value(&original).unwrap();
+    assert_eq!(serialized["next_cursor"], json!("9007199254740993"));
+
+    let deserialized: ScrollResponse = serde_json::from_value(serialized).unwrap();
+    assert_eq!(deserialized.next_cursor, Some(above_safe));
+    assert_eq!(deserialized.points.len(), 1);
+    assert_eq!(deserialized.points[0].id, 1);
+}
+
+/// `ScrollRequest::cursor` accepts a string ID from JS clients.
+#[test]
+fn scroll_request_cursor_accepts_string_id() {
+    let input = json!({
+        "cursor": "9007199254740993",
+        "batch_size": 50
+    });
+    let req: ScrollRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.cursor, Some((1_u64 << 53) + 1));
+    assert_eq!(req.batch_size, 50);
+}
+
+/// `ScrollRequest::cursor` accepts a numeric ID (backward compat).
+#[test]
+fn scroll_request_cursor_accepts_number_id() {
+    let input = json!({
+        "cursor": 42
+    });
+    let req: ScrollRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.cursor, Some(42));
+}
+
+/// `ScrollRequest::cursor` accepts null / absent (start from beginning).
+#[test]
+fn scroll_request_cursor_accepts_null() {
+    let input = json!({});
+    let req: ScrollRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.cursor, None);
+}

@@ -54,6 +54,38 @@ pub fn deserialize_id_from_string_or_number<'de, D: Deserializer<'de>>(
     deserializer.deserialize_any(IdVisitor)
 }
 
+/// Serializes an `Option<u64>` as a JSON string when `Some`, or `null` when `None`.
+///
+/// Emits `"12345"` for `Some(12345)` and `null` for `None`.
+///
+/// # Errors
+///
+/// Returns `S::Error` if the serializer rejects the value.
+pub fn serialize_option_id_as_string<S: Serializer>(
+    value: &Option<u64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(id) => serializer.serialize_str(&id.to_string()),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Deserializes an `Option<u64>` from a JSON string, number, or null.
+///
+/// Accepts `"12345"` (string), `12345` (number), and `null` for backward
+/// compatibility with clients that have not yet migrated to string IDs.
+///
+/// # Errors
+///
+/// Returns `D::Error` if the input is present but not a valid u64 string
+/// or non-negative integer.
+pub fn deserialize_option_id_from_string_or_number<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    deserializer.deserialize_option(OptionIdVisitor)
+}
+
 /// Visitor that accepts either a JSON string or a JSON number as a `u64`.
 struct IdVisitor;
 
@@ -78,5 +110,28 @@ impl Visitor<'_> for IdVisitor {
         value
             .parse::<u64>()
             .map_err(|_| de::Error::invalid_value(Unexpected::Str(value), &"a u64 string"))
+    }
+}
+
+/// Visitor for `Option<u64>` that delegates to `IdVisitor` for `Some` values.
+struct OptionIdVisitor;
+
+impl<'de> Visitor<'de> for OptionIdVisitor {
+    type Value = Option<u64>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("null, a u64 string, or a u64 number")
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_any(IdVisitor).map(Some)
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(None)
     }
 }
