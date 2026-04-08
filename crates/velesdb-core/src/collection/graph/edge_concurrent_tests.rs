@@ -181,7 +181,7 @@ fn test_concurrent_reads_no_block() {
 
 #[test]
 fn test_concurrent_write_different_shards() {
-    let store = Arc::new(ConcurrentEdgeStore::with_shards(64));
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(64).expect("test: valid shard count"));
 
     let mut handles = vec![];
     for t in 0..8 {
@@ -207,7 +207,7 @@ fn test_concurrent_write_different_shards() {
 
 #[test]
 fn test_concurrent_read_write_same_shard() {
-    let store = Arc::new(ConcurrentEdgeStore::with_shards(1)); // Single shard
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(1).expect("test: valid shard count")); // Single shard
 
     let store_writer = Arc::clone(&store);
     let store_reader = Arc::clone(&store);
@@ -232,7 +232,7 @@ fn test_concurrent_read_write_same_shard() {
 
 #[test]
 fn test_sharded_lock_ordering_no_deadlock() {
-    let store = Arc::new(ConcurrentEdgeStore::with_shards(4));
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(4).expect("test: valid shard count"));
 
     // Create edges that cross shards in different orders
     let mut handles = vec![];
@@ -265,7 +265,7 @@ fn test_sharded_lock_ordering_no_deadlock() {
 #[test]
 fn test_get_incoming_cross_shard() {
     // Use 64 shards to ensure source and target are in different shards
-    let store = ConcurrentEdgeStore::with_shards(64);
+    let store = ConcurrentEdgeStore::with_shards(64).expect("test: valid shard count");
 
     // source=100 → shard 36 (100 % 64)
     // target=200 → shard 8 (200 % 64)
@@ -291,7 +291,7 @@ fn test_get_incoming_cross_shard() {
 
 #[test]
 fn test_bidirectional_traversal_cross_shard() {
-    let store = ConcurrentEdgeStore::with_shards(64);
+    let store = ConcurrentEdgeStore::with_shards(64).expect("test: valid shard count");
 
     // Create edges that definitely cross shards
     // Node IDs chosen to be in different shards
@@ -316,9 +316,15 @@ fn test_bidirectional_traversal_cross_shard() {
 // =============================================================================
 
 #[test]
-#[should_panic(expected = "num_shards must be at least 1")]
-fn test_with_shards_zero_panics() {
-    let _ = ConcurrentEdgeStore::with_shards(0);
+fn test_with_shards_zero_returns_error() {
+    let result = ConcurrentEdgeStore::with_shards(0);
+    assert!(result.is_err(), "with_shards(0) should return Err");
+    let err = result.err().expect("test: should be Err");
+    let err_msg = err.to_string();
+    assert!(
+        err_msg.contains("num_shards must be at least 1"),
+        "unexpected error: {err_msg}"
+    );
 }
 
 // =============================================================================
@@ -328,7 +334,7 @@ fn test_with_shards_zero_panics() {
 #[test]
 fn test_remove_node_edges_cross_shard_cleanup() {
     // Use 64 shards to ensure source and target are in different shards
-    let store = ConcurrentEdgeStore::with_shards(64);
+    let store = ConcurrentEdgeStore::with_shards(64).expect("test: valid shard count");
 
     // source=100 → shard 36 (100 % 64)
     // target=200 → shard 8 (200 % 64)
@@ -364,7 +370,7 @@ fn test_remove_node_edges_cross_shard_cleanup() {
 
 #[test]
 fn test_remove_node_edges_incoming_cross_shard() {
-    let store = ConcurrentEdgeStore::with_shards(64);
+    let store = ConcurrentEdgeStore::with_shards(64).expect("test: valid shard count");
 
     // source=200 → shard 8
     // target=100 → shard 36
@@ -383,7 +389,7 @@ fn test_remove_node_edges_incoming_cross_shard() {
 
 #[test]
 fn test_edge_count_across_shards() {
-    let store = ConcurrentEdgeStore::with_shards(4);
+    let store = ConcurrentEdgeStore::with_shards(4).expect("test: valid shard count");
 
     for i in 0..100 {
         store
@@ -419,7 +425,7 @@ fn test_concurrent_store_duplicate_id_rejected() {
 #[test]
 fn test_concurrent_store_duplicate_id_cross_shard() {
     // Use 64 shards to ensure edges are in different shards
-    let store = ConcurrentEdgeStore::with_shards(64);
+    let store = ConcurrentEdgeStore::with_shards(64).expect("test: valid shard count");
 
     // First edge: source=100 (shard 36), target=200 (shard 8)
     store
@@ -573,7 +579,7 @@ fn test_concurrent_remove_node_edges_and_add() {
 fn test_cross_shard_add_edge_consistency() {
     // Regression test: cross-shard add_edge should maintain consistency
     // If we add an edge spanning shards, both indices must be populated
-    let store = ConcurrentEdgeStore::with_shards(64);
+    let store = ConcurrentEdgeStore::with_shards(64).expect("test: valid shard count");
 
     // Add cross-shard edge: source=100 and target=200 should be in different shards
     store
@@ -718,7 +724,7 @@ fn test_add_remove_race_registry_consistency() {
     use std::sync::Arc;
     use std::thread;
 
-    let store = Arc::new(ConcurrentEdgeStore::with_shards(4));
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(4).expect("test: valid shard count"));
 
     // Pre-populate with edge ID 1
     store
@@ -762,7 +768,7 @@ fn test_lock_ordering_no_deadlock_add_remove() {
     use std::sync::Arc;
     use std::thread;
 
-    let store = Arc::new(ConcurrentEdgeStore::with_shards(4));
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(4).expect("test: valid shard count"));
 
     // Many threads doing concurrent add/remove operations
     let mut handles = vec![];
@@ -890,7 +896,7 @@ fn test_concurrent_insert_16_threads_256_shards() {
 /// data loss from lock contention (not just count mismatches).
 #[test]
 fn test_concurrent_insertions_all_edges_retrievable() {
-    let store = Arc::new(ConcurrentEdgeStore::with_shards(16));
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(16).expect("test: valid shard count"));
     let threads = 8;
     let edges_per_thread = 200;
 
@@ -935,7 +941,7 @@ fn test_concurrent_insertions_all_edges_retrievable() {
 fn test_concurrent_read_write_monotonic_count() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    let store = Arc::new(ConcurrentEdgeStore::with_shards(16));
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(16).expect("test: valid shard count"));
     let done = Arc::new(AtomicBool::new(false));
 
     let store_w = Arc::clone(&store);
@@ -983,7 +989,7 @@ fn test_concurrent_read_write_monotonic_count() {
 #[test]
 fn test_shard_index_deterministic_and_consistent() {
     for num_shards in [1, 4, 16, 64, 256] {
-        let store = ConcurrentEdgeStore::with_shards(num_shards);
+        let store = ConcurrentEdgeStore::with_shards(num_shards).expect("test: valid shard count");
 
         for node_id in [0u64, 1, 255, 256, 1000, u64::MAX] {
             let expected = (node_id as usize) % num_shards;
@@ -1008,7 +1014,7 @@ fn test_shard_index_deterministic_and_consistent() {
 /// are always retrievable from the expected shard's perspective.
 #[test]
 fn test_same_source_always_same_shard() {
-    let store = ConcurrentEdgeStore::with_shards(8);
+    let store = ConcurrentEdgeStore::with_shards(8).expect("test: valid shard count");
     let source_id = 42u64;
     let expected_shard = (source_id as usize) % 8;
 

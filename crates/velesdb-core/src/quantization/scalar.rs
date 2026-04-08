@@ -29,13 +29,10 @@ impl QuantizedVector {
     /// # Arguments
     ///
     /// * `vector` - The original f32 vector to quantize
-    ///
-    /// # Panics
-    ///
-    /// Panics if the vector is empty.
     #[must_use]
     pub fn from_f32(vector: &[f32]) -> Self {
-        assert!(!vector.is_empty(), "Cannot quantize empty vector");
+        // Caller guarantees non-empty (dimension validated at collection level).
+        debug_assert!(!vector.is_empty(), "Cannot quantize empty vector");
 
         let min = vector.iter().copied().fold(f32::INFINITY, f32::min);
         let max = vector.iter().copied().fold(f32::NEG_INFINITY, f32::max);

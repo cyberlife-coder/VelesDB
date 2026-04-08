@@ -190,10 +190,18 @@ fn test_approx_jaccard_zero_counts() {
 fn test_fingerprint_integration_with_index() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "machine learning algorithms");
-    index.insert(2, "machine learning models");
-    index.insert(3, "database indexing strategies");
-    index.insert(4, "completely unrelated topic");
+    index
+        .insert(1, "machine learning algorithms")
+        .expect("test: insert");
+    index
+        .insert(2, "machine learning models")
+        .expect("test: insert");
+    index
+        .insert(3, "database indexing strategies")
+        .expect("test: insert");
+    index
+        .insert(4, "completely unrelated topic")
+        .expect("test: insert");
 
     // score_jaccard_fast should rank "machine learning" docs higher.
     let query = "machine learning";
@@ -220,9 +228,9 @@ fn test_fingerprint_integration_with_index() {
 fn test_search_like_ranked_uses_fingerprints() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello world");
-    index.insert(2, "hello there");
-    index.insert(3, "goodbye world");
+    index.insert(1, "hello world").expect("test: insert");
+    index.insert(2, "hello there").expect("test: insert");
+    index.insert(3, "goodbye world").expect("test: insert");
 
     // search_like_ranked internally uses fingerprints now.
     let results = index.search_like_ranked("hello", 0.1);
@@ -242,8 +250,8 @@ fn test_search_like_ranked_uses_fingerprints() {
 fn test_fingerprint_survives_remove() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello world");
-    index.insert(2, "goodbye world");
+    index.insert(1, "hello world").expect("test: insert");
+    index.insert(2, "goodbye world").expect("test: insert");
 
     // Remove doc 1 — its fingerprint should be gone.
     index.remove(1);
@@ -263,8 +271,8 @@ fn test_fingerprint_survives_remove() {
 fn test_fingerprint_update_on_reinsert() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello world");
-    index.insert(1, "goodbye world"); // Re-insert same ID with different text.
+    index.insert(1, "hello world").expect("test: insert");
+    index.insert(1, "goodbye world").expect("test: insert"); // Re-insert same ID with different text.
 
     let query_trigrams = extract_trigrams("goodbye");
     let query_fp = TrigramFingerprint::from_trigram_set(&query_trigrams);

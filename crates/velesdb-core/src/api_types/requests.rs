@@ -289,7 +289,7 @@ pub struct MultiQuerySearchRequest {
     #[serde(default = "default_top_k")]
     #[cfg_attr(feature = "openapi", schema(example = 10))]
     pub top_k: usize,
-    /// Fusion strategy: "average", "maximum", "rrf", "weighted", "relative_score".
+    /// Fusion strategy: "average", "maximum", "rrf", "weighted", "`relative_score`".
     #[serde(default = "default_fusion_strategy")]
     #[cfg_attr(feature = "openapi", schema(example = "rrf"))]
     pub strategy: String,

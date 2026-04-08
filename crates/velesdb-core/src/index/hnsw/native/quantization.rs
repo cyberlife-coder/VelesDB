@@ -217,17 +217,22 @@ impl ScalarQuantizer {
     ///
     /// * `vectors` - Training vectors to compute min/max per dimension
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if vectors is empty or vectors have inconsistent dimensions.
-    #[must_use]
-    pub fn train(vectors: &[&[f32]]) -> Self {
-        assert!(!vectors.is_empty(), "Cannot train on empty vectors");
+    /// Returns `Error::InvalidQuantizerConfig` if `vectors` is empty or
+    /// vectors have inconsistent dimensions.
+    pub fn train(vectors: &[&[f32]]) -> crate::error::Result<Self> {
+        if vectors.is_empty() {
+            return Err(crate::error::Error::InvalidQuantizerConfig(
+                "cannot train on empty vectors".to_string(),
+            ));
+        }
         let dimension = vectors[0].len();
-        assert!(
-            vectors.iter().all(|v| v.len() == dimension),
-            "All vectors must have same dimension"
-        );
+        if !vectors.iter().all(|v| v.len() == dimension) {
+            return Err(crate::error::Error::InvalidQuantizerConfig(
+                "all vectors must have same dimension".to_string(),
+            ));
+        }
 
         let mut min_vals = vec![f32::MAX; dimension];
         let mut max_vals = vec![f32::MIN; dimension];
@@ -257,12 +262,12 @@ impl ScalarQuantizer {
         // Precompute inverse scales for fast dequantization
         let inv_scales: Vec<f32> = scales.iter().map(|&s| 1.0 / s).collect();
 
-        Self {
+        Ok(Self {
             min_vals,
             scales,
             inv_scales,
             dimension,
-        }
+        })
     }
 
     /// Quantizes a float32 vector to int8.
