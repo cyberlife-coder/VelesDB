@@ -74,9 +74,12 @@ impl AuthState {
     }
 }
 
-/// Paths that bypass authentication.
+/// Paths that bypass authentication (both legacy and `/v1/` versioned).
 fn is_public_path(path: &str) -> bool {
-    path == "/health" || path == "/ready" || path == "/metrics"
+    matches!(
+        path,
+        "/health" | "/ready" | "/metrics" | "/v1/health" | "/v1/ready" | "/v1/metrics"
+    )
 }
 
 /// Extract the Bearer token from the Authorization header value.
@@ -178,10 +181,26 @@ mod tests {
     }
 
     #[test]
+    fn test_is_public_path_versioned_health() {
+        assert!(is_public_path("/v1/health"));
+    }
+
+    #[test]
+    fn test_is_public_path_versioned_ready() {
+        assert!(is_public_path("/v1/ready"));
+    }
+
+    #[test]
+    fn test_is_public_path_versioned_metrics() {
+        assert!(is_public_path("/v1/metrics"));
+    }
+
+    #[test]
     fn test_is_public_path_other() {
         assert!(!is_public_path("/collections"));
         assert!(!is_public_path("/query"));
         assert!(!is_public_path("/health/extra"));
+        assert!(!is_public_path("/v1/collections"));
     }
 
     #[test]

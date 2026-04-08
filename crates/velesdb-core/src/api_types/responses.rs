@@ -493,6 +493,7 @@ pub struct ScrollResponse {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ScrollPoint {
     /// Point ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Vector data.
     pub vector: Vec<f32>,

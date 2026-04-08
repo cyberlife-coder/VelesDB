@@ -526,7 +526,8 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"results\""));
-        assert!(json.contains("\"id\":1"));
+        // IDs are serialized as strings to prevent JavaScript precision loss (WP-0D).
+        assert!(json.contains("\"id\":\"1\""));
     }
 
     #[test]
