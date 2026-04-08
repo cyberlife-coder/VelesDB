@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::HashMap;
 
-use crate::utils::{json_to_python, python_to_json};
+use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::collection::graph::{GraphEdge, GraphNode, TraversalResult};
 
 /// Parse a Python properties dict into a JSON properties map.
@@ -47,7 +47,7 @@ pub fn dict_to_node(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResul
     };
 
     let node = if let Some(vector) = dict.get("vector") {
-        let vec: Vec<f32> = vector.extract(py)?;
+        let vec = extract_vector(py, vector)?;
         node.with_vector(vec)
     } else {
         node
@@ -191,6 +191,27 @@ mod tests {
             assert_eq!(edge.source(), 1);
             assert_eq!(edge.target(), 2);
             assert_eq!(edge.label(), "KNOWS");
+        });
+    }
+
+    #[test]
+    fn test_dict_to_node_rejects_nan_vector() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let mut dict = HashMap::new();
+            dict.insert("id".to_string(), 1u64.into_pyobject(py).unwrap().into());
+            dict.insert(
+                "label".to_string(),
+                "Person".into_pyobject(py).unwrap().into(),
+            );
+            let nan_vec = vec![1.0_f32, f32::NAN, 3.0];
+            dict.insert(
+                "vector".to_string(),
+                nan_vec.into_pyobject(py).unwrap().into(),
+            );
+
+            let err = dict_to_node(py, &dict).unwrap_err();
+            assert!(err.to_string().contains("NaN"));
         });
     }
 

@@ -9,32 +9,58 @@ use pyo3::IntoPyObjectExt;
 use std::collections::HashMap;
 use velesdb_core::{DistanceMetric, StorageMode};
 
+/// Rejects vectors that contain NaN values.
+///
+/// NaN propagates silently through distance computations and corrupts
+/// search results.  This check is applied to every vector entering the
+/// engine from Python.
+///
+/// # Errors
+///
+/// Returns `PyValueError` when any component is NaN.
+#[inline]
+pub fn reject_nan_vector(vector: &[f32]) -> PyResult<()> {
+    if vector.iter().any(|v| v.is_nan()) {
+        return Err(PyValueError::new_err("vector contains NaN values"));
+    }
+    Ok(())
+}
+
 /// Extracts a vector from a PyObject, supporting both Python lists and NumPy arrays.
+///
+/// After extraction the vector is validated: NaN values are rejected with a
+/// `PyValueError`.
 ///
 /// # Arguments
 /// * `py` - Python GIL token
 /// * `obj` - The Python object (list or numpy.ndarray)
 ///
 /// # Returns
-/// A Vec<f32> containing the vector data
+/// A `Vec<f32>` containing the validated vector data
 ///
 /// # Errors
-/// Returns an error if the object is neither a list nor a numpy array
+/// Returns an error if the object is neither a list nor a numpy array,
+/// or if the extracted vector contains NaN values.
 pub fn extract_vector(py: Python<'_>, obj: &PyObject) -> PyResult<Vec<f32>> {
     // Try numpy array first (most common in ML workflows)
     if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f32>>(py) {
-        return Ok(array.as_slice()?.to_vec());
+        let vec = array.as_slice()?.to_vec();
+        reject_nan_vector(&vec)?;
+        return Ok(vec);
     }
 
     // Try numpy float64 array and convert
     if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f64>>(py) {
         // Reason: intentional f64->f32 narrowing for numpy float64 arrays
         #[allow(clippy::cast_possible_truncation)]
-        return Ok(array.as_slice()?.iter().map(|&x| x as f32).collect());
+        let vec: Vec<f32> = array.as_slice()?.iter().map(|&x| x as f32).collect();
+        reject_nan_vector(&vec)?;
+        return Ok(vec);
     }
 
     // Fall back to Python list
     if let Ok(list) = obj.extract::<Vec<f32>>(py) {
+        reject_nan_vector(&list)?;
         return Ok(list);
     }
 
@@ -165,6 +191,33 @@ pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_reject_nan_vector_clean() {
+        assert!(reject_nan_vector(&[1.0, 2.0, 3.0]).is_ok());
+    }
+
+    #[test]
+    fn test_reject_nan_vector_contains_nan() {
+        let err = reject_nan_vector(&[1.0, f32::NAN, 3.0]).unwrap_err();
+        assert!(err.to_string().contains("NaN"));
+    }
+
+    #[test]
+    fn test_reject_nan_vector_empty() {
+        assert!(reject_nan_vector(&[]).is_ok());
+    }
+
+    #[test]
+    fn test_extract_vector_rejects_nan_list() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let list = vec![1.0_f32, f32::NAN, 3.0];
+            let obj: PyObject = list.into_pyobject(py).unwrap().into();
+            let err = extract_vector(py, &obj).unwrap_err();
+            assert!(err.to_string().contains("NaN"));
+        });
+    }
 
     #[test]
     fn test_parse_metric_cosine() {
