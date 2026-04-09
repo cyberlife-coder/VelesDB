@@ -28,6 +28,7 @@ import velesdb
 
 from langchain_velesdb.security import (
     validate_path,
+    validate_search_quality,
     validate_text,
     validate_metric,
     validate_storage_mode,
@@ -79,6 +80,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         metric: str = "cosine",
         storage_mode: str = "full",
         server_url: Optional[str] = None,
+        search_quality: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize VelesDB vector store.
@@ -106,6 +108,12 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
                 Examples: ``storage_mode="f32"`` is equivalent to ``storage_mode="full"``.
             server_url: Optional URL of a VelesDB server for server mode. When
                 provided, must be a valid http:// or https:// URL.
+            search_quality: Optional default quality preset for all similarity
+                searches: ``"fast"``, ``"balanced"``, ``"accurate"``,
+                ``"perfect"``, ``"autotune"``, ``"custom:N"``,
+                ``"adaptive:MIN:MAX"``. ``None`` uses the built-in search.
+                Per-call override: pass ``search_quality=`` to
+                :meth:`similarity_search_with_score`.
             **kwargs: Additional arguments passed to the database.
 
         Raises:
@@ -118,6 +126,9 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         if server_url is not None:
             validate_url(server_url)
         self.server_url = server_url
+        self._search_quality: Optional[str] = None
+        if search_quality is not None:
+            self._search_quality = validate_search_quality(search_quality)
 
         self._embedding = embedding
         self._db: Optional[velesdb.Database] = None

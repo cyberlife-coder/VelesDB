@@ -58,8 +58,8 @@ pub use collection::VelesCollection;
 pub use graph::{MobileGraphEdge, MobileGraphNode, MobileGraphStore, TraversalResult};
 pub use types::{
     DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileCollectionStats,
-    MobileIndexInfo, PqTrainConfig, SearchResult, StorageMode, VelesError, VelesPoint,
-    VelesSparseVector,
+    MobileIndexInfo, PqTrainConfig, SearchQuality, SearchResult, StorageMode, VelesError,
+    VelesPoint, VelesSparseVector,
 };
 
 use std::sync::Arc;
@@ -69,6 +69,8 @@ use velesdb_core::Database as CoreDatabase;
 use velesdb_core::DistanceMetric as CoreDistanceMetric;
 #[cfg(test)]
 use velesdb_core::FusionStrategy as CoreFusionStrategy;
+#[cfg(test)]
+use velesdb_core::SearchQuality as CoreSearchQuality;
 
 // NOTE: VelesError, DistanceMetric, StorageMode, FusionStrategy, SearchResult,
 // VelesPoint, IndividualSearchRequest moved to types.rs (EPIC-061/US-005 refactoring)

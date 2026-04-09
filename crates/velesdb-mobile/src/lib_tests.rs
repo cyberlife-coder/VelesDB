@@ -43,6 +43,74 @@ fn test_distance_metric_jaccard_conversion() {
 }
 
 // =========================================================================
+// SearchQuality Tests
+// =========================================================================
+
+#[test]
+fn test_search_quality_fast_conversion() {
+    let q = SearchQuality::Fast;
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::Fast));
+}
+
+#[test]
+fn test_search_quality_balanced_conversion() {
+    let q = SearchQuality::Balanced;
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::Balanced));
+}
+
+#[test]
+fn test_search_quality_accurate_conversion() {
+    let q = SearchQuality::Accurate;
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::Accurate));
+}
+
+#[test]
+fn test_search_quality_perfect_conversion() {
+    let q = SearchQuality::Perfect;
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::Perfect));
+}
+
+#[test]
+fn test_search_quality_custom_conversion() {
+    let q = SearchQuality::Custom { ef: 256 };
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::Custom(256)));
+}
+
+#[test]
+fn test_search_quality_adaptive_conversion() {
+    let q = SearchQuality::Adaptive {
+        min_ef: 32,
+        max_ef: 512,
+    };
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(
+        core,
+        CoreSearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 512
+        }
+    ));
+}
+
+#[test]
+fn test_search_quality_autotune_conversion() {
+    let q = SearchQuality::AutoTune;
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::AutoTune));
+}
+
+#[test]
+fn test_search_quality_default() {
+    let q = SearchQuality::default();
+    assert!(matches!(q, SearchQuality::Balanced));
+}
+
+// =========================================================================
 // StorageMode Tests
 // =========================================================================
 
@@ -146,6 +214,57 @@ fn test_collection_upsert_and_search() {
     let results = col.search(vec![1.0, 0.0, 0.0, 0.0], 1).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, 1);
+}
+
+#[test]
+fn test_collection_search_with_quality() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("quality_test".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db
+        .get_collection("quality_test".to_string())
+        .unwrap()
+        .unwrap();
+
+    col.upsert_batch(vec![
+        VelesPoint {
+            id: 1,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: None,
+        },
+        VelesPoint {
+            id: 2,
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            payload: None,
+        },
+    ])
+    .unwrap();
+
+    // Test all named quality modes produce valid results
+    let modes = [
+        SearchQuality::Fast,
+        SearchQuality::Balanced,
+        SearchQuality::Accurate,
+        SearchQuality::Perfect,
+        SearchQuality::AutoTune,
+        SearchQuality::Custom { ef: 200 },
+        SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 512,
+        },
+    ];
+
+    for quality in modes {
+        let results = col
+            .search_with_quality(vec![1.0, 0.0, 0.0, 0.0], 2, quality)
+            .unwrap();
+        assert!(!results.is_empty(), "quality mode should return results");
+        assert_eq!(results[0].id, 1, "closest vector should be id=1");
+    }
 }
 
 #[test]

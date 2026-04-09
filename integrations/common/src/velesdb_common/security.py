@@ -423,6 +423,48 @@ def _validate_sparse_entry(key: Any, value: Any) -> None:
         )
 
 
+_SIMPLE_QUALITIES = frozenset({"fast", "balanced", "accurate", "perfect", "autotune"})
+_CUSTOM_QUALITY_RE = re.compile(r"^custom:\d+$")
+_ADAPTIVE_QUALITY_RE = re.compile(r"^adaptive:\d+:\d+$")
+
+
+def validate_search_quality(quality: str) -> str:
+    """Validate a search quality string.
+
+    Accepted forms:
+    - Simple presets: ``'fast'``, ``'balanced'``, ``'accurate'``,
+      ``'perfect'``, ``'autotune'``
+    - Custom ef: ``'custom:N'`` where N is a positive integer (e.g. ``'custom:256'``)
+    - Adaptive range: ``'adaptive:MIN:MAX'`` (e.g. ``'adaptive:32:512'``)
+
+    Args:
+        quality: Search quality preset or custom/adaptive string.
+
+    Returns:
+        Validated quality string (lowercased).
+
+    Raises:
+        SecurityError: If quality is not a string or not a recognised form.
+    """
+    if not isinstance(quality, str):
+        raise SecurityError(
+            f"search_quality must be a string, got {type(quality).__name__}"
+        )
+    quality_lower = quality.lower()
+    if quality_lower in _SIMPLE_QUALITIES:
+        return quality_lower
+    if _CUSTOM_QUALITY_RE.match(quality_lower):
+        return quality_lower
+    if _ADAPTIVE_QUALITY_RE.match(quality_lower):
+        return quality_lower
+    raise SecurityError(
+        f"Invalid search_quality '{quality}'. "
+        f"Allowed presets: {', '.join(sorted(_SIMPLE_QUALITIES))}. "
+        "Custom form: 'custom:N' (e.g. 'custom:256'). "
+        "Adaptive form: 'adaptive:MIN:MAX' (e.g. 'adaptive:32:512')."
+    )
+
+
 def validate_sparse_vector(sparse_vector: Any) -> dict:
     """Validate a sparse vector dict.
 

@@ -19,6 +19,7 @@ from velesdb_common.fusion import build_fusion_strategy as _build_fusion_strateg
 
 from llamaindex_velesdb.security import (
     validate_k,
+    validate_search_quality,
     validate_text,
     validate_batch_size,
     validate_weight,
@@ -66,9 +67,11 @@ class SearchOpsMixin:
 
         Args:
             query: Vector store query with embedding and parameters.
-            **kwargs: Additional arguments.  Accepts ``sparse_vector`` (dict)
-                and ``sparse_index_name`` (str) for hybrid dense+sparse search
-                targeting a specific named sparse index.
+            **kwargs: Additional arguments.  Accepts ``sparse_vector`` (dict),
+                ``sparse_index_name`` (str) for hybrid dense+sparse search, and
+                ``search_quality`` (str) to use
+                ``collection.search_with_quality`` instead of
+                ``collection.search``.
 
         Returns:
             Query result with nodes and similarities.
@@ -93,6 +96,10 @@ class SearchOpsMixin:
             validate_sparse_vector(sparse_vector)
         sparse_index_name = kwargs.get("sparse_index_name")
 
+        quality = kwargs.get("search_quality", getattr(self, "_search_quality", None))
+        if quality is not None:
+            validate_search_quality(quality)
+
         core_filter = self._metadata_filters_to_core_filter(query.filters)
 
         if sparse_vector is not None and core_filter is not None:
@@ -106,6 +113,7 @@ class SearchOpsMixin:
             sparse_vector=sparse_vector,
             sparse_index_name=sparse_index_name,
             core_filter=core_filter,
+            search_quality=quality,
         )
 
         return self._build_query_result(results)
@@ -119,11 +127,13 @@ class SearchOpsMixin:
         sparse_vector: Optional[dict] = None,
         sparse_index_name: Optional[str] = None,
         core_filter: Optional[dict] = None,
+        search_quality: Optional[str] = None,
     ) -> List[dict]:
         """Execute the appropriate search variant on the collection.
 
-        Delegates to filtered, hybrid sparse, or plain dense search
-        depending on which optional arguments are provided.
+        Dispatch order: filtered → sparse → quality-aware → plain dense.
+        *search_quality* is ignored when *core_filter* or *sparse_vector*
+        is set so those paths are not affected.
 
         Args:
             collection: VelesDB collection object.
@@ -132,6 +142,7 @@ class SearchOpsMixin:
             sparse_vector: Optional sparse vector dict for hybrid search.
             sparse_index_name: Optional named sparse index to query.
             core_filter: Optional metadata filter dict.
+            search_quality: Optional quality preset string.
 
         Returns:
             List of search result dicts.
@@ -148,6 +159,11 @@ class SearchOpsMixin:
             return self._run_sparse_search(
                 collection, query_embedding, sparse_vector, k,
                 sparse_index_name=sparse_index_name,
+            )
+
+        if search_quality is not None:
+            return collection.search_with_quality(
+                query_embedding, quality=search_quality, top_k=k,
             )
 
         return collection.search(query_embedding, top_k=k)
