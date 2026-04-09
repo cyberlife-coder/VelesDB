@@ -227,7 +227,8 @@ pub fn multi_query_search_impl(
         all_results.push(results);
     }
 
-    let fused = fusion::fuse_results(&all_results, strategy, rrf_k.unwrap_or(60));
+    let fused = fusion::fuse_results(&all_results, strategy, rrf_k.unwrap_or(60))
+        .map_err(|e| JsValue::from_str(&e))?;
     let fused: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
 
     to_js(&fused)

@@ -3,16 +3,13 @@
 Converts between VelesDB result types (list[dict]) and Pandas/Polars
 DataFrames. All pandas/polars imports are deferred to first use.
 
-.. warning:: Reserved column names
+.. note:: Reserved column names
 
    The structural columns ``id``, ``score`` (search results) and
-   ``vector`` (scroll batches) always take precedence over identically
-   named payload keys.  If a payload contains a field called ``id``,
-   ``score``, or ``vector``, it will be **silently overwritten** by the
-   structural value in the resulting DataFrame.  A subsequent
-   ``upsert_from_dataframe`` round-trip would therefore **lose** those
-   payload fields.  Avoid using reserved names as payload keys, or
-   rename them before converting to a DataFrame.
+   ``vector`` (scroll batches) are always present in the output DataFrame.
+   If a payload contains a field with one of these names, it is renamed to
+   ``payload_<name>`` (e.g. ``payload_id``, ``payload_score``) so the data
+   is preserved rather than silently overwritten.
 """
 
 from __future__ import annotations
@@ -63,8 +60,9 @@ def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
     Each dict should have 'id', 'score', and optional payload keys.
     Missing payload fields are represented as None/NaN/null.
 
-    .. note:: Payload keys named ``id`` or ``score`` are overwritten by
-       the structural search-result values (see module-level warning).
+    .. note:: Payload keys named ``id`` or ``score`` are renamed to
+       ``payload_id`` / ``payload_score`` to avoid collision with
+       structural columns (see module-level note).
 
     Args:
         results: List of search result dicts.
@@ -74,6 +72,8 @@ def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
         A pandas.DataFrame or polars.DataFrame.
     """
     lib = _get_backend(backend)
+
+    _SEARCH_RESERVED = frozenset({"id", "score"})
 
     if not results:
         if backend == "pandas":
@@ -85,7 +85,9 @@ def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
         row: dict[str, Any] = {}
         payload = r.get("payload")
         if isinstance(payload, dict):
-            row.update(payload)
+            for k, v in payload.items():
+                safe_key = f"payload_{k}" if k in _SEARCH_RESERVED else k
+                row[safe_key] = v
         row["id"] = r.get("id")
         row["score"] = r.get("score")
         rows.append(row)
@@ -120,8 +122,9 @@ def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
 
     Each dict has 'id', 'vector', and 'payload' keys.
 
-    .. note:: Payload keys named ``id`` or ``vector`` are overwritten
-       by the structural point values (see module-level warning).
+    .. note:: Payload keys named ``id`` or ``vector`` are renamed to
+       ``payload_id`` / ``payload_vector`` to avoid collision with
+       structural columns (see module-level note).
 
     Args:
         batch: List of point dicts from scroll.
@@ -149,18 +152,21 @@ def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
     # This guarantees a consistent schema regardless of per-point payload type.
     has_dict_payload = any(isinstance(p.get("payload"), dict) for p in batch)
 
+    _SCROLL_RESERVED = frozenset({"id", "vector"})
+
     rows = []
     for p in batch:
         row: dict[str, Any] = {}
         payload = p.get("payload")
         if has_dict_payload:
             if isinstance(payload, dict):
-                row.update(payload)
+                for k, v in payload.items():
+                    safe_key = f"payload_{k}" if k in _SCROLL_RESERVED else k
+                    row[safe_key] = v
             # Non-dict payloads in a mixed batch are silently skipped;
             # their columns will be NaN/null in the final DataFrame.
         else:
             row["payload"] = payload
-        # Special columns are written last so payload keys cannot overwrite them.
         row["id"] = p.get("id")
         row["vector"] = list(p.get("vector", []))
         rows.append(row)

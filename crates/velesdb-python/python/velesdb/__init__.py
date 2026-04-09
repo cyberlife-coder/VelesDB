@@ -181,6 +181,23 @@ class Collection:
         return int(info.get("point_count", 0))
 
     def get_graph_store(self) -> GraphStore:
+        """Return a standalone in-memory graph store.
+
+        Warning:
+            This graph store is **independent** of this collection's data.
+            Edges and nodes added here are NOT persisted to the collection.
+            For persistent graph operations, use
+            ``Database.get_graph_collection()`` instead.
+        """
+        import warnings
+
+        warnings.warn(
+            "Collection.get_graph_store() returns a standalone in-memory "
+            "graph not connected to this collection. Use "
+            "Database.get_graph_collection() for persistent graph operations.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if self._graph_store is None:
             self._graph_store = GraphStore()
         return self._graph_store

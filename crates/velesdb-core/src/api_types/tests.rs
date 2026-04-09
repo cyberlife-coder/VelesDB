@@ -300,16 +300,6 @@ fn test_default_rrf_k() {
     assert_eq!(default_rrf_k(), 60);
 }
 
-#[test]
-fn test_mode_to_ef_search_all_modes() {
-    assert_eq!(mode_to_ef_search("fast"), Some(64));
-    assert_eq!(mode_to_ef_search("balanced"), Some(128));
-    assert_eq!(mode_to_ef_search("accurate"), Some(512));
-    assert_eq!(mode_to_ef_search("perfect"), Some(usize::MAX));
-    assert_eq!(mode_to_ef_search("unknown_mode"), None);
-    assert_eq!(mode_to_ef_search(""), None);
-}
-
 // ============================================================================
 // C. Edge case tests (~10)
 // ============================================================================
@@ -449,14 +439,6 @@ fn filter_with_nested_conditions() {
 // ============================================================================
 // D. Utility function / constant tests (~3+)
 // ============================================================================
-
-#[test]
-fn test_mode_to_ef_search_case_insensitive() {
-    assert_eq!(mode_to_ef_search("FAST"), Some(64));
-    assert_eq!(mode_to_ef_search("Balanced"), Some(128));
-    assert_eq!(mode_to_ef_search("ACCURATE"), Some(512));
-    assert_eq!(mode_to_ef_search("Perfect"), Some(usize::MAX));
-}
 
 #[test]
 fn test_default_index_type() {

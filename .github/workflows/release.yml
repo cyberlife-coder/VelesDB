@@ -1,3 +1,7 @@
+# WARNING: This workflow does not verify that CI has passed on the tagged commit.
+# Always ensure CI is green before pushing a tag.
+# A proper fix would use workflow_run trigger to gate on CI completion,
+# but that requires significant refactoring of the release pipeline.
 name: Release
 
 on:
@@ -39,7 +43,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  RUST_VERSION: '1.83'
+  RUST_VERSION: '1.86'
 
 jobs:
   # ===========================================================================

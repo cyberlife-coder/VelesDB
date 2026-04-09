@@ -2,6 +2,9 @@
 
 This module provides a LlamaIndex-compatible VectorStore that uses VelesDB
 as the underlying vector database for storing and retrieving embeddings.
+
+Node construction and streaming helpers live in a dedicated module:
+- :mod:`llamaindex_velesdb.node_builder` — build_points_with_ids, flush_in_batches, etc.
 """
 
 from __future__ import annotations
@@ -30,6 +33,12 @@ from llamaindex_velesdb.security import (
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter
+from llamaindex_velesdb.node_builder import (
+    validate_all_embeddings as _validate_all_embeddings,
+    build_points_with_ids as _build_points_with_ids,
+    flush_in_batches as _flush_in_batches,
+    build_stream_points as _build_stream_points,
+)
 from llamaindex_velesdb.search_ops import SearchOpsMixin
 from llamaindex_velesdb.graph_ops import GraphOpsMixin
 from llamaindex_velesdb.scroll_ops import ScrollOpsMixin, _scroll_one_batch  # noqa: F401
@@ -44,81 +53,6 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
-
-
-def _validate_all_embeddings(nodes: List[BaseNode]) -> None:
-    """Validate that every node has an embedding (required for sparse alignment)."""
-    for i, node in enumerate(nodes):
-        if node.get_embedding() is None:
-            raise ValueError(
-                f"Node at index {i} has no embedding. All nodes must have embeddings "
-                f"when sparse_vectors are provided to preserve index alignment."
-            )
-
-
-def _build_node_payload(node: BaseNode) -> dict:
-    """Build a VelesDB payload dict from a LlamaIndex node."""
-    node_id = node.node_id
-    payload: dict = {"text": node.get_content(), "node_id": node_id}
-    if hasattr(node, "metadata") and node.metadata:
-        for key, value in node.metadata.items():
-            if isinstance(value, (str, int, float, bool)):
-                payload[key] = value
-    return payload
-
-
-def _build_points_with_ids(
-    nodes: List[BaseNode],
-    sparse_vectors: Optional[list] = None,
-) -> tuple[list, List[str]]:
-    """Convert nodes to VelesDB points and collect node IDs."""
-    points: list = []
-    ids: List[str] = []
-    for idx, node in enumerate(nodes):
-        embedding = node.get_embedding()
-        if embedding is None:
-            continue
-        node_id = node.node_id
-        ids.append(node_id)
-        point: dict = {
-            "id": _stable_hash_id(node_id),
-            "vector": embedding,
-            "payload": _build_node_payload(node),
-        }
-        if sparse_vectors is not None and idx < len(sparse_vectors):
-            point["sparse_vector"] = sparse_vectors[idx]
-        points.append(point)
-    return points, ids
-
-
-def _flush_in_batches(collection: Any, points: list, batch_size: int) -> None:
-    """Send points to a collection in batches via stream_insert."""
-    for start in range(0, len(points), batch_size):
-        collection.stream_insert(points[start : start + batch_size])
-
-
-def _build_stream_points(
-    nodes: List[BaseNode],
-    sparse_vectors: Optional[list] = None,
-) -> list:
-    """Convert nodes to VelesDB points, requiring all nodes have embeddings."""
-    points: list = []
-    for idx, node in enumerate(nodes):
-        embedding = node.get_embedding()
-        if embedding is None:
-            raise ValueError(
-                f"Node at index {idx} (id={node.node_id!r}) has no embedding. "
-                f"All nodes passed to stream_insert must have embeddings."
-            )
-        point: dict = {
-            "id": _stable_hash_id(node.node_id),
-            "vector": embedding,
-            "payload": _build_node_payload(node),
-        }
-        if sparse_vectors is not None and idx < len(sparse_vectors):
-            point["sparse_vector"] = sparse_vectors[idx]
-        points.append(point)
-    return points
 
 
 class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, ScrollOpsMixin, BasePydanticVectorStore):

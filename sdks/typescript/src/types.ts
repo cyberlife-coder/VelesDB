@@ -39,6 +39,12 @@ export interface HnswParams {
   m?: number;
   /** Size of dynamic candidate list during construction */
   efConstruction?: number;
+  /** Maximum number of elements in the index */
+  maxElements?: number;
+  /** Storage mode for vector quantization */
+  storageMode?: StorageMode;
+  /** Alpha parameter for HNSW construction */
+  alpha?: number;
 }
 
 /** Collection configuration */
@@ -135,6 +141,10 @@ export interface MultiQuerySearchOptions {
     maxWeight?: number;
     /** Weighted fusion: hit weight (default: 0.1) */
     hitWeight?: number;
+    /** Relative score fusion: dense vector weight (default: 0.5) */
+    denseWeight?: number;
+    /** Relative score fusion: sparse vector weight (default: 0.5) */
+    sparseWeight?: number;
   };
   /** Filter expression (optional) */
   filter?: Record<string, unknown>;
@@ -411,8 +421,8 @@ export interface CollectionStatsResponse {
 export interface CollectionConfigResponse {
   name: string;
   dimension: number;
-  metric: string;
-  storageMode: string;
+  metric: DistanceMetric;
+  storageMode: StorageMode;
   pointCount: number;
   metadataOnly: boolean;
   graphSchema?: Record<string, unknown>;

@@ -1,7 +1,10 @@
 """Search operation mixins for VelesDBVectorStore.
 
-Contains all search/query methods extracted from vectorstore.py to keep
-file size under the 500 NLOC limit (US-005).
+Contains vector/hybrid/text/sparse search methods extracted from
+vectorstore.py to keep each file under the 500 NLOC limit (US-005).
+
+Batch and multi-query search methods live in:
+- :mod:`langchain_velesdb.multi_query_ops` — batch_search, multi_query_search
 """
 
 from __future__ import annotations
@@ -11,13 +14,12 @@ from typing import Any, List, Optional, Tuple
 
 from langchain_core.documents import Document
 
-from langchain_velesdb._common import payload_to_doc_parts, validate_queries_batch
-from velesdb_common.fusion import build_fusion_strategy as _build_fusion_strategy_fn
+from langchain_velesdb._common import payload_to_doc_parts
+from langchain_velesdb.multi_query_ops import MultiQueryOpsMixin
 from langchain_velesdb.security import (
     validate_k,
     validate_text,
     validate_weight,
-    validate_batch_size,
     validate_sparse_vector,
     validate_query,
     validate_collection_name,
@@ -43,7 +45,7 @@ def _results_to_docs_with_score(results: List[dict]) -> List[Tuple[Document, flo
     return [(_payload_to_doc(r), r.get("score", 0.0)) for r in results]
 
 
-class SearchOpsMixin:
+class SearchOpsMixin(MultiQueryOpsMixin):
     """Mixin providing all search and query operations for VelesDBVectorStore.
 
     Expects the host class to provide:
@@ -51,6 +53,9 @@ class SearchOpsMixin:
         - ``self._collection``: Optional VelesDB collection (may be None)
         - ``self._get_collection(dimension)``: Returns or creates the collection
         - ``self._to_document(result)``: Converts a result dict to a Document
+
+    Batch and multi-query methods are inherited from
+    :class:`~langchain_velesdb.multi_query_ops.MultiQueryOpsMixin`.
     """
 
     def _run_vector_search(
@@ -90,7 +95,10 @@ class SearchOpsMixin:
 
         if ids_only:
             if filter is not None:
-                return collection.search_ids(query_embedding, top_k=k, filter=filter)
+                results = collection.search_with_filter(
+                    query_embedding, top_k=k, filter=filter,
+                )
+                return [{"id": r["id"], "score": r["score"]} for r in results]
             return collection.search_ids(query_embedding, top_k=k)
 
         if ef_search is not None:
@@ -420,192 +428,3 @@ class SearchOpsMixin:
             text, metadata = payload_to_doc_parts(result)
             documents.append(Document(page_content=text, metadata=metadata))
         return documents
-
-    def _validate_and_embed_queries(
-        self,
-        queries: List[str],
-        k: int,
-    ) -> tuple[List[List[float]], Any]:
-        """Validate query batch, embed all queries, and return the collection.
-
-        Centralises the validate → embed → get_collection steps shared by
-        ``_run_batch_search`` and ``_run_multi_query``.
-
-        Args:
-            queries: Non-empty list of query strings.
-            k: Top-k value to validate.
-
-        Returns:
-            A ``(query_embeddings, collection)`` tuple.
-        """
-        validate_queries_batch(
-            queries,
-            validate_k_fn=validate_k,
-            validate_batch_size_fn=validate_batch_size,
-            validate_text_fn=validate_text,
-            k=k,
-        )
-        query_embeddings = [self._embedding.embed_query(q) for q in queries]
-        collection = self._get_collection(len(query_embeddings[0]))
-        return query_embeddings, collection
-
-    def _run_batch_search(self, queries: List[str], k: int) -> List[List[dict]]:
-        """Validate, embed, and execute a batch search, returning raw results.
-
-        Args:
-            queries: Non-empty list of query strings (caller guarantees non-empty).
-            k: Number of results per query.
-
-        Returns:
-            Raw list-of-lists of result dicts from the collection.
-        """
-        query_embeddings, collection = self._validate_and_embed_queries(queries, k)
-        searches = [{"vector": emb, "top_k": k} for emb in query_embeddings]
-        return collection.batch_search(searches)
-
-    def batch_search(
-        self,
-        queries: List[str],
-        k: int = 4,
-        **kwargs: Any,
-    ) -> List[List[Document]]:
-        """Batch search for multiple queries in parallel.
-
-        Optimized for high throughput when searching with multiple queries.
-
-        Args:
-            queries: List of query strings.
-            k: Number of results per query. Defaults to 4.
-            **kwargs: Additional arguments.
-
-        Returns:
-            List of Document lists, one per query.
-        """
-        if not queries:
-            return []
-        return [_results_to_docs(r) for r in self._run_batch_search(queries, k)]
-
-    def batch_search_with_score(
-        self,
-        queries: List[str],
-        k: int = 4,
-        **kwargs: Any,
-    ) -> List[List[Tuple[Document, float]]]:
-        """Batch search with scores for multiple queries.
-
-        Args:
-            queries: List of query strings.
-            k: Number of results per query. Defaults to 4.
-            **kwargs: Additional arguments.
-
-        Returns:
-            List of (Document, score) tuple lists, one per query.
-        """
-        if not queries:
-            return []
-        return [_results_to_docs_with_score(r) for r in self._run_batch_search(queries, k)]
-
-    def _run_multi_query(
-        self,
-        queries: List[str],
-        k: int,
-        fusion: str,
-        fusion_params: Optional[dict],
-        query_filter: Optional[dict],
-    ) -> List[dict]:
-        """Validate inputs and execute a multi-query search, returning raw results.
-
-        Args:
-            queries: Non-empty list of query strings.
-            k: Number of results to return after fusion.
-            fusion: Fusion strategy name.
-            fusion_params: Optional fusion strategy parameters.
-            query_filter: Optional metadata filter dict.
-
-        Returns:
-            Raw list of search result dicts from the collection.
-        """
-        query_embeddings, collection = self._validate_and_embed_queries(queries, k)
-        fusion_strategy = self._build_fusion_strategy(fusion, fusion_params)
-        return collection.multi_query_search(
-            vectors=query_embeddings,
-            top_k=k,
-            fusion=fusion_strategy,
-            filter=query_filter,
-        )
-
-    def multi_query_search(
-        self,
-        queries: List[str],
-        k: int = 4,
-        fusion: str = "rrf",
-        fusion_params: Optional[dict] = None,
-        filter: Optional[dict] = None,
-        **kwargs: Any,
-    ) -> List[Document]:
-        """Multi-query search with result fusion.
-
-        Executes parallel searches for multiple query strings and fuses
-        the results using the specified fusion strategy. Ideal for
-        Multiple Query Generation (MQG) pipelines.
-
-        Args:
-            queries: List of query strings (reformulations of user query).
-            k: Number of results to return after fusion. Defaults to 4.
-            fusion: Fusion strategy - "average", "maximum", "rrf", or "weighted".
-                Defaults to "rrf".
-            fusion_params: Optional parameters for fusion strategy:
-                - For "rrf": {"k": 60} (ranking constant)
-                - For "weighted": {"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1}
-            filter: Optional metadata filter dict.
-            **kwargs: Additional arguments.
-
-        Returns:
-            List of Documents with fused ranking.
-
-        Raises:
-            SecurityError: If parameters fail validation.
-        """
-        if not queries:
-            return []
-        results = self._run_multi_query(queries, k, fusion, fusion_params, query_filter=filter)
-        return _results_to_docs(results)
-
-    def multi_query_search_with_score(
-        self,
-        queries: List[str],
-        k: int = 4,
-        fusion: str = "rrf",
-        fusion_params: Optional[dict] = None,
-        filter: Optional[dict] = None,
-        **kwargs: Any,
-    ) -> List[Tuple[Document, float]]:
-        """Multi-query search with fused scores.
-
-        Args:
-            queries: List of query strings.
-            k: Number of results. Defaults to 4.
-            fusion: Fusion strategy. Defaults to "rrf".
-            fusion_params: Optional fusion parameters.
-            filter: Optional metadata filter.
-            **kwargs: Additional arguments.
-
-        Returns:
-            List of (Document, fused_score) tuples.
-        """
-        if not queries:
-            return []
-        results = self._run_multi_query(queries, k, fusion, fusion_params, query_filter=filter)
-        return _results_to_docs_with_score(results)
-
-    def _build_fusion_strategy(
-        self,
-        fusion: str,
-        fusion_params: Optional[dict] = None,
-    ) -> object:
-        """Build a FusionStrategy from string name and params.
-
-        Delegates to :func:`velesdb_common.fusion.build_fusion_strategy`
-        to avoid duplication with the LlamaIndex integration.
-        """
-        return _build_fusion_strategy_fn(fusion, fusion_params)

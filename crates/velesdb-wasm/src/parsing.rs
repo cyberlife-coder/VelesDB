@@ -57,7 +57,7 @@ const fn core_to_wasm_storage_mode(core: velesdb_core::StorageMode) -> StorageMo
         velesdb_core::StorageMode::Binary => StorageMode::Binary,
         velesdb_core::StorageMode::ProductQuantization => StorageMode::ProductQuantization,
         velesdb_core::StorageMode::RaBitQ => StorageMode::RaBitQ,
-        // Reason: StorageMode is #[non_exhaustive] — future variants default to Full.
+        // FIXME(PRE-SEED): New StorageMode variants silently map to Full. Update when core adds variants.
         _ => StorageMode::Full,
     }
 }

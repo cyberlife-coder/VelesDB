@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Vector expression in a NEAR clause.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum VectorExpr {
     /// Literal vector: [0.1, 0.2, ...]
@@ -96,6 +97,7 @@ pub struct CorrelatedColumn {
 }
 
 /// Temporal expression for date/time operations (EPIC-038).
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TemporalExpr {
     /// Current timestamp: `NOW()`
@@ -177,6 +179,7 @@ impl Value {
 }
 
 /// Time unit for INTERVAL expressions (EPIC-038).
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IntervalUnit {
     /// Seconds.

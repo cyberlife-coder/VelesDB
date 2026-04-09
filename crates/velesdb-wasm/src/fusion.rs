@@ -18,11 +18,16 @@ use std::collections::HashMap;
 /// # Returns
 ///
 /// Fused results sorted by combined score (descending).
+/// # Errors
+///
+/// Returns an error if `strategy` is not one of the recognised names:
+/// `"average"` / `"avg"`, `"maximum"` / `"max"`, `"weighted"`,
+/// `"relative_score"` / `"rsf"`, `"rrf"`.
 pub fn fuse_results(
     all_results: &[Vec<(u64, f32)>],
     strategy: &str,
     rrf_k: u32,
-) -> Vec<(u64, f32)> {
+) -> Result<Vec<(u64, f32)>, String> {
     let mut scores: HashMap<u64, Vec<f32>> = HashMap::new();
     let mut ranks: HashMap<u64, Vec<usize>> = HashMap::new();
 
@@ -40,11 +45,19 @@ pub fn fuse_results(
         "maximum" | "max" => fuse_maximum(&scores),
         "weighted" => fuse_weighted(&scores, all_results.len()),
         "relative_score" | "rsf" => fuse_relative_score(all_results),
-        _ => fuse_rrf(&ranks, rrf_k),
+        "rrf" => fuse_rrf(&ranks, rrf_k),
+        // FIXME(PRE-SEED): New fusion strategies must be added here explicitly.
+        _ => {
+            return Err(format!(
+                "Unknown fusion strategy '{strategy}'. \
+                 Expected one of: average, avg, maximum, max, weighted, \
+                 relative_score, rsf, rrf"
+            ));
+        }
     };
 
     fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    fused
+    Ok(fused)
 }
 
 /// Average fusion: mean score across all queries.
@@ -147,7 +160,7 @@ mod tests {
             vec![(2, 1.0), (1, 0.5), (4, 0.3)],
         ];
 
-        let fused = fuse_results(&results, "rrf", 60);
+        let fused = fuse_results(&results, "rrf", 60).unwrap();
 
         // ID 1 and 2 should be at top (appear in both lists)
         assert!(fused.len() >= 2);
@@ -159,7 +172,7 @@ mod tests {
     fn test_fuse_average() {
         let results = vec![vec![(1, 0.8), (2, 0.6)], vec![(1, 0.6), (2, 0.8)]];
 
-        let fused = fuse_results(&results, "average", 60);
+        let fused = fuse_results(&results, "average", 60).unwrap();
 
         // Both should have average 0.7
         for (_, score) in &fused {
@@ -171,7 +184,7 @@ mod tests {
     fn test_fuse_maximum() {
         let results = vec![vec![(1, 0.9), (2, 0.5)], vec![(1, 0.3), (2, 0.8)]];
 
-        let fused = fuse_results(&results, "maximum", 60);
+        let fused = fuse_results(&results, "maximum", 60).unwrap();
 
         let id1_score = fused.iter().find(|(id, _)| *id == 1).map(|(_, s)| *s);
         let id2_score = fused.iter().find(|(id, _)| *id == 2).map(|(_, s)| *s);
@@ -183,14 +196,14 @@ mod tests {
     #[test]
     fn test_fuse_empty() {
         let results: Vec<Vec<(u64, f32)>> = vec![];
-        let fused = fuse_results(&results, "rrf", 60);
+        let fused = fuse_results(&results, "rrf", 60).unwrap();
         assert!(fused.is_empty());
     }
 
     #[test]
     fn test_fuse_single_query() {
         let results = vec![vec![(1, 0.9), (2, 0.8)]];
-        let fused = fuse_results(&results, "rrf", 60);
+        let fused = fuse_results(&results, "rrf", 60).unwrap();
 
         assert_eq!(fused.len(), 2);
         assert_eq!(fused[0].0, 1); // Higher RRF score (rank 0)
@@ -200,7 +213,7 @@ mod tests {
     fn test_fuse_weighted() {
         let results = vec![vec![(1, 0.8), (2, 0.6)], vec![(1, 0.6), (2, 0.8)]];
 
-        let fused = fuse_results(&results, "weighted", 60);
+        let fused = fuse_results(&results, "weighted", 60).unwrap();
 
         // Both docs appear in 2/2 queries => hit_ratio = 1.0
         // ID 1: avg=0.7, max=0.8 => 0.5*0.7 + 0.3*0.8 + 0.2*1.0 = 0.79
@@ -215,7 +228,7 @@ mod tests {
     fn test_fuse_relative_score() {
         let results = vec![vec![(1, 0.9), (2, 0.1)], vec![(1, 0.5), (2, 0.5)]];
 
-        let fused = fuse_results(&results, "relative_score", 60);
+        let fused = fuse_results(&results, "relative_score", 60).unwrap();
 
         // Query 0: range=0.8, ID 1 norm=(0.9-0.1)/0.8=1.0, ID 2 norm=0.0
         // Query 1: range=0, both get 0.5 (default when range==0, matches core)
@@ -230,7 +243,7 @@ mod tests {
     #[test]
     fn test_fuse_rsf_alias() {
         let results = vec![vec![(1, 0.9), (2, 0.1)]];
-        let fused = fuse_results(&results, "rsf", 60);
+        let fused = fuse_results(&results, "rsf", 60).unwrap();
         // "rsf" should behave like "relative_score"
         assert_eq!(fused.len(), 2);
     }
@@ -243,7 +256,7 @@ mod tests {
         // All scores identical within each branch → range ≈ 0
         let results = vec![vec![(1, 0.7), (2, 0.7)], vec![(1, 0.3), (2, 0.3)]];
 
-        let fused = fuse_results(&results, "relative_score", 60);
+        let fused = fuse_results(&results, "relative_score", 60).unwrap();
 
         // Both branches collapse to 0.5 per document → avg = 0.5
         assert_eq!(fused.len(), 2);
@@ -253,5 +266,15 @@ mod tests {
                 "equal-score branch must normalize to 0.5, got {score}"
             );
         }
+    }
+
+    #[test]
+    fn test_fuse_unknown_strategy_returns_error() {
+        let results = vec![vec![(1, 0.9), (2, 0.8)]];
+        let err = fuse_results(&results, "typo_strategy", 60).unwrap_err();
+        assert!(
+            err.contains("Unknown fusion strategy"),
+            "expected descriptive error, got: {err}"
+        );
     }
 }

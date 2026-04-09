@@ -146,13 +146,17 @@ pub fn python_to_json(py: Python<'_>, obj: &PyObject) -> PyResult<serde_json::Va
 /// Helper to convert a value to `PyObject` using the `IntoPyObject` trait.
 ///
 /// Returns `py.None()` on conversion failure instead of panicking,
-/// which preserves the existing `-> PyObject` signature for 50+ callers.
+/// which preserves the existing `-> PyObject` signature for 18 callers.
+/// Failures are logged to help diagnose unexpected `None` values in results.
 #[inline]
 pub fn to_pyobject<'py, T>(py: Python<'py>, value: T) -> PyObject
 where
     T: IntoPyObjectExt<'py>,
 {
-    value.into_py_any(py).unwrap_or_else(|_| py.None())
+    value.into_py_any(py).unwrap_or_else(|e| {
+        eprintln!("[velesdb] to_pyobject conversion failed, returning None: {e}");
+        py.None()
+    })
 }
 
 /// Convert a `serde_json::Value` to a Python object.
