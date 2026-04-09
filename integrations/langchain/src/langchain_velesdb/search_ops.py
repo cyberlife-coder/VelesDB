@@ -251,7 +251,7 @@ class SearchOpsMixin(MultiQueryOpsMixin):
         sparse_index_name = kwargs.get("sparse_index_name")
         quality = kwargs.get("search_quality", getattr(self, "_search_quality", None))
         if quality is not None:
-            validate_search_quality(quality)
+            quality = validate_search_quality(quality)
         query_embedding = self._embedding.embed_query(query)
         results = self._run_vector_search(
             query_embedding, k,
