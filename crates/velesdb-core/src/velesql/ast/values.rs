@@ -15,6 +15,7 @@ pub enum VectorExpr {
 }
 
 /// A value in VelesQL.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     /// Integer value.
