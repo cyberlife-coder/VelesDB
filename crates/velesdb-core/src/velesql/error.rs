@@ -93,6 +93,7 @@ impl fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 /// Kind of parse error.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseErrorKind {
     /// Syntax error (E001).
