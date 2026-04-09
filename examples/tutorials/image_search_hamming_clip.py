@@ -3,7 +3,7 @@ VelesDB Tutorial: Two-Pass Image Search with Hamming + CLIP
 
 The Bouncer and the Detective:
   Pass 1 - The Bouncer (dHash barcodes + Hamming distance) for fast shortlisting
-  Pass 2 - The Detective (CLIP meaning + Euclidean distance) for semantic re-ranking
+  Pass 2 - The Detective (CLIP meaning + Cosine similarity) for semantic re-ranking
 
 Find duplicate and similar photos in 0.3ms using a combined pipeline.
 
@@ -131,9 +131,9 @@ def compute_meaning(img_path: str, model, preprocess) -> list[float]:
 
 
 def index_meanings(db: velesdb.Database, photo_dir: str, files: list, model, preprocess) -> tuple:
-    """Index all images with CLIP embeddings into the Detective's Euclidean collection."""
+    """Index all images with CLIP embeddings into the Detective's Cosine collection."""
     detective = db.get_or_create_collection(
-        "clip_features", dimension=CLIP_DIM, metric="euclidean"
+        "clip_features", dimension=CLIP_DIM, metric="cosine"
     )
 
     t0 = time.time()
@@ -165,7 +165,7 @@ def find_similar(
     Pass 1 (Hamming): The Bouncer looks at barcodes for one second.
         Catches obvious fakes instantly. Ultra-fast (< 0.1ms).
 
-    Pass 2 (CLIP + Euclidean): The Detective runs a thorough investigation.
+    Pass 2 (CLIP + Cosine): The Detective runs a thorough investigation.
         ONE single CLIP query, then joins scores. Not N queries.
         This is what makes it scale.
 
@@ -191,9 +191,9 @@ def find_similar(
             "id": c["id"],
             "filename": c["payload"]["filename"],
             "bouncer": c["score"],
-            "detective": meaning_scores.get(c["id"], float("inf")),
+            "detective": meaning_scores.get(c["id"], 0.0),
         })
-    reranked.sort(key=lambda x: x["detective"])
+    reranked.sort(key=lambda x: x["detective"], reverse=True)
     detective_ms = (time.time() - t0) * 1000
 
     return {
@@ -319,7 +319,7 @@ def main():
     bouncer, files = index_barcodes(db, PHOTO_DIR)
 
     # Step 2: Give the Detective his map
-    print("\nStep 2: The Detective builds his map of meaning (CLIP + Euclidean)")
+    print("\nStep 2: The Detective builds his map of meaning (CLIP + Cosine)")
     model, preprocess = load_clip_model()
     detective = index_meanings(db, PHOTO_DIR, files, model, preprocess)
 
