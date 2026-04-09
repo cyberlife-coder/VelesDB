@@ -8,6 +8,7 @@ use super::{GraphCollection, MetadataCollection, VectorCollection};
 
 /// Health status of a collection's search index.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IndexHealth {
     /// Index is populated and ready for search.
     Healthy,

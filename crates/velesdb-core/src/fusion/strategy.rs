@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 /// Error type for fusion operations.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum FusionError {
     /// Weights do not sum to 1.0 (within tolerance).
     InvalidWeightSum {

@@ -5,6 +5,7 @@ use thiserror::Error;
 
 /// Errors that can occur in ColumnStore operations.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColumnStoreError {
     /// Duplicate primary key value.
     #[error("Duplicate primary key: {0}")]
@@ -43,6 +44,7 @@ pub struct StringId(pub(crate) u32);
 
 /// Column type for schema definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColumnType {
     /// 64-bit signed integer
     Int,
@@ -60,6 +62,7 @@ pub enum ColumnType {
 
 /// A value that can be stored in a column.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ColumnValue {
     /// Integer value
     Int(i64),
@@ -98,6 +101,7 @@ impl Eq for ColumnValue {}
 
 /// A typed column storing values of a specific type.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum TypedColumn {
     /// Integer column (i64)
     Int(Vec<Option<i64>>),
@@ -267,6 +271,7 @@ pub struct ExpireResult {
 
 /// Result of a single upsert operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UpsertResult {
     /// A new row was inserted.
     Inserted,
