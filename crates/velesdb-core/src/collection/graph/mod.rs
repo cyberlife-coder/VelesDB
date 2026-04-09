@@ -61,6 +61,7 @@ mod streaming;
 #[cfg(test)]
 mod streaming_tests;
 mod traversal;
+mod traversal_bidir;
 mod traversal_csr;
 #[cfg(test)]
 mod traversal_tests;
@@ -107,4 +108,5 @@ pub use streaming::{
     bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,
 };
 pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH};
+pub use traversal_bidir::bfs_traverse_both;
 pub use traversal_csr::{bfs_traverse_csr, bfs_traverse_csr_filtered};

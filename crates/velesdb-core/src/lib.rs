@@ -78,6 +78,7 @@ pub mod config_quantization;
 mod config_tests;
 mod config_validation;
 pub mod contiguous_ops;
+mod contiguous_resize;
 pub mod distance;
 #[cfg(test)]
 mod distance_tests;
