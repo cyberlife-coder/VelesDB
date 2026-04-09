@@ -20,6 +20,7 @@ mod guard;
 mod histogram;
 pub mod hnsw_delta_wal;
 mod log_payload;
+mod log_payload_io;
 pub mod metrics;
 mod mmap;
 mod mmap_capacity;

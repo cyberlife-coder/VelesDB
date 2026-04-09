@@ -58,7 +58,7 @@ mod ordering_tests;
 pub mod parallel_traversal;
 #[cfg(test)]
 mod parallel_traversal_tests;
-mod pipeline_helpers;
+mod query_pipeline;
 pub mod projection;
 pub mod pushdown;
 #[cfg(test)]
@@ -262,7 +262,7 @@ impl Collection {
     // validate_let_binding_support, prepare_query_context, finalize_query_results,
     // extract_query_components, apply_vector_group_by, extract_aggregations,
     // check_guardrails_and_record, explain_analyze_query
-    // → moved to pipeline_helpers.rs (NLOC/file reduction)
+    // → moved to query_pipeline.rs (NLOC/file reduction)
 
     // NOTE: try_early_return_path, try_not_similarity_or_union, execute_early_return_query
     // moved to early_return.rs (NLOC/CC resolution batch 3)

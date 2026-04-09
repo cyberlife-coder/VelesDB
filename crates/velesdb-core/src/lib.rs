@@ -73,6 +73,7 @@ pub mod column_store;
 mod column_store_tests;
 pub mod compression;
 pub mod config;
+pub mod config_quantization;
 #[cfg(test)]
 mod config_tests;
 mod config_validation;

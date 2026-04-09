@@ -3,6 +3,7 @@
 mod admin;
 mod condition_vectors;
 mod conditions;
+mod conditions_specialized;
 mod ddl;
 mod ddl_helpers;
 mod dml;
