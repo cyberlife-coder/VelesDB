@@ -416,7 +416,7 @@ impl<'a> ScoreContext<'a> {
             .and_then(serde_json::Value::as_f64)
             .map_or(0.0, |v| {
                 #[allow(clippy::cast_possible_truncation)]
-                // SAFETY: payload values are user-defined scores; f64→f32 precision loss is acceptable.
+                // Reason: payload values are user-defined scores; f64→f32 precision loss is acceptable.
                 {
                     v as f32
                 }
@@ -468,7 +468,7 @@ fn evaluate_arithmetic_inner(expr: &ArithmeticExpr, ctx: &ScoreContext<'_>, dept
     match expr {
         ArithmeticExpr::Literal(v) => {
             #[allow(clippy::cast_possible_truncation)]
-            // SAFETY: arithmetic literals are user-defined weights; f64→f32 precision loss is acceptable.
+            // Reason: arithmetic literals are user-defined weights; f64→f32 precision loss is acceptable.
             {
                 *v as f32
             }

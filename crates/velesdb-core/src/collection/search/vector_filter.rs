@@ -2,7 +2,7 @@
 //!
 //! Extracted from `vector.rs` to reduce NLOC.
 
-// SAFETY: Numeric casts in selectivity estimation are intentional:
+// Reason: Numeric casts in selectivity estimation are intentional:
 // - usize->f64 for selectivity ratios: values are small counts
 // - f64->usize for clamped oversampled k: result is bounded to [k+10, 10_000]
 #![allow(clippy::cast_precision_loss)]

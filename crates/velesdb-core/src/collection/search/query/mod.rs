@@ -457,7 +457,7 @@ impl Collection {
 
         // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
         if fctx.extracted.vector_search.is_some() {
-            // SAFETY: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
+            // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
             #[allow(clippy::cast_possible_truncation)]
             let vector_latency_us = fctx.ctx.elapsed().as_micros() as u64;
             self.query_planner

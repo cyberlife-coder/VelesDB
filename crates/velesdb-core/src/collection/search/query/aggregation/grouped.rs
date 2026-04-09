@@ -3,7 +3,7 @@
 //! Extracted from aggregation.rs for complexity reduction (Plan 04-04).
 //! HAVING evaluation, sorting, and parameter resolution are in `having.rs`.
 
-// SAFETY: Numeric casts in aggregation are intentional:
+// Reason: Numeric casts in aggregation are intentional:
 // - All casts are for computing aggregate statistics (sum, avg, count)
 // - i64->usize for group limits: limits bounded by MAX_GROUPS (1M)
 // - Values bounded by result set size and field cardinality

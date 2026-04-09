@@ -16,7 +16,7 @@
 //! hard-coded constants. When calibrated factors differ from defaults, costs
 //! scale proportionally via `(calibrated / default)` ratios.
 
-// SAFETY: usize/u64 → f64 for selectivity ratios and log2 inputs; these are
+// Reason: usize/u64 → f64 for selectivity ratios and log2 inputs; these are
 // cardinalities where ±1 ULP has no operational impact on query planning.
 #![allow(clippy::cast_precision_loss)]
 

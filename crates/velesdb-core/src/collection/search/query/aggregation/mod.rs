@@ -5,7 +5,7 @@
 //! Supports HAVING for filtering groups (US-006).
 //! Supports parallel aggregation with rayon (EPIC-018 US-001).
 
-// SAFETY: Numeric casts in aggregation are intentional:
+// Reason: Numeric casts in aggregation are intentional:
 // - All casts are for computing aggregate statistics (sum, avg, count)
 // - f64/u64 casts for maintaining precision in intermediate calculations
 // - i64->usize for group limits: limits bounded by MAX_GROUPS (1M)

@@ -388,7 +388,7 @@ impl SearchQuality {
         // sqrt scaling: gentle increase that doesn't destroy latency.
         // At 100K: sqrt(10) ≈ 3.16 → capped at 2.0 → ef * 2.
         // At 1M: sqrt(100) = 10 → capped at 2.0 → ef * 2.
-        // SAFETY: dataset_size and base are small enough that f64 is exact.
+        // Reason: dataset_size and base are small enough that f64 is exact.
         let ratio = dataset_size as f64 / 10_000.0;
         let scale = ratio.sqrt().min(2.0);
         let scaled = (base as f64 * scale) as usize;

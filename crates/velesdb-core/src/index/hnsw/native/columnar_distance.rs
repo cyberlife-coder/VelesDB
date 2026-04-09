@@ -127,7 +127,7 @@ pub(crate) fn block_cosine_distance(
 ///
 /// Inner loop iterates over `PDX_BLOCK_SIZE` contiguous f32 values per
 /// dimension, enabling LLVM auto-vectorization.
-// SAFETY: range indexing is required for LLVM auto-vectorization of [f32; 64]
+// Reason: range indexing is required for LLVM auto-vectorization of [f32; 64]
 #[allow(clippy::needless_range_loop)]
 #[inline]
 fn accumulate_squared_diff(
@@ -147,7 +147,7 @@ fn accumulate_squared_diff(
 }
 
 /// Accumulates dot products for all dimensions into `acc`.
-// SAFETY: range indexing is required for LLVM auto-vectorization of [f32; 64]
+// Reason: range indexing is required for LLVM auto-vectorization of [f32; 64]
 #[allow(clippy::needless_range_loop)]
 #[inline]
 fn accumulate_products(
@@ -187,7 +187,7 @@ fn zero_padding_slots(acc: &mut [f32; PDX_BLOCK_SIZE], block_size: usize) {
 /// Accumulates dot products and norm-B-squared in a fused single pass.
 ///
 /// Returns `(dot[64], norm_b_sq[64])`.
-// SAFETY: range indexing is required for LLVM auto-vectorization of [f32; 64]
+// Reason: range indexing is required for LLVM auto-vectorization of [f32; 64]
 #[allow(clippy::needless_range_loop)]
 #[inline]
 fn accumulate_dot_and_norm(

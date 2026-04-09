@@ -86,7 +86,7 @@ impl<V: Hash + Eq + Clone> DictionaryEncoder<V> {
             return code;
         }
 
-        // SAFETY: Dictionary size is bounded by available memory; u32::MAX codes is ~4B entries
+        // Reason: Dictionary size is bounded by available memory; u32::MAX codes is ~4B entries
         // which would require terabytes of RAM. Saturate to prevent panic in extreme edge cases.
         let code = u32::try_from(self.codebook.code_to_value.len()).unwrap_or(u32::MAX);
         self.codebook.value_to_code.insert(value.clone(), code);

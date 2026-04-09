@@ -204,7 +204,7 @@ impl ProductQuantizer {
             let start = subspace * self.codebook.subspace_dim;
             let end = start + self.codebook.subspace_dim;
             let code = nearest_centroid(&effective[start..end], &self.codebook.centroids[subspace]);
-            // SAFETY: `num_centroids` is validated to fit in u16 during `train()`.
+            // Reason: `num_centroids` is validated to fit in u16 during `train()`.
             // `nearest_centroid` returns an index < num_centroids, so it always fits.
             #[allow(clippy::cast_possible_truncation)]
             codes.push(code as u16);

@@ -150,7 +150,7 @@ impl Bm25Index {
             *term_freqs.entry(token.clone()).or_insert(0) += 1;
         }
 
-        // SAFETY: Document token count is bounded by practical text length limits.
+        // Reason: Document token count is bounded by practical text length limits.
         // Even a 1GB document with single-char tokens would have ~1B tokens, fitting in u32.
         #[allow(clippy::cast_possible_truncation)]
         let doc_length = tokens.len() as u32;

@@ -21,7 +21,7 @@
 //! degenerate estimates. Hardware profiles (`ssd_optimized`, `in_memory`,
 //! `hdd_optimized`) serve as the base before calibration adjustments.
 
-// SAFETY: Numeric casts in cost model are intentional:
+// Reason: Numeric casts in cost model are intentional:
 // - All casts are for cost estimation/statistics (not user data)
 // - f64->f32 precision loss acceptable for query planning heuristics
 // - f64->u64 sign loss acceptable (values are always positive costs/estimates)

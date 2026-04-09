@@ -97,7 +97,7 @@ fn xor_popcount_ip(q_bits: &[u64], enc_bits: &[u64], num_words: usize, dim: usiz
         crate::simd_native::hamming_binary_native(&q_bits[..num_words], &enc_bits[..num_words]);
 
     // Invariant: differing_bits <= dim because padding bits never contribute.
-    // SAFETY: dim fits in u32 for any practical vector dimension (< 2^32).
+    // Reason: dim fits in u32 for any practical vector dimension (< 2^32).
     #[allow(clippy::cast_possible_truncation)]
     let dim_u32 = dim as u32;
     debug_assert!(

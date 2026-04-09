@@ -5,7 +5,7 @@
 //! - Node16 → Node48
 //! - Node48 → Node256
 
-// SAFETY: Numeric casts in C-ART node operations are intentional:
+// Reason: Numeric casts in C-ART node operations are intentional:
 // - usize->u8 for child indices: C-ART nodes have max 256 children, indices fit in u8
 // - Node types enforce size limits (Node4=4, Node16=16, Node48=48, Node256=256)
 // - All index values are validated against node capacity before casting

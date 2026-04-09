@@ -17,7 +17,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or the config cannot be saved.
-    #[allow(dead_code)] // SAFETY: Called in velesql tests and test_fixtures
+    #[allow(dead_code)] // Reason: Called in velesql tests and test_fixtures
     pub fn create(path: PathBuf, dimension: usize, metric: DistanceMetric) -> Result<Self> {
         Self::create_with_options(path, dimension, metric, StorageMode::default())
     }

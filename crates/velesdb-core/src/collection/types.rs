@@ -458,7 +458,7 @@ impl Collection {
     ///
     /// Future: auto-enable from persisted StreamingConfig on open (STREAM-01)
     #[cfg(feature = "persistence")]
-    #[allow(dead_code)] // SAFETY: Called via VectorCollection/server inner delegation
+    #[allow(dead_code)] // Reason: Called via VectorCollection/server inner delegation
     pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
         use crate::collection::streaming::StreamIngester;
         let ingester = StreamIngester::new(self.clone(), config);

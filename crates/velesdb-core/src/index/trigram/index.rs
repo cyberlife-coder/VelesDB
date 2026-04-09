@@ -165,7 +165,7 @@ impl TrigramIndex {
         self.doc_trigrams.insert(doc_id, trigram_set);
 
         // Add to inverted index
-        // SAFETY: Bounds checked above, truncation is safe
+        // Reason: Bounds checked above, truncation is safe
         #[allow(clippy::cast_possible_truncation)]
         let doc_id_u32 = doc_id as u32;
         for trigram in trigrams {
@@ -187,7 +187,7 @@ impl TrigramIndex {
         if u32::try_from(doc_id).is_err() {
             return;
         }
-        // SAFETY: Bounds checked above
+        // Reason: Bounds checked above
         #[allow(clippy::cast_possible_truncation)]
         let doc_id_u32 = doc_id as u32;
         self.doc_fingerprints.remove(&doc_id);

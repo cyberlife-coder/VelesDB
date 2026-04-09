@@ -3,7 +3,7 @@
 //! Designed for graphs that are logically partitioned into shards,
 //! handling cross-shard edges transparently.
 
-// SAFETY: Numeric casts in sharded traversal are intentional:
+// Reason: Numeric casts in sharded traversal are intentional:
 // - u64->usize for node ID hashing: Node IDs are generated sequentially and fit in usize
 // - Used for sharding only, actual storage uses u64 for persistence
 #![allow(clippy::cast_possible_truncation)]

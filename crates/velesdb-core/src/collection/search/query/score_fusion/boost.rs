@@ -3,7 +3,7 @@
 //! Provides boost functions that modify scores based on document metadata,
 //! including recency decay, field-based boosts, and composite strategies.
 
-// SAFETY: Numeric casts in boost functions are intentional:
+// Reason: Numeric casts in boost functions are intentional:
 // - u64->i64 for timestamps: SystemTime::as_secs() values are within valid range
 // - f64->f32 for decay computation: precision loss acceptable for ranking heuristics
 #![allow(clippy::cast_precision_loss)]

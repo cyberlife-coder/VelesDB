@@ -2,7 +2,7 @@
 //!
 //! Extracted from `graph_api.rs` to reduce NLOC below the 500 threshold.
 
-// SAFETY: Functions used by graph_api.rs via Collection — false positive
+// Reason: Functions used by graph_api.rs via Collection — false positive
 // from pub(crate) visibility on Collection.
 #![allow(dead_code)]
 

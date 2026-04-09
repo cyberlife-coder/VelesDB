@@ -73,7 +73,7 @@ impl TraversalResult {
     /// public API boundary.
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
-    // SAFETY: Call sites pass owned SmallVecs (often via move or clone); taking
+    // Reason: Call sites pass owned SmallVecs (often via move or clone); taking
     // by value avoids requiring callers to borrow-then-clone at call sites that
     // already own the value.
     pub(crate) fn from_smallvec(target_id: u64, path: TraversalPath, depth: u32) -> Self {
@@ -289,7 +289,7 @@ fn bfs_traverse_directed(
 /// Uses parent-pointer insertion instead of path cloning.
 /// Only emits results for newly-discovered nodes (no duplicates).
 #[inline]
-#[allow(clippy::too_many_arguments)] // SAFETY: BFS helper passes parent_map alongside traversal state; private fn
+#[allow(clippy::too_many_arguments)] // Reason: BFS helper passes parent_map alongside traversal state; private fn
 fn process_bfs_csr(
     edge_store: &EdgeStore,
     state: &BfsState,
@@ -339,7 +339,7 @@ fn process_bfs_csr(
 /// Uses parent-pointer insertion instead of path cloning.
 /// Only emits results for newly-discovered nodes (no duplicates).
 #[inline]
-#[allow(clippy::too_many_arguments)] // SAFETY: BFS helper passes parent_map alongside traversal state; private fn
+#[allow(clippy::too_many_arguments)] // Reason: BFS helper passes parent_map alongside traversal state; private fn
 fn process_bfs_neighbors(
     edges: &[&super::GraphEdge],
     state: &BfsState,

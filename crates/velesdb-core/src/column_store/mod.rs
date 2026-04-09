@@ -19,7 +19,7 @@
 //! │   └── "rating"   -> FloatColumn(Vec<Option<f64>>)
 //! ```
 
-// SAFETY: Numeric casts in column store are intentional:
+// Reason: Numeric casts in column store are intentional:
 // - All casts are for columnar data processing and statistics
 // - u64/usize conversions for row indices and bitmap operations
 // - Values bounded by column cardinality and row count

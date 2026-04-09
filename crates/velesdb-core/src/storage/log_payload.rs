@@ -96,7 +96,7 @@ pub(super) const CRC_DELETE_MARKER: u8 = 0xC4;
 ///
 /// Panics if `payload.len()` exceeds `u32::MAX`. Callers must validate length first.
 pub(super) fn compute_store_crc(id: u64, payload: &[u8]) -> u32 {
-    // SAFETY: caller validates payload fits in u32 before calling (store validates
+    // Reason: caller validates payload fits in u32 before calling (store validates
     // via try_from, replay reads a u32 length field).
     #[allow(clippy::cast_possible_truncation)]
     let len_u32 = payload.len() as u32;

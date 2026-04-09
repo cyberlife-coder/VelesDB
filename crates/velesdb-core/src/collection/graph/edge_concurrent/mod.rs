@@ -5,7 +5,7 @@
 //!
 //! Read-only queries and traversal are in `query.rs`.
 
-// SAFETY: Numeric casts in edge store sharding are intentional:
+// Reason: Numeric casts in edge store sharding are intentional:
 // - u64->usize for node ID hashing: Node IDs are generated sequentially and fit in usize
 // - Used for sharding only, actual storage uses u64 for persistence
 #![allow(clippy::cast_possible_truncation)]
@@ -384,7 +384,7 @@ impl ConcurrentEdgeStore {
     }
 
     /// Collects all outgoing and incoming edges for a node (read-only).
-    #[allow(clippy::type_complexity)] // SAFETY: tuple of (outgoing, incoming) edge lists is clear in context
+    #[allow(clippy::type_complexity)] // Reason: tuple of (outgoing, incoming) edge lists is clear in context
     fn collect_node_edges(
         &self,
         node_shard: usize,
@@ -451,7 +451,7 @@ impl ConcurrentEdgeStore {
     }
 
     /// Removes edge IDs from the global registry, deduplicating.
-    #[allow(clippy::unused_self)] // SAFETY: method on ConcurrentEdgeStore for API consistency
+    #[allow(clippy::unused_self)] // Reason: method on ConcurrentEdgeStore for API consistency
     fn deregister_edge_ids(
         &self,
         ids: &mut FxHashMap<u64, u64>,
@@ -520,7 +520,7 @@ impl ConcurrentEdgeStore {
     /// # Errors
     ///
     /// Returns `Error::SnapshotBuildFailed` if the merge or build fails.
-    #[allow(clippy::unnecessary_wraps)] // SAFETY: Result kept for future allocation-failure propagation
+    #[allow(clippy::unnecessary_wraps)] // Reason: Result kept for future allocation-failure propagation
     pub(crate) fn rebuild_snapshot(&self) -> Result<()> {
         // Build a merged EdgeStore from all shards (outgoing edges only).
         // We iterate shards directly instead of using `to_merged_edge_store()`

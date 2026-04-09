@@ -13,7 +13,7 @@
 #![allow(clippy::format_push_string)]
 // Prometheus format is clearer with push_str+format
 
-// SAFETY: Numeric casts in metrics are intentional:
+// Reason: Numeric casts in metrics are intentional:
 // - All casts are for statistical aggregations (histograms, percentiles)
 // - f64->u64 casts are for converting duration to bucket indices
 // - u64->f64 casts are for computing averages and rates

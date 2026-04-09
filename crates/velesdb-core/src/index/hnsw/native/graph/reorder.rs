@@ -190,7 +190,7 @@ mod tests {
         let distance = CpuDistance::new(DistanceMetric::Euclidean);
         let hnsw = NativeHnsw::new(distance, 8, 32, n);
         for i in 0..n {
-            // SAFETY: cast_precision_loss acceptable for test data generation.
+            // Reason: cast_precision_loss acceptable for test data generation.
             #[allow(clippy::cast_precision_loss)]
             let v: Vec<f32> = (0..dim).map(|d| (i * dim + d) as f32).collect();
             hnsw.insert(&v).unwrap();

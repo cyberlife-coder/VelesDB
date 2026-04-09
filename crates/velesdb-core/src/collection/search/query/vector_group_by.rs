@@ -269,7 +269,7 @@ fn compute_agg_value(
         return match agg.function_type {
             AggregateType::Max => serde_json::json!(acc.max_score),
             AggregateType::Avg => {
-                // SAFETY: count is bounded by result set size, precision loss acceptable
+                // Reason: count is bounded by result set size, precision loss acceptable
                 #[allow(clippy::cast_precision_loss)]
                 let avg = if acc.count > 0 {
                     acc.sum_scores / acc.count as f32
@@ -296,7 +296,7 @@ fn compute_agg_value(
 fn compute_group_score(acc: &GroupAccumulator, strategy: Option<AggregateType>) -> f32 {
     match strategy {
         Some(AggregateType::Avg) => {
-            // SAFETY: count is bounded by result set size, precision loss acceptable
+            // Reason: count is bounded by result set size, precision loss acceptable
             #[allow(clippy::cast_precision_loss)]
             if acc.count > 0 {
                 acc.sum_scores / acc.count as f32

@@ -28,7 +28,7 @@
 //! println!("Estimated latency: {}ms", estimate.estimated_latency_ms);
 //! ```
 
-// SAFETY: Numeric casts in query cost estimation are intentional:
+// Reason: Numeric casts in query cost estimation are intentional:
 // - All casts are for cost modeling and latency estimation
 // - f64/usize conversions for computing operation costs
 // - Values bounded by dataset size and hardware limits
