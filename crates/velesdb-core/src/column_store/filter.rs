@@ -14,6 +14,7 @@ use super::ColumnStore;
 /// Mirrors `velesql::CompareOp` but lives in the column-store layer
 /// to avoid a dependency on the parser module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CompareOp {
     /// Equal (=)
     Eq,

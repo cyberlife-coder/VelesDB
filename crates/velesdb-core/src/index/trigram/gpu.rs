@@ -153,7 +153,8 @@ impl GpuTrigramAccelerator {
 
 /// Compute backend selection for trigram operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TrigramComputeBackend {
+#[allow(dead_code)] // Used only when `gpu` feature is active
+pub(crate) enum TrigramComputeBackend {
     /// CPU SIMD (default, always available)
     #[default]
     CpuSimd,
@@ -162,6 +163,7 @@ pub enum TrigramComputeBackend {
     Gpu,
 }
 
+#[allow(dead_code)] // Used only when `gpu` feature is active
 impl TrigramComputeBackend {
     /// Select best available backend based on workload size.
     #[must_use]
@@ -184,7 +186,7 @@ impl TrigramComputeBackend {
 
     /// Get backend name for logging.
     #[must_use]
-    pub const fn name(&self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::CpuSimd => "CPU SIMD",
             #[cfg(feature = "gpu")]

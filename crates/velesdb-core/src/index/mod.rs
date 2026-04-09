@@ -16,7 +16,7 @@ pub mod trigram;
 
 pub use bm25::{Bm25Index, Bm25Params};
 pub use hnsw::{HnswIndex, HnswParams, SearchQuality};
-pub use secondary::{JsonValue, SecondaryIndex};
+pub(crate) use secondary::{JsonValue, SecondaryIndex};
 pub use sparse::{SparseInvertedIndex, SparseVector};
 pub use trigram::{extract_trigrams, TrigramIndex};
 

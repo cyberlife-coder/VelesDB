@@ -137,6 +137,7 @@ impl SlowQueryLogger {
 
 /// Query execution phases for tracing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum QueryPhase {
     /// Parsing the query
     Parse,
@@ -157,7 +158,7 @@ pub enum QueryPhase {
 impl QueryPhase {
     /// Returns the span name for this phase.
     #[must_use]
-    pub fn span_name(&self) -> &'static str {
+    pub fn span_name(self) -> &'static str {
         match self {
             Self::Parse => "parse",
             Self::Plan => "plan",

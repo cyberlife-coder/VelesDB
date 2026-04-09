@@ -67,6 +67,7 @@ impl TraversalResult {
 
 /// Thread configuration for parallel traversal (EPIC-051 US-006).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ThreadConfig {
     /// Automatically detect optimal thread count based on CPU.
     #[default]

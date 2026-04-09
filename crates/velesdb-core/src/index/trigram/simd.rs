@@ -24,7 +24,7 @@ pub type Trigram = [u8; 3];
 
 /// SIMD capability for trigram operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrigramSimdLevel {
+pub(crate) enum TrigramSimdLevel {
     /// AVX-512 (512-bit vectors)
     #[cfg(target_arch = "x86_64")]
     Avx512,
@@ -63,7 +63,8 @@ impl TrigramSimdLevel {
 
     /// Get the name of the SIMD level
     #[must_use]
-    pub const fn name(&self) -> &'static str {
+    #[allow(dead_code)] // Reserved for diagnostic/logging use
+    pub const fn name(self) -> &'static str {
         match self {
             #[cfg(target_arch = "x86_64")]
             Self::Avx512 => "AVX-512",

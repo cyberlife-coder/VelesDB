@@ -37,7 +37,7 @@ pub use latency::{compute_latency_percentiles, LatencyStats};
 pub use operational::{OperationalMetrics, DEPTH_BUCKETS, DURATION_BUCKETS, NODES_BUCKETS};
 
 // Re-export guard-rails and traversal metrics
-pub use guardrails::{global_guardrails_metrics, GuardRailsMetrics, LimitType, TraversalMetrics};
+pub use guardrails::{global_guardrails_metrics, GuardRailsMetrics, TraversalMetrics};
 
 // Re-export query diagnostics
-pub use query::{DurationHistogram, QueryPhase, QueryStats, SlowQueryLogger, SpanBuilder};
+pub use query::{DurationHistogram, QueryStats, SlowQueryLogger, SpanBuilder};

@@ -17,7 +17,9 @@ mod boost;
 mod explanation;
 mod path;
 
-pub use boost::{BoostCombination, BoostFunction, CompositeBoost, FieldBoost, RecencyBoost};
+#[allow(unused_imports)] // Re-exported for test access
+pub(crate) use boost::BoostCombination;
+pub use boost::{BoostFunction, CompositeBoost, FieldBoost, RecencyBoost};
 pub use explanation::{ComponentExplanation, ScoreExplanation};
 pub use path::PathScorer;
 
@@ -188,6 +190,7 @@ impl ScoreBreakdown {
 /// Named `ScoreFusionMethod` to distinguish from the public
 /// [`crate::fusion::FusionStrategy`] enum used for multi-query result fusion.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ScoreFusionMethod {
     /// Reciprocal Rank Fusion (RRF) - good for combining ranked lists.
     #[default]

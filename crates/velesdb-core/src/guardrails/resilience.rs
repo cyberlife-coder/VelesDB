@@ -98,6 +98,7 @@ impl RateLimiter {
 
 /// Circuit breaker state (EPIC-048 US-006).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CircuitState {
     /// Circuit is closed, requests are allowed.
     Closed,

@@ -50,7 +50,8 @@ pub fn should_use_gpu(_n: usize, _k: usize, _subspace_dim: usize) -> bool {
 
 /// Compute backend selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ComputeBackend {
+#[allow(dead_code)] // Used only when `gpu` feature is active
+pub(crate) enum ComputeBackend {
     /// CPU SIMD (default, always available)
     #[default]
     Simd,
@@ -59,6 +60,7 @@ pub enum ComputeBackend {
     Gpu,
 }
 
+#[allow(dead_code)] // Used only when `gpu` feature is active
 impl ComputeBackend {
     /// Returns the best available backend.
     ///

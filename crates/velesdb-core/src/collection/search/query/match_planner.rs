@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 /// Execution strategy for MATCH queries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum MatchExecutionStrategy {
     /// Traverse graph first, then filter by similarity.
     /// Best when: graph is selective, or no similarity condition.

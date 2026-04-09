@@ -85,10 +85,11 @@ pub use cart::{CARTEdgeIndex, CompressedART};
 pub use clustered_index::{ClusteredEdgeIndex, ClusteredIndex};
 pub use csr_snapshot::{AdjacencySource, CsrSnapshot, EdgePredicate, LabelFilter, NoFilter};
 pub use degree_router::{
-    DegreeAdaptiveStorage, DegreeRouter, EdgeIndex, HashSetEdgeIndex, VecEdgeIndex,
-    DEFAULT_DEGREE_THRESHOLD,
+    DegreeRouter, EdgeIndex, HashSetEdgeIndex, VecEdgeIndex, DEFAULT_DEGREE_THRESHOLD,
 };
 pub use edge::{EdgeStore, GraphEdge};
+#[allow(unused_imports)] // Re-exported for test access via super::*
+pub(crate) use node::Element;
 // Re-exported for use by ConcurrentEdgeStore (Task 5) and other internal consumers.
 #[allow(unused_imports)]
 pub(crate) use csr_snapshot::SnapshotBuilder;
@@ -97,9 +98,9 @@ pub use label_index::LabelIndex;
 pub use label_table::{LabelId, LabelTable};
 pub use memory_pool::{ConcurrentMemoryPool, ConcurrentPoolHandle, MemoryPool, PoolIndex};
 pub use metrics::{GraphMetrics, LatencyHistogram};
-pub use node::{Element, GraphNode};
+pub use node::GraphNode;
 pub use property_index::PropertyIndex;
-pub use range_index::{OrderedValue, RangeIndex};
+pub use range_index::RangeIndex;
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
 pub use streaming::{
     bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,

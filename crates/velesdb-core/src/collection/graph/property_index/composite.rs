@@ -14,7 +14,7 @@ use std::hash::{Hash, Hasher};
 
 /// Index type for composite indexes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CompositeIndexType {
+pub(crate) enum CompositeIndexType {
     /// Hash index for equality lookups (O(1))
     Hash,
     /// Range index for range queries (O(log n))
