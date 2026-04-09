@@ -8,6 +8,7 @@
 
 mod crud;
 mod crud_bulk;
+mod crud_bulk_raw;
 mod crud_helpers;
 mod crud_histogram;
 mod crud_indexing;

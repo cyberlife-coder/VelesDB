@@ -7,6 +7,7 @@
 //! - [`graph_ops`] — Graph collection create/get
 //! - [`metadata_ops`] — Metadata-only collection create/get
 //! - [`query_engine`] — `VelesQL` query execution, plan caching, DML dispatch
+//! - [`query_join`] — JOIN execution strategies (lookup, filtered, condition pushdown)
 //! - [`dml_executor`] — DML mutations (INSERT EDGE, DELETE, DELETE EDGE, SELECT EDGES, INSERT NODE)
 //! - [`persistence`] — Loading collections from disk at startup
 //! - [`training`] — `TRAIN QUANTIZER` statement execution
@@ -29,6 +30,7 @@ mod metadata_ops;
 mod persistence;
 mod query_engine;
 mod query_engine_dml;
+mod query_join;
 mod stats;
 mod training;
 mod vector_ops;
