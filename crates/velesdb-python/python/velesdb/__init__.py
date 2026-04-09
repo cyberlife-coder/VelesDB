@@ -105,6 +105,9 @@ class Collection:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
+    def __len__(self) -> int:
+        return self._inner.__len__()
+
     def upsert(
         self,
         points_or_id: Any,
