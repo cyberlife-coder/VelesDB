@@ -17,7 +17,7 @@ use std::ops::Bound;
 ///
 /// JSON values are converted to this for ordered comparison.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OrderedValue {
+pub(crate) enum OrderedValue {
     /// Null value (sorts first)
     Null,
     /// Integer value

@@ -18,11 +18,13 @@ mod range;
 // Reason: EPIC-047 types are scaffolded but not yet wired to the query planner.
 // Re-exports are used by property_index_tests; suppress unused-import warnings.
 #[allow(unused_imports)]
-pub use advisor::{
-    IndexAdvisor, IndexSuggestion, PatternStats, PredicateType, QueryPattern, QueryPatternTracker,
-};
+pub(crate) use advisor::PredicateType;
 #[allow(unused_imports)]
-pub use composite::{CompositeGraphIndex, CompositeIndexManager, CompositeIndexType};
+pub use advisor::{IndexAdvisor, IndexSuggestion, PatternStats, QueryPattern, QueryPatternTracker};
+#[allow(unused_imports)]
+pub(crate) use composite::CompositeIndexType;
+#[allow(unused_imports)]
+pub use composite::{CompositeGraphIndex, CompositeIndexManager};
 #[allow(unused_imports)]
 pub use range::{CompositeRangeIndex, EdgePropertyIndex, IndexIntersection, OrderedValue};
 

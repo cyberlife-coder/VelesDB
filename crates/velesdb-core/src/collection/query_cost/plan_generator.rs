@@ -8,6 +8,7 @@ use crate::collection::stats::CollectionStats;
 
 /// Physical execution plan types.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum PhysicalPlan {
     /// Full sequential scan of collection
     SeqScan {

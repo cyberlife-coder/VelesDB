@@ -166,6 +166,7 @@ impl BoostFunction for FieldBoost {
 
 /// Strategy for combining multiple boost functions.
 #[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub enum BoostCombination {
     /// Multiply all boosts together.
     #[default]

@@ -57,7 +57,7 @@ pub use any_collection::AnyCollection;
 pub use core::{IndexInfo, ScrollBatch, MAX_DIMENSION, MIN_DIMENSION};
 pub use diagnostics::{CollectionDiagnostics, IndexHealth};
 pub use graph::{
-    ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,
+    ConcurrentEdgeStore, EdgeStore, EdgeType, GraphEdge, GraphNode, GraphSchema, NodeType,
     PropertyIndex, RangeIndex, TraversalConfig, TraversalPath, TraversalResult, ValueType,
 };
 pub use graph_collection::GraphCollection;

@@ -13,6 +13,7 @@ use thiserror::Error;
 
 /// Error type for LabelTable operations.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LabelTableError {
     /// The label table has reached its maximum capacity.
     #[error("LabelTable overflow: cannot intern more than {max_labels} labels")]

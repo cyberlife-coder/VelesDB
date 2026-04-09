@@ -107,13 +107,15 @@ impl GraphNode {
 /// in the same collection, enabling hybrid graph+vector storage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum Element {
+#[allow(dead_code)] // Scaffolded for hybrid graph+vector storage
+pub(crate) enum Element {
     /// A vector point with optional metadata.
     Point(Point),
     /// A graph node with label, properties, and optional vector.
     Node(GraphNode),
 }
 
+#[allow(dead_code)] // Scaffolded for hybrid graph+vector storage
 impl Element {
     /// Returns the element ID.
     #[must_use]

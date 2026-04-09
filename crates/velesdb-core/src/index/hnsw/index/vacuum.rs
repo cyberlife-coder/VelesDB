@@ -6,6 +6,7 @@ use std::mem::ManuallyDrop;
 
 /// Errors that can occur during vacuum operations.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum VacuumError {
     /// Vector storage is disabled, cannot rebuild index.
     #[error("Cannot vacuum: vector storage is disabled (use new() instead of new_fast_insert())")]

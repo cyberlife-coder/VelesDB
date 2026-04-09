@@ -49,7 +49,7 @@ mod plan_generator_tests;
 mod tests;
 
 pub use cost_model::{CostEstimator, OperationCost, OperationCostFactors};
-pub use plan_generator::{CandidatePlan, PhysicalPlan, PlanGenerator, QueryCharacteristics};
+pub use plan_generator::{CandidatePlan, PlanGenerator, QueryCharacteristics};
 pub use query_executor::{ExecutionContext, PlanCache, QueryOptimizer};
 
 /// Parameters for cost estimation

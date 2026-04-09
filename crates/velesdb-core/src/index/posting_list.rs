@@ -29,7 +29,7 @@ pub const PROMOTION_THRESHOLD: usize = 1000;
 /// Adaptive posting list that chooses optimal representation based on cardinality.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Some methods used only in tests or for future API
-pub enum PostingList {
+pub(crate) enum PostingList {
     /// Small posting list using FxHashSet (fast for < 1000 docs)
     Small(FxHashSet<u32>),
     /// Large posting list using RoaringBitmap (efficient for ≥ 1000 docs)
@@ -178,7 +178,7 @@ impl PostingList {
 }
 
 /// Iterator over posting list document IDs.
-pub enum PostingListIter<'a> {
+pub(crate) enum PostingListIter<'a> {
     Small(std::collections::hash_set::Iter<'a, u32>),
     Large(roaring::bitmap::Iter<'a>),
 }

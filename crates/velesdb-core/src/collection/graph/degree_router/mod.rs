@@ -179,7 +179,8 @@ impl EdgeIndex for HashSetEdgeIndex {
 
 /// Storage variant for degree-adaptive storage.
 #[derive(Debug, Clone)]
-pub enum DegreeAdaptiveStorage {
+#[allow(clippy::enum_variant_names)] // Degree suffix is intentional domain terminology
+pub(crate) enum DegreeAdaptiveStorage {
     /// Low-degree storage (Vec-based, < 100 edges)
     LowDegree(VecEdgeIndex),
     /// High-degree storage (HashSet-based, 100-1000 edges)

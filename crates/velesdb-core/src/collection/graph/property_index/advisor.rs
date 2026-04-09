@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 /// Predicate types for query pattern tracking.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum PredicateType {
+pub(crate) enum PredicateType {
     /// Equality check (=)
     Equality,
     /// Range comparison (>, <, >=, <=)

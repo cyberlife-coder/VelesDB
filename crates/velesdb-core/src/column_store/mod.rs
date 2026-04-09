@@ -47,7 +47,7 @@ use roaring::RoaringBitmap;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
-pub use filter::{CompareOp, GeoBboxParams, GeoDistanceParams};
+pub use filter::{GeoBboxParams, GeoDistanceParams};
 pub use string_table::StringTable;
 pub use types::{
     AutoVacuumConfig, BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStoreError,

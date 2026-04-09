@@ -66,6 +66,7 @@ pub struct SnapshotMetadata {
 
 /// Error type for snapshot operations.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SnapshotError {
     /// IO error during read/write.
     Io(io::Error),

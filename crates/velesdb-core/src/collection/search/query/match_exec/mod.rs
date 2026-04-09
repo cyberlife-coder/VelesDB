@@ -75,6 +75,7 @@ impl MatchResult {
 /// Replaces the former `parse_property_path()` that silently returned `None`
 /// for wildcards, function calls, and bare aliases — leaving `projected` empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProjectionItem<'a> {
     /// `RETURN *` — project all properties from all bound aliases.
     Wildcard,
