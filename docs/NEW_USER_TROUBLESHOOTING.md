@@ -33,7 +33,7 @@ Collection vector dimension and metric are fixed by design for indexing/search p
 `velesdb-core` is embedded library only.
 
 Install the component you need:
-- `cargo install velesdb-server` — REST API server (37 endpoints, OpenAPI)
+- `cargo install velesdb-server` — REST API server (47 endpoints, OpenAPI)
 - `cargo install velesdb-cli` — Interactive VelesQL REPL (binary name: `velesdb`)
 
 ### 5) "Benchmark numbers are different"
@@ -75,7 +75,7 @@ C'est normal : ce choix est figé à la création pour conserver les performance
 `velesdb-core` = moteur embarqué.
 
 Installer le composant adapté :
-- `cargo install velesdb-server` — API REST (37 endpoints, OpenAPI)
+- `cargo install velesdb-server` — API REST (47 endpoints, OpenAPI)
 - `cargo install velesdb-cli` — Shell interactif VelesQL (binaire : `velesdb`)
 
 ### 5) « Les benchmarks ne correspondent pas »
@@ -101,6 +101,6 @@ Normal : dépend du CPU, de `ef_search`, des filtres/payloads et du dataset.
 - [VelesQL Specification](VELESQL_SPEC.md) — Full query language reference with examples
 - [Search Modes Guide](guides/SEARCH_MODES.md) — How to choose between Fast, Balanced, Accurate, Perfect, and Adaptive
 - [Tuning Guide](guides/TUNING_GUIDE.md) — HNSW parameters, quantization modes, memory estimation
-- [API Reference](reference/api-reference.md) — All 37 REST endpoints with request/response examples
+- [API Reference](reference/api-reference.md) — All 47 REST endpoints with request/response examples
 - [Installation Guide](guides/INSTALLATION.md) — All platforms: Linux, macOS, Windows, Docker, WASM, Mobile
 - [E-commerce Example](../examples/ecommerce_recommendation/) — Full Vector + Graph + Filter demo in Rust
