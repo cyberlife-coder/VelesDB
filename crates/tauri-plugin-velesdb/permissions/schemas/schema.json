@@ -307,6 +307,18 @@
           "markdownDescription": "Denies the add_edge command without any pre-configured scope."
         },
         {
+          "description": "Enables the analyze command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-analyze",
+          "markdownDescription": "Enables the analyze command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the analyze command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-analyze",
+          "markdownDescription": "Denies the analyze command without any pre-configured scope."
+        },
+        {
           "description": "Enables the batch_search command without any pre-configured scope.",
           "type": "string",
           "const": "allow-batch-search",
@@ -389,6 +401,18 @@
           "type": "string",
           "const": "deny-drop-index",
           "markdownDescription": "Denies the drop_index command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the explain command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-explain",
+          "markdownDescription": "Enables the explain command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the explain command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-explain",
+          "markdownDescription": "Denies the explain command without any pre-configured scope."
         },
         {
           "description": "Enables the flush command without any pre-configured scope.",
@@ -523,6 +547,18 @@
           "markdownDescription": "Denies the query command without any pre-configured scope."
         },
         {
+          "description": "Enables the scroll command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scroll",
+          "markdownDescription": "Enables the scroll command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scroll command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scroll",
+          "markdownDescription": "Denies the scroll command without any pre-configured scope."
+        },
+        {
           "description": "Enables the search command without any pre-configured scope.",
           "type": "string",
           "const": "allow-search",
@@ -533,6 +569,18 @@
           "type": "string",
           "const": "deny-search",
           "markdownDescription": "Denies the search command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the search_with_quality command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-search-with-quality",
+          "markdownDescription": "Enables the search_with_quality command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the search_with_quality command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-search-with-quality",
+          "markdownDescription": "Denies the search_with_quality command without any pre-configured scope."
         },
         {
           "description": "Enables the semantic_query command without any pre-configured scope.",

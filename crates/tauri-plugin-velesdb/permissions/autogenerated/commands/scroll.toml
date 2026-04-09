@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-scroll"
+description = "Enables the scroll command without any pre-configured scope."
+commands.allow = ["scroll"]
+
+[[permission]]
+identifier = "deny-scroll"
+description = "Denies the scroll command without any pre-configured scope."
+commands.deny = ["scroll"]
