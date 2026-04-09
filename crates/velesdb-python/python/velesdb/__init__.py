@@ -105,6 +105,9 @@ class Collection:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
+    def __len__(self) -> int:
+        return self._inner.__len__()
+
     def upsert(
         self,
         points_or_id: Any,
@@ -177,8 +180,8 @@ class Collection:
         return self._inner.search_with_quality(vector, quality, top_k)
 
     def count(self) -> int:
-        info = self._inner.info()
-        return int(info.get("point_count", 0))
+        """Return the number of points in the collection."""
+        return self._inner.count()
 
     def get_graph_store(self) -> GraphStore:
         """Return a standalone in-memory graph store.

@@ -112,11 +112,16 @@ pub fn search_result_to_multimodel_dict(py: Python<'_>, result: &SearchResult) -
 }
 
 /// Convert a `Point` to a Python dict.
+///
+/// Omits the `vector` field when empty (e.g., graph collections
+/// without embeddings) to avoid misleading empty arrays.
 pub fn point_to_dict(py: Python<'_>, point: &Point) -> PyObject {
     let dict = PyDict::new(py);
     let _ = dict.set_item(PyString::intern(py, "id"), point.id);
-    let np_vector = numpy::PyArray1::from_slice(py, &point.vector);
-    let _ = dict.set_item(PyString::intern(py, "vector"), np_vector);
+    if !point.vector.is_empty() {
+        let np_vector = numpy::PyArray1::from_slice(py, &point.vector);
+        let _ = dict.set_item(PyString::intern(py, "vector"), np_vector);
+    }
     let _ = dict.set_item(
         PyString::intern(py, "payload"),
         payload_to_python(py, &point.payload),

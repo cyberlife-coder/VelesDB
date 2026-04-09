@@ -139,4 +139,118 @@ impl Collection {
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
+
+    /// Get the vector dimension of this collection.
+    ///
+    /// Returns:
+    ///     int: The dimension (e.g. 768 for BERT embeddings)
+    #[getter]
+    fn dimension(&self) -> usize {
+        self.inner.dimension()
+    }
+
+    /// Get the distance metric used by this collection.
+    ///
+    /// Returns:
+    ///     str: The metric name (e.g. "cosine", "euclidean", "dot")
+    #[getter]
+    fn metric(&self) -> String {
+        format!("{:?}", self.inner.metric()).to_lowercase()
+    }
+
+    /// Get the storage mode of this collection.
+    ///
+    /// Returns:
+    ///     str: The storage mode (e.g. "full", "sq8", "binary")
+    #[getter]
+    fn storage_mode(&self) -> String {
+        format!("{:?}", self.inner.storage_mode()).to_lowercase()
+    }
+
+    /// Get the number of points in the collection.
+    ///
+    /// Returns:
+    ///     int: The point count
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Get the number of points in the collection.
+    ///
+    /// Returns:
+    ///     int: The point count
+    fn count(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Get all point IDs in the collection.
+    ///
+    /// Returns:
+    ///     List[int]: All point IDs
+    fn all_ids(&self, py: Python<'_>) -> Vec<u64> {
+        py.allow_threads(|| self.inner.all_ids())
+    }
+
+    /// Full durability flush including vectors.idx serialization.
+    ///
+    /// Use on graceful shutdown to avoid a full WAL replay on next startup.
+    /// For routine persistence, use ``flush()`` instead.
+    fn flush_full(&self, py: Python<'_>) -> PyResult<()> {
+        use crate::collection_helpers::core_err;
+        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+    }
+
+    /// Check if a secondary index exists on a payload field.
+    ///
+    /// Args:
+    ///     field: The payload field name (e.g. "category")
+    ///
+    /// Returns:
+    ///     bool: True if the index exists
+    #[pyo3(signature = (field))]
+    fn has_secondary_index(&self, field: &str) -> bool {
+        self.inner.has_secondary_index(field)
+    }
+
+    /// Drop a secondary index on a payload field.
+    ///
+    /// Args:
+    ///     field: The payload field name
+    ///
+    /// Returns:
+    ///     bool: True if the index existed and was dropped
+    #[pyo3(signature = (field))]
+    fn drop_secondary_index(&self, field: &str) -> bool {
+        self.inner.drop_secondary_index(field)
+    }
+
+    /// Get total memory usage of all indexes in bytes.
+    ///
+    /// Returns:
+    ///     int: Memory usage in bytes
+    fn indexes_memory_usage(&self) -> usize {
+        self.inner.indexes_memory_usage()
+    }
+
+    /// Analyze the collection and compute fresh statistics.
+    ///
+    /// Returns:
+    ///     dict: Statistics including row_count, deleted_count, total_size_bytes,
+    ///           column_stats, index_stats, etc.
+    fn analyze(&self, py: Python<'_>) -> PyResult<PyObject> {
+        use crate::collection_helpers::core_err;
+        let stats = py.allow_threads(|| self.inner.analyze().map_err(core_err))?;
+        let json = serde_json::to_value(&stats).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Stats serialization failed: {e}"))
+        })?;
+        Ok(crate::utils::json_to_python(py, &json))
+    }
+
+    /// Check if the streaming delta buffer is active (HNSW rebuild in progress).
+    ///
+    /// Returns:
+    ///     bool: True if delta buffer is active
+    fn is_delta_active(&self) -> bool {
+        self.inner.is_delta_active()
+    }
 }
