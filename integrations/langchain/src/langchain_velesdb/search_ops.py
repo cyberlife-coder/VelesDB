@@ -98,11 +98,14 @@ class SearchOpsMixin(MultiQueryOpsMixin):
         if ids_only:
             return self._run_ids_search(collection, query_embedding, k, filter)
 
-        if search_quality is not None:
+        if search_quality is not None and filter is None and ef_search is None:
             return collection.search_with_quality(
                 query_embedding, quality=search_quality, top_k=k,
             )
 
+        # When filter or ef_search are provided alongside search_quality,
+        # filter/ef_search take priority (search_with_quality does not
+        # support combined filter+quality in the core engine yet).
         return self._run_dense_search(collection, query_embedding, k,
                                       ef_search=ef_search, filter=filter)
 

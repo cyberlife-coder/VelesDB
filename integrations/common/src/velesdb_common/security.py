@@ -455,7 +455,14 @@ def validate_search_quality(quality: str) -> str:
         return quality_lower
     if _CUSTOM_QUALITY_RE.match(quality_lower):
         return quality_lower
-    if _ADAPTIVE_QUALITY_RE.match(quality_lower):
+    adaptive_match = _ADAPTIVE_QUALITY_RE.match(quality_lower)
+    if adaptive_match:
+        parts = quality_lower.split(":")
+        min_ef, max_ef = int(parts[1]), int(parts[2])
+        if min_ef > max_ef:
+            raise SecurityError(
+                f"Invalid adaptive range: min_ef ({min_ef}) > max_ef ({max_ef})"
+            )
         return quality_lower
     raise SecurityError(
         f"Invalid search_quality '{quality}'. "
