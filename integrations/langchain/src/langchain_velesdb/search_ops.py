@@ -18,6 +18,7 @@ from langchain_velesdb._common import payload_to_doc_parts
 from langchain_velesdb.multi_query_ops import MultiQueryOpsMixin
 from langchain_velesdb.security import (
     validate_k,
+    validate_search_quality,
     validate_text,
     validate_weight,
     validate_sparse_vector,
@@ -68,11 +69,12 @@ class SearchOpsMixin(MultiQueryOpsMixin):
         ids_only: bool = False,
         sparse_vector: Optional[dict] = None,
         sparse_index_name: Optional[str] = None,
+        search_quality: Optional[str] = None,
     ) -> List[dict]:
         """Run the appropriate core vector search variant.
 
-        When *sparse_vector* is provided alongside a dense *query_embedding*,
-        the search becomes a hybrid dense+sparse search (auto RRF k=60).
+        Dispatch order: sparse → ids_only → quality → ef_search → filtered
+        → plain.  See :meth:`_run_dense_search` for the ef/filter sub-path.
 
         Args:
             query_embedding: Dense query vector.
@@ -82,7 +84,7 @@ class SearchOpsMixin(MultiQueryOpsMixin):
             ids_only: If True, return only IDs and scores.
             sparse_vector: Optional sparse vector dict for hybrid search.
             sparse_index_name: Optional name of the sparse index to query.
-                When ``None``, the default (unnamed) sparse index is used.
+            search_quality: Optional quality preset string.
         """
         dimension = len(query_embedding)
         collection = self._get_collection(dimension)
@@ -94,20 +96,50 @@ class SearchOpsMixin(MultiQueryOpsMixin):
             )
 
         if ids_only:
-            if filter is not None:
-                results = collection.search_with_filter(
-                    query_embedding, top_k=k, filter=filter,
-                )
-                return [{"id": r["id"], "score": r["score"]} for r in results]
-            return collection.search_ids(query_embedding, top_k=k)
+            return self._run_ids_search(collection, query_embedding, k, filter)
 
+        if search_quality is not None and filter is None and ef_search is None:
+            return collection.search_with_quality(
+                query_embedding, quality=search_quality, top_k=k,
+            )
+
+        # When filter or ef_search are provided alongside search_quality,
+        # filter/ef_search take priority (search_with_quality does not
+        # support combined filter+quality in the core engine yet).
+        return self._run_dense_search(collection, query_embedding, k,
+                                      ef_search=ef_search, filter=filter)
+
+    def _run_ids_search(
+        self,
+        collection: Any,
+        query_embedding: List[float],
+        k: int,
+        filter: Optional[dict],
+    ) -> List[dict]:
+        """Return only {id, score} pairs (no payload fetch)."""
+        if filter is not None:
+            results = collection.search_with_filter(
+                query_embedding, top_k=k, filter=filter,
+            )
+            return [{"id": r["id"], "score": r["score"]} for r in results]
+        return collection.search_ids(query_embedding, top_k=k)
+
+    def _run_dense_search(
+        self,
+        collection: Any,
+        query_embedding: List[float],
+        k: int,
+        *,
+        ef_search: Optional[int] = None,
+        filter: Optional[dict] = None,
+    ) -> List[dict]:
+        """Run plain dense search, optionally with ef_search or filter."""
         if ef_search is not None:
             if filter is not None:
                 return collection.search_with_ef(
                     query_embedding, top_k=k, ef_search=ef_search, filter=filter,
                 )
             return collection.search_with_ef(query_embedding, top_k=k, ef_search=ef_search)
-
         if filter is not None:
             return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
         return collection.search(query_embedding, top_k=k)
@@ -199,11 +231,14 @@ class SearchOpsMixin(MultiQueryOpsMixin):
         Pass ``sparse_index_name="bge-m3-sparse"`` in *kwargs* to target a
         specific named sparse index instead of the default one.
 
+        Pass ``search_quality="accurate"`` (or any valid preset) to override
+        the instance-level quality for this call only.
+
         Args:
             query: Query string to search for.
             k: Number of results to return. Defaults to 4.
-            **kwargs: Additional arguments. Accepts ``sparse_vector``
-                and ``sparse_index_name``.
+            **kwargs: Additional arguments. Accepts ``sparse_vector``,
+                ``sparse_index_name``, and ``search_quality``.
 
         Returns:
             List of (Document, score) tuples.
@@ -214,11 +249,15 @@ class SearchOpsMixin(MultiQueryOpsMixin):
         if sparse_vector is not None:
             validate_sparse_vector(sparse_vector)
         sparse_index_name = kwargs.get("sparse_index_name")
+        quality = kwargs.get("search_quality", getattr(self, "_search_quality", None))
+        if quality is not None:
+            validate_search_quality(quality)
         query_embedding = self._embedding.embed_query(query)
         results = self._run_vector_search(
             query_embedding, k,
             sparse_vector=sparse_vector,
             sparse_index_name=sparse_index_name,
+            search_quality=quality,
         )
         return _results_to_docs_with_score(results)
 

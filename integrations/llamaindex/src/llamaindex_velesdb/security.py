@@ -26,6 +26,7 @@ from velesdb_common.security import (  # noqa: F401
     validate_metric,
     validate_path,
     validate_query,
+    validate_search_quality,
     validate_sparse_vector,
     validate_storage_mode,
     validate_text,

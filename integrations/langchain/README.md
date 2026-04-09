@@ -71,8 +71,9 @@ VelesDBVectorStore(
     embedding: Embeddings,
     path: str = "./velesdb_data",
     collection_name: str = "langchain",
-    metric: str = "cosine",      # "cosine", "euclidean", "dot" (aliases: "dotproduct", "inner", "ip"), "hamming", "jaccard"
-    storage_mode: str = "full",  # "full"/"f32", "sq8"/"int8" (4× compression), "binary"/"bit" (32× compression), "pq" (8-32× compression), "rabitq" (32× with scalar correction)
+    metric: str = "cosine",         # "cosine", "euclidean", "dot" (aliases: "dotproduct", "inner", "ip"), "hamming", "jaccard"
+    storage_mode: str = "full",     # "full"/"f32", "sq8"/"int8" (4× compression), "binary"/"bit" (32× compression), "pq" (8-32× compression), "rabitq" (32× with scalar correction)
+    search_quality: str = None,     # "fast", "balanced", "accurate", "perfect", "autotune", "custom:N", "adaptive:MIN:MAX"
 )
 ```
 
@@ -158,6 +159,39 @@ results = vectorstore.multi_query_search(
 ```
 
 ### Advanced Search
+
+#### `search_quality` — Quality Presets
+
+Control the recall/latency trade-off for all similarity searches with a single
+parameter set at construction time or overridden per-call.
+
+```python
+# Set once on the store — applies to every similarity_search call
+vectorstore = VelesDBVectorStore(
+    embedding=OpenAIEmbeddings(),
+    path="./data",
+    search_quality="accurate",   # higher recall at the cost of latency
+)
+
+results = vectorstore.similarity_search("machine learning", k=10)
+
+# Override per-call via kwargs
+results = vectorstore.similarity_search_with_score(
+    "machine learning", k=10, search_quality="fast",
+)
+```
+
+Accepted values:
+
+| Value | Description |
+|-------|-------------|
+| `"fast"` | Lowest latency, reduced recall |
+| `"balanced"` | Balanced latency/recall |
+| `"accurate"` | Higher recall, higher latency |
+| `"perfect"` | Exhaustive search, maximum recall |
+| `"autotune"` | Runtime-adaptive quality |
+| `"custom:N"` | Explicit ef_search (e.g. `"custom:256"`) |
+| `"adaptive:MIN:MAX"` | Adaptive ef range (e.g. `"adaptive:32:512"`) |
 
 #### `similarity_search_with_ef(query, ef_search, k)`
 

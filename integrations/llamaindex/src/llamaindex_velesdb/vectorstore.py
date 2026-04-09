@@ -24,6 +24,7 @@ import velesdb
 from llamaindex_velesdb.security import (
     validate_path,
     validate_metric,
+    validate_search_quality,
     validate_storage_mode,
     validate_batch_size,
     validate_collection_name,
@@ -93,10 +94,12 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
     metric: str = "cosine"
     storage_mode: str = "full"
     server_url: Optional[str] = None
+    search_quality: Optional[str] = None
 
     _db: Optional[velesdb.Database] = PrivateAttr(default=None)
     _collection: Optional[velesdb.Collection] = PrivateAttr(default=None)
     _dimension: Optional[int] = PrivateAttr(default=None)
+    _search_quality: Optional[str] = PrivateAttr(default=None)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -107,6 +110,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         metric: str = "cosine",
         storage_mode: str = "full",
         server_url: Optional[str] = None,
+        search_quality: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize VelesDB vector store.
@@ -133,6 +137,11 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
                 Examples: ``storage_mode="int8"`` is equivalent to ``storage_mode="sq8"``.
             server_url: Optional URL of a VelesDB server for server mode. When
                 provided, must be a valid http:// or https:// URL.
+            search_quality: Optional default quality preset for all queries:
+                ``"fast"``, ``"balanced"``, ``"accurate"``, ``"perfect"``,
+                ``"autotune"``, ``"custom:N"``, ``"adaptive:MIN:MAX"``.
+                ``None`` uses the built-in search. Per-call override:
+                pass ``search_quality=`` to :meth:`query`.
             **kwargs: Additional arguments.
 
         Raises:
@@ -145,6 +154,9 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         validated_storage_mode = validate_storage_mode(storage_mode)
         if server_url is not None:
             validate_url(server_url)
+        validated_quality: Optional[str] = None
+        if search_quality is not None:
+            validated_quality = validate_search_quality(search_quality)
 
         super().__init__(
             path=validated_path,
@@ -152,8 +164,10 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
             collection_name=validated_collection,
             metric=validated_metric,
             server_url=server_url,
+            search_quality=validated_quality,
             **kwargs,
         )
+        self._search_quality = validated_quality
 
     # ------------------------------------------------------------------
     # Static / class helpers
