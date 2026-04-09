@@ -3889,6 +3889,12 @@
             "description": "Weighted fusion: weight for average score component.",
             "example": 0.5
           },
+          "dense_weight": {
+            "type": "number",
+            "format": "float",
+            "description": "Relative score fusion: weight for the dense (vector) branch.",
+            "example": 0.5
+          },
           "filter": {
             "description": "Optional metadata filter."
           },
@@ -3911,9 +3917,15 @@
             "example": 60,
             "minimum": 0
           },
+          "sparse_weight": {
+            "type": "number",
+            "format": "float",
+            "description": "Relative score fusion: weight for the sparse branch.",
+            "example": 0.5
+          },
           "strategy": {
             "type": "string",
-            "description": "Fusion strategy: \"average\", \"maximum\", \"rrf\", \"weighted\".",
+            "description": "Fusion strategy: \"average\", \"maximum\", \"rrf\", \"weighted\", \"`relative_score`\".",
             "example": "rrf"
           },
           "top_k": {
@@ -3979,7 +3991,7 @@
       },
       "NodeStatsResponse": {
         "type": "object",
-        "description": "Per-plan-node actual execution statistics for EXPLAIN ANALYZE responses.",
+        "description": "Per-plan-node **estimated** execution statistics for EXPLAIN ANALYZE responses.\n\nAll values are synthetic heuristics derived from the plan-global\n`actual_time_ms` — they are **not** individually measured per node.\nField names keep the `actual_` prefix for API stability; check the\n`estimated` flag to distinguish heuristic values from future\ninstrumented measurements (#467).",
         "required": [
           "node_label",
           "actual_time_ms",
@@ -3992,19 +4004,19 @@
           "actual_rows_in": {
             "type": "integer",
             "format": "int64",
-            "description": "Rows entering this node (heuristic approximation).",
+            "description": "Estimated rows entering this node (heuristic approximation).",
             "minimum": 0
           },
           "actual_rows_out": {
             "type": "integer",
             "format": "int64",
-            "description": "Rows leaving this node (heuristic approximation).",
+            "description": "Estimated rows leaving this node (heuristic approximation).",
             "minimum": 0
           },
           "actual_time_ms": {
             "type": "number",
             "format": "double",
-            "description": "Heuristic estimate of wall-clock time for this node in milliseconds.\nDerived from total execution time using fixed fractions, not real\nper-node instrumentation. Will be replaced by measured timing (#467)."
+            "description": "Estimated wall-clock time for this node in milliseconds.\nDerived from total execution time using normalized weight fractions,\nnot real per-node instrumentation. Will be replaced by measured\ntiming (#467)."
           },
           "estimated": {
             "type": "boolean",

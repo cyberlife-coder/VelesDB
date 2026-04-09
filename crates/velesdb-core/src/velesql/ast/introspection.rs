@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Introspection statements for database/collection metadata queries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum IntrospectionStatement {
     /// `SHOW COLLECTIONS` -- lists all collection names and types.
     ShowCollections,

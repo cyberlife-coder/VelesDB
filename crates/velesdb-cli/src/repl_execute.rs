@@ -147,5 +147,6 @@ pub(crate) fn contains_param_vector(condition: &velesdb_core::velesql::Condition
         | Condition::ContainsText(_)
         | Condition::GeoDistance(_)
         | Condition::GeoBbox(_) => false,
+        _ => false,
     }
 }

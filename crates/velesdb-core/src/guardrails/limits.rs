@@ -99,6 +99,7 @@ impl QueryLimits {
 
 /// Guard-rail violation error (EPIC-048).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GuardRailViolation {
     /// Query exceeded maximum traversal depth (US-002).
     DepthExceeded {

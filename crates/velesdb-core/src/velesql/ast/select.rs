@@ -14,6 +14,7 @@ use super::with_clause::WithClause;
 
 /// DISTINCT mode for SELECT queries (EPIC-052 US-001).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DistinctMode {
     /// No deduplication.
     #[default]
@@ -61,6 +62,7 @@ pub struct SelectStatement {
 
 /// Columns in a SELECT statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SelectColumns {
     /// Select all columns (*).
     All,
