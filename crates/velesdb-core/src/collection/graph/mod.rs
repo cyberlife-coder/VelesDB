@@ -43,6 +43,7 @@ mod degree_router;
 mod edge;
 mod edge_concurrent;
 mod edge_persistence;
+mod edge_removal;
 pub(crate) mod helpers;
 mod label_index;
 #[cfg(test)]

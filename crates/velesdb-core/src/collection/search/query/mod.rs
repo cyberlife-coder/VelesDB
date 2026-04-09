@@ -58,11 +58,11 @@ mod ordering_tests;
 pub mod parallel_traversal;
 #[cfg(test)]
 mod parallel_traversal_tests;
-mod query_pipeline;
 pub mod projection;
 pub mod pushdown;
 #[cfg(test)]
 mod pushdown_tests;
+mod query_pipeline;
 pub mod score_fusion;
 #[cfg(test)]
 mod score_fusion_tests;

@@ -19,6 +19,7 @@ mod values;
 pub mod match_clause;
 #[cfg(test)]
 mod match_clause_tests;
+mod match_patterns;
 #[cfg(test)]
 mod match_query_tests;
 #[cfg(test)]

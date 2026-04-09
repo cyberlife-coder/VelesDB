@@ -44,6 +44,7 @@ mod distance;
 mod dual_precision;
 mod graph;
 mod graph_io;
+mod int8_traversal;
 pub(crate) mod layer;
 mod ordered_float;
 mod quantization;
