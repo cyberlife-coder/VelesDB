@@ -159,6 +159,33 @@ class Collection:
             searches = [{"vector": list(v), "top_k": int(top_k)} for v in queries]
         return self._inner.batch_search(searches)
 
+    def multi_query_search(
+        self,
+        queries: list[list[float]],
+        top_k: int = 10,
+        fusion_strategy: str | None = None,
+        fusion_params: dict[str, Any] | None = None,
+    ) -> list[list[dict[str, Any]]]:
+        """Multi-query search with fusion strategy."""
+        return self._inner.multi_query_search(
+            queries,
+            top_k=top_k,
+            fusion_strategy=fusion_strategy,
+            fusion_params=fusion_params,
+        )
+
+    def stream_insert(self, points: list[dict[str, Any]]) -> int:
+        """Streaming insert for real-time ingestion."""
+        return self._inner.stream_insert(points)
+
+    def search_batch_parallel(
+        self,
+        vectors: list[list[float]],
+        top_k: int = 10,
+    ) -> list[list[dict[str, Any]]]:
+        """Parallel batch search using rayon."""
+        return self._inner.search_batch_parallel(vectors, top_k=top_k)
+
     def search_with_quality(
         self,
         vector: Any,
