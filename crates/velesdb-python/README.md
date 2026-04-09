@@ -3,9 +3,9 @@
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-1.11.1-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
+[![Version](https://img.shields.io/badge/version-1.12.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
-Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.11.1 - a high-performance vector database for AI applications.
+Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.12.0 - a high-performance vector database for AI applications.
 
 ## Features
 
@@ -872,7 +872,7 @@ VelesDB is built in Rust with explicit SIMD optimizations:
 |-----------|--------|
 | **HNSW Search (10K/768D)** | **47.0 µs** (k=10, Balanced mode) |
 | **Recall@10 (Accurate)** | **100%** |
-| **Insert throughput vs pgvector** | **3.8-7x faster** (10K-100K vectors) |
+| **Insert throughput vs pgvector** | **3.8-7x faster** (10K-100K vectors, internal benchmarks on i9-14900KF, not independently verified) |
 
 *Measured with Criterion.rs on i9-14900KF. See [benchmarks/](../../benchmarks/) for methodology.*
 

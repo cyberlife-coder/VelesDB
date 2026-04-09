@@ -232,7 +232,7 @@ curl -X POST http://localhost:8080/collections/docs/search \
 
 ## Vector Engine
 
-Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search on commodity hardware.
+Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search on modern x86_64 hardware.
 
 | Metric | Value |
 |--------|-------|
@@ -397,7 +397,7 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | Domain | Component | Install |
 |--------|-----------|---------|
 | **Core** | [velesdb-core](crates/velesdb-core) — Vector + Graph + ColumnStore + VelesQL | `cargo add velesdb-core` |
-| **Server** | [velesdb-server](crates/velesdb-server) — REST API (37 endpoints, OpenAPI) | `cargo install velesdb-server` |
+| **Server** | [velesdb-server](crates/velesdb-server) — REST API (46 endpoints, OpenAPI) | `cargo install velesdb-server` |
 | **CLI** | [velesdb-cli](crates/velesdb-cli) — Interactive VelesQL REPL | `cargo install velesdb-cli` |
 | **Python** | [velesdb-python](crates/velesdb-python) — PyO3 bindings + NumPy | `pip install velesdb` |
 | **TypeScript** | [typescript-sdk](sdks/typescript) — Node.js & Browser SDK | `npm install @wiscale/velesdb-sdk` |
@@ -461,7 +461,7 @@ The container runs as a non-root `velesdb` user. Data persists via the named vol
 </details>
 
 <details>
-<summary>API Reference (37 REST endpoints)</summary>
+<summary>API Reference (46 REST endpoints)</summary>
 
 | Category | Key Endpoints |
 |----------|--------------|

@@ -56,7 +56,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | SHOW COLLECTIONS | Stable | 3.4 |
 | DESCRIBE COLLECTION | Stable | 3.4 |
 | EXPLAIN query plan | Stable | 3.4 |
-| EXPLAIN ANALYZE execution stats | Stable | 3.8 |
+| EXPLAIN ANALYZE execution stats | API-level (via `explain_analyze_query()` and `/query/explain?analyze=true`, not a parsed VelesQL statement) | 3.8 |
 | CREATE INDEX / DROP INDEX | Stable | 3.5 |
 | ANALYZE | Stable | 3.5 |
 | TRUNCATE | Stable | 3.5 |

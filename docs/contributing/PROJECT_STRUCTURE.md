@@ -55,7 +55,7 @@ velesdb-core/
 │   │   ├── benches/           # Criterion benchmarks
 │   │   └── tests/             # Integration + BDD tests
 │   │
-│   ├── velesdb-server/        # Axum REST API server (37 endpoints)
+│   ├── velesdb-server/        # Axum REST API server (46 endpoints)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── handlers/      # Route handlers (query/, search/, graph, admin)
@@ -142,7 +142,7 @@ Core engine. Contains:
 
 ### `velesdb-server`
 
-Axum-based REST API server with 37 endpoints. Exposes:
+Axum-based REST API server with 46 endpoints. Exposes:
 - CRUD endpoints for collections and points
 - `/search`, `/search/batch`, `/search/hybrid` endpoints
 - `/query` endpoint for VelesQL execution
