@@ -98,7 +98,7 @@ class SearchOpsMixin:
 
         quality = kwargs.get("search_quality", getattr(self, "_search_quality", None))
         if quality is not None:
-            validate_search_quality(quality)
+            quality = validate_search_quality(quality)
 
         core_filter = self._metadata_filters_to_core_filter(query.filters)
 
