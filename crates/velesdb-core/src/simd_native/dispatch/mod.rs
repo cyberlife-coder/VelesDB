@@ -18,6 +18,7 @@ pub use hamming::{
 
 /// SIMD capability level detected at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SimdLevel {
     /// AVX-512F available (x86_64 only).
     Avx512,

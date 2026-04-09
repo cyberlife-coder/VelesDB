@@ -283,6 +283,7 @@ impl Query {
 
 /// SQL set operator for compound queries (EPIC-040 US-006).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SetOperator {
     /// UNION - merge results, remove duplicates.
     Union,

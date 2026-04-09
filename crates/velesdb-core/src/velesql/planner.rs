@@ -36,6 +36,7 @@ pub use crate::velesql::query_stats::QueryStats;
 
 /// Execution strategy for hybrid queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExecutionStrategy {
     /// Execute vector search first, then filter by graph pattern.
     /// Best when graph filter is not very selective (>10% of data).

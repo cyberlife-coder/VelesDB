@@ -31,6 +31,7 @@ const ENTRY_PAYLOAD_SIZE: usize = 1 + 4 + 1; // 6 bytes
 
 /// Operation codes for HNSW delta WAL entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 #[repr(u8)]
 pub enum DeltaOp {
     /// Directed edge addition.
@@ -43,6 +44,7 @@ pub enum DeltaOp {
 
 /// A single HNSW graph mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HnswDelta {
     /// Add a directed edge from `from` to `to` at `layer`.
     AddEdge {
