@@ -857,7 +857,10 @@ async fn test_hybrid_search() {
     let results = json["results"].as_array().expect("Not an array");
     assert!(!results.is_empty());
     // Results should contain docs matching "rust" (ids 1 and 3)
-    let ids: Vec<i64> = results.iter().filter_map(|r| r["id"].as_i64()).collect();
+    let ids: Vec<i64> = results
+        .iter()
+        .filter_map(|r| r["id"].as_str().and_then(|s| s.parse::<i64>().ok()))
+        .collect();
     assert!(
         ids.contains(&1) || ids.contains(&3),
         "Should find rust-related docs"
@@ -1230,7 +1233,7 @@ async fn test_sq8_collection_upsert_and_search() {
     let results = json["results"].as_array().expect("Not an array");
     assert_eq!(results.len(), 3);
     // First result should be exact match
-    assert_eq!(results[0]["id"], 1);
+    assert_eq!(results[0]["id"], "1");
 }
 
 // =============================================================================
@@ -2018,8 +2021,8 @@ async fn test_graph_get_edges_by_label() {
 
     assert_eq!(json["count"], 1);
     assert_eq!(json["edges"][0]["label"], "KNOWS");
-    assert_eq!(json["edges"][0]["source"], 100);
-    assert_eq!(json["edges"][0]["target"], 200);
+    assert_eq!(json["edges"][0]["source"], "100");
+    assert_eq!(json["edges"][0]["target"], "200");
 }
 
 #[tokio::test]
@@ -2233,7 +2236,7 @@ async fn test_graph_traverse_with_rel_type_filter() {
     // Should only find node 2 (KNOWS), not node 3 (WROTE)
     let results = json["results"].as_array().expect("Not an array");
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0]["target_id"], 2);
+    assert_eq!(results[0]["target_id"], "2");
 }
 
 #[tokio::test]
@@ -2720,7 +2723,10 @@ async fn test_search_ids_with_filter() {
     let results = json["results"].as_array().expect("results is array");
 
     // Only IDs 1 and 3 have category="a"
-    let ids: Vec<u64> = results.iter().filter_map(|r| r["id"].as_u64()).collect();
+    let ids: Vec<u64> = results
+        .iter()
+        .filter_map(|r| r["id"].as_str().and_then(|s| s.parse::<u64>().ok()))
+        .collect();
     assert!(ids.contains(&1));
     assert!(ids.contains(&3));
     assert!(!ids.contains(&2));
@@ -2812,7 +2818,7 @@ async fn test_search_ids_with_mode() {
     assert!(!results.is_empty());
     // Verify id and score fields exist, but no payload
     for r in results {
-        assert!(r["id"].is_u64());
+        assert!(r["id"].is_string());
         assert!(r["score"].is_number());
         assert!(r.get("payload").is_none());
     }
@@ -2905,7 +2911,7 @@ async fn test_search_ids_sparse() {
 
     // Should return results as id+score only
     for r in results {
-        assert!(r["id"].is_u64());
+        assert!(r["id"].is_string());
         assert!(r["score"].is_number());
         assert!(r.get("payload").is_none());
     }

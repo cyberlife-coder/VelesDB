@@ -98,18 +98,6 @@ pub fn default_index_type() -> String {
     "hash".to_string()
 }
 
-/// Convert search mode string to `ef_search` value.
-#[must_use]
-pub fn mode_to_ef_search(mode: &str) -> Option<usize> {
-    match mode.to_lowercase().as_str() {
-        "fast" => Some(64),
-        "balanced" => Some(128),
-        "accurate" => Some(512),
-        "perfect" => Some(usize::MAX),
-        _ => None,
-    }
-}
-
 /// Convert search mode string to [`SearchQuality`].
 ///
 /// Supports all named modes including `"autotune"` which adapts ef

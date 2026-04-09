@@ -219,13 +219,12 @@ describe('WasmBackend', () => {
       expect(results[0].score).toBe(0.95);
     });
 
-    it('should reject weighted fusion strategy', async () => {
-      await expect(
-        backend.multiQuerySearch('vectors', [[0.1, 0.2, 0.3, 0.4]], {
-          fusion: 'weighted',
-          fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 },
-        }),
-      ).rejects.toThrow("Fusion strategy 'weighted' is not supported in WASM backend.");
+    it('should accept weighted fusion strategy', async () => {
+      const results = await backend.multiQuerySearch('vectors', [[0.1, 0.2, 0.3, 0.4]], {
+        fusion: 'weighted',
+        fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 },
+      });
+      expect(Array.isArray(results)).toBe(true);
     });
   });
 

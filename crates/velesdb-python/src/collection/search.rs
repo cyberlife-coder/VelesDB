@@ -406,11 +406,17 @@ impl Collection {
         }
 
         // Invariant: every query index was assigned to exactly one group.
-        debug_assert!(
-            output.iter().all(Option::is_some),
-            "batch dispatch left unassigned slots"
-        );
-        Ok(output.into_iter().map(|o| o.unwrap_or_default()).collect())
+        output
+            .into_iter()
+            .enumerate()
+            .map(|(i, slot)| {
+                slot.ok_or_else(|| {
+                    core_err(velesdb_core::error::Error::Query(format!(
+                        "batch dispatch left slot {i} unassigned"
+                    )))
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()
     }
 
     /// Converts core `SearchResult` vectors to Python dicts.

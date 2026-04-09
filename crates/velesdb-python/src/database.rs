@@ -494,10 +494,14 @@ impl Database {
             .inner
             .get_collection_stats(name)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to read stats: {e}")))?;
-        Ok(maybe_stats.map(|stats| {
-            let json = serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null);
-            utils::json_to_python(py, &json)
-        }))
+        maybe_stats
+            .map(|stats| {
+                let json = serde_json::to_value(&stats).map_err(|e| {
+                    PyRuntimeError::new_err(format!("stats serialization failed: {e}"))
+                })?;
+                Ok(utils::json_to_python(py, &json))
+            })
+            .transpose()
     }
 }
 

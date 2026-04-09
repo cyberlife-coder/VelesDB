@@ -8,7 +8,7 @@ Rule:
   - #<number>
   - #issue
 
-By default, checks `crates/velesdb-core/src/**/*.rs` excluding test/bench-like files.
+By default, checks all workspace crate `src/**/*.rs` excluding test/bench-like files.
 """
 
 from __future__ import annotations
@@ -21,7 +21,12 @@ from pathlib import Path
 
 ANNOTATION_RE = re.compile(r"\b(TODO|FIXME|HACK)\b")
 TAG_RE = re.compile(
-    r"(?:\[EPIC-[A-Za-z0-9.-]+/US-[A-Za-z0-9.-]+\]|#\d+|#issue)",
+    r"(?:"
+    r"\[EPIC-[A-Za-z0-9.-]+/US-[A-Za-z0-9.-]+\]"  # [EPIC-XXX/US-YYY]
+    r"|\([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\)"  # (EPIC-001), (US-GRAPH-01), (PRE-SEED), (MIGRATE-01), etc.
+    r"|#\d+"  # #123
+    r"|#issue"  # #issue
+    r")",
     re.IGNORECASE,
 )
 
@@ -39,10 +44,21 @@ def is_production_file(path: Path) -> bool:
 
 
 def iter_default_files() -> list[Path]:
-    root = Path("crates/velesdb-core/src")
-    if not root.exists():
-        return []
-    return [p for p in root.rglob("*.rs") if is_production_file(p)]
+    roots = [
+        Path("crates/velesdb-core/src"),
+        Path("crates/velesdb-server/src"),
+        Path("crates/velesdb-cli/src"),
+        Path("crates/velesdb-migrate/src"),
+        Path("crates/velesdb-mobile/src"),
+        Path("crates/velesdb-wasm/src"),
+        Path("crates/tauri-plugin-velesdb/src"),
+    ]
+    files: list[Path] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        files.extend(p for p in root.rglob("*.rs") if is_production_file(p))
+    return files
 
 
 def check_files(files: list[Path]) -> list[str]:

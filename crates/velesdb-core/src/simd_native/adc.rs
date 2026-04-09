@@ -10,6 +10,7 @@
 // the PQ rescoring pipeline. Remove this allow when Phase 03 integration is complete.
 #![allow(dead_code)]
 
+#[allow(unused_imports)] // simd_level/SimdLevel used only on x86_64/aarch64 targets
 use super::dispatch::{simd_level, SimdLevel};
 #[cfg(target_arch = "x86_64")]
 use super::reduction::hsum_avx256;

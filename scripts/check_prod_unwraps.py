@@ -2,8 +2,8 @@
 """
 Detect `.unwrap()` calls in production Rust code.
 
-Scans `crates/velesdb-core/src/` and `crates/velesdb-server/src/` for `.unwrap()`
-in production code. Skips test code, comments, and doc examples.
+Scans all workspace crate `src/` directories for `.unwrap()` in production code.
+Skips test code, comments, and doc examples.
 
 Exit code 0 = clean, 1 = violations found.
 """
@@ -19,6 +19,11 @@ UNWRAP_RE = re.compile(r"\.unwrap\(\)")
 SCAN_DIRS = [
     Path("crates/velesdb-core/src"),
     Path("crates/velesdb-server/src"),
+    Path("crates/velesdb-cli/src"),
+    Path("crates/velesdb-migrate/src"),
+    Path("crates/velesdb-mobile/src"),
+    Path("crates/velesdb-wasm/src"),
+    Path("crates/tauri-plugin-velesdb/src"),
 ]
 
 

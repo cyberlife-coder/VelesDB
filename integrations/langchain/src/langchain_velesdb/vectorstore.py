@@ -5,8 +5,12 @@ as the underlying vector database for storing and retrieving embeddings.
 
 Search and query operations are implemented in focused mixin modules:
 - :mod:`langchain_velesdb.search_ops` — vector/hybrid/text/batch/multi-query search
+- :mod:`langchain_velesdb.multi_query_ops` — batch and multi-query search
 - :mod:`langchain_velesdb.graph_ops` — VelesQL and MATCH query operations
 - :mod:`langchain_velesdb.scroll_ops` — cursor-paginated scroll iteration
+
+Point construction and streaming helpers live in:
+- :mod:`langchain_velesdb.point_builder` — build_point, flush_stream_batches
 """
 
 from __future__ import annotations
@@ -35,34 +39,12 @@ from langchain_velesdb.security import (
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
 from langchain_velesdb._common import payload_to_doc_parts
+from langchain_velesdb.point_builder import build_point as _build_point, flush_stream_batches as _flush_stream_batches
 from langchain_velesdb.search_ops import SearchOpsMixin
 from langchain_velesdb.graph_ops import GraphOpsMixin
 from langchain_velesdb.scroll_ops import ScrollOpsMixin, _scroll_one_batch  # noqa: F401
 
 logger = logging.getLogger(__name__)
-
-
-def _flush_stream_batches(collection: Any, points: list, batch_size: int) -> None:
-    """Send points to a collection in batches via stream_insert."""
-    for start in range(0, len(points), batch_size):
-        collection.stream_insert(points[start : start + batch_size])
-
-
-def _build_point(
-    int_id: int,
-    text: str,
-    embedding: List[float],
-    metadata: Optional[dict] = None,
-    sparse_vector: Optional[dict] = None,
-) -> dict:
-    """Build a single VelesDB point dict."""
-    payload: dict = {"text": text}
-    if metadata is not None:
-        payload.update(metadata)
-    point: dict = {"id": int_id, "vector": embedding, "payload": payload}
-    if sparse_vector is not None:
-        point["sparse_vector"] = sparse_vector
-    return point
 
 
 class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, ScrollOpsMixin, VectorStore):
@@ -512,6 +494,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         if not texts_list:
             return []
 
+        validate_batch_size(len(texts_list))
         for text in texts_list:
             validate_text(text)
 

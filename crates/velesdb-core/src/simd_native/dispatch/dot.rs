@@ -1,3 +1,4 @@
+#[allow(unused_imports)] // simd_level used only on x86_64/aarch64 targets
 use super::{simd_level, SimdLevel};
 
 /// Dot product with runtime SIMD dispatch.
@@ -83,6 +84,7 @@ pub(super) fn batch_prefetch_candidate(candidates: &[&[f32]], i: usize) {
     }
 }
 
+#[allow(unused_variables)] // dim used only on x86_64 for dimension-based dispatch
 pub(super) fn resolve_dot_product(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]) -> f32 {
     match level {
         #[cfg(target_arch = "x86_64")]

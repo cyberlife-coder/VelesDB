@@ -350,16 +350,18 @@ class SearchOpsMixin:
         # Security: Validate batch size
         validate_batch_size(len(queries))
 
-        first_emb = queries[0].query_embedding
-        if first_emb is None:
-            return [VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
-                    for _ in queries]
+        missing = [i for i, q in enumerate(queries) if q.query_embedding is None]
+        if missing:
+            raise ValueError(
+                f"Queries at indices {missing} have no embedding. "
+                "All queries in a batch must have a query_embedding set."
+            )
 
-        dimension = len(first_emb)
+        dimension = len(queries[0].query_embedding)  # type: ignore[arg-type]
         collection = self._get_collection(dimension)
 
         searches = [{"vector": q.query_embedding, "top_k": q.similarity_top_k or 10}
-                    for q in queries if q.query_embedding is not None]
+                    for q in queries]
 
         batch_results = collection.batch_search(searches)
 
@@ -478,14 +480,5 @@ class SearchOpsMixin:
         dimension = len(query_embedding)
         collection = self._get_collection(dimension)
         raw = collection.search_ids(query_embedding, top_k=top_k)
-        # search_ids returns [{id, score}, ...]; extract the node_id string
-        # stored in the payload, falling back to the numeric point ID.
-        ids: List[str] = []
-        for entry in raw:
-            payload = entry.get("payload", {})
-            node_id = payload.get("node_id")
-            if node_id is not None:
-                ids.append(str(node_id))
-            else:
-                ids.append(str(entry.get("id", "")))
-        return ids
+        # search_ids returns [{id, score}, ...] — no payload.
+        return [str(entry["id"]) for entry in raw]

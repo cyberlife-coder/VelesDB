@@ -386,7 +386,6 @@ pub(crate) struct Collection {
     /// construction via `HnswSegmentBuilder` for high-throughput bulk import.
     ///
     /// Lock order position: **11** (same tier as `deferred_indexer`).
-    #[allow(dead_code)] // Read by future upsert_bulk_v2 path
     pub(crate) async_index_builder: Option<Arc<AsyncIndexBuilder>>,
 }
 

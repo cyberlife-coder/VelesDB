@@ -48,6 +48,7 @@ pub fn fast_rsqrt(x: f32) -> f32 {
 /// Algebraic identity: `dot / (sqrt(na²) × sqrt(nb²)) = dot / sqrt(na² × nb²)`.
 /// Saves one `sqrtss` (~3 cycles throughput on modern x86), exact precision.
 /// Used by all SIMD cosine kernels (AVX2, AVX-512, NEON) as the final step.
+#[allow(dead_code)] // Used by AVX2/AVX-512/NEON cosine kernels, not on WASM
 #[inline]
 #[must_use]
 pub(crate) fn cosine_finish_fast(dot: f32, norm_a_sq: f32, norm_b_sq: f32) -> f32 {

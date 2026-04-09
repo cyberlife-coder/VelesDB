@@ -137,6 +137,7 @@ fn extract_mutation_collection_name(parsed: &Query) -> String {
             IntrospectionStatement::ShowCollections | IntrospectionStatement::Explain(_) => {
                 "_system".to_string()
             }
+            // FIXME(PRE-SEED): New IntrospectionStatement variants silently map to _system. Update when core adds variants.
             _ => "_system".to_string(),
         };
     }
@@ -146,6 +147,7 @@ fn extract_mutation_collection_name(parsed: &Query) -> String {
                 .collection
                 .clone()
                 .unwrap_or_else(|| "_system".to_string()),
+            // FIXME(PRE-SEED): New AdminStatement variants silently map to _system. Update when core adds variants.
             _ => "_system".to_string(),
         };
     }
@@ -157,29 +159,29 @@ fn extract_mutation_collection_name(parsed: &Query) -> String {
 
 /// Extract collection name from a DDL statement.
 fn extract_ddl_collection(parsed: &Query) -> Option<String> {
-    parsed.ddl.as_ref().map(|ddl| match ddl {
-        DdlStatement::CreateCollection(s) => s.name.clone(),
-        DdlStatement::DropCollection(s) => s.name.clone(),
-        DdlStatement::CreateIndex(s) => s.collection.clone(),
-        DdlStatement::DropIndex(s) => s.collection.clone(),
-        DdlStatement::Analyze(s) => s.collection.clone(),
-        DdlStatement::Truncate(s) => s.collection.clone(),
-        DdlStatement::AlterCollection(s) => s.collection.clone(),
-        _ => format!("<unknown DDL {:?}>", ddl),
+    parsed.ddl.as_ref().and_then(|ddl| match ddl {
+        DdlStatement::CreateCollection(s) => Some(s.name.clone()),
+        DdlStatement::DropCollection(s) => Some(s.name.clone()),
+        DdlStatement::CreateIndex(s) => Some(s.collection.clone()),
+        DdlStatement::DropIndex(s) => Some(s.collection.clone()),
+        DdlStatement::Analyze(s) => Some(s.collection.clone()),
+        DdlStatement::Truncate(s) => Some(s.collection.clone()),
+        DdlStatement::AlterCollection(s) => Some(s.collection.clone()),
+        _ => None,
     })
 }
 
 /// Extract collection name from a DML statement.
 fn extract_dml_collection(parsed: &Query) -> Option<String> {
-    parsed.dml.as_ref().map(|dml| match dml {
-        DmlStatement::Insert(s) | DmlStatement::Upsert(s) => s.table.clone(),
-        DmlStatement::Update(s) => s.table.clone(),
-        DmlStatement::InsertEdge(s) => s.collection.clone(),
-        DmlStatement::Delete(s) => s.table.clone(),
-        DmlStatement::DeleteEdge(s) => s.collection.clone(),
-        DmlStatement::SelectEdges(s) => s.collection.clone(),
-        DmlStatement::InsertNode(s) => s.collection.clone(),
-        _ => format!("<unknown DML {:?}>", dml),
+    parsed.dml.as_ref().and_then(|dml| match dml {
+        DmlStatement::Insert(s) | DmlStatement::Upsert(s) => Some(s.table.clone()),
+        DmlStatement::Update(s) => Some(s.table.clone()),
+        DmlStatement::InsertEdge(s) => Some(s.collection.clone()),
+        DmlStatement::Delete(s) => Some(s.table.clone()),
+        DmlStatement::DeleteEdge(s) => Some(s.collection.clone()),
+        DmlStatement::SelectEdges(s) => Some(s.collection.clone()),
+        DmlStatement::InsertNode(s) => Some(s.collection.clone()),
+        _ => None,
     })
 }
 

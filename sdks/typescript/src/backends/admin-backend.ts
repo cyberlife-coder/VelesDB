@@ -9,6 +9,8 @@ import type {
   CollectionStatsResponse,
   CollectionConfigResponse,
   ColumnStatsDetail,
+  DistanceMetric,
+  StorageMode,
 } from '../types';
 import type { BaseTransport } from './shared';
 import { throwOnError, returnNullOnNotFound, collectionPath } from './shared';
@@ -119,8 +121,8 @@ export async function getCollectionConfig(
   return {
     name: data.name,
     dimension: data.dimension,
-    metric: data.metric,
-    storageMode: data.storage_mode,
+    metric: data.metric as DistanceMetric,
+    storageMode: data.storage_mode as StorageMode,
     pointCount: data.point_count,
     metadataOnly: data.metadata_only,
     graphSchema: data.graph_schema,
