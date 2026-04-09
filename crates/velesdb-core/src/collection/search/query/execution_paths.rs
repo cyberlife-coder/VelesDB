@@ -208,11 +208,7 @@ impl Collection {
                 // Convert bitmap to ID list and scan with filter
                 let candidate_ids: Vec<u64> = bitmap.iter().map(u64::from).collect();
                 if candidate_ids.len() <= execution_limit.saturating_mul(50).max(1000) {
-                    return Ok(self.scan_ids_with_filter(
-                        &candidate_ids,
-                        &filter,
-                        execution_limit,
-                    ));
+                    return Ok(self.scan_ids_with_filter(&candidate_ids, &filter, execution_limit));
                 }
                 // Too many bitmap hits — fall through to scan with early exit
             }

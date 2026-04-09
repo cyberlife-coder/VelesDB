@@ -48,6 +48,7 @@ mod match_metrics_tests;
 pub mod match_planner;
 #[cfg(test)]
 mod match_planner_tests;
+mod metadata_query;
 mod multi_vector;
 #[cfg(test)]
 mod multi_vector_tests;
@@ -62,7 +63,6 @@ pub mod projection;
 pub mod pushdown;
 #[cfg(test)]
 mod pushdown_tests;
-mod metadata_query;
 mod query_pipeline;
 pub mod score_fusion;
 #[cfg(test)]

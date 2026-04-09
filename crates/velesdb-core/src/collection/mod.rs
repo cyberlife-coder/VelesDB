@@ -19,6 +19,7 @@ pub mod async_ops;
 #[cfg(test)]
 mod async_ops_tests;
 pub mod auto_reindex;
+mod collection_config;
 mod core;
 pub mod diagnostics;
 pub mod graph;
@@ -54,6 +55,7 @@ mod e2e_integration_tests;
 mod set_operations_execution_tests;
 
 pub use any_collection::AnyCollection;
+pub use collection_config::{CollectionConfig, CURRENT_SCHEMA_VERSION};
 pub use core::{IndexInfo, ScrollBatch, MAX_DIMENSION, MIN_DIMENSION};
 pub use diagnostics::{CollectionDiagnostics, IndexHealth};
 pub use graph::{
@@ -63,5 +65,5 @@ pub use graph::{
 pub use graph_collection::GraphCollection;
 pub use metadata_collection::MetadataCollection;
 pub(crate) use types::Collection;
-pub use types::{CollectionConfig, CollectionType};
+pub use types::CollectionType;
 pub use vector_collection::VectorCollection;
