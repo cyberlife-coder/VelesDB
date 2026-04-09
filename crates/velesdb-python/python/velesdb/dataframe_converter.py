@@ -86,7 +86,12 @@ def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
         payload = r.get("payload")
         if isinstance(payload, dict):
             for k, v in payload.items():
-                safe_key = f"payload_{k}" if k in _SEARCH_RESERVED else k
+                if k in _SEARCH_RESERVED:
+                    safe_key = f"payload_{k}"
+                    while safe_key in payload:
+                        safe_key = f"_{safe_key}"
+                else:
+                    safe_key = k
                 row[safe_key] = v
         row["id"] = r.get("id")
         row["score"] = r.get("score")
@@ -161,7 +166,12 @@ def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
         if has_dict_payload:
             if isinstance(payload, dict):
                 for k, v in payload.items():
-                    safe_key = f"payload_{k}" if k in _SCROLL_RESERVED else k
+                    if k in _SCROLL_RESERVED:
+                        safe_key = f"payload_{k}"
+                        while safe_key in payload:
+                            safe_key = f"_{safe_key}"
+                    else:
+                        safe_key = k
                     row[safe_key] = v
             # Non-dict payloads in a mixed batch are silently skipped;
             # their columns will be NaN/null in the final DataFrame.
