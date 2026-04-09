@@ -423,7 +423,10 @@ def _validate_sparse_entry(key: Any, value: Any) -> None:
         )
 
 
-_SIMPLE_QUALITIES = frozenset({"fast", "balanced", "accurate", "perfect", "autotune"})
+_SIMPLE_QUALITIES = frozenset({
+    "fast", "balanced", "accurate", "perfect",
+    "autotune", "auto_tune", "auto",  # aliases for consistency with WASM/Rust
+})
 _CUSTOM_QUALITY_RE = re.compile(r"^custom:\d+$")
 _ADAPTIVE_QUALITY_RE = re.compile(r"^adaptive:\d+:\d+$")
 
