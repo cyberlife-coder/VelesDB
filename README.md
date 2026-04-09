@@ -461,7 +461,7 @@ The container runs as a non-root `velesdb` user. Data persists via the named vol
 </details>
 
 <details>
-<summary>API Reference (47 REST endpoints)</summary>
+<summary>API Reference (46 REST endpoints)</summary>
 
 | Category | Key Endpoints |
 |----------|--------------|

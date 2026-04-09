@@ -101,6 +101,6 @@ Normal : dépend du CPU, de `ef_search`, des filtres/payloads et du dataset.
 - [VelesQL Specification](VELESQL_SPEC.md) — Full query language reference with examples
 - [Search Modes Guide](guides/SEARCH_MODES.md) — How to choose between Fast, Balanced, Accurate, Perfect, and Adaptive
 - [Tuning Guide](guides/TUNING_GUIDE.md) — HNSW parameters, quantization modes, memory estimation
-- [API Reference](reference/api-reference.md) — All 47 REST endpoints with request/response examples
+- [API Reference](reference/api-reference.md) — All 46 REST endpoints with request/response examples
 - [Installation Guide](guides/INSTALLATION.md) — All platforms: Linux, macOS, Windows, Docker, WASM, Mobile
 - [E-commerce Example](../examples/ecommerce_recommendation/) — Full Vector + Graph + Filter demo in Rust
