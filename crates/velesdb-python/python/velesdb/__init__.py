@@ -161,17 +161,21 @@ class Collection:
 
     def multi_query_search(
         self,
-        queries: list[list[float]],
+        vectors: list[list[float]],
         top_k: int = 10,
-        fusion_strategy: str | None = None,
-        fusion_params: dict[str, Any] | None = None,
-    ) -> list[list[dict[str, Any]]]:
-        """Multi-query search with fusion strategy."""
+        fusion: Any = None,
+        filter: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Multi-query search with result fusion.
+
+        Args:
+            vectors: List of query vectors.
+            top_k: Number of results per query (default: 10).
+            fusion: Optional FusionStrategy instance.
+            filter: Optional metadata filter dict.
+        """
         return self._inner.multi_query_search(
-            queries,
-            top_k=top_k,
-            fusion_strategy=fusion_strategy,
-            fusion_params=fusion_params,
+            vectors, top_k=top_k, fusion=fusion, filter=filter,
         )
 
     def stream_insert(self, points: list[dict[str, Any]]) -> int:

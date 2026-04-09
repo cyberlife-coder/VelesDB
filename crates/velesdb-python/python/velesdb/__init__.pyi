@@ -306,22 +306,21 @@ class Collection:
 
     def multi_query_search(
         self,
-        queries: List[List[float]],
+        vectors: List[Union[List[float], "np.ndarray"]],
         top_k: int = 10,
-        fusion_strategy: Optional[str] = None,
-        fusion_params: Optional[Dict[str, Any]] = None,
-    ) -> List[List[Dict[str, Any]]]:
-        """Multi-query search with fusion strategy.
+        fusion: Optional["FusionStrategy"] = None,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Multi-query search with result fusion.
 
         Args:
-            queries: List of query vectors
-            top_k: Number of results per fused output (default: 10)
-            fusion_strategy: Named fusion strategy (e.g. ``'rrf'``, ``'weighted'``).
-                Defaults to RRF when None.
-            fusion_params: Strategy-specific parameters (e.g. ``{'k': 60}`` for RRF).
+            vectors: List of query vectors.
+            top_k: Number of results (default: 10).
+            fusion: Optional FusionStrategy instance. Defaults to RRF.
+            filter: Optional metadata filter dict.
 
         Returns:
-            List of result lists, one per query vector (pre-fusion per-query results).
+            Fused search results as list of dicts.
         """
         ...
 
