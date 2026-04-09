@@ -181,6 +181,7 @@ impl ParsedStatement {
                 velesdb_core::velesql::DdlStatement::Analyze(s) => s.collection.clone(),
                 velesdb_core::velesql::DdlStatement::Truncate(s) => s.collection.clone(),
                 velesdb_core::velesql::DdlStatement::AlterCollection(s) => s.collection.clone(),
+                _ => return None,
             });
         }
         if let Some(name) = Self::dml_collection_name(&self.inner) {

@@ -12,6 +12,7 @@ use crate::velesql::GraphPattern;
 
 /// A condition in a WHERE clause.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Condition {
     /// Vector similarity search: `vector NEAR [metric] $param`
     VectorSearch(VectorSearch),

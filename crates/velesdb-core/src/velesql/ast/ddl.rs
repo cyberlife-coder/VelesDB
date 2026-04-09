@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// DDL statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DdlStatement {
     /// CREATE COLLECTION statement.
     CreateCollection(CreateCollectionStatement),

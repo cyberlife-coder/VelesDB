@@ -137,14 +137,17 @@ fn extract_mutation_collection_name(parsed: &Query) -> String {
             IntrospectionStatement::ShowCollections | IntrospectionStatement::Explain(_) => {
                 "_system".to_string()
             }
+            _ => "_system".to_string(),
         };
     }
     if let Some(ref admin) = parsed.admin {
-        let velesdb_core::velesql::AdminStatement::Flush(f) = admin;
-        return f
-            .collection
-            .clone()
-            .unwrap_or_else(|| "_system".to_string());
+        return match admin {
+            velesdb_core::velesql::AdminStatement::Flush(f) => f
+                .collection
+                .clone()
+                .unwrap_or_else(|| "_system".to_string()),
+            _ => "_system".to_string(),
+        };
     }
     if let Some(ref train) = parsed.train {
         return train.collection.clone();
@@ -162,6 +165,7 @@ fn extract_ddl_collection(parsed: &Query) -> Option<String> {
         DdlStatement::Analyze(s) => s.collection.clone(),
         DdlStatement::Truncate(s) => s.collection.clone(),
         DdlStatement::AlterCollection(s) => s.collection.clone(),
+        _ => format!("<unknown DDL {:?}>", ddl),
     })
 }
 
@@ -175,6 +179,7 @@ fn extract_dml_collection(parsed: &Query) -> Option<String> {
         DmlStatement::DeleteEdge(s) => s.collection.clone(),
         DmlStatement::SelectEdges(s) => s.collection.clone(),
         DmlStatement::InsertNode(s) => s.collection.clone(),
+        _ => format!("<unknown DML {:?}>", dml),
     })
 }
 

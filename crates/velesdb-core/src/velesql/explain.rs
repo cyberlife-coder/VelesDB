@@ -67,6 +67,7 @@ pub struct QueryPlan {
 
 /// A node in the query execution plan tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum PlanNode {
     /// Vector similarity search operation.
     VectorSearch(VectorSearchPlan),
@@ -295,6 +296,7 @@ pub struct NodeStats {
 
 /// Type of index used in the query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum IndexType {
     /// HNSW index for vector search.
     Hnsw,
@@ -308,6 +310,7 @@ pub enum IndexType {
 
 /// Strategy for applying filters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum FilterStrategy {
     /// No filter.
     #[default]

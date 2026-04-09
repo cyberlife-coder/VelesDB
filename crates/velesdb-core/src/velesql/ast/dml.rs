@@ -106,6 +106,7 @@ pub struct InsertNodeStatement {
 
 /// DML statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DmlStatement {
     /// INSERT statement.
     Insert(InsertStatement),

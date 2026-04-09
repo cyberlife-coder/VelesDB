@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Admin statements for database maintenance operations.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AdminStatement {
     /// `FLUSH [FULL] [collection]` -- persist collection data to disk.
     Flush(FlushStatement),
