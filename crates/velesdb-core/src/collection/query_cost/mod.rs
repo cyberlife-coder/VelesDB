@@ -39,6 +39,8 @@
 
 use std::fmt;
 
+pub mod calibration;
+pub mod cost_factors;
 pub mod cost_model;
 pub mod plan_generator;
 pub mod query_executor;

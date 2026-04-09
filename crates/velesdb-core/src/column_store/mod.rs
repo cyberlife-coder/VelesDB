@@ -32,6 +32,8 @@ mod batch;
 #[cfg(test)]
 mod batch_tests;
 mod filter;
+mod filter_array;
+mod filter_geo;
 #[cfg(test)]
 mod filter_tests;
 pub(crate) mod haversine;
@@ -47,7 +49,7 @@ use roaring::RoaringBitmap;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
-pub use filter::{GeoBboxParams, GeoDistanceParams};
+pub use filter_geo::{CompareOp, GeoBboxParams, GeoDistanceParams};
 pub use string_table::StringTable;
 pub use types::{
     AutoVacuumConfig, BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStoreError,
