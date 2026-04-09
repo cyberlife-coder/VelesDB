@@ -13,7 +13,7 @@
 //! - Linux: `fallocate(FALLOC_FL_PUNCH_HOLE)`
 //! - Windows: `FSCTL_SET_ZERO_DATA`
 
-// SAFETY: Numeric casts in this file are intentional and bounded.
+// Reason: Numeric casts in this file are intentional and bounded.
 // Each cast site carries an inline #[allow] with a per-site justification.
 
 use super::sharded_index::ShardedIndex;
@@ -134,7 +134,7 @@ fn punch_hole_windows(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     }
 
     let handle = file.as_raw_handle() as HANDLE;
-    // SAFETY: Win32 API requires i64 for file offsets. offset and len are typically < i64::MAX
+    // Reason: Win32 API requires i64 for file offsets. offset and len are typically < i64::MAX
     // on any realistic file system. Saturate to prevent undefined behavior on edge cases.
     #[allow(clippy::cast_possible_wrap)]
     let info = FileZeroDataInformation {
@@ -153,7 +153,7 @@ fn punch_hole_windows(file: &File, offset: u64, len: u64) -> io::Result<bool> {
             handle,
             FSCTL_SET_ZERO_DATA,
             std::ptr::addr_of!(info).cast(),
-            // SAFETY: FileZeroDataInformation struct size is always <= 16 bytes; fits in u32.
+            // Reason: FileZeroDataInformation struct size is always <= 16 bytes; fits in u32.
             #[allow(clippy::cast_possible_truncation)]
             {
                 std::mem::size_of::<FileZeroDataInformation>() as u32
@@ -190,7 +190,7 @@ fn punch_hole_fallback(file: &File, offset: u64, len: u64) -> io::Result<bool> {
 
     // Write zeros in chunks to avoid large allocations
     let zeros = vec![0u8; FALLBACK_CHUNK_SIZE];
-    // SAFETY: `len` represents a byte range within a single file; on supported
+    // Reason: `len` represents a byte range within a single file; on supported
     // platforms (64-bit Linux/Windows) usize == u64, so no truncation occurs.
     // On 32-bit targets this function is only reachable for lengths <= usize::MAX.
     #[allow(clippy::cast_possible_truncation)]
@@ -350,7 +350,7 @@ impl CompactionContext<'_> {
             .open(&temp_path)?;
 
         // Size the temp file for active vectors
-        // SAFETY: active_size = active_count * vector_size; both are bounded by
+        // Reason: active_size = active_count * vector_size; both are bounded by
         // available memory (usize), so usize -> u64 widens and never truncates.
         #[allow(clippy::cast_possible_truncation)]
         let new_size = (active_size as u64).max(self.initial_size);
@@ -412,7 +412,7 @@ impl CompactionContext<'_> {
         // an intermediate empty state visible to concurrent readers.
         *self.mmap.write() = new_mmap;
         self.index.replace_all(new_index);
-        // SAFETY: Release ordering pairs with the Acquire loads in
+        // Reason: Release ordering pairs with the Acquire loads in
         // `should_compact` and `compact` to ensure readers on ARM/weak-memory
         // architectures observe the updated mmap and index before seeing the
         // new offset value.

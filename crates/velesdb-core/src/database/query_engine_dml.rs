@@ -38,7 +38,7 @@ impl Database {
     }
 
     /// Resolves column values from a single row into id, vector, and payload fields.
-    #[allow(clippy::type_complexity)] // SAFETY: one-off tuple return for internal helper.
+    #[allow(clippy::type_complexity)] // Reason: one-off tuple return for internal helper.
     fn resolve_insert_row(
         columns: &[String],
         row: &[crate::velesql::Value],

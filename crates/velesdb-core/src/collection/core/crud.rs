@@ -122,7 +122,7 @@ impl Collection {
     /// any missing vectors. The recovery window is bounded by one batch.
     ///
     /// Returns buffered sparse vectors for deferred insertion.
-    #[allow(clippy::type_complexity)] // SAFETY: tuple of (sparse_batch, old_payloads) — extracting a named type adds indirection without clarity
+    #[allow(clippy::type_complexity)] // Reason: tuple of (sparse_batch, old_payloads) — extracting a named type adds indirection without clarity
     fn upsert_storage_and_index(
         &self,
         points: &[Point],

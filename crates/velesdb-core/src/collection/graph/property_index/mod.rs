@@ -3,7 +3,7 @@
 //! Provides O(1) lookups on (label, property_name, value) instead of O(n) scans.
 //! Also includes composite indexes for (label, property1, property2, ...) lookups.
 
-// SAFETY: Numeric casts in property indexing are intentional:
+// Reason: Numeric casts in property indexing are intentional:
 // - u128->u64 for millisecond timestamps: values fit within u64 range
 // - u64/usize->f64 for statistics: precision loss acceptable for query planning
 // - All values are bounded by collection sizes and query counts

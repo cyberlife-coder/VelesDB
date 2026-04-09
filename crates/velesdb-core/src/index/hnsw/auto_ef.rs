@@ -24,7 +24,7 @@ pub(crate) fn auto_ef_range(count: usize, dimension: usize, k: usize) -> (usize,
     let base = collection_size_base_ef(count, k);
     let dim_factor = dimension_factor(dimension);
 
-    // SAFETY: base <= k*12 (at most ~120K for k=10K), dim_factor <= 1.5.
+    // Reason: base <= k*12 (at most ~120K for k=10K), dim_factor <= 1.5.
     // Product is always small and positive, so f64 precision loss and
     // truncation to usize are both harmless.
     #[allow(

@@ -1,6 +1,6 @@
 //! Runtime statistics for adaptive query planning.
 
-// SAFETY: u64 → f64 casts are for selectivity ratio normalisation and EMA retrieval;
+// Reason: u64 → f64 casts are for selectivity ratio normalisation and EMA retrieval;
 // cardinalities and ratios here never approach 2^53 so precision loss is negligible.
 #![allow(clippy::cast_precision_loss)]
 
@@ -32,7 +32,7 @@ impl QueryStats {
     pub fn update_graph_selectivity(&self, matched: u64, total: u64) {
         if total > 0 {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            // SAFETY: selectivity ratio * 1_000_000 is always in [0, 1_000_000] range,
+            // Reason: selectivity ratio * 1_000_000 is always in [0, 1_000_000] range,
             // which fits in u64. Both matched and total are unsigned, so ratio is non-negative.
             let selectivity = (matched as f64 / total as f64 * 1_000_000.0) as u64;
             self.graph_selectivity.store(selectivity, Ordering::Relaxed);

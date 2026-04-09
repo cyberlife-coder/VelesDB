@@ -12,7 +12,7 @@
 //! | peek() | ~30ns (L1 only) | N/A |
 //! | insert() | ~100ns (write-through) | - |
 
-// SAFETY: Numeric casts in cache metrics are intentional:
+// Reason: Numeric casts in cache metrics are intentional:
 // - All casts are for hit rate calculations and statistics
 // - f64/u64 conversions for computing cache hit ratios
 // - Values bounded by cache size and access patterns

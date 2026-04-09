@@ -31,7 +31,7 @@
 #[inline]
 #[must_use]
 pub fn fast_rsqrt(x: f32) -> f32 {
-    // SAFETY: Bit manipulation is safe for f32
+    // Reason: Bit manipulation is safe for f32
     // Magic constant from Quake III, refined for f32
     let i = x.to_bits();
     let i = 0x5f37_5a86_u32.wrapping_sub(i >> 1);

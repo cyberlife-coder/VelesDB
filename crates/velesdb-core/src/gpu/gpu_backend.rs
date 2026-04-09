@@ -325,7 +325,7 @@ impl GpuAccelerator {
                 usage: wgpu::BufferUsages::STORAGE,
             });
 
-        // SAFETY: num_vectors * 4 bytes always fits in u64 (validated by u32 check above)
+        // Reason: num_vectors * 4 bytes always fits in u64 (validated by u32 check above)
         #[allow(clippy::cast_possible_truncation)]
         let results_size = (num_vectors * std::mem::size_of::<f32>()) as u64;
         let results_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -342,7 +342,7 @@ impl GpuAccelerator {
             mapped_at_creation: false,
         });
 
-        // SAFETY: dimension and num_vectors validated to fit in u32 by validate_gpu_params
+        // Reason: dimension and num_vectors validated to fit in u32 by validate_gpu_params
         #[allow(clippy::cast_possible_truncation)]
         let params = [dimension as u32, num_vectors as u32];
         let params_buffer = self
@@ -381,7 +381,7 @@ impl GpuAccelerator {
     }
 
     /// Encodes the compute pass and submits it to the GPU queue.
-    // SAFETY: GPU encode needs device, queue, pipeline, bind_group, and 3 buffer
+    // Reason: GPU encode needs device, queue, pipeline, bind_group, and 3 buffer
     // refs — bundling into a struct would add lifetime complexity for a private fn.
     #[allow(clippy::too_many_arguments)]
     fn encode_and_submit(
@@ -406,7 +406,7 @@ impl GpuAccelerator {
             compute_pass.set_pipeline(pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
 
-            // SAFETY: num_vectors validated to fit in u32; div_ceil(256) only reduces the value.
+            // Reason: num_vectors validated to fit in u32; div_ceil(256) only reduces the value.
             #[allow(clippy::cast_possible_truncation)]
             let workgroups = num_vectors.div_ceil(256) as u32;
             compute_pass.dispatch_workgroups(workgroups, 1, 1);

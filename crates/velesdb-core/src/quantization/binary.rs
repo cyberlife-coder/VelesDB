@@ -135,7 +135,7 @@ impl QuantizationCodec for BinaryQuantizedVector {
             self.dimension
         );
 
-        // SAFETY: dimension validated above to fit in u32
+        // Reason: dimension validated above to fit in u32
         #[allow(clippy::cast_possible_truncation)]
         let header = (self.dimension as u32).to_le_bytes();
         serialize_with_header(&header, &self.data)
@@ -146,7 +146,7 @@ impl QuantizationCodec for BinaryQuantizedVector {
             validate_and_split_header(bytes, BINARY_HEADER_SIZE, "BinaryQuantizedVector")?;
 
         #[allow(clippy::cast_possible_truncation)]
-        // SAFETY: u32 always fits in usize on 32-bit and 64-bit platforms
+        // Reason: u32 always fits in usize on 32-bit and 64-bit platforms
         let dimension = u32::from_le_bytes([header[0], header[1], header[2], header[3]]) as usize;
         let expected_data_len = dimension.div_ceil(8);
 

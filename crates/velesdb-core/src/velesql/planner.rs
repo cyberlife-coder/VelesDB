@@ -19,7 +19,7 @@
 //! - Implement cost model based on index cardinality
 //! - Add adaptive query execution with plan switching
 
-// SAFETY: Numeric casts across this file are intentional and bounded:
+// Reason: Numeric casts across this file are intentional and bounded:
 // - u64/usize → f64: cardinalities used in planning heuristics; ±1 ULP is operationally irrelevant.
 // - f64 → usize: over-fetch factor clamped to [1.0, 64.0] before cast; no truncation possible.
 #![allow(
@@ -184,7 +184,7 @@ impl QueryPlanner {
             ExecutionStrategy::VectorFirst => {
                 // (1 / selectivity) rounded up, clamped to [1, 64].
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                // SAFETY: over_fetch_f is in [1.0, 64.0]; casting to usize is safe.
+                // Reason: over_fetch_f is in [1.0, 64.0]; casting to usize is safe.
                 let over_fetch_f = (1.0 / filter_selectivity).clamp(1.0, 64.0);
                 over_fetch_f.ceil() as usize
             }

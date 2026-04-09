@@ -6,7 +6,7 @@
 //! All functions require runtime AVX-512F detection before calling.
 //! Dispatch is handled by `dispatch.rs` after `simd_level()` confirms support.
 
-// SAFETY: Numeric casts in this file are intentional and safe:
+// Reason: Numeric casts in this file are intentional and safe:
 // - All casts are from well-bounded values (vector dimensions, loop indices)
 // - usize->f64 casts are for statistical calculations where 52-bit mantissa is sufficient
 // - All casts are validated by extensive SIMD tests (simd_native_tests.rs)
@@ -616,7 +616,7 @@ pub(crate) unsafe fn cosine_fused_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-#[allow(clippy::too_many_lines)] // SAFETY: 24-accumulator SIMD kernel; extracting further would hurt ILP clarity
+#[allow(clippy::too_many_lines)] // Reason: 24-accumulator SIMD kernel; extracting further would hurt ILP clarity
 unsafe fn cosine_8acc_main_loop(
     a_ptr: *const f32,
     b_ptr: *const f32,
@@ -684,7 +684,7 @@ unsafe fn cosine_8acc_main_loop(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-#[allow(clippy::too_many_arguments)] // SAFETY: SIMD kernel helper passes 12 accumulator refs + 2 pointers; no cleaner decomposition exists
+#[allow(clippy::too_many_arguments)] // Reason: SIMD kernel helper passes 12 accumulator refs + 2 pointers; no cleaner decomposition exists
 unsafe fn cosine_8acc_body_lo(
     pa: *const f32,
     pb: *const f32,
@@ -737,7 +737,7 @@ unsafe fn cosine_8acc_body_lo(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-#[allow(clippy::too_many_arguments)] // SAFETY: SIMD kernel helper passes 12 accumulator refs + 2 pointers; no cleaner decomposition exists
+#[allow(clippy::too_many_arguments)] // Reason: SIMD kernel helper passes 12 accumulator refs + 2 pointers; no cleaner decomposition exists
 unsafe fn cosine_8acc_body_hi(
     pa: *const f32,
     pb: *const f32,
@@ -1005,7 +1005,7 @@ unsafe fn hamming_xor_popcount(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-#[allow(clippy::too_many_lines)] // SAFETY: SIMD kernel with 8 accumulators; extracting more would hurt ILP clarity
+#[allow(clippy::too_many_lines)] // Reason: SIMD kernel with 8 accumulators; extracting more would hurt ILP clarity
 pub(crate) unsafe fn jaccard_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX-512F.
     // - `_mm512_loadu_ps` handles unaligned loads safely
@@ -1128,7 +1128,7 @@ pub(crate) unsafe fn jaccard_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-#[allow(clippy::too_many_lines)] // SAFETY: 16-accumulator SIMD kernel; extracting further would hurt ILP clarity
+#[allow(clippy::too_many_lines)] // Reason: 16-accumulator SIMD kernel; extracting further would hurt ILP clarity
 unsafe fn jaccard_8acc_main_loop(
     a_ptr: *const f32,
     b_ptr: *const f32,
@@ -1185,7 +1185,7 @@ unsafe fn jaccard_8acc_main_loop(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-#[allow(clippy::too_many_arguments)] // SAFETY: SIMD kernel helper passes 8 accumulator refs + 2 pointers; no cleaner decomposition exists
+#[allow(clippy::too_many_arguments)] // Reason: SIMD kernel helper passes 8 accumulator refs + 2 pointers; no cleaner decomposition exists
 unsafe fn jaccard_8acc_body_lo(
     pa: *const f32,
     pb: *const f32,
@@ -1230,7 +1230,7 @@ unsafe fn jaccard_8acc_body_lo(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-#[allow(clippy::too_many_arguments)] // SAFETY: SIMD kernel helper passes 8 accumulator refs + 2 pointers; no cleaner decomposition exists
+#[allow(clippy::too_many_arguments)] // Reason: SIMD kernel helper passes 8 accumulator refs + 2 pointers; no cleaner decomposition exists
 unsafe fn jaccard_8acc_body_hi(
     pa: *const f32,
     pb: *const f32,

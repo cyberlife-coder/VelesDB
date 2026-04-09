@@ -69,7 +69,7 @@ fn estimate_rows_in(node: &PlanNode, rows_out: u64) -> u64 {
         PlanNode::Filter(f) => {
             if f.selectivity > 0.0 && f.selectivity < 1.0 {
                 // Invert selectivity: if 50 % of rows pass, twice as many entered.
-                // SAFETY: rows_out and selectivity are bounded positive values;
+                // Reason: rows_out and selectivity are bounded positive values;
                 // precision loss and truncation are acceptable for estimation.
                 #[allow(
                     clippy::cast_precision_loss,

@@ -3,7 +3,7 @@
 //! Tracks per-query resource consumption (time, depth, cardinality, memory)
 //! and enforces the configured limits.
 
-// SAFETY: Numeric casts in guardrails are intentional:
+// Reason: Numeric casts in guardrails are intentional:
 // - u128->u64 for millisecond durations: durations fit within u64 (thousands of years)
 // - Used for timeout checking and logging, not precise calculations
 #![allow(clippy::cast_possible_truncation)]

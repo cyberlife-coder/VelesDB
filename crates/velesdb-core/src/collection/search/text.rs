@@ -36,7 +36,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if storage retrieval fails.
-    #[allow(clippy::unnecessary_wraps)] // SAFETY: Public API contract — callers expect Result
+    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
         let bm25_results = self.text_index.search(query, k);
 
@@ -71,7 +71,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if storage retrieval fails.
-    #[allow(clippy::unnecessary_wraps)] // SAFETY: Public API contract — callers expect Result
+    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn text_search_with_filter(
         &self,
         query: &str,
@@ -152,7 +152,7 @@ impl Collection {
 
         let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
         let text_weight = 1.0 - weight;
-        // SAFETY: RRF k is typically 1–1000; u32→f32 is lossless below 2^24.
+        // Reason: RRF k is typically 1–1000; u32→f32 is lossless below 2^24.
         #[allow(clippy::cast_precision_loss)]
         let rrf_constant = rrf_k.unwrap_or(60).max(1) as f32;
 
@@ -289,7 +289,7 @@ impl Collection {
 
         let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
         let text_weight = 1.0 - weight;
-        // SAFETY: RRF k is typically 1–1000; u32→f32 is lossless below 2^24.
+        // Reason: RRF k is typically 1–1000; u32→f32 is lossless below 2^24.
         #[allow(clippy::cast_precision_loss)]
         let rrf_constant = rrf_k.unwrap_or(60).max(1) as f32;
         let candidates_k = k.saturating_mul(4).max(k + 10);

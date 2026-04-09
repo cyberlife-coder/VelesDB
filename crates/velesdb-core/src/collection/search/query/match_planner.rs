@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 // Planner is used by execute_match integration
 
-// SAFETY: Numeric casts in query planning are intentional:
+// Reason: Numeric casts in query planning are intentional:
 // - u64->f64 for limit calculations: precision loss acceptable for estimates
 // - f32->f64 for selectivity: values bounded (0.0-1.0 range)
 // - usize->f64 for estimate calculations: values bounded (limit * 100 max)
@@ -262,7 +262,7 @@ impl MatchQueryPlanner {
             2.0
         };
 
-        // SAFETY: limit, graph_factor and selectivity are all positive, so ceil() >= 0.
+        // Reason: limit, graph_factor and selectivity are all positive, so ceil() >= 0.
         #[allow(clippy::cast_sign_loss)]
         let estimated = (limit as f64 * graph_factor / selectivity).ceil() as usize;
         estimated.clamp(limit, limit * 100)

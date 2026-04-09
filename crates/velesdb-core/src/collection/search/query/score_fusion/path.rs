@@ -2,7 +2,7 @@
 //!
 //! Scores paths based on distance decay and relationship type weights.
 
-// SAFETY: Numeric casts in path scoring are intentional:
+// Reason: Numeric casts in path scoring are intentional:
 // - usize->i32 for powi() indices: values bounded by path lengths (typically < 100)
 #![allow(clippy::cast_possible_wrap)]
 

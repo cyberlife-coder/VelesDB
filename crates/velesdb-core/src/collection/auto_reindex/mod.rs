@@ -24,7 +24,7 @@
 //! }
 //! ```
 
-// SAFETY: Numeric casts in auto_reindex are intentional:
+// Reason: Numeric casts in auto_reindex are intentional:
 // - All casts are for computing optimal HNSW parameters
 // - f64/usize conversions for parameter scaling with dataset size
 // - Values bounded by practical limits (dataset size, dimension)

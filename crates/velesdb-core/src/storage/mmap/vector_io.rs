@@ -37,7 +37,7 @@ fn write_wal_store_entry(
     buf.clear();
     buf.push(1u8);
     buf.extend_from_slice(&id.to_le_bytes());
-    // SAFETY: Vector byte length is dimension * 4. With max dimension 65536,
+    // Reason: Vector byte length is dimension * 4. With max dimension 65536,
     // max bytes = 262144 which fits in u32 (max 4,294,967,295).
     #[allow(clippy::cast_possible_truncation)]
     let len_u32 = data.len() as u32;
@@ -90,7 +90,7 @@ fn serialize_wal_store_entry(id: u64, data: &[u8], buf: &mut Vec<u8>) {
     buf.clear();
     buf.push(1u8);
     buf.extend_from_slice(&id.to_le_bytes());
-    // SAFETY: Vector byte length is dimension * 4. With max dimension 65536,
+    // Reason: Vector byte length is dimension * 4. With max dimension 65536,
     // max bytes = 262144 which fits in u32 (max 4,294,967,295).
     #[allow(clippy::cast_possible_truncation)]
     let len_u32 = data.len() as u32;
@@ -268,7 +268,7 @@ impl VectorStorage for MmapStorage {
         if let Some(offset) = offset {
             let vector_size = self.dimension * std::mem::size_of::<f32>();
             // Best-effort: ignore errors (space will be reclaimed on compact())
-            // SAFETY: offset and vector_size are bounded by file size, always fit in u64 on 64-bit
+            // Reason: offset and vector_size are bounded by file size, always fit in u64 on 64-bit
             let offset_u64 = u64::try_from(offset).unwrap_or(u64::MAX);
             let size_u64 = u64::try_from(vector_size).unwrap_or(u64::MAX);
             if offset_u64 != u64::MAX && size_u64 != u64::MAX {

@@ -6,7 +6,7 @@
 //! - JSON value comparison utilities for aggregation ordering
 //! - Parameter resolution for condition placeholders
 
-// SAFETY: Numeric casts in aggregation are intentional:
+// Reason: Numeric casts in aggregation are intentional:
 // - All casts are for computing aggregate statistics (sum, avg, count)
 // - i64->usize for group limits: limits bounded by MAX_GROUPS (1M)
 // - Values bounded by result set size and field cardinality
@@ -152,7 +152,7 @@ impl Collection {
         let thresh = match threshold {
             Value::Integer(i) => *i as f64,
             #[allow(clippy::cast_precision_loss)]
-            // SAFETY: aggregate comparison converts to f64; precision loss is
+            // Reason: aggregate comparison converts to f64; precision loss is
             // acceptable for large u64 values in HAVING threshold context.
             Value::UnsignedInteger(u) => *u as f64,
             Value::Float(f) => *f,

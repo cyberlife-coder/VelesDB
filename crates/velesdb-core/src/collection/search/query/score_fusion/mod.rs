@@ -3,7 +3,7 @@
 //! This module provides score breakdown and combination strategies
 //! for combining vector similarity, graph distance, and metadata boosts.
 
-// SAFETY: Numeric casts in score fusion are intentional:
+// Reason: Numeric casts in score fusion are intentional:
 // - All casts are for score normalization and combination (0-1 range)
 // - f64 precision loss acceptable for ranking heuristics
 // - usize->i32 for powi() indices: values bounded by path lengths (typically < 100)
@@ -247,7 +247,7 @@ impl ScoreFusionMethod {
             }
             Self::Weighted => {
                 // Equal weights for now - could be configurable
-                // SAFETY: scores.len() is typically < 100, fits in f32 with full precision
+                // Reason: scores.len() is typically < 100, fits in f32 with full precision
                 #[allow(clippy::cast_precision_loss)]
                 let weight = 1.0 / scores.len() as f32;
                 scores.iter().map(|&s| s * weight).sum()
@@ -255,7 +255,7 @@ impl ScoreFusionMethod {
             Self::Maximum => scores.iter().copied().fold(f32::MIN, f32::max),
             Self::Minimum => scores.iter().copied().fold(f32::MAX, f32::min),
             Self::Product => scores.iter().copied().product(),
-            // SAFETY: scores.len() is typically < 100, fits in f32 with full precision
+            // Reason: scores.len() is typically < 100, fits in f32 with full precision
             #[allow(clippy::cast_precision_loss)]
             Self::Average => scores.iter().sum::<f32>() / scores.len() as f32,
         };

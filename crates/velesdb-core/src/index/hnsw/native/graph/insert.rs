@@ -37,9 +37,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ///
     /// Uses a statistical upper bound for the max expected layer:
     /// `ceil(log_M(total_nodes)) + 2`, capped at 15.
-    // SAFETY: cast_precision_loss acceptable for statistical bound calculation
-    // SAFETY: cast_possible_truncation result is capped at 15
-    // SAFETY: cast_sign_loss log of positive numbers is positive
+    // Reason: cast_precision_loss acceptable for statistical bound calculation
+    // Reason: cast_possible_truncation result is capped at 15
+    // Reason: cast_sign_loss log of positive numbers is positive
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,

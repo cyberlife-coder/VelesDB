@@ -12,7 +12,7 @@
 //! - **Temporal Index**: Efficient O(log N) time-based queries
 //! - **Adaptive Reinforcement**: Extensible confidence update strategies
 
-// SAFETY: Numeric casts in agent memory are intentional:
+// Reason: Numeric casts in agent memory are intentional:
 // - u64 <-> i64 casts for timestamps (SystemTime uses u64, DB schema uses i64)
 // - Values are always positive (elapsed time) and bounded by reasonable ranges
 // - Casts verified by temporal index tests and snapshot functionality
@@ -52,7 +52,7 @@ pub struct AgentMemory {
     episodic: EpisodicMemory,
     procedural: ProceduralMemory,
     ttl: Arc<MemoryTtl>,
-    // SAFETY: temporal_index will be used for time-based queries in future implementation
+    // Reason: temporal_index will be used for time-based queries in future implementation
     #[allow(dead_code)]
     temporal_index: Arc<TemporalIndex>,
     eviction_config: EvictionConfig,
