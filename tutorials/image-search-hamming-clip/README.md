@@ -36,13 +36,13 @@ while recall approaches brute-force accuracy.
 
 ## Why Two Passes?
 
-A single CLIP-based search (768-dim float vectors, Cosine metric) works well
+A single CLIP-based search (512-dim float vectors, Cosine metric) works well
 at small scale. At 1M+ images, it hits two walls:
 
 | Constraint        | Single-Pass (CLIP only) | Two-Pass (Hamming + CLIP) |
 |-------------------|-------------------------|---------------------------|
-| Memory per vector | 3072 bytes (768 x f32)  | 32 bytes (256-bit hash) + 3072 bytes (CLIP, stored separately) |
-| First-pass speed  | ~5ms (HNSW, 768-dim)    | ~0.05ms (Hamming on 256-bit binary vectors) |
+| Memory per vector | 2048 bytes (512 x f32)  | 32 bytes (256-bit hash) + 2048 bytes (CLIP, stored separately) |
+| First-pass speed  | ~5ms (HNSW, 512-dim)    | ~0.05ms (Hamming on 256-bit binary vectors) |
 | Recall            | ~99% (HNSW Balanced)    | ~97-99% (depends on shortlist size) |
 | Near-duplicate detection | Poor (semantic, not perceptual) | Excellent (dHash catches resizes, crops, recompression) |
 
@@ -66,7 +66,7 @@ shortlist, not by scanning the full database.
               |                     |
      +--------v--------+  +--------v--------+
      |  Bouncer (Pass 1)|  |  CLIP Encoder   |
-     |  Hamming search  |  |  768-dim vector  |
+     |  Hamming search  |  |  512-dim vector  |
      |  Collection:     |  +--------+--------+
      |  perceptual_hashes|          |
      +--------+---------+          |
@@ -87,10 +87,11 @@ shortlist, not by scanning the full database.
         (e.g., N=10)
 ```
 
-**Key insight**: the Detective does NOT scan the full collection. It queries
-`clip_embeddings` for the top-K IDs returned by the Bouncer, then re-ranks
-by Cosine similarity. This is a single vector search with a wider top-K, not
-N individual lookups.
+**Key insight**: the Detective runs a single ANN search on `clip_embeddings`
+(with a wider top-K), then intersects results with the Bouncer's shortlist
+and re-ranks by Cosine similarity. The VelesQL variant uses `AND id IN (...)`
+for server-side filtering, which is more efficient than the client-side
+intersection shown in the Python SDK examples.
 
 ---
 
@@ -289,9 +290,10 @@ different crop or compression).
 
 ### Pass 2: The Detective (Cosine Re-Ranking)
 
-The Detective runs ONE Cosine search on `clip_embeddings` with a wider top-K,
-then intersects the results with the Bouncer's shortlist. This avoids N
-individual lookups -- it scales as O(1) regardless of shortlist size.
+The Detective runs ONE Cosine ANN search on `clip_embeddings` with a wider
+top-K, then intersects the results with the Bouncer's shortlist to re-rank.
+This avoids N individual point lookups -- a single search call retrieves all
+the scores needed for re-ranking.
 
 ```python
 FINAL_K = 10

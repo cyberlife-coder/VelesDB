@@ -104,11 +104,11 @@ def test_bouncer_hamming():
 
 
 # ---------------------------------------------------------------------------
-# Test 2: Detective - CLIP meanings + Euclidean collection
+# Test 2: Detective - CLIP meanings + Cosine collection
 # ---------------------------------------------------------------------------
 
-def test_detective_euclidean(db, files):
-    """The Detective indexes meanings and Euclidean search ranks semantically."""
+def test_detective_cosine(db, files):
+    """The Detective indexes meanings and Cosine search ranks semantically."""
     try:
         import open_clip
         import torch
@@ -131,7 +131,7 @@ def test_detective_euclidean(db, files):
             return f.squeeze().numpy().tolist()
 
     detective = db.get_or_create_collection(
-        "clip_features", dimension=512, metric="euclidean"
+        "clip_features", dimension=512, metric="cosine"
     )
 
     for i, fname in enumerate(files):
@@ -145,12 +145,12 @@ def test_detective_euclidean(db, files):
 
     assert len(results) == 5
     assert results[0]["payload"]["filename"] == "beach_1.jpg"
-    assert results[0]["score"] < 0.01, f"Self-match L2 too high: {results[0]['score']}"
+    assert results[0]["score"] > 0.99, f"Self-match cosine too low: {results[0]['score']}"
 
     top3 = [r["payload"]["filename"] for r in results[:3]]
     assert "beach_1_square.jpg" in top3, f"Semantic match not in top 3: {top3}"
 
-    print("  [PASS] Detective (CLIP + Euclidean): correct semantic ranking")
+    print("  [PASS] Detective (CLIP + Cosine): correct semantic ranking")
     return detective, compute_meaning
 
 
@@ -179,11 +179,12 @@ def test_combined_pipeline(bouncer, detective, compute_meaning_fn, files):
                 "id": c["id"],
                 "filename": c["payload"]["filename"],
                 "bouncer": c["score"],
-                "detective": meaning_scores.get(c["id"], float("inf")),
+                "detective": meaning_scores.get(c["id"], 0.0),
             }
             for c in fast_candidates
         ],
         key=lambda x: x["detective"],
+        reverse=True,
     )
     detective_ms = (time.time() - t0) * 1000
 
@@ -251,8 +252,8 @@ if __name__ == "__main__":
     print("Test 1: Bouncer (dHash + Hamming)")
     db, bouncer, files = test_bouncer_hamming()
 
-    print("\nTest 2: Detective (CLIP + Euclidean)")
-    result = test_detective_euclidean(db, files)
+    print("\nTest 2: Detective (CLIP + Cosine)")
+    result = test_detective_cosine(db, files)
 
     if result:
         detective, compute_meaning_fn = result
