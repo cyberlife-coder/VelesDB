@@ -125,6 +125,25 @@ class Collection:
         """Check if the collection is empty."""
         ...
 
+    @property
+    def dimension(self) -> int:
+        """The vector dimension of this collection."""
+        ...
+
+    @property
+    def metric(self) -> str:
+        """The distance metric (e.g. 'cosine', 'euclidean', 'dot')."""
+        ...
+
+    @property
+    def storage_mode(self) -> str:
+        """The storage mode (e.g. 'full', 'sq8', 'binary')."""
+        ...
+
+    def __len__(self) -> int:
+        """Return the number of points in the collection."""
+        ...
+
     def upsert(self, points: List[Dict[str, Any]]) -> int:
         """Insert or update vectors in the collection.
 
@@ -334,8 +353,84 @@ class Collection:
         """Flush pending changes to disk."""
         ...
 
+    def flush_full(self) -> None:
+        """Full durability flush including vectors.idx serialization.
+
+        Use on graceful shutdown to avoid a full WAL replay on next startup.
+        """
+        ...
+
     def count(self) -> int:
         """Return number of points in the collection."""
+        ...
+
+    def all_ids(self) -> List[int]:
+        """Get all point IDs in the collection."""
+        ...
+
+    def has_secondary_index(self, field: str) -> bool:
+        """Check if a secondary index exists on a payload field."""
+        ...
+
+    def drop_secondary_index(self, field: str) -> bool:
+        """Drop a secondary index on a payload field.
+
+        Returns:
+            True if the index existed and was dropped
+        """
+        ...
+
+    def indexes_memory_usage(self) -> int:
+        """Get total memory usage of all indexes in bytes."""
+        ...
+
+    def analyze(self) -> Dict[str, Any]:
+        """Analyze the collection and compute fresh statistics.
+
+        Returns:
+            Dict with row_count, deleted_count, total_size_bytes,
+            column_stats, index_stats, etc.
+        """
+        ...
+
+    def is_delta_active(self) -> bool:
+        """Check if the streaming delta buffer is active (HNSW rebuild in progress)."""
+        ...
+
+    def search_batch_parallel(
+        self,
+        vectors: List[Union[List[float], "np.ndarray"]],
+        top_k: int = 10,
+    ) -> List[List[Dict[str, Any]]]:
+        """Parallel batch search for multiple query vectors.
+
+        Args:
+            vectors: List of query vectors
+            top_k: Number of results per query (default: 10)
+
+        Returns:
+            List of result lists, one per query vector
+        """
+        ...
+
+    def search_with_quality(
+        self,
+        vector: Union[List[float], "np.ndarray"],
+        quality: str,
+        top_k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Search with a named quality mode.
+
+        Args:
+            vector: Query vector (list or numpy array).
+            quality: One of 'fast', 'balanced', 'accurate', 'perfect', 'autotune',
+                     'custom:<ef>' (e.g. 'custom:256'), or 'adaptive:<min>:<max>'
+                     (e.g. 'adaptive:32:512').
+            top_k: Number of results (default: 10).
+
+        Returns:
+            List of dicts with id, score, and payload.
+        """
         ...
 
     def get_graph_store(self) -> "GraphStore":
@@ -553,6 +648,7 @@ class Database:
         storage_mode: str = "full",
         m: Optional[int] = None,
         ef_construction: Optional[int] = None,
+        expected_vectors: Optional[int] = None,
     ) -> Collection:
         """Create a new vector collection.
 
@@ -563,6 +659,7 @@ class Database:
             storage_mode: "full", "sq8", or "binary"
             m: Optional HNSW M parameter
             ef_construction: Optional HNSW ef_construction parameter
+            expected_vectors: Optional expected dataset size for auto-tuning M and ef
 
         Returns:
             The created Collection
@@ -589,6 +686,9 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
+        m: Optional[int] = None,
+        ef_construction: Optional[int] = None,
+        expected_vectors: Optional[int] = None,
     ) -> Collection:
         """Get an existing collection or create a new one.
 
@@ -597,6 +697,9 @@ class Database:
             dimension: Vector dimension (used only if creating)
             metric: Distance metric (used only if creating)
             storage_mode: Storage mode (used only if creating)
+            m: Optional HNSW M parameter (used only if creating)
+            ef_construction: Optional HNSW ef_construction parameter (used only if creating)
+            expected_vectors: Optional expected dataset size (used only if creating)
 
         Returns:
             The Collection (existing or newly created)
@@ -655,6 +758,22 @@ class Database:
 
         Returns:
             GraphCollection instance or None if not found
+        """
+        ...
+
+    def execute_query(
+        self,
+        sql: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query string (SELECT, DDL, DML).
+
+        Args:
+            sql: VelesQL query string.
+            params: Optional parameter bindings (e.g., {"$v": [0.1, 0.2]}).
+
+        Returns:
+            List of result dicts for SELECT queries, empty list for DDL/DML.
         """
         ...
 
@@ -897,6 +1016,17 @@ class PyGraphCollection:
         """
         ...
 
+    def add_edges_batch(self, edges: List[Dict[str, Any]]) -> int:
+        """Add multiple edges in batch (faster than add_edge in a loop).
+
+        Args:
+            edges: List of edge dicts (same format as add_edge)
+
+        Returns:
+            Number of edges successfully added
+        """
+        ...
+
     def get_edges(self, label: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get edges, optionally filtered by label."""
         ...
@@ -935,6 +1065,7 @@ class PyGraphCollection:
         max_depth: Optional[int] = 3,
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
+        relationship_types: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Perform BFS traversal from a source node."""
         ...
@@ -945,8 +1076,28 @@ class PyGraphCollection:
         max_depth: Optional[int] = 3,
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
+        relationship_types: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Perform DFS traversal from a source node."""
+        ...
+
+    def traverse_bfs_parallel(
+        self,
+        source_ids: List[int],
+        max_depth: Optional[int] = 3,
+        limit: Optional[int] = 100,
+        rel_types: Optional[List[str]] = None,
+        relationship_types: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Perform multi-source BFS traversal with deduplication.
+
+        Args:
+            source_ids: List of starting node IDs
+            max_depth: Maximum traversal depth (default: 3)
+            limit: Maximum results to return (default: 100)
+            rel_types: Optional relationship type filter
+            relationship_types: Alias for rel_types
+        """
         ...
 
     def search_by_embedding(
@@ -1045,6 +1196,52 @@ class PyGraphCollection:
 
     def flush(self) -> None:
         """Flush all graph state to disk."""
+        ...
+
+    def flush_full(self) -> None:
+        """Full durability flush including WAL serialization.
+
+        Use on graceful shutdown to avoid a full WAL replay on next startup.
+        """
+        ...
+
+    def __len__(self) -> int:
+        """Return the number of points (nodes with payload) in the graph."""
+        ...
+
+    def count(self) -> int:
+        """Return the number of points (nodes with payload) in the graph."""
+        ...
+
+    def is_empty(self) -> bool:
+        """Check if the graph collection has no stored points."""
+        ...
+
+    def get(self, ids: List[int]) -> List[Optional[Dict[str, Any]]]:
+        """Get points by their IDs.
+
+        Args:
+            ids: List of point IDs to retrieve
+
+        Returns:
+            List of point dicts (or None for missing IDs)
+        """
+        ...
+
+    def delete(self, ids: List[int]) -> None:
+        """Delete points by their IDs.
+
+        Args:
+            ids: List of point IDs to delete
+        """
+        ...
+
+    def remove_edge(self, edge_id: int) -> bool:
+        """Remove a specific edge by its ID.
+
+        Returns:
+            True if the edge existed and was removed
+        """
         ...
 
 

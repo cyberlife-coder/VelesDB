@@ -280,6 +280,40 @@ impl Collection {
         Ok(search_results_to_dicts(py, results))
     }
 
+    /// Parallel batch search for multiple query vectors.
+    ///
+    /// Each query is executed in parallel using rayon. All queries share the
+    /// same ``top_k`` value. For per-query ``top_k`` control, use
+    /// ``batch_search`` instead.
+    ///
+    /// Args:
+    ///     vectors: List of query vectors (lists or numpy arrays).
+    ///     top_k: Number of results per query (default: 10).
+    ///
+    /// Returns:
+    ///     List of result lists, one per query vector.
+    #[pyo3(signature = (vectors, top_k = 10))]
+    fn search_batch_parallel(
+        &self,
+        py: Python<'_>,
+        vectors: Vec<PyObject>,
+        top_k: usize,
+    ) -> PyResult<Vec<Vec<PyObject>>> {
+        let query_vectors: Vec<Vec<f32>> = vectors
+            .iter()
+            .map(|v| extract_vector(py, v))
+            .collect::<PyResult<_>>()?;
+
+        let results = py.allow_threads(|| {
+            let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
+            self.inner
+                .search_batch_parallel(&query_refs, top_k)
+                .map_err(core_err)
+        })?;
+
+        Ok(Self::convert_batch_results(py, results))
+    }
+
     /// Multi-query search returning only IDs and fused scores.
     #[pyo3(signature = (vectors, top_k = 10, fusion = None))]
     fn multi_query_search_ids(

@@ -7,7 +7,7 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-use crate::collection_helpers::{core_err, search_result_to_dict};
+use crate::collection_helpers::{core_err, point_to_dict, search_result_to_dict};
 use crate::graph::{dict_to_edge, edge_to_dict, traversal_to_dict};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::collection::graph::TraversalConfig;
@@ -427,6 +427,76 @@ impl PyGraphCollection {
     ///     int: Edge count
     fn edge_count(&self) -> usize {
         self.inner.edge_count()
+    }
+
+    /// Full durability flush including WAL serialization.
+    ///
+    /// Use on graceful shutdown to avoid a full WAL replay on next startup.
+    /// For routine persistence, use ``flush()`` instead.
+    fn flush_full(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+    }
+
+    /// Returns the number of points (nodes with payload) in the graph.
+    ///
+    /// Returns:
+    ///     int: Point count
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Returns the number of points (nodes with payload) in the graph.
+    ///
+    /// Returns:
+    ///     int: Point count
+    fn count(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Check if the graph collection has no stored points.
+    ///
+    /// Returns:
+    ///     bool: True if empty
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Get points by their IDs.
+    ///
+    /// Args:
+    ///     ids: List of point IDs to retrieve
+    ///
+    /// Returns:
+    ///     List of point dicts (or None for missing IDs)
+    #[pyo3(signature = (ids))]
+    fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<PyObject>>> {
+        let points = py.allow_threads(|| self.inner.get(&ids));
+        let py_points = points
+            .into_iter()
+            .map(|opt_point| opt_point.map(|p| point_to_dict(py, &p)))
+            .collect();
+        Ok(py_points)
+    }
+
+    /// Delete points by their IDs.
+    ///
+    /// Args:
+    ///     ids: List of point IDs to delete
+    #[pyo3(signature = (ids))]
+    fn delete(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<()> {
+        py.allow_threads(|| self.inner.delete(&ids).map_err(core_err))
+    }
+
+    /// Remove a specific edge by its ID.
+    ///
+    /// Args:
+    ///     edge_id: The edge ID to remove
+    ///
+    /// Returns:
+    ///     bool: True if the edge existed and was removed
+    #[pyo3(signature = (edge_id))]
+    fn remove_edge(&self, py: Python<'_>, edge_id: u64) -> bool {
+        py.allow_threads(|| self.inner.remove_edge(edge_id))
     }
 
     fn __repr__(&self) -> String {
