@@ -134,7 +134,7 @@ and calls the appropriate `unsafe` target-featured kernel.
 pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
     match simd_level() {
-        SimdLevel::Avx512 if a.len() >= 128 =>
+        SimdLevel::Avx512 if a.len() >= 1024 =>
             // SAFETY: simd_level() confirmed AVX-512F support.
             unsafe { dot_product_avx512_8acc(a, b) },
         // ...
@@ -145,9 +145,9 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
 **`dispatch/mod.rs`**: Contains `unsafe impl Send/Sync for DistanceEngine`.
 
 ```rust
-// SAFETY: DistanceEngine stores only function pointers and a DistanceMetric enum.
+// SAFETY: DistanceEngine stores only function pointers and a usize dimension.
 // - Condition 1: Function pointers are Copy + Send + Sync.
-// - Condition 2: DistanceMetric is a simple enum with no interior mutability.
+// - Condition 2: usize is a primitive with no interior mutability.
 unsafe impl Send for DistanceEngine {}
 unsafe impl Sync for DistanceEngine {}
 ```
@@ -266,7 +266,7 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
     
     match simd_level() {  // Cached runtime detection
-        SimdLevel::Avx512 if a.len() >= 16 => unsafe { dot_product_avx512(a, b) },
+        SimdLevel::Avx512 => unsafe { dot_product_avx512(a, b) },
         // ...
     }
 }

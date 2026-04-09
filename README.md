@@ -397,7 +397,7 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | Domain | Component | Install |
 |--------|-----------|---------|
 | **Core** | [velesdb-core](crates/velesdb-core) — Vector + Graph + ColumnStore + VelesQL | `cargo add velesdb-core` |
-| **Server** | [velesdb-server](crates/velesdb-server) — REST API (47 endpoints, OpenAPI) | `cargo install velesdb-server` |
+| **Server** | [velesdb-server](crates/velesdb-server) — REST API (46 endpoints, OpenAPI) | `cargo install velesdb-server` |
 | **CLI** | [velesdb-cli](crates/velesdb-cli) — Interactive VelesQL REPL | `cargo install velesdb-cli` |
 | **Python** | [velesdb-python](crates/velesdb-python) — PyO3 bindings + NumPy | `pip install velesdb` |
 | **TypeScript** | [typescript-sdk](sdks/typescript) — Node.js & Browser SDK | `npm install @wiscale/velesdb-sdk` |

@@ -33,7 +33,7 @@ Collection vector dimension and metric are fixed by design for indexing/search p
 `velesdb-core` is embedded library only.
 
 Install the component you need:
-- `cargo install velesdb-server` — REST API server (47 endpoints, OpenAPI)
+- `cargo install velesdb-server` — REST API server (46 endpoints, OpenAPI)
 - `cargo install velesdb-cli` — Interactive VelesQL REPL (binary name: `velesdb`)
 
 ### 5) "Benchmark numbers are different"
@@ -75,7 +75,7 @@ C'est normal : ce choix est figé à la création pour conserver les performance
 `velesdb-core` = moteur embarqué.
 
 Installer le composant adapté :
-- `cargo install velesdb-server` — API REST (47 endpoints, OpenAPI)
+- `cargo install velesdb-server` — API REST (46 endpoints, OpenAPI)
 - `cargo install velesdb-cli` — Shell interactif VelesQL (binaire : `velesdb`)
 
 ### 5) « Les benchmarks ne correspondent pas »
