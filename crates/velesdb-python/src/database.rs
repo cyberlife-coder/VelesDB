@@ -496,8 +496,9 @@ impl Database {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to read stats: {e}")))?;
         maybe_stats
             .map(|stats| {
-                let json = serde_json::to_value(&stats)
-                    .map_err(|e| PyRuntimeError::new_err(format!("stats serialization failed: {e}")))?;
+                let json = serde_json::to_value(&stats).map_err(|e| {
+                    PyRuntimeError::new_err(format!("stats serialization failed: {e}"))
+                })?;
                 Ok(utils::json_to_python(py, &json))
             })
             .transpose()

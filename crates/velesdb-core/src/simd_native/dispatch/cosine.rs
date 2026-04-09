@@ -1,4 +1,6 @@
-use super::{dot::dot_product_native, simd_level, SimdLevel};
+use super::dot::dot_product_native;
+#[allow(unused_imports)] // simd_level used only on x86_64/aarch64 targets
+use super::{simd_level, SimdLevel};
 
 /// Cosine for pre-normalized vectors with runtime SIMD dispatch.
 #[allow(clippy::inline_always)]
@@ -72,6 +74,7 @@ pub fn batch_cosine_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
     super::batch_with_prefetch(candidates, query, cosine_similarity_native)
 }
 
+#[allow(unused_variables)] // dim used only on x86_64 for dimension-based dispatch
 pub(super) fn resolve_cosine(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]) -> f32 {
     match level {
         #[cfg(target_arch = "x86_64")]

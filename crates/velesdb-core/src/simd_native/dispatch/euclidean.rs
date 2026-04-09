@@ -1,3 +1,4 @@
+#[allow(unused_imports)] // simd_level used only on x86_64/aarch64 targets
 use super::{dot::dot_product_native, simd_level, SimdLevel};
 
 /// Squared L2 distance with runtime SIMD dispatch.
@@ -163,6 +164,7 @@ pub fn batch_euclidean_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> 
     super::batch_with_prefetch(candidates, query, euclidean_native)
 }
 
+#[allow(unused_variables)] // dim used only on x86_64 for dimension-based dispatch
 pub(super) fn resolve_squared_l2(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]) -> f32 {
     match level {
         #[cfg(target_arch = "x86_64")]
