@@ -40,6 +40,7 @@ const fn default_oversampling() -> Option<u32> {
 /// compatibility via [`QuantizationConfig`]'s custom deserializer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum QuantizationType {
     /// No quantization -- full-precision vectors.
     #[default]
@@ -85,6 +86,7 @@ impl QuantizationType {
 
 /// Configuration errors.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ConfigError {
     /// Failed to parse configuration file.
     #[error("Failed to parse configuration: {0}")]
@@ -111,6 +113,7 @@ pub enum ConfigError {
 /// Search mode presets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SearchMode {
     /// Fast search with `ef_search=96`, ~95% recall.
     Fast,

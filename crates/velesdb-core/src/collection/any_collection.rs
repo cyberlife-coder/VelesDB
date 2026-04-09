@@ -17,6 +17,7 @@ use crate::point::SearchResult;
 /// Dispatches common operations to the inner typed collection via enum match.
 /// Zero-cost: no heap allocation, no vtable — just a match arm per variant.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum AnyCollection {
     /// A vector collection (HNSW + payload + full-text).
     Vector(VectorCollection),

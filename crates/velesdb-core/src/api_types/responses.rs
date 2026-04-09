@@ -127,6 +127,7 @@ pub struct ErrorResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum QueryType {
     /// Vector similarity search.
     Search,

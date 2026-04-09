@@ -13,11 +13,6 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 /// Index type for composite indexes.
-<<<<<<< HEAD
-// SAFETY: CompositeIndexType part of EPIC-047 composite graph index feature
-#[allow(dead_code)]
-=======
->>>>>>> 64264b17 (fix(velesql): add Average to FusionStrategyType and clean property_index dead code)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompositeIndexType {
     /// Hash index for equality lookups (O(1))
@@ -30,11 +25,6 @@ pub enum CompositeIndexType {
 ///
 /// Provides O(1) lookups for nodes matching a label and specific property values.
 /// Useful for queries like `MATCH (n:Person {name: 'Alice', city: 'Paris'})`.
-<<<<<<< HEAD
-// SAFETY: CompositeGraphIndex part of EPIC-047 composite graph index feature
-#[allow(dead_code)]
-=======
->>>>>>> 64264b17 (fix(velesql): add Average to FusionStrategyType and clean property_index dead code)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CompositeGraphIndex {
     /// Label this index covers
@@ -47,11 +37,6 @@ pub struct CompositeGraphIndex {
     hash_index: HashMap<u64, Vec<u64>>,
 }
 
-<<<<<<< HEAD
-// SAFETY: CompositeGraphIndex impl part of EPIC-047 composite graph index feature
-#[allow(dead_code)]
-=======
->>>>>>> 64264b17 (fix(velesql): add Average to FusionStrategyType and clean property_index dead code)
 impl CompositeGraphIndex {
     /// Creates a new composite index.
     #[must_use]
@@ -187,22 +172,12 @@ impl CompositeGraphIndex {
 }
 
 /// Manager for multiple composite indexes.
-<<<<<<< HEAD
-// SAFETY: CompositeIndexManager part of EPIC-047 composite graph index feature
-#[allow(dead_code)]
-=======
->>>>>>> 64264b17 (fix(velesql): add Average to FusionStrategyType and clean property_index dead code)
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CompositeIndexManager {
     /// All composite indexes, keyed by index name
     indexes: HashMap<String, CompositeGraphIndex>,
 }
 
-<<<<<<< HEAD
-// SAFETY: CompositeIndexManager impl part of EPIC-047 composite graph index feature
-#[allow(dead_code)]
-=======
->>>>>>> 64264b17 (fix(velesql): add Average to FusionStrategyType and clean property_index dead code)
 impl CompositeIndexManager {
     /// Creates a new index manager.
     #[must_use]

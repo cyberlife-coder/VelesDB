@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 /// - `FlushOnly`: `flush()` only — data reaches OS kernel but may be lost on power failure.
 /// - `None`: No sync — maximum throughput for bulk imports where data can be re-derived.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum DurabilityMode {
     /// Full durability: flush buffer + fsync to disk.
     #[default]

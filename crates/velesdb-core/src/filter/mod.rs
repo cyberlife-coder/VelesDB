@@ -63,6 +63,7 @@ impl Filter {
 /// A condition for filtering metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Condition {
     /// Equality comparison: field == value
     Eq {

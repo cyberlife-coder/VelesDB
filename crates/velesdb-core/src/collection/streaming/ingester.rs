@@ -71,6 +71,7 @@ pub(crate) enum WriteMode {
 
 /// Error returned when the streaming channel cannot accept a point.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum BackpressureError {
     /// The ingestion buffer is full; the caller should retry after a short delay.
     #[error("streaming buffer is full (backpressure)")]

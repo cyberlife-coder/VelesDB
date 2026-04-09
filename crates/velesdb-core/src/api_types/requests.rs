@@ -60,6 +60,7 @@ pub struct CreateCollectionRequest {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum SparseVectorInput {
     /// Canonical parallel-array format with explicit indices and values.
     Parallel {

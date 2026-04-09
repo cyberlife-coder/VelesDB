@@ -314,5 +314,9 @@ fn stream_insert_result_to_response(
             StatusCode::CONFLICT,
             "Streaming not configured for this collection".to_string(),
         ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Unexpected streaming error: {e}"),
+        ),
     }
 }
