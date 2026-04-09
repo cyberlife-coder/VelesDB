@@ -62,6 +62,7 @@ pub mod projection;
 pub mod pushdown;
 #[cfg(test)]
 mod pushdown_tests;
+mod metadata_query;
 mod query_pipeline;
 pub mod score_fusion;
 #[cfg(test)]

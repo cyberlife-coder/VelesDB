@@ -1,121 +1,7 @@
 use super::{Collection, HashSet, QuerySearchOptions, Result, SearchResult, MAX_LIMIT};
 
 impl Collection {
-    pub(super) fn execute_indexed_metadata_query(
-        &self,
-        cond: &crate::velesql::Condition,
-        execution_limit: usize,
-    ) -> Option<Vec<SearchResult>> {
-        // Try simple Eq lookup first (fastest path).
-        if let Some((field_name, key)) = Self::extract_index_lookup_condition(cond) {
-            let ids = self.secondary_index_lookup(&field_name, &key)?;
-            tracing::debug!(
-                field = %field_name,
-                ids_count = ids.len(),
-                limit = execution_limit,
-                "indexed metadata query: Eq lookup"
-            );
-            // Skip index path when too many hits — sequential scan with early
-            // exit is faster than hydrating thousands of index results.
-            if ids.len() > execution_limit.saturating_mul(50).max(1000) {
-                tracing::debug!("indexed metadata query: too many hits, falling through to scan");
-                return None; // Fall through to scan
-            }
-            let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
-            return Some(self.scan_ids_with_filter(&ids, &filter, execution_limit));
-        }
-
-        // For AND conditions, find the first Eq sub-condition that has an index,
-        // use it to narrow the candidate set, then post-filter the rest.
-        if let crate::velesql::Condition::And(ref _left, ref _right) = cond {
-            // Flatten the AND tree into a list of leaf conditions.
-            let mut leaves = Vec::new();
-            Self::flatten_and_conditions(cond, &mut leaves);
-            for sub in &leaves {
-                if let Some((field_name, key)) = Self::extract_index_lookup_condition(sub) {
-                    if let Some(ids) = self.secondary_index_lookup(&field_name, &key) {
-                        let filter = crate::filter::Filter::new(crate::filter::Condition::from(
-                            cond.clone(),
-                        ));
-                        return Some(self.scan_ids_with_filter(&ids, &filter, execution_limit));
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Flattens a binary AND tree into a list of leaf conditions.
-    fn flatten_and_conditions<'a>(
-        cond: &'a crate::velesql::Condition,
-        out: &mut Vec<&'a crate::velesql::Condition>,
-    ) {
-        match cond {
-            crate::velesql::Condition::And(left, right) => {
-                Self::flatten_and_conditions(left, out);
-                Self::flatten_and_conditions(right, out);
-            }
-            crate::velesql::Condition::Group(inner) => {
-                Self::flatten_and_conditions(inner, out);
-            }
-            other => out.push(other),
-        }
-    }
-
-    /// Scans a set of candidate IDs and applies a filter, returning matching results.
-    ///
-    /// Uses score `1.0` for metadata-only matches (no vector similarity involved).
-    fn scan_ids_with_filter(
-        &self,
-        ids: &[u64],
-        filter: &crate::filter::Filter,
-        execution_limit: usize,
-    ) -> Vec<SearchResult> {
-        let mut results = Vec::new();
-        for point in self.get(ids).into_iter().flatten() {
-            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
-            if filter.matches(&payload) {
-                results.push(SearchResult::new(point, 1.0));
-                if results.len() >= execution_limit {
-                    break;
-                }
-            }
-        }
-        results
-    }
-
-    fn extract_index_lookup_condition(
-        cond: &crate::velesql::Condition,
-    ) -> Option<(String, crate::index::JsonValue)> {
-        if let crate::velesql::Condition::Comparison(cmp) = cond {
-            if cmp.operator == crate::velesql::CompareOp::Eq {
-                return crate::index::JsonValue::from_ast_value(&cmp.value)
-                    .map(|v| (cmp.column.clone(), v));
-            }
-        }
-        None
-    }
-
-    /// Scans candidate IDs from a bitmap and applies the full filter.
-    fn scan_candidate_ids_metadata(
-        &self,
-        candidate_ids: &[u64],
-        filter: &crate::filter::Filter,
-        limit: usize,
-    ) -> Vec<SearchResult> {
-        let mut results = Vec::new();
-        for point in self.get(candidate_ids).into_iter().flatten() {
-            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
-            if filter.matches(&payload) {
-                results.push(SearchResult::new(point, 1.0));
-                if results.len() >= limit {
-                    break;
-                }
-            }
-        }
-        results
-    }
+    // Metadata index query strategy is in metadata_query.rs
 
     pub(crate) fn evaluate_graph_match_anchor_ids(
         &self,
@@ -322,7 +208,7 @@ impl Collection {
                 // Convert bitmap to ID list and scan with filter
                 let candidate_ids: Vec<u64> = bitmap.iter().map(u64::from).collect();
                 if candidate_ids.len() <= execution_limit.saturating_mul(50).max(1000) {
-                    return Ok(self.scan_candidate_ids_metadata(
+                    return Ok(self.scan_ids_with_filter(
                         &candidate_ids,
                         &filter,
                         execution_limit,
