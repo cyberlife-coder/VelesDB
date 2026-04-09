@@ -252,12 +252,6 @@ export async function wasmMultiQuerySearch(
   });
 
   const strategy = options?.fusion ?? 'rrf';
-  if (strategy === 'weighted') {
-    throw new VelesDBError(
-      "Fusion strategy 'weighted' is not supported in WASM backend.",
-      'NOT_SUPPORTED'
-    );
-  }
   const raw = collection.store.multi_query_search(
     flat,
     numVectors,
