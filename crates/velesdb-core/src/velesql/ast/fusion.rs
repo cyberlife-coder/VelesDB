@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Fusion strategy type for hybrid search (EPIC-040 US-005).
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum FusionStrategyType {
     /// Reciprocal Rank Fusion (default).
