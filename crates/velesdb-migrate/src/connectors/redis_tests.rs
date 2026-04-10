@@ -120,6 +120,75 @@ fn test_redis_extract_payload_filtered() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_normalise_redis_metric_maps_l2_to_euclidean() {
+    // Redis FT.CREATE reports 'L2' for squared-L2 distance; VelesDB
+    // core uses 'euclidean'.
+    assert_eq!(RedisConnector::normalise_redis_metric("L2"), "euclidean");
+    assert_eq!(RedisConnector::normalise_redis_metric("l2"), "euclidean");
+}
+
+#[test]
+fn test_normalise_redis_metric_maps_ip_to_dot() {
+    assert_eq!(RedisConnector::normalise_redis_metric("IP"), "dot");
+    assert_eq!(RedisConnector::normalise_redis_metric("ip"), "dot");
+}
+
+#[test]
+fn test_normalise_redis_metric_lowercases_known_values() {
+    assert_eq!(RedisConnector::normalise_redis_metric("COSINE"), "cosine");
+    assert_eq!(RedisConnector::normalise_redis_metric("Cosine"), "cosine");
+}
+
+#[test]
+fn test_normalise_redis_metric_preserves_unknown_values() {
+    assert_eq!(RedisConnector::normalise_redis_metric("HAMMING"), "hamming");
+}
+
+#[test]
+fn test_extract_vector_distance_metric_from_attribute_array() {
+    // GIVEN: an FT.INFO response with an attributes array where the
+    // vector field definition carries a distance_metric attribute
+    let vector_attr = redis::Value::Array(vec![
+        redis::Value::BulkString(b"identifier".to_vec()),
+        redis::Value::BulkString(b"embedding".to_vec()),
+        redis::Value::BulkString(b"attribute".to_vec()),
+        redis::Value::BulkString(b"embedding".to_vec()),
+        redis::Value::BulkString(b"type".to_vec()),
+        redis::Value::BulkString(b"VECTOR".to_vec()),
+        redis::Value::BulkString(b"algorithm".to_vec()),
+        redis::Value::BulkString(b"HNSW".to_vec()),
+        redis::Value::BulkString(b"distance_metric".to_vec()),
+        redis::Value::BulkString(b"COSINE".to_vec()),
+    ]);
+    let items = vec![
+        redis::Value::BulkString(b"index_name".to_vec()),
+        redis::Value::BulkString(b"myidx".to_vec()),
+        redis::Value::BulkString(b"attributes".to_vec()),
+        redis::Value::Array(vec![vector_attr]),
+    ];
+    // WHEN: we extract the distance_metric for the vector field
+    let metric = extract_vector_distance_metric(&items, "embedding");
+    // THEN: we get the raw Redis value (normalisation happens later)
+    assert_eq!(metric, Some("COSINE".to_string()));
+}
+
+#[test]
+fn test_extract_vector_distance_metric_returns_none_when_missing() {
+    // Attribute array without a distance_metric entry yields None.
+    let vector_attr = redis::Value::Array(vec![
+        redis::Value::BulkString(b"identifier".to_vec()),
+        redis::Value::BulkString(b"embedding".to_vec()),
+        redis::Value::BulkString(b"type".to_vec()),
+        redis::Value::BulkString(b"VECTOR".to_vec()),
+    ]);
+    let items = vec![
+        redis::Value::BulkString(b"attributes".to_vec()),
+        redis::Value::Array(vec![vector_attr]),
+    ];
+    assert_eq!(extract_vector_distance_metric(&items, "embedding"), None);
+}
+
+#[test]
 fn test_find_info_int_stride2_correctness() {
     // GIVEN: a flat FT.INFO-style key-value list where a value is "num_docs"
     // (if stride were 1, the value at index 1 would be checked as a key)

@@ -157,11 +157,12 @@ impl RedisConnector {
         Ok(first.vector.len())
     }
 
-    /// Fetches index metadata via `FT.INFO`: total document count and field definitions.
+    /// Fetches index metadata via `FT.INFO`: total document count,
+    /// field definitions, and the distance metric of the vector field.
     async fn fetch_index_info(
         &self,
         con: &mut redis::aio::MultiplexedConnection,
-    ) -> Result<(u64, Vec<FieldInfo>)> {
+    ) -> Result<(u64, Vec<FieldInfo>, Option<String>)> {
         let resp: redis::Value = redis::cmd("FT.INFO")
             .arg(&self.config.index)
             .query_async(con)
@@ -169,6 +170,24 @@ impl RedisConnector {
             .map_err(|e| Error::SourceConnection(format!("FT.INFO failed: {e}")))?;
 
         parse_ft_info_response(&resp, &self.config.vector_field)
+    }
+
+    /// Normalise a Redis `DISTANCE_METRIC` value to the VelesDB core
+    /// vocabulary so `Pipeline::check_metric_fidelity` can compare it
+    /// against a destination collection's metric.
+    ///
+    /// RediSearch exposes `COSINE`, `L2`, and `IP` (inner product).
+    /// VelesDB core uses `cosine`, `euclidean`, and `dot`. The mapping
+    /// is straightforward: `L2` → `euclidean`, `IP` → `dot`,
+    /// `COSINE` → `cosine`. Unknown labels are lowercased and returned
+    /// verbatim so mismatch errors stay actionable.
+    fn normalise_redis_metric(raw: &str) -> String {
+        let lower = raw.to_ascii_lowercase();
+        match lower.as_str() {
+            "l2" => "euclidean".to_string(),
+            "ip" => "dot".to_string(),
+            _ => lower,
+        }
     }
 }
 
@@ -184,7 +203,8 @@ impl SourceConnector for RedisConnector {
         let mut con = self.open_connection().await?;
 
         let dimension = self.detect_dimension(&mut con).await?;
-        let (num_docs, fields) = self.fetch_index_info(&mut con).await?;
+        let (num_docs, fields, raw_metric) = self.fetch_index_info(&mut con).await?;
+        let metric = raw_metric.as_deref().map(Self::normalise_redis_metric);
 
         self.schema = Some(SourceSchema {
             source_type: "redis".to_string(),
@@ -194,8 +214,7 @@ impl SourceConnector for RedisConnector {
             fields,
             vector_column: Some(self.config.vector_field.clone()),
             id_column: None,
-            // TODO(MIGRATE-METRIC-REDIS): parse DISTANCE_METRIC from FT.INFO response.
-            metric: None,
+            metric,
         });
         self.connection = Some(Arc::new(Mutex::new(con)));
 
@@ -473,7 +492,7 @@ fn build_payload(
 fn parse_ft_info_response(
     resp: &redis::Value,
     vector_field: &str,
-) -> Result<(u64, Vec<FieldInfo>)> {
+) -> Result<(u64, Vec<FieldInfo>, Option<String>)> {
     let items = match resp {
         redis::Value::Array(arr) => arr,
         _ => {
@@ -485,8 +504,40 @@ fn parse_ft_info_response(
 
     let num_docs = find_info_int(items, "num_docs").unwrap_or(0);
     let fields = extract_attributes(items, vector_field);
+    let metric = extract_vector_distance_metric(items, vector_field);
 
-    Ok((num_docs, fields))
+    Ok((num_docs, fields, metric))
+}
+
+/// Extracts the `DISTANCE_METRIC` attribute from the vector field
+/// definition inside an `FT.INFO` response.
+///
+/// RediSearch stores `distance_metric` as part of the attribute array
+/// for the vector field (alternating `[key, value, ...]` layout).
+/// Returns the raw value verbatim; the connector is responsible for
+/// normalisation to the VelesDB core vocabulary.
+fn extract_vector_distance_metric(items: &[redis::Value], vector_field: &str) -> Option<String> {
+    // Find the "attributes" key and scan each attribute array for the
+    // vector field definition.
+    let mut i = 0;
+    while i + 1 < items.len() {
+        if extract_bulk_string(&items[i]).as_deref() == Some("attributes") {
+            if let redis::Value::Array(attrs_array) = &items[i + 1] {
+                for attr in attrs_array {
+                    if let redis::Value::Array(parts) = attr {
+                        let identifier = find_string_after(parts, "identifier");
+                        if identifier.as_deref() == Some(vector_field) {
+                            return find_string_after(parts, "distance_metric")
+                                .or_else(|| find_string_after(parts, "DISTANCE_METRIC"));
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        i += 2;
+    }
+    None
 }
 
 /// Finds a numeric value by key in a flat key-value RESP list.
