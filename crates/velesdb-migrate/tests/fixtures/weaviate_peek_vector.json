@@ -1,0 +1,10 @@
+{
+  "data": {
+    "Get": {
+      "Article": [{"_additional": {"vector": [0.1, 0.2, 0.3, 0.4]}}],
+      "Product": [{"_additional": {"vector": [0.1, 0.2, 0.3, 0.4]}}],
+      "Location": [{"_additional": {"vector": [0.1, 0.2, 0.3, 0.4]}}],
+      "ArticleNV": [{"_additional": {"vector": [0.1, 0.2, 0.3, 0.4]}}]
+    }
+  }
+}

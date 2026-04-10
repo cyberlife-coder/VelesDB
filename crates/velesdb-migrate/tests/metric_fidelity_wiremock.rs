@@ -20,7 +20,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
-use velesdb_migrate::config::{MilvusConfig, QdrantConfig, SourceConfig};
+use velesdb_migrate::config::{MilvusConfig, QdrantConfig, SourceConfig, WeaviateConfig};
 use velesdb_migrate::connectors::create_connector;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -276,6 +276,144 @@ async fn qdrant_schema_preserves_manhattan_verbatim() {
         schema.metric.as_deref(),
         Some("manhattan"),
         "Manhattan must be preserved verbatim, got {:?}",
+        schema.metric
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Weaviate
+// ---------------------------------------------------------------------------
+
+/// Helper: mount the wiremock routes Weaviate's connect() +
+/// get_schema() implementations hit — /v1/.well-known/ready (for
+/// the initial readiness check), /v1/schema (for the class schema
+/// fetch), and /v1/graphql (for Aggregate count + Get peek).
+async fn mount_weaviate_schema_routes(mock: &MockServer, schema_fixture: &str) {
+    // Readiness probe called during connect().
+    Mock::given(method("GET"))
+        .and(path("/v1/.well-known/ready"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(mock)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/schema"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(load_fixture(schema_fixture)))
+        .mount(mock)
+        .await;
+
+    // The connector posts two GraphQL queries in sequence: first an
+    // Aggregate to get the count, then a Get with limit:1 to peek
+    // the vector dimension. Both land on /v1/graphql so we mount a
+    // single mock that responds identically to both.
+    Mock::given(method("POST"))
+        .and(path("/v1/graphql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(load_fixture("weaviate_count_only.json")),
+        )
+        .up_to_n_times(1)
+        .mount(mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/graphql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(load_fixture("weaviate_peek_vector.json")),
+        )
+        .mount(mock)
+        .await;
+}
+
+/// GIVEN a legacy (pre-1.24) Weaviate class with
+/// `vectorIndexConfig.distance = "cosine"`,
+/// WHEN the connector extracts the schema,
+/// THEN `SourceSchema.metric` must carry `"cosine"`.
+#[tokio::test]
+async fn weaviate_schema_has_cosine_metric_for_legacy_class() {
+    let mock = start_mock_server().await;
+    mount_weaviate_schema_routes(&mock, "weaviate_schema_cosine.json").await;
+
+    let config = SourceConfig::Weaviate(WeaviateConfig {
+        url: mock.uri(),
+        class_name: "Article".to_string(),
+        api_key: None,
+        properties: vec![],
+    });
+
+    let mut connector = create_connector(&config).expect("create Weaviate connector");
+    connector.connect().await.expect("Weaviate connect");
+    let schema = connector.get_schema().await.expect("Weaviate get_schema");
+    assert_eq!(schema.metric.as_deref(), Some("cosine"));
+}
+
+/// GIVEN a legacy Weaviate class with `distance = "l2-squared"`,
+/// WHEN the connector extracts the schema,
+/// THEN the metric must be normalised to `"euclidean"`.
+#[tokio::test]
+async fn weaviate_schema_normalises_l2_squared_to_euclidean() {
+    let mock = start_mock_server().await;
+    mount_weaviate_schema_routes(&mock, "weaviate_schema_l2_squared.json").await;
+
+    let config = SourceConfig::Weaviate(WeaviateConfig {
+        url: mock.uri(),
+        class_name: "Product".to_string(),
+        api_key: None,
+        properties: vec![],
+    });
+
+    let mut connector = create_connector(&config).expect("create Weaviate connector");
+    connector.connect().await.expect("Weaviate connect");
+    let schema = connector.get_schema().await.expect("Weaviate get_schema");
+    assert_eq!(schema.metric.as_deref(), Some("euclidean"));
+}
+
+/// GIVEN a Weaviate class using `distance = "manhattan"` (not a
+/// VelesDB core metric),
+/// WHEN extraction runs,
+/// THEN the metric must be preserved verbatim so
+/// check_metric_fidelity can surface the mismatch honestly.
+#[tokio::test]
+async fn weaviate_schema_preserves_manhattan_verbatim() {
+    let mock = start_mock_server().await;
+    mount_weaviate_schema_routes(&mock, "weaviate_schema_manhattan.json").await;
+
+    let config = SourceConfig::Weaviate(WeaviateConfig {
+        url: mock.uri(),
+        class_name: "Location".to_string(),
+        api_key: None,
+        properties: vec![],
+    });
+
+    let mut connector = create_connector(&config).expect("create Weaviate connector");
+    connector.connect().await.expect("Weaviate connect");
+    let schema = connector.get_schema().await.expect("Weaviate get_schema");
+    assert_eq!(schema.metric.as_deref(), Some("manhattan"));
+}
+
+/// GIVEN a Weaviate 1.24+ class using the named-vector `vectorConfig`
+/// layout with `default` → `distance = "dot"` and `body_vectors` →
+/// `distance = "cosine"`,
+/// WHEN the connector extracts the schema,
+/// THEN it must prefer the `default` entry and report `"dot"`.
+#[tokio::test]
+async fn weaviate_schema_picks_default_named_vector_from_vector_config() {
+    let mock = start_mock_server().await;
+    mount_weaviate_schema_routes(&mock, "weaviate_schema_named_default_dot.json").await;
+
+    let config = SourceConfig::Weaviate(WeaviateConfig {
+        url: mock.uri(),
+        class_name: "ArticleNV".to_string(),
+        api_key: None,
+        properties: vec![],
+    });
+
+    let mut connector = create_connector(&config).expect("create Weaviate connector");
+    connector.connect().await.expect("Weaviate connect");
+    let schema = connector.get_schema().await.expect("Weaviate get_schema");
+    assert_eq!(
+        schema.metric.as_deref(),
+        Some("dot"),
+        "Weaviate 1.24+ named-vector 'default' Dot must resolve to 'dot', got {:?}",
         schema.metric
     );
 }

@@ -1,0 +1,10 @@
+{
+  "data": {
+    "Aggregate": {
+      "Article": [{"meta": {"count": 500}}],
+      "Product": [{"meta": {"count": 500}}],
+      "Location": [{"meta": {"count": 500}}],
+      "ArticleNV": [{"meta": {"count": 500}}]
+    }
+  }
+}

@@ -45,6 +45,49 @@ impl WeaviateConnector {
         }
     }
 
+    /// Extract the distance metric from a class schema, preferring
+    /// the 1.24+ named-vector layout (`vectorConfig`) when it is
+    /// present and falling back to the legacy class-level
+    /// `vectorIndexConfig` otherwise.
+    ///
+    /// Policy for 1.24+ named vectors:
+    /// 1. Prefer the entry named `"default"` if present — Weaviate's
+    ///    implicit name for the primary vector.
+    /// 2. Otherwise use the lexicographically first entry by key
+    ///    so the result is deterministic (HashMap iteration order
+    ///    is not).
+    ///
+    /// Returns `None` when neither field carries a distance — for
+    /// example on a 1.24+ class whose operator left every named
+    /// vector at default index config.
+    fn extract_class_distance(class: &ClassSchema) -> Option<String> {
+        if let Some(vc) = class.vector_config.as_ref() {
+            if let Some(distance) = Self::pick_named_vector_distance(vc) {
+                return Some(distance);
+            }
+        }
+        class
+            .vector_index_config
+            .as_ref()
+            .and_then(|cfg| cfg.distance.clone())
+    }
+
+    fn pick_named_vector_distance(
+        vc: &HashMap<String, NamedVectorEntry>,
+    ) -> Option<String> {
+        let pick_entry = vc
+            .get("default")
+            .or_else(|| {
+                let mut keys: Vec<&String> = vc.keys().collect();
+                keys.sort();
+                keys.first().and_then(|k| vc.get(*k))
+            })?;
+        pick_entry
+            .vector_index_config
+            .as_ref()
+            .and_then(|cfg| cfg.distance.clone())
+    }
+
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         let url = format!("{}{}", self.config.url.trim_end_matches('/'), path);
         let mut req = self.client.request(method, &url);
@@ -66,6 +109,26 @@ struct SchemaResponse {
 struct ClassSchema {
     class: String,
     properties: Option<Vec<PropertySchema>>,
+    /// Legacy (pre-1.24) class-level vectorIndexConfig. Still the
+    /// canonical location for single-vector collections.
+    #[serde(rename = "vectorIndexConfig")]
+    vector_index_config: Option<VectorIndexConfig>,
+    /// Weaviate 1.24+ named vectors. When present, each entry
+    /// owns its own vectorIndexConfig with an independent
+    /// distance metric. The parser prefers `vector_config` over
+    /// the legacy field when both are present (1.24+ classes
+    /// can in theory coexist with legacy fields during a
+    /// migration).
+    #[serde(rename = "vectorConfig")]
+    vector_config: Option<HashMap<String, NamedVectorEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NamedVectorEntry {
+    /// Per-named-vector vectorIndexConfig (1.24+). May be absent
+    /// if the operator only declared a vectorizer and left the
+    /// index config at defaults — in that case the entry
+    /// contributes `None` to the metric extraction.
     #[serde(rename = "vectorIndexConfig")]
     vector_index_config: Option<VectorIndexConfig>,
 }
@@ -244,10 +307,8 @@ impl SourceConnector for WeaviateConnector {
             }
         }
 
-        let metric = class
-            .vector_index_config
-            .as_ref()
-            .and_then(|cfg| cfg.distance.as_deref())
+        let metric = Self::extract_class_distance(class)
+            .as_deref()
             .map(Self::normalise_weaviate_metric);
 
         info!(
