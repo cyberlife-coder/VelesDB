@@ -1,0 +1,41 @@
+{
+  "status": "ok",
+  "time": 0.002567,
+  "result": {
+    "status": "green",
+    "optimizer_status": "ok",
+    "warnings": [],
+    "points_count": 500,
+    "indexed_vectors_count": 500,
+    "segments_count": 2,
+    "config": {
+      "params": {
+        "vectors": {
+          "default": {
+            "size": 768,
+            "distance": "Euclid",
+            "on_disk": false,
+            "datatype": "float32"
+          },
+          "secondary": {
+            "size": 384,
+            "distance": "Cosine",
+            "on_disk": false,
+            "datatype": "float32"
+          }
+        },
+        "shard_number": 1,
+        "replication_factor": 1,
+        "write_consistency_factor": 1,
+        "on_disk_payload": true
+      },
+      "hnsw_config": {
+        "m": 16,
+        "ef_construct": 200,
+        "full_scan_threshold": 10000,
+        "max_indexing_threads": 0
+      }
+    },
+    "payload_schema": {}
+  }
+}

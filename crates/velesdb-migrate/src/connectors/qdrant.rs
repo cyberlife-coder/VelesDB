@@ -44,6 +44,36 @@ impl QdrantConnector {
         }
     }
 
+    /// Pick the "primary" named vector from a multi-vector Qdrant
+    /// collection. Returns its `(dimension, raw_metric)`.
+    ///
+    /// Qdrant 1.7+ supports multiple named vectors per collection
+    /// (e.g. `default`, `secondary`, `text_embedding`). For
+    /// migration purposes we need to pick exactly one — the rest
+    /// of the pipeline assumes a single primary vector per source.
+    /// Selection policy, in order of preference:
+    /// 1. The entry named `"default"` if present — Qdrant's
+    ///    implicit name when a single unnamed vector is upgraded.
+    /// 2. Otherwise the lexicographically first entry, so the
+    ///    result is deterministic across runs (HashMap iteration
+    ///    order is not).
+    ///
+    /// Returns `(0, None)` only for an empty map, which should
+    /// never happen on a well-formed Qdrant response but is
+    /// handled defensively.
+    fn pick_named_vector(
+        map: &HashMap<String, QdrantNamedVector>,
+    ) -> (usize, Option<String>) {
+        if let Some(default) = map.get("default") {
+            return (default.size, default.distance.clone());
+        }
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+        keys.first()
+            .and_then(|k| map.get(*k))
+            .map_or((0, None), |v| (v.size, v.distance.clone()))
+    }
+
     /// Build request with optional auth.
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         let url = format!(
@@ -243,10 +273,7 @@ impl SourceConnector for QdrantConnector {
 
         let (dimension, raw_metric) = match info.result.config.params.vectors {
             QdrantVectorConfig::Single { size, ref distance } => (size, distance.clone()),
-            QdrantVectorConfig::Named(ref map) => map
-                .values()
-                .next()
-                .map_or((0, None), |v| (v.size, v.distance.clone())),
+            QdrantVectorConfig::Named(ref map) => Self::pick_named_vector(map),
         };
         let metric = raw_metric.as_deref().map(Self::normalise_qdrant_metric);
 

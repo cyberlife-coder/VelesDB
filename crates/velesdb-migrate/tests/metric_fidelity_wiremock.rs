@@ -20,7 +20,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
-use velesdb_migrate::config::{MilvusConfig, SourceConfig};
+use velesdb_migrate::config::{MilvusConfig, QdrantConfig, SourceConfig};
 use velesdb_migrate::connectors::create_connector;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -159,6 +159,130 @@ async fn milvus_schema_normalises_l2_to_euclidean_with_custom_index_name() {
     assert_eq!(schema.metric.as_deref(), Some("euclidean"));
     assert_eq!(schema.dimension, 64);
 }
+
+// ---------------------------------------------------------------------------
+// Qdrant
+// ---------------------------------------------------------------------------
+
+/// GIVEN a Qdrant collection configured with a single unnamed
+/// vector using the Cosine distance,
+/// WHEN `connect()` + `get_schema()` run against the mock,
+/// THEN `SourceSchema.metric` must carry `"cosine"` and
+/// `dimension` must equal the fixture's `size` field.
+#[tokio::test]
+async fn qdrant_schema_has_cosine_metric_for_single_vector() {
+    let mock = start_mock_server().await;
+
+    Mock::given(method("GET"))
+        .and(path("/collections/single_cosine"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(load_fixture("qdrant_describe_single_cosine.json")),
+        )
+        .mount(&mock)
+        .await;
+
+    let config = SourceConfig::Qdrant(QdrantConfig {
+        url: mock.uri(),
+        collection: "single_cosine".to_string(),
+        api_key: None,
+        payload_fields: vec![],
+    });
+
+    let mut connector = create_connector(&config).expect("create Qdrant connector");
+    connector.connect().await.expect("Qdrant connect");
+    let schema = connector.get_schema().await.expect("Qdrant get_schema");
+    assert_eq!(
+        schema.metric.as_deref(),
+        Some("cosine"),
+        "single-vector Cosine must normalise to 'cosine', got {:?}",
+        schema.metric
+    );
+    assert_eq!(schema.dimension, 384);
+    assert_eq!(schema.total_count, Some(1500));
+}
+
+/// GIVEN a Qdrant 1.7+ collection with named vectors where a
+/// `default` entry uses `Euclid` and a `secondary` entry uses
+/// `Cosine`,
+/// WHEN the connector extracts the schema,
+/// THEN it must pick the `default` entry (policy) and normalise
+/// `Euclid` → `euclidean`.
+#[tokio::test]
+async fn qdrant_schema_picks_default_named_vector_and_normalises_euclid() {
+    let mock = start_mock_server().await;
+
+    Mock::given(method("GET"))
+        .and(path("/collections/named_default_euclid"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(load_fixture("qdrant_describe_named_default_euclid.json")),
+        )
+        .mount(&mock)
+        .await;
+
+    let config = SourceConfig::Qdrant(QdrantConfig {
+        url: mock.uri(),
+        collection: "named_default_euclid".to_string(),
+        api_key: None,
+        payload_fields: vec![],
+    });
+
+    let mut connector = create_connector(&config).expect("create Qdrant connector");
+    connector.connect().await.expect("Qdrant connect");
+    let schema = connector.get_schema().await.expect("Qdrant get_schema");
+    assert_eq!(
+        schema.metric.as_deref(),
+        Some("euclidean"),
+        "named 'default' Euclid must normalise to 'euclidean', got {:?}",
+        schema.metric
+    );
+    assert_eq!(
+        schema.dimension, 768,
+        "must pick 'default' vector dimension, not 'secondary'"
+    );
+}
+
+/// GIVEN a Qdrant collection with the `Manhattan` distance (1.8+),
+/// WHEN extraction runs,
+/// THEN the metric must be preserved verbatim as `"manhattan"`
+/// (not a VelesDB core identifier) so `check_metric_fidelity`
+/// can surface the mismatch honestly rather than silently
+/// dropping it.
+#[tokio::test]
+async fn qdrant_schema_preserves_manhattan_verbatim() {
+    let mock = start_mock_server().await;
+
+    Mock::given(method("GET"))
+        .and(path("/collections/manhattan_col"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(load_fixture("qdrant_describe_manhattan.json")),
+        )
+        .mount(&mock)
+        .await;
+
+    let config = SourceConfig::Qdrant(QdrantConfig {
+        url: mock.uri(),
+        collection: "manhattan_col".to_string(),
+        api_key: None,
+        payload_fields: vec![],
+    });
+
+    let mut connector = create_connector(&config).expect("create Qdrant connector");
+    connector.connect().await.expect("Qdrant connect");
+    let schema = connector.get_schema().await.expect("Qdrant get_schema");
+    assert_eq!(
+        schema.metric.as_deref(),
+        Some("manhattan"),
+        "Manhattan must be preserved verbatim, got {:?}",
+        schema.metric
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Milvus (continued)
+// ---------------------------------------------------------------------------
 
 /// GIVEN a Milvus collection without any index yet (e.g. newly
 /// created, before FT.CREATE-equivalent runs),
