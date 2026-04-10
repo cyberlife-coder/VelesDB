@@ -195,44 +195,70 @@ impl Collection {
         if skip_metadata_prefilter_for_graph_or {
             return Ok(self.execute_scan_query(&empty_filter(), execution_limit));
         }
-        if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
-            // Fast path: use bitmap from secondary indexes (same mechanism as
-            // search_with_filter). This handles AND conditions, Eq lookups, and
-            // range queries via the bitmap infrastructure.
-            let filter =
-                crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond.clone()));
-            if let Some(bitmap) = self.build_prefilter_bitmap(&filter) {
-                if bitmap.is_empty() {
-                    return Ok(Vec::new());
-                }
-                // Convert bitmap to ID list and scan with filter
-                let candidate_ids: Vec<u64> = bitmap.iter().map(u64::from).collect();
-                if candidate_ids.len() <= execution_limit.saturating_mul(50).max(1000) {
-                    return Ok(self.scan_ids_with_filter(&candidate_ids, &filter, execution_limit));
-                }
-                // Too many bitmap hits — fall through to scan with early exit
-            }
+        let Some(metadata_cond) = Self::extract_metadata_filter(cond) else {
+            return Ok(self.execute_scan_query(&empty_filter(), execution_limit));
+        };
+        Ok(self.dispatch_metadata_filter(cond, metadata_cond, execution_limit))
+    }
 
-            tracing::debug!("dispatch_metadata_only: trying indexed path");
-            if let Some(indexed) =
-                self.execute_indexed_metadata_query(&metadata_cond, execution_limit)
-            {
-                tracing::debug!("dispatch_metadata_only: indexed path succeeded");
-                return Ok(indexed);
-            }
-            tracing::debug!("dispatch_metadata_only: indexed path returned None, trying BM25");
-
-            // Try BM25 text search for LIKE conditions before falling back to full scan.
-            // When a LIKE pattern contains a word-like substring (e.g. `%google%`),
-            // BM25 can narrow candidates significantly faster than a sequential scan.
-            if let Some(like_results) = self.try_like_via_text_index(cond, execution_limit) {
-                return Ok(like_results);
-            }
-
-            let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
-            return Ok(self.execute_scan_query(&filter, execution_limit));
+    /// Resolves a metadata filter by probing bitmap → indexed → BM25 → scan paths.
+    ///
+    /// Extracted from `dispatch_metadata_only` to keep cyclomatic complexity ≤ 8.
+    fn dispatch_metadata_filter(
+        &self,
+        cond: &crate::velesql::Condition,
+        metadata_cond: crate::velesql::Condition,
+        execution_limit: usize,
+    ) -> Vec<SearchResult> {
+        // Fast path: use bitmap from secondary indexes (same mechanism as
+        // search_with_filter). This handles AND conditions, Eq lookups, and
+        // range queries via the bitmap infrastructure.
+        let filter =
+            crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond.clone()));
+        if let Some(bitmap_results) = self.try_bitmap_prefilter(&filter, execution_limit) {
+            return bitmap_results;
         }
-        Ok(self.execute_scan_query(&empty_filter(), execution_limit))
+
+        tracing::debug!("dispatch_metadata_only: trying indexed path");
+        if let Some(indexed) = self.execute_indexed_metadata_query(&metadata_cond, execution_limit)
+        {
+            tracing::debug!("dispatch_metadata_only: indexed path succeeded");
+            return indexed;
+        }
+        tracing::debug!("dispatch_metadata_only: indexed path returned None, trying BM25");
+
+        // Try BM25 text search for LIKE conditions before falling back to full scan.
+        // When a LIKE pattern contains a word-like substring (e.g. `%google%`),
+        // BM25 can narrow candidates significantly faster than a sequential scan.
+        if let Some(like_results) = self.try_like_via_text_index(cond, execution_limit) {
+            return like_results;
+        }
+
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
+        self.execute_scan_query(&filter, execution_limit)
+    }
+
+    /// Attempts a bitmap-prefiltered scan when the candidate set is bounded.
+    ///
+    /// Returns `Some(results)` when the bitmap path is viable (empty result or
+    /// candidate count within a reasonable multiple of `execution_limit`).
+    /// Returns `None` to let the caller fall through to indexed/scan paths.
+    fn try_bitmap_prefilter(
+        &self,
+        filter: &crate::filter::Filter,
+        execution_limit: usize,
+    ) -> Option<Vec<SearchResult>> {
+        let bitmap = self.build_prefilter_bitmap(filter)?;
+        if bitmap.is_empty() {
+            return Some(Vec::new());
+        }
+        let candidate_ids: Vec<u64> = bitmap.iter().map(u64::from).collect();
+        let candidate_budget = execution_limit.saturating_mul(50).max(1000);
+        if candidate_ids.len() <= candidate_budget {
+            return Some(self.scan_ids_with_filter(&candidate_ids, filter, execution_limit));
+        }
+        // Too many bitmap hits — fall through to scan with early exit
+        None
     }
 
     /// Attempts to accelerate a LIKE condition using the BM25 text index.
@@ -257,33 +283,9 @@ impl Collection {
         cond: &crate::velesql::Condition,
         limit: usize,
     ) -> Option<Vec<SearchResult>> {
-        let pattern = Self::extract_like_pattern(cond)?;
-
-        // Extract the word-like core from the pattern (strip leading/trailing %).
-        let word = pattern.trim_matches('%');
-        if word.is_empty() || word.len() < 3 {
-            return None;
-        }
-
-        // Use BM25 text index to find candidates (over-fetch 10× for post-filter headroom).
-        let text_results = self.text_index.search(word, limit.saturating_mul(10));
-        if text_results.is_empty() {
-            return None;
-        }
-
-        let candidate_ids: Vec<u64> = text_results.iter().map(|(id, _)| *id).collect();
+        let candidate_ids = self.bm25_candidates_for_like(cond, limit)?;
         let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
-
-        let mut results = Vec::new();
-        for point in self.get(&candidate_ids).into_iter().flatten() {
-            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
-            if filter.matches(&payload) {
-                results.push(SearchResult::new(point, 1.0));
-                if results.len() >= limit {
-                    break;
-                }
-            }
-        }
+        let results = self.collect_matching_points(&candidate_ids, &filter, limit);
 
         // Only return BM25 results when we filled the limit — otherwise the
         // result set may be incomplete because BM25 tokenization differs from
@@ -294,6 +296,50 @@ impl Collection {
         } else {
             None // Fall through to full sequential scan
         }
+    }
+
+    /// Extracts BM25 candidate IDs for a LIKE condition, if the pattern yields
+    /// a meaningful word and BM25 returns any match.
+    fn bm25_candidates_for_like(
+        &self,
+        cond: &crate::velesql::Condition,
+        limit: usize,
+    ) -> Option<Vec<u64>> {
+        let pattern = Self::extract_like_pattern(cond)?;
+
+        // Extract the word-like core from the pattern (strip leading/trailing %).
+        let word = pattern.trim_matches('%');
+        if word.len() < 3 {
+            return None;
+        }
+
+        // Use BM25 text index to find candidates (over-fetch 10× for post-filter headroom).
+        let text_results = self.text_index.search(word, limit.saturating_mul(10));
+        if text_results.is_empty() {
+            return None;
+        }
+
+        Some(text_results.iter().map(|(id, _)| *id).collect())
+    }
+
+    /// Scans a candidate ID list, returning up to `limit` points that match the filter.
+    fn collect_matching_points(
+        &self,
+        candidate_ids: &[u64],
+        filter: &crate::filter::Filter,
+        limit: usize,
+    ) -> Vec<SearchResult> {
+        let mut results = Vec::new();
+        for point in self.get(candidate_ids).into_iter().flatten() {
+            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
+            if filter.matches(&payload) {
+                results.push(SearchResult::new(point, 1.0));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+        results
     }
 
     /// Recursively extracts the first LIKE pattern from a condition tree.

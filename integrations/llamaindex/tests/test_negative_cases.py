@@ -26,7 +26,6 @@ try:
         validate_sparse_vector,
         validate_path,
         MAX_K_VALUE,
-        MAX_TEXT_LENGTH,
         MAX_BATCH_SIZE,
     )
     from llama_index.core.schema import TextNode
