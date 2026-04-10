@@ -61,9 +61,7 @@ impl QdrantConnector {
     /// Returns `(0, None)` only for an empty map, which should
     /// never happen on a well-formed Qdrant response but is
     /// handled defensively.
-    fn pick_named_vector(
-        map: &HashMap<String, QdrantNamedVector>,
-    ) -> (usize, Option<String>) {
+    fn pick_named_vector(map: &HashMap<String, QdrantNamedVector>) -> (usize, Option<String>) {
         if let Some(default) = map.get("default") {
             return (default.size, default.distance.clone());
         }

@@ -72,16 +72,12 @@ impl WeaviateConnector {
             .and_then(|cfg| cfg.distance.clone())
     }
 
-    fn pick_named_vector_distance(
-        vc: &HashMap<String, NamedVectorEntry>,
-    ) -> Option<String> {
-        let pick_entry = vc
-            .get("default")
-            .or_else(|| {
-                let mut keys: Vec<&String> = vc.keys().collect();
-                keys.sort();
-                keys.first().and_then(|k| vc.get(*k))
-            })?;
+    fn pick_named_vector_distance(vc: &HashMap<String, NamedVectorEntry>) -> Option<String> {
+        let pick_entry = vc.get("default").or_else(|| {
+            let mut keys: Vec<&String> = vc.keys().collect();
+            keys.sort();
+            keys.first().and_then(|k| vc.get(*k))
+        })?;
         pick_entry
             .vector_index_config
             .as_ref()

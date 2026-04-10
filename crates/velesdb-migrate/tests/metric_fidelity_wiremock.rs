@@ -49,8 +49,7 @@ fn load_fixture(name: &str) -> Value {
     let path = fixture_path(name);
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading fixture {}: {e}", path.display()));
-    serde_json::from_str(&raw)
-        .unwrap_or_else(|e| panic!("parsing fixture {}: {e}", path.display()))
+    serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parsing fixture {}: {e}", path.display()))
 }
 
 // ---------------------------------------------------------------------------
@@ -76,7 +75,9 @@ async fn milvus_schema_has_cosine_metric_when_index_cosine() {
     Mock::given(method("GET"))
         .and(path("/v2/vectordb/collections/has"))
         .and(query_param("collectionName", "test_collection"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(load_fixture("milvus_has_true.json")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(load_fixture("milvus_has_true.json")),
+        )
         .mount(&mock)
         .await;
 
@@ -104,7 +105,10 @@ async fn milvus_schema_has_cosine_metric_when_index_cosine() {
     });
 
     let mut connector = create_connector(&config).expect("create Milvus connector");
-    connector.connect().await.expect("Milvus connect should succeed");
+    connector
+        .connect()
+        .await
+        .expect("Milvus connect should succeed");
 
     let schema = connector.get_schema().await.expect("Milvus get_schema");
     assert_eq!(
@@ -129,7 +133,9 @@ async fn milvus_schema_normalises_l2_to_euclidean_with_custom_index_name() {
     Mock::given(method("GET"))
         .and(path("/v2/vectordb/collections/has"))
         .and(query_param("collectionName", "test_l2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(load_fixture("milvus_has_true.json")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(load_fixture("milvus_has_true.json")),
+        )
         .mount(&mock)
         .await;
 
@@ -300,9 +306,7 @@ async fn mount_pinecone_routes(mock: &MockServer, describe_fixture: &str) {
 
     Mock::given(method("POST"))
         .and(path("/describe_index_stats"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(load_fixture("pinecone_stats.json")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(load_fixture("pinecone_stats.json")))
         .mount(mock)
         .await;
 }
@@ -642,7 +646,9 @@ async fn milvus_schema_metric_is_none_when_no_index_present() {
     Mock::given(method("GET"))
         .and(path("/v2/vectordb/collections/has"))
         .and(query_param("collectionName", "test_no_index"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(load_fixture("milvus_has_true.json")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(load_fixture("milvus_has_true.json")),
+        )
         .mount(&mock)
         .await;
 
@@ -650,8 +656,7 @@ async fn milvus_schema_metric_is_none_when_no_index_present() {
         .and(path("/v2/vectordb/collections/describe"))
         .and(query_param("collectionName", "test_no_index"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(load_fixture("milvus_describe_no_index.json")),
+            ResponseTemplate::new(200).set_body_json(load_fixture("milvus_describe_no_index.json")),
         )
         .mount(&mock)
         .await;
