@@ -3649,6 +3649,181 @@ async fn test_graph_endpoint_works_after_explicit_creation() {
     assert_eq!(response.status(), StatusCode::CREATED);
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Per-request timeout_ms — honoured by /search (Sprint 1 / F-03)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Helper: seed a small vector collection for timeout tests.
+async fn seed_timeout_collection(app: &axum::Router, name: &str) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": name,
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create collection request"),
+        )
+        .await
+        .expect("test: create collection request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/collections/{name}/points"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+                            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+                            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0]}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build upsert request"),
+        )
+        .await
+        .expect("test: upsert request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Nominal: a search without `timeout_ms` must behave exactly as before
+/// and return 200 with the expected result set. This locks in the
+/// baseline so the F-03 wrapping does not introduce latency or break
+/// the no-timeout path.
+#[tokio::test]
+async fn test_search_without_timeout_returns_200() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_timeout_collection(&app, "timeout_ok").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/timeout_ok/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 3
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build search request"),
+        )
+        .await
+        .expect("test: search request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Nominal: a search with a generous `timeout_ms` (30 seconds) must
+/// return 200. This verifies the new wrapping code path behaves like
+/// the pass-through code path for any realistic query.
+#[tokio::test]
+async fn test_search_with_generous_timeout_returns_200() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_timeout_collection(&app, "timeout_generous").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/timeout_generous/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 3,
+                        "timeout_ms": 30000
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build search request"),
+        )
+        .await
+        .expect("test: search request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Negative: a search with `timeout_ms: 0` yields an immediate timeout.
+/// The handler must return 408 Request Timeout with a VELES-QUERY-TIMEOUT
+/// error code, not 200 with the results. The `tokio::time::timeout`
+/// wrapper fires on the very next runtime tick after the worker is
+/// spawned, so this deterministic test will always see the elapsed
+/// path regardless of how fast the underlying HNSW search is.
+#[tokio::test]
+async fn test_search_with_zero_timeout_returns_408() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_timeout_collection(&app, "timeout_zero").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/timeout_zero/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 3,
+                        "timeout_ms": 0
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build search request"),
+        )
+        .await
+        .expect("test: search request failed");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::REQUEST_TIMEOUT,
+        "F-03: timeout_ms=0 must return 408 Request Timeout"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+    assert_eq!(
+        json["code"].as_str(),
+        Some("VELES-QUERY-TIMEOUT"),
+        "error code must be VELES-QUERY-TIMEOUT, got: {}",
+        json["code"]
+    );
+    let error_msg = json["error"].as_str().expect("error field");
+    assert!(
+        error_msg.contains("timeout_zero"),
+        "error must include collection name, got: {error_msg}"
+    );
+    assert!(
+        error_msg.contains("0ms"),
+        "error must echo the budget, got: {error_msg}"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Type-mismatch branch for F-05 (retained from the previous section)
+// ────────────────────────────────────────────────────────────────────────────
+
 /// Type-mismatch: a vector collection already exists with the target
 /// name, but the caller targets a graph endpoint. The handler must
 /// return 409 Conflict (already the case before F-05, but we lock it
