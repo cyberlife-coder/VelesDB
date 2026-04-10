@@ -4005,6 +4005,53 @@ async fn test_create_with_invalid_async_index_builder_returns_400() {
     );
 }
 
+/// Regression: when Phase 2 (`apply_advanced_config`) fails after
+/// Phase 1 created the base collection, the handler must roll back
+/// the collection via `Database::delete_collection` so the client can
+/// retry without hitting `CollectionExists`. The only realistic failure
+/// mode of `apply_advanced_config` is `save_config()` I/O, which we
+/// cannot inject from the outside without a mockable filesystem trait.
+///
+/// This test documents the invariant and is kept ignored until a
+/// fault-injection hook is introduced (tracked alongside Sprint 2
+/// server polish). Re-enable once `VectorCollection` exposes a test
+/// seam that can force a write failure on `save_config()`.
+#[tokio::test]
+#[ignore = "needs disk fault-injection seam — see finding ANALYSIS_0002 on PR #582"]
+async fn test_advanced_config_failure_rolls_back_collection() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Precondition: POST a collection with advanced config and inject
+    // a `save_config()` failure between Phase 1 and Phase 2. Until the
+    // test seam exists, the scaffolding below documents the expected
+    // shape so the first engineer to wire the hook has a ready body.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "rollback_cfg",
+                        "dimension": 16,
+                        "metric": "cosine",
+                        "pq_rescore_oversampling": 8
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    // Expected (post-seam): 500 with a diagnostic error body AND the
+    // collection must be absent from the registry so retrying with a
+    // valid payload succeeds instead of returning `CollectionExists`.
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // PROP-GRAPHSCHEMA-SERVER: CreateCollectionRequest accepts a typed
 // graph_schema payload instead of hard-coding GraphSchema::schemaless()

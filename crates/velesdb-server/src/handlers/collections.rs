@@ -131,19 +131,37 @@ fn create_vector_collection(
     }
 
     // Phase 2: persist advanced overrides if any were requested.
+    //
+    // If this phase fails, we MUST roll back the Phase 1 collection
+    // creation so callers do not end up with a half-initialised
+    // collection on disk that would subsequently fail every retry
+    // with `CollectionExists`. Any delete error during rollback is
+    // logged but we still surface the original Phase 2 error to the
+    // caller because it is more actionable.
     if advanced.has_any() {
         let Some(coll) = state.db.get_vector_collection(&req.name) else {
             return Ok(Err(velesdb_core::error::Error::CollectionNotFound(
                 req.name.clone(),
             )));
         };
-        if let Err(e) = coll.apply_advanced_config(
+        if let Err(phase_two_err) = coll.apply_advanced_config(
             advanced.pq_rescore_oversampling,
             #[cfg(feature = "persistence")]
             advanced.deferred_indexing,
             advanced.async_index_builder,
         ) {
-            return Ok(Err(e));
+            // Drop the coll handle before the rollback to release any
+            // read lock the registry hands back by default.
+            drop(coll);
+            if let Err(rollback_err) = state.db.delete_collection(&req.name) {
+                tracing::warn!(
+                    collection = %req.name,
+                    rollback_error = %rollback_err,
+                    phase_two_error = %phase_two_err,
+                    "failed to roll back collection after apply_advanced_config error"
+                );
+            }
+            return Ok(Err(phase_two_err));
         }
     }
 
