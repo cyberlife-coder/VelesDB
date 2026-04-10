@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::common::{
     build_numeric_offset_batch, check_response, create_http_client, extract_id_from_value,
@@ -106,6 +106,20 @@ struct QueryResponse {
 struct StatsResponse {
     #[serde(rename = "rowCount")]
     row_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct DescribeIndexRequest<'a> {
+    #[serde(rename = "collectionName")]
+    collection_name: &'a str,
+    #[serde(rename = "indexName")]
+    index_name: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct IndexDescription {
+    #[serde(rename = "metricType")]
+    metric_type: Option<String>,
 }
 
 #[async_trait]
@@ -253,6 +267,94 @@ impl MilvusConnector {
         Err(Error::SchemaMismatch("No vector field found".to_string()))
     }
 
+    /// Normalise a Milvus `metricType` identifier to the VelesDB core
+    /// vocabulary so `Pipeline::check_metric_fidelity` can compare it
+    /// against a destination collection's metric.
+    ///
+    /// Milvus exposes `L2`, `IP`, `COSINE`, `HAMMING`, `JACCARD`, and
+    /// (legacy) `TANIMOTO`. VelesDB core uses `euclidean`, `dot`,
+    /// `cosine`, `hamming`, `jaccard`. `L2` maps to `euclidean`, `IP`
+    /// (inner product) maps to `dot`. Unknown labels such as
+    /// `TANIMOTO` are lowercased and returned verbatim so mismatch
+    /// errors remain actionable instead of being silently dropped.
+    fn normalise_milvus_metric(raw: &str) -> String {
+        let lower = raw.to_ascii_lowercase();
+        match lower.as_str() {
+            "l2" => "euclidean".to_string(),
+            "ip" => "dot".to_string(),
+            _ => lower,
+        }
+    }
+
+    /// Best-effort retrieval of the distance metric configured on the
+    /// vector-field index. Milvus v2 REST does not return the metric in
+    /// `/collections/describe`; it is stored on the associated index
+    /// and accessible via `POST /v2/vectordb/indexes/describe`. If the
+    /// call fails (older Milvus versions, permission issues, or the
+    /// index not yet built), we log a warning and return `None` so the
+    /// rest of the schema extraction can proceed — `check_metric_fidelity`
+    /// will skip validation for this source rather than blocking
+    /// migration.
+    async fn fetch_index_metric(&self, vector_field: &str) -> Option<String> {
+        let body = DescribeIndexRequest {
+            collection_name: &self.config.collection,
+            index_name: vector_field,
+        };
+
+        let resp = match self
+            .request(reqwest::Method::POST, "/indexes/describe")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "Milvus /indexes/describe request failed; metric \
+                     fidelity check will be skipped for this source"
+                );
+                return None;
+            }
+        };
+
+        if !resp.status().is_success() {
+            warn!(
+                status = %resp.status(),
+                "Milvus /indexes/describe returned non-success; metric \
+                 fidelity check will be skipped for this source"
+            );
+            return None;
+        }
+
+        let parsed: MilvusResponse<IndexDescription> = match resp.json().await {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "Milvus /indexes/describe response failed to parse; \
+                     metric fidelity check will be skipped for this source"
+                );
+                return None;
+            }
+        };
+
+        if parsed.code != 0 {
+            warn!(
+                code = parsed.code,
+                message = ?parsed.message,
+                "Milvus /indexes/describe returned error code; metric \
+                 fidelity check will be skipped for this source"
+            );
+            return None;
+        }
+
+        parsed
+            .data
+            .and_then(|d| d.metric_type)
+            .map(|raw| Self::normalise_milvus_metric(&raw))
+    }
+
     /// Fetch the collection schema from Milvus and cache it locally.
     async fn fetch_and_cache_schema(&mut self) -> Result<()> {
         let resp = self
@@ -294,9 +396,11 @@ impl MilvusConnector {
             None
         };
 
+        let metric = self.fetch_index_metric(&vector_field).await;
+
         info!(
-            "Milvus collection '{}': {}D vectors, {:?} rows",
-            self.config.collection, dimension, total_count
+            "Milvus collection '{}': {}D vectors, metric={:?}, {:?} rows",
+            self.config.collection, dimension, metric, total_count
         );
 
         self.vector_field = Some(vector_field);
@@ -306,6 +410,7 @@ impl MilvusConnector {
             dimension,
             total_count,
             fields,
+            metric,
             ..Default::default()
         });
 
@@ -316,6 +421,49 @@ impl MilvusConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalise_milvus_metric_maps_l2_to_euclidean() {
+        // Milvus reports 'L2' for squared-L2 distance; VelesDB core
+        // uses 'euclidean'. The mapping is what allows
+        // check_metric_fidelity to honestly compare a Milvus source
+        // against a core collection created with metric: "euclidean".
+        assert_eq!(MilvusConnector::normalise_milvus_metric("L2"), "euclidean");
+        assert_eq!(MilvusConnector::normalise_milvus_metric("l2"), "euclidean");
+    }
+
+    #[test]
+    fn test_normalise_milvus_metric_maps_ip_to_dot() {
+        // Milvus 'IP' (inner product) maps to VelesDB's 'dot'.
+        assert_eq!(MilvusConnector::normalise_milvus_metric("IP"), "dot");
+        assert_eq!(MilvusConnector::normalise_milvus_metric("ip"), "dot");
+    }
+
+    #[test]
+    fn test_normalise_milvus_metric_lowercases_known_values() {
+        assert_eq!(
+            MilvusConnector::normalise_milvus_metric("COSINE"),
+            "cosine"
+        );
+        assert_eq!(
+            MilvusConnector::normalise_milvus_metric("HAMMING"),
+            "hamming"
+        );
+        assert_eq!(
+            MilvusConnector::normalise_milvus_metric("JACCARD"),
+            "jaccard"
+        );
+    }
+
+    #[test]
+    fn test_normalise_milvus_metric_preserves_unknown_values() {
+        // TANIMOTO is a legacy Milvus metric not supported by VelesDB
+        // core — preserved verbatim so mismatch errors stay actionable.
+        assert_eq!(
+            MilvusConnector::normalise_milvus_metric("TANIMOTO"),
+            "tanimoto"
+        );
+    }
 
     #[test]
     fn test_milvus_connector_new() {
