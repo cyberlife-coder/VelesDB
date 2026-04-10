@@ -273,8 +273,9 @@ pub(crate) struct Collection {
 
     /// Async index builder for bulk insert V2 (Issue #488).
     ///
-    /// `None` when not configured. When `Some`, provides deferred HNSW
-    /// construction via `HnswSegmentBuilder` for high-throughput bulk import.
+    /// `None` when not configured. When `Some`, buffers vectors during
+    /// bulk import and flushes them to the HNSW index via
+    /// `HnswIndex::insert_batch_parallel`.
     ///
     /// Lock order position: **11** (same tier as `deferred_indexer`).
     pub(crate) async_index_builder: Option<Arc<AsyncIndexBuilder>>,

@@ -46,15 +46,15 @@ impl Default for AsyncIndexBuilderConfig {
     }
 }
 
-/// Async HNSW index builder that buffers vectors and builds in background.
+/// Async HNSW index builder that buffers vectors and flushes them to the
+/// HNSW index via [`HnswIndex::insert_batch_parallel`].
 ///
-/// Extends the concept of `DeferredIndexer` with segmented parallel
-/// construction via [`HnswSegmentBuilder`]. For the minimal implementation,
-/// only synchronous flush is supported; the background thread is added in
-/// Task 4 integration.
+/// Only synchronous flush is currently supported; background-thread
+/// integration into the Collection pipeline is tracked under Issue #488
+/// Task 4.
 ///
 /// Lock order position: 11 (after `delta_buffer` at 10).
-#[allow(dead_code)] // Wired into Collection pipeline in Task 4
+#[allow(dead_code)] // Pipeline integration tracked under Issue #488 Task 4.
 pub struct AsyncIndexBuilder {
     /// Buffer of vectors pending indexation.
     buffer: RwLock<Vec<(u64, Vec<f32>)>>,
@@ -128,10 +128,11 @@ impl AsyncIndexBuilder {
         results
     }
 
-    /// Drains the buffer and indexes all vectors synchronously.
+    /// Drains the buffer and inserts all buffered vectors into the HNSW
+    /// index via [`HnswIndex::insert_batch_parallel`].
     ///
-    /// Uses `HnswSegmentBuilder` for segmented parallel construction
-    /// when the batch is large enough.
+    /// Concurrent calls are serialized: the second caller returns
+    /// `Ok(0)` while the first is in progress.
     ///
     /// # Errors
     ///
