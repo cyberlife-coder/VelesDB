@@ -132,28 +132,22 @@ mod tests {
 
     #[test]
     fn test_source_type_all_returns_all_variants() {
-        // Arrange & Act
         let all = SourceType::all();
-
-        // Assert
-        assert_eq!(all.len(), 12);
+        assert_eq!(all.len(), 10);
         assert!(all.contains(&SourceType::Supabase));
         assert!(all.contains(&SourceType::Qdrant));
         assert!(all.contains(&SourceType::Pinecone));
         assert!(all.contains(&SourceType::Weaviate));
         assert!(all.contains(&SourceType::Milvus));
         assert!(all.contains(&SourceType::ChromaDB));
-        assert!(all.contains(&SourceType::PgVector));
         assert!(all.contains(&SourceType::JsonFile));
         assert!(all.contains(&SourceType::CsvFile));
-        assert!(all.contains(&SourceType::MongoDB));
         assert!(all.contains(&SourceType::Elasticsearch));
         assert!(all.contains(&SourceType::Redis));
     }
 
     #[test]
     fn test_source_type_display_names() {
-        // Arrange & Act & Assert
         assert_eq!(
             SourceType::Supabase.display_name(),
             "Supabase (PostgreSQL + pgvector)"
@@ -163,50 +157,42 @@ mod tests {
         assert_eq!(SourceType::Weaviate.display_name(), "Weaviate");
         assert_eq!(SourceType::Milvus.display_name(), "Milvus / Zilliz Cloud");
         assert_eq!(SourceType::ChromaDB.display_name(), "ChromaDB");
-        assert_eq!(
-            SourceType::PgVector.display_name(),
-            "PostgreSQL (pgvector direct)"
-        );
     }
 
     #[test]
     fn test_source_type_short_names() {
-        // Arrange & Act & Assert
         assert_eq!(SourceType::Supabase.short_name(), "supabase");
         assert_eq!(SourceType::Qdrant.short_name(), "qdrant");
         assert_eq!(SourceType::Pinecone.short_name(), "pinecone");
         assert_eq!(SourceType::Weaviate.short_name(), "weaviate");
         assert_eq!(SourceType::Milvus.short_name(), "milvus");
         assert_eq!(SourceType::ChromaDB.short_name(), "chromadb");
-        assert_eq!(SourceType::PgVector.short_name(), "pgvector");
     }
 
     #[test]
     fn test_source_type_requires_api_key() {
-        // Sources that REQUIRE API key
+        // Sources that require an API key.
         assert!(SourceType::Supabase.requires_api_key());
         assert!(SourceType::Pinecone.requires_api_key());
 
-        // Sources that do NOT require API key
+        // Sources that do not require an API key.
         assert!(!SourceType::Qdrant.requires_api_key());
         assert!(!SourceType::Weaviate.requires_api_key());
         assert!(!SourceType::Milvus.requires_api_key());
         assert!(!SourceType::ChromaDB.requires_api_key());
-        assert!(!SourceType::PgVector.requires_api_key());
     }
 
     #[test]
     fn test_source_type_optional_api_key() {
-        // Sources with OPTIONAL API key
+        // Sources with an optional API key.
         assert!(SourceType::Qdrant.optional_api_key());
         assert!(SourceType::Weaviate.optional_api_key());
         assert!(SourceType::Milvus.optional_api_key());
 
-        // Sources without optional API key
+        // Sources without an optional API key.
         assert!(!SourceType::Supabase.optional_api_key());
         assert!(!SourceType::Pinecone.optional_api_key());
         assert!(!SourceType::ChromaDB.optional_api_key());
-        assert!(!SourceType::PgVector.optional_api_key());
     }
 
     // ==================== WizardConfig Tests ====================

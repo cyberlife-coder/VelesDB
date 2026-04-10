@@ -422,7 +422,6 @@ fn checkpoint_path(config: &MigrationConfig) -> std::path::PathBuf {
 
 fn source_tag(config: &crate::config::SourceConfig) -> &'static str {
     match config {
-        crate::config::SourceConfig::PgVector(_) => "pgvector",
         crate::config::SourceConfig::Supabase(_) => "supabase",
         crate::config::SourceConfig::Qdrant(_) => "qdrant",
         crate::config::SourceConfig::Pinecone(_) => "pinecone",
@@ -431,7 +430,6 @@ fn source_tag(config: &crate::config::SourceConfig) -> &'static str {
         crate::config::SourceConfig::ChromaDB(_) => "chromadb",
         crate::config::SourceConfig::JsonFile(_) => "json_file",
         crate::config::SourceConfig::CsvFile(_) => "csv_file",
-        crate::config::SourceConfig::MongoDB(_) => "mongodb",
         crate::config::SourceConfig::Elasticsearch(_) => "elasticsearch",
         crate::config::SourceConfig::Redis(_) => "redis",
     }

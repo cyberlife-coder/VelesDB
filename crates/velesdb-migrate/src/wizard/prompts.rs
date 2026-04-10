@@ -68,20 +68,16 @@ impl WizardPrompts {
             SourceType::Weaviate => "http://localhost:8080",
             SourceType::Milvus => "http://localhost:19530",
             SourceType::ChromaDB => "http://localhost:8000",
-            SourceType::PgVector => "postgres://user:pass@localhost:5432/db",
             SourceType::JsonFile => "./vectors.json",
             SourceType::CsvFile => "./vectors.csv",
-            SourceType::MongoDB => "https://data.mongodb-api.com/app/<app-id>/endpoint/data/v1",
             SourceType::Elasticsearch => "http://localhost:9200",
             SourceType::Redis => "redis://localhost:6379",
         };
 
         let prompt = match source_type {
             SourceType::Supabase => "Supabase Project URL",
-            SourceType::PgVector => "PostgreSQL Connection String",
             SourceType::JsonFile => "JSON File Path",
             SourceType::CsvFile => "CSV File Path",
-            SourceType::MongoDB => "MongoDB Data API URL",
             SourceType::Elasticsearch => "Elasticsearch URL",
             SourceType::Redis => "Redis URL",
             _ => "Source URL",
@@ -132,7 +128,7 @@ impl WizardPrompts {
     /// Prompts for collection/table name.
     fn prompt_collection(&self, source_type: SourceType) -> Result<String> {
         let prompt = match source_type {
-            SourceType::Supabase | SourceType::PgVector => "Table name",
+            SourceType::Supabase => "Table name",
             SourceType::Weaviate => "Class name",
             SourceType::Pinecone => "Index name",
             _ => "Collection name",

@@ -70,7 +70,7 @@ enum Commands {
 
     /// Generate example configuration
     Init {
-        /// Source type (qdrant, pinecone, weaviate, milvus, chromadb, pgvector, supabase)
+        /// Source type (qdrant, pinecone, weaviate, milvus, chromadb, supabase, elasticsearch, redis, json_file, csv_file)
         #[arg(short, long)]
         source: String,
 
@@ -253,7 +253,9 @@ fn generate_config(source: &str, output: &PathBuf) -> anyhow::Result<()> {
         Some(t) => t,
         None => {
             error!("Unknown source type: {}", source);
-            eprintln!("Supported sources: qdrant, pinecone, weaviate, milvus, chromadb, pgvector, supabase");
+            eprintln!(
+                "Supported sources: qdrant, pinecone, weaviate, milvus, chromadb, supabase, elasticsearch, redis, json_file, csv_file"
+            );
             std::process::exit(1);
         }
     };

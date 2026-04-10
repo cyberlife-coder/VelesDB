@@ -6,13 +6,12 @@ pub mod csv_file;
 pub mod elasticsearch;
 pub mod json_file;
 pub mod milvus;
-pub mod mongodb;
-pub mod pgvector;
 pub mod pinecone;
 pub mod qdrant;
 #[cfg(feature = "redis-source")]
 pub mod redis;
 pub mod relation_detector;
+pub mod supabase;
 pub mod weaviate;
 
 use async_trait::async_trait;
@@ -132,20 +131,14 @@ pub fn create_connector(config: &crate::config::SourceConfig) -> Result<Box<dyn 
         crate::config::SourceConfig::ChromaDB(cfg) => {
             Ok(Box::new(chromadb::ChromaDBConnector::new(cfg.clone())))
         }
-        crate::config::SourceConfig::PgVector(cfg) => {
-            Ok(Box::new(pgvector::PgVectorConnector::new(cfg.clone())))
-        }
         crate::config::SourceConfig::Supabase(cfg) => {
-            Ok(Box::new(pgvector::SupabaseConnector::new(cfg.clone())))
+            Ok(Box::new(supabase::SupabaseConnector::new(cfg.clone())))
         }
         crate::config::SourceConfig::JsonFile(cfg) => {
             Ok(Box::new(json_file::JsonFileConnector::new(cfg.clone())))
         }
         crate::config::SourceConfig::CsvFile(cfg) => {
             Ok(Box::new(csv_file::CsvFileConnector::new(cfg.clone())))
-        }
-        crate::config::SourceConfig::MongoDB(cfg) => {
-            Ok(Box::new(mongodb::MongoDBConnector::new(cfg.clone())))
         }
         crate::config::SourceConfig::Elasticsearch(cfg) => Ok(Box::new(
             elasticsearch::ElasticsearchConnector::new(cfg.clone()),

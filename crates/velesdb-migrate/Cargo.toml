@@ -37,9 +37,6 @@ clap = { version = "4.5", features = ["derive", "env"] }
 # Use native-tls to avoid ring 0.17.14 compilation issues on aarch64-apple-darwin
 reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false }
 
-# Database clients
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "json"], default-features = false, optional = true }
-
 # Native RESP client for Redis Stack / RediSearch
 redis = { version = "0.26", features = ["tokio-comp", "aio"], optional = true }
 
@@ -76,15 +73,15 @@ name = "migration_benchmark"
 harness = false
 
 [features]
-default = ["postgres", "redis-source", "velesdb-core/default"]
-postgres = ["sqlx"]
+default = ["redis-source", "velesdb-core/default"]
 redis-source = ["dep:redis"]
-all-sources = ["postgres", "redis-source"]
+all-sources = ["redis-source"]
 loom = ["velesdb-core/loom"]
 
-# sqlx is optional behind "postgres" feature flag — cargo-machete can't detect it
+# redis is optional behind "redis-source" feature flag — cargo-machete
+# cannot detect it through the optional dependency.
 [package.metadata.cargo-machete]
-ignored = ["sqlx", "redis"]
+ignored = ["redis"]
 
 [lints]
 workspace = true

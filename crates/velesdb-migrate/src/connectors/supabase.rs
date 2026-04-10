@@ -1,4 +1,9 @@
-//! `PostgreSQL` pgvector and Supabase connectors.
+//! Supabase source connector (PostgREST API).
+//!
+//! Connects to a Supabase project's PostgREST endpoint and extracts
+//! rows from a configured table as vector embeddings plus metadata.
+//! The connector parses pgvector wire format (`"[0.1,0.2,...]"`) that
+//! Supabase returns from `vector` columns.
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -9,112 +14,17 @@ use super::common::{
     json_type_name,
 };
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
-use crate::config::{PgVectorConfig, SupabaseConfig};
-#[cfg(not(feature = "postgres"))]
-use crate::error::Error;
+use crate::config::SupabaseConfig;
 use crate::error::Result;
 
-/// pgvector (`PostgreSQL`) source connector.
-pub struct PgVectorConnector {
-    config: PgVectorConfig,
-    #[allow(dead_code)]
-    connected: bool,
-}
-
-impl PgVectorConnector {
-    /// Create a new pgvector connector.
-    #[must_use]
-    pub fn new(config: PgVectorConfig) -> Self {
-        Self {
-            config,
-            connected: false,
-        }
-    }
-}
-
-#[async_trait]
-impl SourceConnector for PgVectorConnector {
-    fn source_type(&self) -> &'static str {
-        "pgvector"
-    }
-
-    async fn connect(&mut self) -> Result<()> {
-        crate::connectors::common::validate_url(&self.config.connection_string)?;
-
-        info!("pgvector connector requires 'postgres' feature");
-
-        #[cfg(feature = "postgres")]
-        {
-            // Real implementation with sqlx
-            info!("Connecting to PostgreSQL: {}", self.config.table);
-            self.connected = true;
-            Ok(())
-        }
-
-        #[cfg(not(feature = "postgres"))]
-        {
-            Err(Error::UnsupportedSource(
-                "pgvector requires 'postgres' feature. Compile with --features postgres"
-                    .to_string(),
-            ))
-        }
-    }
-
-    async fn get_schema(&self) -> Result<SourceSchema> {
-        #[cfg(feature = "postgres")]
-        {
-            Err(crate::error::Error::UnsupportedSource(
-                "pgvector SQL extraction is not yet implemented. \
-                 Use the 'supabase' connector for Supabase projects (PostgREST API)."
-                    .to_string(),
-            ))
-        }
-
-        #[cfg(not(feature = "postgres"))]
-        {
-            Err(Error::UnsupportedSource(
-                "pgvector requires 'postgres' feature".to_string(),
-            ))
-        }
-    }
-
-    async fn extract_batch(
-        &self,
-        _offset: Option<serde_json::Value>,
-        _batch_size: usize,
-    ) -> Result<ExtractedBatch> {
-        #[cfg(feature = "postgres")]
-        {
-            Err(crate::error::Error::UnsupportedSource(
-                "pgvector SQL extraction is not yet implemented. \
-                 Use the 'supabase' connector for Supabase projects (PostgREST API)."
-                    .to_string(),
-            ))
-        }
-
-        #[cfg(not(feature = "postgres"))]
-        {
-            Err(Error::UnsupportedSource(
-                "pgvector requires 'postgres' feature".to_string(),
-            ))
-        }
-    }
-
-    async fn close(&mut self) -> Result<()> {
-        info!("Closing pgvector connection");
-        self.connected = false;
-        Ok(())
-    }
-}
-
-/// Supabase source connector (uses `PostgREST` API).
+/// Supabase source connector using the PostgREST API.
 pub struct SupabaseConnector {
     config: SupabaseConfig,
     client: reqwest::Client,
 }
 
 impl SupabaseConnector {
-    /// Create a new Supabase connector.
+    /// Creates a new Supabase connector with the given configuration.
     #[must_use]
     pub fn new(config: SupabaseConfig) -> Self {
         Self {
@@ -145,7 +55,8 @@ impl SourceConnector for SupabaseConnector {
 
         info!("Connecting to Supabase: {}", self.config.url);
 
-        // Test connection by fetching schema
+        // Probe the configured table with `limit=0` to validate the
+        // endpoint and API key without transferring rows.
         let resp = self
             .request(reqwest::Method::GET, &self.config.table)
             .query(&[("limit", "0")])
@@ -221,7 +132,6 @@ impl SourceConnector for SupabaseConnector {
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
 
-        // Build select columns
         let mut select_cols = vec![
             self.config.id_column.clone(),
             self.config.vector_column.clone(),
@@ -254,7 +164,7 @@ impl SourceConnector for SupabaseConnector {
 
             let vector = row
                 .remove(&self.config.vector_column)
-                .map(|v| parse_pgvector(&v))
+                .map(|v| parse_pgvector_wire_format(&v))
                 .unwrap_or_default();
 
             points.push(ExtractedPoint {
@@ -296,7 +206,8 @@ impl SupabaseConnector {
     }
 }
 
-/// Detects vector column, dimension, and metadata fields from a sample row.
+/// Detects the vector column, dimension, and metadata fields from a
+/// sample row returned by the Supabase REST API.
 fn detect_supabase_schema(
     row: &HashMap<String, serde_json::Value>,
     configured_vector_col: &str,
@@ -308,11 +219,12 @@ fn detect_supabase_schema(
     (dimension, fields, detected_col)
 }
 
-/// Finds columns that look like vector embeddings (dimension > 10).
+/// Returns columns whose value parses into a vector of more than ten
+/// f32 elements (likely embeddings).
 fn find_vector_candidates(row: &HashMap<String, serde_json::Value>) -> Vec<(String, usize)> {
     row.iter()
         .filter_map(|(col_name, col_value)| {
-            let parsed = parse_pgvector(col_value);
+            let parsed = parse_pgvector_wire_format(col_value);
             if parsed.len() > 10 {
                 Some((col_name.clone(), parsed.len()))
             } else {
@@ -322,7 +234,9 @@ fn find_vector_candidates(row: &HashMap<String, serde_json::Value>) -> Vec<(Stri
         .collect()
 }
 
-/// Picks the best vector column from candidates.
+/// Selects the best vector column from the detected candidates. Order
+/// of preference: exact match with the configured name, then a name
+/// containing "vector"/"embedding"/"emb", then the first candidate.
 fn pick_best_vector_column(
     candidates: &[(String, usize)],
     configured: &str,
@@ -356,7 +270,7 @@ fn collect_metadata_fields(
             if vector_column.is_some_and(|vc| col_name.as_str() == vc) {
                 return false;
             }
-            let parsed = parse_pgvector(col_value);
+            let parsed = parse_pgvector_wire_format(col_value);
             parsed.len() <= 10
         })
         .map(|(col_name, col_value)| FieldInfo {
@@ -367,7 +281,7 @@ fn collect_metadata_fields(
         .collect()
 }
 
-/// Logs schema detection results for Supabase.
+/// Logs schema detection results for a Supabase table.
 fn log_supabase_schema(
     table: &str,
     dimension: usize,
@@ -394,11 +308,15 @@ fn log_supabase_schema(
     }
 }
 
-/// Parse a pgvector string format "[0.1,0.2,0.3]" into Vec<f32>.
-fn parse_pgvector(value: &serde_json::Value) -> Vec<f32> {
+/// Parses pgvector wire format `"[0.1,0.2,0.3]"` (string) or a JSON
+/// array into a `Vec<f32>`. Supabase returns `vector` columns in the
+/// string form; the JSON-array branch covers transports that decode
+/// the vector server-side.
+// Reason: f64 → f32 truncation is expected for embedding storage.
+#[allow(clippy::cast_possible_truncation)]
+fn parse_pgvector_wire_format(value: &serde_json::Value) -> Vec<f32> {
     match value {
         serde_json::Value::String(s) => {
-            // pgvector format: "[0.1,0.2,0.3]"
             let trimmed = s.trim_start_matches('[').trim_end_matches(']');
             trimmed
                 .split(',')
@@ -418,33 +336,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_pgvector_string() {
+    fn test_parse_pgvector_wire_format_from_string() {
         let val = serde_json::json!("[0.1,0.2,0.3]");
-        let vec = parse_pgvector(&val);
+        let vec = parse_pgvector_wire_format(&val);
         assert_eq!(vec.len(), 3);
         assert!((vec[0] - 0.1).abs() < 0.001);
     }
 
     #[test]
-    fn test_parse_pgvector_array() {
+    fn test_parse_pgvector_wire_format_from_array() {
         let val = serde_json::json!([0.1, 0.2, 0.3]);
-        let vec = parse_pgvector(&val);
+        let vec = parse_pgvector_wire_format(&val);
         assert_eq!(vec.len(), 3);
-    }
-
-    #[test]
-    fn test_pgvector_connector_new() {
-        let config = PgVectorConfig {
-            connection_string: "postgres://localhost/test".to_string(),
-            table: "embeddings".to_string(),
-            vector_column: "embedding".to_string(),
-            id_column: "id".to_string(),
-            payload_columns: vec!["title".to_string()],
-            filter: None,
-        };
-
-        let connector = PgVectorConnector::new(config);
-        assert_eq!(connector.source_type(), "pgvector");
     }
 
     #[test]
@@ -465,33 +368,5 @@ mod tests {
     #[test]
     fn test_supabase_connect_rejects_file_url() {
         assert!(crate::connectors::common::validate_url("file:///etc/passwd").is_err());
-    }
-
-    #[test]
-    fn test_pgvector_get_schema_returns_explicit_error() {
-        use crate::config::PgVectorConfig;
-
-        let config = PgVectorConfig {
-            connection_string: "postgres://localhost/test".to_string(),
-            table: "items".to_string(),
-            vector_column: "embedding".to_string(),
-            id_column: "id".to_string(),
-            payload_columns: vec![],
-            filter: None,
-        };
-        let connector = super::PgVectorConnector::new(config);
-
-        // get_schema() should fail with UnsupportedSource — not compile-time, but runtime.
-        let rt = tokio::runtime::Runtime::new().expect("test: tokio runtime");
-        let result = rt.block_on(connector.get_schema());
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("not yet implemented")
-                || err_msg.contains("Unsupported source")
-                || err_msg.contains("supabase")
-                || err_msg.contains("postgres"),
-            "Error should mention the issue: {err_msg}"
-        );
     }
 }
