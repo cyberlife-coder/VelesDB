@@ -3292,3 +3292,214 @@ async fn test_delete_point_by_id() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Multi-query search — filter forwarding (Sprint 1 / F-04 regression tests)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Helper: seed a collection named `multi_filter` with three categorised points.
+async fn seed_multi_query_filter_collection(app: &axum::Router) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "multi_filter",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build create collection request"),
+        )
+        .await
+        .expect("Create collection request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/multi_filter/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"category": "a"}},
+                            {"id": 2, "vector": [0.9, 0.1, 0.0, 0.0], "payload": {"category": "b"}},
+                            {"id": 3, "vector": [0.8, 0.2, 0.0, 0.0], "payload": {"category": "a"}}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build upsert request"),
+        )
+        .await
+        .expect("Upsert request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Nominal: `/search/multi` must apply a metadata filter and exclude rows
+/// that do not match. With three points (ids 1, 2, 3) and a filter
+/// `category = "a"`, the result set must be `{1, 3}` — id 2 belongs to
+/// category "b" and must be excluded.
+///
+/// Regression test for F-04: `MultiQuerySearchRequest.filter` was previously
+/// deserialized by the handler but never forwarded to
+/// `VectorCollection::multi_query_search`, so all rows were returned.
+#[tokio::test]
+async fn test_multi_query_search_with_filter_excludes_nonmatching_points() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_multi_query_filter_collection(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/multi_filter/search/multi")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vectors": [
+                            [1.0, 0.0, 0.0, 0.0],
+                            [0.95, 0.05, 0.0, 0.0]
+                        ],
+                        "top_k": 10,
+                        "strategy": "rrf",
+                        "rrf_k": 60,
+                        "filter": {
+                            "condition": {
+                                "type": "eq",
+                                "field": "category",
+                                "value": "a"
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build multi search request"),
+        )
+        .await
+        .expect("Multi search request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let results = json["results"].as_array().expect("results is an array");
+
+    let ids: Vec<u64> = results
+        .iter()
+        .filter_map(|r| {
+            r["id"]
+                .as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+                .or_else(|| r["id"].as_u64())
+        })
+        .collect();
+
+    assert!(
+        ids.contains(&1),
+        "expected id=1 (category=a) in filtered results, got {ids:?}"
+    );
+    assert!(
+        ids.contains(&3),
+        "expected id=3 (category=a) in filtered results, got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&2),
+        "id=2 (category=b) must be excluded by the filter, got {ids:?}"
+    );
+}
+
+/// Without a filter, `/search/multi` must return all three points (verifies
+/// that the filter fix does not break the baseline behaviour).
+#[tokio::test]
+async fn test_multi_query_search_without_filter_returns_all_points() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_multi_query_filter_collection(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/multi_filter/search/multi")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vectors": [[1.0, 0.0, 0.0, 0.0]],
+                        "top_k": 10,
+                        "strategy": "rrf",
+                        "rrf_k": 60
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build multi search request"),
+        )
+        .await
+        .expect("Multi search request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let results = json["results"].as_array().expect("results is an array");
+    assert_eq!(
+        results.len(),
+        3,
+        "without filter, all three points must be returned"
+    );
+}
+
+/// Negative: an invalid filter expression must produce a 400 response
+/// (not a 500 and not silently dropped).
+#[tokio::test]
+async fn test_multi_query_search_with_invalid_filter_returns_400() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_multi_query_filter_collection(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/multi_filter/search/multi")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vectors": [[1.0, 0.0, 0.0, 0.0]],
+                        "top_k": 10,
+                        "strategy": "rrf",
+                        "rrf_k": 60,
+                        "filter": {
+                            "condition": {
+                                "type": "nonexistent_operator",
+                                "field": "category",
+                                "value": "a"
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build multi search request"),
+        )
+        .await
+        .expect("Multi search request failed");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "invalid filter must be rejected with 400"
+    );
+}

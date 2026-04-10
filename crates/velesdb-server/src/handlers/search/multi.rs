@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::types::{ErrorResponse, MultiQuerySearchRequest, SearchResponse};
 use crate::AppState;
 
-use super::pipeline::{finish_search_with_cb, validate_query_dimension};
+use super::pipeline::{finish_search_with_cb, parse_filter_or_400, validate_query_dimension};
 use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
 /// Multi-query search with fusion strategies.
@@ -91,10 +91,26 @@ pub async fn multi_query_search(
         }
     }
 
+    // Parse the optional metadata filter. We need to materialise the
+    // `Filter` before starting the stopwatch so that a malformed filter
+    // yields a 400 response instead of a misleading 200 with unfiltered
+    // results. Regression guard: see
+    // `test_multi_query_search_with_filter_excludes_nonmatching_points`
+    // and `test_multi_query_search_with_invalid_filter_returns_400`
+    // (F-04).
+    let filter = match req.filter.as_ref() {
+        Some(filter_json) => match parse_filter_or_400(filter_json, &state.onboarding_metrics) {
+            Ok(f) => Some(f),
+            Err(resp) => return resp,
+        },
+        None => None,
+    };
+
     let start = std::time::Instant::now();
     let query_refs: Vec<&[f32]> = req.vectors.iter().map(Vec::as_slice).collect();
 
-    let search_result = collection.multi_query_search(&query_refs, req.top_k, strategy, None);
+    let search_result =
+        collection.multi_query_search(&query_refs, req.top_k, strategy, filter.as_ref());
 
     finish_search_with_cb(&state, &name, start, &collection, search_result)
 }
