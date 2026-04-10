@@ -130,3 +130,43 @@ pub fn create_versioned_test_app(temp_dir: &TempDir) -> Router {
 
     versioned.merge(legacy).with_state(state)
 }
+
+/// Seeds a graph collection via `POST /collections` with
+/// `collection_type = "graph"`. Returns after asserting the 201 status.
+///
+/// Since F-05 (Sprint 1), graph collections must be created explicitly
+/// before any `/collections/{name}/graph/*` endpoint can be called.
+/// Previously, `get_graph_collection_or_404` auto-created a schemaless
+/// graph collection on first use, which made tests appear to work
+/// without an explicit creation step but hid a feature-lie from
+/// real API consumers.
+pub async fn create_graph_collection(app: &Router, name: &str) {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "name": name,
+                        "collection_type": "graph"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create graph collection request"),
+        )
+        .await
+        .expect("test: create graph collection request failed");
+
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::CREATED,
+        "test: failed to create graph collection '{name}'"
+    );
+}

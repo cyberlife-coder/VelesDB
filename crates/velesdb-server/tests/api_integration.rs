@@ -7,7 +7,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use common::{create_test_app, create_test_app_with_state};
+use common::{create_graph_collection, create_test_app, create_test_app_with_state};
 use futures::stream;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -1926,6 +1926,9 @@ async fn test_graph_add_edge() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
 
+    // Graph collections must be explicitly created since F-05 (Sprint 1).
+    create_graph_collection(&app, "test").await;
+
     // Add edge
     let response = app
         .oneshot(
@@ -1955,6 +1958,7 @@ async fn test_graph_add_edge() {
 async fn test_graph_get_edges_by_label() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "test").await;
 
     // Add edges
     let response = app
@@ -2048,6 +2052,7 @@ async fn test_graph_get_edges_missing_label() {
 async fn test_graph_traverse_bfs() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "graph_test").await;
 
     // Build a graph: 1 -> 2 -> 3 -> 4
     for (id, src, tgt) in [(1, 1, 2), (2, 2, 3), (3, 3, 4)] {
@@ -2115,6 +2120,7 @@ async fn test_graph_traverse_bfs() {
 async fn test_graph_traverse_dfs() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "dfs_test").await;
 
     // Build graph
     for (id, src, tgt) in [(1, 1, 2), (2, 2, 3)] {
@@ -2177,6 +2183,7 @@ async fn test_graph_traverse_dfs() {
 async fn test_graph_traverse_with_rel_type_filter() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "filter_test").await;
 
     // Build graph with mixed edge types: 1 -KNOWS-> 2 -WROTE-> 3
     let edges = [(1, 1, 2, "KNOWS"), (2, 2, 3, "WROTE")];
@@ -2243,6 +2250,7 @@ async fn test_graph_traverse_with_rel_type_filter() {
 async fn test_graph_traverse_invalid_strategy() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "test").await;
 
     let response = app
         .oneshot(
@@ -2270,6 +2278,7 @@ async fn test_graph_traverse_invalid_strategy() {
 async fn test_graph_node_degree() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "degree_test").await;
 
     // Build graph: 1 -> 2, 3 -> 2, 2 -> 4
     // Node 2 has in_degree=2, out_degree=1
@@ -3502,4 +3511,195 @@ async fn test_multi_query_search_with_invalid_filter_returns_400() {
         StatusCode::BAD_REQUEST,
         "invalid filter must be rejected with 400"
     );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Graph collection resolution — no auto-create (Sprint 1 / F-05 regression)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Nominal negative: calling a graph endpoint on a collection that was
+/// never created must return 404 Not Found, not silently create a
+/// schemaless graph collection. This is the F-05 regression guard.
+#[tokio::test]
+async fn test_graph_endpoint_on_missing_collection_returns_404() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/never_created/graph/edges")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "id": 1,
+                        "source": 100,
+                        "target": 200,
+                        "label": "KNOWS"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "graph endpoints must return 404 when the collection does not exist"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let error_msg = json["error"]
+        .as_str()
+        .expect("error field must be present");
+    assert!(
+        error_msg.contains("never_created"),
+        "error message must include the collection name, got: {error_msg}"
+    );
+    assert!(
+        error_msg.contains("collection_type"),
+        "error message must guide callers to create the collection explicitly, got: {error_msg}"
+    );
+}
+
+/// GET /collections/{name}/graph/edges?label=... on a missing graph
+/// collection must return 404 (not auto-create and not 500).
+#[tokio::test]
+async fn test_graph_get_edges_on_missing_collection_returns_404() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/ghost/graph/edges?label=KNOWS")
+                .body(Body::empty())
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// POST /collections/{name}/graph/traverse on a missing graph collection
+/// must return 404 (regression: auto-create previously hid this path).
+#[tokio::test]
+async fn test_graph_traverse_on_missing_collection_returns_404() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/absent/graph/traverse")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "source": 1,
+                        "strategy": "bfs",
+                        "max_depth": 3
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// After an explicit `POST /collections` with `collection_type = "graph"`,
+/// graph endpoints must succeed as before — this is the happy path that
+/// validates the new explicit-creation contract.
+#[tokio::test]
+async fn test_graph_endpoint_works_after_explicit_creation() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "explicit").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/explicit/graph/edges")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "id": 1,
+                        "source": 100,
+                        "target": 200,
+                        "label": "KNOWS"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+/// Type-mismatch: a vector collection already exists with the target
+/// name, but the caller targets a graph endpoint. The handler must
+/// return 409 Conflict (already the case before F-05, but we lock it
+/// in with an explicit test so the fix cannot regress the branch).
+#[tokio::test]
+async fn test_graph_endpoint_on_vector_collection_returns_409() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create a vector collection (not a graph collection).
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "type_mismatch",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build create collection request"),
+        )
+        .await
+        .expect("Create collection request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Now POST to its graph/edges endpoint → must be 409, not 404 or 500.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/type_mismatch/graph/edges")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "id": 1,
+                        "source": 1,
+                        "target": 2,
+                        "label": "X"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build graph edge request"),
+        )
+        .await
+        .expect("Graph edge request failed");
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
