@@ -15,8 +15,8 @@ use velesdb_server::{
     batch_search, collection_sanity, create_collection, delete_collection, delete_point, explain,
     get_collection, get_collection_config, get_edges, get_node_degree, get_point, health_check,
     hybrid_search, list_collections, multi_query_search, query, readiness_check, rebuild_index,
-    search, search_ids, stream_upsert_points, text_search, traverse_graph, upsert_points,
-    AppState, OnboardingMetrics,
+    search, search_ids, stream_upsert_points, text_search, traverse_graph, upsert_points, AppState,
+    OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {

@@ -3555,9 +3555,7 @@ async fn test_graph_endpoint_on_missing_collection_returns_404() {
         .await
         .expect("Failed to read body");
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
-    let error_msg = json["error"]
-        .as_str()
-        .expect("error field must be present");
+    let error_msg = json["error"].as_str().expect("error field must be present");
     assert!(
         error_msg.contains("never_created"),
         "error message must include the collection name, got: {error_msg}"
@@ -3961,8 +3959,7 @@ async fn test_create_without_advanced_config_describe_returns_defaults() {
         "pq_rescore_oversampling must default to 4"
     );
     assert!(
-        json.get("async_index_builder").is_none()
-            || json["async_index_builder"].is_null(),
+        json.get("async_index_builder").is_none() || json["async_index_builder"].is_null(),
         "async_index_builder must be absent or null when not set"
     );
 }

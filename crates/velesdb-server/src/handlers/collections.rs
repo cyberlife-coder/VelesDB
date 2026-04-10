@@ -122,12 +122,9 @@ fn create_vector_collection(
             req.hnsw_ef_construction,
         )
     } else {
-        state.db.create_vector_collection_with_options(
-            &req.name,
-            dimension,
-            metric,
-            storage_mode,
-        )
+        state
+            .db
+            .create_vector_collection_with_options(&req.name, dimension, metric, storage_mode)
     };
     if let Err(e) = base_result {
         return Ok(Err(e));
@@ -166,7 +163,8 @@ struct AdvancedCreateOverrides {
     pq_rescore_oversampling: Option<Option<u32>>,
     #[cfg(feature = "persistence")]
     deferred_indexing: Option<Option<velesdb_core::collection::streaming::DeferredIndexerConfig>>,
-    async_index_builder: Option<Option<velesdb_core::collection::streaming::AsyncIndexBuilderConfig>>,
+    async_index_builder:
+        Option<Option<velesdb_core::collection::streaming::AsyncIndexBuilderConfig>>,
 }
 
 impl AdvancedCreateOverrides {

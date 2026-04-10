@@ -1796,7 +1796,7 @@ components:
           format: int32
           description: |-
             On-disk schema version. Increments when the persisted
-            `config.json` format changes in a way older VelesDB versions
+            `config.json` format changes in a way older `VelesDB` versions
             cannot safely read.
           minimum: 0
         storage_mode:

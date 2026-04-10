@@ -262,12 +262,7 @@ async fn test_health_and_ready_remain_public_after_f02_fix() {
     for path in ["/health", "/ready"] {
         let response = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(path)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
             .await
             .unwrap();
 

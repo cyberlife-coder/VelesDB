@@ -79,8 +79,7 @@ pub async fn stream_traverse(
     // wrapper as a lazy iterator, so individual events are still
     // pushed to the wire progressively under back-pressure.
     let events = tokio::task::spawn_blocking(move || {
-        let traversal_result =
-            run_traversal_blocking(coll_handle, collection.as_str(), &params);
+        let traversal_result = run_traversal_blocking(coll_handle, collection.as_str(), &params);
         build_sse_events(traversal_result, start_time)
     })
     .await

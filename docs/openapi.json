@@ -2728,7 +2728,7 @@
           "schema_version": {
             "type": "integer",
             "format": "int32",
-            "description": "On-disk schema version. Increments when the persisted\n`config.json` format changes in a way older VelesDB versions\ncannot safely read.",
+            "description": "On-disk schema version. Increments when the persisted\n`config.json` format changes in a way older `VelesDB` versions\ncannot safely read.",
             "minimum": 0
           },
           "storage_mode": {

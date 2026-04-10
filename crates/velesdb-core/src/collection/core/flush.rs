@@ -315,9 +315,7 @@ impl Collection {
         #[cfg(feature = "persistence")] deferred_indexing: Option<
             Option<crate::collection::streaming::DeferredIndexerConfig>,
         >,
-        async_index_builder: Option<
-            Option<crate::collection::streaming::AsyncIndexBuilderConfig>,
-        >,
+        async_index_builder: Option<Option<crate::collection::streaming::AsyncIndexBuilderConfig>>,
     ) -> Result<()> {
         {
             let mut config = self.config.write();

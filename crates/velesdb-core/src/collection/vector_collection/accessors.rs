@@ -112,9 +112,7 @@ impl VectorCollection {
         #[cfg(feature = "persistence")] deferred_indexing: Option<
             Option<crate::collection::streaming::DeferredIndexerConfig>,
         >,
-        async_index_builder: Option<
-            Option<crate::collection::streaming::AsyncIndexBuilderConfig>,
-        >,
+        async_index_builder: Option<Option<crate::collection::streaming::AsyncIndexBuilderConfig>>,
     ) -> crate::error::Result<()> {
         self.inner.apply_advanced_config(
             pq_rescore_oversampling,

@@ -454,10 +454,7 @@ pub(crate) fn finish_search_with_status(
 /// exceeds the per-request `timeout_ms` budget. Includes the collection
 /// name and the budget in milliseconds so that clients can log
 /// actionable diagnostics.
-pub(crate) fn timeout_response(
-    collection_name: &str,
-    timeout_ms: u64,
-) -> axum::response::Response {
+pub(crate) fn timeout_response(collection_name: &str, timeout_ms: u64) -> axum::response::Response {
     (
         StatusCode::REQUEST_TIMEOUT,
         Json(ErrorResponse {
@@ -506,9 +503,10 @@ pub(crate) async fn run_search_with_optional_timeout<F>(
     TimeoutElapsed,
 >
 where
-    F: FnOnce()
-            -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response>
-        + Send
+    F: FnOnce() -> Result<
+            velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
+            axum::response::Response,
+        > + Send
         + 'static,
 {
     // A zero-millisecond budget is treated as an immediate short-circuit:
@@ -553,9 +551,10 @@ pub(crate) async fn run_blocking_search<F>(
     work: F,
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response>
 where
-    F: FnOnce()
-            -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response>
-        + Send
+    F: FnOnce() -> Result<
+            velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
+            axum::response::Response,
+        > + Send
         + 'static,
 {
     unwrap_join(tokio::task::spawn_blocking(work).await)
@@ -567,10 +566,7 @@ where
 #[allow(clippy::result_large_err)]
 fn unwrap_join(
     join_result: Result<
-        Result<
-            velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
-            axum::response::Response,
-        >,
+        Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response>,
         tokio::task::JoinError,
     >,
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
