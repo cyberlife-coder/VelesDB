@@ -188,6 +188,152 @@ fn test_extract_vector_distance_metric_returns_none_when_missing() {
     assert_eq!(extract_vector_distance_metric(&items, "embedding"), None);
 }
 
+/// Helper: build a realistic FT.INFO vector field attribute array
+/// matching the RediSearch 2.6+ alternating key-value layout.
+fn vector_attr(
+    identifier: &str,
+    metric_key: &str,
+    metric_value: &str,
+    algorithm: &str,
+) -> redis::Value {
+    redis::Value::Array(vec![
+        redis::Value::BulkString(b"identifier".to_vec()),
+        redis::Value::BulkString(identifier.as_bytes().to_vec()),
+        redis::Value::BulkString(b"attribute".to_vec()),
+        redis::Value::BulkString(identifier.as_bytes().to_vec()),
+        redis::Value::BulkString(b"type".to_vec()),
+        redis::Value::BulkString(b"VECTOR".to_vec()),
+        redis::Value::BulkString(b"algorithm".to_vec()),
+        redis::Value::BulkString(algorithm.as_bytes().to_vec()),
+        redis::Value::BulkString(b"data_type".to_vec()),
+        redis::Value::BulkString(b"FLOAT32".to_vec()),
+        redis::Value::BulkString(b"dim".to_vec()),
+        redis::Value::BulkString(b"384".to_vec()),
+        redis::Value::BulkString(metric_key.as_bytes().to_vec()),
+        redis::Value::BulkString(metric_value.as_bytes().to_vec()),
+    ])
+}
+
+#[test]
+fn test_parse_ft_info_response_extracts_metric_and_num_docs_for_cosine() {
+    // Realistic RediSearch 2.6+ FT.INFO response: alternating
+    // key-value list with num_docs and an attributes array whose
+    // first (and only) entry is a VECTOR field with COSINE metric.
+    let vec_attr = vector_attr("embedding", "distance_metric", "COSINE", "HNSW");
+    let response = redis::Value::Array(vec![
+        redis::Value::BulkString(b"index_name".to_vec()),
+        redis::Value::BulkString(b"myidx".to_vec()),
+        redis::Value::BulkString(b"num_docs".to_vec()),
+        redis::Value::BulkString(b"1234".to_vec()),
+        redis::Value::BulkString(b"attributes".to_vec()),
+        redis::Value::Array(vec![vec_attr]),
+    ]);
+
+    let (num_docs, _fields, metric) =
+        parse_ft_info_response(&response, "embedding").expect("parse should succeed");
+
+    assert_eq!(num_docs, 1234);
+    assert_eq!(metric, Some("COSINE".to_string()));
+}
+
+#[test]
+fn test_parse_ft_info_response_handles_uppercase_distance_metric_key() {
+    // Older RediSearch versions emit the key in UPPERCASE.
+    // extract_vector_distance_metric probes both cases so the
+    // parser is version-tolerant.
+    let vec_attr = vector_attr("embedding", "DISTANCE_METRIC", "L2", "FLAT");
+    let response = redis::Value::Array(vec![
+        redis::Value::BulkString(b"num_docs".to_vec()),
+        redis::Value::BulkString(b"100".to_vec()),
+        redis::Value::BulkString(b"attributes".to_vec()),
+        redis::Value::Array(vec![vec_attr]),
+    ]);
+
+    let (_num_docs, _fields, metric) = parse_ft_info_response(&response, "embedding").unwrap();
+    assert_eq!(
+        metric,
+        Some("L2".to_string()),
+        "UPPERCASE DISTANCE_METRIC key must be recognised"
+    );
+}
+
+#[test]
+fn test_parse_ft_info_response_returns_first_vector_field_metric() {
+    // Response with a non-vector field before the vector field.
+    // The extractor must skip over the non-vector attribute and
+    // match on the identifier of the vector field.
+    let text_attr = redis::Value::Array(vec![
+        redis::Value::BulkString(b"identifier".to_vec()),
+        redis::Value::BulkString(b"title".to_vec()),
+        redis::Value::BulkString(b"type".to_vec()),
+        redis::Value::BulkString(b"TEXT".to_vec()),
+        redis::Value::BulkString(b"weight".to_vec()),
+        redis::Value::BulkString(b"1".to_vec()),
+    ]);
+    let vec_attr = vector_attr("embedding", "distance_metric", "IP", "HNSW");
+    let response = redis::Value::Array(vec![
+        redis::Value::BulkString(b"num_docs".to_vec()),
+        redis::Value::BulkString(b"50".to_vec()),
+        redis::Value::BulkString(b"attributes".to_vec()),
+        redis::Value::Array(vec![text_attr, vec_attr]),
+    ]);
+
+    let (_, _, metric) = parse_ft_info_response(&response, "embedding").unwrap();
+    assert_eq!(metric, Some("IP".to_string()));
+}
+
+#[test]
+fn test_parse_ft_info_response_metric_is_none_when_vector_field_missing() {
+    // Response with only a TEXT field — no vector field matches
+    // the requested vector_field name.
+    let text_attr = redis::Value::Array(vec![
+        redis::Value::BulkString(b"identifier".to_vec()),
+        redis::Value::BulkString(b"title".to_vec()),
+        redis::Value::BulkString(b"type".to_vec()),
+        redis::Value::BulkString(b"TEXT".to_vec()),
+    ]);
+    let response = redis::Value::Array(vec![
+        redis::Value::BulkString(b"num_docs".to_vec()),
+        redis::Value::BulkString(b"5".to_vec()),
+        redis::Value::BulkString(b"attributes".to_vec()),
+        redis::Value::Array(vec![text_attr]),
+    ]);
+
+    let (_, _, metric) = parse_ft_info_response(&response, "embedding").unwrap();
+    assert!(metric.is_none());
+}
+
+#[test]
+fn test_parse_ft_info_response_metric_normalises_end_to_end_via_connector() {
+    // Sanity: verify that what the parser extracts and what
+    // RedisConnector::normalise_redis_metric produces end-to-end
+    // maps the RediSearch vocabulary (COSINE, L2, IP) to the
+    // VelesDB core vocabulary (cosine, euclidean, dot).
+    for (raw, expected) in [
+        ("COSINE", "cosine"),
+        ("L2", "euclidean"),
+        ("IP", "dot"),
+        ("HAMMING", "hamming"),
+    ] {
+        let vec_attr = vector_attr("embedding", "distance_metric", raw, "HNSW");
+        let response = redis::Value::Array(vec![
+            redis::Value::BulkString(b"num_docs".to_vec()),
+            redis::Value::BulkString(b"10".to_vec()),
+            redis::Value::BulkString(b"attributes".to_vec()),
+            redis::Value::Array(vec![vec_attr]),
+        ]);
+        let (_, _, raw_metric) = parse_ft_info_response(&response, "embedding").unwrap();
+        let normalised = raw_metric
+            .as_deref()
+            .map(RedisConnector::normalise_redis_metric);
+        assert_eq!(
+            normalised,
+            Some(expected.to_string()),
+            "raw {raw} must normalise to {expected}"
+        );
+    }
+}
+
 #[test]
 fn test_find_info_int_stride2_correctness() {
     // GIVEN: a flat FT.INFO-style key-value list where a value is "num_docs"
