@@ -59,6 +59,9 @@ async-trait = "0.1"
 # UUID for point IDs
 uuid = { version = "1.11", features = ["v4", "serde"] }
 
+# URL parsing for SSRF-resistant validate_url
+url = "2.5"
+
 # VelesDB client (for destination)
 velesdb-core = { workspace = true }
 

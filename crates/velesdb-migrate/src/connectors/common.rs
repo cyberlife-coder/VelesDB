@@ -31,31 +31,153 @@ pub fn create_http_client() -> Client {
         })
 }
 
-/// Validates a URL for safety (anti-SSRF).
-pub fn validate_url(url: &str) -> Result<()> {
-    // Check for valid scheme
-    let valid_schemes = [
-        "http://",
-        "https://",
-        "redis://",
-        "rediss://",
-        "postgres://",
-        "postgresql://",
-    ];
-    let has_valid_scheme = valid_schemes.iter().any(|s| url.starts_with(s));
+/// URL schemes accepted by migration connectors.
+const ALLOWED_SCHEMES: &[&str] = &["http", "https", "redis", "rediss", "postgres", "postgresql"];
 
-    if !has_valid_scheme {
+/// Validates a URL for use as a migration source or sink endpoint.
+///
+/// Applies anti-SSRF checks aligned with OWASP guidance:
+/// 1. Scheme must belong to [`ALLOWED_SCHEMES`].
+/// 2. URL userinfo (`user:pass@host`) is rejected; credentials must be
+///    supplied via the connector's explicit authentication fields.
+/// 3. Host component must be present and non-empty.
+/// 4. Host must not resolve to a loopback, private (RFC 1918 / ULA),
+///    link-local, or cloud-metadata address.
+/// 5. Domain names ending in `.localhost`, `.local`, `.internal`, or
+///    `.arpa`, or the bare label `localhost`, are rejected.
+///
+/// # Local development escape hatch
+///
+/// The environment variable `VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS=1`
+/// disables checks (4) and (5) to support local docker-compose stacks.
+/// Checks (1)–(3) always apply. This variable must not be set in
+/// production deployments.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] with a message that includes the rejected
+/// input and the specific rule that failed.
+pub fn validate_url(input: &str) -> Result<()> {
+    // Delegate RFC 3986 parsing to the `url` crate.
+    let parsed =
+        url::Url::parse(input).map_err(|e| Error::Config(format!("Invalid URL '{input}': {e}")))?;
+
+    // (1) Scheme allowlist.
+    let scheme = parsed.scheme();
+    if !ALLOWED_SCHEMES.contains(&scheme) {
         return Err(Error::Config(format!(
-            "Invalid URL scheme in '{}'. Allowed: http, https, redis, postgres",
-            url
+            "Disallowed URL scheme '{scheme}' in '{input}'. \
+             Allowed: {}",
+            ALLOWED_SCHEMES.join(", ")
         )));
     }
 
-    // Basic URL format validation
-    if url.len() < 10 || !url.contains("://") {
-        return Err(Error::Config(format!("Invalid URL format: {}", url)));
+    // (2) Reject embedded userinfo to prevent credential smuggling and
+    //     parser-confusion attacks where a crafted `user@host` component
+    //     overrides the caller's intended target.
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(Error::Config(format!(
+            "URL '{input}' must not contain userinfo (user:pass@host). \
+             Pass credentials via the connector's explicit auth config."
+        )));
     }
 
+    // (3) Host presence and non-emptiness.
+    let host = parsed
+        .host()
+        .ok_or_else(|| Error::Config(format!("URL '{input}' is missing a host component")))?;
+    if let url::Host::Domain(d) = &host {
+        if d.is_empty() {
+            return Err(Error::Config(format!(
+                "URL '{input}' has an empty host component"
+            )));
+        }
+    }
+
+    // Local development escape hatch: bypass checks (4) and (5) only.
+    let allow_private = std::env::var("VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS")
+        .ok()
+        .filter(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .is_some();
+    if allow_private {
+        return Ok(());
+    }
+
+    // (4) and (5) Private-range and reserved-hostname rejection.
+    reject_unsafe_host(&host, input)
+}
+
+/// Rejects hosts that resolve to private, loopback, link-local, or
+/// cloud-metadata endpoints. Implements checks (4) and (5) documented on
+/// [`validate_url`].
+///
+/// Returns `Ok(())` if the host is publicly routable, `Err(Error::Config)`
+/// otherwise.
+fn reject_unsafe_host(host: &url::Host<&str>, input: &str) -> Result<()> {
+    match host {
+        url::Host::Ipv4(ip) => {
+            if ip.is_loopback() || ip.is_private() || ip.is_link_local() {
+                return Err(Error::Config(format!(
+                    "URL '{input}' targets a non-public IPv4 range ({ip}): \
+                     loopback, RFC 1918 private, or link-local. \
+                     Set VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS=1 for \
+                     local development."
+                )));
+            }
+            // `is_link_local()` already covers 169.254.0.0/16; the
+            // additional exact-match check produces a clearer diagnostic
+            // for the well-known cloud metadata endpoint.
+            if ip.octets() == [169, 254, 169, 254] {
+                return Err(Error::Config(format!(
+                    "URL '{input}' targets the cloud metadata endpoint \
+                     (169.254.169.254)"
+                )));
+            }
+        }
+        url::Host::Ipv6(ip) => {
+            if ip.is_loopback() || ip.is_unspecified() {
+                return Err(Error::Config(format!(
+                    "URL '{input}' targets an IPv6 loopback or unspecified \
+                     address ({ip})"
+                )));
+            }
+            // Detect fe80::/10 (link-local) and fc00::/7 (unique local)
+            // via their IPv6 prefix masks; `std::net::Ipv6Addr` lacks
+            // stable is_unique_local / is_unicast_link_local on MSRV 1.83.
+            let first = ip.segments()[0];
+            if (first & 0xffc0) == 0xfe80 {
+                return Err(Error::Config(format!(
+                    "URL '{input}' targets an IPv6 link-local address ({ip})"
+                )));
+            }
+            if (first & 0xfe00) == 0xfc00 {
+                return Err(Error::Config(format!(
+                    "URL '{input}' targets an IPv6 unique-local address ({ip})"
+                )));
+            }
+        }
+        url::Host::Domain(name) => {
+            let lower = name.to_ascii_lowercase();
+            // Reject reserved suffixes that name on-host or internal-only
+            // services. These cover both standards-reserved labels
+            // (RFC 6761 `.localhost`, RFC 8375 `.home.arpa`) and common
+            // private-DNS conventions (`.internal`, `.local`).
+            const RESERVED_SUFFIXES: &[&str] =
+                &["localhost", ".localhost", ".local", ".internal", ".arpa"];
+            let is_reserved = lower == "localhost"
+                || RESERVED_SUFFIXES
+                    .iter()
+                    .any(|s| lower == s.trim_start_matches('.') || lower.ends_with(s));
+            if is_reserved {
+                return Err(Error::Config(format!(
+                    "URL '{input}' targets reserved hostname '{lower}' \
+                     (localhost / .local / .internal / .arpa). \
+                     Set VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS=1 for \
+                     local development."
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -323,22 +445,138 @@ mod tests {
         assert!(matches!(err, Error::SourceConnection(_)));
     }
 
+    // ---- validate_url: SSRF regression test suite ----
+    //
+    // Each rule documented on `validate_url` is covered by at least one
+    // positive and one negative test. The suite tracks the rule numbers
+    // from the validate_url docstring for traceability during audits.
+
     #[test]
-    fn test_validate_url_valid_http() {
-        assert!(validate_url("http://localhost:9200").is_ok());
-        assert!(validate_url("https://api.example.com").is_ok());
+    fn test_validate_url_allows_public_https() {
+        assert!(validate_url("https://api.openai.com").is_ok());
+        assert!(validate_url("https://example.com:443/path?query=1").is_ok());
     }
 
     #[test]
-    fn test_validate_url_valid_redis() {
-        assert!(validate_url("redis://localhost:6379").is_ok());
-        assert!(validate_url("rediss://cloud.redis.io:6380").is_ok());
+    fn test_validate_url_allows_public_http() {
+        assert!(validate_url("http://pinecone.io").is_ok());
     }
 
     #[test]
-    fn test_validate_url_invalid_scheme() {
-        assert!(validate_url("ftp://files.example.com").is_err());
+    fn test_validate_url_rejects_ftp_scheme() {
+        let err = validate_url("ftp://files.example.com").unwrap_err();
+        assert!(err.to_string().contains("Disallowed URL scheme 'ftp'"));
+    }
+
+    #[test]
+    fn test_validate_url_rejects_file_scheme() {
         assert!(validate_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_gopher_scheme() {
+        assert!(validate_url("gopher://example.com:70").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_userinfo_in_url() {
+        // Regression: `http://alt-host@victim.com` can be misinterpreted
+        // by naive URL parsers as fetching `alt-host`. Reject any URL
+        // that embeds credentials regardless of the host component.
+        let err = validate_url("http://alt-host@victim.com").unwrap_err();
+        assert!(err.to_string().contains("must not contain userinfo"));
+    }
+
+    #[test]
+    fn test_validate_url_rejects_password_in_url() {
+        assert!(validate_url("https://user:pass@example.com").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_aws_metadata_ipv4() {
+        let err = validate_url("http://169.254.169.254/latest/meta-data/").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("169.254.169.254") || msg.contains("link-local"));
+    }
+
+    #[test]
+    fn test_validate_url_rejects_loopback_ipv4() {
+        assert!(validate_url("http://127.0.0.1:8080").is_err());
+        assert!(validate_url("http://127.0.0.1").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_rfc1918_10() {
+        assert!(validate_url("http://10.0.0.1").is_err());
+        assert!(validate_url("http://10.10.10.10:9200").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_rfc1918_172() {
+        assert!(validate_url("http://172.16.0.1").is_err());
+        assert!(validate_url("http://172.31.255.255").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_rfc1918_192() {
+        assert!(validate_url("http://192.168.1.1").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_ipv6_loopback() {
+        assert!(validate_url("http://[::1]:8080").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_ipv6_link_local() {
+        assert!(validate_url("http://[fe80::1]:8080").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_ipv6_unique_local() {
+        assert!(validate_url("http://[fc00::1]:8080").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_localhost_hostname() {
+        assert!(validate_url("http://localhost:9200").is_err());
+        assert!(validate_url("http://LocalHost:9200").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_reserved_suffixes() {
+        assert!(validate_url("http://vault.internal:8200").is_err());
+        assert!(validate_url("http://service.local").is_err());
+        assert!(validate_url("http://host.localhost").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_arpa_suffix() {
+        assert!(validate_url("http://0.0.10.in-addr.arpa").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_rejects_malformed_input() {
+        assert!(validate_url("not a url").is_err());
+        assert!(validate_url("").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_escape_hatch_permits_private_networks() {
+        std::env::set_var("VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS", "1");
+        assert!(validate_url("http://localhost:9200").is_ok());
+        assert!(validate_url("http://127.0.0.1:6379").is_ok());
+        assert!(validate_url("http://10.0.0.1").is_ok());
+        // Scheme and userinfo checks remain active with the escape
+        // hatch enabled — regression guard for defense-in-depth.
+        assert!(validate_url("http://user:pass@localhost").is_err());
+        assert!(validate_url("file:///etc/passwd").is_err());
+        std::env::remove_var("VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS");
+    }
+
+    #[test]
+    fn test_validate_url_allows_public_redis_endpoint() {
+        assert!(validate_url("rediss://redis.upstash.io:6379").is_ok());
     }
 
     #[test]
