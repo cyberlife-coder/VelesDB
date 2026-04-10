@@ -16,11 +16,15 @@
 //! ```ignore
 //! use velesdb_core::fault_injection::SaveConfigFaultGuard;
 //!
-//! // The guard forces every `Collection::save_config()` call on
-//! // this process to fail with a PermissionDenied error for the
-//! // lifetime of the guard.
+//! // `activate(fail_at)` schedules the Nth call to
+//! // `Collection::save_config()` to return a synthetic
+//! // `PermissionDenied` error; earlier and later calls succeed
+//! // normally. Use `activate(0)` to fail the very first call.
+//! // The guard fires exactly once and the counter+threshold are
+//! // cleared on drop so tests can never leak fault state across
+//! // test cases.
 //! {
-//!     let _guard = SaveConfigFaultGuard::activate();
+//!     let _guard = SaveConfigFaultGuard::activate(0);
 //!     // Exercise the rollback path of apply_advanced_config,
 //!     // upsert_points, or any other caller of save_config().
 //! }
