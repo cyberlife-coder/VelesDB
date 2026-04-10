@@ -825,7 +825,7 @@ fn test_hash_edge_id_collision_resistance() {
 }
 
 // =========================================================================
-// ALTER COLLECTION — honest rejection (Sprint 0 P0: stop the feature lie)
+// ALTER COLLECTION — execution returns feature-gap error (US-300)
 // =========================================================================
 
 #[test]
@@ -833,7 +833,6 @@ fn test_alter_collection_rejects_with_us300_reference() {
     let dir = tempdir().expect("tempdir");
     let db = Database::open(dir.path()).expect("open");
 
-    // Create a collection first so the alter target exists.
     let create = DdlStatement::CreateCollection(CreateCollectionStatement {
         name: "alter_test".to_string(),
         kind: CreateCollectionKind::Vector(VectorCollectionParams {
@@ -846,33 +845,31 @@ fn test_alter_collection_rejects_with_us300_reference() {
     });
     execute_ddl(&db, create).expect("create");
 
-    // ALTER with a valid option syntactically. Previously this returned a
-    // misleading "status: accepted" payload while silently discarding the
-    // value. The Sprint 0 fix replaces that with an honest rejection
-    // referencing the US-300 tracking ticket and suggesting the drop+create
-    // workaround.
+    // ALTER COLLECTION SET execution is documented as not implemented
+    // under US-300. The error message must expose the ticket, the
+    // collection name, and the option list for debuggability.
     let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
         collection: "alter_test".to_string(),
         options: vec![("auto_reindex".to_string(), "true".to_string())],
     });
-    let err = execute_ddl(&db, alter).expect_err("ALTER must now return an error");
+    let err = execute_ddl(&db, alter).expect_err("ALTER must return a feature-gap error");
 
     let err_msg = err.to_string();
     assert!(
         err_msg.contains("US-300"),
-        "error must reference US-300 tracking ticket, got: {err_msg}"
+        "error must reference US-300: {err_msg}"
     );
     assert!(
         err_msg.contains("not yet implemented"),
-        "error must state feature is not implemented, got: {err_msg}"
+        "error must state feature is not implemented: {err_msg}"
     );
     assert!(
         err_msg.contains("alter_test"),
-        "error must include the target collection name, got: {err_msg}"
+        "error must include target collection name: {err_msg}"
     );
     assert!(
         err_msg.contains("auto_reindex=true"),
-        "error must echo the requested option for debuggability, got: {err_msg}"
+        "error must echo the requested option: {err_msg}"
     );
 }
 
@@ -893,9 +890,8 @@ fn test_alter_collection_validates_unknown_option_before_feature_gap() {
     });
     execute_ddl(&db, create).expect("create");
 
-    // Unknown option should surface as "Unsupported ALTER option" BEFORE
-    // the feature-not-implemented error, so users get the most actionable
-    // diagnostic.
+    // Unknown options must return the specific "Unsupported ALTER
+    // option" diagnostic before the feature-gap error.
     let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
         collection: "alter_unknown".to_string(),
         options: vec![("nonexistent_option".to_string(), "value".to_string())],
@@ -904,11 +900,11 @@ fn test_alter_collection_validates_unknown_option_before_feature_gap() {
     let err_msg = err.to_string();
     assert!(
         err_msg.contains("Unsupported ALTER option"),
-        "must reject unknown option specifically, got: {err_msg}"
+        "must reject unknown option specifically: {err_msg}"
     );
     assert!(
         err_msg.contains("nonexistent_option"),
-        "must echo the unknown option name, got: {err_msg}"
+        "must echo the unknown option name: {err_msg}"
     );
 }
 
@@ -929,8 +925,8 @@ fn test_alter_collection_validates_value_type_before_feature_gap() {
     });
     execute_ddl(&db, create).expect("create");
 
-    // Invalid value type should be rejected with the type error, not the
-    // feature-not-implemented error.
+    // Malformed values must return the type-specific diagnostic rather
+    // than the feature-gap error.
     let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
         collection: "alter_bad_value".to_string(),
         options: vec![("auto_reindex".to_string(), "not_a_bool".to_string())],
@@ -939,7 +935,7 @@ fn test_alter_collection_validates_value_type_before_feature_gap() {
     let err_msg = err.to_string();
     assert!(
         err_msg.contains("auto_reindex must be 'true' or 'false'"),
-        "must reject invalid bool value specifically, got: {err_msg}"
+        "must reject invalid bool value specifically: {err_msg}"
     );
 }
 

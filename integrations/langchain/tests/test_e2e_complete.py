@@ -13,22 +13,23 @@ import tempfile
 import shutil
 import numpy as np
 
-# Step 1: skip the whole module if langchain_core / langchain_velesdb package
-# is not installed (legitimate optional-dependency skip).
+# Optional-dependency skip: the langchain_core package and the
+# langchain_velesdb distribution may be absent in minimal CI runners.
+# `pytest.importorskip` skips the module with a specific reason instead
+# of failing the test run.
 langchain_core = pytest.importorskip(
     "langchain_core",
-    reason="langchain_core not installed — install with `pip install langchain-velesdb[dev]`",
+    reason="langchain_core not installed; install langchain-velesdb[dev]",
 )
 langchain_velesdb = pytest.importorskip(
     "langchain_velesdb",
-    reason="langchain_velesdb package not installed",
+    reason="langchain_velesdb distribution not installed",
 )
 
-# Step 2: import our own classes WITHOUT try/except — any ImportError here is
-# a real bug in langchain_velesdb that must surface as a test failure, not
-# silently skip the whole file. Previously this was buried under a blanket
-# `except ImportError` that hid a class-rename bug (VelesDBGraphRetriever →
-# GraphRetriever) for weeks.
+# Package-level imports of our own classes are intentionally not wrapped
+# in try/except. An ImportError here indicates a real defect in
+# langchain_velesdb (renamed or missing symbol) and must surface as a
+# test error so CI catches it immediately.
 from langchain_velesdb import VelesDBVectorStore  # noqa: E402
 from langchain_velesdb.graph_retriever import GraphRetriever, GraphQARetriever  # noqa: E402
 from langchain_core.documents import Document  # noqa: E402
@@ -228,17 +229,13 @@ class TestMultiQuerySearchE2E:
 
 
 class TestGraphRetrieverE2E:
-    """E2E tests for GraphRetriever / GraphQARetriever.
+    """End-to-end tests for GraphRetriever and GraphQARetriever.
 
-    Note: these tests exercise the vector-search seed path of the retriever
-    without populating a graph. The GraphRetriever is designed to work
-    against an existing graph collection (nodes + edges); in these tests
-    we use `low_latency=True` so the retriever skips graph expansion and
-    simply returns the vector search seeds.
-
-    TODO(EPIC-SPRINT1-LC): Extend these tests to populate a real graph
-    collection (nodes + edges) and assert that graph expansion extends the
-    result set beyond the initial seeds.
+    These tests exercise the vector-search seed path with
+    ``low_latency=True`` so the retriever skips graph expansion and
+    returns only the initial seeds. A proper graph-expansion test
+    requires a pre-populated graph collection (nodes and edges); this is
+    tracked under TODO(EPIC-SPRINT1-LC).
     """
 
     def test_graph_retriever_low_latency_returns_seeds(self, mock_embeddings):
@@ -257,9 +254,8 @@ class TestGraphRetrieverE2E:
             ]
             store.add_documents(docs)
 
-            # low_latency=True skips graph expansion so we only exercise the
-            # vector-search path. This lets us use the retriever without a
-            # populated graph collection (required for Sprint 1 proper E2E).
+            # low_latency=True skips graph expansion, allowing the
+            # retriever to run without a pre-populated graph collection.
             retriever = GraphRetriever(
                 vector_store=store,
                 mode="native",
@@ -288,8 +284,8 @@ class TestGraphRetrieverE2E:
                 collection_name="graph_qa_dedup",
             )
 
-            # Include intentional duplicates (same page_content) to exercise
-            # the _deduplicate path in GraphQARetriever.
+            # Include two documents with identical page_content to
+            # exercise the content-hash deduplication in GraphQARetriever.
             docs = [
                 Document(page_content=f"Node {i}", metadata={"id": i})
                 for i in range(5)
@@ -309,8 +305,8 @@ class TestGraphRetrieverE2E:
             )
 
             results = retriever.invoke("Node")
-            # Deduplication should guarantee unique page_content in the
-            # first-200-char window.
+            # Deduplication must yield unique content prefixes across the
+            # returned documents.
             content_prefixes = {doc.page_content[:200] for doc in results}
             assert len(content_prefixes) == len(results), (
                 "Deduplication failed: results contain duplicate content"
