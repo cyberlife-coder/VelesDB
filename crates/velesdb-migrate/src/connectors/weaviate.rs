@@ -26,6 +26,25 @@ impl WeaviateConnector {
         }
     }
 
+    /// Normalise a Weaviate distance identifier to the VelesDB core
+    /// vocabulary so `Pipeline::check_metric_fidelity` can compare it
+    /// against a destination collection's metric.
+    ///
+    /// Weaviate exposes `cosine`, `l2-squared`, `dot`, `hamming`,
+    /// and `manhattan`. VelesDB core uses `cosine`, `euclidean`,
+    /// `dot`, `hamming`, `jaccard`. `l2-squared` is mapped to
+    /// `euclidean` (both are L2 distance, VelesDB's `euclidean`
+    /// kernel operates on squared L2 internally). Unknown values are
+    /// lowercased and returned verbatim so mismatch errors stay
+    /// actionable.
+    fn normalise_weaviate_metric(raw: &str) -> String {
+        let lower = raw.to_ascii_lowercase();
+        match lower.as_str() {
+            "l2-squared" | "l2_squared" | "l2" => "euclidean".to_string(),
+            _ => lower,
+        }
+    }
+
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         let url = format!("{}{}", self.config.url.trim_end_matches('/'), path);
         let mut req = self.client.request(method, &url);
@@ -48,7 +67,6 @@ struct ClassSchema {
     class: String,
     properties: Option<Vec<PropertySchema>>,
     #[serde(rename = "vectorIndexConfig")]
-    #[allow(dead_code)] // Parsed from JSON, reserved for distance metric
     vector_index_config: Option<VectorIndexConfig>,
 }
 
@@ -61,7 +79,11 @@ struct PropertySchema {
 
 #[derive(Debug, Deserialize)]
 struct VectorIndexConfig {
-    #[allow(dead_code)] // Parsed from JSON, reserved for auto-detecting metric
+    /// Distance metric reported by the Weaviate schema endpoint
+    /// (`cosine`, `l2-squared`, `dot`, `hamming`, `manhattan`).
+    /// Forwarded to `SourceSchema.metric` via `normalise_weaviate_metric`
+    /// so `Pipeline::check_metric_fidelity` can honestly compare it
+    /// against the destination collection's metric.
     distance: Option<String>,
 }
 
@@ -222,10 +244,17 @@ impl SourceConnector for WeaviateConnector {
             }
         }
 
+        let metric = class
+            .vector_index_config
+            .as_ref()
+            .and_then(|cfg| cfg.distance.as_deref())
+            .map(Self::normalise_weaviate_metric);
+
         info!(
-            "Weaviate class '{}': {}D vectors, {:?} objects, {} properties",
+            "Weaviate class '{}': {}D vectors, metric={:?}, {:?} objects, {} properties",
             self.config.class_name,
             dimension,
+            metric,
             total_count,
             fields.len()
         );
@@ -236,6 +265,7 @@ impl SourceConnector for WeaviateConnector {
             dimension,
             total_count,
             fields,
+            metric,
             ..Default::default()
         })
     }
@@ -339,6 +369,53 @@ impl SourceConnector for WeaviateConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalise_weaviate_metric_maps_l2_squared_to_euclidean() {
+        // Weaviate reports 'l2-squared' for L2 distance; VelesDB core
+        // uses 'euclidean'. The mapping is what allows
+        // check_metric_fidelity to honestly compare a Weaviate source
+        // against a core collection created with metric: "euclidean".
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("l2-squared"),
+            "euclidean"
+        );
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("L2-Squared"),
+            "euclidean"
+        );
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("l2_squared"),
+            "euclidean"
+        );
+    }
+
+    #[test]
+    fn test_normalise_weaviate_metric_lowercases_known_values() {
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("Cosine"),
+            "cosine"
+        );
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("Dot"),
+            "dot"
+        );
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("Hamming"),
+            "hamming"
+        );
+    }
+
+    #[test]
+    fn test_normalise_weaviate_metric_preserves_unknown_values() {
+        // Manhattan is a valid Weaviate metric but not supported by
+        // VelesDB core — preserved verbatim so mismatch errors are
+        // actionable rather than masked.
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("manhattan"),
+            "manhattan"
+        );
+    }
 
     #[test]
     fn test_weaviate_connector_new() {
