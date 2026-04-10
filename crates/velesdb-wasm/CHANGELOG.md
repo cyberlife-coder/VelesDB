@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Retracted claim**: WASM SIMD128 distance kernels. The `simd.rs` module
+  depending on the `wide` crate was not wired into the distance paths used
+  by `VectorStore`; distance calculations run on the scalar code paths of
+  `velesdb-core` under `wasm32-unknown-unknown`. The `wide` dependency has
+  been removed. `wasm-opt --enable-simd` remains enabled as an optimizer
+  hint but is not part of the public API contract.
+
 ## [1.11.1] - 2026-04-04
 
 ### Changed
