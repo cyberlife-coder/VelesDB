@@ -105,6 +105,24 @@ pub struct SupabaseConfig {
     /// Additional columns to include in payload.
     #[serde(default)]
     pub payload_columns: Vec<String>,
+    /// Optional distance metric declared by the operator.
+    ///
+    /// Supabase's PostgREST surface does not expose `pg_catalog`
+    /// tables by default, so the pgvector index operator class
+    /// (`vector_cosine_ops`, `vector_l2_ops`, `vector_ip_ops`)
+    /// cannot be auto-introspected without a custom RPC. Operators
+    /// who know their index definition can declare it here and the
+    /// value is forwarded to `SourceSchema.metric` so
+    /// `Pipeline::check_metric_fidelity` can catch mismatches.
+    ///
+    /// Accepted values: the VelesDB core vocabulary
+    /// (`cosine`/`euclidean`/`dot`/...) or the pgvector operator
+    /// class aliases (`vector_cosine_ops`/`vector_l2_ops`/
+    /// `vector_ip_ops`). Values are normalised before forwarding.
+    /// Leaving this unset emits a `tracing::warn!` on `get_schema`
+    /// so the skipped fidelity check is never silent.
+    #[serde(default)]
+    pub metric: Option<String>,
 }
 
 /// Qdrant configuration.

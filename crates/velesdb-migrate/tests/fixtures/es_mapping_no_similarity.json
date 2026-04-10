@@ -1,0 +1,15 @@
+{
+  "articles": {
+    "mappings": {
+      "properties": {
+        "title": {
+          "type": "text"
+        },
+        "embedding": {
+          "type": "dense_vector",
+          "dims": 5
+        }
+      }
+    }
+  }
+}

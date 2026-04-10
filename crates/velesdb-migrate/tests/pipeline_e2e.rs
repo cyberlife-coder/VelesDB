@@ -1205,6 +1205,7 @@ async fn test_pipeline_supabase_e2e() {
             vector_column: "embedding".to_string(),
             id_column: "id".to_string(),
             payload_columns: vec![],
+            metric: None,
         }),
         destination: DestinationConfig {
             path: destination.path().to_path_buf(),

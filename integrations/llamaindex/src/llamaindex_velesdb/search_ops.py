@@ -17,6 +17,7 @@ from llama_index.core.vector_stores.types import (
 
 from velesdb_common.fusion import build_fusion_strategy as _build_fusion_strategy_fn
 
+from llamaindex_velesdb.errors import VelesDBCapabilityError
 from llamaindex_velesdb.security import (
     validate_k,
     validate_search_quality,
@@ -150,8 +151,23 @@ class SearchOpsMixin:
         if core_filter is not None:
             search_with_filter = getattr(collection, "search_with_filter", None)
             if search_with_filter is None:
-                raise NotImplementedError(
-                    "Collection does not support 'search_with_filter' required for MetadataFilters."
+                # Capability gap: the backing collection is either a
+                # legacy type (GraphCollection, MetadataCollection) or
+                # the python binding version predates the
+                # search_with_filter surface. Raise a typed exception
+                # so callers that wrap the query in a try/except can
+                # branch on it — `NotImplementedError` was too generic
+                # for integration code that also treats "method not
+                # yet wired" as a runtime failure.
+                raise VelesDBCapabilityError(
+                    capability="search_with_filter",
+                    remediation=(
+                        "MetadataFilters require a vector collection that "
+                        "exposes search_with_filter. Recreate the collection "
+                        "with collection_type='vector' (or upgrade the "
+                        "velesdb python binding), or remove the filter from "
+                        "the VectorStoreQuery to fall back to dense search."
+                    ),
                 )
             return search_with_filter(query_embedding, top_k=k, filter=core_filter)
 

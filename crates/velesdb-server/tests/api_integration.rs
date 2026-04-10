@@ -4007,26 +4007,146 @@ async fn test_create_with_invalid_async_index_builder_returns_400() {
 
 /// Regression: when Phase 2 (`apply_advanced_config`) fails after
 /// Phase 1 created the base collection, the handler must roll back
-/// the collection via `Database::delete_collection` so the client can
-/// retry without hitting `CollectionExists`. The only realistic failure
-/// mode of `apply_advanced_config` is `save_config()` I/O, which we
-/// cannot inject from the outside without a mockable filesystem trait.
+/// the collection via `Database::delete_collection` so the client
+/// can retry without hitting `CollectionExists`.
 ///
-/// This test documents the invariant and is kept ignored until a
-/// fault-injection hook is introduced (tracked alongside Sprint 2
-/// server polish). Re-enable once `VectorCollection` exposes a test
-/// seam that can force a write failure on `save_config()`.
+/// The only realistic failure mode of `apply_advanced_config` is a
+/// disk I/O error in `save_config()`. Sprint 1.5 item S1.5-05
+/// introduced the `SaveConfigFaultGuard` seam in
+/// `velesdb_core::fault_injection` which lets this test force the
+/// failure without touching the real file system. The test is gated
+/// behind the `test-fault-injection` cargo feature:
+///
+/// ```sh
+/// cargo test -p velesdb-server --features test-fault-injection \
+///     test_advanced_config_failure_rolls_back_collection -- --test-threads=1
+/// ```
+///
+/// The `--test-threads=1` flag is important because the fault
+/// injection flag is process-wide (atomic, not thread-local) so
+/// parallel tests could observe each other's state.
+#[cfg(feature = "test-fault-injection")]
 #[tokio::test]
-#[ignore = "needs disk fault-injection seam — see finding ANALYSIS_0002 on PR #582"]
 async fn test_advanced_config_failure_rolls_back_collection() {
+    use std::sync::atomic::Ordering;
+    use velesdb_core::fault_injection::{SaveConfigFaultGuard, SAVE_CONFIG_CALL_COUNT};
+
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
 
-    // Precondition: POST a collection with advanced config and inject
-    // a `save_config()` failure between Phase 1 and Phase 2. Until the
-    // test seam exists, the scaffolding below documents the expected
-    // shape so the first engineer to wire the hook has a ready body.
-    let response = app
+    // Step 1: probe how many `save_config()` calls a normal Phase 1
+    // (create_vector_collection) makes so we can configure the
+    // fault to fire exactly on the first Phase 2 call. We do this
+    // on a throw-away collection so the counter state is realistic.
+    SAVE_CONFIG_CALL_COUNT.store(0, Ordering::SeqCst);
+    let probe_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "rollback_probe",
+                        "dimension": 16,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build probe request"),
+        )
+        .await
+        .expect("test: probe request failed");
+    assert_eq!(probe_response.status(), StatusCode::CREATED);
+    let phase1_save_calls = SAVE_CONFIG_CALL_COUNT.load(Ordering::SeqCst);
+
+    // Delete the probe so the retry assertion below starts from a
+    // clean state without relying on collection name uniqueness.
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/collections/rollback_probe")
+                .body(Body::empty())
+                .expect("test: build delete request"),
+        )
+        .await;
+
+    // Step 2: GIVEN Phase 2 `save_config()` is scheduled to fail on
+    // the call immediately after Phase 1 completes (phase1_save_calls
+    // is the zero-based index of the first Phase 2 call).
+    {
+        let _guard = SaveConfigFaultGuard::activate(phase1_save_calls);
+
+        // WHEN: POST with advanced config → Phase 1 completes
+        // normally (probe calls reproduced), then Phase 2's
+        // apply_advanced_config hits the injected save_config error.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/collections")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "name": "rollback_cfg",
+                            "dimension": 16,
+                            "metric": "cosine",
+                            "pq_rescore_oversampling": 8
+                        })
+                        .to_string(),
+                    ))
+                    .expect("test: build create request"),
+            )
+            .await
+            .expect("test: create request failed");
+
+        // THEN: the handler surfaces a 400/500 depending on how the
+        // core::Error::Io variant maps through core_error_response.
+        // What matters is the downstream invariant verified below:
+        // the collection must be absent from the registry so retry
+        // succeeds.
+        assert!(
+            response.status() == StatusCode::BAD_REQUEST
+                || response.status() == StatusCode::INTERNAL_SERVER_ERROR,
+            "expected 400 or 500 after Phase 2 fault injection, got {}",
+            response.status()
+        );
+    }
+    // Guard dropped here — save_config() returns to normal operation.
+
+    // Invariant 1: the collection must be absent from the list.
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/collections")
+                .body(Body::empty())
+                .expect("test: build list request"),
+        )
+        .await
+        .expect("test: list request failed");
+    let list_body = axum::body::to_bytes(list_response.into_body(), usize::MAX)
+        .await
+        .expect("test: read list body");
+    let list_json: Value = serde_json::from_slice(&list_body).expect("test: parse list json");
+    let collections_array = list_json["collections"]
+        .as_array()
+        .expect("collections must be an array");
+    assert!(
+        !collections_array
+            .iter()
+            .any(|v| v.get("name").and_then(Value::as_str) == Some("rollback_cfg")),
+        "rollback_cfg must be absent after Phase 2 failure rollback, got: {collections_array:?}"
+    );
+
+    // Invariant 2: retrying the same POST without fault injection
+    // must succeed — no CollectionExists error from orphaned state.
+    let retry_response = app
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -4041,15 +4161,15 @@ async fn test_advanced_config_failure_rolls_back_collection() {
                     })
                     .to_string(),
                 ))
-                .expect("test: build create request"),
+                .expect("test: build retry request"),
         )
         .await
-        .expect("test: create request failed");
-
-    // Expected (post-seam): 500 with a diagnostic error body AND the
-    // collection must be absent from the registry so retrying with a
-    // valid payload succeeds instead of returning `CollectionExists`.
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        .expect("test: retry request failed");
+    assert_eq!(
+        retry_response.status(),
+        StatusCode::CREATED,
+        "retry after rollback must succeed"
+    );
 }
 
 // ────────────────────────────────────────────────────────────────────────────

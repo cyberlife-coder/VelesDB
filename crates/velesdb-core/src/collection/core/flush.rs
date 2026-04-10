@@ -252,8 +252,27 @@ impl Collection {
     /// Saves the collection configuration to disk.
     ///
     /// Uses atomic write-tmp-fsync-rename to prevent torn writes on crash.
+    ///
+    /// Under the `test-fault-injection` cargo feature, checks a
+    /// process-wide flag first and returns a synthetic `Error::Io`
+    /// without touching the file system. This seam lets downstream
+    /// crates (velesdb-server tests in particular) exercise the
+    /// rollback path of `apply_advanced_config` without needing a
+    /// real disk-full or permission error. The check is a single
+    /// atomic load and is optimised out entirely when the feature
+    /// is disabled.
     pub(crate) fn save_config(&self) -> Result<()> {
         use std::io::Write;
+
+        #[cfg(feature = "test-fault-injection")]
+        {
+            if crate::fault_injection::should_fail_save_config() {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "fault-injected save_config failure (test-fault-injection feature)",
+                )));
+            }
+        }
 
         let config = self.config.read();
         let config_path = self.path.join("config.json");

@@ -1,0 +1,15 @@
+{
+  "classes": [
+    {
+      "class": "Location",
+      "vectorizer": "none",
+      "vectorIndexType": "hnsw",
+      "vectorIndexConfig": {
+        "distance": "manhattan"
+      },
+      "properties": [
+        {"name": "name", "dataType": ["text"]}
+      ]
+    }
+  ]
+}

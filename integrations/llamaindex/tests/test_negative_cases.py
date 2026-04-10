@@ -320,7 +320,16 @@ class TestQueryEdgeCases:
         assert result.ids == []
 
     def test_query_with_filter_missing_search_with_filter_raises(self, temp_dir):
-        """search_with_filter absence on collection raises NotImplementedError."""
+        """search_with_filter absence on collection raises VelesDBCapabilityError.
+
+        Regression test for Sprint 1.5 item S1.5-04: the previous code
+        raised a plain NotImplementedError, which was generic and not
+        catchable by integration code that treats "method not wired"
+        as a distinct failure mode. The typed exception carries a
+        `capability` attribute so callers can branch on it.
+        """
+        from llamaindex_velesdb.errors import VelesDBCapabilityError
+
         store = VelesDBVectorStore(path=temp_dir, collection_name="missing-swf")
 
         class _DenseOnlyCollection:
@@ -347,8 +356,56 @@ class TestQueryEdgeCases:
             similarity_top_k=5,
             filters=MetadataFilters(filters=[MetadataFilter(key="lang", value="en")]),
         )
-        with pytest.raises(NotImplementedError, match="search_with_filter"):
+        with pytest.raises(VelesDBCapabilityError, match="search_with_filter") as excinfo:
             store.query(query)
+        assert excinfo.value.capability == "search_with_filter"
+        # Ensure the remediation hint is propagated to the error message.
+        assert "vector" in str(excinfo.value).lower()
+        # Backward compat: VelesDBCapabilityError must inherit from
+        # NotImplementedError so legacy catch blocks still work.
+        # Regression for Devin review finding on PR #583.
+        assert isinstance(excinfo.value, NotImplementedError)
+
+    def test_query_with_filter_error_still_catchable_as_not_implemented(self, temp_dir):
+        """Regression for PR #583 Devin review: the Sprint 1.5 switch
+        from raising a plain NotImplementedError to raising a typed
+        VelesDBCapabilityError must NOT break callers that use the
+        legacy `except NotImplementedError:` catch block. The typed
+        error inherits from NotImplementedError so both catches
+        work — the typed one enables branching on `capability`,
+        the legacy one remains semantically valid.
+        """
+        store = VelesDBVectorStore(path=temp_dir, collection_name="legacy-catch")
+
+        class _DenseOnlyCollection:
+            def search(self, vector, top_k=10):
+                return []
+
+        class _MockDb:
+            def __init__(self):
+                self.collection = None
+
+            def get_collection(self, _name):
+                return None
+
+            def create_collection(self, name, dimension, metric, storage_mode="full"):
+                self.collection = _DenseOnlyCollection()
+                return self.collection
+
+        store._db = _MockDb()
+        store._collection = None
+        store._dimension = None
+
+        query = VectorStoreQuery(
+            query_embedding=[0.1, 0.2, 0.3],
+            similarity_top_k=5,
+            filters=MetadataFilters(filters=[MetadataFilter(key="lang", value="en")]),
+        )
+        # Legacy catch block — must still work.
+        with pytest.raises(NotImplementedError) as excinfo:
+            store.query(query)
+        # And the exception should still be the typed subclass.
+        assert type(excinfo.value).__name__ == "VelesDBCapabilityError"
 
 
 # ---------------------------------------------------------------------------

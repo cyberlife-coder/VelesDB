@@ -192,6 +192,7 @@ fn bench_real_supabase_connection(c: &mut Criterion) {
                 vector_column: "embedding".to_string(),
                 id_column: "id".to_string(),
                 payload_columns: vec![],
+                metric: None,
             };
 
             let source_config = velesdb_migrate::config::SourceConfig::Supabase(config);
@@ -223,6 +224,7 @@ fn bench_real_supabase_connection(c: &mut Criterion) {
                         vector_column: "embedding".to_string(),
                         id_column: "id".to_string(),
                         payload_columns: vec![],
+                        metric: None,
                     };
 
                     let source_config = velesdb_migrate::config::SourceConfig::Supabase(config);

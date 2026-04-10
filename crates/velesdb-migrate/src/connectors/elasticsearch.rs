@@ -132,12 +132,19 @@ impl ElasticsearchConnector {
         self.build_index_url("_count")
     }
 
-    /// Makes an authenticated request.
+    /// Makes an authenticated POST request.
     fn build_request(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut req = self.client.post(url);
+        self.authenticate(self.client.post(url))
+    }
+
+    /// Makes an authenticated GET request (used for _mapping introspection).
+    fn build_get_request(&self, url: &str) -> reqwest::RequestBuilder {
+        self.authenticate(self.client.get(url))
+    }
+
+    fn authenticate(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         req = req.header("Content-Type", "application/json");
 
-        // Apply authentication
         if let Some(api_key) = &self.config.api_key {
             req = req.header("Authorization", format!("ApiKey {}", api_key));
         } else if let (Some(user), Some(pass)) = (&self.config.username, &self.config.password) {
@@ -145,6 +152,94 @@ impl ElasticsearchConnector {
         }
 
         req
+    }
+
+    /// Normalise an Elasticsearch `similarity` identifier to the
+    /// VelesDB core vocabulary so `Pipeline::check_metric_fidelity` can
+    /// compare it against a destination collection's metric.
+    ///
+    /// Elasticsearch dense_vector exposes `cosine`, `dot_product`,
+    /// `l2_norm`, and `max_inner_product`. VelesDB core uses `cosine`,
+    /// `dot`, `euclidean`, `hamming`, `jaccard`. The mapping is:
+    /// - `cosine` → `cosine`
+    /// - `dot_product` → `dot`
+    /// - `l2_norm` → `euclidean`
+    /// - `max_inner_product` → preserved verbatim (not a core metric)
+    ///
+    /// Unknown labels are lowercased and returned verbatim so
+    /// mismatch errors stay actionable rather than masked.
+    fn normalise_elasticsearch_metric(raw: &str) -> String {
+        let lower = raw.to_ascii_lowercase();
+        match lower.as_str() {
+            "dot_product" => "dot".to_string(),
+            "l2_norm" => "euclidean".to_string(),
+            _ => lower,
+        }
+    }
+
+    /// Best-effort retrieval of the distance metric from the
+    /// Elasticsearch `_mapping` endpoint. For a dense_vector field, the
+    /// mapping response includes a `similarity` attribute. If the call
+    /// fails (older ES versions, permission issues, index has no
+    /// dense_vector field) we log a warning and return `None` so the
+    /// rest of the schema extraction proceeds — `check_metric_fidelity`
+    /// will skip validation for this source rather than blocking
+    /// migration.
+    async fn fetch_field_similarity(&self) -> Option<String> {
+        let base = self.config.url.trim_end_matches('/');
+        let index_path = if self.config.index.starts_with('/') {
+            self.config.index.clone()
+        } else {
+            format!("/{}", self.config.index)
+        };
+        let url = format!("{base}{index_path}/_mapping");
+
+        let resp = match self.build_get_request(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Elasticsearch _mapping request failed; metric fidelity \
+                     check will be skipped for this source"
+                );
+                return None;
+            }
+        };
+
+        if !resp.status().is_success() {
+            tracing::warn!(
+                status = %resp.status(),
+                "Elasticsearch _mapping returned non-success; metric fidelity \
+                 check will be skipped for this source"
+            );
+            return None;
+        }
+
+        let body: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Elasticsearch _mapping response failed to parse; metric \
+                     fidelity check will be skipped for this source"
+                );
+                return None;
+            }
+        };
+
+        // Response shape: { "<index>": { "mappings": { "properties": {
+        // "<vector_field>": { "type": "dense_vector", "similarity": "cosine" } } } } }
+        let similarity = body
+            .as_object()?
+            .values()
+            .next()?
+            .get("mappings")?
+            .get("properties")?
+            .get(&self.config.vector_field)?
+            .get("similarity")?
+            .as_str()?;
+
+        Some(Self::normalise_elasticsearch_metric(similarity))
     }
 
     /// Gets the total count of documents.
@@ -252,6 +347,9 @@ impl SourceConnector for ElasticsearchConnector {
         // Detect fields
         let fields = detect_fields_from_sample(&sample.source, &[&self.config.vector_field]);
 
+        // Best-effort metric introspection via _mapping endpoint.
+        let metric = self.fetch_field_similarity().await;
+
         self.schema = Some(SourceSchema {
             source_type: "elasticsearch".to_string(),
             collection: self.config.index.clone(),
@@ -260,8 +358,7 @@ impl SourceConnector for ElasticsearchConnector {
             fields,
             vector_column: Some(self.config.vector_field.clone()),
             id_column: Some(self.config.id_field.clone()),
-            // TODO(MIGRATE-METRIC-ES): parse similarity from _mapping response.
-            metric: None,
+            metric,
         });
 
         Ok(())

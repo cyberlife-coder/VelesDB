@@ -213,6 +213,9 @@ class TestQueryFilterTranslation:
         }
 
     def test_query_with_filters_fails_if_search_with_filter_is_missing(self, temp_dir):
+        """Regression for Sprint 1.5 S1.5-04: typed capability error."""
+        from llamaindex_velesdb.errors import VelesDBCapabilityError
+
         store = VelesDBVectorStore(path=temp_dir, collection_name="filter_missing_method")
         store._db = _RecordingDatabase(_SearchOnlyCollection())
         store._collection = None
@@ -224,8 +227,9 @@ class TestQueryFilterTranslation:
             filters=MetadataFilters(filters=[MetadataFilter(key="language", value="python")]),
         )
 
-        with pytest.raises(NotImplementedError, match="search_with_filter"):
+        with pytest.raises(VelesDBCapabilityError, match="search_with_filter") as excinfo:
             store.query(query)
+        assert excinfo.value.capability == "search_with_filter"
 
 
 class TestVelesDBVectorStoreAdvanced:
