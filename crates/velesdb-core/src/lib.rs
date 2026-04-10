@@ -85,6 +85,8 @@ mod distance_tests;
 pub mod error;
 #[cfg(test)]
 mod error_tests;
+#[cfg(feature = "test-fault-injection")]
+pub mod fault_injection;
 pub mod filter;
 #[cfg(test)]
 mod filter_like_tests;

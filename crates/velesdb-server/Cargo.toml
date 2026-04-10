@@ -61,6 +61,10 @@ persistence = ["velesdb-core/persistence"]
 prometheus = []
 update-check = ["velesdb-core/update-check"]
 swagger-ui = ["dep:utoipa-swagger-ui"]
+## Forwards `velesdb-core/test-fault-injection`. Only enable for
+## integration tests that exercise rollback paths via
+## `SaveConfigFaultGuard`. Never include in production builds.
+test-fault-injection = ["velesdb-core/test-fault-injection"]
 
 [dev-dependencies]
 # Use native-tls to avoid ring compilation issues on aarch64-apple-darwin
