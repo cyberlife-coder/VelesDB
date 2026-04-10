@@ -68,6 +68,16 @@ struct CollectionInfo {
 #[derive(Debug, Deserialize)]
 struct CollectionSchema {
     fields: Vec<FieldSchema>,
+    /// Index definitions included in the describe response.
+    ///
+    /// Milvus v2 REST (`POST /v2/vectordb/collections/describe`)
+    /// returns every index attached to the collection in this array.
+    /// Each entry carries `fieldName`, `indexName`, and `metricType`
+    /// — the metric we want to forward into `SourceSchema.metric`.
+    /// Absent on older Milvus versions that pre-date the unified
+    /// describe response (pre-2.3.x).
+    #[serde(default)]
+    indexes: Vec<IndexInfo>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,12 +87,45 @@ struct FieldSchema {
     field_type: String,
     #[serde(rename = "isPrimaryKey")]
     is_primary_key: Option<bool>,
-    params: Option<FieldParams>,
+    /// Milvus v2 REST returns field params as an array of
+    /// `{key, value}` objects (where `value` is a stringified
+    /// integer) rather than a flat map. We parse the array raw and
+    /// extract `dim` via helper because `#[serde(deserialize_with)]`
+    /// on a nested custom shape would obscure the failure mode.
+    #[serde(default)]
+    params: Vec<FieldParam>,
 }
 
 #[derive(Debug, Deserialize)]
-struct FieldParams {
-    dim: Option<usize>,
+struct FieldParam {
+    key: String,
+    value: String,
+}
+
+impl FieldSchema {
+    /// Extract the vector dimension from the `dim` entry of the
+    /// `params` array. Returns 0 when the entry is missing or the
+    /// value cannot be parsed — consistent with the previous
+    /// behaviour for non-vector fields.
+    fn dimension(&self) -> usize {
+        self.params
+            .iter()
+            .find(|p| p.key == "dim")
+            .and_then(|p| p.value.parse::<usize>().ok())
+            .unwrap_or(0)
+    }
+}
+
+/// Index definition returned inside `CollectionSchema.indexes` by
+/// `POST /v2/vectordb/collections/describe`. Every vector field has
+/// a corresponding entry whose `metricType` field carries the
+/// distance metric the operator configured at index creation time.
+#[derive(Debug, Deserialize)]
+struct IndexInfo {
+    #[serde(rename = "fieldName")]
+    field_name: String,
+    #[serde(rename = "metricType")]
+    metric_type: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,20 +149,6 @@ struct QueryResponse {
 struct StatsResponse {
     #[serde(rename = "rowCount")]
     row_count: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct DescribeIndexRequest<'a> {
-    #[serde(rename = "collectionName")]
-    collection_name: &'a str,
-    #[serde(rename = "indexName")]
-    index_name: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
-struct IndexDescription {
-    #[serde(rename = "metricType")]
-    metric_type: Option<String>,
 }
 
 #[async_trait]
@@ -260,8 +289,7 @@ impl MilvusConnector {
         for field in &schema.fields {
             let ft = field.field_type.to_ascii_uppercase();
             if ft.contains("VECTOR") {
-                let dim = field.params.as_ref().and_then(|p| p.dim).unwrap_or(0);
-                return Ok((field.name.clone(), dim));
+                return Ok((field.name.clone(), field.dimension()));
             }
         }
         Err(Error::SchemaMismatch("No vector field found".to_string()))
@@ -286,73 +314,31 @@ impl MilvusConnector {
         }
     }
 
-    /// Best-effort retrieval of the distance metric configured on the
-    /// vector-field index. Milvus v2 REST does not return the metric in
-    /// `/collections/describe`; it is stored on the associated index
-    /// and accessible via `POST /v2/vectordb/indexes/describe`. If the
-    /// call fails (older Milvus versions, permission issues, or the
-    /// index not yet built), we log a warning and return `None` so the
-    /// rest of the schema extraction can proceed — `check_metric_fidelity`
-    /// will skip validation for this source rather than blocking
-    /// migration.
-    async fn fetch_index_metric(&self, vector_field: &str) -> Option<String> {
-        let body = DescribeIndexRequest {
-            collection_name: &self.config.collection,
-            index_name: vector_field,
-        };
-
-        let resp = match self
-            .request(reqwest::Method::POST, "/indexes/describe")
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    "Milvus /indexes/describe request failed; metric \
-                     fidelity check will be skipped for this source"
-                );
-                return None;
-            }
-        };
-
-        if !resp.status().is_success() {
-            warn!(
-                status = %resp.status(),
-                "Milvus /indexes/describe returned non-success; metric \
-                 fidelity check will be skipped for this source"
-            );
-            return None;
-        }
-
-        let parsed: MilvusResponse<IndexDescription> = match resp.json().await {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    "Milvus /indexes/describe response failed to parse; \
-                     metric fidelity check will be skipped for this source"
-                );
-                return None;
-            }
-        };
-
-        if parsed.code != 0 {
-            warn!(
-                code = parsed.code,
-                message = ?parsed.message,
-                "Milvus /indexes/describe returned error code; metric \
-                 fidelity check will be skipped for this source"
-            );
-            return None;
-        }
-
-        parsed
-            .data
-            .and_then(|d| d.metric_type)
-            .map(|raw| Self::normalise_milvus_metric(&raw))
+    /// Extract the distance metric for the given vector field from
+    /// a parsed `/collections/describe` response.
+    ///
+    /// The Milvus v2 REST `POST /v2/vectordb/collections/describe`
+    /// call already returns an `indexes` array with every index
+    /// attached to the collection — each entry carries `fieldName`,
+    /// `indexName`, and `metricType`. We simply locate the index
+    /// whose `fieldName` matches the detected vector field and
+    /// forward its `metricType`, normalised to the VelesDB core
+    /// vocabulary. This avoids the dead-end of chasing a separate
+    /// `/indexes/describe` endpoint that the v2 REST surface does
+    /// not actually expose.
+    ///
+    /// Returns `None` when the collection has no index yet (newly
+    /// created, still building, or flushed without indexing) — in
+    /// that case `check_metric_fidelity` will skip validation rather
+    /// than blocking migration. This is the honest best-effort
+    /// behaviour we want for unindexed sources.
+    fn extract_index_metric(schema: &CollectionSchema, vector_field: &str) -> Option<String> {
+        schema
+            .indexes
+            .iter()
+            .find(|idx| idx.field_name == vector_field)
+            .and_then(|idx| idx.metric_type.as_deref())
+            .map(Self::normalise_milvus_metric)
     }
 
     /// Fetch the collection schema from Milvus and cache it locally.
@@ -396,7 +382,18 @@ impl MilvusConnector {
             None
         };
 
-        let metric = self.fetch_index_metric(&vector_field).await;
+        let metric = Self::extract_index_metric(&schema, &vector_field);
+
+        if metric.is_none() {
+            warn!(
+                collection = %self.config.collection,
+                vector_field = %vector_field,
+                "Milvus describe response did not include an index with \
+                 metricType for the vector field — metric fidelity check \
+                 will be skipped for this source. This typically means \
+                 the index has not been created yet or is still building."
+            );
+        }
 
         info!(
             "Milvus collection '{}': {}D vectors, metric={:?}, {:?} rows",
@@ -495,6 +492,13 @@ mod tests {
         assert!(crate::connectors::common::validate_url("file:///etc/passwd").is_err());
     }
 
+    fn dim_param(dim: usize) -> Vec<FieldParam> {
+        vec![FieldParam {
+            key: "dim".to_string(),
+            value: dim.to_string(),
+        }]
+    }
+
     #[test]
     fn test_find_vector_field_detects_float_vector() {
         let schema = CollectionSchema {
@@ -503,15 +507,16 @@ mod tests {
                     name: "id".to_string(),
                     field_type: "Int64".to_string(),
                     is_primary_key: Some(true),
-                    params: None,
+                    params: vec![],
                 },
                 FieldSchema {
                     name: "embedding".to_string(),
                     field_type: "FloatVector".to_string(),
                     is_primary_key: None,
-                    params: Some(FieldParams { dim: Some(128) }),
+                    params: dim_param(128),
                 },
             ],
+            indexes: vec![],
         };
         let (name, dim) =
             MilvusConnector::find_vector_field(&schema).expect("test: should detect FloatVector");
@@ -526,8 +531,9 @@ mod tests {
                 name: "vec".to_string(),
                 field_type: "FLOAT_VECTOR".to_string(),
                 is_primary_key: None,
-                params: Some(FieldParams { dim: Some(768) }),
+                params: dim_param(768),
             }],
+            indexes: vec![],
         };
         let (name, dim) =
             MilvusConnector::find_vector_field(&schema).expect("test: FLOAT_VECTOR uppercase");
@@ -543,16 +549,101 @@ mod tests {
                     name: "id".to_string(),
                     field_type: "Int64".to_string(),
                     is_primary_key: Some(true),
-                    params: None,
+                    params: vec![],
                 },
                 FieldSchema {
                     name: "name".to_string(),
                     field_type: "VarChar".to_string(),
                     is_primary_key: None,
-                    params: None,
+                    params: vec![],
+                },
+            ],
+            indexes: vec![],
+        };
+        assert!(MilvusConnector::find_vector_field(&schema).is_err());
+    }
+
+    #[test]
+    fn test_extract_index_metric_matches_by_field_name() {
+        let schema = CollectionSchema {
+            fields: vec![],
+            indexes: vec![
+                IndexInfo {
+                    field_name: "other".to_string(),
+                    metric_type: Some("L2".to_string()),
+                },
+                IndexInfo {
+                    field_name: "vector".to_string(),
+                    metric_type: Some("COSINE".to_string()),
                 },
             ],
         };
-        assert!(MilvusConnector::find_vector_field(&schema).is_err());
+        assert_eq!(
+            MilvusConnector::extract_index_metric(&schema, "vector"),
+            Some("cosine".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_index_metric_returns_none_when_field_absent() {
+        let schema = CollectionSchema {
+            fields: vec![],
+            indexes: vec![IndexInfo {
+                field_name: "other".to_string(),
+                metric_type: Some("L2".to_string()),
+            }],
+        };
+        assert_eq!(
+            MilvusConnector::extract_index_metric(&schema, "vector"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_index_metric_returns_none_when_indexes_empty() {
+        let schema = CollectionSchema {
+            fields: vec![],
+            indexes: vec![],
+        };
+        assert_eq!(
+            MilvusConnector::extract_index_metric(&schema, "vector"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_field_schema_dimension_parses_dim_param() {
+        let field = FieldSchema {
+            name: "v".to_string(),
+            field_type: "FloatVector".to_string(),
+            is_primary_key: None,
+            params: dim_param(512),
+        };
+        assert_eq!(field.dimension(), 512);
+    }
+
+    #[test]
+    fn test_field_schema_dimension_returns_zero_when_dim_absent() {
+        let field = FieldSchema {
+            name: "v".to_string(),
+            field_type: "FloatVector".to_string(),
+            is_primary_key: None,
+            params: vec![],
+        };
+        assert_eq!(field.dimension(), 0);
+    }
+
+    #[test]
+    fn test_field_schema_dimension_handles_unparseable_dim() {
+        let field = FieldSchema {
+            name: "v".to_string(),
+            field_type: "FloatVector".to_string(),
+            is_primary_key: None,
+            params: vec![FieldParam {
+                key: "dim".to_string(),
+                value: "not_a_number".to_string(),
+            }],
+        };
+        assert_eq!(field.dimension(), 0);
     }
 }

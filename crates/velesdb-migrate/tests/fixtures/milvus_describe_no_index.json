@@ -1,0 +1,38 @@
+{
+  "code": 0,
+  "data": {
+    "aliases": [],
+    "autoId": false,
+    "collectionID": 448707763883002002,
+    "collectionName": "test_no_index",
+    "consistencyLevel": "Bounded",
+    "description": "",
+    "enableDynamicField": true,
+    "fields": [
+      {
+        "autoId": false,
+        "description": "",
+        "id": 100,
+        "name": "id",
+        "partitionKey": false,
+        "primaryKey": true,
+        "type": "Int64"
+      },
+      {
+        "autoId": false,
+        "description": "",
+        "id": 101,
+        "name": "vector",
+        "params": [{"key": "dim", "value": "32"}],
+        "partitionKey": false,
+        "primaryKey": false,
+        "type": "FloatVector"
+      }
+    ],
+    "indexes": [],
+    "load": "LoadStateNotLoad",
+    "partitionsNum": 1,
+    "properties": [],
+    "shardsNum": 1
+  }
+}
