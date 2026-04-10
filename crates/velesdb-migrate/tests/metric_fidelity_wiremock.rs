@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 use velesdb_migrate::config::{MilvusConfig, QdrantConfig, SourceConfig, WeaviateConfig};
 use velesdb_migrate::connectors::create_connector;
+use velesdb_migrate::connectors::elasticsearch::ElasticsearchConfig;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -278,6 +279,120 @@ async fn qdrant_schema_preserves_manhattan_verbatim() {
         "Manhattan must be preserved verbatim, got {:?}",
         schema.metric
     );
+}
+
+// ---------------------------------------------------------------------------
+// Elasticsearch
+// ---------------------------------------------------------------------------
+
+/// Helper: mount the wiremock routes Elasticsearch's connect() +
+/// fetch_field_similarity() hit — POST /{index}/_search for the
+/// sample doc, POST /{index}/_count for the total count, and
+/// GET /{index}/_mapping for the dense_vector similarity.
+async fn mount_elasticsearch_routes(mock: &MockServer, mapping_fixture: &str) {
+    Mock::given(method("POST"))
+        .and(path("/articles/_search"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(load_fixture("es_search_sample.json")),
+        )
+        .mount(mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/articles/_count"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(load_fixture("es_count.json")))
+        .mount(mock)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/articles/_mapping"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(load_fixture(mapping_fixture)))
+        .mount(mock)
+        .await;
+}
+
+fn es_config(base_url: String) -> ElasticsearchConfig {
+    ElasticsearchConfig {
+        url: base_url,
+        index: "articles".to_string(),
+        vector_field: "embedding".to_string(),
+        id_field: "_id".to_string(),
+        payload_fields: vec![],
+        username: None,
+        password: None,
+        api_key: None,
+        query: None,
+    }
+}
+
+/// GIVEN an Elasticsearch `dense_vector` field with
+/// `similarity: "cosine"`,
+/// WHEN the connector runs connect() → get_schema(),
+/// THEN `schema.metric` must carry `"cosine"`.
+#[tokio::test]
+async fn elasticsearch_schema_has_cosine_metric_for_dense_vector() {
+    let mock = start_mock_server().await;
+    mount_elasticsearch_routes(&mock, "es_mapping_cosine.json").await;
+
+    let config = SourceConfig::Elasticsearch(es_config(mock.uri()));
+
+    let mut connector = create_connector(&config).expect("create ES connector");
+    connector.connect().await.expect("ES connect");
+    let schema = connector.get_schema().await.expect("ES get_schema");
+    assert_eq!(schema.metric.as_deref(), Some("cosine"));
+    assert_eq!(schema.dimension, 5);
+}
+
+/// GIVEN a `dense_vector` with `similarity: "dot_product"`,
+/// WHEN extraction runs,
+/// THEN it must be normalised to `"dot"`.
+#[tokio::test]
+async fn elasticsearch_schema_normalises_dot_product_to_dot() {
+    let mock = start_mock_server().await;
+    mount_elasticsearch_routes(&mock, "es_mapping_dot_product.json").await;
+
+    let config = SourceConfig::Elasticsearch(es_config(mock.uri()));
+
+    let mut connector = create_connector(&config).expect("create ES connector");
+    connector.connect().await.expect("ES connect");
+    let schema = connector.get_schema().await.expect("ES get_schema");
+    assert_eq!(schema.metric.as_deref(), Some("dot"));
+}
+
+/// GIVEN a `dense_vector` with `similarity: "l2_norm"`,
+/// WHEN extraction runs,
+/// THEN it must be normalised to `"euclidean"`.
+#[tokio::test]
+async fn elasticsearch_schema_normalises_l2_norm_to_euclidean() {
+    let mock = start_mock_server().await;
+    mount_elasticsearch_routes(&mock, "es_mapping_l2_norm.json").await;
+
+    let config = SourceConfig::Elasticsearch(es_config(mock.uri()));
+
+    let mut connector = create_connector(&config).expect("create ES connector");
+    connector.connect().await.expect("ES connect");
+    let schema = connector.get_schema().await.expect("ES get_schema");
+    assert_eq!(schema.metric.as_deref(), Some("euclidean"));
+}
+
+/// GIVEN a `dense_vector` field whose mapping does not declare a
+/// `similarity` attribute (Elasticsearch < 8.x or operator opted
+/// for the default implicit behaviour),
+/// WHEN extraction runs,
+/// THEN `schema.metric` must be `None` so
+/// `check_metric_fidelity` skips validation honestly rather than
+/// fabricating a false positive.
+#[tokio::test]
+async fn elasticsearch_schema_metric_is_none_when_similarity_absent() {
+    let mock = start_mock_server().await;
+    mount_elasticsearch_routes(&mock, "es_mapping_no_similarity.json").await;
+
+    let config = SourceConfig::Elasticsearch(es_config(mock.uri()));
+
+    let mut connector = create_connector(&config).expect("create ES connector");
+    connector.connect().await.expect("ES connect");
+    let schema = connector.get_schema().await.expect("ES get_schema");
+    assert!(schema.metric.is_none(), "got {:?}", schema.metric);
 }
 
 // ---------------------------------------------------------------------------
