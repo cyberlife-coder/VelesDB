@@ -311,12 +311,12 @@ pub async fn hybrid_search(
         (status = 400, description = "Invalid request", body = crate::types::ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
+#[allow(clippy::result_large_err)]
 pub async fn search_ids(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Path(name): Path<String>,
-    Json(mut req): Json<SearchRequest>,
+    Json(req): Json<SearchRequest>,
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
 
@@ -325,9 +325,34 @@ pub async fn search_ids(
         Err(resp) => return resp,
     };
 
-    let search_result = match execute_with_cb(&state, &name, &collection, &mut req) {
-        Ok(r) => r,
-        Err(resp) => return resp,
+    // F-03: honour the per-request `timeout_ms` budget and run the
+    // CPU-bound search on a blocking worker so the async runtime stays
+    // responsive. Mirrors the pattern used by `search` so both endpoints
+    // share the same timeout semantics for the same `SearchRequest` type.
+    let timeout_ms = req.timeout_ms;
+    let state_for_work = Arc::clone(&state);
+    let name_for_work = name.clone();
+    let collection_for_work = collection.clone();
+
+    let execution = run_search_with_optional_timeout(timeout_ms, move || {
+        let mut owned_req = req;
+        execute_search_with_cb_owned(
+            &state_for_work,
+            &name_for_work,
+            &collection_for_work,
+            &mut owned_req,
+        )
+    })
+    .await;
+
+    let search_result = match execution {
+        Ok(Ok(inner)) => inner,
+        Ok(Err(resp)) => return resp,
+        Err(pipeline::TimeoutElapsed) => {
+            collection.guard_rails().circuit_breaker.record_failure();
+            let ms = timeout_ms.unwrap_or_default();
+            return timeout_response(&name, ms);
+        }
     };
 
     finish_search_ids_with_cb(&state, &name, start, &collection, search_result)
