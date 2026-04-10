@@ -18,6 +18,7 @@ pub(crate) fn build_supabase(params: &SourceParams<'_>) -> Result<SourceConfig> 
         vector_column: "embedding".to_string(),
         id_column: "id".to_string(),
         payload_columns: vec![],
+        metric: None,
     }))
 }
 

@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::common::{
     build_numeric_offset_batch, check_response, create_http_client, extract_id_from_value,
@@ -30,6 +30,28 @@ impl SupabaseConnector {
         Self {
             config,
             client: create_http_client(),
+        }
+    }
+
+    /// Normalise a user-declared Supabase metric (or pgvector operator
+    /// class hint) to the VelesDB core vocabulary so
+    /// `Pipeline::check_metric_fidelity` can compare it against a
+    /// destination collection's metric.
+    ///
+    /// Accepts:
+    /// - `cosine`, `vector_cosine_ops` → `cosine`
+    /// - `euclidean`, `l2`, `vector_l2_ops` → `euclidean`
+    /// - `dot`, `ip`, `vector_ip_ops` → `dot`
+    ///
+    /// Unknown values are lowercased and returned verbatim so
+    /// mismatch errors stay actionable rather than being masked.
+    fn normalise_supabase_metric(raw: &str) -> String {
+        let lower = raw.to_ascii_lowercase();
+        match lower.as_str() {
+            "vector_cosine_ops" => "cosine".to_string(),
+            "l2" | "vector_l2_ops" => "euclidean".to_string(),
+            "ip" | "vector_ip_ops" => "dot".to_string(),
+            _ => lower,
         }
     }
 
@@ -111,6 +133,26 @@ impl SourceConnector for SupabaseConnector {
             &self.config.vector_column,
         );
 
+        // Supabase PostgREST does not expose pg_catalog tables by
+        // default so the pgvector operator class cannot be auto-
+        // introspected without a custom RPC. Fall back to the
+        // operator-declared `metric` field in SupabaseConfig: if
+        // present, normalise and forward; if absent, warn explicitly
+        // so the skipped fidelity check is never silent.
+        let metric = match self.config.metric.as_deref() {
+            Some(raw) => Some(Self::normalise_supabase_metric(raw)),
+            None => {
+                warn!(
+                    table = %self.config.table,
+                    "Supabase config.metric is not set — metric fidelity \
+                     check will be skipped for this source. Declare the \
+                     metric in your YAML (e.g. metric: cosine) to enable \
+                     the check."
+                );
+                None
+            }
+        };
+
         Ok(SourceSchema {
             source_type: "supabase".to_string(),
             collection: self.config.table.clone(),
@@ -119,9 +161,7 @@ impl SourceConnector for SupabaseConnector {
             fields,
             vector_column: detected_vector_col,
             id_column: Some(self.config.id_column.clone()),
-            // TODO(MIGRATE-METRIC-SUPABASE): introspect operator class of the
-            // pgvector index (vector_cosine_ops, vector_l2_ops, etc.).
-            metric: None,
+            metric,
         })
     }
 
@@ -362,6 +402,7 @@ mod tests {
             vector_column: "embedding".to_string(),
             id_column: "id".to_string(),
             payload_columns: vec![],
+            metric: None,
         };
 
         let connector = SupabaseConnector::new(config);
@@ -371,5 +412,51 @@ mod tests {
     #[test]
     fn test_supabase_connect_rejects_file_url() {
         assert!(crate::connectors::common::validate_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_normalise_supabase_metric_maps_pgvector_operator_classes() {
+        // pgvector operator class aliases are what operators actually
+        // declare in their index DDL. The normaliser must accept them
+        // verbatim so check_metric_fidelity compares apples to apples.
+        assert_eq!(
+            SupabaseConnector::normalise_supabase_metric("vector_cosine_ops"),
+            "cosine"
+        );
+        assert_eq!(
+            SupabaseConnector::normalise_supabase_metric("vector_l2_ops"),
+            "euclidean"
+        );
+        assert_eq!(
+            SupabaseConnector::normalise_supabase_metric("vector_ip_ops"),
+            "dot"
+        );
+    }
+
+    #[test]
+    fn test_normalise_supabase_metric_accepts_short_aliases() {
+        // Operators might also write the short pgvector aliases.
+        assert_eq!(SupabaseConnector::normalise_supabase_metric("l2"), "euclidean");
+        assert_eq!(SupabaseConnector::normalise_supabase_metric("ip"), "dot");
+    }
+
+    #[test]
+    fn test_normalise_supabase_metric_lowercases_known_values() {
+        assert_eq!(
+            SupabaseConnector::normalise_supabase_metric("Cosine"),
+            "cosine"
+        );
+        assert_eq!(
+            SupabaseConnector::normalise_supabase_metric("EUCLIDEAN"),
+            "euclidean"
+        );
+    }
+
+    #[test]
+    fn test_normalise_supabase_metric_preserves_unknown_values() {
+        assert_eq!(
+            SupabaseConnector::normalise_supabase_metric("manhattan"),
+            "manhattan"
+        );
     }
 }
