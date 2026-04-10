@@ -85,7 +85,13 @@ struct FieldSchema {
     name: String,
     #[serde(rename = "type")]
     field_type: String,
-    #[serde(rename = "isPrimaryKey")]
+    /// Milvus v2 REST returns `primaryKey` (not `isPrimaryKey`)
+    /// on the `/v2/vectordb/collections/describe` response. The
+    /// original scaffold used the wrong JSON key so `indexed`
+    /// was always `false` for primary key fields. Both spellings
+    /// are accepted via `alias` in case older Milvus versions
+    /// used the camelCase-with-`is`-prefix form.
+    #[serde(rename = "primaryKey", alias = "isPrimaryKey")]
     is_primary_key: Option<bool>,
     /// Milvus v2 REST returns field params as an array of
     /// `{key, value}` objects (where `value` is a stringified
@@ -631,6 +637,45 @@ mod tests {
             params: vec![],
         };
         assert_eq!(field.dimension(), 0);
+    }
+
+    #[test]
+    fn test_field_schema_deserialises_primary_key_from_camelcase() {
+        // Regression for the Milvus v2 REST primaryKey/isPrimaryKey
+        // drift caught by Devin review on PR #583. The v2 REST
+        // shape uses "primaryKey" as the JSON key, not
+        // "isPrimaryKey" — the pre-Sprint-1.5 annotation silently
+        // dropped the value to None for every field, so the
+        // downstream FieldInfo.indexed flag was always false for
+        // primary key fields.
+        let json = r#"{
+            "name": "id",
+            "type": "Int64",
+            "primaryKey": true
+        }"#;
+        let field: FieldSchema = serde_json::from_str(json).expect("parse primaryKey");
+        assert_eq!(field.is_primary_key, Some(true));
+    }
+
+    #[test]
+    fn test_field_schema_deserialises_legacy_is_primary_key_alias() {
+        // The serde alias should still accept the pre-Sprint-1.5
+        // "isPrimaryKey" spelling in case an older Milvus version
+        // emits it. Forward + backward compat in one field.
+        let json = r#"{
+            "name": "id",
+            "type": "Int64",
+            "isPrimaryKey": true
+        }"#;
+        let field: FieldSchema = serde_json::from_str(json).expect("parse isPrimaryKey");
+        assert_eq!(field.is_primary_key, Some(true));
+    }
+
+    #[test]
+    fn test_field_schema_primary_key_none_when_key_absent() {
+        let json = r#"{ "name": "x", "type": "Int64" }"#;
+        let field: FieldSchema = serde_json::from_str(json).expect("parse without key");
+        assert_eq!(field.is_primary_key, None);
     }
 
     #[test]
