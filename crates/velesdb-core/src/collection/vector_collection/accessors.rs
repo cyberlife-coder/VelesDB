@@ -77,6 +77,51 @@ impl VectorCollection {
         self.inner.config()
     }
 
+    /// Rebuilds the HNSW index of this collection from the vector
+    /// storage, reclaiming memory occupied by tombstoned entries.
+    /// Returns the number of entries compacted.
+    ///
+    /// Used by the server admin endpoint
+    /// `POST /collections/{name}/index/rebuild` (finding F-21).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the vacuum fails (for instance, when
+    /// vector storage is disabled on the HNSW index).
+    pub fn rebuild_index(&self) -> crate::error::Result<usize> {
+        self.inner.vacuum_hnsw_index()
+    }
+
+    /// Applies post-creation overrides to the advanced configuration
+    /// fields (`pq_rescore_oversampling`, `deferred_indexing`,
+    /// `async_index_builder`) and persists the updated `config.json`.
+    ///
+    /// Each parameter is wrapped in an outer `Option` that expresses
+    /// "leave unchanged" (`None`) versus "set to this value" (`Some(_)`).
+    /// Passing `Some(None)` explicitly clears the inner field. A local
+    /// clippy allow is applied because the three-state semantics are
+    /// the intended contract here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the updated config cannot be written to disk.
+    #[allow(clippy::option_option)]
+    pub fn apply_advanced_config(
+        &self,
+        pq_rescore_oversampling: Option<Option<u32>>,
+        #[cfg(feature = "persistence")] deferred_indexing: Option<
+            Option<crate::collection::streaming::DeferredIndexerConfig>,
+        >,
+        async_index_builder: Option<Option<crate::collection::streaming::AsyncIndexBuilderConfig>>,
+    ) -> crate::error::Result<()> {
+        self.inner.apply_advanced_config(
+            pq_rescore_oversampling,
+            #[cfg(feature = "persistence")]
+            deferred_indexing,
+            async_index_builder,
+        )
+    }
+
     /// Returns CBO statistics.
     #[must_use]
     pub fn get_stats(&self) -> crate::collection::stats::CollectionStats {

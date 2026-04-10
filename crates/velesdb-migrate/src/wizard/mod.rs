@@ -451,6 +451,7 @@ mod tests {
             fields: vec![],
             vector_column: None,
             id_column: None,
+            metric: None,
         };
 
         // Act
@@ -491,6 +492,7 @@ mod tests {
             fields: vec![],
             vector_column: None,
             id_column: None,
+            metric: None,
         };
 
         // Act
@@ -526,6 +528,7 @@ mod tests {
             fields: vec![],
             vector_column: None,
             id_column: None,
+            metric: None,
         };
 
         // Act

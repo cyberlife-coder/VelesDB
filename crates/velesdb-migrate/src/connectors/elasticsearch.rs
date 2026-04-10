@@ -260,6 +260,8 @@ impl SourceConnector for ElasticsearchConnector {
             fields,
             vector_column: Some(self.config.vector_field.clone()),
             id_column: Some(self.config.id_field.clone()),
+            // TODO(MIGRATE-METRIC-ES): parse similarity from _mapping response.
+            metric: None,
         });
 
         Ok(())

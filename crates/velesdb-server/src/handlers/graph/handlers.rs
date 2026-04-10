@@ -24,11 +24,20 @@ use super::types::{
 
 /// Resolves a `GraphCollection` by name.
 ///
-/// Returns 404 if no collection with that name exists at all.
-/// Returns 409 if a collection exists but is not a graph collection (type mismatch).
-/// Auto-creates a schemaless graph collection on first use if no collection exists yet,
-/// preserving backward compatibility with workflows that drive graph ops without
-/// an explicit `create_graph_collection` call.
+/// # Returns
+///
+/// * `Ok(collection)` if a graph collection with this name exists.
+/// * `Err(404 Not Found)` if no collection with this name exists.
+/// * `Err(409 Conflict)` if a collection exists with this name but is not
+///   a graph collection (type mismatch with vector or metadata collection).
+///
+/// # Contract
+///
+/// This function previously auto-created a schemaless graph collection
+/// on first use. That behaviour is retired (F-05): a missing graph
+/// collection now yields a 404 response instead of being created
+/// silently. Callers must issue `POST /collections` with
+/// `collection_type = "graph"` before targeting graph endpoints.
 pub(super) fn get_graph_collection_or_404(
     state: &AppState,
     name: &str,
@@ -45,38 +54,24 @@ pub(super) fn get_graph_collection_or_404(
             StatusCode::CONFLICT,
             Json(ErrorResponse {
                 error: format!(
-                    "Collection '{}' exists but is not a graph collection. \
-                     Use /collections/{}/graph only on graph-typed collections.",
-                    name, name
+                    "Collection '{name}' exists but is not a graph collection. \
+                     Use /collections/{name}/graph only on graph-typed collections.",
                 ),
                 code: None,
             }),
         ));
     }
 
-    use velesdb_core::GraphSchema;
-    state
-        .db
-        .create_graph_collection(name, GraphSchema::schemaless())
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to auto-create graph collection '{}': {e}", name),
-                    code: None,
-                }),
-            )
-        })?;
-
-    state.db.get_graph_collection(name).ok_or_else(|| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Graph collection '{}' not found after creation.", name),
-                code: None,
-            }),
-        )
-    })
+    Err((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: format!(
+                "Graph collection '{name}' not found. Create it first with \
+                 POST /collections and collection_type = \"graph\".",
+            ),
+            code: None,
+        }),
+    ))
 }
 
 /// Get edges from a collection's graph filtered by label.

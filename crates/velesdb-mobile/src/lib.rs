@@ -176,7 +176,13 @@ impl VelesDatabase {
     pub fn get_collection(&self, name: String) -> Result<Option<Arc<VelesCollection>>, VelesError> {
         match self.inner.get_any_collection(&name) {
             Some(any_coll) => {
-                let vc = any_coll.into_vector_collection();
+                // F2.2 mitigation: the mobile surface exposes a single
+                // `VelesCollection` type, so we use the unchecked cast
+                // here. Callers that invoke vector-specific methods on
+                // a graph or metadata collection will observe empty
+                // results at runtime. A proper typed split is tracked
+                // as the F2.2 post-seed EPIC.
+                let vc = any_coll.as_vector_collection_unchecked();
                 Ok(Some(Arc::new(VelesCollection { inner: vc })))
             }
             None => Ok(None),

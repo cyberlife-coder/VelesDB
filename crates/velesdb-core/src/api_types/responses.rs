@@ -52,6 +52,28 @@ pub struct CollectionConfigResponse {
     /// Embedding dimension for graph node vectors.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding_dimension: Option<usize>,
+    /// On-disk schema version. Increments when the persisted
+    /// `config.json` format changes in a way older `VelesDB` versions
+    /// cannot safely read.
+    #[serde(default)]
+    pub schema_version: u32,
+    /// PQ rescore oversampling factor. See `CollectionConfig` for
+    /// the semantics of `None`, `Some(0)`, and `Some(n > 0)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pq_rescore_oversampling: Option<u32>,
+    /// Persisted HNSW parameters (M, `ef_construction`, etc.) when
+    /// customised at create time. `None` means the defaults inferred
+    /// from the collection dimension are in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hnsw_params: Option<serde_json::Value>,
+    /// Deferred indexing configuration (`US-366`) — `None` when the
+    /// feature is disabled for this collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_indexing: Option<serde_json::Value>,
+    /// Async index builder configuration (Issue `#488`) — `None` when
+    /// the feature is disabled for this collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_index_builder: Option<serde_json::Value>,
 }
 
 // ============================================================================

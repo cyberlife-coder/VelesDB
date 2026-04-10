@@ -83,6 +83,14 @@ fn parse_storage_mode(raw: &str) -> Result<StorageMode, axum::response::Response
 }
 
 /// Create a vector collection, requiring a dimension in the request.
+///
+/// Applies advanced configuration overrides (pq_rescore_oversampling,
+/// deferred_indexing, async_index_builder) in a second pass via
+/// `VectorCollection::apply_advanced_config` once the base collection
+/// has been registered. This two-step approach keeps the core
+/// `Database::create_vector_collection_*` API stable while still
+/// honouring the full PROP-CONFIG-ADVANCED field set on the REST
+/// surface.
 #[allow(clippy::result_large_err)]
 fn create_vector_collection(
     state: &AppState,
@@ -96,22 +104,155 @@ fn create_vector_collection(
             "dimension is required for vector collections".to_string(),
         )
     })?;
-    if req.hnsw_m.is_some() || req.hnsw_ef_construction.is_some() {
-        Ok(state.db.create_vector_collection_with_hnsw(
+
+    // Parse the advanced override fields up-front so a malformed JSON
+    // payload fails the request before any collection is created on
+    // disk. This avoids the half-initialised state where the base
+    // collection exists but the advanced fields are missing.
+    let advanced = parse_advanced_config(req)?;
+
+    // Phase 1: create the base collection with HNSW params.
+    let base_result = if req.hnsw_m.is_some() || req.hnsw_ef_construction.is_some() {
+        state.db.create_vector_collection_with_hnsw(
             &req.name,
             dimension,
             metric,
             storage_mode,
             req.hnsw_m,
             req.hnsw_ef_construction,
-        ))
+        )
     } else {
-        Ok(state.db.create_vector_collection_with_options(
-            &req.name,
-            dimension,
-            metric,
-            storage_mode,
-        ))
+        state
+            .db
+            .create_vector_collection_with_options(&req.name, dimension, metric, storage_mode)
+    };
+    if let Err(e) = base_result {
+        return Ok(Err(e));
+    }
+
+    // Phase 2: persist advanced overrides if any were requested.
+    //
+    // If this phase fails, we MUST roll back the Phase 1 collection
+    // creation so callers do not end up with a half-initialised
+    // collection on disk that would subsequently fail every retry
+    // with `CollectionExists`. Any delete error during rollback is
+    // logged but we still surface the original Phase 2 error to the
+    // caller because it is more actionable.
+    if advanced.has_any() {
+        let Some(coll) = state.db.get_vector_collection(&req.name) else {
+            return Ok(Err(velesdb_core::error::Error::CollectionNotFound(
+                req.name.clone(),
+            )));
+        };
+        if let Err(phase_two_err) = coll.apply_advanced_config(
+            advanced.pq_rescore_oversampling,
+            #[cfg(feature = "persistence")]
+            advanced.deferred_indexing,
+            advanced.async_index_builder,
+        ) {
+            // Drop the coll handle before the rollback to release any
+            // read lock the registry hands back by default.
+            drop(coll);
+            if let Err(rollback_err) = state.db.delete_collection(&req.name) {
+                tracing::warn!(
+                    collection = %req.name,
+                    rollback_error = %rollback_err,
+                    phase_two_error = %phase_two_err,
+                    "failed to roll back collection after apply_advanced_config error"
+                );
+            }
+            return Ok(Err(phase_two_err));
+        }
+    }
+
+    Ok(Ok(()))
+}
+
+/// Parsed advanced override fields for the create-collection pipeline.
+///
+/// The outer `Option` signals whether the field was present in the
+/// request body; the inner `Option` carries the value the caller
+/// wanted to persist (including explicit `null` → `Some(None)`).
+/// A local clippy allow is applied because the three-state semantics
+/// are the intended contract here.
+#[allow(clippy::option_option)]
+#[derive(Default)]
+struct AdvancedCreateOverrides {
+    pq_rescore_oversampling: Option<Option<u32>>,
+    #[cfg(feature = "persistence")]
+    deferred_indexing: Option<Option<velesdb_core::collection::streaming::DeferredIndexerConfig>>,
+    async_index_builder:
+        Option<Option<velesdb_core::collection::streaming::AsyncIndexBuilderConfig>>,
+}
+
+impl AdvancedCreateOverrides {
+    #[cfg(feature = "persistence")]
+    fn has_any(&self) -> bool {
+        self.pq_rescore_oversampling.is_some()
+            || self.deferred_indexing.is_some()
+            || self.async_index_builder.is_some()
+    }
+
+    #[cfg(not(feature = "persistence"))]
+    fn has_any(&self) -> bool {
+        self.pq_rescore_oversampling.is_some() || self.async_index_builder.is_some()
+    }
+}
+
+/// Parses the advanced override JSON fields on `CreateCollectionRequest`
+/// into typed `CollectionConfig` fragments. A malformed JSON payload
+/// becomes a 400 response.
+#[allow(clippy::result_large_err)]
+fn parse_advanced_config(
+    req: &CreateCollectionRequest,
+) -> Result<AdvancedCreateOverrides, axum::response::Response> {
+    let mut overrides = AdvancedCreateOverrides {
+        pq_rescore_oversampling: req.pq_rescore_oversampling.map(Some),
+        ..Default::default()
+    };
+
+    #[cfg(feature = "persistence")]
+    if let Some(ref value) = req.deferred_indexing {
+        let parsed: velesdb_core::collection::streaming::DeferredIndexerConfig =
+            serde_json::from_value(value.clone()).map_err(|e| {
+                error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid 'deferred_indexing' configuration: {e}"),
+                )
+            })?;
+        overrides.deferred_indexing = Some(Some(parsed));
+    }
+
+    if let Some(ref value) = req.async_index_builder {
+        let parsed: velesdb_core::collection::streaming::AsyncIndexBuilderConfig =
+            serde_json::from_value(value.clone()).map_err(|e| {
+                error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid 'async_index_builder' configuration: {e}"),
+                )
+            })?;
+        overrides.async_index_builder = Some(Some(parsed));
+    }
+
+    Ok(overrides)
+}
+
+/// Parses the optional `graph_schema` JSON field on
+/// `CreateCollectionRequest` into a typed `GraphSchema`. When the field
+/// is absent the schemaless default is returned, preserving backward
+/// compatibility with callers that relied on the previous behaviour.
+#[allow(clippy::result_large_err)]
+fn parse_graph_schema(
+    req: &CreateCollectionRequest,
+) -> Result<velesdb_core::GraphSchema, axum::response::Response> {
+    match req.graph_schema.as_ref() {
+        Some(value) => serde_json::from_value(value.clone()).map_err(|e| {
+            error_response(
+                StatusCode::BAD_REQUEST,
+                format!("Invalid 'graph_schema' payload: {e}"),
+            )
+        }),
+        None => Ok(velesdb_core::GraphSchema::schemaless()),
     }
 }
 
@@ -128,10 +269,8 @@ fn dispatch_create(
             Ok(state.db.create_metadata_collection(&req.name))
         }
         "graph" | "knowledge_graph" | "kg" => {
-            use velesdb_core::GraphSchema;
-            Ok(state
-                .db
-                .create_graph_collection(&req.name, GraphSchema::schemaless()))
+            let schema = parse_graph_schema(req)?;
+            Ok(state.db.create_graph_collection(&req.name, schema))
         }
         "vector" | "" => create_vector_collection(state, req, metric, storage_mode),
         _ => Err(error_response(

@@ -2674,6 +2674,12 @@
           "metadata_only"
         ],
         "properties": {
+          "async_index_builder": {
+            "description": "Async index builder configuration (Issue `#488`) — `None` when\nthe feature is disabled for this collection."
+          },
+          "deferred_indexing": {
+            "description": "Deferred indexing configuration (`US-366`) — `None` when the\nfeature is disabled for this collection."
+          },
           "dimension": {
             "type": "integer",
             "description": "Vector dimension (0 for metadata-only collections).",
@@ -2690,6 +2696,9 @@
           "graph_schema": {
             "description": "Graph schema (if this is a graph collection)."
           },
+          "hnsw_params": {
+            "description": "Persisted HNSW parameters (M, `ef_construction`, etc.) when\ncustomised at create time. `None` means the defaults inferred\nfrom the collection dimension are in use."
+          },
           "metadata_only": {
             "type": "boolean",
             "description": "Whether this is a metadata-only collection."
@@ -2705,6 +2714,21 @@
           "point_count": {
             "type": "integer",
             "description": "Number of points in the collection.",
+            "minimum": 0
+          },
+          "pq_rescore_oversampling": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "PQ rescore oversampling factor. See `CollectionConfig` for\nthe semantics of `None`, `Some(0)`, and `Some(n > 0)`.",
+            "minimum": 0
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "On-disk schema version. Increments when the persisted\n`config.json` format changes in a way older `VelesDB` versions\ncannot safely read.",
             "minimum": 0
           },
           "storage_mode": {
@@ -2893,10 +2917,16 @@
           "name"
         ],
         "properties": {
+          "async_index_builder": {
+            "description": "Async index builder configuration (Issue `#488` — Bulk Insert V2).\n\nWhen present, enables the `AsyncIndexBuilder` for deferred HNSW\ninsertion during bulk import. Accepted as a free-form JSON object\nmatching\n`velesdb_core::collection::streaming::AsyncIndexBuilderConfig`."
+          },
           "collection_type": {
             "type": "string",
             "description": "Collection type: \"vector\" (default) or \"`metadata_only`\".",
             "example": "vector"
+          },
+          "deferred_indexing": {
+            "description": "Deferred indexing configuration (`US-366`).\n\nWhen present, inserts are buffered in memory and batch-merged\ninto the HNSW index when the buffer reaches `merge_threshold`.\nAccepted as a free-form JSON object matching\n`velesdb_core::collection::streaming::DeferredIndexerConfig`."
           },
           "dimension": {
             "type": [
@@ -2906,6 +2936,9 @@
             "description": "Vector dimension (required for vector collections, ignored for `metadata_only`).",
             "example": 768,
             "minimum": 0
+          },
+          "graph_schema": {
+            "description": "Graph schema (only for `collection_type = \"graph\"`).\n\nAccepted as a free-form JSON object matching\n`velesdb_core::GraphSchema`. `GraphSchema::schemaless()` is\nused when the field is absent."
           },
           "hnsw_ef_construction": {
             "type": [
@@ -2934,6 +2967,16 @@
             "type": "string",
             "description": "Collection name.",
             "example": "documents"
+          },
+          "pq_rescore_oversampling": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "PQ rescore oversampling factor (default 4).\n\nThe search pipeline fetches `max(k * factor, k + 32)` candidates\nfrom HNSW and rescores them with full-precision ADC. Only\nmeaningful for quantised storage modes (SQ8, PQ). `Some(0)` is\ntreated as \"disabled\".",
+            "example": 4,
+            "minimum": 0
           },
           "storage_mode": {
             "type": "string",
@@ -3339,6 +3382,14 @@
           "strategy"
         ],
         "properties": {
+          "avg_w": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Weighted fusion: weight applied to the average score component\n(only for strategy = \"weighted\", default 0.5)."
+          },
           "dense_w": {
             "type": [
               "number",
@@ -3346,6 +3397,14 @@
             ],
             "format": "float",
             "description": "Dense weight (only for strategy = \"rsf\", default 0.5)."
+          },
+          "hit_w": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Weighted fusion: weight applied to the hit-ratio component\n(only for strategy = \"weighted\", default 0.2)."
           },
           "k": {
             "type": [
@@ -3355,6 +3414,14 @@
             "format": "int32",
             "description": "RRF k parameter (only for strategy = \"rrf\", default 60).",
             "minimum": 0
+          },
+          "max_w": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Weighted fusion: weight applied to the maximum score component\n(only for strategy = \"weighted\", default 0.3)."
           },
           "sparse_w": {
             "type": [
@@ -3366,7 +3433,7 @@
           },
           "strategy": {
             "type": "string",
-            "description": "Fusion strategy: \"rrf\" or \"rsf\".",
+            "description": "Fusion strategy: \"rrf\", \"rsf\" (alias \"`relative_score`\"),\n\"average\" (alias \"avg\"), \"maximum\" (alias \"max\"), or \"weighted\".",
             "example": "rrf"
           }
         }

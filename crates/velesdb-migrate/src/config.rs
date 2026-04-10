@@ -285,6 +285,14 @@ pub struct MigrationOptions {
     /// Continue on errors.
     #[serde(default)]
     pub continue_on_error: bool,
+    /// Allow the pipeline to proceed even when the source reports a
+    /// distance metric that differs from the destination
+    /// configuration (finding M-P0-3). Defaults to `false`: a
+    /// mismatch aborts the migration with an error that names both
+    /// metrics. Set to `true` for controlled migrations where the
+    /// operator knows the semantic difference is acceptable.
+    #[serde(default)]
+    pub allow_metric_mismatch: bool,
 }
 
 impl Default for MigrationOptions {
@@ -297,6 +305,7 @@ impl Default for MigrationOptions {
             dry_run: false,
             field_mappings: HashMap::new(),
             continue_on_error: false,
+            allow_metric_mismatch: false,
         }
     }
 }

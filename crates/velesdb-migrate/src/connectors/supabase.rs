@@ -119,6 +119,9 @@ impl SourceConnector for SupabaseConnector {
             fields,
             vector_column: detected_vector_col,
             id_column: Some(self.config.id_column.clone()),
+            // TODO(MIGRATE-METRIC-SUPABASE): introspect operator class of the
+            // pgvector index (vector_cosine_ops, vector_l2_ops, etc.).
+            metric: None,
         })
     }
 

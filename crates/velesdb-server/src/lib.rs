@@ -46,8 +46,8 @@ pub use handlers::{
     create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
     get_collection, get_collection_config, get_collection_stats, get_guardrails, get_point,
     health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
-    multi_query_search, query, readiness_check, scroll_points, search, search_ids, stream_insert,
-    stream_upsert_points, text_search, update_guardrails, upsert_points,
+    multi_query_search, query, readiness_check, rebuild_index, scroll_points, search, search_ids,
+    stream_insert, stream_upsert_points, text_search, update_guardrails, upsert_points,
 };
 
 pub use handlers::graph::{

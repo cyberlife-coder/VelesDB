@@ -196,3 +196,80 @@ async fn test_auth_basic_scheme_rejected() {
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+// ============================================================================
+// F-02: /metrics must not bypass auth — Prometheus endpoint leaks operational
+// details about the running database (collection counts, query latencies, WAL
+// depths, cache hit rates). When auth is enabled, scrapers must present an
+// API key like any other REST client.
+// ============================================================================
+
+/// Nominal negative: `/metrics` without an Authorization header must be
+/// rejected with 401 when auth is enabled, not bypassed as a public path.
+#[tokio::test]
+async fn test_metrics_endpoint_requires_auth_when_enabled() {
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app_with_auth(&temp_dir, vec!["secret-key".to_string()]);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "F-02: /metrics must require an API key when auth is enabled"
+    );
+}
+
+/// Same guard for the versioned path `/v1/metrics`.
+#[tokio::test]
+async fn test_metrics_versioned_endpoint_requires_auth_when_enabled() {
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app_with_auth(&temp_dir, vec!["secret-key".to_string()]);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "F-02: /v1/metrics must require an API key when auth is enabled"
+    );
+}
+
+/// `/health` and `/ready` remain public — they are needed by container
+/// orchestrators (Kubernetes, Nomad, systemd) that cannot carry
+/// authentication headers on probes.
+#[tokio::test]
+async fn test_health_and_ready_remain_public_after_f02_fix() {
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app_with_auth(&temp_dir, vec!["secret-key".to_string()]);
+
+    for path in ["/health", "/ready"] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{path} must remain public for container orchestrators"
+        );
+    }
+}

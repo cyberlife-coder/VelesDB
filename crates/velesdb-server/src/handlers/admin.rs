@@ -14,7 +14,9 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::helpers::{core_error_response, error_response, get_collection_or_404};
+use super::helpers::{
+    core_error_response, error_response, get_collection_or_404, get_vector_collection_or_404,
+};
 
 /// Get detailed collection configuration (HNSW params, storage mode, schema, etc.).
 #[utoipa::path(
@@ -43,6 +45,25 @@ pub async fn get_collection_config(
         .graph_schema
         .as_ref()
         .and_then(|gs| serde_json::to_value(gs).ok());
+    let hnsw_params = config
+        .hnsw_params
+        .as_ref()
+        .and_then(|p| serde_json::to_value(p).ok());
+
+    // `deferred_indexing` is only populated under the `persistence`
+    // feature because the core config field is gated the same way.
+    #[cfg(feature = "persistence")]
+    let deferred_indexing = config
+        .deferred_indexing
+        .as_ref()
+        .and_then(|d| serde_json::to_value(d).ok());
+    #[cfg(not(feature = "persistence"))]
+    let deferred_indexing = None;
+
+    let async_index_builder = config
+        .async_index_builder
+        .as_ref()
+        .and_then(|a| serde_json::to_value(a).ok());
 
     Json(CollectionConfigResponse {
         name: config.name,
@@ -53,8 +74,56 @@ pub async fn get_collection_config(
         metadata_only: config.metadata_only,
         graph_schema,
         embedding_dimension: config.embedding_dimension,
+        schema_version: config.schema_version,
+        pq_rescore_oversampling: config.pq_rescore_oversampling,
+        hnsw_params,
+        deferred_indexing,
+        async_index_builder,
     })
     .into_response()
+}
+
+/// Rebuilds the HNSW index of a vector collection, reclaiming memory
+/// occupied by tombstoned entries and producing a fresh graph from
+/// the current vector storage.
+///
+/// This is a blocking operation: for large collections it may take
+/// several seconds. The response includes the number of entries that
+/// were compacted during the rebuild.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/index/rebuild",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Index rebuilt", body = Object),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 500, description = "Rebuild failed", body = ErrorResponse)
+    )
+)]
+pub async fn rebuild_index(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    match collection.rebuild_index() {
+        Ok(compacted) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": "Index rebuilt",
+                "collection": name,
+                "compacted_entries": compacted
+            })),
+        )
+            .into_response(),
+        Err(e) => core_error_response(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
 }
 
 /// Analyze a collection, computing and persisting statistics.

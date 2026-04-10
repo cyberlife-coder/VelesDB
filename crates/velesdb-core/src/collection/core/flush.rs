@@ -269,4 +269,67 @@ impl Collection {
         std::fs::rename(&tmp_path, &config_path)?;
         Ok(())
     }
+
+    /// Vacuums the HNSW index of this collection, rebuilding the
+    /// graph from the current vector storage and reclaiming memory
+    /// occupied by tombstoned entries. Returns the number of entries
+    /// compacted.
+    ///
+    /// This is the collection-level wrapper around
+    /// [`HnswIndex::vacuum`] used by the server admin endpoint
+    /// `POST /collections/{name}/index/rebuild` (finding F-21).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying HNSW vacuum fails (for
+    /// instance, when vector storage is disabled on the index).
+    pub(crate) fn vacuum_hnsw_index(&self) -> Result<usize> {
+        self.index
+            .vacuum()
+            .map_err(|e| Error::Index(format!("HNSW vacuum failed: {e}")))
+    }
+
+    /// Applies post-creation overrides to the advanced configuration
+    /// fields and persists the updated `config.json` atomically.
+    ///
+    /// This is used by the server `POST /collections` handler to wire
+    /// `pq_rescore_oversampling`, `deferred_indexing`, and
+    /// `async_index_builder` from the REST payload after the collection
+    /// has been created with its base options (HNSW, storage mode).
+    /// Passing `None` leaves the corresponding field unchanged — callers
+    /// that need to clear a field should pass `Some(None)` via the
+    /// nested `Option`.
+    ///
+    /// The `Option<Option<T>>` pattern encodes three states:
+    /// `None` (leave unchanged), `Some(None)` (clear the field), and
+    /// `Some(Some(v))` (set the field to `v`). A clippy allow is
+    /// applied locally because that is exactly what we need here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the updated config cannot be written to disk.
+    #[allow(clippy::option_option)]
+    pub(crate) fn apply_advanced_config(
+        &self,
+        pq_rescore_oversampling: Option<Option<u32>>,
+        #[cfg(feature = "persistence")] deferred_indexing: Option<
+            Option<crate::collection::streaming::DeferredIndexerConfig>,
+        >,
+        async_index_builder: Option<Option<crate::collection::streaming::AsyncIndexBuilderConfig>>,
+    ) -> Result<()> {
+        {
+            let mut config = self.config.write();
+            if let Some(rescore) = pq_rescore_oversampling {
+                config.pq_rescore_oversampling = rescore;
+            }
+            #[cfg(feature = "persistence")]
+            if let Some(deferred) = deferred_indexing {
+                config.deferred_indexing = deferred;
+            }
+            if let Some(aib) = async_index_builder {
+                config.async_index_builder = aib;
+            }
+        }
+        self.save_config()
+    }
 }

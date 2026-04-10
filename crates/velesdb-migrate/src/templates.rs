@@ -252,6 +252,7 @@ mod tests {
             fields,
             vector_column: None,
             id_column: None,
+            metric: None,
         }
     }
 
@@ -310,6 +311,7 @@ mod tests {
             ],
             vector_column: Some("embedding".to_string()),
             id_column: Some("doc_id".to_string()),
+            metric: None,
         };
         let params = AutoConfigParams {
             source_type: "supabase",
@@ -360,6 +362,7 @@ mod tests {
             fields: vec![],
             vector_column: None,
             id_column: None,
+            metric: None,
         };
         let params = make_params("milvus", &schema);
         let yaml = generate_auto_config(&params);
@@ -410,6 +413,7 @@ mod tests {
             ],
             vector_column: None,
             id_column: None,
+            metric: None,
         };
         let col = detect_vector_column(&schema);
         assert_eq!(col, "content_embedding");
@@ -436,6 +440,7 @@ mod tests {
             ],
             vector_column: None,
             id_column: None,
+            metric: None,
         };
         let col = detect_id_column(&schema);
         assert_eq!(col, "doc_id");
@@ -472,6 +477,7 @@ mod tests {
             ],
             vector_column: None,
             id_column: None,
+            metric: None,
         };
         let list = build_fields_list(&schema, "id", "embedding");
         assert!(list.contains("- title"));
