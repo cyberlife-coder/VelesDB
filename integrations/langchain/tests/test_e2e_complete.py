@@ -13,22 +13,25 @@ import tempfile
 import shutil
 import numpy as np
 
-try:
-    from langchain_velesdb import VelesDBVectorStore
-    from langchain_velesdb.graph_retriever import VelesDBGraphRetriever
-    from langchain_core.documents import Document
-    LANGCHAIN_AVAILABLE = True
-except ImportError:
-    LANGCHAIN_AVAILABLE = False
-    VelesDBVectorStore = None
-    VelesDBGraphRetriever = None
-    Document = None
-
-
-pytestmark = pytest.mark.skipif(
-    not LANGCHAIN_AVAILABLE,
-    reason="LangChain VelesDB integration not installed"
+# Step 1: skip the whole module if langchain_core / langchain_velesdb package
+# is not installed (legitimate optional-dependency skip).
+langchain_core = pytest.importorskip(
+    "langchain_core",
+    reason="langchain_core not installed — install with `pip install langchain-velesdb[dev]`",
 )
+langchain_velesdb = pytest.importorskip(
+    "langchain_velesdb",
+    reason="langchain_velesdb package not installed",
+)
+
+# Step 2: import our own classes WITHOUT try/except — any ImportError here is
+# a real bug in langchain_velesdb that must surface as a test failure, not
+# silently skip the whole file. Previously this was buried under a blanket
+# `except ImportError` that hid a class-rename bug (VelesDBGraphRetriever →
+# GraphRetriever) for weeks.
+from langchain_velesdb import VelesDBVectorStore  # noqa: E402
+from langchain_velesdb.graph_retriever import GraphRetriever, GraphQARetriever  # noqa: E402
+from langchain_core.documents import Document  # noqa: E402
 
 
 class MockEmbeddings:
@@ -225,59 +228,93 @@ class TestMultiQuerySearchE2E:
 
 
 class TestGraphRetrieverE2E:
-    """E2E tests for VelesDBGraphRetriever."""
+    """E2E tests for GraphRetriever / GraphQARetriever.
 
-    def test_graph_retriever_bfs(self, mock_embeddings):
-        """Test graph retriever with BFS expansion."""
+    Note: these tests exercise the vector-search seed path of the retriever
+    without populating a graph. The GraphRetriever is designed to work
+    against an existing graph collection (nodes + edges); in these tests
+    we use `low_latency=True` so the retriever skips graph expansion and
+    simply returns the vector search seeds.
+
+    TODO(EPIC-SPRINT1-LC): Extend these tests to populate a real graph
+    collection (nodes + edges) and assert that graph expansion extends the
+    result set beyond the initial seeds.
+    """
+
+    def test_graph_retriever_low_latency_returns_seeds(self, mock_embeddings):
+        """Vector-only mode returns seeds annotated with retrieval metadata."""
         temp_dir = tempfile.mkdtemp()
         try:
             store = VelesDBVectorStore(
                 embedding=mock_embeddings,
                 path=temp_dir,
-                collection_name="graph_test",
+                collection_name="graph_retriever_seeds",
             )
-            
-            # Add documents
+
             docs = [
                 Document(page_content=f"Entity {i}", metadata={"id": i})
                 for i in range(10)
             ]
             store.add_documents(docs)
-            
-            # Create retriever
-            retriever = VelesDBGraphRetriever(
-                vectorstore=store,
-                expansion_strategy="breadth_first",
-                max_depth=2,
+
+            # low_latency=True skips graph expansion so we only exercise the
+            # vector-search path. This lets us use the retriever without a
+            # populated graph collection (required for Sprint 1 proper E2E).
+            retriever = GraphRetriever(
+                vector_store=store,
+                mode="native",
+                graph_collection_name="graph_retriever_seeds",
+                seed_k=3,
+                expand_k=5,
+                low_latency=True,
             )
-            
-            # Retrieve
-            results = retriever.get_relevant_documents("Entity 5")
+
+            results = retriever.invoke("Entity 5")
             assert len(results) > 0
+            # Verify vector-only mode metadata
+            for doc in results:
+                assert doc.metadata.get("retrieval_mode") == "vector_only"
+                assert doc.metadata.get("graph_depth") == 0
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def test_graph_retriever_dfs(self, mock_embeddings):
-        """Test graph retriever with DFS expansion."""
+    def test_graph_qa_retriever_deduplicates_results(self, mock_embeddings):
+        """GraphQARetriever deduplicates documents by content hash."""
         temp_dir = tempfile.mkdtemp()
         try:
             store = VelesDBVectorStore(
                 embedding=mock_embeddings,
                 path=temp_dir,
-                collection_name="dfs_test",
+                collection_name="graph_qa_dedup",
             )
-            
-            docs = [Document(page_content=f"Node {i}") for i in range(10)]
+
+            # Include intentional duplicates (same page_content) to exercise
+            # the _deduplicate path in GraphQARetriever.
+            docs = [
+                Document(page_content=f"Node {i}", metadata={"id": i})
+                for i in range(5)
+            ] + [
+                Document(page_content="Node 0", metadata={"id": 99}),
+            ]
             store.add_documents(docs)
-            
-            retriever = VelesDBGraphRetriever(
-                vectorstore=store,
-                expansion_strategy="depth_first",
-                max_depth=3,
+
+            retriever = GraphQARetriever(
+                vector_store=store,
+                mode="native",
+                graph_collection_name="graph_qa_dedup",
+                seed_k=3,
+                expand_k=10,
+                low_latency=True,
+                deduplicate=True,
             )
-            
-            results = retriever.get_relevant_documents("Node")
-            assert len(results) > 0
+
+            results = retriever.invoke("Node")
+            # Deduplication should guarantee unique page_content in the
+            # first-200-char window.
+            content_prefixes = {doc.page_content[:200] for doc in results}
+            assert len(content_prefixes) == len(results), (
+                "Deduplication failed: results contain duplicate content"
+            )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
