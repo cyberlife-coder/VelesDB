@@ -66,6 +66,19 @@ pub struct SourceSchema {
     /// Detected ID column name (for SQL-based sources).
     #[serde(default)]
     pub id_column: Option<String>,
+    /// Distance metric reported by the source, when the connector
+    /// can introspect it (Qdrant, Pinecone, Weaviate, Milvus,
+    /// ChromaDB, Supabase, Elasticsearch, Redis). File-backed
+    /// connectors (JSON, CSV) leave this field empty because the
+    /// source format does not carry a metric annotation.
+    ///
+    /// Values are normalised to the lowercase core identifiers
+    /// (`"cosine"`, `"euclidean"`, `"dot"`, `"hamming"`,
+    /// `"jaccard"`). Unrecognised source values are preserved
+    /// verbatim so `Pipeline::check_metric_fidelity` can report
+    /// them honestly in the mismatch error.
+    #[serde(default)]
+    pub metric: Option<String>,
 }
 
 /// Information about a payload field.
