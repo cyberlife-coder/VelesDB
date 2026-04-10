@@ -170,7 +170,12 @@ impl Database {
     fn get_collection(&self, name: &str) -> PyResult<Option<Collection>> {
         match self.inner.get_any_collection(name) {
             Some(any_coll) => {
-                let vc = any_coll.into_vector_collection();
+                // F2.2 mitigation: Python SDK exposes a single Collection
+                // type. Invoking vector-specific methods on a graph or
+                // metadata collection returns empty results rather than
+                // raising — the typed split is tracked as a post-seed
+                // EPIC in docs/ARCHITECTURE.md.
+                let vc = any_coll.as_vector_collection_unchecked();
                 Ok(Some(Collection::new(vc, name.to_string())))
             }
             None => Ok(None),
@@ -230,7 +235,7 @@ impl Database {
         let collection = self
             .inner
             .get_any_collection(name)
-            .map(|c| c.into_vector_collection())
+            .map(velesdb_core::AnyCollection::as_vector_collection_unchecked)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
         Ok(Collection::new(collection, name.to_string()))

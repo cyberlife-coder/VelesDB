@@ -136,15 +136,19 @@ pub fn map_core_results(
 
 /// Looks up a collection by name, returning a typed error on miss.
 ///
-/// Returns a `VectorCollection` for any collection type (vector, graph, or metadata)
-/// by using `get_any_collection` and converting via `into_vector_collection`.
-/// This ensures graph and metadata collections are accessible through Tauri commands.
+/// Returns a `VectorCollection` for any collection type (vector, graph,
+/// or metadata) by using `get_any_collection` and the unchecked cast
+/// `AnyCollection::as_vector_collection_unchecked`. Callers that
+/// invoke vector-specific methods on a collection produced from a
+/// graph or metadata variant may observe empty or nonsensical
+/// results — a proper typed split is tracked as the F2.2 post-seed
+/// EPIC (see `docs/ARCHITECTURE.md`).
 pub fn require_collection(
     db: &velesdb_core::Database,
     name: &str,
 ) -> Result<velesdb_core::VectorCollection> {
     db.get_any_collection(name)
-        .map(velesdb_core::AnyCollection::into_vector_collection)
+        .map(velesdb_core::AnyCollection::as_vector_collection_unchecked)
         .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
 }
 

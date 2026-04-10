@@ -214,6 +214,11 @@ fn round_trip_collection_config_response() {
         metadata_only: false,
         graph_schema: Some(json!({"labels": ["Person"]})),
         embedding_dimension: Some(128),
+        schema_version: 1,
+        pq_rescore_oversampling: Some(4),
+        hnsw_params: None,
+        deferred_indexing: None,
+        async_index_builder: None,
     };
     let serialized = serde_json::to_value(&resp).unwrap();
     let deserialized: CollectionConfigResponse = serde_json::from_value(serialized).unwrap();
@@ -222,6 +227,8 @@ fn round_trip_collection_config_response() {
     assert_eq!(deserialized.metric, "cosine");
     assert_eq!(deserialized.storage_mode, "full");
     assert_eq!(deserialized.point_count, 1000);
+    assert_eq!(deserialized.schema_version, 1);
+    assert_eq!(deserialized.pq_rescore_oversampling, Some(4));
     assert!(!deserialized.metadata_only);
     assert!(deserialized.graph_schema.is_some());
     assert_eq!(deserialized.embedding_dimension, Some(128));
@@ -577,14 +584,23 @@ fn serialize_collection_config_skips_none_graph_schema() {
         metadata_only: true,
         graph_schema: None,
         embedding_dimension: None,
+        schema_version: 1,
+        pq_rescore_oversampling: None,
+        hnsw_params: None,
+        deferred_indexing: None,
+        async_index_builder: None,
     };
     let json = serde_json::to_value(&resp).unwrap();
     // `skip_serializing_if = "Option::is_none"` omits the key entirely
-    assert!(!json.as_object().unwrap().contains_key("graph_schema"));
-    assert!(!json
-        .as_object()
-        .unwrap()
-        .contains_key("embedding_dimension"));
+    let obj = json.as_object().unwrap();
+    assert!(!obj.contains_key("graph_schema"));
+    assert!(!obj.contains_key("embedding_dimension"));
+    assert!(!obj.contains_key("pq_rescore_oversampling"));
+    assert!(!obj.contains_key("hnsw_params"));
+    assert!(!obj.contains_key("deferred_indexing"));
+    assert!(!obj.contains_key("async_index_builder"));
+    // `schema_version` is not an Option — always serialised.
+    assert_eq!(obj["schema_version"], 1);
 }
 
 #[test]

@@ -123,23 +123,72 @@ impl AnyCollection {
         }
     }
 
-    /// Converts this `AnyCollection` into a `VectorCollection`.
+    /// Consumes this `AnyCollection` and returns a `VectorCollection`
+    /// wrapping the same inner state.
     ///
-    /// For `Vector` variants, returns the inner `VectorCollection` directly.
-    /// For `Graph` and `Metadata` variants, wraps the inner `Collection` in a
-    /// `VectorCollection` newtype. This is safe because `VectorCollection` is a
-    /// pure newtype over `Collection` — all operations delegate to the same
-    /// `Arc`-wrapped state.
+    /// For the `Vector` variant this is a straightforward move. For
+    /// the `Graph` and `Metadata` variants this function re-wraps the
+    /// inner `Arc<Collection>` in the `VectorCollection` newtype
+    /// without changing the underlying runtime type — downstream code
+    /// that then invokes vector-specific methods on the result (for
+    /// example `search`, `upsert`, `config().dimension > 0`) may
+    /// therefore hit an error or nonsensical state at runtime. The
+    /// method is still useful for SDK bindings (Python, Mobile, Tauri)
+    /// that expose a single `Collection` type to users and only call
+    /// shared methods (config, flush, diagnostics, point_count) on
+    /// the result.
     ///
-    /// This is primarily useful for SDK bindings (Python, Mobile, Tauri) that
-    /// expose a single `Collection` type to users regardless of the underlying
-    /// collection kind.
+    /// # Safety
+    ///
+    /// Calling vector-specific methods on a `VectorCollection` that
+    /// was produced from a `Graph` or `Metadata` variant is **not**
+    /// memory-unsafe, but the result is logically unsound: the
+    /// underlying storage does not hold a homogeneous vector index,
+    /// and the returned `SearchResult` objects are either empty or
+    /// reflect internal state that was not intended for public
+    /// consumption. Callers must either:
+    ///
+    /// * branch on [`AnyCollection::is_vector`] first and only
+    ///   invoke vector-specific methods on the `Vector` variant, or
+    /// * restrict themselves to the methods that all three collection
+    ///   kinds share (`config`, `flush`, `diagnostics`, `name`,
+    ///   `point_count`).
+    ///
+    /// This method is retained to support the existing SDK surface
+    /// but is flagged as `unchecked` to make the caller obligation
+    /// explicit. A proper type-safe refactor is tracked under the
+    /// post-seed EPIC documented in `docs/ARCHITECTURE.md` (finding
+    /// F2.2 of the pre-seed audit).
     #[must_use]
-    pub fn into_vector_collection(self) -> VectorCollection {
+    pub fn as_vector_collection_unchecked(self) -> VectorCollection {
         match self {
             Self::Vector(c) => c,
             Self::Graph(c) => VectorCollection { inner: c.inner },
             Self::Metadata(c) => VectorCollection { inner: c.inner },
         }
+    }
+
+    /// Deprecated alias for [`Self::as_vector_collection_unchecked`].
+    ///
+    /// The old name is retained so external consumers do not break at
+    /// compile time; it emits a deprecation warning that points at
+    /// the safer replacement. Internal call sites have been migrated.
+    #[must_use]
+    #[deprecated(
+        since = "1.13.0",
+        note = "Renamed to `as_vector_collection_unchecked`. See the rustdoc for the unchecked-cast contract and finding F2.2 in docs/ARCHITECTURE.md."
+    )]
+    pub fn into_vector_collection(self) -> VectorCollection {
+        self.as_vector_collection_unchecked()
+    }
+
+    /// Returns `true` if this collection is a `Vector` variant.
+    ///
+    /// Intended for callers that use
+    /// [`Self::as_vector_collection_unchecked`] and need to branch on
+    /// the underlying kind before invoking vector-specific methods.
+    #[must_use]
+    pub fn is_vector(&self) -> bool {
+        matches!(self, Self::Vector(_))
     }
 }
