@@ -1744,6 +1744,14 @@ components:
       - point_count
       - metadata_only
       properties:
+        async_index_builder:
+          description: |-
+            Async index builder configuration (Issue `#488`) — `None` when
+            the feature is disabled for this collection.
+        deferred_indexing:
+          description: |-
+            Deferred indexing configuration (`US-366`) — `None` when the
+            feature is disabled for this collection.
         dimension:
           type: integer
           description: Vector dimension (0 for metadata-only collections).
@@ -1756,6 +1764,11 @@ components:
           minimum: 0
         graph_schema:
           description: Graph schema (if this is a graph collection).
+        hnsw_params:
+          description: |-
+            Persisted HNSW parameters (M, `ef_construction`, etc.) when
+            customised at create time. `None` means the defaults inferred
+            from the collection dimension are in use.
         metadata_only:
           type: boolean
           description: Whether this is a metadata-only collection.
@@ -1768,6 +1781,23 @@ components:
         point_count:
           type: integer
           description: Number of points in the collection.
+          minimum: 0
+        pq_rescore_oversampling:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: |-
+            PQ rescore oversampling factor. See `CollectionConfig` for
+            the semantics of `None`, `Some(0)`, and `Some(n > 0)`.
+          minimum: 0
+        schema_version:
+          type: integer
+          format: int32
+          description: |-
+            On-disk schema version. Increments when the persisted
+            `config.json` format changes in a way older VelesDB versions
+            cannot safely read.
           minimum: 0
         storage_mode:
           type: string
@@ -1915,10 +1945,26 @@ components:
       required:
       - name
       properties:
+        async_index_builder:
+          description: |-
+            Async index builder configuration (Issue `#488` — Bulk Insert V2).
+
+            When present, enables the `AsyncIndexBuilder` for deferred HNSW
+            insertion during bulk import. Accepted as a free-form JSON object
+            matching
+            `velesdb_core::collection::streaming::AsyncIndexBuilderConfig`.
         collection_type:
           type: string
           description: 'Collection type: "vector" (default) or "`metadata_only`".'
           example: vector
+        deferred_indexing:
+          description: |-
+            Deferred indexing configuration (`US-366`).
+
+            When present, inserts are buffered in memory and batch-merged
+            into the HNSW index when the buffer reaches `merge_threshold`.
+            Accepted as a free-form JSON object matching
+            `velesdb_core::collection::streaming::DeferredIndexerConfig`.
         dimension:
           type:
           - integer
@@ -1926,6 +1972,13 @@ components:
           description: Vector dimension (required for vector collections, ignored for `metadata_only`).
           example: 768
           minimum: 0
+        graph_schema:
+          description: |-
+            Graph schema (only for `collection_type = "graph"`).
+
+            Accepted as a free-form JSON object matching
+            `velesdb_core::GraphSchema`. `GraphSchema::schemaless()` is
+            used when the field is absent.
         hnsw_ef_construction:
           type:
           - integer
@@ -1948,6 +2001,20 @@ components:
           type: string
           description: Collection name.
           example: documents
+        pq_rescore_oversampling:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: |-
+            PQ rescore oversampling factor (default 4).
+
+            The search pipeline fetches `max(k * factor, k + 32)` candidates
+            from HNSW and rescores them with full-precision ADC. Only
+            meaningful for quantised storage modes (SQ8, PQ). `Some(0)` is
+            treated as "disabled".
+          example: 4
+          minimum: 0
         storage_mode:
           type: string
           description: Storage mode (full, sq8, binary). Defaults to full.

@@ -3824,6 +3824,302 @@ async fn test_search_with_zero_timeout_returns_408() {
 // Type-mismatch branch for F-05 (retained from the previous section)
 // ────────────────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────────────────
+// PROP-CONFIG-ADVANCED: CreateCollectionRequest accepts pq_rescore_oversampling,
+// deferred_indexing, async_index_builder; GET /collections/{name}/config
+// echoes them back (Sprint 1 / S1-07).
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Nominal round-trip: create a collection with pq_rescore_oversampling
+/// and async_index_builder, then GET /config and verify the values are
+/// persisted and echoed.
+#[tokio::test]
+async fn test_create_with_pq_rescore_and_async_builder_round_trip() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create with advanced config.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "advanced_cfg",
+                        "dimension": 16,
+                        "metric": "cosine",
+                        "pq_rescore_oversampling": 8,
+                        "async_index_builder": {
+                            "merge_threshold": 5000,
+                            "segment_count": 4
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Describe: GET /collections/{name}/config.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/advanced_cfg/config")
+                .body(Body::empty())
+                .expect("test: build describe request"),
+        )
+        .await
+        .expect("test: describe request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+
+    assert_eq!(json["name"], "advanced_cfg");
+    assert_eq!(json["dimension"], 16);
+    assert_eq!(
+        json["pq_rescore_oversampling"], 8,
+        "pq_rescore_oversampling must round-trip through describe, got: {}",
+        json["pq_rescore_oversampling"]
+    );
+
+    let aib = &json["async_index_builder"];
+    assert!(
+        aib.is_object(),
+        "async_index_builder must be populated in describe response, got: {aib}"
+    );
+    assert_eq!(
+        aib["merge_threshold"], 5000,
+        "async_index_builder.merge_threshold must round-trip"
+    );
+    assert_eq!(
+        aib["segment_count"], 4,
+        "async_index_builder.segment_count must round-trip"
+    );
+
+    // schema_version is always populated (non-optional in the response).
+    assert!(
+        json["schema_version"].as_u64().is_some(),
+        "schema_version must be present"
+    );
+}
+
+/// Edge: a collection created WITHOUT advanced overrides must still
+/// describe cleanly. pq_rescore_oversampling defaults to 4 (the core
+/// default); async_index_builder and deferred_indexing are absent.
+#[tokio::test]
+async fn test_create_without_advanced_config_describe_returns_defaults() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "minimal_cfg",
+                        "dimension": 8,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/minimal_cfg/config")
+                .body(Body::empty())
+                .expect("test: build describe request"),
+        )
+        .await
+        .expect("test: describe request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+
+    assert_eq!(
+        json["pq_rescore_oversampling"], 4,
+        "pq_rescore_oversampling must default to 4"
+    );
+    assert!(
+        json.get("async_index_builder").is_none()
+            || json["async_index_builder"].is_null(),
+        "async_index_builder must be absent or null when not set"
+    );
+}
+
+/// Negative: a malformed `async_index_builder` payload must return
+/// 400 Bad Request with a message that identifies the offending field.
+#[tokio::test]
+async fn test_create_with_invalid_async_index_builder_returns_400() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "bad_aib",
+                        "dimension": 8,
+                        "metric": "cosine",
+                        "async_index_builder": {
+                            "merge_threshold": "this is not a number"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+    let error_msg = json["error"].as_str().expect("error field");
+    assert!(
+        error_msg.contains("async_index_builder"),
+        "error must name the offending field, got: {error_msg}"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// PROP-GRAPHSCHEMA-SERVER: CreateCollectionRequest accepts a typed
+// graph_schema payload instead of hard-coding GraphSchema::schemaless()
+// (Sprint 1 / S1-08).
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Nominal: creating a graph collection with a typed `graph_schema`
+/// payload must succeed with 201 and the schema must persist through
+/// GET /config. The shape matches `velesdb_core::GraphSchema`: a
+/// `schemaless` boolean plus `node_types` / `edge_types` arrays.
+#[tokio::test]
+async fn test_create_graph_collection_with_typed_schema() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "typed_graph",
+                        "collection_type": "graph",
+                        "graph_schema": {
+                            "schemaless": false,
+                            "node_types": [],
+                            "edge_types": []
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "typed graph schema must be accepted"
+    );
+}
+
+/// Edge: a graph collection created without a `graph_schema` field must
+/// continue to work and fall back to `GraphSchema::schemaless()`. This
+/// locks in the backward-compatibility promise.
+#[tokio::test]
+async fn test_create_graph_collection_without_schema_uses_schemaless() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "implicit_schemaless",
+                        "collection_type": "graph"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+/// Negative: a malformed `graph_schema` payload must return 400 Bad
+/// Request with a message that identifies the offending field.
+#[tokio::test]
+async fn test_create_graph_collection_with_invalid_schema_returns_400() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "bad_schema",
+                        "collection_type": "graph",
+                        "graph_schema": "not an object"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+    let error_msg = json["error"].as_str().expect("error field");
+    assert!(
+        error_msg.contains("graph_schema"),
+        "error must name the offending field, got: {error_msg}"
+    );
+}
+
 /// Type-mismatch: a vector collection already exists with the target
 /// name, but the caller targets a graph endpoint. The handler must
 /// return 409 Conflict (already the case before F-05, but we lock it

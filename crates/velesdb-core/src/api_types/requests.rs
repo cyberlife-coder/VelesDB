@@ -47,6 +47,38 @@ pub struct CreateCollectionRequest {
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(example = 400, nullable))]
     pub hnsw_ef_construction: Option<usize>,
+    /// PQ rescore oversampling factor (default 4).
+    ///
+    /// The search pipeline fetches `max(k * factor, k + 32)` candidates
+    /// from HNSW and rescores them with full-precision ADC. Only
+    /// meaningful for quantised storage modes (SQ8, PQ). `Some(0)` is
+    /// treated as "disabled".
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(example = 4, nullable))]
+    pub pq_rescore_oversampling: Option<u32>,
+    /// Deferred indexing configuration (`US-366`).
+    ///
+    /// When present, inserts are buffered in memory and batch-merged
+    /// into the HNSW index when the buffer reaches `merge_threshold`.
+    /// Accepted as a free-form JSON object matching
+    /// `velesdb_core::collection::streaming::DeferredIndexerConfig`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_indexing: Option<serde_json::Value>,
+    /// Async index builder configuration (Issue `#488` — Bulk Insert V2).
+    ///
+    /// When present, enables the `AsyncIndexBuilder` for deferred HNSW
+    /// insertion during bulk import. Accepted as a free-form JSON object
+    /// matching
+    /// `velesdb_core::collection::streaming::AsyncIndexBuilderConfig`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_index_builder: Option<serde_json::Value>,
+    /// Graph schema (only for `collection_type = "graph"`).
+    ///
+    /// Accepted as a free-form JSON object matching
+    /// `velesdb_core::GraphSchema`. `GraphSchema::schemaless()` is
+    /// used when the field is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_schema: Option<serde_json::Value>,
 }
 
 // ============================================================================

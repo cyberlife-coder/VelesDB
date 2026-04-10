@@ -43,6 +43,25 @@ pub async fn get_collection_config(
         .graph_schema
         .as_ref()
         .and_then(|gs| serde_json::to_value(gs).ok());
+    let hnsw_params = config
+        .hnsw_params
+        .as_ref()
+        .and_then(|p| serde_json::to_value(p).ok());
+
+    // `deferred_indexing` is only populated under the `persistence`
+    // feature because the core config field is gated the same way.
+    #[cfg(feature = "persistence")]
+    let deferred_indexing = config
+        .deferred_indexing
+        .as_ref()
+        .and_then(|d| serde_json::to_value(d).ok());
+    #[cfg(not(feature = "persistence"))]
+    let deferred_indexing = None;
+
+    let async_index_builder = config
+        .async_index_builder
+        .as_ref()
+        .and_then(|a| serde_json::to_value(a).ok());
 
     Json(CollectionConfigResponse {
         name: config.name,
@@ -53,6 +72,11 @@ pub async fn get_collection_config(
         metadata_only: config.metadata_only,
         graph_schema,
         embedding_dimension: config.embedding_dimension,
+        schema_version: config.schema_version,
+        pq_rescore_oversampling: config.pq_rescore_oversampling,
+        hnsw_params,
+        deferred_indexing,
+        async_index_builder,
     })
     .into_response()
 }
