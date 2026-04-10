@@ -8,7 +8,6 @@ fn default_config() -> AsyncIndexBuilderConfig {
     AsyncIndexBuilderConfig {
         merge_threshold: 100,
         segment_count: Some(2),
-        sync_mode: false,
     }
 }
 
@@ -37,7 +36,6 @@ fn test_enqueue_returns_true_at_threshold() {
     let config = AsyncIndexBuilderConfig {
         merge_threshold: 3,
         segment_count: Some(1),
-        sync_mode: false,
     };
     let builder = AsyncIndexBuilder::new(config);
 
@@ -127,13 +125,11 @@ fn test_config_serde_roundtrip() {
     let config = AsyncIndexBuilderConfig {
         merge_threshold: 5000,
         segment_count: Some(8),
-        sync_mode: true,
     };
     let json = serde_json::to_string(&config).expect("serialize");
     let restored: AsyncIndexBuilderConfig = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(restored.merge_threshold, 5000);
     assert_eq!(restored.segment_count, Some(8));
-    assert!(restored.sync_mode);
 }
 
 #[test]
@@ -142,7 +138,18 @@ fn test_config_serde_defaults() {
     let config: AsyncIndexBuilderConfig = serde_json::from_str(json).expect("deserialize empty");
     assert_eq!(config.merge_threshold, 10_000);
     assert!(config.segment_count.is_none());
-    assert!(!config.sync_mode);
+}
+
+/// Legacy `config.json` files persisted before the removal of
+/// `sync_mode` must continue to deserialize. serde ignores unknown
+/// fields by default, so the stale value is silently dropped.
+#[test]
+fn test_config_legacy_sync_mode_field_is_ignored() {
+    let legacy_json = r#"{"merge_threshold": 500, "segment_count": 4, "sync_mode": true}"#;
+    let config: AsyncIndexBuilderConfig =
+        serde_json::from_str(legacy_json).expect("legacy config must still deserialize");
+    assert_eq!(config.merge_threshold, 500);
+    assert_eq!(config.segment_count, Some(4));
 }
 
 #[test]

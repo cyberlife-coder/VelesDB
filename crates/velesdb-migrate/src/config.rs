@@ -23,10 +23,7 @@ pub struct MigrationConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SourceConfig {
-    /// `PostgreSQL` with pgvector extension.
-    #[serde(rename = "pgvector")]
-    PgVector(PgVectorConfig),
-    /// Supabase (pgvector-based).
+    /// Supabase (PostgREST API over a pgvector-enabled PostgreSQL).
     #[serde(rename = "supabase")]
     Supabase(SupabaseConfig),
     /// Qdrant vector database.
@@ -50,9 +47,6 @@ pub enum SourceConfig {
     /// CSV file import.
     #[serde(rename = "csv_file")]
     CsvFile(crate::connectors::csv_file::CsvFileConfig),
-    /// MongoDB Atlas Vector Search.
-    #[serde(rename = "mongodb")]
-    MongoDB(crate::connectors::mongodb::MongoDBConfig),
     /// Elasticsearch/OpenSearch with vector search.
     #[serde(rename = "elasticsearch")]
     Elasticsearch(crate::connectors::elasticsearch::ElasticsearchConfig),
@@ -91,26 +85,6 @@ fn default_redis_vector_field() -> String {
 
 fn default_redis_key_prefix() -> String {
     "doc:".to_string()
-}
-
-/// `PostgreSQL` pgvector configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PgVectorConfig {
-    /// Connection string (postgres://user:pass@host:port/db).
-    pub connection_string: String,
-    /// Table name containing vectors.
-    pub table: String,
-    /// Column name for vector data.
-    #[serde(default = "default_vector_column")]
-    pub vector_column: String,
-    /// Column name for primary key/ID.
-    #[serde(default = "default_id_column")]
-    pub id_column: String,
-    /// Additional columns to include in payload.
-    #[serde(default)]
-    pub payload_columns: Vec<String>,
-    /// Optional WHERE clause for filtering.
-    pub filter: Option<String>,
 }
 
 /// Supabase configuration.

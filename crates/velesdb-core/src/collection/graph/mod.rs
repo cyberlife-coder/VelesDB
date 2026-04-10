@@ -36,10 +36,8 @@
 //! ```
 #![allow(clippy::doc_markdown)] // Graph docs include many domain identifiers and acronyms.
 
-mod cart;
 mod clustered_index;
 mod csr_snapshot;
-mod degree_router;
 mod edge;
 mod edge_concurrent;
 mod edge_persistence;
@@ -51,7 +49,6 @@ mod label_index_tests;
 mod label_table;
 #[cfg(test)]
 mod label_table_tests;
-mod memory_pool;
 mod metrics;
 mod node;
 mod property_index;
@@ -83,12 +80,8 @@ mod range_index_tests;
 #[cfg(test)]
 mod schema_tests;
 
-pub use cart::{CARTEdgeIndex, CompressedART};
-pub use clustered_index::{ClusteredEdgeIndex, ClusteredIndex};
+pub use clustered_index::ClusteredIndex;
 pub use csr_snapshot::{AdjacencySource, CsrSnapshot, EdgePredicate, LabelFilter, NoFilter};
-pub use degree_router::{
-    DegreeRouter, EdgeIndex, HashSetEdgeIndex, VecEdgeIndex, DEFAULT_DEGREE_THRESHOLD,
-};
 pub use edge::{EdgeStore, GraphEdge};
 #[allow(unused_imports)] // Re-exported for test access via super::*
 pub(crate) use node::Element;
@@ -98,7 +91,6 @@ pub(crate) use csr_snapshot::SnapshotBuilder;
 pub use edge_concurrent::ConcurrentEdgeStore;
 pub use label_index::LabelIndex;
 pub use label_table::{LabelId, LabelTable};
-pub use memory_pool::{ConcurrentMemoryPool, ConcurrentPoolHandle, MemoryPool, PoolIndex};
 pub use metrics::{GraphMetrics, LatencyHistogram};
 pub use node::GraphNode;
 pub use property_index::PropertyIndex;

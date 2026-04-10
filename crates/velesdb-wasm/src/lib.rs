@@ -23,9 +23,14 @@
 //! # Features
 //!
 //! - **In-memory vector store**: Fast vector storage and retrieval
-//! - **SIMD-optimized**: Uses WASM SIMD128 for distance calculations
 //! - **Multiple metrics**: Cosine, Euclidean, Dot Product
 //! - **Half-precision**: f16/bf16 support for 50% memory reduction
+//!
+//! Distance kernels run on the scalar code paths of `velesdb-core` under
+//! `wasm32-unknown-unknown`. Explicit WASM SIMD128 intrinsics are not wired
+//! in this crate; the `wasm-opt` post-processing stage may emit SIMD128
+//! opportunistically when safe, but that is an optimizer choice and is not
+//! part of the public API contract.
 //!
 //! # Usage (JavaScript)
 //!
@@ -50,13 +55,12 @@ mod filter;
 mod fusion;
 mod graph;
 mod graph_persistence;
-mod graph_worker;
+mod graph_worker_hints;
 mod hybrid_quantized;
 mod idb_helpers;
 mod parsing;
 mod persistence;
 mod serialization;
-mod simd;
 pub mod sparse;
 mod store_get;
 mod store_insert;

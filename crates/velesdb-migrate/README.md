@@ -27,8 +27,7 @@ Switch to VelesDB in minutes, not days. `velesdb-migrate` handles the heavy lift
 
 | Source | Status | Protocol | Notes |
 |--------|--------|----------|-------|
-| **Supabase** | ✅ Ready | PostgREST | pgvector via Supabase API |
-| **PostgreSQL/pgvector** | ✅ Ready | SQL | Direct SQL connection |
+| **Supabase** | ✅ Ready | PostgREST | pgvector-enabled Supabase projects |
 | **Qdrant** | ✅ Ready | REST API | Scroll pagination |
 | **Pinecone** | ✅ Ready | REST API | Serverless & pod indexes |
 | **Weaviate** | ✅ Ready | GraphQL | All classes & properties |
@@ -36,9 +35,15 @@ Switch to VelesDB in minutes, not days. `velesdb-migrate` handles the heavy lift
 | **ChromaDB** | ✅ Ready | REST API | Tenant/database support |
 | **JSON File** | ✅ Ready | Local file | Universal import from exports |
 | **CSV File** | ✅ Ready | Local file | Spreadsheet/ML pipeline import |
-| **MongoDB Atlas** | ✅ Ready | Data API | Vector Search with ObjectId support |
-| **Elasticsearch** | ✅ Ready | REST API | OpenSearch compatible, search_after pagination |
+| **Elasticsearch** | ✅ Ready | REST API | OpenSearch compatible, `search_after` pagination |
 | **Redis** | ✅ Ready | REST API | Redis Stack with RediSearch, FT.SEARCH |
+
+### Previously supported (removed)
+
+| Source | Removed | Reason | Workaround |
+|--------|---------|--------|------------|
+| **PostgreSQL/pgvector** (direct SQL) | v1.13 | Connector was a stub: `get_schema()` and `extract_batch()` returned `UnsupportedSource` at runtime. Use Supabase for pgvector-enabled projects, or export with `pg_dump` + `--source json_file`. | Use `supabase` for Supabase projects; for self-hosted pgvector export rows to JSONL and use `--source json_file`. |
+| **MongoDB Atlas** | v1.13 | The connector relied on the MongoDB Atlas Data API, which MongoDB Inc. deprecated on 2025-09-30. | Export to JSONL with `mongoexport --collection <c> --out data.jsonl` and migrate with `--source json_file`. |
 
 ---
 
@@ -49,9 +54,6 @@ Switch to VelesDB in minutes, not days. `velesdb-migrate` handles the heavy lift
 ```bash
 # From source
 cargo install --path crates/velesdb-migrate
-
-# With PostgreSQL support
-cargo install --path crates/velesdb-migrate --features postgres
 ```
 
 ### Basic Usage
@@ -211,48 +213,6 @@ CREATE TABLE documents (
   embedding VECTOR(1536),  -- OpenAI ada-002
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-```
-
----
-
-### 🐘 PostgreSQL with pgvector (Direct SQL)
-
-Direct SQL connection for self-hosted PostgreSQL with pgvector extension.
-
-**Prerequisites:**
-- PostgreSQL connection string
-- pgvector extension installed
-- Compile with `--features postgres`
-
-**Configuration:**
-
-```yaml
-source:
-  type: pgvector
-  connection_string: postgres://user:password@localhost:5432/mydb
-  table: embeddings
-  vector_column: embedding
-  id_column: id
-  payload_columns:
-    - title
-    - content
-    - category
-  filter: "created_at > '2024-01-01'"  # Optional WHERE clause
-
-destination:
-  path: ./velesdb_data
-  collection: pg_documents
-  dimension: 768
-  metric: cosine
-
-options:
-  batch_size: 1000
-```
-
-**Installation with PostgreSQL support:**
-
-```bash
-cargo install --path crates/velesdb-migrate --features postgres
 ```
 
 ---
@@ -485,7 +445,6 @@ OPTIONS:
 ```bash
 # Generate config for each source type
 velesdb-migrate init --source supabase --output supabase.yaml
-velesdb-migrate init --source pgvector --output pgvector.yaml
 velesdb-migrate init --source qdrant --output qdrant.yaml
 velesdb-migrate init --source pinecone --output pinecone.yaml
 velesdb-migrate init --source weaviate --output weaviate.yaml
@@ -559,7 +518,6 @@ options:
 | Weaviate | 2,000-5,000 pts/sec | 1000 |
 | Milvus | 3,000-8,000 pts/sec | 1000 |
 | ChromaDB | 2,000-5,000 pts/sec | 1000 |
-| pgvector (local) | 5,000-15,000 pts/sec | 1000 |
 
 ### Optimization Tips
 
@@ -595,7 +553,6 @@ velesdb-migrate run --config migration.yaml
 | Qdrant | Read-only API key |
 | Pinecone | Read-only API key |
 | Weaviate | Read-only auth token |
-| pgvector | SELECT permission on tables |
 
 ### .gitignore
 
@@ -761,8 +718,7 @@ All connectors automatically detect vector dimensions:
 
 | Source | Detection Method | Reliability |
 |--------|------------------|-------------|
-| **Supabase** | Fetch 1 row, parse pgvector format | ✅ 100% |
-| **PostgreSQL/pgvector** | Query vector column | ✅ 100% |
+| **Supabase** | Fetch 1 row, parse pgvector wire format | ✅ 100% |
 | **Qdrant** | Collection info API | ✅ 100% |
 | **Pinecone** | Index stats API | ✅ 100% |
 | **Weaviate** | GraphQL fetch 1 vector | ✅ 100% |

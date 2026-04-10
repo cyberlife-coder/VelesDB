@@ -825,15 +825,14 @@ fn test_hash_edge_id_collision_resistance() {
 }
 
 // =========================================================================
-// ALTER COLLECTION — warning payload (Finding 1: US-300 no-op)
+// ALTER COLLECTION — execution returns feature-gap error (US-300)
 // =========================================================================
 
 #[test]
-fn test_alter_collection_returns_warning_payload() {
+fn test_alter_collection_rejects_with_us300_reference() {
     let dir = tempdir().expect("tempdir");
     let db = Database::open(dir.path()).expect("open");
 
-    // Create a collection first.
     let create = DdlStatement::CreateCollection(CreateCollectionStatement {
         name: "alter_test".to_string(),
         kind: CreateCollectionKind::Vector(VectorCollectionParams {
@@ -846,23 +845,97 @@ fn test_alter_collection_returns_warning_payload() {
     });
     execute_ddl(&db, create).expect("create");
 
+    // ALTER COLLECTION SET execution is documented as not implemented
+    // under US-300. The error message must expose the ticket, the
+    // collection name, and the option list for debuggability.
     let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
         collection: "alter_test".to_string(),
         options: vec![("auto_reindex".to_string(), "true".to_string())],
     });
-    let results = execute_ddl(&db, alter).expect("alter");
+    let err = execute_ddl(&db, alter).expect_err("ALTER must return a feature-gap error");
 
-    assert_eq!(results.len(), 1, "one result per option");
-    let payload = results[0].point.payload.as_ref().expect("payload");
-    assert_eq!(payload["status"], "accepted");
-    assert_eq!(payload["option"], "auto_reindex");
-    assert_eq!(payload["value"], "true");
+    let err_msg = err.to_string();
     assert!(
-        payload["warning"]
-            .as_str()
-            .expect("warning string")
-            .contains("US-300"),
-        "warning must reference the tracking ticket"
+        err_msg.contains("US-300"),
+        "error must reference US-300: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("not yet implemented"),
+        "error must state feature is not implemented: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("alter_test"),
+        "error must include target collection name: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("auto_reindex=true"),
+        "error must echo the requested option: {err_msg}"
+    );
+}
+
+#[test]
+fn test_alter_collection_validates_unknown_option_before_feature_gap() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "alter_unknown".to_string(),
+        kind: CreateCollectionKind::Vector(VectorCollectionParams {
+            dimension: 32,
+            metric: "cosine".to_string(),
+            storage: None,
+            m: None,
+            ef_construction: None,
+        }),
+    });
+    execute_ddl(&db, create).expect("create");
+
+    // Unknown options must return the specific "Unsupported ALTER
+    // option" diagnostic before the feature-gap error.
+    let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
+        collection: "alter_unknown".to_string(),
+        options: vec![("nonexistent_option".to_string(), "value".to_string())],
+    });
+    let err = execute_ddl(&db, alter).expect_err("unknown option must error");
+    let err_msg = err.to_string();
+    assert!(
+        err_msg.contains("Unsupported ALTER option"),
+        "must reject unknown option specifically: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("nonexistent_option"),
+        "must echo the unknown option name: {err_msg}"
+    );
+}
+
+#[test]
+fn test_alter_collection_validates_value_type_before_feature_gap() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "alter_bad_value".to_string(),
+        kind: CreateCollectionKind::Vector(VectorCollectionParams {
+            dimension: 32,
+            metric: "cosine".to_string(),
+            storage: None,
+            m: None,
+            ef_construction: None,
+        }),
+    });
+    execute_ddl(&db, create).expect("create");
+
+    // Malformed values must return the type-specific diagnostic rather
+    // than the feature-gap error.
+    let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
+        collection: "alter_bad_value".to_string(),
+        options: vec![("auto_reindex".to_string(), "not_a_bool".to_string())],
+    });
+    let err = execute_ddl(&db, alter).expect_err("bad value must error");
+    let err_msg = err.to_string();
+    assert!(
+        err_msg.contains("auto_reindex must be 'true' or 'false'"),
+        "must reject invalid bool value specifically: {err_msg}"
     );
 }
 

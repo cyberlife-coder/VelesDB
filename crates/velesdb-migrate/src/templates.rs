@@ -13,7 +13,6 @@ pub fn get_template(source: &str) -> Option<&'static str> {
         "weaviate" => Some(WEAVIATE_TEMPLATE),
         "milvus" => Some(MILVUS_TEMPLATE),
         "chromadb" => Some(CHROMADB_TEMPLATE),
-        "pgvector" => Some(PGVECTOR_TEMPLATE),
         "supabase" => Some(SUPABASE_TEMPLATE),
         _ => None,
     }
@@ -171,7 +170,7 @@ mod tests {
     use velesdb_migrate::connectors::FieldInfo;
 
     const ALL_SOURCES: &[&str] = &[
-        "qdrant", "pinecone", "weaviate", "milvus", "chromadb", "pgvector", "supabase",
+        "qdrant", "pinecone", "weaviate", "milvus", "chromadb", "supabase",
     ];
 
     #[test]

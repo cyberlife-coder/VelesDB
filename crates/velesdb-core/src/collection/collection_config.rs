@@ -112,8 +112,8 @@ pub struct CollectionConfig {
     /// Async index builder configuration (Issue #488 — Bulk Insert V2).
     ///
     /// When `Some`, enables the `AsyncIndexBuilder` for deferred HNSW
-    /// construction during bulk insert. Vectors are buffered and indexed
-    /// asynchronously via `HnswSegmentBuilder`.
+    /// insertion during bulk import. Buffered vectors are flushed to the
+    /// HNSW index via `HnswIndex::insert_batch_parallel`.
     ///
     /// Backward compatible: old `config.json` files without this field
     /// deserialize to `None` (disabled).

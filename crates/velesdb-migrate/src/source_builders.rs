@@ -69,27 +69,6 @@ pub(crate) fn build_chromadb(params: &SourceParams<'_>) -> SourceConfig {
     })
 }
 
-pub(crate) fn build_pgvector(params: &SourceParams<'_>) -> Result<SourceConfig> {
-    #[cfg(feature = "postgres")]
-    {
-        Ok(SourceConfig::PgVector(crate::config::PgVectorConfig {
-            connection_string: params.url.to_string(),
-            table: params.collection.to_string(),
-            vector_column: "embedding".to_string(),
-            id_column: "id".to_string(),
-            payload_columns: vec![],
-            filter: None,
-        }))
-    }
-    #[cfg(not(feature = "postgres"))]
-    {
-        let _ = params;
-        Err(crate::error::Error::Config(
-            "pgvector requires --features postgres".to_string(),
-        ))
-    }
-}
-
 pub(crate) fn build_json_file(params: &SourceParams<'_>) -> SourceConfig {
     SourceConfig::JsonFile(crate::connectors::json_file::JsonFileConfig {
         path: std::path::PathBuf::from(params.url),
@@ -110,23 +89,6 @@ pub(crate) fn build_csv_file(params: &SourceParams<'_>) -> SourceConfig {
         delimiter: ',',
         has_header: true,
     })
-}
-
-pub(crate) fn build_mongodb(params: &SourceParams<'_>) -> Result<SourceConfig> {
-    let api_key = require_api_key(params, "MongoDB")?;
-    Ok(SourceConfig::MongoDB(
-        crate::connectors::mongodb::MongoDBConfig {
-            data_api_url: params.url.to_string(),
-            api_key,
-            database: "vectors".to_string(),
-            collection: params.collection.to_string(),
-            vector_field: "embedding".to_string(),
-            id_field: "_id".to_string(),
-            payload_fields: vec![],
-            filter: None,
-            data_source: "mongodb-atlas".to_string(),
-        },
-    ))
 }
 
 pub(crate) fn build_elasticsearch(params: &SourceParams<'_>) -> SourceConfig {

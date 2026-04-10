@@ -52,15 +52,14 @@ impl Collection {
     ///
     /// # When to Use
     ///
-    /// Use this for intermediate batches in a streaming bulk import
-    /// (e.g., [`upsert_bulk_streaming`](super::async_ops::upsert_bulk_streaming)).
+    /// Use this for intermediate batches in a streaming bulk import.
     /// The final batch should use [`upsert_bulk`](Self::upsert_bulk) or be
     /// followed by an explicit [`flush()`](Self::flush).
     ///
     /// # Errors
     ///
     /// Returns an error if any point has a mismatched dimension.
-    #[allow(dead_code)] // Reason: Called via async_ops::upsert_chunk delegation
+    #[allow(dead_code)] // Reserved for future streaming ingestion surface.
     pub(crate) fn upsert_bulk_deferred_sync(&self, points: &[Point]) -> Result<usize> {
         self.upsert_bulk_inner(points, false)
     }

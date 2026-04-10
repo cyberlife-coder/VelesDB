@@ -21,7 +21,6 @@
 // - Values bounded by buffer sizes, used for statistics only
 #![allow(clippy::cast_precision_loss)]
 
-use super::degree_router::EdgeIndex;
 use rustc_hash::FxHashMap;
 
 /// Fragmentation threshold (30%) that triggers automatic compaction.
@@ -301,42 +300,6 @@ impl ClusteredIndex {
 impl Default for ClusteredIndex {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Wrapper to implement EdgeIndex trait for ClusteredIndex per node.
-#[derive(Debug)]
-pub struct ClusteredEdgeIndex<'a> {
-    index: &'a mut ClusteredIndex,
-    node_id: u64,
-}
-
-impl<'a> ClusteredEdgeIndex<'a> {
-    /// Creates a new edge index view for a specific node.
-    pub fn new(index: &'a mut ClusteredIndex, node_id: u64) -> Self {
-        Self { index, node_id }
-    }
-}
-
-impl EdgeIndex for ClusteredEdgeIndex<'_> {
-    fn insert(&mut self, target: u64) {
-        self.index.insert(self.node_id, target);
-    }
-
-    fn remove(&mut self, target: u64) -> bool {
-        self.index.remove(self.node_id, target)
-    }
-
-    fn contains(&self, target: u64) -> bool {
-        self.index.contains(self.node_id, target)
-    }
-
-    fn targets(&self) -> Vec<u64> {
-        self.index.get_neighbors(self.node_id).to_vec()
-    }
-
-    fn len(&self) -> usize {
-        self.index.neighbor_count(self.node_id)
     }
 }
 

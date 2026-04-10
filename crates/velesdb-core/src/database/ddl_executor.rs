@@ -227,44 +227,51 @@ impl Database {
     /// Executes an ALTER COLLECTION SET statement.
     ///
     /// Currently supports only the `auto_reindex` option (boolean).
-    /// Unknown options are rejected with a descriptive error.
+    /// Executes an `ALTER COLLECTION ... SET <key> = <value>` statement.
     ///
-    /// Returns a single `SearchResult` per option with `status: "accepted"`
-    /// and a warning explaining that persistence is not yet implemented
-    /// (pending US-300). This gives the caller explicit feedback rather
-    /// than a silent no-op.
+    /// Persistence of `ALTER COLLECTION SET` options is tracked under
+    /// US-300 and is not currently implemented. The grammar accepts the
+    /// syntax so existing documentation examples and tests parse without
+    /// error, but the execution path returns a diagnostic error so that
+    /// callers cannot mistakenly assume the option took effect.
+    ///
+    /// Validation order is chosen to return the most actionable error
+    /// first:
+    ///   1. Collection existence — `Error::CollectionNotFound`.
+    ///   2. Per-option syntax (unknown key, unparseable value) —
+    ///      `Error::Query` via [`apply_alter_option`].
+    ///   3. Feature-gap rejection referencing US-300.
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection does not exist, an option is
-    /// unknown, or a value cannot be parsed.
+    /// Returns `Error::CollectionNotFound` or `Error::Query` as described
+    /// above. A successful result is not currently possible.
     fn execute_alter_collection(
         &self,
         stmt: &AlterCollectionStatement,
     ) -> Result<Vec<SearchResult>> {
-        // Validate the collection exists.
+        // Step 1: existence check.
         let _collection = self.resolve_writable_collection(&stmt.collection)?;
 
-        let mut results = Vec::with_capacity(stmt.options.len());
+        // Step 2: per-option syntax validation.
         for (key, value) in &stmt.options {
             apply_alter_option(key, value)?;
-            let payload = serde_json::json!({
-                "status": "accepted",
-                "option": key,
-                "value": value,
-                "warning": format!(
-                    "Option '{key}' validated but not yet persisted \
-                     (pending US-300). Value will take effect only for \
-                     the current session."
-                ),
-            });
-            results.push(SearchResult::new(
-                crate::Point::metadata_only(0, payload),
-                0.0,
-            ));
         }
 
-        Ok(results)
+        // Step 3: feature-gap rejection (US-300).
+        let option_list = stmt
+            .options
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(Error::Query(format!(
+            "ALTER COLLECTION SET is parsed but not yet implemented \
+             (tracked under US-300). Requested options on collection '{}': \
+             [{}]. Workaround: drop and recreate the collection with \
+             CREATE COLLECTION.",
+            stmt.collection, option_list
+        )))
     }
 }
 
@@ -364,24 +371,27 @@ fn build_typed_schema(definitions: &[SchemaDefinition]) -> GraphSchema {
     schema
 }
 
-/// Validates and applies a single ALTER COLLECTION option.
+/// Validates the syntax of a single `ALTER COLLECTION` option.
 ///
-/// Currently only `auto_reindex` (boolean) is supported.
+/// Returns `Ok(())` when the option key is recognized and the value
+/// parses into the expected type. The parsed value is discarded because
+/// `execute_alter_collection` rejects the entire statement with a
+/// feature-gap error (US-300). This function is kept separate so that
+/// malformed options surface a specific diagnostic before the generic
+/// feature-gap error.
+///
+/// Supported options: `auto_reindex` (boolean).
 ///
 /// # Errors
 ///
 /// Returns `Error::Query` for unknown option keys or unparseable values.
 fn apply_alter_option(key: &str, value: &str) -> Result<()> {
     match key {
-        "auto_reindex" => {
-            let _enabled = value.parse::<bool>().map_err(|_| {
-                Error::Query(format!(
-                    "auto_reindex must be 'true' or 'false', got '{value}'"
-                ))
-            })?;
-            // Persistence tracked in US-300 — response payload includes a warning.
-            Ok(())
-        }
+        "auto_reindex" => value.parse::<bool>().map(|_| ()).map_err(|_| {
+            Error::Query(format!(
+                "auto_reindex must be 'true' or 'false', got '{value}'"
+            ))
+        }),
         _ => Err(Error::Query(format!(
             "Unsupported ALTER option: '{key}'. Supported: auto_reindex"
         ))),

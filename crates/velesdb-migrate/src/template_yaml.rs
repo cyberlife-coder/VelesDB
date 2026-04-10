@@ -96,29 +96,6 @@ options:
   batch_size: 1000
 "#;
 
-pub(super) const PGVECTOR_TEMPLATE: &str = r#"# VelesDB Migration Configuration - pgvector Source
-# Requires: velesdb-migrate --features postgres
-source:
-  type: pgvector
-  connection_string: postgres://user:password@localhost:5432/database
-  table: embeddings
-  vector_column: embedding
-  id_column: id
-  payload_columns:
-    - title
-    - content
-  # filter: "created_at > '2024-01-01'"
-
-destination:
-  path: ./velesdb_data
-  collection: migrated_docs
-  dimension: 768
-  metric: cosine
-
-options:
-  batch_size: 1000
-"#;
-
 pub(super) const SUPABASE_TEMPLATE: &str = r#"# VelesDB Migration Configuration - Supabase Source
 source:
   type: supabase

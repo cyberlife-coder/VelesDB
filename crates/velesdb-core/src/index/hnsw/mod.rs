@@ -20,7 +20,6 @@
 // Core modules
 // ============================================================================
 pub(crate) mod auto_ef;
-mod backend;
 pub(crate) mod direct_writer;
 mod index;
 pub mod native;
@@ -31,7 +30,6 @@ mod native_index_tests;
 mod native_inner;
 mod params;
 pub(crate) mod persistence;
-pub(crate) mod segment_builder;
 mod sharded_mappings;
 mod sharded_vectors;
 pub(crate) mod upsert;
@@ -49,8 +47,6 @@ mod index_tests;
 #[cfg(test)]
 mod params_tests;
 #[cfg(test)]
-mod segment_builder_tests;
-#[cfg(test)]
 mod sharded_mappings_tests;
 #[cfg(test)]
 mod sharded_vectors_tests;
@@ -64,10 +60,6 @@ pub use params::{HnswParams, SearchQuality};
 
 /// Main HNSW index for vector search operations.
 pub use index::HnswIndex;
-
-/// HNSW backend trait for custom implementations.
-#[allow(unused_imports)]
-pub use backend::HnswBackend;
 
 /// Native HNSW index with direct access to underlying graph.
 pub use native_index::NativeHnswIndex;
