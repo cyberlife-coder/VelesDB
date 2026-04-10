@@ -8,6 +8,7 @@ use serde_json::Value;
 
 /// Error type for JSON path parsing.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum JsonPathError {
     /// Empty path provided.
     EmptyPath,
@@ -34,6 +35,7 @@ impl std::error::Error for JsonPathError {}
 
 /// A segment in a JSON path.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum PathSegment {
     /// Object property access: `.field`
     Property(String),

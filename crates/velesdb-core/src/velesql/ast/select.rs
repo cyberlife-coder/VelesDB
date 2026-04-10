@@ -188,6 +188,7 @@ impl SelectOrderBy {
 
 /// Expression types supported in ORDER BY clause.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum OrderByExpr {
     /// Simple field reference.
     Field(String),
@@ -226,6 +227,7 @@ pub struct LetBinding {
 /// Supports binary operations (+, -, *, /) with numeric literals,
 /// variables (field references), and similarity() function calls.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ArithmeticExpr {
     /// Numeric literal (e.g., `0.7`, `2`).
     Literal(f64),
@@ -246,6 +248,7 @@ pub enum ArithmeticExpr {
 
 /// Arithmetic operators for ORDER BY expressions (EPIC-042).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ArithmeticOp {
     /// Addition (`+`).
     Add,

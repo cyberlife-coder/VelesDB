@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Controls the precision/speed tradeoff for similarity search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum QuantizationMode {
     /// Use full f32 precision (exact, slower).
     F32,
@@ -147,6 +148,7 @@ pub struct WithOption {
 
 /// Value type for WITH clause options.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum WithValue {
     /// String value.
     String(String),

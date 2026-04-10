@@ -50,6 +50,7 @@ VelesDB utilise un modèle de concurrence basé sur:
 | RaBitQ index | `parking_lot::RwLock` | None (after training) | Write-once then read-only |
 | RaBitQ store | `parking_lot::RwLock` | Low | Write per insert (~10ns hold) |
 | RaBitQ training buffer | `parking_lot::Mutex` | Low | Pre-training only |
+| MmapStorage (compaction) | `parking_lot::RwLock` | High (during compaction) | Exclusive write lock for full compaction duration |
 
 ## Thread Safety Guarantees
 
@@ -591,6 +592,69 @@ Recovery behavior is validated by the following test suite:
 | WAL replay tests | `wal_recovery_tests.rs` | CRC validation, legacy format detection, truncation |
 | HNSW delta WAL tests | `hnsw_delta_wal_tests.rs` | Delta entry serialization, CRC verification, crash boundary |
 
+## Storage Compaction Concurrency
+
+### Exclusive Lock Scope
+
+Storage compaction holds the `MmapStorage` write lock for the entire
+duration of the operation. This is enforced at two levels:
+
+1. **Synchronous path** (`MmapStorage::compact(&mut self)`): The method
+   takes `&mut self`, so the caller must already hold an exclusive
+   reference. No concurrent reads or writes are possible while compaction
+   runs.
+
+2. **Asynchronous path** (`compact_async(storage: Arc<RwLock<MmapStorage>>)`):
+   Acquires `storage.write()` inside a `spawn_blocking` task and holds
+   the write guard for the full compaction cycle. All readers and writers
+   on the same `RwLock` are blocked until the guard is dropped.
+
+```
+compact_async()
+├─ spawn_blocking
+│  ├─ storage.write()          ← exclusive lock acquired
+│  ├─ MmapStorage::compact()   ← rewrite active vectors to .tmp
+│  │   ├─ build temp file
+│  │   ├─ copy active vectors
+│  │   ├─ atomic_replace(.tmp → .dat)
+│  │   └─ rebuild index + flush
+│  └─ drop(guard)              ← exclusive lock released
+```
+
+### Latency Impact
+
+On large collections (>1M vectors), compaction rewrites the entire active
+vector set to a new file and atomically replaces the original. This can
+block all reads and writes for seconds, depending on disk throughput and
+vector dimensionality. This is an intentional correctness-over-performance
+trade-off: holding the exclusive lock prevents readers from observing a
+partially rewritten file and writers from appending to a file that is about
+to be replaced.
+
+### Crash Recovery
+
+`recover_compaction_artifacts()` runs automatically during
+`MmapStorage::new()` to repair any interrupted compaction. The recovery
+logic inspects leftover intermediate files:
+
+| State on Disk | Interpretation | Recovery Action |
+|---------------|---------------|-----------------|
+| `.bak` exists, original missing | Crash after rename-to-backup, before new file swap | Restore `.bak` as original |
+| `.bak` exists, original exists | Compaction completed, backup not yet cleaned up | Remove `.bak` |
+| `.tmp` exists | Incomplete compaction (temp file never swapped in) | Remove `.tmp` |
+
+This ensures the storage directory is always in a consistent state before
+the mmap file is opened, regardless of when the previous process crashed.
+
+**Module**: `crates/velesdb-core/src/storage/compaction.rs`
+(`recover_compaction_artifacts`, `atomic_replace`)
+
+### Future Roadmap
+
+Copy-on-write compaction that allows concurrent reads during the rewrite
+phase is planned for the enterprise edition. The current exclusive-lock
+design is the baseline for correctness validation.
+
 ## Testing Concurrency
 
 ### Running Loom Tests
@@ -624,4 +688,4 @@ invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-
 
 ---
 
-*Last updated: 2026-04-08 (WP-1F: HNSW crash recovery documentation)*
+*Last updated: 2026-04-09 (Storage compaction concurrency documentation)*

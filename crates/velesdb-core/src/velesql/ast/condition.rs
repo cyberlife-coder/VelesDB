@@ -88,6 +88,7 @@ pub struct SparseVectorSearch {
 
 /// Expression representing a sparse vector value in a query.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SparseVectorExpr {
     /// Inline sparse literal: `{12: 0.8, 45: 0.3}`
     Literal(SparseVector),
@@ -121,6 +122,7 @@ pub struct Comparison {
 
 /// Comparison operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum CompareOp {
     /// Equal (=)
     Eq,
@@ -203,6 +205,7 @@ pub struct ContainsTextCondition {
 
 /// Containment mode for array CONTAINS operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ContainsMode {
     /// Single value: `column CONTAINS value`
     Single,

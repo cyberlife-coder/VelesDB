@@ -120,6 +120,7 @@ impl RelationshipPattern {
 
 /// Direction of a relationship.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Direction {
     /// Outgoing: `-->`
     Outgoing,

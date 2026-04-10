@@ -10,6 +10,7 @@ use super::values::Value;
 
 /// Aggregate function type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AggregateType {
     /// COUNT(*) or COUNT(column)
     Count,
@@ -27,6 +28,7 @@ pub enum AggregateType {
 
 /// Argument to an aggregate function.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AggregateArg {
     /// Wildcard (*) - only valid for COUNT.
     Wildcard,
@@ -56,6 +58,7 @@ pub struct GroupByClause {
 
 /// Logical operator for combining HAVING conditions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LogicalOp {
     /// Logical AND.
     And,
