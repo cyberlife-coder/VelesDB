@@ -43,6 +43,7 @@ async fn test_supabase_connection() {
         vector_column: env::var("SUPABASE_VECTOR_COL").unwrap_or_else(|_| "embedding".to_string()),
         id_column: env::var("SUPABASE_ID_COL").unwrap_or_else(|_| "id".to_string()),
         payload_columns: vec![],
+        metric: None,
     };
 
     // Test connection
@@ -82,6 +83,7 @@ async fn test_supabase_extract_batch() {
         vector_column: env::var("SUPABASE_VECTOR_COL").unwrap_or_else(|_| "embedding".to_string()),
         id_column: env::var("SUPABASE_ID_COL").unwrap_or_else(|_| "id".to_string()),
         payload_columns: vec!["information_type".to_string(), "text_content".to_string()],
+        metric: None,
     };
 
     let source_config = velesdb_migrate::config::SourceConfig::Supabase(config);
@@ -137,6 +139,7 @@ async fn test_full_migration_to_velesdb() {
         vector_column: env::var("SUPABASE_VECTOR_COL").unwrap_or_else(|_| "embedding".to_string()),
         id_column: env::var("SUPABASE_ID_COL").unwrap_or_else(|_| "id".to_string()),
         payload_columns: vec!["information_type".to_string(), "text_content".to_string()],
+        metric: None,
     };
 
     let source_config = velesdb_migrate::config::SourceConfig::Supabase(config);
@@ -193,6 +196,7 @@ async fn test_dimension_detection_accuracy() {
         vector_column: env::var("SUPABASE_VECTOR_COL").unwrap_or_else(|_| "embedding".to_string()),
         id_column: env::var("SUPABASE_ID_COL").unwrap_or_else(|_| "id".to_string()),
         payload_columns: vec![],
+        metric: None,
     };
 
     let source_config = velesdb_migrate::config::SourceConfig::Supabase(config);
