@@ -2247,12 +2247,28 @@ components:
       required:
       - strategy
       properties:
+        avg_w:
+          type:
+          - number
+          - 'null'
+          format: float
+          description: |-
+            Weighted fusion: weight applied to the average score component
+            (only for strategy = "weighted", default 0.5).
         dense_w:
           type:
           - number
           - 'null'
           format: float
           description: Dense weight (only for strategy = "rsf", default 0.5).
+        hit_w:
+          type:
+          - number
+          - 'null'
+          format: float
+          description: |-
+            Weighted fusion: weight applied to the hit-ratio component
+            (only for strategy = "weighted", default 0.2).
         k:
           type:
           - integer
@@ -2260,6 +2276,14 @@ components:
           format: int32
           description: RRF k parameter (only for strategy = "rrf", default 60).
           minimum: 0
+        max_w:
+          type:
+          - number
+          - 'null'
+          format: float
+          description: |-
+            Weighted fusion: weight applied to the maximum score component
+            (only for strategy = "weighted", default 0.3).
         sparse_w:
           type:
           - number
@@ -2268,7 +2292,9 @@ components:
           description: Sparse weight (only for strategy = "rsf", default 0.5).
         strategy:
           type: string
-          description: 'Fusion strategy: "rrf" or "rsf".'
+          description: |-
+            Fusion strategy: "rrf", "rsf" (alias "`relative_score`"),
+            "average" (alias "avg"), "maximum" (alias "max"), or "weighted".
           example: rrf
     GraphSearchRequest:
       type: object

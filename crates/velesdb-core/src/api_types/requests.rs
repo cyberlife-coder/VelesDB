@@ -132,7 +132,8 @@ impl SparseVectorInput {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct FusionRequest {
-    /// Fusion strategy: "rrf" or "rsf".
+    /// Fusion strategy: "rrf", "rsf" (alias "`relative_score`"),
+    /// "average" (alias "avg"), "maximum" (alias "max"), or "weighted".
     #[cfg_attr(feature = "openapi", schema(example = "rrf"))]
     pub strategy: String,
     /// RRF k parameter (only for strategy = "rrf", default 60).
@@ -144,6 +145,18 @@ pub struct FusionRequest {
     /// Sparse weight (only for strategy = "rsf", default 0.5).
     #[serde(default)]
     pub sparse_w: Option<f32>,
+    /// Weighted fusion: weight applied to the average score component
+    /// (only for strategy = "weighted", default 0.5).
+    #[serde(default)]
+    pub avg_w: Option<f32>,
+    /// Weighted fusion: weight applied to the maximum score component
+    /// (only for strategy = "weighted", default 0.3).
+    #[serde(default)]
+    pub max_w: Option<f32>,
+    /// Weighted fusion: weight applied to the hit-ratio component
+    /// (only for strategy = "weighted", default 0.2).
+    #[serde(default)]
+    pub hit_w: Option<f32>,
 }
 
 // ============================================================================
