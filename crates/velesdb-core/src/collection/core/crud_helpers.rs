@@ -1,4 +1,5 @@
-//! Internal helpers for CRUD operations: quantization caching and secondary index updates.
+//! Internal helpers for CRUD operations: quantization caching, secondary index
+//! updates, `DedupMap`, and `QuantizationGuards`.
 
 use crate::collection::types::Collection;
 use crate::index::{JsonValue, SecondaryIndex};
@@ -6,10 +7,50 @@ use crate::point::Point;
 use crate::quantization::{
     BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
 };
+use parking_lot::RwLockWriteGuard;
 #[cfg(feature = "persistence")]
 use rayon::prelude::*;
+use std::collections::HashMap;
 
 const PQ_TRAINING_SAMPLES: usize = 128;
+
+/// Pre-computed last-writer-wins dedup map: `point_id -> index_of_last_occurrence`.
+///
+/// Built once in `batch_store_all` and shared by both `write_deduped_payloads`
+/// and `write_deduped_vectors` to avoid redundant map construction (Issue #425).
+pub(super) type DedupMap = HashMap<u64, usize>;
+
+/// Write-lock guards for quantization caches, acquired once per batch.
+pub(super) struct QuantizationGuards<'a> {
+    pub(super) sq8: Option<RwLockWriteGuard<'a, HashMap<u64, QuantizedVector>>>,
+    pub(super) binary: Option<RwLockWriteGuard<'a, HashMap<u64, BinaryQuantizedVector>>>,
+    pub(super) pq: Option<RwLockWriteGuard<'a, HashMap<u64, PQVector>>>,
+}
+
+impl<'a> QuantizationGuards<'a> {
+    /// Acquires all quantization cache guards matching `mode`.
+    pub(super) fn acquire(collection: &'a Collection, mode: StorageMode) -> Self {
+        Self {
+            sq8: matches!(mode, StorageMode::SQ8).then(|| collection.sq8_cache.write()),
+            binary: matches!(mode, StorageMode::Binary).then(|| collection.binary_cache.write()),
+            pq: matches!(mode, StorageMode::ProductQuantization)
+                .then(|| collection.pq_cache.write()),
+        }
+    }
+
+    /// Acquires only the PQ cache guard (for when SQ8/Binary were handled in parallel).
+    ///
+    /// Issue #486: After parallel quantization for SQ8/Binary, only PQ mode
+    /// still needs a guard for sequential processing.
+    pub(super) fn acquire_pq_only(collection: &'a Collection, mode: StorageMode) -> Self {
+        Self {
+            sq8: None,
+            binary: None,
+            pq: matches!(mode, StorageMode::ProductQuantization)
+                .then(|| collection.pq_cache.write()),
+        }
+    }
+}
 
 fn auto_num_subspaces(dimension: usize) -> usize {
     let mut num_subspaces = 8usize;

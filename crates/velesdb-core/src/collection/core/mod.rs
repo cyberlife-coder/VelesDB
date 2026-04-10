@@ -6,6 +6,7 @@
 //! - Index management: `create_property_index`, `create_range_index`,
 //!   `list_indexes`, `drop_index`
 
+mod bulk_import;
 mod crud;
 mod crud_bulk;
 mod crud_helpers;

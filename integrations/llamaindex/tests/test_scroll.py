@@ -65,7 +65,7 @@ class TestScrollNominal:
 
     def test_scroll_first_page_returns_text_nodes(self, store_with_nodes):
         # GIVEN a store with 5 nodes
-        nodes, cursor = store_with_nodes.scroll(cursor=None, batch_size=100)
+        nodes, _cursor = store_with_nodes.scroll(cursor=None, batch_size=100)
 
         # THEN all items are TextNode instances
         assert isinstance(nodes, list)
@@ -74,7 +74,7 @@ class TestScrollNominal:
 
     def test_scroll_cursor_exhaustion(self, store_with_nodes):
         # GIVEN a full first batch
-        nodes, cursor = store_with_nodes.scroll(cursor=None, batch_size=100)
+        _nodes, cursor = store_with_nodes.scroll(cursor=None, batch_size=100)
 
         # WHEN that cursor is used again
         nodes2, cursor2 = store_with_nodes.scroll(cursor=cursor, batch_size=100)
@@ -153,7 +153,7 @@ class TestScrollOnePageHelper:
         col = store_with_nodes._collection
         if col is None:
             pytest.skip("collection not initialised")
-        batch1, cursor1 = _scroll_one_batch(col, None, 3)
+        _batch1, cursor1 = _scroll_one_batch(col, None, 3)
         if cursor1 is None:
             pytest.skip("all points fit in first batch")
         batch2, _cursor2 = _scroll_one_batch(col, cursor1, 3)

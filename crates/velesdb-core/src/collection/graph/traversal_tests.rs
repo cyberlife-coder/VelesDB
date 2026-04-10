@@ -1,6 +1,7 @@
 //! Tests for `traversal` module - Graph traversal algorithms.
 
 use super::traversal::*;
+use super::traversal_bidir::bfs_traverse_both;
 use super::{EdgeStore, GraphEdge};
 
 fn create_test_edge_store() -> EdgeStore {

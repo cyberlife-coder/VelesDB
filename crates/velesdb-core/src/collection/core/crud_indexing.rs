@@ -9,7 +9,7 @@ use crate::quantization::StorageMode;
 use crate::storage::VectorStorage;
 use std::collections::{BTreeMap, HashMap};
 
-use super::crud::QuantizationGuards;
+use super::crud_helpers::QuantizationGuards;
 
 impl Collection {
     /// Checks whether label index updates are needed for this batch.

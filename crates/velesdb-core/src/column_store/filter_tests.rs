@@ -176,7 +176,7 @@ fn bitmap_or_combinator() {
 // GeoPoint filter tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-use crate::column_store::filter::{CompareOp, GeoBboxParams, GeoDistanceParams};
+use crate::column_store::filter_geo::{CompareOp, GeoBboxParams, GeoDistanceParams};
 
 /// Helper: creates a column store with a GeoPoint column and pushes test rows.
 fn geo_store() -> ColumnStore {

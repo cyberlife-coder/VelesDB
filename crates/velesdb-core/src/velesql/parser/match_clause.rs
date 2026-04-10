@@ -1,13 +1,21 @@
 //! MATCH clause parser for graph pattern matching.
+//!
+//! Graph pattern parsing (node, relationship, path patterns) lives in the
+//! sibling [`super::match_patterns`] module. This module handles the top-level
+//! MATCH clause orchestration, WHERE condition parsing, RETURN clause parsing,
+//! and shared string-scanning utilities.
 
 use super::helpers::{compare_op_from_str, parse_value_from_str};
 use crate::velesql::ast::{Comparison, Condition, Value};
 use crate::velesql::error::ParseError;
-use crate::velesql::graph_pattern::{
-    Direction, GraphPattern, MatchClause, NodePattern, RelationshipPattern, ReturnClause,
-    ReturnItem,
-};
+use crate::velesql::graph_pattern::{MatchClause, ReturnClause, ReturnItem};
 use std::collections::HashMap;
+
+// Re-export pattern parsers so existing callers (tests, external modules)
+// continue to find them at `match_clause::parse_node_pattern` etc.
+pub use super::match_patterns::{parse_node_pattern, parse_relationship_pattern};
+
+use super::match_patterns::parse_pattern_list;
 
 /// Parses a complete MATCH clause.
 ///
@@ -58,226 +66,11 @@ fn extract_where_clause(
     Ok(Some(condition))
 }
 
-/// Parses a single node pattern.
-///
-/// # Errors
-///
-/// Returns [`ParseError`] when delimiters are invalid or properties cannot be parsed.
-pub fn parse_node_pattern(input: &str) -> Result<NodePattern, ParseError> {
-    let input = input.trim();
-    validate_node_delimiters(input)?;
-    let inner = input[1..input.len() - 1].trim();
-    if inner.is_empty() {
-        return Ok(NodePattern::new());
-    }
-    let mut node = NodePattern::new();
-    let (main_part, properties) = split_with_braces(inner, input, "node pattern")?;
-    node.properties = properties;
-    apply_alias_and_labels(main_part, &mut node);
-    Ok(node)
-}
-
-/// Validates that a node pattern string starts with `(` and ends with `)`.
-fn validate_node_delimiters(input: &str) -> Result<(), ParseError> {
-    if !input.starts_with('(') {
-        return Err(ParseError::syntax(
-            0,
-            input,
-            "Node pattern must start with '('",
-        ));
-    }
-    if !input.ends_with(')') {
-        return Err(ParseError::syntax(input.len(), input, "Expected ')'"));
-    }
-    Ok(())
-}
-
-/// Extracts alias, labels, and optional collection from a node identifier.
-///
-/// Supports:
-/// - `n:Person` → alias=n, labels=[Person]
-/// - `n:Person:Author` → alias=n, labels=[Person, Author]
-/// - `n:Person@products` → alias=n, labels=[Person], collection=products
-/// - `:Product@catalog` → labels=[Product], collection=catalog
-fn apply_alias_and_labels(main_part: &str, node: &mut NodePattern) {
-    if main_part.is_empty() {
-        return;
-    }
-
-    // Check for @collection suffix on the last segment
-    let (part_without_coll, collection) = extract_collection_annotation(main_part);
-
-    let parts: Vec<&str> = part_without_coll.split(':').collect();
-    if !parts[0].trim().is_empty() {
-        node.alias = Some(parts[0].trim().to_string());
-    }
-    for label in &parts[1..] {
-        let trimmed = label.trim();
-        if !trimmed.is_empty() {
-            node.labels.push(trimmed.to_string());
-        }
-    }
-
-    node.collection = collection;
-}
-
-/// Extracts `@collection` annotation from a node identifier string.
-///
-/// Returns `(identifier_without_annotation, Some(collection_name))` if found,
-/// or `(original, None)` if no `@` is present.
-fn extract_collection_annotation(input: &str) -> (&str, Option<String>) {
-    // Find the last '@' that's not inside quotes
-    if let Some(at_pos) = input.rfind('@') {
-        let before = &input[..at_pos];
-        let after = input[at_pos + 1..].trim();
-        if !after.is_empty() {
-            return (before, Some(after.to_string()));
-        }
-    }
-    (input, None)
-}
-
-/// Parses a relationship pattern.
-///
-/// # Errors
-///
-/// Returns [`ParseError`] when direction/brackets are malformed or relationship
-/// details cannot be parsed.
-pub fn parse_relationship_pattern(input: &str) -> Result<RelationshipPattern, ParseError> {
-    let input = input.trim();
-    let (direction, is, ie) = detect_direction_and_brackets(input)?;
-    let mut rel = RelationshipPattern::new(direction);
-
-    validate_bracket_matching(input)?;
-
-    if input.contains('[') && input.contains(']') {
-        parse_bracket_contents(input, is, ie, &mut rel)?;
-    }
-    Ok(rel)
-}
-
-/// Detects relationship direction and returns bracket positions.
-fn detect_direction_and_brackets(input: &str) -> Result<(Direction, usize, usize), ParseError> {
-    if input.starts_with("<-") && input.ends_with('-') {
-        Ok((
-            Direction::Incoming,
-            input.find('[').unwrap_or(2),
-            input.rfind(']').unwrap_or(input.len() - 1),
-        ))
-    } else if input.starts_with('-') && input.ends_with("->") {
-        Ok((
-            Direction::Outgoing,
-            input.find('[').unwrap_or(1),
-            input.rfind(']').unwrap_or(input.len() - 2),
-        ))
-    } else if input.starts_with('-') && input.ends_with('-') {
-        Ok((
-            Direction::Both,
-            input.find('[').unwrap_or(1),
-            input.rfind(']').unwrap_or(input.len() - 1),
-        ))
-    } else {
-        Err(ParseError::syntax(
-            0,
-            input,
-            "Invalid relationship direction",
-        ))
-    }
-}
-
-/// Validates that brackets are matched (both present or both absent).
-fn validate_bracket_matching(input: &str) -> Result<(), ParseError> {
-    let has_open = input.contains('[');
-    let has_close = input.contains(']');
-    if has_open != has_close {
-        return Err(ParseError::syntax(
-            0,
-            input,
-            if has_open {
-                "Missing closing ']' in relationship pattern"
-            } else {
-                "Missing opening '[' in relationship pattern"
-            },
-        ));
-    }
-    Ok(())
-}
-
-/// Parses the contents between brackets in a relationship pattern.
-fn parse_bracket_contents(
-    input: &str,
-    is: usize,
-    ie: usize,
-    rel: &mut RelationshipPattern,
-) -> Result<(), ParseError> {
-    if ie <= is {
-        return Err(ParseError::syntax(
-            is,
-            input,
-            "Mismatched brackets in relationship pattern",
-        ));
-    }
-    let inner = input[is + 1..ie].trim();
-    if inner.is_empty() {
-        return Ok(());
-    }
-    if let Some(sp) = inner.find('*') {
-        if let Some((s, e)) = parse_range(&inner[sp + 1..]) {
-            rel.range = Some((s, e));
-        }
-        parse_rel_details(inner[..sp].trim(), rel)?;
-    } else {
-        parse_rel_details(inner, rel)?;
-    }
-    Ok(())
-}
-
-fn parse_rel_details(input: &str, rel: &mut RelationshipPattern) -> Result<(), ParseError> {
-    if input.is_empty() {
-        return Ok(());
-    }
-    let (main_part, props) = split_with_braces(input, input, "relationship properties")?;
-    rel.properties = props;
-    if let Some(stripped) = main_part.strip_prefix(':') {
-        parse_rel_types(stripped, rel);
-    } else if let Some(cp) = main_part.find(':') {
-        rel.alias = Some(main_part[..cp].trim().to_string());
-        parse_rel_types(&main_part[cp + 1..], rel);
-    } else if !main_part.is_empty() {
-        rel.alias = Some(main_part.to_string());
-    }
-    Ok(())
-}
-
-fn parse_rel_types(input: &str, rel: &mut RelationshipPattern) {
-    for t in input.split('|') {
-        if !t.trim().is_empty() {
-            rel.types.push(t.trim().to_string());
-        }
-    }
-}
-
-/// Parses variable-length range after `*`.
-fn parse_range(input: &str) -> Option<(u32, u32)> {
-    let input = input.trim();
-    if input.is_empty() {
-        return Some((1, u32::MAX));
-    }
-    if let Some(d) = input.find("..") {
-        Some((
-            input[..d].trim().parse().unwrap_or(1),
-            input[d + 2..].trim().parse().unwrap_or(u32::MAX),
-        ))
-    } else {
-        input.parse::<u32>().ok().map(|n| (n, n))
-    }
-}
-
 /// Splits `inner` at the first `{...}` block, returning `(text_before_brace, parsed_properties)`.
 ///
 /// If no braces are present, returns `(inner, empty_map)`.
 /// `error_context` is used in brace-mismatch error messages (e.g. "node pattern").
-fn split_with_braces<'a>(
+pub(super) fn split_with_braces<'a>(
     inner: &'a str,
     error_source: &str,
     error_context: &str,
@@ -308,95 +101,28 @@ fn parse_properties(input: &str) -> Result<HashMap<String, Value>, ParseError> {
         if ch == '\'' {
             in_string = !in_string;
         } else if ch == ',' && !in_string {
-            let prop = input[start..i].trim();
-            if let Some(c) = prop.find(':') {
-                props.insert(
-                    prop[..c].trim().to_string(),
-                    parse_value(prop[c + 1..].trim())?,
-                );
-            }
+            insert_property(input[start..i].trim(), &mut props)?;
             start = i + 1;
         }
     }
 
-    let prop = input[start..].trim();
+    insert_property(input[start..].trim(), &mut props)?;
+    Ok(props)
+}
+
+/// Parses a single `key: value` property and inserts it into the map.
+fn insert_property(prop: &str, props: &mut HashMap<String, Value>) -> Result<(), ParseError> {
     if let Some(c) = prop.find(':') {
         props.insert(
             prop[..c].trim().to_string(),
             parse_value(prop[c + 1..].trim())?,
         );
     }
-
-    Ok(props)
+    Ok(())
 }
 
 fn parse_value(input: &str) -> Result<Value, ParseError> {
     parse_value_from_str(input)
-}
-
-fn parse_pattern_list(input: &str) -> Result<Vec<GraphPattern>, ParseError> {
-    let (name, ps) = if let Some(eq) = input.find('=') {
-        let b = input[..eq].trim();
-        if b.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            (Some(b.to_string()), input[eq + 1..].trim())
-        } else {
-            (None, input)
-        }
-    } else {
-        (None, input)
-    };
-    let mut pattern = parse_path_pattern(ps)?;
-    pattern.name = name;
-    Ok(vec![pattern])
-}
-
-fn parse_path_pattern(input: &str) -> Result<GraphPattern, ParseError> {
-    let mut nodes = Vec::new();
-    let mut rels = Vec::new();
-    let mut pos = 0;
-    let input = input.trim();
-    while pos < input.len() {
-        if let Some(s) = input[pos..].find('(') {
-            let abs = pos + s;
-            let end = find_matching_paren(input, abs)?;
-            nodes.push(parse_node_pattern(&input[abs..=end])?);
-            pos = end + 1;
-            if pos < input.len() {
-                let rem = &input[pos..];
-                if rem.starts_with('-') || rem.starts_with('<') {
-                    if let Some(np) = rem.find('(') {
-                        rels.push(parse_relationship_pattern(&rem[..np])?);
-                        pos += np;
-                    }
-                }
-            }
-        } else {
-            break;
-        }
-    }
-    Ok(GraphPattern {
-        name: None,
-        nodes,
-        relationships: rels,
-    })
-}
-
-fn find_matching_paren(input: &str, start: usize) -> Result<usize, ParseError> {
-    let mut d = 0;
-    // Use char_indices() to get byte indices, not character indices
-    for (i, c) in input[start..].char_indices() {
-        match c {
-            '(' => d += 1,
-            ')' => {
-                d -= 1;
-                if d == 0 {
-                    return Ok(start + i);
-                }
-            }
-            _ => {}
-        }
-    }
-    Err(ParseError::syntax(start, input, "Expected ')'"))
 }
 
 /// Operator tokens to scan for, ordered longest-first to avoid ambiguous matches.
@@ -471,7 +197,7 @@ fn parse_return_clause(input: &str) -> ReturnClause {
 
 /// Finds a keyword in the input string, respecting string literal boundaries.
 /// Uses ASCII-only case-insensitive matching to avoid Unicode index issues.
-fn find_keyword(input: &str, kw: &str) -> Option<usize> {
+pub(super) fn find_keyword(input: &str, kw: &str) -> Option<usize> {
     scan_outside_quotes(input, kw, true)
 }
 
@@ -493,9 +219,7 @@ fn scan_outside_quotes(input: &str, needle: &str, word_boundary: bool) -> Option
     let mut i = 0;
 
     while i <= bytes.len() - needle_len {
-        let b = bytes[i];
-
-        if b == b'\'' {
+        if bytes[i] == b'\'' {
             in_string = !in_string;
             i += 1;
             continue;
@@ -506,32 +230,45 @@ fn scan_outside_quotes(input: &str, needle: &str, word_boundary: bool) -> Option
             continue;
         }
 
-        let matched = if word_boundary {
-            bytes[i..i + needle_len]
-                .iter()
-                .zip(needle_bytes.iter())
-                .all(|(a, b)| a.eq_ignore_ascii_case(b))
-        } else {
-            &bytes[i..i + needle_len] == needle_bytes
-        };
-
-        if matched {
-            if word_boundary {
-                let before_ok =
-                    i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
-                let after_ok = i + needle_len >= bytes.len()
-                    || !(bytes[i + needle_len].is_ascii_alphanumeric()
-                        || bytes[i + needle_len] == b'_');
-                if before_ok && after_ok {
-                    return Some(i);
-                }
-            } else {
-                return Some(i);
-            }
+        if needle_matches_at(bytes, needle_bytes, i, word_boundary) {
+            return Some(i);
         }
 
         i += 1;
     }
 
     None
+}
+
+/// Checks whether `needle` matches `bytes` at position `pos`.
+///
+/// When `word_boundary` is true, the match is case-insensitive and must be
+/// surrounded by non-word characters. Otherwise, exact byte comparison is used.
+fn needle_matches_at(bytes: &[u8], needle: &[u8], pos: usize, word_boundary: bool) -> bool {
+    let needle_len = needle.len();
+    let content_matches = if word_boundary {
+        bytes[pos..pos + needle_len]
+            .iter()
+            .zip(needle.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    } else {
+        &bytes[pos..pos + needle_len] == needle
+    };
+
+    if !content_matches {
+        return false;
+    }
+
+    if !word_boundary {
+        return true;
+    }
+
+    let before_ok = pos == 0 || !is_word_byte(bytes[pos - 1]);
+    let after_ok = pos + needle_len >= bytes.len() || !is_word_byte(bytes[pos + needle_len]);
+    before_ok && after_ok
+}
+
+/// Returns true if `b` is an ASCII alphanumeric byte or underscore.
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }

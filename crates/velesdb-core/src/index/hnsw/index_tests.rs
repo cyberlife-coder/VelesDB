@@ -1772,10 +1772,12 @@ fn test_search_brute_force_gpu_fallback_to_none_without_gpu() {
     let query = vec![0.5; 64];
 
     // Should not panic, returns Ok(None) if GPU unavailable
-    let _result = index.search_brute_force_gpu(&query, 5).unwrap();
+    let result = index.search_brute_force_gpu(&query, 5).unwrap();
 
     #[cfg(not(feature = "gpu"))]
-    assert!(_result.is_none(), "Should return None without GPU feature");
+    assert!(result.is_none(), "Should return None without GPU feature");
+    #[cfg(feature = "gpu")]
+    let _ = result;
 }
 
 #[test]

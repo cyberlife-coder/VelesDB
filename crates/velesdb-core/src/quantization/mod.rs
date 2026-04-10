@@ -19,6 +19,8 @@ pub(crate) mod codec_helpers;
 mod pq;
 pub(crate) mod pq_kmeans;
 pub(crate) mod pq_opq;
+#[cfg(feature = "persistence")]
+mod pq_persistence;
 mod rabitq;
 pub(crate) mod rabitq_store;
 mod scalar;

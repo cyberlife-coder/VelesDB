@@ -12,7 +12,7 @@
 //! No separate schema-version header is needed because the per-entry
 //! marker already encodes the wire format.
 
-use super::log_payload::{
+use super::log_payload_io::{
     compute_delete_crc, compute_store_crc, CRC_DELETE_MARKER, CRC_STORE_MARKER,
     LEGACY_DELETE_MARKER, LEGACY_STORE_MARKER,
 };

@@ -25,6 +25,7 @@ pub(crate) mod direct_writer;
 mod index;
 pub mod native;
 pub mod native_index;
+mod native_index_io;
 #[cfg(test)]
 mod native_index_tests;
 mod native_inner;

@@ -131,6 +131,11 @@ exclude_paths:
   # mmap capacity growth — MmapMut::map_mut after file resize (file was set_len'd
   # to new_len before remapping, ensuring bounds are valid).
   - "crates/velesdb-core/src/storage/mmap_capacity.rs"
+  # Contiguous resize — dealloc/realloc logic extracted from contiguous_ops.rs
+  # during Wave 5 refactor (NLOC compliance). All unsafe blocks preserve the
+  # original // SAFETY: comments documenting layout alignment, ownership,
+  # and non-overlapping invariants. Miri CI covers both files.
+  - "crates/velesdb-core/src/contiguous_resize.rs"
 
 # ---------------------------------------------------------------------------
 # Per-engine exclusions — targeted suppression without losing other checks
@@ -288,6 +293,36 @@ engines:
       # match_exec/mod.rs and crud.rs false positives above.
       - "crates/velesdb-core/src/velesql/parser/select/clause_from_join.rs"
 
+      # --- Files extracted during Wave 1-5 NLOC refactors ---
+      # These files host functions that were previously living in excluded
+      # parent files. The complexity is inherent (parser match trees, geo
+      # filtering, bulk import orchestration) and was accepted in the
+      # original locations. Moving them triggered fresh "Added" issues in
+      # Codacy despite zero net complexity change.
+
+      # ColumnStore geo filters — extracted from filter.rs (already excluded).
+      # filter_geo_bbox iterates through coordinate tuples with short-circuit
+      # bounding-box checks; the complexity reflects the 4-corner geometry test.
+      - "crates/velesdb-core/src/column_store/filter_geo.rs"
+
+      # VelesQL specialized condition parsers — extracted from conditions.rs
+      # (already excluded). parse_similarity_expr / parse_geo_distance_expr /
+      # parse_geo_bbox_expr are pest grammar handlers whose CC comes from the
+      # match arms over the grammar rule variants; splitting fragments the
+      # parser surface.
+      - "crates/velesdb-core/src/velesql/parser/conditions_specialized.rs"
+
+      # VelesQL MATCH pattern parser — extracted from match parsing module.
+      # parse_path_pattern walks the pest pair tree for node/edge alternation
+      # with greedy consumption; CC reflects the grammar shape.
+      - "crates/velesdb-core/src/velesql/parser/match_patterns.rs"
+
+      # Bulk import pipeline — extracted from crud_bulk.rs (already covered
+      # by crud.rs exclusion). upsert_bulk_from_raw orchestrates raw->typed
+      # conversion + batched WAL sync + HNSW deferred insert in a single
+      # pipeline; the NLOC reflects the sequential I/O phases.
+      - "crates/velesdb-core/src/collection/core/bulk_import.rs"
+
   opengrep:
     exclude_paths:
       # Integration memory modules — random.randint used for session-scoped
@@ -308,6 +343,10 @@ engines:
       # mmap_capacity.rs: MmapMut::map_mut after file resize (file was set_len'd
       # to new_len before remapping, ensuring bounds are valid).
       - "crates/velesdb-core/src/storage/mmap_capacity.rs"
+      # contiguous_resize.rs: dealloc/realloc path extracted from contiguous_ops.rs
+      # during Wave 5 NLOC refactor. All unsafe blocks carry // SAFETY: comments
+      # documenting layout alignment, ownership, and non-overlapping invariants.
+      - "crates/velesdb-core/src/contiguous_resize.rs"
       # contains_text_search in LangChain/LlamaIndex integrations — opengrep's
       # taint analysis cannot track sanitization across Python function calls.
       # All three user-supplied parameters are sanitized before query construction:
