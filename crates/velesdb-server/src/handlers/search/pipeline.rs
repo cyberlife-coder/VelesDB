@@ -246,6 +246,68 @@ pub(crate) fn execute_dense_search(
     Ok(result)
 }
 
+/// Search mode classification used by [`execute_search_request`] to
+/// dispatch to the appropriate search backend.
+///
+/// The variants enumerate the three legitimate combinations of
+/// dense and sparse query payloads on a `SearchRequest`:
+/// - `Hybrid` : both a dense vector and a sparse vector are present.
+/// - `DenseOnly` : only a dense vector is present.
+/// - `SparseOnly` : only a sparse vector is present.
+///
+/// The "neither" case is rejected upfront with a 400 Bad Request,
+/// so the enum does not carry a fallback variant.
+///
+/// # Exhaustiveness guarantee
+///
+/// Both [`SearchMode::classify`] and the `match` dispatch in
+/// [`execute_search_request`] are exhaustive over this enum. Adding
+/// a new search mode (e.g. a future `HybridLexical` combining
+/// dense + BM25 + sparse) will trigger a compile error at both
+/// sites instead of silently falling through to the legacy
+/// dense-only code path — this is the audit A P1 finding S2-NEW-08
+/// that motivated the refactor from the previous if-let chain.
+enum SearchMode<'a> {
+    /// Both dense and sparse vectors are present — route to the
+    /// hybrid fusion backend.
+    Hybrid {
+        sparse: &'a velesdb_core::index::sparse::SparseVector,
+    },
+    /// Only a dense vector is present.
+    DenseOnly,
+    /// Only a sparse vector is present.
+    SparseOnly {
+        sparse: &'a velesdb_core::index::sparse::SparseVector,
+    },
+}
+
+impl<'a> SearchMode<'a> {
+    /// Classify a request by its dense/sparse payload presence.
+    ///
+    /// Returns a 400 Bad Request when neither is provided — the
+    /// only invalid state. All three legitimate combinations map
+    /// to a corresponding [`SearchMode`] variant.
+    #[allow(clippy::result_large_err)]
+    fn classify(
+        has_dense: bool,
+        sparse: Option<&'a velesdb_core::index::sparse::SparseVector>,
+    ) -> Result<Self, axum::response::Response> {
+        match (has_dense, sparse) {
+            (true, Some(s)) => Ok(Self::Hybrid { sparse: s }),
+            (true, None) => Ok(Self::DenseOnly),
+            (false, Some(s)) => Ok(Self::SparseOnly { sparse: s }),
+            (false, None) => Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Either 'vector' or 'sparse_vector' must be provided".to_string(),
+                    code: None,
+                }),
+            )
+                .into_response()),
+        }
+    }
+}
+
 /// Runs the full search pipeline (dense, sparse, or hybrid) based on
 /// `SearchRequest` fields. Returns search results or an error response.
 #[allow(clippy::result_large_err)]
@@ -257,40 +319,21 @@ pub(crate) fn execute_search_request(
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
     let sparse_vec = resolve_sparse_input(req)?;
     let has_dense = !req.vector.is_empty();
-    let has_sparse = sparse_vec.is_some();
-
-    if !has_dense && !has_sparse {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Either 'vector' or 'sparse_vector' must be provided".to_string(),
-                code: None,
-            }),
-        )
-            .into_response());
-    }
 
     let index_name = req
         .sparse_index
         .as_deref()
         .unwrap_or(DEFAULT_SPARSE_INDEX_NAME);
 
-    // Hybrid: both dense and sparse
-    if has_dense {
-        if let Some(sparse_query) = sparse_vec {
-            return execute_hybrid_sparse(state, name, collection, req, &sparse_query, index_name);
+    match SearchMode::classify(has_dense, sparse_vec.as_ref())? {
+        SearchMode::Hybrid { sparse } => {
+            execute_hybrid_sparse(state, name, collection, req, sparse, index_name)
         }
-        // Dense-only
-        return execute_dense_search(state, name, collection, req);
+        SearchMode::DenseOnly => execute_dense_search(state, name, collection, req),
+        SearchMode::SparseOnly { sparse } => {
+            Ok(collection.sparse_search(sparse, req.top_k, index_name))
+        }
     }
-
-    // Sparse-only
-    if let Some(sparse_query) = sparse_vec {
-        return Ok(collection.sparse_search(&sparse_query, req.top_k, index_name));
-    }
-
-    // Dense-only (fallback — should not reach here given earlier validation)
-    execute_dense_search(state, name, collection, req)
 }
 
 /// Hybrid dense+sparse search path with dimension validation and fusion.
