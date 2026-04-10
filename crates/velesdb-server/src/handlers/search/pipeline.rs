@@ -540,6 +540,27 @@ where
 /// the per-request timeout elapses before the blocking worker finishes.
 pub(crate) struct TimeoutElapsed;
 
+/// Executes a synchronous search closure on a `spawn_blocking` worker,
+/// without a timeout budget. This is the lighter-weight sibling of
+/// [`run_search_with_optional_timeout`] used by handlers that do not
+/// currently expose a per-request timeout (text search, hybrid
+/// search, batch search) but still need to keep CPU-bound work off
+/// the async runtime.
+///
+/// Finding F-01 of the pre-seed audit (spawn_blocking sweep).
+#[allow(clippy::result_large_err)]
+pub(crate) async fn run_blocking_search<F>(
+    work: F,
+) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response>
+where
+    F: FnOnce()
+            -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response>
+        + Send
+        + 'static,
+{
+    unwrap_join(tokio::task::spawn_blocking(work).await)
+}
+
 /// Converts a `JoinHandle` result into the same shape expected by
 /// callers of the synchronous search pipeline. A panic or cancellation
 /// of the blocking task is reported as a 500 Internal Server Error.

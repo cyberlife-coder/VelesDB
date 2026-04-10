@@ -21,8 +21,8 @@ use crate::AppState;
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 use pipeline::{
     execute_search_request, finish_search_ids_with_cb, finish_search_with_cb,
-    finish_search_with_status, parse_filter_or_400, run_search_with_optional_timeout,
-    timeout_response, validate_query_dimension,
+    finish_search_with_status, parse_filter_or_400, run_blocking_search,
+    run_search_with_optional_timeout, timeout_response, validate_query_dimension,
 };
 
 #[allow(unused_imports)]
@@ -160,7 +160,7 @@ fn execute_search_with_cb_owned(
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
+#[allow(clippy::result_large_err)]
 pub async fn text_search(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -174,14 +174,34 @@ pub async fn text_search(
 
     let start = std::time::Instant::now();
 
-    let search_result = if let Some(ref filter_json) = req.filter {
-        let filter = match parse_filter_or_400(filter_json, &state.onboarding_metrics) {
-            Ok(f) => f,
-            Err(resp) => return resp,
+    // F-01 / F-03 sweep: the BM25 text search is CPU-bound and was
+    // previously executed on the async runtime thread. Move it to a
+    // blocking worker so concurrent requests do not stall.
+    let filter_json = req.filter.clone();
+    let query = req.query.clone();
+    let top_k = req.top_k;
+    let collection_for_work = collection.clone();
+    let onboarding_for_work = Arc::clone(&state);
+
+    let work_result = run_blocking_search(move || {
+        let filter = match filter_json.as_ref() {
+            Some(fj) => match parse_filter_or_400(fj, &onboarding_for_work.onboarding_metrics) {
+                Ok(f) => Some(f),
+                Err(resp) => return Err(resp),
+            },
+            None => None,
         };
-        collection.text_search_with_filter(&req.query, req.top_k, &filter)
-    } else {
-        collection.text_search(&req.query, req.top_k)
+        Ok(if let Some(f) = filter {
+            collection_for_work.text_search_with_filter(&query, top_k, &f)
+        } else {
+            collection_for_work.text_search(&query, top_k)
+        })
+    })
+    .await;
+
+    let search_result = match work_result {
+        Ok(inner) => inner,
+        Err(resp) => return resp,
     };
 
     finish_search_with_status(
@@ -209,7 +229,7 @@ pub async fn text_search(
         (status = 400, description = "Invalid request", body = crate::types::ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
+#[allow(clippy::result_large_err)]
 pub async fn hybrid_search(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -228,20 +248,45 @@ pub async fn hybrid_search(
         return (StatusCode::BAD_REQUEST, Json(error)).into_response();
     }
 
-    let search_result = if let Some(ref filter_json) = req.filter {
-        let filter = match parse_filter_or_400(filter_json, &state.onboarding_metrics) {
-            Ok(f) => f,
-            Err(resp) => return resp,
+    // F-01 / F-03 sweep: the hybrid BM25 + dense path is CPU-bound
+    // (filter parsing, text index lookup, dense HNSW search, fusion).
+    // Move the whole closure to a blocking worker so the async
+    // runtime stays responsive.
+    let collection_for_work = collection.clone();
+    let state_for_work = Arc::clone(&state);
+    let HybridSearchRequest {
+        vector,
+        query,
+        top_k,
+        vector_weight,
+        filter,
+    } = req;
+
+    let work_result = run_blocking_search(move || {
+        let filter = match filter.as_ref() {
+            Some(fj) => match parse_filter_or_400(fj, &state_for_work.onboarding_metrics) {
+                Ok(f) => Some(f),
+                Err(resp) => return Err(resp),
+            },
+            None => None,
         };
-        collection.hybrid_search_with_filter(
-            &req.vector,
-            &req.query,
-            req.top_k,
-            Some(req.vector_weight),
-            &filter,
-        )
-    } else {
-        collection.hybrid_search(&req.vector, &req.query, req.top_k, Some(req.vector_weight))
+        Ok(if let Some(f) = filter {
+            collection_for_work.hybrid_search_with_filter(
+                &vector,
+                &query,
+                top_k,
+                Some(vector_weight),
+                &f,
+            )
+        } else {
+            collection_for_work.hybrid_search(&vector, &query, top_k, Some(vector_weight))
+        })
+    })
+    .await;
+
+    let search_result = match work_result {
+        Ok(inner) => inner,
+        Err(resp) => return resp,
     };
 
     finish_search_with_cb(&state, &name, start, &collection, search_result)
