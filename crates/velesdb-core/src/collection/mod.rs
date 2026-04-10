@@ -15,9 +15,6 @@
 //! - Async operations via `spawn_blocking` (EPIC-034/US-005)
 #![allow(clippy::doc_markdown)] // Collection docs contain many API/algorithm identifiers.
 
-pub mod async_ops;
-#[cfg(test)]
-mod async_ops_tests;
 pub mod auto_reindex;
 mod collection_config;
 mod core;

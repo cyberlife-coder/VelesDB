@@ -20,7 +20,6 @@
 // Core modules
 // ============================================================================
 pub(crate) mod auto_ef;
-mod backend;
 pub(crate) mod direct_writer;
 mod index;
 pub mod native;
@@ -64,10 +63,6 @@ pub use params::{HnswParams, SearchQuality};
 
 /// Main HNSW index for vector search operations.
 pub use index::HnswIndex;
-
-/// HNSW backend trait for custom implementations.
-#[allow(unused_imports)]
-pub use backend::HnswBackend;
 
 /// Native HNSW index with direct access to underlying graph.
 pub use native_index::NativeHnswIndex;
