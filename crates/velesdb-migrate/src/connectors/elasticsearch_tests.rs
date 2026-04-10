@@ -18,6 +18,50 @@ fn test_config() -> ElasticsearchConfig {
 }
 
 #[test]
+fn test_normalise_elasticsearch_metric_maps_dot_product_to_dot() {
+    // Elasticsearch dense_vector reports 'dot_product'; VelesDB core
+    // uses 'dot'. The mapping is what allows check_metric_fidelity
+    // to honestly compare an ES source against a core collection
+    // created with metric: "dot".
+    assert_eq!(
+        ElasticsearchConnector::normalise_elasticsearch_metric("dot_product"),
+        "dot"
+    );
+    assert_eq!(
+        ElasticsearchConnector::normalise_elasticsearch_metric("DOT_PRODUCT"),
+        "dot"
+    );
+}
+
+#[test]
+fn test_normalise_elasticsearch_metric_maps_l2_norm_to_euclidean() {
+    // 'l2_norm' is the ES identifier for squared-L2 distance.
+    assert_eq!(
+        ElasticsearchConnector::normalise_elasticsearch_metric("l2_norm"),
+        "euclidean"
+    );
+}
+
+#[test]
+fn test_normalise_elasticsearch_metric_lowercases_known_values() {
+    assert_eq!(
+        ElasticsearchConnector::normalise_elasticsearch_metric("Cosine"),
+        "cosine"
+    );
+}
+
+#[test]
+fn test_normalise_elasticsearch_metric_preserves_unknown_values() {
+    // max_inner_product is a valid ES similarity (8.11+) but not
+    // supported by VelesDB core — preserved verbatim so mismatch
+    // errors remain actionable.
+    assert_eq!(
+        ElasticsearchConnector::normalise_elasticsearch_metric("max_inner_product"),
+        "max_inner_product"
+    );
+}
+
+#[test]
 fn test_elasticsearch_config_defaults() {
     let json = r#"{"url":"http://localhost:9200","index":"vectors"}"#;
     let config: ElasticsearchConfig = serde_json::from_str(json).unwrap();
