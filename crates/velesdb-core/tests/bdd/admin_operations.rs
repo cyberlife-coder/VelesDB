@@ -157,11 +157,11 @@ fn test_truncate_then_insert() {
 }
 
 // ============================================================================
-// ALTER COLLECTION — nominal
+// ALTER COLLECTION — honest rejection (Sprint 0 P0: stop the feature lie)
 // ============================================================================
 
 #[test]
-fn test_alter_collection_set_option() {
+fn test_alter_collection_set_option_is_honestly_rejected() {
     let (_dir, db) = create_test_db();
 
     execute_sql(
@@ -170,20 +170,22 @@ fn test_alter_collection_set_option() {
     )
     .expect("create");
 
-    let results = execute_sql(&db, "ALTER COLLECTION alter_test SET (auto_reindex = true)")
-        .expect("ALTER COLLECTION should succeed");
+    // ALTER COLLECTION SET used to return a misleading "status: accepted"
+    // payload while silently discarding the requested value. The Sprint 0
+    // fix replaces this feature lie with an honest rejection that
+    // references the US-300 tracking ticket. A caller must now either
+    // accept the error or use the drop+create workaround.
+    let err = execute_sql(&db, "ALTER COLLECTION alter_test SET (auto_reindex = true)")
+        .expect_err("ALTER COLLECTION SET must now return an error");
 
-    // ALTER now returns one result per option with a warning payload
-    // explaining that the option is validated but not yet persisted (US-300).
-    assert_eq!(results.len(), 1, "ALTER returns one result per option");
-    let payload = results[0].point.payload.as_ref().expect("payload");
-    assert_eq!(payload["status"], "accepted");
+    let err_msg = err.to_string();
     assert!(
-        payload["warning"]
-            .as_str()
-            .expect("warning string")
-            .contains("US-300"),
-        "warning must reference the tracking ticket"
+        err_msg.contains("US-300"),
+        "error must reference US-300 tracking ticket, got: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("not yet implemented"),
+        "error must state feature is not implemented, got: {err_msg}"
     );
 }
 
