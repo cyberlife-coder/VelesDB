@@ -16,6 +16,25 @@ use velesdb_migrate::Pipeline;
 use wiremock::matchers::{body_partial_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// Starts a wiremock server and ensures the SSRF-hardened `validate_url`
+/// accepts the loopback URL issued by `MockServer` during the test run.
+///
+/// The production `validate_url` path rejects loopback and RFC 1918 hosts
+/// unless `VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS=1` is set (escape hatch
+/// for local development and integration tests). This helper sets the
+/// variable once per process — tests in this file run single-threaded
+/// under `cargo test -- --test-threads=1`, so there is no race.
+async fn start_mock_server() -> MockServer {
+    // SAFETY: set_var is `unsafe` on newer Rust editions because setting
+    // environment variables is not thread-safe. These integration tests
+    // run under `--test-threads=1`, so no other thread can observe an
+    // inconsistent state.
+    unsafe {
+        std::env::set_var("VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS", "1");
+    }
+    MockServer::start().await
+}
+
 fn write_json_source(file: &mut NamedTempFile, rows: &[serde_json::Value]) {
     file.as_file_mut().set_len(0).expect("truncate json source");
     file.as_file_mut()
@@ -313,7 +332,7 @@ async fn test_pipeline_workers_match_sequential_results_and_text_ids_stable() {
 
 #[tokio::test]
 async fn test_pipeline_qdrant_sparse_vectors_e2e() {
-    let mock_server = MockServer::start().await;
+    let mock_server = start_mock_server().await;
 
     let collection_info_body = json!({
         "result": {
@@ -421,7 +440,7 @@ async fn test_pipeline_qdrant_sparse_vectors_e2e() {
 /// key assertion: it proves the connector does not retry on server errors.
 #[tokio::test]
 async fn test_pipeline_qdrant_500_fails_pipeline() {
-    let mock_server = MockServer::start().await;
+    let mock_server = start_mock_server().await;
 
     let collection_info_body = json!({
         "result": {
@@ -490,7 +509,7 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
 /// `with_retry(RetryConfig::for_transient_errors())` (3 retries).
 #[tokio::test]
 async fn test_pipeline_qdrant_429_fails_pipeline() {
-    let mock_server = MockServer::start().await;
+    let mock_server = start_mock_server().await;
 
     let collection_info_body = json!({
         "result": {
@@ -563,7 +582,7 @@ async fn test_pipeline_qdrant_429_fails_pipeline() {
 /// No scroll mock is registered — the pipeline must abort before calling it.
 #[tokio::test]
 async fn test_pipeline_qdrant_schema_mismatch() {
-    let mock_server = MockServer::start().await;
+    let mock_server = start_mock_server().await;
 
     let collection_info_body = json!({
         "result": {
@@ -638,7 +657,7 @@ async fn test_pipeline_qdrant_schema_mismatch() {
 
 #[tokio::test]
 async fn test_pipeline_pinecone_sparse_vectors_e2e() {
-    let mock_server = MockServer::start().await;
+    let mock_server = start_mock_server().await;
 
     // Extract host:port from mock server URI (strip the "http://" scheme).
     let mock_host = mock_server
@@ -742,7 +761,7 @@ async fn test_pipeline_pinecone_sparse_vectors_e2e() {
 
 #[tokio::test]
 async fn test_pipeline_elasticsearch_e2e() {
-    let mock_server = MockServer::start().await;
+    let mock_server = start_mock_server().await;
     let destination = TempDir::new().expect("destination dir");
 
     // -- Mock: _count endpoint (separate path, no ordering concerns) --
@@ -877,7 +896,7 @@ async fn test_pipeline_elasticsearch_e2e() {
 
 #[tokio::test]
 async fn test_pipeline_qdrant_pagination_multi_page() {
-    let mock_server = MockServer::start().await;
+    let mock_server = start_mock_server().await;
 
     let collection_info_body = json!({
         "result": {
@@ -991,7 +1010,7 @@ async fn test_pipeline_qdrant_pagination_multi_page() {
 
 #[tokio::test]
 async fn test_pipeline_pinecone_pagination_multi_page() {
-    let mock_server = MockServer::start().await;
+    let mock_server = start_mock_server().await;
 
     let mock_host = mock_server
         .uri()
@@ -1123,7 +1142,7 @@ async fn test_pipeline_pinecone_pagination_multi_page() {
 
 #[tokio::test]
 async fn test_pipeline_supabase_e2e() {
-    let mock_server = MockServer::start().await;
+    let mock_server = start_mock_server().await;
     let destination = TempDir::new().expect("destination dir");
 
     // Mock 1: HEAD — count via content-range (separate method, no conflict).
