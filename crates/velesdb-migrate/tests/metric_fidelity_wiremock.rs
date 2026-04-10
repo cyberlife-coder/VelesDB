@@ -20,6 +20,8 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
+#[allow(deprecated)]
+use velesdb_migrate::config::PineconeConfig;
 use velesdb_migrate::config::{MilvusConfig, QdrantConfig, SourceConfig, WeaviateConfig};
 use velesdb_migrate::connectors::create_connector;
 use velesdb_migrate::connectors::elasticsearch::ElasticsearchConfig;
@@ -279,6 +281,97 @@ async fn qdrant_schema_preserves_manhattan_verbatim() {
         "Manhattan must be preserved verbatim, got {:?}",
         schema.metric
     );
+}
+
+// ---------------------------------------------------------------------------
+// Pinecone
+// ---------------------------------------------------------------------------
+
+/// Helper: mount the wiremock routes Pinecone's connect() +
+/// get_schema() hit — GET /indexes/{name} for the describe, and
+/// POST /describe_index_stats for the vector count. Both land on
+/// the same base URL when the config sets base_url to the mock.
+async fn mount_pinecone_routes(mock: &MockServer, describe_fixture: &str) {
+    Mock::given(method("GET"))
+        .and(path("/indexes/test-index"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(load_fixture(describe_fixture)))
+        .mount(mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/describe_index_stats"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(load_fixture("pinecone_stats.json")),
+        )
+        .mount(mock)
+        .await;
+}
+
+#[allow(deprecated)]
+fn pinecone_config(base_url: String) -> PineconeConfig {
+    PineconeConfig {
+        api_key: "test-api-key".to_string(),
+        environment: String::new(),
+        index: "test-index".to_string(),
+        namespace: None,
+        base_url: Some(base_url),
+    }
+}
+
+/// GIVEN a Pinecone index with `metric = "cosine"`,
+/// WHEN the connector runs connect() + get_schema(),
+/// THEN schema.metric must carry `"cosine"`.
+#[tokio::test]
+async fn pinecone_schema_has_cosine_metric() {
+    let mock = start_mock_server().await;
+    mount_pinecone_routes(&mock, "pinecone_describe_cosine.json").await;
+
+    let config = SourceConfig::Pinecone(pinecone_config(mock.uri()));
+
+    let mut connector = create_connector(&config).expect("create Pinecone connector");
+    connector.connect().await.expect("Pinecone connect");
+    let schema = connector.get_schema().await.expect("Pinecone get_schema");
+    assert_eq!(schema.metric.as_deref(), Some("cosine"));
+    assert_eq!(schema.dimension, 1536);
+    assert_eq!(schema.total_count, Some(5000));
+}
+
+/// GIVEN a Pinecone index with `metric = "dotproduct"`,
+/// WHEN extraction runs,
+/// THEN the metric must be normalised to `"dot"` (Pinecone's
+/// 'dotproduct' maps to VelesDB core 'dot').
+#[tokio::test]
+async fn pinecone_schema_normalises_dotproduct_to_dot() {
+    let mock = start_mock_server().await;
+    mount_pinecone_routes(&mock, "pinecone_describe_dotproduct.json").await;
+
+    let config = SourceConfig::Pinecone(pinecone_config(mock.uri()));
+
+    let mut connector = create_connector(&config).expect("create Pinecone connector");
+    connector.connect().await.expect("Pinecone connect");
+    let schema = connector.get_schema().await.expect("Pinecone get_schema");
+    assert_eq!(
+        schema.metric.as_deref(),
+        Some("dot"),
+        "Pinecone dotproduct must normalise to VelesDB 'dot'"
+    );
+}
+
+/// GIVEN a Pinecone index with `metric = "euclidean"`,
+/// WHEN extraction runs,
+/// THEN the metric must be lowercased to `"euclidean"` verbatim
+/// (Pinecone already uses the VelesDB core identifier).
+#[tokio::test]
+async fn pinecone_schema_passes_euclidean_through_unchanged() {
+    let mock = start_mock_server().await;
+    mount_pinecone_routes(&mock, "pinecone_describe_euclidean.json").await;
+
+    let config = SourceConfig::Pinecone(pinecone_config(mock.uri()));
+
+    let mut connector = create_connector(&config).expect("create Pinecone connector");
+    connector.connect().await.expect("Pinecone connect");
+    let schema = connector.get_schema().await.expect("Pinecone get_schema");
+    assert_eq!(schema.metric.as_deref(), Some("euclidean"));
 }
 
 // ---------------------------------------------------------------------------

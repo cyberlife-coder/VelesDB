@@ -1,0 +1,16 @@
+{
+  "dimension": 1536,
+  "host": "test-index-xxxxx.svc.us-east1-gcp.pinecone.io",
+  "metric": "cosine",
+  "name": "test-index",
+  "spec": {
+    "serverless": {
+      "cloud": "aws",
+      "region": "us-east-1"
+    }
+  },
+  "status": {
+    "ready": true,
+    "state": "Ready"
+  }
+}
