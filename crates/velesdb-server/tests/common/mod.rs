@@ -14,9 +14,9 @@ use velesdb_server::{
     auth::{auth_middleware, AuthState},
     batch_search, collection_sanity, create_collection, delete_collection, delete_point, explain,
     get_collection, get_collection_config, get_edges, get_node_degree, get_point, health_check,
-    hybrid_search, list_collections, multi_query_search, query, readiness_check, search,
-    search_ids, stream_upsert_points, text_search, traverse_graph, upsert_points, AppState,
-    OnboardingMetrics,
+    hybrid_search, list_collections, multi_query_search, query, readiness_check, rebuild_index,
+    search, search_ids, stream_upsert_points, text_search, traverse_graph, upsert_points,
+    AppState, OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -32,6 +32,7 @@ fn base_routes() -> Router<Arc<AppState>> {
             get(get_collection).delete(delete_collection),
         )
         .route("/collections/{name}/config", get(get_collection_config))
+        .route("/collections/{name}/index/rebuild", post(rebuild_index))
         .route("/collections/{name}/sanity", get(collection_sanity))
         .route("/collections/{name}/points", post(upsert_points))
         .route(

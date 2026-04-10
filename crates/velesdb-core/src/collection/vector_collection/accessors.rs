@@ -77,6 +77,21 @@ impl VectorCollection {
         self.inner.config()
     }
 
+    /// Rebuilds the HNSW index of this collection from the vector
+    /// storage, reclaiming memory occupied by tombstoned entries.
+    /// Returns the number of entries compacted.
+    ///
+    /// Used by the server admin endpoint
+    /// `POST /collections/{name}/index/rebuild` (finding F-21).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the vacuum fails (for instance, when
+    /// vector storage is disabled on the HNSW index).
+    pub fn rebuild_index(&self) -> crate::error::Result<usize> {
+        self.inner.vacuum_hnsw_index()
+    }
+
     /// Applies post-creation overrides to the advanced configuration
     /// fields (`pq_rescore_oversampling`, `deferred_indexing`,
     /// `async_index_builder`) and persists the updated `config.json`.

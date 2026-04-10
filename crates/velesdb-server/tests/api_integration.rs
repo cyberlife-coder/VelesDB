@@ -4120,6 +4120,113 @@ async fn test_create_graph_collection_with_invalid_schema_returns_400() {
     );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// F-21: POST /collections/{name}/index/rebuild — HNSW vacuum endpoint
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Nominal: `POST /collections/{name}/index/rebuild` on a populated
+/// vector collection must return 200 with `compacted_entries` in the
+/// body. For a collection that has not had any deletions, the compacted
+/// count is expected to be 0 — the important contract is that the
+/// endpoint succeeds and surfaces the count honestly.
+#[tokio::test]
+async fn test_rebuild_index_on_populated_collection_returns_200() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Seed a small collection with three points.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "rebuild_ok",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rebuild_ok/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+                            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+                            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0]}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build upsert request"),
+        )
+        .await
+        .expect("test: upsert request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Rebuild the index.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rebuild_ok/index/rebuild")
+                .body(Body::empty())
+                .expect("test: build rebuild request"),
+        )
+        .await
+        .expect("test: rebuild request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+
+    assert_eq!(json["message"], "Index rebuilt");
+    assert_eq!(json["collection"], "rebuild_ok");
+    assert!(
+        json["compacted_entries"].as_u64().is_some(),
+        "compacted_entries must be a number, got: {}",
+        json["compacted_entries"]
+    );
+}
+
+/// Negative: `POST /collections/{name}/index/rebuild` on a missing
+/// collection must return 404.
+#[tokio::test]
+async fn test_rebuild_index_on_missing_collection_returns_404() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/never_created/index/rebuild")
+                .body(Body::empty())
+                .expect("test: build rebuild request"),
+        )
+        .await
+        .expect("test: rebuild request failed");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 /// Type-mismatch: a vector collection already exists with the target
 /// name, but the caller targets a graph endpoint. The handler must
 /// return 409 Conflict (already the case before F-05, but we lock it

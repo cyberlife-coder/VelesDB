@@ -270,6 +270,25 @@ impl Collection {
         Ok(())
     }
 
+    /// Vacuums the HNSW index of this collection, rebuilding the
+    /// graph from the current vector storage and reclaiming memory
+    /// occupied by tombstoned entries. Returns the number of entries
+    /// compacted.
+    ///
+    /// This is the collection-level wrapper around
+    /// [`HnswIndex::vacuum`] used by the server admin endpoint
+    /// `POST /collections/{name}/index/rebuild` (finding F-21).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying HNSW vacuum fails (for
+    /// instance, when vector storage is disabled on the index).
+    pub(crate) fn vacuum_hnsw_index(&self) -> Result<usize> {
+        self.index
+            .vacuum()
+            .map_err(|e| Error::Index(format!("HNSW vacuum failed: {e}")))
+    }
+
     /// Applies post-creation overrides to the advanced configuration
     /// fields and persists the updated `config.json` atomically.
     ///
