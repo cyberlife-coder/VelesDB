@@ -70,32 +70,6 @@ Denies the add_edge command without any pre-configured scope.
 <tr>
 <td>
 
-`velesdb:allow-analyze`
-
-</td>
-<td>
-
-Enables the analyze command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`velesdb:deny-analyze`
-
-</td>
-<td>
-
-Denies the analyze command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `velesdb:allow-batch-search`
 
 </td>
@@ -271,32 +245,6 @@ Enables the drop_index command without any pre-configured scope.
 <td>
 
 Denies the drop_index command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`velesdb:allow-explain`
-
-</td>
-<td>
-
-Enables the explain command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`velesdb:deny-explain`
-
-</td>
-<td>
-
-Denies the explain command without any pre-configured scope.
 
 </td>
 </tr>
@@ -590,32 +538,6 @@ Denies the query command without any pre-configured scope.
 <tr>
 <td>
 
-`velesdb:allow-scroll`
-
-</td>
-<td>
-
-Enables the scroll command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`velesdb:deny-scroll`
-
-</td>
-<td>
-
-Denies the scroll command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `velesdb:allow-search`
 
 </td>
@@ -635,32 +557,6 @@ Enables the search command without any pre-configured scope.
 <td>
 
 Denies the search command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`velesdb:allow-search-with-quality`
-
-</td>
-<td>
-
-Enables the search_with_quality command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`velesdb:deny-search-with-quality`
-
-</td>
-<td>
-
-Denies the search_with_quality command without any pre-configured scope.
 
 </td>
 </tr>
