@@ -194,7 +194,7 @@ impl SourceConnector for RedisConnector {
             fields,
             vector_column: Some(self.config.vector_field.clone()),
             id_column: None,
-            // TODO(S2): parse DISTANCE_METRIC from FT.INFO response.
+            // TODO(MIGRATE-METRIC-REDIS): parse DISTANCE_METRIC from FT.INFO response.
             metric: None,
         });
         self.connection = Some(Arc::new(Mutex::new(con)));
