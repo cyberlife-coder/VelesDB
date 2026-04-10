@@ -361,6 +361,51 @@ class TestQueryEdgeCases:
         assert excinfo.value.capability == "search_with_filter"
         # Ensure the remediation hint is propagated to the error message.
         assert "vector" in str(excinfo.value).lower()
+        # Backward compat: VelesDBCapabilityError must inherit from
+        # NotImplementedError so legacy catch blocks still work.
+        # Regression for Devin review finding on PR #583.
+        assert isinstance(excinfo.value, NotImplementedError)
+
+    def test_query_with_filter_error_still_catchable_as_not_implemented(self, temp_dir):
+        """Regression for PR #583 Devin review: the Sprint 1.5 switch
+        from raising a plain NotImplementedError to raising a typed
+        VelesDBCapabilityError must NOT break callers that use the
+        legacy `except NotImplementedError:` catch block. The typed
+        error inherits from NotImplementedError so both catches
+        work — the typed one enables branching on `capability`,
+        the legacy one remains semantically valid.
+        """
+        store = VelesDBVectorStore(path=temp_dir, collection_name="legacy-catch")
+
+        class _DenseOnlyCollection:
+            def search(self, vector, top_k=10):
+                return []
+
+        class _MockDb:
+            def __init__(self):
+                self.collection = None
+
+            def get_collection(self, _name):
+                return None
+
+            def create_collection(self, name, dimension, metric, storage_mode="full"):
+                self.collection = _DenseOnlyCollection()
+                return self.collection
+
+        store._db = _MockDb()
+        store._collection = None
+        store._dimension = None
+
+        query = VectorStoreQuery(
+            query_embedding=[0.1, 0.2, 0.3],
+            similarity_top_k=5,
+            filters=MetadataFilters(filters=[MetadataFilter(key="lang", value="en")]),
+        )
+        # Legacy catch block — must still work.
+        with pytest.raises(NotImplementedError) as excinfo:
+            store.query(query)
+        # And the exception should still be the typed subclass.
+        assert type(excinfo.value).__name__ == "VelesDBCapabilityError"
 
 
 # ---------------------------------------------------------------------------

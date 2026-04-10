@@ -1,15 +1,21 @@
 """Typed exceptions for the LlamaIndex VelesDB integration.
 
-Unlike the standard-library ``NotImplementedError``, the exceptions in
-this module are specific to the integration layer so callers (and
-integration test suites) can catch capability gaps surgically rather
-than reacting to the broad built-in hierarchy.
+The exceptions in this module are specific to the integration layer
+so callers (and integration test suites) can catch capability gaps
+surgically rather than reacting to the broad built-in hierarchy.
+
+Backward compatibility: :class:`VelesDBCapabilityError` inherits
+from :class:`NotImplementedError` (not :class:`RuntimeError`) so
+existing code that catches ``NotImplementedError`` — the exception
+the integration raised before Sprint 1.5 — continues to work
+without modification. New code should prefer the typed variant to
+access the :attr:`capability` attribute for introspection.
 """
 
 from __future__ import annotations
 
 
-class VelesDBCapabilityError(RuntimeError):
+class VelesDBCapabilityError(NotImplementedError):
     """Raised when the backing VelesDB collection does not expose a
     capability the LlamaIndex integration relies on.
 
@@ -19,6 +25,13 @@ class VelesDBCapabilityError(RuntimeError):
     message embeds a ``remediation`` hint explaining how the operator
     can restore the capability (typically by recreating the collection
     as a vector collection instead of a legacy type).
+
+    Inheritance: this exception derives from
+    :class:`NotImplementedError` so legacy code that uses
+    ``except NotImplementedError:`` still catches it. The previous
+    integration behaviour (before Sprint 1.5) raised a plain
+    ``NotImplementedError`` directly; the switch to a typed subclass
+    is a strict superset — no existing catch block breaks.
     """
 
     def __init__(self, capability: str, remediation: str = "") -> None:
