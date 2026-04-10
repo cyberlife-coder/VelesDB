@@ -1,20 +1,30 @@
-//! Web Worker support for heavy graph traversals (EPIC-053/US-005).
+//! Heuristic helpers for Web Worker offload decisions (EPIC-053/US-005).
 //!
-//! Provides infrastructure for offloading heavy graph operations to Web Workers,
-//! keeping the main thread responsive during long-running traversals.
+//! This module provides client-side heuristics only. It does **not** create,
+//! instantiate, or orchestrate Web Workers. No `postMessage` channel, no
+//! worker lifecycle, no `SharedArrayBuffer` transfer is implemented here.
+//!
+//! Callers that wish to offload traversal to a Web Worker are responsible
+//! for instantiating a JS `Worker`, serializing graph data, and dispatching
+//! messages. This module only exposes:
+//!
+//! - [`GraphWorkerConfig`] — configurable thresholds for offload decisions.
+//! - [`should_use_worker`] — threshold check based on node count and depth.
+//! - [`estimate_traversal_size`] — BFS frontier heuristic for progress UIs.
+//! - [`TraversalProgress`] — data class for progress reporting by callers.
 //!
 //! # Usage (JavaScript)
 //!
 //! ```javascript
 //! import { GraphWorkerConfig, should_use_worker } from 'velesdb-wasm';
 //!
-//! // Check if operation should use worker
+//! // Heuristic check only. Caller decides what to do with the result.
 //! if (should_use_worker(graphStore.node_count, maxDepth)) {
-//!   // Use web worker for heavy traversal
+//!   // Application code must create and manage the worker itself.
 //!   const worker = new Worker('./velesdb-graph-worker.js');
 //!   worker.postMessage({ type: 'traverse', ... });
 //! } else {
-//!   // Use synchronous traversal on main thread
+//!   // Synchronous traversal on main thread.
 //!   const results = graphStore.bfs_traverse(startNode, maxDepth, limit);
 //! }
 //! ```
@@ -22,19 +32,22 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-/// Configuration for Web Worker traversal decisions.
+/// Thresholds used by [`should_use_worker`] to recommend Web Worker offload.
+///
+/// This is a data-only configuration object. It does not allocate or start
+/// a Worker — the caller remains responsible for Worker lifecycle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 #[allow(clippy::unsafe_derive_deserialize)]
 pub struct GraphWorkerConfig {
-    /// Minimum node count to trigger worker offload.
+    /// Minimum node count at which offload is recommended.
     pub node_threshold: usize,
-    /// Minimum depth to trigger worker offload.
+    /// Minimum traversal depth at which offload is recommended.
     pub depth_threshold: usize,
-    /// Progress callback interval in milliseconds.
+    /// Suggested progress callback interval in milliseconds for the
+    /// caller's own worker implementation. This crate does not emit
+    /// progress events on its own.
     pub progress_interval_ms: u32,
-    /// Whether to use `SharedArrayBuffer` for result transfer (if available).
-    pub use_shared_buffer: bool,
 }
 
 #[wasm_bindgen]
@@ -45,25 +58,23 @@ impl GraphWorkerConfig {
         Self::default()
     }
 
-    /// Creates a configuration optimized for large graphs.
+    /// Returns thresholds tuned for large graphs.
     #[wasm_bindgen]
     pub fn for_large_graphs() -> Self {
         Self {
             node_threshold: 10_000,
             depth_threshold: 5,
             progress_interval_ms: 50,
-            use_shared_buffer: true,
         }
     }
 
-    /// Creates a configuration optimized for responsive UI.
+    /// Returns thresholds tuned for UI responsiveness on smaller graphs.
     #[wasm_bindgen]
     pub fn for_responsive_ui() -> Self {
         Self {
             node_threshold: 1_000,
             depth_threshold: 3,
             progress_interval_ms: 100,
-            use_shared_buffer: false,
         }
     }
 }
@@ -74,7 +85,6 @@ impl Default for GraphWorkerConfig {
             node_threshold: 5_000,
             depth_threshold: 4,
             progress_interval_ms: 100,
-            use_shared_buffer: false,
         }
     }
 }
@@ -143,65 +153,6 @@ pub fn should_use_worker(
 ) -> bool {
     let cfg = config.unwrap_or_default();
     node_count >= cfg.node_threshold || max_depth >= cfg.depth_threshold
-}
-
-/// Message types for worker communication.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub enum WorkerMessageType {
-    /// Initialize the worker with graph data.
-    Init,
-    /// Execute a BFS traversal.
-    TraverseBfs,
-    /// Execute a DFS traversal.
-    TraverseDfs,
-    /// Cancel the current operation.
-    Cancel,
-    /// Progress update from worker.
-    Progress,
-    /// Result from worker.
-    Result,
-    /// Error from worker.
-    Error,
-    /// Worker is ready.
-    Ready,
-}
-
-/// Message structure for worker communication.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct WorkerMessage {
-    /// Unique message ID for request/response correlation.
-    pub id: String,
-    /// Message type.
-    pub msg_type: WorkerMessageType,
-    /// Optional payload data.
-    pub payload: Option<serde_json::Value>,
-}
-
-#[allow(dead_code)]
-impl WorkerMessage {
-    /// Creates a new worker message.
-    pub fn new(id: impl Into<String>, msg_type: WorkerMessageType) -> Self {
-        Self {
-            id: id.into(),
-            msg_type,
-            payload: None,
-        }
-    }
-
-    /// Creates a message with payload.
-    pub fn with_payload(
-        id: impl Into<String>,
-        msg_type: WorkerMessageType,
-        payload: serde_json::Value,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            msg_type,
-            payload: Some(payload),
-        }
-    }
 }
 
 /// Estimates the number of nodes that will be visited during traversal.
@@ -290,17 +241,4 @@ mod tests {
         assert!(estimate_deep <= 1000);
     }
 
-    #[test]
-    fn test_worker_message_creation() {
-        let msg = WorkerMessage::new("123", WorkerMessageType::Init);
-        assert_eq!(msg.id, "123");
-        assert!(msg.payload.is_none());
-
-        let msg_with_payload = WorkerMessage::with_payload(
-            "456",
-            WorkerMessageType::TraverseBfs,
-            serde_json::json!({"start": 1, "depth": 3}),
-        );
-        assert!(msg_with_payload.payload.is_some());
-    }
 }
