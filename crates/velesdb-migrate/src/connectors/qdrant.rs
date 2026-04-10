@@ -355,10 +355,7 @@ mod tests {
 
     #[test]
     fn test_normalise_qdrant_metric_lowercases_known_values() {
-        assert_eq!(
-            QdrantConnector::normalise_qdrant_metric("Cosine"),
-            "cosine"
-        );
+        assert_eq!(QdrantConnector::normalise_qdrant_metric("Cosine"), "cosine");
         assert_eq!(QdrantConnector::normalise_qdrant_metric("Dot"), "dot");
     }
 

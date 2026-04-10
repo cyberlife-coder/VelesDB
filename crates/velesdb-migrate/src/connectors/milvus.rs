@@ -441,10 +441,7 @@ mod tests {
 
     #[test]
     fn test_normalise_milvus_metric_lowercases_known_values() {
-        assert_eq!(
-            MilvusConnector::normalise_milvus_metric("COSINE"),
-            "cosine"
-        );
+        assert_eq!(MilvusConnector::normalise_milvus_metric("COSINE"), "cosine");
         assert_eq!(
             MilvusConnector::normalise_milvus_metric("HAMMING"),
             "hamming"

@@ -436,7 +436,10 @@ mod tests {
     #[test]
     fn test_normalise_supabase_metric_accepts_short_aliases() {
         // Operators might also write the short pgvector aliases.
-        assert_eq!(SupabaseConnector::normalise_supabase_metric("l2"), "euclidean");
+        assert_eq!(
+            SupabaseConnector::normalise_supabase_metric("l2"),
+            "euclidean"
+        );
         assert_eq!(SupabaseConnector::normalise_supabase_metric("ip"), "dot");
     }
 

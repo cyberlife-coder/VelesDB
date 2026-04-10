@@ -396,10 +396,7 @@ mod tests {
             WeaviateConnector::normalise_weaviate_metric("Cosine"),
             "cosine"
         );
-        assert_eq!(
-            WeaviateConnector::normalise_weaviate_metric("Dot"),
-            "dot"
-        );
+        assert_eq!(WeaviateConnector::normalise_weaviate_metric("Dot"), "dot");
         assert_eq!(
             WeaviateConnector::normalise_weaviate_metric("Hamming"),
             "hamming"
