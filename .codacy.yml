@@ -106,9 +106,6 @@ exclude_paths:
   - "crates/velesdb-core/src/index/hnsw/index/mod.rs"
   - "crates/velesdb-core/src/index/hnsw/index/vacuum.rs"
   - "crates/velesdb-core/src/index/hnsw/vector_store.rs"
-  # Memory pool — MaybeUninit for arena-allocated graph nodes
-  # RAII-guarded with compile-time size assertions.
-  - "crates/velesdb-core/src/collection/graph/memory_pool/mod.rs"
   # SIMD NEON intrinsics (ARM equivalent of AVX2)
   - "crates/velesdb-core/src/simd_neon.rs"
   - "crates/velesdb-core/src/simd_neon_prefetch.rs"
@@ -184,11 +181,6 @@ engines:
       - "crates/velesdb-migrate/src/pipeline.rs"
       - "crates/velesdb-migrate/src/retry.rs"
 
-      # --- Graph algorithmic complexity (CART tree operations) ---
-      # Binary tree insert/remove with rebalancing — inherently recursive
-      # and branch-heavy. Covered by extensive unit tests.
-      - "crates/velesdb-core/src/collection/graph/cart/node/mod.rs"
-
       # --- MATCH executor (Lizard false positive: merges adjacent fns) ---
       # accept_traversal_hit is 30 NLOC / CC=3 but Lizard reports "70 lines"
       # by merging it with the preceding execute_for_start_nodes function.
@@ -223,14 +215,10 @@ engines:
       # --- GPU backend (sequential hardware init pipeline) ---
       - "crates/velesdb-core/src/gpu/**"
 
-      # --- CART adaptive radix tree nodes ---
-      - "crates/velesdb-core/src/collection/graph/cart/node/mod.rs"
-
       # --- Point deserialization (serde custom impl) ---
       - "crates/velesdb-core/src/point.rs"
 
       # --- Async streaming (tokio pipeline) ---
-      - "crates/velesdb-core/src/collection/async_ops.rs"
       - "crates/velesdb-core/src/collection/streaming/ingester.rs"
 
       # --- Graph traversal (BFS/DFS algorithms) ---
