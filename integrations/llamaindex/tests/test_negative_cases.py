@@ -320,7 +320,16 @@ class TestQueryEdgeCases:
         assert result.ids == []
 
     def test_query_with_filter_missing_search_with_filter_raises(self, temp_dir):
-        """search_with_filter absence on collection raises NotImplementedError."""
+        """search_with_filter absence on collection raises VelesDBCapabilityError.
+
+        Regression test for Sprint 1.5 item S1.5-04: the previous code
+        raised a plain NotImplementedError, which was generic and not
+        catchable by integration code that treats "method not wired"
+        as a distinct failure mode. The typed exception carries a
+        `capability` attribute so callers can branch on it.
+        """
+        from llamaindex_velesdb.errors import VelesDBCapabilityError
+
         store = VelesDBVectorStore(path=temp_dir, collection_name="missing-swf")
 
         class _DenseOnlyCollection:
@@ -347,8 +356,11 @@ class TestQueryEdgeCases:
             similarity_top_k=5,
             filters=MetadataFilters(filters=[MetadataFilter(key="lang", value="en")]),
         )
-        with pytest.raises(NotImplementedError, match="search_with_filter"):
+        with pytest.raises(VelesDBCapabilityError, match="search_with_filter") as excinfo:
             store.query(query)
+        assert excinfo.value.capability == "search_with_filter"
+        # Ensure the remediation hint is propagated to the error message.
+        assert "vector" in str(excinfo.value).lower()
 
 
 # ---------------------------------------------------------------------------
