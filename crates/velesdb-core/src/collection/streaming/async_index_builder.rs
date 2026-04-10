@@ -17,6 +17,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Configuration for the async index builder.
+///
+/// Legacy configurations persisted with a `sync_mode` field are
+/// accepted transparently: serde ignores unknown fields by default,
+/// so the value is dropped silently on load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsyncIndexBuilderConfig {
     /// Number of buffered vectors that triggers a build.
@@ -26,10 +30,6 @@ pub struct AsyncIndexBuilderConfig {
     /// Number of segments for parallel construction (default: `num_cpus`).
     #[serde(default)]
     pub segment_count: Option<usize>,
-
-    /// Synchronous mode — `enqueue` indexes immediately instead of buffering.
-    #[serde(default)]
-    pub sync_mode: bool,
 }
 
 fn default_merge_threshold() -> usize {
@@ -41,7 +41,6 @@ impl Default for AsyncIndexBuilderConfig {
         Self {
             merge_threshold: default_merge_threshold(),
             segment_count: None,
-            sync_mode: false,
         }
     }
 }

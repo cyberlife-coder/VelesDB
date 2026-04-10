@@ -240,5 +240,4 @@ mod tests {
         let estimate_deep = estimate_traversal_size(1000, 3000, 5);
         assert!(estimate_deep <= 1000);
     }
-
 }

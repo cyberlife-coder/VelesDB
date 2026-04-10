@@ -48,7 +48,6 @@ fn async_builder_enqueue_and_buffer_search() {
     let config = AsyncIndexBuilderConfig {
         merge_threshold: 100_000,
         segment_count: Some(2),
-        sync_mode: false,
     };
     let builder = AsyncIndexBuilder::new(config);
 
@@ -77,7 +76,6 @@ fn async_builder_threshold_triggers_correctly() {
     let config = AsyncIndexBuilderConfig {
         merge_threshold: 50,
         segment_count: Some(2),
-        sync_mode: false,
     };
     let builder = AsyncIndexBuilder::new(config);
 
@@ -278,6 +276,9 @@ fn async_builder_config_serde_backward_compat() {
 fn async_builder_config_serde_with_config() {
     use velesdb_core::collection::CollectionConfig;
 
+    // The legacy `sync_mode` field is retained in this fixture on purpose:
+    // older `config.json` files persisted before its removal must continue
+    // to deserialize. serde drops unknown fields silently.
     let json = r#"{
         "name": "new_collection",
         "dimension": 128,
@@ -296,7 +297,6 @@ fn async_builder_config_serde_with_config() {
         .expect("async_index_builder must be Some");
     assert_eq!(aib.merge_threshold, 5000);
     assert_eq!(aib.segment_count, Some(4));
-    assert!(aib.sync_mode);
 }
 
 // ── V2 wired path: DirectVectorWriter + AsyncIndexBuilder ───────────────
@@ -310,7 +310,6 @@ fn v2_path_produces_searchable_results() {
     let config = velesdb_core::collection::streaming::AsyncIndexBuilderConfig {
         merge_threshold: 50, // Low threshold to trigger flush during test
         segment_count: Some(2),
-        sync_mode: false,
     };
     let coll =
         VectorCollection::create_with_async_builder(coll_dir, dim, DistanceMetric::Cosine, config)
@@ -349,7 +348,6 @@ fn v2_path_maintains_recall() {
     let config = velesdb_core::collection::streaming::AsyncIndexBuilderConfig {
         merge_threshold: 50,
         segment_count: Some(2),
-        sync_mode: false,
     };
     let v2_coll =
         VectorCollection::create_with_async_builder(v2_dir, dim, DistanceMetric::Cosine, config)
