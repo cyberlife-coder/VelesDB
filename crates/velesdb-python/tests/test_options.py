@@ -200,3 +200,68 @@ def test_hnsw_options_is_exported_from_top_level():
     assert "LimitsOptions" in velesdb.__all__
     assert "AutoReindexOptions" in velesdb.__all__
     assert "VelesConfigOptions" in velesdb.__all__
+
+
+# ---------------------------------------------------------------------------
+# HnswOptions presets (Wave 3 Commit 11)
+# ---------------------------------------------------------------------------
+
+
+def test_preset_fast_matches_core_fast_params():
+    """`HnswOptions.fast()` must match the core `HnswParams::fast()` values
+    (M=16, ef_construction=150)."""
+    opts = HnswOptions.fast()
+    assert opts.m == 16
+    assert opts.ef_construction == 150
+
+
+def test_preset_turbo_matches_core_turbo_params():
+    """`HnswOptions.turbo()` must match the core `HnswParams::turbo()` values
+    (M=12, ef_construction=100)."""
+    opts = HnswOptions.turbo()
+    assert opts.m == 12
+    assert opts.ef_construction == 100
+
+
+def test_preset_balanced_small_dim_uses_low_band():
+    """`HnswOptions.balanced(128)` must use the low-dim band of
+    `HnswParams::auto` (M=24, ef_construction=300)."""
+    opts = HnswOptions.balanced(128)
+    assert opts.m == 24
+    assert opts.ef_construction == 300
+
+
+def test_preset_balanced_large_dim_uses_high_band():
+    """`HnswOptions.balanced(768)` must use the high-dim band of
+    `HnswParams::auto` (M=32, ef_construction=400)."""
+    opts = HnswOptions.balanced(768)
+    assert opts.m == 32
+    assert opts.ef_construction == 400
+
+
+def test_preset_high_recall_bumps_balanced():
+    """`high_recall(d)` must exceed `balanced(d)` on both M and ef."""
+    balanced = HnswOptions.balanced(768)
+    high = HnswOptions.high_recall(768)
+    assert high.m > balanced.m
+    assert high.ef_construction > balanced.ef_construction
+
+
+def test_preset_max_recall_does_not_panic():
+    """Regression: `HnswOptions.max_recall(dim)` must produce non-None
+    fields for every dimension band in the core dispatch."""
+    for dim in (64, 128, 256, 512, 768, 1024, 3072):
+        opts = HnswOptions.max_recall(dim)
+        assert opts.m is not None and opts.m > 0
+        assert opts.ef_construction is not None and opts.ef_construction > 0
+
+
+def test_preset_round_trips_through_create_collection(tmp_db_path):
+    """End-to-end: every preset must be accepted by `create_collection`."""
+    db = Database(str(tmp_db_path))
+    db.create_collection("a", dimension=768, hnsw=HnswOptions.fast())
+    db.create_collection("b", dimension=768, hnsw=HnswOptions.turbo())
+    db.create_collection("c", dimension=768, hnsw=HnswOptions.balanced(768))
+    db.create_collection("d", dimension=768, hnsw=HnswOptions.high_recall(768))
+    db.create_collection("e", dimension=768, hnsw=HnswOptions.max_recall(768))
+    assert set(db.list_collections()) == {"a", "b", "c", "d", "e"}

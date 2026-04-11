@@ -1419,6 +1419,31 @@ class HnswOptions:
         """Return an HnswOptions pre-tuned for a specific dataset size."""
         ...
 
+    @staticmethod
+    def fast() -> "HnswOptions":
+        """Preset optimized for insertion speed (M=16, ef_construction=150)."""
+        ...
+
+    @staticmethod
+    def turbo() -> "HnswOptions":
+        """Preset for maximum insert throughput (~85% recall)."""
+        ...
+
+    @staticmethod
+    def balanced(dimension: int) -> "HnswOptions":
+        """Engine-default balanced preset for the given dimension."""
+        ...
+
+    @staticmethod
+    def high_recall(dimension: int) -> "HnswOptions":
+        """High-recall preset (engine default + 8 M, +200 ef_construction)."""
+        ...
+
+    @staticmethod
+    def max_recall(dimension: int) -> "HnswOptions":
+        """Tightest recall preset for the given dimension."""
+        ...
+
 
 class LimitsOptions:
     """Tenant-wide guard-rail limits mapped to core `LimitsConfig`.

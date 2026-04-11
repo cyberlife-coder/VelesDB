@@ -109,14 +109,62 @@ impl HnswOptions {
     ///         collection over its lifetime
     #[staticmethod]
     fn for_dataset_size(dimension: usize, expected_vectors: usize) -> Self {
-        let params = HnswParams::for_dataset_size(dimension, expected_vectors);
-        Self {
-            m: Some(params.max_connections),
-            ef_construction: Some(params.ef_construction),
-            max_elements: Some(params.max_elements),
-            alpha: Some(params.alpha),
-            pq_rescore_oversampling: None,
-        }
+        Self::from_params(HnswParams::for_dataset_size(dimension, expected_vectors))
+    }
+
+    /// **Preset — fast**: optimized for insertion speed, lower recall.
+    ///
+    /// Best for small datasets (<10K), dev workflows, and rapid
+    /// iteration. Maps to
+    /// [`velesdb_core::index::hnsw::HnswParams::fast`]
+    /// (`M=16`, `ef_construction=150`).
+    #[staticmethod]
+    fn fast() -> Self {
+        Self::from_params(HnswParams::fast())
+    }
+
+    /// **Preset — turbo**: maximum insert throughput, ~85% recall.
+    ///
+    /// Best for bulk loading, benchmarking, and cold-start ingestion
+    /// where search quality is not yet the priority. Maps to
+    /// [`velesdb_core::index::hnsw::HnswParams::turbo`]
+    /// (`M=12`, `ef_construction=100`). Not recommended for production
+    /// search workloads — rebuild with [`HnswOptions::high_recall`] or
+    /// [`HnswOptions::max_recall`] after ingestion.
+    #[staticmethod]
+    fn turbo() -> Self {
+        Self::from_params(HnswParams::turbo())
+    }
+
+    /// **Preset — balanced**: the engine-default mix of recall and
+    /// speed for the given dimension.
+    ///
+    /// Wraps [`velesdb_core::index::hnsw::HnswParams::auto`]:
+    /// - dimension ≤ 256: `M=24`, `ef_construction=300`
+    /// - dimension ≥ 257: `M=32`, `ef_construction=400`
+    #[staticmethod]
+    fn balanced(dimension: usize) -> Self {
+        Self::from_params(HnswParams::auto(dimension))
+    }
+
+    /// **Preset — high recall**: bumps `M` and `ef_construction` above
+    /// the engine default for the given dimension.
+    ///
+    /// Maps to [`velesdb_core::index::hnsw::HnswParams::high_recall`]
+    /// (`M = auto.M + 8`, `ef_construction = auto.ef_construction + 200`).
+    #[staticmethod]
+    fn high_recall(dimension: usize) -> Self {
+        Self::from_params(HnswParams::high_recall(dimension))
+    }
+
+    /// **Preset — max recall**: the tightest recall-oriented preset.
+    ///
+    /// Maps to [`velesdb_core::index::hnsw::HnswParams::max_recall`].
+    /// Trades insert throughput and memory for the highest achievable
+    /// recall at this dimension.
+    #[staticmethod]
+    fn max_recall(dimension: usize) -> Self {
+        Self::from_params(HnswParams::max_recall(dimension))
     }
 
     fn __repr__(&self) -> String {
@@ -138,6 +186,19 @@ impl HnswOptions {
             max_elements: self.max_elements.unwrap_or(base.max_elements),
             alpha: self.alpha.unwrap_or(base.alpha),
             storage_mode: base.storage_mode,
+        }
+    }
+
+    /// Shared conversion from a concrete [`HnswParams`] to a fully-
+    /// populated `HnswOptions`. Used by every preset classmethod so
+    /// they share the same field-mapping contract.
+    fn from_params(params: HnswParams) -> Self {
+        Self {
+            m: Some(params.max_connections),
+            ef_construction: Some(params.ef_construction),
+            max_elements: Some(params.max_elements),
+            alpha: Some(params.alpha),
+            pq_rescore_oversampling: None,
         }
     }
 }
