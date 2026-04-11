@@ -256,12 +256,7 @@ impl PyGraphCollection {
     /// Example:
     ///     >>> graph.upsert_node_payload(10, {"name": "Alice", "age": 30})
     #[pyo3(signature = (node_id, payload))]
-    fn upsert_node_payload(
-        &self,
-        py: Python<'_>,
-        node_id: u64,
-        payload: PyObject,
-    ) -> PyResult<()> {
+    fn upsert_node_payload(&self, py: Python<'_>, node_id: u64, payload: PyObject) -> PyResult<()> {
         let value = python_to_json(py, &payload)?;
         py.allow_threads(|| {
             self.inner

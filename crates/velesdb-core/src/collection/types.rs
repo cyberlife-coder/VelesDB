@@ -297,9 +297,8 @@ pub(crate) struct Collection {
     ///
     /// Lock order position: **11** (same tier as `deferred_indexer` /
     /// `async_index_builder`).
-    pub(crate) auto_reindex: Arc<
-        RwLock<Option<Arc<crate::collection::auto_reindex::AutoReindexManager>>>,
-    >,
+    pub(crate) auto_reindex:
+        Arc<RwLock<Option<Arc<crate::collection::auto_reindex::AutoReindexManager>>>>,
 }
 
 impl Collection {

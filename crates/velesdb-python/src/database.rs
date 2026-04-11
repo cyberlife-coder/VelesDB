@@ -183,8 +183,8 @@ impl Database {
         // Convert AutoReindexOptions to a manager under the GIL so the
         // closure doesn't have to touch Python types. `Arc<AutoReindexManager>`
         // is the runtime-only attachment handle (Commit 9).
-        let reindex_manager: Option<Arc<AutoReindexManager>> = auto_reindex
-            .map(|opts| Arc::new(AutoReindexManager::new(opts.to_core())));
+        let reindex_manager: Option<Arc<AutoReindexManager>> =
+            auto_reindex.map(|opts| Arc::new(AutoReindexManager::new(opts.to_core())));
 
         // Drop the GIL for the disk write + index init. Every string
         // argument must be cloned into an owned value because the
