@@ -123,9 +123,14 @@ db = velesdb.Database("./path/to/data")
 # List collections
 names = db.list_collections()
 
-# Create collection (with optional HNSW tuning)
+# Create collection (with optional HNSW tuning via typed options)
 collection = db.create_collection("name", dimension=768, metric="cosine")
-collection = db.create_collection("tuned", dimension=768, m=48, ef_construction=600)
+from velesdb import HnswOptions
+collection = db.create_collection(
+    "tuned",
+    dimension=768,
+    hnsw=HnswOptions(m=48, ef_construction=600),
+)
 
 # Get existing collection
 collection = db.get_collection("name")

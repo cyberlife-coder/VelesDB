@@ -9,8 +9,10 @@ use crate::agent;
 use crate::collection::Collection;
 use crate::collection_helpers::core_err;
 use crate::graph_collection::{PyGraphCollection, PyGraphSchema};
+use crate::options::{AutoReindexOptions, HnswOptions, VelesConfigOptions};
 use crate::utils::{self, parse_metric, parse_storage_mode};
 
+use velesdb_core::collection::auto_reindex::AutoReindexManager;
 use velesdb_core::{CollectionType, Database as CoreDatabase, GraphSchema};
 
 /// VelesDB Database - the main entry point for interacting with VelesDB.
@@ -24,18 +26,25 @@ pub struct Database {
     path: PathBuf,
 }
 
-/// Internal HNSW dispatch plan computed under the GIL by
+/// Internal dispatch plan computed under the GIL by
 /// [`Database::create_collection`] and consumed inside a
-/// `py.allow_threads` closure. Kept as a small `Copy` enum so moving
-/// it across the GIL-release boundary is a single memory copy.
-#[derive(Clone, Copy)]
+/// `py.allow_threads` closure.
+///
+/// Wave 3 Commit 10 introduces the typed-options surface: `Full`
+/// carries fully-materialized [`HnswParams`] plus an explicit
+/// `pq_rescore_oversampling` override so the closure can call
+/// [`CoreDatabase::create_vector_collection_with_params`] in one step.
+/// `Default` defers every parameter to the engine.
+#[derive(Clone)]
 enum CreatePlan {
-    /// Use `create_vector_collection_with_hnsw` with the given
-    /// `(max_connections, ef_construction)` overrides. Either value
-    /// may be `None` to defer to the engine default for that field.
-    Hnsw(Option<usize>, Option<usize>),
+    /// Use `create_vector_collection_with_params` with the given
+    /// fully-materialized HNSW params and PQ rescore factor.
+    Full {
+        hnsw_params: velesdb_core::index::hnsw::HnswParams,
+        pq_rescore_oversampling: Option<u32>,
+    },
     /// Use `create_vector_collection_with_options` — engine picks
-    /// both `max_connections` and `ef_construction`.
+    /// every HNSW field.
     Default,
 }
 
@@ -44,16 +53,22 @@ impl Database {
     /// Create or open a VelesDB database at the specified path.
     ///
     /// Args:
-    ///     path: Directory path for database storage
+    ///     path: Directory path for database storage.
+    ///     config: Optional typed configuration (limits, etc.) applied
+    ///         at open time. See :class:`VelesConfigOptions`.
     ///
     /// Returns:
     ///     Database instance
     ///
     /// Example:
     ///     >>> db = velesdb.Database("./my_vectors")
+    ///     >>> # With explicit limits:
+    ///     >>> from velesdb import VelesConfigOptions, LimitsOptions
+    ///     >>> cfg = VelesConfigOptions(limits=LimitsOptions(max_collections=50))
+    ///     >>> db = velesdb.Database("./tenant1", config=cfg)
     #[new]
-    #[pyo3(signature = (path))]
-    fn new(py: Python<'_>, path: &str) -> PyResult<Self> {
+    #[pyo3(signature = (path, config = None))]
+    fn new(py: Python<'_>, path: &str, config: Option<VelesConfigOptions>) -> PyResult<Self> {
         // Open the database off the GIL. Opening walks the WAL, rebuilds
         // any in-memory state, and mmaps vector/edge files — on a multi-
         // million-vector directory this easily reaches multi-second
@@ -64,7 +79,10 @@ impl Database {
         let path_buf = PathBuf::from(path);
         let path_clone = path_buf.clone();
         let db = py
-            .allow_threads(move || CoreDatabase::open(&path_clone))
+            .allow_threads(move || match config {
+                Some(cfg) => CoreDatabase::open_with_config(&path_clone, cfg.to_core()),
+                None => CoreDatabase::open(&path_clone),
+            })
             .map_err(core_err)?;
         Ok(Self {
             inner: Arc::new(db),
@@ -77,10 +95,10 @@ impl Database {
     /// Args:
     ///     name: Collection name
     ///     dimension: Vector dimension (e.g., 768 for BERT embeddings)
-    ///     metric: Distance metric - "cosine", "euclidean", "dot", "hamming", or "jaccard"
-    ///             (default: "cosine")
-    ///     storage_mode: Storage mode (default: "full"). Accepted values (case-insensitive,
-    ///                   aliases in parentheses):
+    ///     metric: Distance metric — "cosine", "euclidean", "dot",
+    ///             "hamming", or "jaccard" (default: "cosine")
+    ///     storage_mode: Storage mode (default: "full"). Accepted values
+    ///                   (case-insensitive, aliases in parentheses):
     ///                   - "full" ("f32"): Full f32 precision — best recall, 4 bytes/dim.
     ///                   - "sq8" ("int8"): 8-bit scalar quantization — 4x compression, ~1% recall loss.
     ///                   - "binary" ("bit"): 1-bit binary quantization — 32x compression,
@@ -89,21 +107,55 @@ impl Database {
     ///                     via trained codebooks (requires a training step before upserts).
     ///                   - "rabitq": RaBitQ — 1-bit with rotation + scalar correction,
     ///                     32x compression with ~1-2% recall loss.
+    ///     hnsw: Optional :class:`HnswOptions` dataclass with typed HNSW
+    ///           parameters. Replaces the v1.12 flat kwargs (`m=`,
+    ///           `ef_construction=`, `expected_vectors=`) — see the
+    ///           v1.13 CHANGELOG for the migration guide.
+    ///     auto_reindex: Optional :class:`AutoReindexOptions` dataclass.
+    ///           When provided, an :class:`AutoReindexManager` is
+    ///           constructed from the options and attached to the
+    ///           freshly-created collection as a runtime-only hook.
+    ///           The attachment is not persisted — re-attach after
+    ///           every `Database(path)` to restore the behavior.
     ///
     /// Returns:
     ///     Collection instance
     ///
     /// Example:
-    ///     >>> collection = db.create_collection("documents", dimension=768, metric="cosine")
-    ///     >>> # With SQ8 quantization for memory savings:
-    ///     >>> quantized = db.create_collection("embeddings", dimension=768, storage_mode="sq8")
-    ///     >>> # With RaBitQ for 32x compression with minimal recall loss:
-    ///     >>> rabitq_col = db.create_collection("compact", dimension=768, storage_mode="rabitq")
-    ///     >>> # With custom HNSW parameters:
-    ///     >>> custom = db.create_collection("docs", dimension=768, m=48, ef_construction=600)
-    ///     >>> # Auto-tuned for expected dataset size (optimizes M and ef_construction):
-    ///     >>> large = db.create_collection("big", dimension=128, expected_vectors=1_000_000)
-    #[pyo3(signature = (name, dimension, metric = "cosine", storage_mode = "full", m = None, ef_construction = None, expected_vectors = None))]
+    ///     >>> # Simple creation
+    ///     >>> collection = db.create_collection("documents", dimension=768)
+    ///     >>> # With SQ8 quantization:
+    ///     >>> quantized = db.create_collection(
+    ///     ...     "embeddings", dimension=768, storage_mode="sq8"
+    ///     ... )
+    ///     >>> # With typed HNSW options:
+    ///     >>> from velesdb import HnswOptions
+    ///     >>> custom = db.create_collection(
+    ///     ...     "docs",
+    ///     ...     dimension=768,
+    ///     ...     hnsw=HnswOptions(m=48, ef_construction=600),
+    ///     ... )
+    ///     >>> # Auto-tuned for expected dataset size:
+    ///     >>> large = db.create_collection(
+    ///     ...     "big",
+    ///     ...     dimension=128,
+    ///     ...     hnsw=HnswOptions.for_dataset_size(128, 1_000_000),
+    ///     ... )
+    ///     >>> # With auto-reindex divergence monitoring:
+    ///     >>> from velesdb import AutoReindexOptions
+    ///     >>> monitored = db.create_collection(
+    ///     ...     "agents",
+    ///     ...     dimension=384,
+    ///     ...     auto_reindex=AutoReindexOptions(min_size_for_reindex=5_000),
+    ///     ... )
+    #[pyo3(signature = (
+        name,
+        dimension,
+        metric = "cosine",
+        storage_mode = "full",
+        hnsw = None,
+        auto_reindex = None,
+    ))]
     #[allow(clippy::too_many_arguments)] // Reason: `py` is an injected PyO3 token, not a user-facing argument
     fn create_collection(
         &self,
@@ -112,46 +164,27 @@ impl Database {
         dimension: usize,
         metric: &str,
         storage_mode: &str,
-        m: Option<usize>,
-        ef_construction: Option<usize>,
-        expected_vectors: Option<usize>,
+        hnsw: Option<HnswOptions>,
+        auto_reindex: Option<AutoReindexOptions>,
     ) -> PyResult<Collection> {
         let distance_metric = parse_metric(metric)?;
         let mode = parse_storage_mode(storage_mode)?;
 
-        // Compute the HNSW plan under the GIL — cheap, and issuing the
-        // Python UserWarning on the explicit-override branch must happen
-        // before we release the interpreter lock.
-        //
-        // Priority: explicit m/ef > expected_vectors > engine default.
-        let plan = if m.is_some() || ef_construction.is_some() {
-            // Warn when expected_vectors is also set: explicit values override
-            // the adaptive defaults, so expected_vectors only fills in gaps.
-            if expected_vectors.is_some() {
-                let _ = PyErr::warn(
-                    py,
-                    &py.get_type::<pyo3::exceptions::PyUserWarning>(),
-                    c"expected_vectors is set alongside explicit m/ef_construction; \
-                      explicit values take priority and override adaptive defaults",
-                    1,
-                );
+        // Compute the dispatch plan under the GIL — cheap.
+        let plan = if let Some(opts) = hnsw {
+            CreatePlan::Full {
+                hnsw_params: opts.to_hnsw_params(),
+                pq_rescore_oversampling: opts.pq_rescore_oversampling,
             }
-            let (m_val, ef_val) = if let Some(n) = expected_vectors {
-                let base = velesdb_core::index::hnsw::HnswParams::for_dataset_size(dimension, n);
-                (
-                    m.or(Some(base.max_connections)),
-                    ef_construction.or(Some(base.ef_construction)),
-                )
-            } else {
-                (m, ef_construction)
-            };
-            CreatePlan::Hnsw(m_val, ef_val)
-        } else if let Some(n) = expected_vectors {
-            let params = velesdb_core::index::hnsw::HnswParams::for_dataset_size(dimension, n);
-            CreatePlan::Hnsw(Some(params.max_connections), Some(params.ef_construction))
         } else {
             CreatePlan::Default
         };
+
+        // Convert AutoReindexOptions to a manager under the GIL so the
+        // closure doesn't have to touch Python types. `Arc<AutoReindexManager>`
+        // is the runtime-only attachment handle (Commit 9).
+        let reindex_manager: Option<Arc<AutoReindexManager>> = auto_reindex
+            .map(|opts| Arc::new(AutoReindexManager::new(opts.to_core())));
 
         // Drop the GIL for the disk write + index init. Every string
         // argument must be cloned into an owned value because the
@@ -160,13 +193,16 @@ impl Database {
         let inner = Arc::clone(&self.inner);
         let name_for_closure = name_owned.clone();
         py.allow_threads(move || match plan {
-            CreatePlan::Hnsw(m_val, ef_val) => inner.create_vector_collection_with_hnsw(
+            CreatePlan::Full {
+                hnsw_params,
+                pq_rescore_oversampling,
+            } => inner.create_vector_collection_with_params(
                 &name_for_closure,
                 dimension,
                 distance_metric,
                 mode,
-                m_val,
-                ef_val,
+                hnsw_params,
+                pq_rescore_oversampling,
             ),
             CreatePlan::Default => inner.create_vector_collection_with_options(
                 &name_for_closure,
@@ -185,6 +221,13 @@ impl Database {
             .inner
             .get_vector_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
+
+        // Attach the AutoReindex manager to the newly-created collection
+        // as a runtime-only hook. This is a no-op when auto_reindex was
+        // not provided.
+        if let Some(manager) = reindex_manager {
+            collection.attach_auto_reindex(manager);
+        }
 
         Ok(Collection::new(collection, name_owned))
     }

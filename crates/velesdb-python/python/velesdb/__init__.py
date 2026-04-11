@@ -12,6 +12,7 @@ from typing import Any, Iterable
 
 from velesdb.velesdb import (  # type: ignore[attr-defined]
     AgentMemory,
+    AutoReindexOptions,
     Collection as _RawCollection,
     CollectionExistsError,
     CollectionNotFoundError,
@@ -21,6 +22,8 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     EdgeExistsError,
     FusionStrategy,
     GraphStore as _RawGraphStore,
+    HnswOptions,
+    LimitsOptions,
     ParsedStatement,
     PyEpisodicMemory,
     GraphCollection as PyGraphCollection,
@@ -30,6 +33,7 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     SearchResult,
     StreamingConfig,
     TraversalResult,
+    VelesConfigOptions,
     VelesDBError,
     VelesQL as _RawVelesQL,
     VelesQLParameterError,
@@ -246,8 +250,12 @@ class Collection:
 class Database:
     """Compatibility adapter around the Rust Database binding."""
 
-    def __init__(self, path: str) -> None:
-        self._inner = _RawDatabase(path)
+    def __init__(
+        self,
+        path: str,
+        config: VelesConfigOptions | None = None,
+    ) -> None:
+        self._inner = _RawDatabase(path, config)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -258,9 +266,8 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
-        m: int | None = None,
-        ef_construction: int | None = None,
-        expected_vectors: int | None = None,
+        hnsw: HnswOptions | None = None,
+        auto_reindex: AutoReindexOptions | None = None,
     ) -> "Collection":
         """Create a new vector collection.
 
@@ -280,16 +287,20 @@ class Database:
                 - ``"rabitq"``: RaBitQ — 1-bit with rotation + scalar correction,
                   32x compression with ~1-2% recall loss.
 
-            m: HNSW ``max_connections`` parameter (overrides adaptive default).
-            ef_construction: HNSW ``ef_construction`` parameter (overrides adaptive default).
-            expected_vectors: Expected dataset size used to auto-tune ``m`` and
-                ``ef_construction`` when they are not explicitly set.
+            hnsw: Optional :class:`HnswOptions` dataclass with typed HNSW
+                parameters. Replaces the legacy v1.12 flat kwargs
+                (``m=``, ``ef_construction=``, ``expected_vectors=``) —
+                see the v1.13 CHANGELOG for the migration guide.
+            auto_reindex: Optional :class:`AutoReindexOptions` dataclass.
+                When provided, an ``AutoReindexManager`` is constructed and
+                attached to the freshly-created collection as a runtime-only
+                hook (not persisted — re-attach after every ``Database(path)``).
 
         Returns:
             Collection instance wrapping the underlying Rust collection.
         """
         col = self._inner.create_collection(
-            name, dimension, metric, storage_mode, m, ef_construction, expected_vectors
+            name, dimension, metric, storage_mode, hnsw, auto_reindex
         )
         return Collection(col)
 
@@ -305,15 +316,15 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
-        m: int | None = None,
-        ef_construction: int | None = None,
-        expected_vectors: int | None = None,
+        hnsw: HnswOptions | None = None,
+        auto_reindex: AutoReindexOptions | None = None,
     ) -> "Collection":
         """Return an existing collection or create it if missing.
 
         When the collection already exists, it is returned as-is — ``dimension``,
-        ``metric``, and ``storage_mode`` are ignored for the lookup path and no
-        compatibility check is performed against the stored configuration.
+        ``metric``, ``storage_mode``, ``hnsw``, and ``auto_reindex`` are
+        ignored for the lookup path and no compatibility check is performed
+        against the stored configuration.
 
         Args and accepted storage modes are identical to :meth:`create_collection`.
 
@@ -324,8 +335,12 @@ class Database:
         if existing is not None:
             return existing
         return self.create_collection(
-            name, dimension=dimension, metric=metric, storage_mode=storage_mode,
-            m=m, ef_construction=ef_construction, expected_vectors=expected_vectors,
+            name,
+            dimension=dimension,
+            metric=metric,
+            storage_mode=storage_mode,
+            hnsw=hnsw,
+            auto_reindex=auto_reindex,
         )
 
     def create_metadata_collection(self, name: str) -> "Collection":
@@ -436,5 +451,13 @@ __all__ = [
     "DimensionMismatchError",
     "EdgeExistsError",
     "DatabaseLockedError",
+    # Typed options dataclasses (Wave 3 Commit 10). `HnswOptions` and
+    # `AutoReindexOptions` are passed to `Database.create_collection`;
+    # `LimitsOptions` wraps tenant-wide guard-rails; `VelesConfigOptions`
+    # is the database-level wrapper passed to `Database(path, config=...)`.
+    "HnswOptions",
+    "LimitsOptions",
+    "AutoReindexOptions",
+    "VelesConfigOptions",
     "__version__",
 ]
