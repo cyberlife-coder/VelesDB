@@ -42,6 +42,37 @@ export async function addEdge(
   throwOnError(response, `Collection '${collection}'`);
 }
 
+/**
+ * Raw wire shape of an edge from the server.
+ *
+ * `id`/`source`/`target` arrive as **strings** because the server's
+ * `EdgeResponse` struct uses `serialize_id_as_string` to avoid
+ * JavaScript `Number.MAX_SAFE_INTEGER` precision loss on u64 values.
+ * The `toGraphEdge` helper coerces them back to the `number` shape
+ * declared on the public `GraphEdge` interface (PR #586 fix applied
+ * to the pre-existing `getEdges` wrapper for consistency with the
+ * `getNodeEdges` fix landed earlier in the same PR).
+ */
+interface EdgeWire {
+  id: number | string;
+  source: number | string;
+  target: number | string;
+  label: string;
+  properties?: Record<string, unknown>;
+}
+
+function toGraphEdge(e: EdgeWire): GraphEdge {
+  const toNum = (v: number | string): number =>
+    typeof v === 'string' ? Number(v) : v;
+  return {
+    id: toNum(e.id),
+    source: toNum(e.source),
+    target: toNum(e.target),
+    label: e.label,
+    properties: e.properties,
+  };
+}
+
 export async function getEdges(
   transport: GraphTransport,
   collection: string,
@@ -49,14 +80,14 @@ export async function getEdges(
 ): Promise<GraphEdge[]> {
   const queryParams = options?.label ? `?label=${encodeURIComponent(options.label)}` : '';
 
-  const response = await transport.requestJson<{ edges: GraphEdge[]; count: number }>(
+  const response = await transport.requestJson<{ edges: EdgeWire[]; count: number }>(
     'GET',
     `${collectionPath(collection)}/graph/edges${queryParams}`
   );
 
   throwOnError(response, `Collection '${collection}'`);
 
-  return response.data?.edges ?? [];
+  return (response.data?.edges ?? []).map(toGraphEdge);
 }
 
 export async function traverseGraph(
