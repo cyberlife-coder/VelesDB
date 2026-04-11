@@ -42,6 +42,32 @@ import type { FilterInput } from '../filter';
 import type { CapabilityMap } from '../capabilities';
 import { REST_CAPABILITIES } from '../capabilities';
 import { ConnectionError } from '../types';
+import type {
+  RebuildIndexResponse,
+  GuardRailsUpdateRequest,
+  GuardRailsConfigResponse,
+  ListNodesResponse,
+  GetNodeEdgesOptions,
+  NodePayloadResponse,
+  GraphSearchRequest as GraphSearchReq,
+  GraphSearchResponse,
+  MatchQueryOptions,
+  AggregateQueryOptions,
+} from '../types';
+import {
+  rebuildIndex as _rebuildIndex,
+  getGuardrails as _getGuardrails,
+  updateGuardrails as _updateGuardrails,
+  aggregate as _aggregate,
+  matchQuery as _matchQuery,
+  removeEdge as _removeEdge,
+  getEdgeCount as _getEdgeCount,
+  listNodes as _listNodes,
+  getNodeEdges as _getNodeEdges,
+  getNodePayload as _getNodePayload,
+  upsertNodePayload as _upsertNodePayload,
+  graphSearch as _graphSearch,
+} from './missing-endpoints';
 import {
   storeSemanticFact as _storeSemanticFact,
   searchSemanticMemory as _searchSemanticMemory,
@@ -352,6 +378,107 @@ export class RestBackend implements IVelesDBBackend {
 
   capabilities(): Readonly<CapabilityMap> {
     return REST_CAPABILITIES;
+  }
+
+  // ==========================================================================
+  // Additional REST endpoints (Sprint 2 Wave 4 — S2-NEW-10)
+  // ==========================================================================
+
+  async rebuildIndex(collection: string): Promise<RebuildIndexResponse> {
+    this.ensureInitialized();
+    return _rebuildIndex(this.baseTransport(), collection);
+  }
+
+  async getGuardrails(): Promise<GuardRailsConfigResponse> {
+    this.ensureInitialized();
+    return _getGuardrails(this.baseTransport());
+  }
+
+  async updateGuardrails(
+    req: GuardRailsUpdateRequest
+  ): Promise<GuardRailsConfigResponse> {
+    this.ensureInitialized();
+    return _updateGuardrails(this.baseTransport(), req);
+  }
+
+  async aggregate(
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: AggregateQueryOptions
+  ): Promise<QueryApiResponse> {
+    this.ensureInitialized();
+    return _aggregate(this.baseTransport(), queryString, params, options);
+  }
+
+  async matchQuery(
+    collection: string,
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: MatchQueryOptions
+  ): Promise<QueryApiResponse> {
+    this.ensureInitialized();
+    return _matchQuery(this.baseTransport(), collection, queryString, params, options);
+  }
+
+  async removeEdge(collection: string, edgeId: number): Promise<boolean> {
+    this.ensureInitialized();
+    return _removeEdge(this.baseTransport(), collection, edgeId);
+  }
+
+  async getEdgeCount(collection: string): Promise<number> {
+    this.ensureInitialized();
+    return _getEdgeCount(this.baseTransport(), collection);
+  }
+
+  async listNodes(collection: string): Promise<ListNodesResponse> {
+    this.ensureInitialized();
+    return _listNodes(this.baseTransport(), collection);
+  }
+
+  async getNodeEdges(
+    collection: string,
+    nodeId: number,
+    options?: GetNodeEdgesOptions
+  ): Promise<GraphEdge[]> {
+    this.ensureInitialized();
+    return _getNodeEdges(this.baseTransport(), collection, nodeId, options);
+  }
+
+  async getNodePayload(
+    collection: string,
+    nodeId: number
+  ): Promise<NodePayloadResponse> {
+    this.ensureInitialized();
+    return _getNodePayload(this.baseTransport(), collection, nodeId);
+  }
+
+  async upsertNodePayload(
+    collection: string,
+    nodeId: number,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    this.ensureInitialized();
+    return _upsertNodePayload(this.baseTransport(), collection, nodeId, payload);
+  }
+
+  async graphSearch(
+    collection: string,
+    request: GraphSearchReq
+  ): Promise<GraphSearchResponse> {
+    this.ensureInitialized();
+    return _graphSearch(this.baseTransport(), collection, request);
+  }
+
+  /**
+   * Minimal `BaseTransport` view over this backend, used by the
+   * small endpoint wrappers in `missing-endpoints.ts`. Keeping it
+   * as a thin adapter avoids coupling those helpers to the full
+   * `RestBackend` surface.
+   */
+  private baseTransport(): import('./shared').BaseTransport {
+    return {
+      requestJson: (method, path, body) => this.request(method, path, body),
+    };
   }
 
   // ==========================================================================

@@ -42,6 +42,7 @@ import type { FilterInput } from '../filter';
 import type { CapabilityMap } from '../capabilities';
 import { WASM_CAPABILITIES } from '../capabilities';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
+import { wasmNotSupported } from './shared';
 import type { SparseVector } from '../types';
 import type { WasmModule, CollectionData, WasmContext } from './wasm-types';
 
@@ -130,6 +131,62 @@ export class WasmBackend implements IVelesDBBackend {
 
   capabilities(): Readonly<CapabilityMap> {
     return WASM_CAPABILITIES;
+  }
+
+  // ==========================================================================
+  // Missing REST endpoint stubs (Sprint 2 Wave 4 — S2-NEW-10)
+  // All throw wasmNotSupported() — none of these features ship in WASM.
+  // ==========================================================================
+
+  async rebuildIndex(_c: string): Promise<import('../types').RebuildIndexResponse> {
+    return Promise.resolve(wasmNotSupported('Index rebuild'));
+  }
+  async getGuardrails(): Promise<import('../types').GuardRailsConfigResponse> {
+    return Promise.resolve(wasmNotSupported('Guardrails'));
+  }
+  async updateGuardrails(
+    _r: import('../types').GuardRailsUpdateRequest
+  ): Promise<import('../types').GuardRailsConfigResponse> {
+    return Promise.resolve(wasmNotSupported('Guardrails'));
+  }
+  async aggregate(
+    _q: string, _p?: Record<string, unknown>, _o?: import('../types').AggregateQueryOptions
+  ): Promise<QueryApiResponse> {
+    return Promise.resolve(wasmNotSupported('Aggregate queries'));
+  }
+  async matchQuery(
+    _c: string, _q: string, _p?: Record<string, unknown>, _o?: import('../types').MatchQueryOptions
+  ): Promise<QueryApiResponse> {
+    return Promise.resolve(wasmNotSupported('MATCH queries'));
+  }
+  async removeEdge(_c: string, _id: number): Promise<boolean> {
+    return Promise.resolve(wasmNotSupported('Graph edge removal'));
+  }
+  async getEdgeCount(_c: string): Promise<number> {
+    return Promise.resolve(wasmNotSupported('Graph edge count'));
+  }
+  async listNodes(_c: string): Promise<import('../types').ListNodesResponse> {
+    return Promise.resolve(wasmNotSupported('Graph list nodes'));
+  }
+  async getNodeEdges(
+    _c: string, _id: number, _o?: import('../types').GetNodeEdgesOptions
+  ): Promise<GraphEdge[]> {
+    return Promise.resolve(wasmNotSupported('Graph node edges'));
+  }
+  async getNodePayload(
+    _c: string, _id: number
+  ): Promise<import('../types').NodePayloadResponse> {
+    return Promise.resolve(wasmNotSupported('Graph node payload (read)'));
+  }
+  async upsertNodePayload(
+    _c: string, _id: number, _p: Record<string, unknown>
+  ): Promise<void> {
+    return Promise.resolve(wasmNotSupported('Graph node payload (upsert)'));
+  }
+  async graphSearch(
+    _c: string, _r: import('../types').GraphSearchRequest
+  ): Promise<import('../types').GraphSearchResponse> {
+    return Promise.resolve(wasmNotSupported('Graph search'));
   }
 
   // ========================================================================

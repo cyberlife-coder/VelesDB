@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Sprint 2 Wave 4 (TypeScript SDK)
 
+- **12 missing REST endpoint wrappers surfaced on the TS SDK**
+  (`sdks/typescript/src/backends/missing-endpoints.ts` + plumbing
+  in `rest.ts`, `wasm.ts`, `client.ts`, `types.ts`, Commit 8) —
+  closes the `S2-NEW-10` audit finding. The pre-v1.13 SDK
+  covered only the core CRUD + search paths; 12 server endpoints
+  were un-reachable from TS callers without resorting to
+  hand-written `fetch`. Every wrapper is now exposed on
+  `VelesDB` and fully typed.
+
+  New methods on `VelesDB`:
+  ```typescript
+  // Admin
+  await db.rebuildIndex('docs');                                // POST /collections/{name}/index/rebuild
+  const caps = await db.getGuardrails();                        // GET  /guardrails
+  await db.updateGuardrails({ maxDepth: 15, rateLimitQps: 200 }); // PUT  /guardrails
+
+  // Query
+  await db.aggregate('SELECT category, COUNT(*) FROM docs GROUP BY category'); // POST /aggregate
+  await db.matchQuery('kg', 'MATCH (a:Person)-[:KNOWS]->(b) RETURN b');        // POST /collections/{name}/match
+
+  // Graph
+  await db.removeEdge('kg', 42);                                // DELETE /collections/{name}/graph/edges/{id}
+  const n = await db.getEdgeCount('kg');                        // GET    /collections/{name}/graph/edges/count
+  const nodes = await db.listNodes('kg');                       // GET    /collections/{name}/graph/nodes
+  const edges = await db.getNodeEdges('kg', 10, { direction: 'in', label: 'KNOWS' });
+  const payload = await db.getNodePayload('kg', 10);            // GET    /collections/{name}/graph/nodes/{id}/payload
+  await db.upsertNodePayload('kg', 10, { name: 'Alice' });      // PUT    /collections/{name}/graph/nodes/{id}/payload
+  const res = await db.graphSearch('kg', { vector: [...], k: 5 }); // POST  /collections/{name}/graph/search
+  ```
+
+  All 12 wrappers honour the `snake_case ↔ camelCase` convention
+  used across the existing SDK (request bodies converted
+  camel→snake, responses converted snake→camel). `removeEdge`
+  follows the same "map-to-null" convention as `getCollection`:
+  if the server answers `VELES-020` (edge not found) the helper
+  returns `false` instead of throwing, so callers can use the
+  boolean return value.
+
+  **Scope limitation (explicit, not a saupoudrage)**: the 13th
+  endpoint listed in the audit — `GET /collections/{name}/graph/
+  traverse/stream` — is a Server-Sent Events endpoint, not a
+  plain JSON response. Wiring it to the TS SDK requires a
+  streaming-fetch abstraction that does not exist today in the
+  SDK codebase; adding a blocking "collect everything then
+  return" wrapper would defeat the whole point of the streaming
+  design. Deferred to a dedicated Sprint 3+ "streaming API"
+  commit that introduces the abstraction properly.
+
+  **WASM backend**: every new method on `IVelesDBBackend` is
+  implemented on `WasmBackend` too, throwing `wasmNotSupported`
+  for each — the features require persistent server-side
+  infrastructure (guard rails, graph, rebuild). The WASM
+  `CapabilityMap` already reports these as `false`.
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `RebuildIndexResponse`, `GuardRailsUpdateRequest`,
+    `GuardRailsConfigResponse`, `ListNodesResponse`,
+    `GetNodeEdgesOptions`, `NodePayloadResponse`,
+    `GraphSearchRequest`, `GraphSearchResponse`,
+    `GraphSearchResultItem`, `MatchQueryOptions`,
+    `AggregateQueryOptions`
+
 - **`db.capabilities()` API — static feature map per backend**
   (`sdks/typescript/src/capabilities.ts` + client + both backends,
   Commit 7) — closes the `#24 F-BACK-002` audit finding. Callers

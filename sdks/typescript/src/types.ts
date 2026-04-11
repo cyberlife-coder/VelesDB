@@ -844,6 +844,64 @@ export interface IVelesDBBackend {
     embedding: number[],
     k?: number
   ): Promise<SearchResult[]>;
+
+  // Sprint 2 Wave 4 — S2-NEW-10: missing REST endpoint wrappers
+
+  /** Rebuild a collection's HNSW index (compacts tombstones). */
+  rebuildIndex(collection: string): Promise<RebuildIndexResponse>;
+
+  /** Read the current process-wide guard-rails configuration. */
+  getGuardrails(): Promise<GuardRailsConfigResponse>;
+
+  /** Partial-update the process-wide guard-rails configuration. */
+  updateGuardrails(req: GuardRailsUpdateRequest): Promise<GuardRailsConfigResponse>;
+
+  /** Execute a VelesQL aggregate query (COUNT/AVG/GROUP BY/...). */
+  aggregate(
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: AggregateQueryOptions
+  ): Promise<QueryApiResponse>;
+
+  /** Execute a VelesQL `MATCH (...)` graph query scoped to a collection. */
+  matchQuery(
+    collection: string,
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: MatchQueryOptions
+  ): Promise<QueryApiResponse>;
+
+  /** Remove a graph edge by ID. Returns `true` if removed, `false` if not found. */
+  removeEdge(collection: string, edgeId: number): Promise<boolean>;
+
+  /** Total edge count in a graph collection. */
+  getEdgeCount(collection: string): Promise<number>;
+
+  /** List every node ID in a graph collection. */
+  listNodes(collection: string): Promise<ListNodesResponse>;
+
+  /** Get edges adjacent to a node (filterable by direction + label). */
+  getNodeEdges(
+    collection: string,
+    nodeId: number,
+    options?: GetNodeEdgesOptions
+  ): Promise<GraphEdge[]>;
+
+  /** Read the JSON payload attached to a graph node. */
+  getNodePayload(collection: string, nodeId: number): Promise<NodePayloadResponse>;
+
+  /** Upsert (create or replace) the JSON payload of a graph node. */
+  upsertNodePayload(
+    collection: string,
+    nodeId: number,
+    payload: Record<string, unknown>
+  ): Promise<void>;
+
+  /** Vector similarity search scoped to graph nodes only. */
+  graphSearch(
+    collection: string,
+    request: GraphSearchRequest
+  ): Promise<GraphSearchResponse>;
 }
 
 /** Error types */
@@ -885,4 +943,98 @@ export class BackpressureError extends VelesDBError {
     super(message, 'BACKPRESSURE');
     this.name = 'BackpressureError';
   }
+}
+
+// ============================================================================
+// Additional endpoint types (Sprint 2 Wave 4 — S2-NEW-10)
+// ============================================================================
+
+/** Result of `POST /collections/{name}/index/rebuild`. */
+export interface RebuildIndexResponse {
+  /** Informational message from the server. */
+  message: string;
+  /** Collection name. */
+  collection: string;
+  /** Number of tombstoned entries compacted during rebuild. */
+  compactedEntries: number;
+}
+
+/** Guard-rails config sent to `PUT /guardrails` (partial update). */
+export interface GuardRailsUpdateRequest {
+  maxDepth?: number;
+  maxCardinality?: number;
+  memoryLimitBytes?: number;
+  timeoutMs?: number;
+  rateLimitQps?: number;
+  circuitFailureThreshold?: number;
+  circuitRecoverySeconds?: number;
+}
+
+/** Guard-rails config returned by `GET /guardrails` and `PUT /guardrails`. */
+export interface GuardRailsConfigResponse {
+  maxDepth: number;
+  maxCardinality: number;
+  memoryLimitBytes: number;
+  timeoutMs: number;
+  rateLimitQps: number;
+  circuitFailureThreshold: number;
+  circuitRecoverySeconds: number;
+}
+
+/** Options for `listNodes`. */
+export interface ListNodesResponse {
+  /** Node IDs in insertion order. */
+  nodeIds: number[];
+  /** Total count — matches `nodeIds.length`. */
+  count: number;
+}
+
+/** Options for `getNodeEdges`. Mirrors `NodeEdgeQueryParams` on the server. */
+export interface GetNodeEdgesOptions {
+  /** Edge direction: "in", "out" (default), or "both". */
+  direction?: 'in' | 'out' | 'both';
+  /** Optional label filter. */
+  label?: string;
+}
+
+/** Result of `GET /collections/{name}/graph/nodes/{id}/payload`. */
+export interface NodePayloadResponse {
+  /** Node ID. */
+  nodeId: number;
+  /** Stored payload — `null` if no payload has been set. */
+  payload: Record<string, unknown> | null;
+}
+
+/** Request body for `POST /collections/{name}/graph/search`. */
+export interface GraphSearchRequest {
+  /** Query vector for embedding similarity. */
+  vector: number[] | Float32Array;
+  /** Number of results (default: 10). */
+  k?: number;
+}
+
+/** Single result item from `graphSearch`. */
+export interface GraphSearchResultItem {
+  /** Node ID. */
+  id: number;
+  /** Similarity score. */
+  score: number;
+}
+
+/** Response of `graphSearch`. */
+export interface GraphSearchResponse {
+  /** Result items ordered by score. */
+  results: GraphSearchResultItem[];
+}
+
+/** Options for `matchQuery` — reuses the shared VelesQL query API. */
+export interface MatchQueryOptions {
+  /** Timeout in milliseconds. */
+  timeoutMs?: number;
+}
+
+/** Aggregate query options. */
+export interface AggregateQueryOptions {
+  /** Timeout in milliseconds. */
+  timeoutMs?: number;
 }
