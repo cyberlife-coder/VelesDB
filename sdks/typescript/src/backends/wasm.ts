@@ -39,6 +39,8 @@ import type {
   ScrollResponse,
 } from '../types';
 import type { FilterInput } from '../filter';
+import type { CapabilityMap } from '../capabilities';
+import { WASM_CAPABILITIES } from '../capabilities';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 import type { SparseVector } from '../types';
 import type { WasmModule, CollectionData, WasmContext } from './wasm-types';
@@ -124,6 +126,10 @@ export class WasmBackend implements IVelesDBBackend {
     }
     this.collections.clear();
     this._initialized = false;
+  }
+
+  capabilities(): Readonly<CapabilityMap> {
+    return WASM_CAPABILITIES;
   }
 
   // ========================================================================

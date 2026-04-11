@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Sprint 2 Wave 4 (TypeScript SDK)
 
+- **`db.capabilities()` API — static feature map per backend**
+  (`sdks/typescript/src/capabilities.ts` + client + both backends,
+  Commit 7) — closes the `#24 F-BACK-002` audit finding. Callers
+  can now inspect the active backend's feature set at
+  construction time and gracefully degrade their workflow instead
+  of catching a runtime `NOT_SUPPORTED` error after the fact.
+
+  ```typescript
+  import { VelesDB, type CapabilityMap } from '@wiscale/velesdb-sdk';
+
+  const db = new VelesDB({ backend: 'wasm' });
+  await db.init();
+
+  const caps: Readonly<CapabilityMap> = db.capabilities();
+  if (caps.graphTraversal) {
+    await db.traverseGraph('kg', { source: 1, direction: 'out' });
+  } else {
+    // WASM backend does not ship graph traversal — fall back to
+    // REST or a pure in-memory traversal
+  }
+  ```
+
+  The map is **frozen at backend construction** and does NOT
+  round-trip to a live server. It reflects the features the SDK
+  version actually wraps for the selected backend — callers who
+  want live server feature flags should still catch `VelesError`
+  at the call site.
+
+  `CapabilityMap` has 13 boolean fields covering every major SDK
+  surface: `vectorSearch`, `textSearch`, `hybridSearch`,
+  `multiQuerySearch`, `sparseSearch`, `scroll`, `graphTraversal`,
+  `secondaryIndexes`, `agentMemory`, `streamInsert`, `pqTraining`,
+  `velesqlQuery`, `collectionIntrospection`. REST advertises all
+  13 as `true`; WASM advertises the 5 search-and-query paths as
+  `true` and the 8 persistent/graph/streaming paths as `false`
+  (matching the `wasmNotSupported()` stubs).
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `CapabilityMap` (interface)
+  - `REST_CAPABILITIES`, `WASM_CAPABILITIES` (frozen singletons)
+
 - **WASM backend index-management stubs now throw explicitly**
   (`sdks/typescript/src/backends/wasm-stubs.ts`, Commit 6) — closes
   the `#23 F-BACK-001` audit finding where `wasmListIndexes`,

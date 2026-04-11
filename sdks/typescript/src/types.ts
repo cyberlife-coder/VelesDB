@@ -4,6 +4,7 @@
  */
 
 import type { FilterInput } from './filter';
+import type { CapabilityMap } from './capabilities';
 
 /** Supported distance metrics for vector similarity */
 export type DistanceMetric = 'cosine' | 'euclidean' | 'dot' | 'hamming' | 'jaccard';
@@ -645,9 +646,19 @@ export interface CreateIndexOptions {
 export interface IVelesDBBackend {
   /** Initialize the backend */
   init(): Promise<void>;
-  
+
   /** Check if backend is initialized */
   isInitialized(): boolean;
+
+  /**
+   * Return the static capability map for this backend.
+   *
+   * The map is frozen at backend construction — it does NOT round-trip
+   * to a live server. Use it to gracefully degrade UI / workflow when
+   * a feature is not available instead of catching a runtime
+   * `NOT_SUPPORTED` error after the fact.
+   */
+  capabilities(): Readonly<CapabilityMap>;
   
   /** Create a new collection */
   createCollection(name: string, config: CollectionConfig): Promise<void>;

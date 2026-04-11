@@ -34,6 +34,7 @@ import type {
   ScrollResponse,
 } from './types';
 import type { FilterInput } from './filter';
+import type { CapabilityMap } from './capabilities';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
 import { RestBackend } from './backends/rest';
@@ -587,6 +588,28 @@ export class VelesDB {
       await this.backend.close();
       this.initialized = false;
     }
+  }
+
+  /**
+   * Return the static capability map of the active backend.
+   *
+   * The map is frozen at backend construction and reflects the
+   * features the SDK wraps for the selected backend (`rest` or
+   * `wasm`). Use it to gracefully degrade workflows when a feature
+   * is not available instead of catching a runtime `NOT_SUPPORTED`
+   * error after the fact.
+   *
+   * @example
+   * ```typescript
+   * if (db.capabilities().graphTraversal) {
+   *   await db.traverseGraph('kg', { source: 1, direction: 'out' });
+   * } else {
+   *   // fall back to REST or another data path
+   * }
+   * ```
+   */
+  capabilities(): Readonly<CapabilityMap> {
+    return this.backend.capabilities();
   }
 
   /**

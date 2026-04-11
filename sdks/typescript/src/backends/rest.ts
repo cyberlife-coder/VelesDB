@@ -39,6 +39,8 @@ import type {
   ScrollResponse,
 } from '../types';
 import type { FilterInput } from '../filter';
+import type { CapabilityMap } from '../capabilities';
+import { REST_CAPABILITIES } from '../capabilities';
 import { ConnectionError } from '../types';
 import {
   storeSemanticFact as _storeSemanticFact,
@@ -346,6 +348,10 @@ export class RestBackend implements IVelesDBBackend {
 
   async close(): Promise<void> {
     this._initialized = false;
+  }
+
+  capabilities(): Readonly<CapabilityMap> {
+    return REST_CAPABILITIES;
   }
 
   // ==========================================================================

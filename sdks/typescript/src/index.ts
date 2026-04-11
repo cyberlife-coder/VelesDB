@@ -32,6 +32,8 @@ export { f, isTypedFilter, normalizeFilter } from './filter';
 export type { Filter, Condition, CompareOp, FilterInput, JsonValue } from './filter';
 export { searchQualityToMode } from './search-quality';
 export type { SearchQualityWire } from './search-quality';
+export { REST_CAPABILITIES, WASM_CAPABILITIES } from './capabilities';
+export type { CapabilityMap } from './capabilities';
 export {
   VelesError,
   CollectionExistsError,
