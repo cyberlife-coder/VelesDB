@@ -6,7 +6,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RestBackend } from '../src/backends/rest';
-import { VelesDBError, NotFoundError, ConnectionError, ValidationError } from '../src/types';
+import { VelesDBError, ConnectionError, ValidationError } from '../src/types';
+import { CollectionNotFoundError } from '../src/errors';
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -103,9 +104,14 @@ describe('RestBackend', () => {
     });
 
     it('should return null for non-existent collection', async () => {
+      // Server emits VELES-002 with the verbatim message; the transport layer
+      // recognises CollectionNotFoundError as the "absent" signal and returns null.
       mockFetch.mockResolvedValueOnce({
         ok: false,
-        json: () => Promise.resolve({ code: 'NOT_FOUND', message: 'Not found' }),
+        json: () => Promise.resolve({
+          code: 'VELES-002',
+          message: "[VELES-002] Collection 'nonexistent' not found",
+        }),
       });
 
       const col = await backend.getCollection('nonexistent');
@@ -357,15 +363,18 @@ describe('RestBackend', () => {
       expect(results[0].score).toBe(0.95);
     });
 
-    it('should handle collection not found', async () => {
+    it('should handle collection not found (VELES-002 → CollectionNotFoundError)', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
-        json: () => Promise.resolve({ code: 'NOT_FOUND', message: 'Collection not found' }),
+        json: () => Promise.resolve({
+          code: 'VELES-002',
+          message: "[VELES-002] Collection 'nonexistent' not found",
+        }),
       });
 
       await expect(backend.multiQuerySearch('nonexistent', [[0.1, 0.2]]))
-        .rejects.toThrow(NotFoundError);
+        .rejects.toThrow(CollectionNotFoundError);
     });
 
     it('should use default fusion strategy when not specified', async () => {

@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Sprint 2 Wave 4 (TypeScript SDK)
 
+- **Typed error hierarchy with verbatim `VELES-XXX` codes**
+  (`sdks/typescript/src/errors.ts`, Commit 2) — 36 typed error classes,
+  one per `velesdb_core::Error` variant, all extending a new `VelesError`
+  base class which itself extends `VelesDBError` for backward compat.
+  Closes the `#20 PROP-ERR-TSSDK` audit finding.
+
+  ```typescript
+  import {
+    CollectionNotFoundError,
+    DimensionMismatchError,
+    GuardRailError,
+    VelesError,
+  } from '@wiscale/velesdb-sdk';
+
+  try {
+    await db.search('docs', queryVector, { k: 10 });
+  } catch (e) {
+    if (e instanceof CollectionNotFoundError) {
+      // VELES-002 — e.code is preserved verbatim
+      console.log('code:', e.code); // "VELES-002"
+    } else if (e instanceof DimensionMismatchError) {
+      // VELES-004
+    } else if (e instanceof GuardRailError) {
+      // VELES-027 — rate limit, timeout, cardinality, etc.
+    } else if (e instanceof VelesError) {
+      // Any other VELES-XXX, forward-compat with newer core versions
+    } else {
+      throw e;
+    }
+  }
+  ```
+
+  The SDK no longer fabricates fake codes like `'NOT_FOUND'` when
+  dispatching server responses. The transport layer (`shared.ts::throwOnError`)
+  now routes via `parseVelesError(code, message)`, which instantiates
+  the matching typed class from the server's exact `VELES-XXX` code.
+
+  **Backward compatibility**: the four legacy client-side error classes
+  (`ConnectionError`, `ValidationError`, `NotFoundError`, `BackpressureError`)
+  are unchanged — they cover connection/validation/WASM-lookup scenarios
+  that never carry a `VELES-XXX` code. Existing `catch (e instanceof
+  VelesDBError)` handlers continue to catch everything they did before.
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `VelesError` (base class for server errors)
+  - 36 typed sub-classes (`CollectionNotFoundError`, `DimensionMismatchError`,
+    `StorageError`, `QueryError`, `GuardRailError`, ...)
+  - `parseVelesError(code, message)` — runtime discriminator factory
+  - `VELES_ERROR_CODES` — ordered const array of all 36 codes
+  - `VelesErrorCode` — union type of every known code
+
 - **Typed `Filter` DSL** (`sdks/typescript/src/filter.ts`, Commit 1) —
   discriminated union mirror of `velesdb_core::filter::Condition`
   (20 operators) with a fluent builder `f.*` for ergonomic filter
