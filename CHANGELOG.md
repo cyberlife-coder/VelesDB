@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Sprint 2 Wave 4 (TypeScript SDK)
 
+- **WASM backend index-management stubs now throw explicitly**
+  (`sdks/typescript/src/backends/wasm-stubs.ts`, Commit 6) — closes
+  the `#23 F-BACK-001` audit finding where `wasmListIndexes`,
+  `wasmHasIndex`, and `wasmDropIndex` silently returned `[]` and
+  `false` respectively. Those empty results made callers believe
+  "this collection has no indexes / the drop succeeded" when in
+  reality the WASM backend does not support index management at
+  all. The stubs now throw a `VelesDBError` with code
+  `'NOT_SUPPORTED'` via the shared `wasmNotSupported()` helper,
+  making the capability boundary visible upfront.
+
+  ```typescript
+  const db = new VelesDB({ backend: 'wasm' });
+  await db.init();
+
+  // Pre-v1.13: silently returned [] — caller never knew the op
+  //            was unsupported and wrote code around an empty list.
+  // v1.13:     throws VelesDBError('... not supported in WASM
+  //            backend. Use REST backend.')
+  try {
+    const indexes = await db.listIndexes('docs');
+  } catch (e) {
+    if (e instanceof VelesDBError && e.code === 'NOT_SUPPORTED') {
+      // fall back to REST backend or a pure in-memory index
+    }
+  }
+  ```
+
+  `wasmCreateIndex` is also aligned onto the shared
+  `wasmNotSupported()` helper (it previously threw a bespoke
+  `Error`) so all four index-management stubs emit identical error
+  shapes.
+
 - **`SearchOptions.quality` forwarded to REST as `mode`**
   (`sdks/typescript/src/search-quality.ts` +
   `backends/search-backend.ts`, Commit 5) — the `quality` field that
