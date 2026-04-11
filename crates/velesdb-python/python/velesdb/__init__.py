@@ -13,7 +13,12 @@ from typing import Any, Iterable
 from velesdb.velesdb import (  # type: ignore[attr-defined]
     AgentMemory,
     Collection as _RawCollection,
+    CollectionExistsError,
+    CollectionNotFoundError,
     Database as _RawDatabase,
+    DatabaseLockedError,
+    DimensionMismatchError,
+    EdgeExistsError,
     FusionStrategy,
     GraphStore as _RawGraphStore,
     ParsedStatement,
@@ -25,6 +30,7 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     SearchResult,
     StreamingConfig,
     TraversalResult,
+    VelesDBError,
     VelesQL as _RawVelesQL,
     VelesQLParameterError,
     VelesQLSyntaxError,
@@ -421,5 +427,14 @@ __all__ = [
     "PyProceduralMemory",
     "PyGraphCollection",
     "PyGraphSchema",
+    # Typed VelesDB exception hierarchy (all inherit from `VelesDBError`).
+    # Import them via `import velesdb` and catch the specific subclass
+    # for actionable error handling; use `VelesDBError` as a catch-all.
+    "VelesDBError",
+    "CollectionNotFoundError",
+    "CollectionExistsError",
+    "DimensionMismatchError",
+    "EdgeExistsError",
+    "DatabaseLockedError",
     "__version__",
 ]
