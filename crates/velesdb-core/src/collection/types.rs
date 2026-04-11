@@ -21,7 +21,7 @@ use crate::point::Point;
 use crate::quantization::{
     BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
 };
-use crate::storage::{LogPayloadStorage, MmapStorage};
+use crate::storage::{LogPayloadStorage, MmapStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -279,6 +279,27 @@ pub(crate) struct Collection {
     ///
     /// Lock order position: **11** (same tier as `deferred_indexer`).
     pub(crate) async_index_builder: Option<Arc<AsyncIndexBuilder>>,
+
+    /// Runtime-only auto-reindex manager (Wave 3 Commit 9).
+    ///
+    /// `None` by default. Attached via
+    /// [`VectorCollection::attach_auto_reindex`] after the collection is
+    /// opened. **Not persisted** to `config.json` — each caller must
+    /// re-attach after every [`Database::open`](crate::Database::open) to
+    /// avoid the `Duration` serde round-trip problem and the associated
+    /// schema version bump.
+    ///
+    /// When attached, the bulk upsert hot path (see `crud_bulk.rs`) calls
+    /// [`AutoReindexManager::should_reindex`](crate::collection::auto_reindex::AutoReindexManager::should_reindex)
+    /// after a successful batch. A `true` result is surfaced via
+    /// `tracing::info!` — automatic reconstruction is out of scope for
+    /// Wave 3 and is left to the caller or a background task.
+    ///
+    /// Lock order position: **11** (same tier as `deferred_indexer` /
+    /// `async_index_builder`).
+    pub(crate) auto_reindex: Arc<
+        RwLock<Option<Arc<crate::collection::auto_reindex::AutoReindexManager>>>,
+    >,
 }
 
 impl Collection {
@@ -368,5 +389,106 @@ impl Collection {
             self.delta_buffer
                 .extend(entries.iter().map(|(id, v)| (*id, v.clone())));
         }
+    }
+
+    /// Attaches a runtime-only [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager).
+    ///
+    /// Replaces any previously attached manager. The manager is consulted by
+    /// the bulk upsert hot path after every successful batch and can be
+    /// queried externally via [`Self::auto_reindex_manager`] or
+    /// [`Self::check_auto_reindex_divergence`].
+    ///
+    /// The attachment is **not persisted**. After a [`Database::open`] the
+    /// caller must re-attach the manager if auto-reindex behavior is desired.
+    pub(crate) fn attach_auto_reindex(
+        &self,
+        manager: Arc<crate::collection::auto_reindex::AutoReindexManager>,
+    ) {
+        *self.auto_reindex.write() = Some(manager);
+    }
+
+    /// Detaches the currently attached auto-reindex manager, if any.
+    ///
+    /// Subsequent bulk upserts will no longer consult the manager. Returns
+    /// the previously attached manager so callers can drop or reuse it.
+    pub(crate) fn detach_auto_reindex(
+        &self,
+    ) -> Option<Arc<crate::collection::auto_reindex::AutoReindexManager>> {
+        self.auto_reindex.write().take()
+    }
+
+    /// Returns a clone of the currently attached auto-reindex manager, if any.
+    ///
+    /// External consumers use this to inspect the manager state, register
+    /// their own event callbacks, or trigger a manual reindex.
+    #[must_use]
+    pub(crate) fn auto_reindex_manager(
+        &self,
+    ) -> Option<Arc<crate::collection::auto_reindex::AutoReindexManager>> {
+        self.auto_reindex.read().as_ref().map(Arc::clone)
+    }
+
+    /// Returns a [`DivergenceCheck`](crate::collection::auto_reindex::DivergenceCheck)
+    /// from the attached manager, or `None` if no manager is attached.
+    ///
+    /// Uses the collection's current persisted HNSW params, the live vector
+    /// count, and the configured dimension. Callers that want to force a
+    /// particular parameter set should use the manager directly via
+    /// [`Self::auto_reindex_manager`].
+    ///
+    /// This method is a read-only query — it does not trigger any state
+    /// transition on the manager.
+    #[must_use]
+    pub(crate) fn check_auto_reindex_divergence(
+        &self,
+    ) -> Option<crate::collection::auto_reindex::DivergenceCheck> {
+        let manager = self.auto_reindex_manager()?;
+        let (params, size, dimension) = self.auto_reindex_inputs();
+        Some(manager.check_divergence(&params, size, dimension))
+    }
+
+    /// Notifies the attached auto-reindex manager after a successful bulk
+    /// upsert, surfacing a `tracing::info!` event when the manager reports
+    /// that a reindex would be beneficial.
+    ///
+    /// Silently no-ops when no manager is attached. Does not block the
+    /// hot path — the only cost is three `parking_lot::RwLock::read()`
+    /// calls when a manager is attached, and zero syscalls when it is not.
+    ///
+    /// This method intentionally does NOT trigger automatic reindex
+    /// reconstruction: the runtime-only attachment model leaves that
+    /// decision to the caller. External consumers can wire their own
+    /// reindex pipeline on top of [`Self::auto_reindex_manager`].
+    pub(crate) fn notify_auto_reindex_after_bulk(&self) {
+        let Some(manager) = self.auto_reindex_manager() else {
+            return;
+        };
+        let (params, size, dimension) = self.auto_reindex_inputs();
+        if manager.should_reindex(&params, size, dimension) {
+            let name = self.config.read().name.clone();
+            tracing::info!(
+                collection = %name,
+                current_size = size,
+                dimension = dimension,
+                "auto-reindex manager reports divergence — reindex recommended"
+            );
+        }
+    }
+
+    /// Gathers the three inputs `AutoReindexManager` needs from the
+    /// collection: current HNSW params (persisted in config, falling back
+    /// to the engine default when unset), live vector count, and the
+    /// configured vector dimension.
+    ///
+    /// Extracted as a helper so [`Self::check_auto_reindex_divergence`]
+    /// and [`Self::notify_auto_reindex_after_bulk`] share the same source
+    /// of truth instead of drifting.
+    fn auto_reindex_inputs(&self) -> (crate::index::hnsw::HnswParams, usize, usize) {
+        let config = self.config.read();
+        let params = config.hnsw_params.unwrap_or_default();
+        let dimension = config.dimension;
+        drop(config);
+        let size = self.vector_storage.read().len();
+        (params, size, dimension)
     }
 }

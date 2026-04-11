@@ -85,6 +85,13 @@ impl Collection {
             self.upsert_bulk_standard_path(&vector_refs, points, &sparse_batch, fsync)?
         };
 
+        // Wave 3 Commit 9 — wire `AutoReindexManager` into the bulk hot
+        // path. No-op when no manager is attached; emits a `tracing::info!`
+        // event when the attached manager reports divergence. Actual
+        // reindex reconstruction is out of scope for runtime-only
+        // attachment and is left to the external consumer.
+        self.notify_auto_reindex_after_bulk();
+
         Ok(count)
     }
 
