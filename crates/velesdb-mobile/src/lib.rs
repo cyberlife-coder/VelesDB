@@ -133,13 +133,17 @@ impl VelesDatabase {
     /// * `name` - Unique name for the collection
     /// * `dimension` - Vector dimension
     /// * `metric` - Distance metric
-    /// * `storage_mode` - Storage optimization (Full, Sq8, Binary)
+    /// * `storage_mode` - Storage optimization (see [`StorageMode`])
     ///
     /// # Storage Modes
     ///
     /// - **Full**: Best recall, 4 bytes/dimension
     /// - **Sq8**: 4x compression, ~1% recall loss (recommended for mobile)
     /// - **Binary**: 32x compression, ~5-10% recall loss (for extreme constraints)
+    /// - **`ProductQuantization`**: 8x-16x compression via trained codebooks
+    ///   (requires a training step before upserts)
+    /// - **`Rabitq`**: 32x compression with ~1-2% recall loss (1-bit with
+    ///   rotation + scalar correction)
     pub fn create_collection_with_storage(
         &self,
         name: String,

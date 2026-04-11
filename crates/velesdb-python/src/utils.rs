@@ -363,6 +363,46 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_storage_mode_pq() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|_py| {
+            assert!(matches!(
+                parse_storage_mode("pq").unwrap(),
+                StorageMode::ProductQuantization
+            ));
+            assert!(matches!(
+                parse_storage_mode("product_quantization").unwrap(),
+                StorageMode::ProductQuantization
+            ));
+            // Case-insensitive (delegates to core `StorageMode::from_str`).
+            assert!(matches!(
+                parse_storage_mode("PQ").unwrap(),
+                StorageMode::ProductQuantization
+            ));
+        });
+    }
+
+    #[test]
+    fn test_parse_storage_mode_rabitq() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|_py| {
+            assert!(matches!(
+                parse_storage_mode("rabitq").unwrap(),
+                StorageMode::RaBitQ
+            ));
+            // Case-insensitive (delegates to core `StorageMode::from_str`).
+            assert!(matches!(
+                parse_storage_mode("RaBitQ").unwrap(),
+                StorageMode::RaBitQ
+            ));
+            assert!(matches!(
+                parse_storage_mode("RABITQ").unwrap(),
+                StorageMode::RaBitQ
+            ));
+        });
+    }
+
+    #[test]
     fn test_parse_storage_mode_invalid() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {

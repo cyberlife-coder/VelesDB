@@ -256,6 +256,32 @@ class Database:
         ef_construction: int | None = None,
         expected_vectors: int | None = None,
     ) -> "Collection":
+        """Create a new vector collection.
+
+        Args:
+            name: Collection name.
+            dimension: Vector dimension (e.g. 768 for BERT embeddings).
+            metric: Distance metric (default ``"cosine"``). One of ``"cosine"``,
+                ``"euclidean"``, ``"dot"``, ``"hamming"``, ``"jaccard"``.
+            storage_mode: Storage mode (default ``"full"``). Accepted values
+                (case-insensitive; aliases in parentheses):
+
+                - ``"full"`` (``"f32"``): Full f32 precision — best recall.
+                - ``"sq8"`` (``"int8"``): 8-bit scalar quantization — 4x compression.
+                - ``"binary"`` (``"bit"``): 1-bit binary quantization — 32x compression.
+                - ``"pq"`` (``"product_quantization"``): Product Quantization — 8x-16x
+                  compression via trained codebooks (requires a training step).
+                - ``"rabitq"``: RaBitQ — 1-bit with rotation + scalar correction,
+                  32x compression with ~1-2% recall loss.
+
+            m: HNSW ``max_connections`` parameter (overrides adaptive default).
+            ef_construction: HNSW ``ef_construction`` parameter (overrides adaptive default).
+            expected_vectors: Expected dataset size used to auto-tune ``m`` and
+                ``ef_construction`` when they are not explicitly set.
+
+        Returns:
+            Collection instance wrapping the underlying Rust collection.
+        """
         col = self._inner.create_collection(
             name, dimension, metric, storage_mode, m, ef_construction, expected_vectors
         )
@@ -277,6 +303,17 @@ class Database:
         ef_construction: int | None = None,
         expected_vectors: int | None = None,
     ) -> "Collection":
+        """Return an existing collection or create it if missing.
+
+        When the collection already exists, it is returned as-is — ``dimension``,
+        ``metric``, and ``storage_mode`` are ignored for the lookup path and no
+        compatibility check is performed against the stored configuration.
+
+        Args and accepted storage modes are identical to :meth:`create_collection`.
+
+        Returns:
+            Existing :class:`Collection` if found, otherwise a freshly created one.
+        """
         existing = self.get_collection(name)
         if existing is not None:
             return existing
