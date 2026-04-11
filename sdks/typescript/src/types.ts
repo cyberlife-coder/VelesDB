@@ -49,6 +49,38 @@ export interface HnswParams {
   alpha?: number;
 }
 
+/**
+ * Deferred indexing configuration (`velesdb_core::collection::streaming::DeferredIndexerConfig`).
+ *
+ * When enabled, inserts are buffered in memory and batch-merged into the
+ * HNSW index once the buffer reaches `mergeThreshold` or once the oldest
+ * buffered vector is older than `maxBufferAgeMs`. Trades insert latency
+ * for throughput.
+ */
+export interface DeferredIndexerOptions {
+  /** Whether deferred indexing is enabled (default: false). */
+  enabled?: boolean;
+  /** Number of buffered vectors that triggers a merge into HNSW. */
+  mergeThreshold?: number;
+  /** Max age (ms) of the oldest buffered vector before a time-based merge. */
+  maxBufferAgeMs?: number;
+}
+
+/**
+ * Async index builder configuration (`velesdb_core::collection::streaming::AsyncIndexBuilderConfig`).
+ *
+ * Enables the parallel segment-based `AsyncIndexBuilder` for bulk inserts
+ * (Issue #488 — Bulk Insert V2). Used when the collection is known to
+ * receive large bulk loads where the extra segment coordination cost is
+ * amortised over millions of inserts.
+ */
+export interface AsyncIndexBuilderOptions {
+  /** Buffered vector count that triggers a build (default: 10_000). */
+  mergeThreshold?: number;
+  /** Number of segments for parallel construction (default: num_cpus). */
+  segmentCount?: number;
+}
+
 /** Collection configuration */
 export interface CollectionConfig {
   /** Vector dimension (e.g., 768 for BERT, 1536 for GPT). Required for vector collections. */
@@ -59,6 +91,8 @@ export interface CollectionConfig {
    * - 'full': Full f32 precision (3 KB/vector for 768D)
    * - 'sq8': 8-bit scalar quantization, 4x memory reduction (~1% recall loss)
    * - 'binary': 1-bit binary quantization, 32x memory reduction (edge/IoT)
+   * - 'pq': Product quantization (requires training via `trainPq`)
+   * - 'rabitq': RaBitQ quantization (binary + rescoring)
    */
   storageMode?: StorageMode;
   /** Collection type: 'vector' (default) or 'metadata_only' */
@@ -67,6 +101,18 @@ export interface CollectionConfig {
   description?: string;
   /** Optional HNSW parameters for index tuning */
   hnsw?: HnswParams;
+  /**
+   * PQ rescore oversampling factor (quantised storage modes only).
+   *
+   * The search pipeline fetches `max(k * factor, k + 32)` candidates from
+   * HNSW and rescores them with full-precision ADC. Default is `4`.
+   * Setting `0` disables rescoring (fastest, lowest recall).
+   */
+  pqRescoreOversampling?: number;
+  /** Deferred indexing buffer configuration (US-366). */
+  deferredIndexing?: DeferredIndexerOptions;
+  /** Parallel async index builder configuration (Issue #488). */
+  asyncIndexBuilder?: AsyncIndexBuilderOptions;
 }
 
 /** Collection metadata */
@@ -419,7 +465,7 @@ export interface CollectionStatsResponse {
   columnStats?: Record<string, ColumnStatsDetail>;
 }
 
-/** Collection configuration response */
+/** Collection configuration response. Mirrors `velesdb_core::api_types::CollectionConfigResponse`. */
 export interface CollectionConfigResponse {
   name: string;
   dimension: number;
@@ -429,6 +475,19 @@ export interface CollectionConfigResponse {
   metadataOnly: boolean;
   graphSchema?: Record<string, unknown>;
   embeddingDimension?: number;
+  /**
+   * On-disk schema version. Increments when the persisted `config.json`
+   * format changes in a way older `VelesDB` versions cannot safely read.
+   */
+  schemaVersion?: number;
+  /** PQ rescore oversampling factor — see `CollectionConfig.pqRescoreOversampling`. */
+  pqRescoreOversampling?: number;
+  /** Persisted HNSW parameters when customised at create time (raw server JSON). */
+  hnswParams?: Record<string, unknown>;
+  /** Deferred indexing configuration (`null` / absent when the feature is disabled for this collection). */
+  deferredIndexing?: Record<string, unknown>;
+  /** Async index builder configuration (`null` / absent when the feature is disabled for this collection). */
+  asyncIndexBuilder?: Record<string, unknown>;
 }
 
 // ============================================================================

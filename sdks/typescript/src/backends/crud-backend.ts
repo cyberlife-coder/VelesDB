@@ -48,12 +48,43 @@ export function sparseVectorToRestFormat(sv: SparseVector): Record<string, numbe
   return result;
 }
 
+/**
+ * Convert a TypeScript `DeferredIndexerOptions` into the snake_case JSON
+ * shape expected by `velesdb_core::collection::streaming::DeferredIndexerConfig`.
+ * Returns `undefined` when the caller did not supply the option, so the
+ * field is dropped from the request body entirely.
+ */
+function toDeferredIndexingWire(
+  opts: CollectionConfig['deferredIndexing']
+): Record<string, unknown> | undefined {
+  if (!opts) return undefined;
+  const wire: Record<string, unknown> = {};
+  if (opts.enabled !== undefined) wire.enabled = opts.enabled;
+  if (opts.mergeThreshold !== undefined) wire.merge_threshold = opts.mergeThreshold;
+  if (opts.maxBufferAgeMs !== undefined) wire.max_buffer_age_ms = opts.maxBufferAgeMs;
+  return wire;
+}
+
+/**
+ * Convert a TypeScript `AsyncIndexBuilderOptions` into the snake_case JSON
+ * shape expected by `velesdb_core::collection::streaming::AsyncIndexBuilderConfig`.
+ */
+function toAsyncIndexBuilderWire(
+  opts: CollectionConfig['asyncIndexBuilder']
+): Record<string, unknown> | undefined {
+  if (!opts) return undefined;
+  const wire: Record<string, unknown> = {};
+  if (opts.mergeThreshold !== undefined) wire.merge_threshold = opts.mergeThreshold;
+  if (opts.segmentCount !== undefined) wire.segment_count = opts.segmentCount;
+  return wire;
+}
+
 export async function createCollection(
   transport: CrudTransport,
   name: string,
   config: CollectionConfig
 ): Promise<void> {
-  const response = await transport.requestJson('POST', '/collections', {
+  const body: Record<string, unknown> = {
     name,
     dimension: config.dimension,
     metric: config.metric ?? 'cosine',
@@ -62,7 +93,24 @@ export async function createCollection(
     description: config.description,
     hnsw_m: config.hnsw?.m,
     hnsw_ef_construction: config.hnsw?.efConstruction,
-  });
+  };
+
+  // Advanced options — omit the key entirely when undefined so
+  // `JSON.stringify` produces a minimal payload and the server falls
+  // back to defaults.
+  if (config.pqRescoreOversampling !== undefined) {
+    body.pq_rescore_oversampling = config.pqRescoreOversampling;
+  }
+  const deferredWire = toDeferredIndexingWire(config.deferredIndexing);
+  if (deferredWire !== undefined) {
+    body.deferred_indexing = deferredWire;
+  }
+  const asyncWire = toAsyncIndexBuilderWire(config.asyncIndexBuilder);
+  if (asyncWire !== undefined) {
+    body.async_index_builder = asyncWire;
+  }
+
+  const response = await transport.requestJson('POST', '/collections', body);
   throwOnError(response);
 }
 

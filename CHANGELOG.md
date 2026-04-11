@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Sprint 2 Wave 4 (TypeScript SDK)
 
+- **Advanced `CollectionConfig` fields wired through to REST**
+  (`sdks/typescript/src/types.ts` + `backends/crud-backend.ts` +
+  `backends/admin-backend.ts`, Commit 3) — the TS SDK now exposes
+  every advanced create-time option accepted by
+  `velesdb_core::api_types::CreateCollectionRequest` and every
+  advanced field returned by `CollectionConfigResponse`. Closes the
+  `#18 PROP-CONFIG-ADVANCED` audit finding.
+
+  New create-time fields on `CollectionConfig`:
+
+  ```typescript
+  import { VelesDB, type CollectionConfig } from '@wiscale/velesdb-sdk';
+
+  const config: CollectionConfig = {
+    dimension: 1536,
+    metric: 'cosine',
+    storageMode: 'pq',
+    hnsw: { m: 48, efConstruction: 600 },
+    // — NEW advanced options (all optional, default to engine behaviour) —
+    pqRescoreOversampling: 8,                        // PQ/SQ8 candidate rescoring factor
+    deferredIndexing: {                              // US-366 in-memory buffer
+      enabled: true,
+      mergeThreshold: 5000,
+      maxBufferAgeMs: 30_000,
+    },
+    asyncIndexBuilder: {                             // Issue #488 parallel bulk build
+      mergeThreshold: 50_000,
+      segmentCount: 8,
+    },
+  };
+  await db.createCollection('rag', config);
+  ```
+
+  The three new sub-interfaces (`DeferredIndexerOptions`,
+  `AsyncIndexBuilderOptions`) are TS-ergonomic camelCase mirrors of
+  the Rust `DeferredIndexerConfig` / `AsyncIndexBuilderConfig`
+  structs. The crud-backend converts them to the snake_case wire
+  format (`merge_threshold`, `max_buffer_age_ms`, `segment_count`)
+  before forwarding, and omits any field the caller did not supply
+  so the server falls back to its defaults.
+
+  New read-time fields on `CollectionConfigResponse`:
+  `schemaVersion`, `pqRescoreOversampling`, `hnswParams`,
+  `deferredIndexing`, `asyncIndexBuilder`. Consumers can now inspect
+  the on-disk schema version and the effective advanced configuration
+  of an existing collection via `db.getCollectionConfig()`.
+
+  **Backward compatible**: every new field is optional. Callers that
+  don't pass them see zero behavioural change — the REST body omits
+  the keys and the server applies defaults. Existing code compiles
+  and runs unchanged.
+
 - **Typed error hierarchy with verbatim `VELES-XXX` codes**
   (`sdks/typescript/src/errors.ts`, Commit 2) — 36 typed error classes,
   one per `velesdb_core::Error` variant, all extending a new `VelesError`
