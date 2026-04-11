@@ -33,7 +33,7 @@ def generate_clustered_data(n_vectors: int, dim: int, n_clusters: int = 50) -> n
     data = []
     
     np.random.seed(42)
-    for c in range(n_clusters):
+    for _ in range(n_clusters):
         # Centre du cluster
         center = np.random.randn(dim).astype('float32')
         center = center / np.linalg.norm(center)

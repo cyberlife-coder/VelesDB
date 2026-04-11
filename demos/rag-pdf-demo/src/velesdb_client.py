@@ -11,8 +11,6 @@ from .config import get_settings
 class VelesDBConnectionError(Exception):
     """Error connecting to VelesDB server."""
 
-    pass
-
 
 class VelesDBClient:
     """Async client for VelesDB REST API with persistent connection."""

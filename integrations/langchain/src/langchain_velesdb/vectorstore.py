@@ -43,7 +43,14 @@ from langchain_velesdb._common import payload_to_doc_parts
 from langchain_velesdb.point_builder import build_point as _build_point, flush_stream_batches as _flush_stream_batches
 from langchain_velesdb.search_ops import SearchOpsMixin
 from langchain_velesdb.graph_ops import GraphOpsMixin
-from langchain_velesdb.scroll_ops import ScrollOpsMixin, _scroll_one_batch  # noqa: F401
+from langchain_velesdb.scroll_ops import (  # noqa: F401  # pylint: disable=unused-import
+    ScrollOpsMixin,
+    # `_scroll_one_batch` is re-imported intentionally: tests
+    # monkeypatch ``langchain_velesdb.vectorstore._scroll_one_batch``
+    # to observe pagination, so the symbol must be bound at module
+    # scope even though nothing in this file calls it directly.
+    _scroll_one_batch,
+)
 
 logger = logging.getLogger(__name__)
 

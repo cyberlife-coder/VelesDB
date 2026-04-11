@@ -156,7 +156,7 @@ class RAGEngine:
 
         # Prepare points for VelesDB
         points = []
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+        for chunk, embedding in zip(chunks, embeddings):
             # Use hash of full chunk ID for better collision resistance
             # chunk["id"] is 32 hex chars, take first 16 for u64 (still good distribution)
             chunk_id = int(chunk["id"][:16], 16)  # 64-bit ID from first half of MD5

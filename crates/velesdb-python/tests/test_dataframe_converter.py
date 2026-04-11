@@ -14,7 +14,6 @@ Run with: pytest tests/test_dataframe_converter.py -v
 from __future__ import annotations
 
 import importlib.util
-import math
 import pathlib
 import sys
 from typing import Any

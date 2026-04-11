@@ -12,12 +12,10 @@ Companion article:
 """
 
 import os
-import sys
 import time
 import shutil
 import urllib.request
 
-import numpy as np
 from PIL import Image
 import imagehash
 import velesdb

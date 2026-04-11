@@ -70,7 +70,7 @@ class TestScrollNominal:
     def test_scroll_first_page_returns_documents(self, store_with_docs):
         # GIVEN a store with 5 documents
         # WHEN scroll is called with no cursor
-        docs, cursor = store_with_docs.scroll(cursor=None, batch_size=100)
+        docs, _cursor = store_with_docs.scroll(cursor=None, batch_size=100)
 
         # THEN docs is a list of Document objects
         assert isinstance(docs, list)
@@ -80,7 +80,7 @@ class TestScrollNominal:
     def test_scroll_cursor_none_exhausted_returns_none(self, store_with_docs):
         # GIVEN a store with 5 documents
         # WHEN the full collection fits in one batch
-        docs, cursor = store_with_docs.scroll(cursor=None, batch_size=100)
+        _docs, cursor = store_with_docs.scroll(cursor=None, batch_size=100)
 
         # THEN next cursor is not None (there is a last ID to report)
         # and a follow-up call with that cursor returns nothing
@@ -107,7 +107,7 @@ class TestScrollNominal:
 
     def test_scroll_batch_size_1_returns_one_doc_at_a_time(self, store_with_docs):
         # GIVEN batch_size=1
-        docs, cursor = store_with_docs.scroll(cursor=None, batch_size=1)
+        docs, _cursor = store_with_docs.scroll(cursor=None, batch_size=1)
 
         # THEN exactly one document is returned
         assert len(docs) == 1

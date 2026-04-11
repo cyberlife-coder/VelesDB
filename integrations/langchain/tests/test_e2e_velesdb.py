@@ -14,7 +14,7 @@ import shutil
 import math
 
 try:
-    import velesdb
+    import velesdb  # noqa: F401  # pylint: disable=unused-import
     VELESDB_AVAILABLE = True
 except ImportError:
     VELESDB_AVAILABLE = False
