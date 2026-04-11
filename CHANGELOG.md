@@ -13,6 +13,145 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Database::get_collection()` removed** — Use `get_vector_collection()`, `get_graph_collection()`,
   `get_metadata_collection()`, or `get_any_collection()` instead.
 
+#### Sprint 2 Wave 3 B2 — Python typed-options surface (Commits 10-12)
+
+- **`Database.create_collection` flat HNSW kwargs removed** — the legacy
+  `m=`, `ef_construction=`, and `expected_vectors=` kwargs are replaced
+  by a single typed `hnsw=HnswOptions(...)` parameter. A new
+  `auto_reindex=AutoReindexOptions(...)` parameter attaches a runtime-only
+  `AutoReindexManager` to the freshly-created collection.
+
+  ```python
+  # v1.12 — DEPRECATED
+  db.create_collection("docs", dimension=768, m=48, ef_construction=600)
+  db.create_collection("big", dimension=128, expected_vectors=1_000_000)
+
+  # v1.13 — current
+  from velesdb import HnswOptions, AutoReindexOptions
+  db.create_collection(
+      "docs", dimension=768, hnsw=HnswOptions(m=48, ef_construction=600),
+  )
+  db.create_collection(
+      "big", dimension=128, hnsw=HnswOptions.for_dataset_size(128, 1_000_000),
+  )
+  db.create_collection(
+      "agents", dimension=384,
+      auto_reindex=AutoReindexOptions(min_size_for_reindex=5_000),
+  )
+  ```
+
+- **`Database(path)` accepts an optional `config=VelesConfigOptions(...)`**
+  kwarg for database-level configuration (currently surfaces
+  `LimitsOptions` for tenant-wide guard-rails; other sub-sections stay
+  at engine defaults):
+
+  ```python
+  from velesdb import Database, LimitsOptions, VelesConfigOptions
+  db = Database(
+      "./tenant1",
+      config=VelesConfigOptions(limits=LimitsOptions(max_collections=50)),
+  )
+  ```
+
+- **`WalBatchOptions` is NOT exposed in Python** — concurrent multi-writer
+  WAL is a velesdb-premium Enterprise feature. See
+  `docs/guides/WRITE_CONCURRENCY.md` for the positioning and
+  `docs/CORE_WIRING_DEBT.md` for the technical rationale.
+
+- **`HnswOptions` presets** (Commit 11) — five classmethods for common
+  tuning profiles, each a 1:1 wrapper around the matching
+  `HnswParams` core factory:
+  - `HnswOptions.fast()` — M=16, ef_construction=150
+  - `HnswOptions.turbo()` — M=12, ef_construction=100 (~85% recall)
+  - `HnswOptions.balanced(dimension)` — engine default for the dim
+  - `HnswOptions.high_recall(dimension)` — balanced + 8 M, +200 ef
+  - `HnswOptions.max_recall(dimension)` — tightest recall preset
+
+- **`PyGraphCollection.store_node_payload` renamed to `upsert_node_payload`**
+  (Commit 12) — aligns the Python surface with the core API and the
+  rest of the `upsert*` naming convention:
+
+  ```python
+  # v1.12 — DEPRECATED
+  graph.store_node_payload(node_id, {"name": "Alice"})
+
+  # v1.13 — current
+  graph.upsert_node_payload(node_id, {"name": "Alice"})
+  ```
+
+- **`ParsedStatement.table_name` removed** (Commit 12) — use the
+  canonical `collection_name` getter instead (which has been the
+  preferred name since v1.8):
+
+  ```python
+  # v1.12 — DEPRECATED
+  parsed = VelesQL.parse("SELECT * FROM docs")
+  print(parsed.table_name)   # "docs"
+
+  # v1.13 — current
+  print(parsed.collection_name)  # "docs"
+  ```
+
+### Added — Sprint 2 Wave 3 B2
+
+- **`Database::open_with_config(path, VelesConfig)`** (Commit 6) — new
+  core constructor that threads a `VelesConfig` through
+  `Database::open_impl`. Backed by a new `Database::config()` /
+  `Database::config_arc()` accessor surface for read-only inspection.
+- **`LimitsConfig::max_collections` + `max_dimensions` enforcement**
+  (Commit 7) — both limits are now enforced at collection creation.
+  `max_collections` counts across every typed registry (vector +
+  graph + metadata). `max_dimensions` gates both vector and
+  graph-with-embedding paths. Rejections produce `Error::GuardRail`
+  with a `current / cap` ratio string.
+- **`Database::create_vector_collection_with_params`** (Commit 5) —
+  full-config constructor accepting `(name, dimension, metric,
+  storage_mode, hnsw_params, pq_rescore_oversampling)`. The
+  `storage_mode` argument wins over any `hnsw_params.storage_mode`
+  field, preserving explicit override semantics. Used internally by
+  the Python `Database.create_collection(..., hnsw=HnswOptions(...))`
+  path.
+- **`VectorCollection::attach_auto_reindex` / `detach_auto_reindex` /
+  `auto_reindex_manager` / `check_auto_reindex_divergence`** (Commit 9)
+  — runtime-only attachment of an `AutoReindexManager` to a
+  collection. No persistence: callers must re-attach after every
+  `Database::open`. The bulk upsert hot path consults the attached
+  manager and emits a `tracing::info!` event on divergence.
+  Automatic reindex reconstruction is out of scope — it is left to
+  the caller or an event-driven background task.
+
+### Added — Documentation (Commit 8 W3-honest + Commit 13)
+
+- **`docs/CORE_WIRING_DEBT.md`** — internal engineering debt catalogue
+  listing every `*Config` struct that is parsed but not fully wired
+  to the runtime, with explicit outcome per entry (wired in
+  Community, transferred to velesdb-premium, or scheduled removal).
+- **`docs/guides/WRITE_CONCURRENCY.md`** — customer-facing guide
+  explaining the single-writer-per-collection model, the three
+  Community best-practices (batching, sharding, async ingestion),
+  the anti-pattern to avoid, the Enterprise tier positioning, and
+  an FAQ.
+- **Cross-references added** in `docs/CONCURRENCY_MODEL.md` and
+  `docs/guides/CONCURRENCY_LOCKING.md` pointing at the new
+  `WRITE_CONCURRENCY.md` guide.
+- **`docs/README.md`** — new "Write Concurrency" entry in the User
+  Guides table.
+
+### Changed — Python error handling (Commits 1-4)
+
+- **Typed VelesDB exception hierarchy** — 36 `Error::VELES-XXX` core
+  variants are now mapped to Python exception subclasses via a
+  centralized `core_err()` helper. Three new exception types:
+  `CollectionExistsError`, `EdgeExistsError`, `DatabaseLockedError`,
+  all inheriting from `VelesDBError`. Every mutation path routes
+  through `core_err` instead of stringly-typed `PyRuntimeError`.
+- **GIL release on every `Database` mutation** — `Database.__new__`,
+  `create_collection`, `delete_collection`, `create_metadata_collection`,
+  `create_graph_collection`, `analyze_collection`, `get_collection_stats`,
+  `execute_query`, and `ScrollIterator.__next__` now release the GIL
+  via `py.allow_threads` around the core call. Unlocks parallel
+  Python worker throughput on multi-core machines.
+
 ### Added
 - **Cost model calibration from histograms (Issue #467)** —
   `OperationCostFactors` are now calibrated dynamically during `analyze()` from
