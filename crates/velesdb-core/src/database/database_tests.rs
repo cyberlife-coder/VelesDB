@@ -945,3 +945,174 @@ fn test_database_config_arc_shares_same_instance() {
     let a_ptr: *const crate::config::VelesConfig = std::sync::Arc::as_ptr(&a);
     assert!(std::ptr::eq(a_ptr, r));
 }
+
+// =========================================================================
+// LimitsConfig enforcement — Wave 3 Commit 7
+//
+// Runtime gates that read from `database.config().limits` and refuse
+// operations that would exceed a user-supplied ceiling. These tests
+// anchor each gate with nominal, edge, and negative coverage so later
+// refactors cannot silently relax the enforcement.
+// =========================================================================
+
+#[test]
+fn test_max_collections_limit_refuses_excess_with_guard_rail_error() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_collections: 2,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+
+    db.create_collection("one", 4, DistanceMetric::Cosine)
+        .unwrap();
+    db.create_collection("two", 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    // The third creation must fail with a guard-rail violation carrying
+    // the current/cap ratio in the message — that string is the contract
+    // for any client-side parser that wants to surface "raise the cap"
+    // guidance to the end user.
+    let err = db
+        .create_collection("three", 4, DistanceMetric::Cosine)
+        .unwrap_err();
+    match err {
+        Error::GuardRail(msg) => {
+            assert!(msg.contains("max_collections"));
+            assert!(msg.contains("2 / 2"));
+        }
+        other => panic!("expected GuardRail error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_max_collections_limit_counts_across_all_registries() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_collections: 3,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+
+    // Mix vector + graph + metadata collections — the limit is
+    // tenant-wide, not per-type.
+    db.create_collection("v1", 4, DistanceMetric::Cosine)
+        .unwrap();
+    db.create_graph_collection("g1", crate::collection::GraphSchema::new())
+        .unwrap();
+    db.create_metadata_collection("m1").unwrap();
+
+    // Fourth collection of any kind must be refused.
+    let err = db.create_metadata_collection("m2").unwrap_err();
+    assert!(matches!(err, Error::GuardRail(_)));
+}
+
+#[test]
+fn test_max_dimensions_limit_refuses_oversize_vector() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_dimensions: 512,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+
+    // Exactly at the cap is accepted (inclusive boundary).
+    db.create_collection("boundary", 512, DistanceMetric::Cosine)
+        .unwrap();
+
+    // One above the cap is refused with a guard-rail error.
+    let err = db
+        .create_vector_collection_with_options(
+            "too_big",
+            513,
+            DistanceMetric::Cosine,
+            StorageMode::Full,
+        )
+        .unwrap_err();
+    match err {
+        Error::GuardRail(msg) => {
+            assert!(msg.contains("513"));
+            assert!(msg.contains("512"));
+            assert!(msg.contains("max_dimensions"));
+        }
+        other => panic!("expected GuardRail error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_max_dimensions_limit_applies_to_graph_with_embeddings() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_dimensions: 128,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+
+    // Graph WITHOUT embeddings is always accepted — dimension 0 bypasses
+    // the gate so metadata-only graphs are unaffected.
+    db.create_graph_collection("plain_graph", crate::collection::GraphSchema::new())
+        .unwrap();
+
+    // Graph WITH embeddings must obey the same dimension cap as vector
+    // collections, because the embeddings live in the same HNSW index.
+    let err = db
+        .create_graph_collection_with_embeddings(
+            "embed_graph",
+            crate::collection::GraphSchema::new(),
+            256,
+            DistanceMetric::Cosine,
+        )
+        .unwrap_err();
+    assert!(matches!(err, Error::GuardRail(_)));
+}
+
+#[test]
+fn test_limits_config_default_accepts_common_embedding_dims() {
+    // Regression guard: the default LimitsConfig must accept every
+    // dimension used by popular embedding models without any user
+    // configuration. If someone tightens the default too much, this
+    // test catches the silent breakage immediately.
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    for (name, dim) in [
+        ("minilm", 384),
+        ("bert", 768),
+        ("openai_small", 1536),
+        ("openai_large", 3072),
+    ] {
+        db.create_collection(name, dim, DistanceMetric::Cosine)
+            .unwrap_or_else(|e| panic!("default limits should accept {name} ({dim}-d), got {e:?}"));
+    }
+}
+
+#[test]
+fn test_dimension_zero_is_exempt_from_limits_gate() {
+    // Metadata-only collections pass dimension=0 down the same
+    // pipeline — the dimension-limit gate must NOT reject them.
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    db.create_metadata_collection("meta").unwrap();
+    assert_eq!(db.list_collections(), vec!["meta"]);
+}

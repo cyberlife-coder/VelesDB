@@ -25,7 +25,8 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if a collection with the same name already exists.
+    /// Returns an error if a collection with the same name already exists
+    /// or if the dimension exceeds the configured `max_dimensions` limit.
     pub fn create_vector_collection_with_options(
         &self,
         name: &str,
@@ -34,6 +35,7 @@ impl Database {
         storage_mode: StorageMode,
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
+        self.enforce_vector_dimension_limit(dimension)?;
         let path = self.data_dir.join(name);
         let coll = VectorCollection::create(path, name, dimension, metric, storage_mode)?;
         self.register_vector_collection(name, &coll, dimension, metric, storage_mode);
@@ -61,6 +63,7 @@ impl Database {
         ef_construction: Option<usize>,
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
+        self.enforce_vector_dimension_limit(dimension)?;
         let path = self.data_dir.join(name);
         let coll = VectorCollection::create_with_hnsw(
             path,
@@ -105,6 +108,7 @@ impl Database {
         pq_rescore_oversampling: Option<u32>,
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
+        self.enforce_vector_dimension_limit(dimension)?;
         let path = self.data_dir.join(name);
         let coll = VectorCollection::create_with_params(
             path,

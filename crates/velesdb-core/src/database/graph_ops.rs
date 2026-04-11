@@ -43,6 +43,7 @@ impl Database {
         metric: DistanceMetric,
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
+        self.enforce_vector_dimension_limit(dimension)?;
         let path = self.data_dir.join(name);
         let coll = GraphCollection::create(path, name, Some(dimension), metric, schema.clone())?;
         self.register_graph_collection(name, &coll, Some(dimension), metric, &schema);
@@ -58,6 +59,9 @@ impl Database {
         schema: &crate::collection::GraphSchema,
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
+        if let Some(d) = dimension {
+            self.enforce_vector_dimension_limit(d)?;
+        }
         let path = self.data_dir.join(name);
         let coll = GraphCollection::create(path, name, dimension, metric, schema.clone())?;
         self.register_graph_collection(name, &coll, dimension, metric, schema);
