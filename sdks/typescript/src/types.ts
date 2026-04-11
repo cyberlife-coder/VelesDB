@@ -1019,6 +1019,8 @@ export interface GraphSearchResultItem {
   id: number;
   /** Similarity score. */
   score: number;
+  /** Optional node payload (mirror of `GraphSearchResultItem.payload`). */
+  payload?: Record<string, unknown> | null;
 }
 
 /** Response of `graphSearch`. */

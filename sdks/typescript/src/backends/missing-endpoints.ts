@@ -309,13 +309,35 @@ export async function listNodes(
   return { nodeIds: data.node_ids, count: data.count };
 }
 
-/** Raw wire shape of an edge as returned by the server. */
+/**
+ * Raw wire shape of an edge as returned by the server.
+ *
+ * `id`/`source`/`target` arrive as **strings** because the server's
+ * `EdgeResponse` struct uses `#[serde(serialize_with =
+ * "serde_id::serialize_id_as_string")]` to avoid JavaScript's
+ * `Number.MAX_SAFE_INTEGER` (2^53-1) precision loss on u64 values.
+ * The `idToNumber` helper coerces them back to the `number` shape
+ * declared on the public `GraphEdge` interface; callers that need
+ * u64-safe IDs should migrate to the TypeScript `bigint` surface
+ * (tracked as a follow-up for Sprint 3+ streaming API commit).
+ */
 interface EdgeWire {
-  id: number;
-  source: number;
-  target: number;
+  id: number | string;
+  source: number | string;
+  target: number | string;
   label: string;
   properties?: Record<string, unknown>;
+}
+
+/**
+ * Coerce a wire-format node/edge ID (which may arrive as a string
+ * because of `serialize_id_as_string`) into the `number` shape
+ * declared on the public `GraphEdge` interface. IDs above
+ * `Number.MAX_SAFE_INTEGER` (2^53-1) will lose precision — this is
+ * an accepted limitation of the current `id: number` contract.
+ */
+function idToNumber(id: number | string): number {
+  return typeof id === 'string' ? Number(id) : id;
 }
 
 /**
@@ -342,9 +364,9 @@ export async function getNodeEdges(
   throwOnError(response, `Collection '${collection}'`);
 
   return (response.data?.edges ?? []).map((e) => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
+    id: idToNumber(e.id),
+    source: idToNumber(e.source),
+    target: idToNumber(e.target),
     label: e.label,
     properties: e.properties,
   }));
@@ -363,7 +385,7 @@ export async function getNodePayload(
   throwOnError(response, `Collection '${collection}'`);
   const data = response.data!;
   return {
-    nodeId: typeof data.node_id === 'string' ? Number(data.node_id) : data.node_id,
+    nodeId: idToNumber(data.node_id),
     payload: data.payload,
   };
 }
@@ -396,7 +418,11 @@ export async function graphSearch(
   request: GraphSearchRequest
 ): Promise<GraphSearchResponse> {
   const response = await transport.requestJson<{
-    results: Array<{ id: number | string; score: number }>;
+    results: Array<{
+      id: number | string;
+      score: number;
+      payload?: Record<string, unknown> | null;
+    }>;
   }>(
     'POST',
     `${collectionPath(collection)}/graph/search`,
@@ -408,8 +434,9 @@ export async function graphSearch(
   throwOnError(response, `Collection '${collection}'`);
   const items: GraphSearchResultItem[] = (response.data?.results ?? []).map(
     (r) => ({
-      id: typeof r.id === 'string' ? Number(r.id) : r.id,
+      id: idToNumber(r.id),
       score: r.score,
+      payload: r.payload,
     })
   );
   return { results: items };
