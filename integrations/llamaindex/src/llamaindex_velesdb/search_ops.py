@@ -30,6 +30,16 @@ from llamaindex_velesdb.security import (
     validate_column_name,
 )
 
+# Lazy VelesDBError resolution. See langchain_velesdb.graph_retriever
+# for the full rationale — the integration is importable without the
+# compiled `velesdb` extension, so we fall back to `Exception` when
+# the typed class is unavailable so the defensive try/except blocks
+# below still catch the fallback path regardless of runtime.
+try:
+    from velesdb import VelesDBError as _VelesDBError
+except (ImportError, AttributeError):  # pragma: no cover — optional dependency fallback
+    _VelesDBError = Exception  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -215,7 +225,12 @@ class SearchOpsMixin:
 
         try:
             return collection.search(**search_kwargs)
-        except RuntimeError:
+        except (RuntimeError, ValueError, _VelesDBError):
+            # Since Wave 3 Commit 2, `VELES-015 SearchNotSupported` is
+            # routed to `ValueError` and other sparse-search failures
+            # from the Rust layer surface as `VelesDBError` subclasses
+            # rather than flat `RuntimeError`. Catching all three keeps
+            # the dense-only fallback path intact.
             warnings.warn(
                 "sparse_vector was provided but the collection does not have a sparse "
                 "index (no sparse vectors have been inserted). Falling back to "

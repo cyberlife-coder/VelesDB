@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::agent;
 use crate::collection::Collection;
+use crate::collection_helpers::core_err;
 use crate::graph_collection::{PyGraphCollection, PyGraphSchema};
 use crate::utils::{self, parse_metric, parse_storage_mode};
 
@@ -39,8 +40,7 @@ impl Database {
     #[pyo3(signature = (path))]
     fn new(path: &str) -> PyResult<Self> {
         let path_buf = PathBuf::from(path);
-        let db = CoreDatabase::open(&path_buf)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to open database: {}", e)))?;
+        let db = CoreDatabase::open(&path_buf).map_err(core_err)?;
         Ok(Self {
             inner: Arc::new(db),
             path: path_buf,
@@ -127,9 +127,7 @@ impl Database {
                     m_val,
                     ef_val,
                 )
-                .map_err(|e| {
-                    PyRuntimeError::new_err(format!("Failed to create collection: {e}"))
-                })?;
+                .map_err(core_err)?;
         } else if let Some(n) = expected_vectors {
             let params = velesdb_core::index::hnsw::HnswParams::for_dataset_size(dimension, n);
             self.inner
@@ -141,15 +139,11 @@ impl Database {
                     Some(params.max_connections),
                     Some(params.ef_construction),
                 )
-                .map_err(|e| {
-                    PyRuntimeError::new_err(format!("Failed to create collection: {e}"))
-                })?;
+                .map_err(core_err)?;
         } else {
             self.inner
                 .create_vector_collection_with_options(name, dimension, distance_metric, mode)
-                .map_err(|e| {
-                    PyRuntimeError::new_err(format!("Failed to create collection: {e}"))
-                })?;
+                .map_err(core_err)?;
         }
 
         let collection = self
@@ -211,9 +205,7 @@ impl Database {
     ///     >>> db.delete_collection("old_collection")
     #[pyo3(signature = (name))]
     fn delete_collection(&self, name: &str) -> PyResult<()> {
-        self.inner
-            .delete_collection(name)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete collection: {}", e)))
+        self.inner.delete_collection(name).map_err(core_err)
     }
 
     /// Create a metadata-only collection (no vectors, no HNSW index).
@@ -235,9 +227,9 @@ impl Database {
     ///     ... ])
     #[pyo3(signature = (name))]
     fn create_metadata_collection(&self, name: &str) -> PyResult<Collection> {
-        self.inner.create_metadata_collection(name).map_err(|e| {
-            PyRuntimeError::new_err(format!("Failed to create metadata collection: {e}"))
-        })?;
+        self.inner
+            .create_metadata_collection(name)
+            .map_err(core_err)?;
 
         // Use get_any_collection to get the registered instance (not a disconnected copy).
         let collection = self
@@ -312,7 +304,7 @@ impl Database {
         let results = self
             .inner
             .execute_query(&parsed, &empty_params)
-            .map_err(|e| PyRuntimeError::new_err(format!("PQ training failed: {e}")))?;
+            .map_err(core_err)?;
 
         Ok(format!("PQ training complete: {} results", results.len()))
     }
@@ -356,9 +348,7 @@ impl Database {
                     schema: graph_schema,
                 },
             )
-            .map_err(|e| {
-                PyRuntimeError::new_err(format!("Failed to create graph collection: {e}"))
-            })?;
+            .map_err(core_err)?;
 
         let coll = self
             .inner
@@ -431,7 +421,7 @@ impl Database {
         let inner = Arc::clone(&self.inner);
         let results = py
             .allow_threads(move || inner.execute_query(&parsed, &rust_params))
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(core_err)?;
         Ok(search_results_to_multimodel_dicts(py, results))
     }
 
@@ -474,10 +464,7 @@ impl Database {
     ///     >>> print(stats["total_points"])
     #[pyo3(signature = (name))]
     fn analyze_collection(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
-        let stats = self
-            .inner
-            .analyze_collection(name)
-            .map_err(|e| PyRuntimeError::new_err(format!("Analyze failed: {e}")))?;
+        let stats = self.inner.analyze_collection(name).map_err(core_err)?;
         let json = serde_json::to_value(&stats)
             .map_err(|e| PyRuntimeError::new_err(format!("Serialization failed: {e}")))?;
         Ok(utils::json_to_python(py, &json))
@@ -503,10 +490,7 @@ impl Database {
     ///     ...     print(stats["row_count"])
     #[pyo3(signature = (name))]
     fn get_collection_stats(&self, py: Python<'_>, name: &str) -> PyResult<Option<PyObject>> {
-        let maybe_stats = self
-            .inner
-            .get_collection_stats(name)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to read stats: {e}")))?;
+        let maybe_stats = self.inner.get_collection_stats(name).map_err(core_err)?;
         maybe_stats
             .map(|stats| {
                 let json = serde_json::to_value(&stats).map_err(|e| {

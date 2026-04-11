@@ -102,8 +102,14 @@ def test_query_method_on_graph_collection(graph_db):
 
 
 def test_match_query_rejects_non_match(graph_db):
-    """match_query should reject SELECT queries."""
-    with pytest.raises(Exception):
+    """match_query should reject SELECT queries with a typed `ValueError`.
+
+    Passing a SELECT statement to `match_query` is a query-shape error
+    (`VELES-010 Query`), which `core_err` routes to Python's canonical
+    `ValueError` since Wave 3 Commit 2 — the previous `pytest.raises(Exception)`
+    was too loose and would silently accept any regression.
+    """
+    with pytest.raises(ValueError):
         graph_db.match_query("SELECT * FROM kg LIMIT 1")
 
 

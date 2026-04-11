@@ -2,30 +2,132 @@
 //!
 //! Extracted from collection.rs to reduce file size and improve maintainability.
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyKeyError, PyMemoryError, PyOverflowError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::exceptions::{CollectionNotFoundError, DimensionMismatchError};
+use crate::exceptions::{
+    CollectionExistsError, CollectionNotFoundError, DatabaseLockedError, DimensionMismatchError,
+    EdgeExistsError,
+};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::sparse_index::SparseVector;
 use velesdb_core::{Filter, Point, SearchResult};
 
 /// Convert a `velesdb_core::Error` into the most specific Python exception available.
 ///
-/// VELES-004 (DimensionMismatch) → `DimensionMismatchError` with a human-readable message
-/// that includes the expected and actual dimensions.
-/// VELES-002 (CollectionNotFound) → `CollectionNotFoundError`.
-/// All other errors fall back to `PyRuntimeError`.
+/// Maps every `VELES-XXX` variant to the semantically correct Python
+/// exception type, so callers can write `except PyKeyError`,
+/// `except velesdb.CollectionExistsError`, etc. instead of squinting at
+/// a generic `RuntimeError` message.
+///
+/// # Mapping table
+///
+/// | VELES code | Variant                   | Python exception              |
+/// |------------|---------------------------|-------------------------------|
+/// | VELES-001  | `CollectionExists`        | `CollectionExistsError`       |
+/// | VELES-002  | `CollectionNotFound`      | `CollectionNotFoundError`     |
+/// | VELES-003  | `PointNotFound`           | `KeyError`                    |
+/// | VELES-004  | `DimensionMismatch`       | `DimensionMismatchError`      |
+/// | VELES-005  | `InvalidVector`           | `ValueError`                  |
+/// | VELES-006  | `Storage`                 | `RuntimeError`                |
+/// | VELES-007  | `Index`                   | `RuntimeError`                |
+/// | VELES-008  | `IndexCorrupted`          | `RuntimeError`                |
+/// | VELES-009  | `Config`                  | `ValueError`                  |
+/// | VELES-010  | `Query`                   | `ValueError`                  |
+/// | VELES-011  | `Io`                      | `RuntimeError`                |
+/// | VELES-012  | `Serialization`           | `RuntimeError`                |
+/// | VELES-013  | `Internal`                | `RuntimeError`                |
+/// | VELES-014  | `VectorNotAllowed`        | `ValueError`                  |
+/// | VELES-015  | `SearchNotSupported`      | `ValueError`                  |
+/// | VELES-016  | `VectorRequired`          | `ValueError`                  |
+/// | VELES-017  | `SchemaValidation`        | `ValueError`                  |
+/// | VELES-018  | `GraphNotSupported`       | `ValueError`                  |
+/// | VELES-019  | `EdgeExists`              | `EdgeExistsError`             |
+/// | VELES-020  | `EdgeNotFound`            | `KeyError`                    |
+/// | VELES-021  | `InvalidEdgeLabel`        | `ValueError`                  |
+/// | VELES-022  | `NodeNotFound`            | `KeyError`                    |
+/// | VELES-023  | `Overflow`                | `OverflowError`               |
+/// | VELES-024  | `ColumnStoreError`        | `RuntimeError`                |
+/// | VELES-025  | `GpuError`                | `RuntimeError`                |
+/// | VELES-026  | `EpochMismatch`           | `RuntimeError`                |
+/// | VELES-027  | `GuardRail`               | `RuntimeError`                |
+/// | VELES-028  | `InvalidQuantizerConfig`  | `ValueError`                  |
+/// | VELES-029  | `TrainingFailed`          | `RuntimeError`                |
+/// | VELES-030  | `SparseIndexError`        | `RuntimeError`                |
+/// | VELES-031  | `DatabaseLocked`          | `DatabaseLockedError`         |
+/// | VELES-032  | `InvalidDimension`        | `ValueError`                  |
+/// | VELES-033  | `AllocationFailed`        | `MemoryError`                 |
+/// | VELES-034  | `InvalidCollectionName`   | `ValueError`                  |
+/// | VELES-035  | `SnapshotBuildFailed`     | `RuntimeError`                |
+/// | VELES-036  | `IncompatibleSchemaVersion` | `RuntimeError`              |
+///
+/// The wildcard arm at the bottom handles future variants added under
+/// the `#[non_exhaustive]` attribute on `velesdb_core::Error`. New
+/// variants fall through to `RuntimeError` until this mapping is
+/// updated; the unit test `test_core_err_mapping_is_exhaustive_via_code`
+/// in `exceptions.rs` guards against silently adding a code without a
+/// Python mapping.
 pub fn core_err(e: velesdb_core::Error) -> PyErr {
+    use velesdb_core::Error as E;
     match &e {
-        velesdb_core::Error::DimensionMismatch { expected, actual } => {
-            DimensionMismatchError::new_err(format!("Expected {expected} dimensions, got {actual}"))
-        }
-        velesdb_core::Error::CollectionNotFound(name) => {
+        // Conflicts / lifecycle — custom VelesDB exceptions
+        E::CollectionExists(_) => CollectionExistsError::new_err(e.to_string()),
+        E::CollectionNotFound(name) => {
             CollectionNotFoundError::new_err(format!("Collection '{name}' not found"))
         }
+        E::EdgeExists(id) => EdgeExistsError::new_err(format!("Edge with ID {id} already exists")),
+        E::DatabaseLocked(_) => DatabaseLockedError::new_err(e.to_string()),
+
+        // Lookup misses — Python's canonical KeyError
+        E::PointNotFound(id) => PyKeyError::new_err(format!("Point {id} not found")),
+        E::EdgeNotFound(id) => PyKeyError::new_err(format!("Edge {id} not found")),
+        E::NodeNotFound(id) => PyKeyError::new_err(format!("Node {id} not found")),
+
+        // Dimension mismatch — the only numeric arg-invalid case with its own class
+        E::DimensionMismatch { expected, actual } => {
+            DimensionMismatchError::new_err(format!("Expected {expected} dimensions, got {actual}"))
+        }
+
+        // Argument / configuration invalid — ValueError
+        E::InvalidVector(_)
+        | E::Config(_)
+        | E::Query(_)
+        | E::VectorNotAllowed(_)
+        | E::SearchNotSupported(_)
+        | E::VectorRequired(_)
+        | E::SchemaValidation(_)
+        | E::GraphNotSupported(_)
+        | E::InvalidEdgeLabel(_)
+        | E::InvalidQuantizerConfig(_)
+        | E::InvalidDimension { .. }
+        | E::InvalidCollectionName { .. } => PyValueError::new_err(e.to_string()),
+
+        // Numeric overflow / allocation failure — specific Python builtins
+        E::Overflow(_) => PyOverflowError::new_err(e.to_string()),
+        E::AllocationFailed(_) => PyMemoryError::new_err(e.to_string()),
+
+        // Engine / IO / internal — generic RuntimeError
+        E::Storage(_)
+        | E::Index(_)
+        | E::IndexCorrupted(_)
+        | E::Io(_)
+        | E::Serialization(_)
+        | E::Internal(_)
+        | E::ColumnStoreError(_)
+        | E::GpuError(_)
+        | E::EpochMismatch(_)
+        | E::GuardRail(_)
+        | E::TrainingFailed(_)
+        | E::SparseIndexError(_)
+        | E::SnapshotBuildFailed(_)
+        | E::IncompatibleSchemaVersion { .. } => PyRuntimeError::new_err(e.to_string()),
+
+        // Forward-compat: unknown future variants fall back to RuntimeError.
+        // A new variant added to `velesdb_core::Error` should trigger the
+        // unit test `test_core_err_mapping_covers_every_code` and be given
+        // an explicit arm above before this wildcard catches it silently.
         _ => PyRuntimeError::new_err(e.to_string()),
     }
 }

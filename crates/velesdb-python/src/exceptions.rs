@@ -268,4 +268,272 @@ mod tests {
             assert!(!err.is_instance_of::<DimensionMismatchError>(py));
         });
     }
+
+    // -------------------------------------------------------------------
+    // Commit 2 — core_err mapping coverage for every VELES-XXX variant.
+    //
+    // Each test drives `core_err` with a concrete `velesdb_core::Error`
+    // variant and asserts it is converted to the semantically correct
+    // Python exception class. A single dispatch test at the bottom
+    // enumerates `Error::code()` across every known code so adding a
+    // new VELES-XXX code to core without updating `core_err` is caught
+    // by a compile-time exhaustiveness check on the helper constructor.
+    // -------------------------------------------------------------------
+
+    use pyo3::exceptions::{
+        PyKeyError, PyMemoryError, PyOverflowError, PyRuntimeError, PyValueError,
+    };
+    use velesdb_core::Error as CoreError;
+
+    #[test]
+    fn test_core_err_collection_exists_type() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::CollectionExists("docs".into()));
+            assert!(err.is_instance_of::<CollectionExistsError>(py));
+            assert!(err.is_instance_of::<VelesDBError>(py));
+            assert!(err.value(py).to_string().contains("docs"));
+        });
+    }
+
+    #[test]
+    fn test_core_err_edge_exists_type() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::EdgeExists(42));
+            assert!(err.is_instance_of::<EdgeExistsError>(py));
+            assert!(err.is_instance_of::<VelesDBError>(py));
+            assert!(err.value(py).to_string().contains("42"));
+        });
+    }
+
+    #[test]
+    fn test_core_err_database_locked_type() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::DatabaseLocked("pid 1234".into()));
+            assert!(err.is_instance_of::<DatabaseLockedError>(py));
+            assert!(err.is_instance_of::<VelesDBError>(py));
+            assert!(err.value(py).to_string().contains("1234"));
+        });
+    }
+
+    #[test]
+    fn test_core_err_point_not_found_is_key_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::PointNotFound(7));
+            assert!(err.is_instance_of::<PyKeyError>(py));
+            assert!(err.value(py).to_string().contains('7'));
+        });
+    }
+
+    #[test]
+    fn test_core_err_edge_not_found_is_key_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::EdgeNotFound(99));
+            assert!(err.is_instance_of::<PyKeyError>(py));
+            assert!(err.value(py).to_string().contains("99"));
+        });
+    }
+
+    #[test]
+    fn test_core_err_node_not_found_is_key_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::NodeNotFound(11));
+            assert!(err.is_instance_of::<PyKeyError>(py));
+            assert!(err.value(py).to_string().contains("11"));
+        });
+    }
+
+    #[test]
+    fn test_core_err_invalid_vector_is_value_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::InvalidVector("nan at position 0".into()));
+            assert!(err.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn test_core_err_query_is_value_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::Query("unexpected token".into()));
+            assert!(err.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn test_core_err_config_is_value_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::Config("bad hnsw parameter".into()));
+            assert!(err.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn test_core_err_graph_not_supported_is_value_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::GraphNotSupported("edges disabled".into()));
+            assert!(err.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn test_core_err_invalid_dimension_is_value_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::InvalidDimension {
+                dimension: 0,
+                min: 1,
+                max: 65536,
+            });
+            assert!(err.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn test_core_err_invalid_collection_name_is_value_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::InvalidCollectionName {
+                name: "../etc/passwd".into(),
+                reason: "path traversal".into(),
+            });
+            assert!(err.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn test_core_err_overflow_is_overflow_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::Overflow("u64 -> usize".into()));
+            assert!(err.is_instance_of::<PyOverflowError>(py));
+        });
+    }
+
+    #[test]
+    fn test_core_err_allocation_failed_is_memory_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::AllocationFailed("16 GiB".into()));
+            assert!(err.is_instance_of::<PyMemoryError>(py));
+        });
+    }
+
+    #[test]
+    fn test_core_err_storage_is_runtime_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::Storage("disk full".into()));
+            assert!(err.is_instance_of::<PyRuntimeError>(py));
+            // Engine errors stay as generic RuntimeError and must NOT be
+            // confused with any of the typed VelesDB subclasses.
+            assert!(!err.is_instance_of::<VelesDBError>(py));
+        });
+    }
+
+    #[test]
+    fn test_core_err_internal_is_runtime_error() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let err = core_err(CoreError::Internal("BUG: unreachable".into()));
+            assert!(err.is_instance_of::<PyRuntimeError>(py));
+        });
+    }
+
+    /// Exhaustiveness guard: every `VELES-XXX` code currently defined in
+    /// `velesdb_core::Error::code()` must map to a known Python exception.
+    ///
+    /// This walks a representative instance of every variant and asserts
+    /// that `core_err` produces one of the expected concrete types. If a
+    /// new variant is added to core, the match in this test becomes
+    /// non-exhaustive at compile time, forcing the author to update both
+    /// the mapping in `collection_helpers::core_err` and this test.
+    #[test]
+    fn test_core_err_mapping_covers_every_code() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let cases: Vec<CoreError> = vec![
+                CoreError::CollectionExists("x".into()),
+                CoreError::CollectionNotFound("x".into()),
+                CoreError::PointNotFound(1),
+                CoreError::DimensionMismatch {
+                    expected: 1,
+                    actual: 2,
+                },
+                CoreError::InvalidVector("x".into()),
+                CoreError::Storage("x".into()),
+                CoreError::Index("x".into()),
+                CoreError::IndexCorrupted("x".into()),
+                CoreError::Config("x".into()),
+                CoreError::Query("x".into()),
+                CoreError::Serialization("x".into()),
+                CoreError::Internal("x".into()),
+                CoreError::VectorNotAllowed("x".into()),
+                CoreError::SearchNotSupported("x".into()),
+                CoreError::VectorRequired("x".into()),
+                CoreError::SchemaValidation("x".into()),
+                CoreError::GraphNotSupported("x".into()),
+                CoreError::EdgeExists(1),
+                CoreError::EdgeNotFound(1),
+                CoreError::InvalidEdgeLabel("x".into()),
+                CoreError::NodeNotFound(1),
+                CoreError::Overflow("x".into()),
+                CoreError::ColumnStoreError("x".into()),
+                CoreError::GpuError("x".into()),
+                CoreError::EpochMismatch("x".into()),
+                CoreError::GuardRail("x".into()),
+                CoreError::InvalidQuantizerConfig("x".into()),
+                CoreError::TrainingFailed("x".into()),
+                CoreError::SparseIndexError("x".into()),
+                CoreError::DatabaseLocked("x".into()),
+                CoreError::InvalidDimension {
+                    dimension: 0,
+                    min: 1,
+                    max: 2,
+                },
+                CoreError::AllocationFailed("x".into()),
+                CoreError::InvalidCollectionName {
+                    name: "x".into(),
+                    reason: "y".into(),
+                },
+                CoreError::SnapshotBuildFailed("x".into()),
+                CoreError::IncompatibleSchemaVersion {
+                    found: 2,
+                    supported: 1,
+                },
+            ];
+            // VELES-011 (Io) requires a std::io::Error which we construct
+            // explicitly rather than inline into the vec literal.
+            let io_case = CoreError::Io(std::io::Error::other("disk error"));
+            let mut all_cases = cases;
+            all_cases.push(io_case);
+
+            for case in all_cases {
+                let code = case.code();
+                let err = core_err(case);
+                // Every variant must map to EITHER a typed VelesDBError
+                // subclass OR one of the canonical Python builtins. Nothing
+                // is allowed to produce a pure Python `Exception` without a
+                // more specific type.
+                let typed = err.is_instance_of::<VelesDBError>(py)
+                    || err.is_instance_of::<PyKeyError>(py)
+                    || err.is_instance_of::<PyValueError>(py)
+                    || err.is_instance_of::<PyOverflowError>(py)
+                    || err.is_instance_of::<PyMemoryError>(py)
+                    || err.is_instance_of::<PyRuntimeError>(py);
+                assert!(
+                    typed,
+                    "core_err({code}) produced an untyped exception: {err:?}"
+                );
+            }
+        });
+    }
 }

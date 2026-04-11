@@ -557,15 +557,21 @@ class TestMetadataOnlyCollections:
         assert points[0] is None
         assert points[1] is not None
 
-    def test_metadata_collection_search_raises_error(self, temp_db):
-        """Test that vector search on metadata-only collection raises error."""
+    def test_metadata_collection_search_raises_value_error(self, temp_db):
+        """Vector search on a metadata-only collection raises `ValueError`.
+
+        `VELES-015 SearchNotSupported` is an "operation invalid for this
+        collection shape" error — which `core_err` routes to Python's
+        canonical `ValueError` since Wave 3 Commit 2. Before the typed
+        routing this path bubbled up as `RuntimeError`.
+        """
         collection = temp_db.create_metadata_collection("no_vectors")
 
         collection.upsert_metadata([
             {"id": 1, "payload": {"text": "hello"}},
         ])
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ValueError):
             collection.search([1.0, 0.0, 0.0, 0.0], top_k=10)
 
     def test_vector_collection_not_metadata_only(self, temp_db):
