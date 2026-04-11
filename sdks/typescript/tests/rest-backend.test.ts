@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RestBackend } from '../src/backends/rest';
-import { VelesDBError, ConnectionError, ValidationError } from '../src/types';
+import { VelesDBError, NotFoundError, ConnectionError, ValidationError } from '../src/types';
 import { CollectionNotFoundError } from '../src/errors';
 
 // Mock global fetch
@@ -138,6 +138,29 @@ describe('RestBackend', () => {
 
       const col = await backend.getCollection('nonexistent');
       expect(col).toBeNull();
+    });
+
+    it('throwOnError preserves legacy NotFoundError when resourceLabel provided (PR #586 Devin #7)', async () => {
+      // Pre-v1.13 callers narrow on `(e instanceof NotFoundError)` for
+      // REST 404 responses without VELES codes. The commit that
+      // introduced parseVelesError temporarily lost this path; this
+      // regression test guards against losing it again.
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({
+          error: 'Collection not found',
+        }),
+      });
+      // getCollection uses returnNullOnNotFound (returns null), so
+      // reach into a method that calls throwOnError with a label:
+      // listCollections on a backend that 404s is unusual, but we
+      // can exercise the helper directly via a method that passes
+      // resourceLabel. `multiQuerySearch` calls
+      // `throwOnError(response, "Collection '...'")`.
+      await expect(
+        backend.multiQuerySearch('missing', [[0.1, 0.2]])
+      ).rejects.toThrow(NotFoundError);
     });
 
     it('should delete a collection', async () => {

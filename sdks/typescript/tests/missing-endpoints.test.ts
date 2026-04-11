@@ -356,6 +356,29 @@ describe('removeEdge', () => {
     const removed = await backend.removeEdge('kg', 999);
     expect(removed).toBe(false);
   });
+
+  it('throws when the collection itself does not exist (VELES-002 — not edge-not-found)', async () => {
+    // PR #586 Devin finding #6 regression guard: the pre-fix
+    // `removeEdge` used `isNotFoundError` which matched VELES-002,
+    // silently returning `false` when the caller targeted a
+    // nonexistent collection. The caller would then assume "edge
+    // wasn't in this collection" while the collection itself never
+    // existed. The fix restricts the false-return path to
+    // EdgeNotFoundError (VELES-020) only.
+    const { CollectionNotFoundError } = await import('../src/errors');
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: () =>
+        Promise.resolve({
+          code: 'VELES-002',
+          error: "[VELES-002] Collection 'ghost' not found",
+        }),
+    });
+    await expect(backend.removeEdge('ghost', 42)).rejects.toThrow(
+      CollectionNotFoundError
+    );
+  });
 });
 
 describe('getEdgeCount', () => {

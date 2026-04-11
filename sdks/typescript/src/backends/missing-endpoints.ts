@@ -33,12 +33,8 @@ import type {
   AggregateResponse,
 } from '../types';
 import type { BaseTransport } from './shared';
-import {
-  throwOnError,
-  collectionPath,
-  toNumberArray,
-  isNotFoundError,
-} from './shared';
+import { throwOnError, collectionPath, toNumberArray } from './shared';
+import { parseVelesError, EdgeNotFoundError } from '../errors';
 
 // ============================================================================
 // Admin
@@ -256,13 +252,28 @@ export async function matchQuery(
 // ============================================================================
 
 /**
- * Remove an edge by ID. Returns `true` if removed, `false` if not found.
+ * Remove an edge by ID. Returns `true` if removed, `false` if the
+ * specific edge does not exist.
  *
- * Uses [`isNotFoundError`] to absorb both the legacy status-derived
- * `'NOT_FOUND'` code and the typed `VELES-020 EdgeNotFound` code so
- * the function behaves identically whether the server handler has
- * been migrated to `core_error_response` or still uses
- * `error_response` (PR #586 Devin fix).
+ * **Scope contract** (PR #586 Devin finding #6): only edge-not-found
+ * is absorbed as `false`. Collection-not-found, point-not-found,
+ * node-not-found, and every other error are re-thrown so the caller
+ * sees the real problem instead of a misleading "edge not in this
+ * collection" boolean.
+ *
+ * Accepts two wire formats:
+ * - **Typed** — server emitted `VELES-020` via
+ *   `core_error_response(Error::EdgeNotFound)`, producing an
+ *   `EdgeNotFoundError`.
+ * - **Legacy** — server emitted no VELES code, the transport layer
+ *   filled in `'NOT_FOUND'` via `mapStatusToErrorCode(404)`. Since
+ *   the legacy path cannot distinguish "edge missing" from
+ *   "collection missing", we accept it as an edge-not-found signal
+ *   ONLY when the DELETE URL already targets a specific edge (which
+ *   it does — the route is `/collections/{name}/graph/edges/{id}`).
+ *   This path is safe because the server only 404s here for a
+ *   missing edge; missing-collection errors go through
+ *   `get_graph_collection_or_404` which now emits typed `VELES-002`.
  */
 export async function removeEdge(
   transport: BaseTransport,
@@ -274,7 +285,21 @@ export async function removeEdge(
     `${collectionPath(collection)}/graph/edges/${edgeId}`
   );
   if (response.error !== undefined) {
-    if (isNotFoundError(response.error.code)) {
+    const { code, message } = response.error;
+    // Typed path: only EdgeNotFoundError counts as "absent edge".
+    // Any other VELES code (CollectionNotFound, etc.) must propagate
+    // so the caller sees the real error instead of a misleading
+    // `false` return.
+    const err = parseVelesError(code, message);
+    if (err instanceof EdgeNotFoundError) {
+      return false;
+    }
+    // Legacy path: the server omitted the VELES code and the
+    // transport filled in `'NOT_FOUND'`. At this URL the only 404
+    // the handler produces is edge-not-found (collection 404 is
+    // emitted upstream by `get_graph_collection_or_404` which now
+    // always carries VELES-002, handled by the typed branch above).
+    if (code === 'NOT_FOUND') {
       return false;
     }
     throwOnError(response, `Collection '${collection}'`);

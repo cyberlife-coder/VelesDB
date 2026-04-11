@@ -7,7 +7,7 @@
  * and agent-memory-backend.
  */
 
-import { VelesDBError } from '../types';
+import { NotFoundError, VelesDBError } from '../types';
 import {
   parseVelesError,
   CollectionNotFoundError,
@@ -47,26 +47,35 @@ export interface TransportError {
 /**
  * Throw a typed error when the transport response contains an error payload.
  *
- * The error is instantiated via [`parseVelesError`], so:
- * - A server response carrying a `VELES-XXX` code surfaces as the
- *   matching typed sub-class (e.g. `CollectionNotFoundError` for
- *   `VELES-002`) — users can narrow via `instanceof`.
- * - A legacy response with a null/omitted code produces a generic
- *   `VelesError` with code `VELES-UNKNOWN`.
+ * Routing priority (PR #586 Devin finding #7 — preserve v1.12 catch
+ * ergonomics):
  *
- * The `resourceLabel` parameter is accepted for backward source
- * compatibility with v1.12 callers but is no longer consulted — the
- * server's verbatim message is always preferred over a synthesised
- * label.
+ * 1. **Legacy `NotFoundError` compat** — when the server transmits
+ *    no VELES code (so the transport layer fills in
+ *    `'NOT_FOUND'` via `mapStatusToErrorCode(404)`) AND a
+ *    `resourceLabel` was passed by the caller, throw the v1.12
+ *    `NotFoundError(resourceLabel)`. This keeps pre-v1.13 handlers
+ *    catching `(e instanceof NotFoundError)` on REST 404 responses
+ *    working unchanged.
+ * 2. **Typed VELES error** — otherwise delegate to
+ *    `parseVelesError(code, message)`, which instantiates the
+ *    matching `VelesError` sub-class (e.g. `CollectionNotFoundError`
+ *    for `VELES-002`) when the server emitted a typed code.
  *
  * When no error is present, the function is a no-op.
  */
 export function throwOnError(
   response: TransportResponse<unknown>,
-  _resourceLabel?: string
+  resourceLabel?: string
 ): void {
   if (!response.error) {
     return;
+  }
+  // Legacy path: status-derived 'NOT_FOUND' with a caller-supplied
+  // resource label still throws the pre-v1.13 `NotFoundError` for
+  // backward source compatibility with handlers that narrow on it.
+  if (response.error.code === 'NOT_FOUND' && resourceLabel !== undefined) {
+    throw new NotFoundError(resourceLabel);
   }
   throw parseVelesError(response.error.code, response.error.message);
 }
