@@ -47,6 +47,24 @@ pub struct CreateCollectionRequest {
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(example = 400, nullable))]
     pub hnsw_ef_construction: Option<usize>,
+    /// VAMANA alpha for neighbor diversification (default derived from dimension).
+    ///
+    /// Values > 1.0 bias `select_neighbors` toward diversity over proximity,
+    /// producing a more navigable graph with better recall. The engine
+    /// default is 1.2 (VAMANA paper recommendation). Set to 1.0 for strict
+    /// nearest-neighbor selection.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(example = 1.2, nullable))]
+    pub hnsw_alpha: Option<f32>,
+    /// Initial HNSW capacity (grows automatically if exceeded).
+    ///
+    /// Pre-sizing matters for bulk imports: the engine avoids repeated
+    /// realloc-and-copy cycles when the final population is known upfront.
+    /// Use this when migrating a large existing corpus into a fresh
+    /// collection.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(example = 1_000_000, nullable))]
+    pub hnsw_max_elements: Option<usize>,
     /// PQ rescore oversampling factor (default 4).
     ///
     /// The search pipeline fetches `max(k * factor, k + 32)` candidates

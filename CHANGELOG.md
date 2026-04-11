@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Sprint 2 Wave 4 (TypeScript SDK)
 
+- **`hnsw_alpha` and `hnsw_max_elements` exposed on `POST /collections`**
+  (`velesdb-server::CreateCollectionRequest` + `velesdb-server::handlers::collections::build_hnsw_params_override`
+  + `sdks/typescript/src/backends/crud-backend.ts`, Commit 4) —
+  closes the `#21 PROP-HNSW-ALPHA` audit finding where the TS SDK's
+  `HnswParams` interface advertised `alpha` and `maxElements` but the
+  REST layer silently dropped them.
+
+  Both fields existed in the core `HnswParams` struct (used by the
+  Python SDK via v1.13 `HnswOptions`) but the REST handler's
+  `create_vector_collection_with_hnsw` path only carried `hnsw_m`
+  and `hnsw_ef_construction`. The handler now routes through
+  `Database::create_vector_collection_with_params` (the same entry
+  point Python uses) whenever any HNSW tuning field is supplied,
+  building a full `HnswParams` from `HnswParams::auto(dimension)`
+  and overriding just the fields the caller provided.
+
+  ```typescript
+  import { VelesDB } from '@wiscale/velesdb-sdk';
+  const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+  await db.init();
+
+  await db.createCollection('rag', {
+    dimension: 1536,
+    metric: 'cosine',
+    storageMode: 'full',
+    hnsw: {
+      m: 48,
+      efConstruction: 600,
+      alpha: 1.5,            // NEW — VAMANA diversification
+      maxElements: 1_000_000 // NEW — pre-size for bulk import
+    },
+  });
+  ```
+
+  Any combination of the four HNSW fields is valid: supplying only
+  `alpha` works, supplying only `maxElements` works, and the
+  unspecified fields inherit the dimension-aware engine defaults.
+  `GET /collections/{name}/config` echoes the full `hnsw_params`
+  block so callers can verify the persisted values.
+
+  **Backward compatible**: the two new fields are optional on the
+  wire (`#[serde(default)]`). Pre-v1.13 clients that send only
+  `hnsw_m` / `hnsw_ef_construction` continue to work unchanged, and
+  the legacy `Database::create_vector_collection_with_hnsw` helper
+  remains in the core API for other callers (Python, CLI, WASM).
+
 - **Advanced `CollectionConfig` fields wired through to REST**
   (`sdks/typescript/src/types.ts` + `backends/crud-backend.ts` +
   `backends/admin-backend.ts`, Commit 3) — the TS SDK now exposes

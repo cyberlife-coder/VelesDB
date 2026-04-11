@@ -106,6 +106,49 @@ describe('CreateCollectionRequest — advanced fields forwarded to REST', () => 
     });
   });
 
+  it('forwards hnsw.alpha and hnsw.maxElements (#21 PROP-HNSW-ALPHA)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({}),
+    });
+
+    const config: CollectionConfig = {
+      dimension: 128,
+      hnsw: {
+        m: 48,
+        efConstruction: 600,
+        alpha: 1.5,
+        maxElements: 500_000,
+      },
+    };
+    await backend.createCollection('tuned', config);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.hnsw_m).toBe(48);
+    expect(body.hnsw_ef_construction).toBe(600);
+    expect(body.hnsw_alpha).toBe(1.5);
+    expect(body.hnsw_max_elements).toBe(500_000);
+  });
+
+  it('forwards only hnsw.alpha without other HNSW fields', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({}),
+    });
+
+    const config: CollectionConfig = {
+      dimension: 384,
+      hnsw: { alpha: 1.8 },
+    };
+    await backend.createCollection('alpha-only', config);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.hnsw_alpha).toBe(1.8);
+    expect(body.hnsw_m).toBeUndefined();
+    expect(body.hnsw_ef_construction).toBeUndefined();
+    expect(body.hnsw_max_elements).toBeUndefined();
+  });
+
   it('omits advanced fields from the request body when not provided', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

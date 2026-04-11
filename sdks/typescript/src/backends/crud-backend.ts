@@ -93,6 +93,8 @@ export async function createCollection(
     description: config.description,
     hnsw_m: config.hnsw?.m,
     hnsw_ef_construction: config.hnsw?.efConstruction,
+    hnsw_alpha: config.hnsw?.alpha,
+    hnsw_max_elements: config.hnsw?.maxElements,
   };
 
   // Advanced options — omit the key entirely when undefined so
