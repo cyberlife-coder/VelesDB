@@ -62,14 +62,19 @@ pub(super) fn get_graph_collection_or_404(
         ));
     }
 
+    // PR #586 Devin fix: propagate `VELES-002 CollectionNotFound` so
+    // typed-error clients surface `CollectionNotFoundError` instead of
+    // a status-derived `'NOT_FOUND'` string. The "create it first"
+    // hint stays in the message for human operators.
+    let err = velesdb_core::Error::CollectionNotFound(name.to_string());
     Err((
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {
             error: format!(
-                "Graph collection '{name}' not found. Create it first with \
+                "{err}. Create it first with \
                  POST /collections and collection_type = \"graph\".",
             ),
-            code: None,
+            code: Some(err.code().to_string()),
         }),
     ))
 }

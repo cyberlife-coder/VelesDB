@@ -103,14 +103,36 @@ describe('RestBackend', () => {
       expect(col?.dimension).toBe(128);
     });
 
-    it('should return null for non-existent collection', async () => {
-      // Server emits VELES-002 with the verbatim message; the transport layer
-      // recognises CollectionNotFoundError as the "absent" signal and returns null.
+    it('should return null for non-existent collection (typed VELES-002)', async () => {
+      // Modern server emits the VELES-002 code verbatim via
+      // `core_error_response`; the transport layer recognises
+      // `CollectionNotFoundError` as the "absent" signal and returns null.
       mockFetch.mockResolvedValueOnce({
         ok: false,
+        status: 404,
         json: () => Promise.resolve({
           code: 'VELES-002',
-          message: "[VELES-002] Collection 'nonexistent' not found",
+          error: "[VELES-002] Collection 'nonexistent' not found",
+        }),
+      });
+
+      const col = await backend.getCollection('nonexistent');
+      expect(col).toBeNull();
+    });
+
+    it('should return null for non-existent collection (legacy status-derived NOT_FOUND)', async () => {
+      // Legacy server handlers that still use `error_response` omit
+      // the `code` field entirely. The transport layer falls back to
+      // `mapStatusToErrorCode(404)` → `'NOT_FOUND'`, which
+      // `returnNullOnNotFound` recognises via `isNotFoundError`. This
+      // guards against the regression described in PR #586 Devin
+      // finding #1 where the pre-fix `instanceof CollectionNotFoundError`
+      // check missed the legacy format and threw instead of returning null.
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({
+          error: "Collection 'nonexistent' not found",
         }),
       });
 
@@ -363,13 +385,13 @@ describe('RestBackend', () => {
       expect(results[0].score).toBe(0.95);
     });
 
-    it('should handle collection not found (VELES-002 → CollectionNotFoundError)', async () => {
+    it('should handle collection not found (typed VELES-002 → CollectionNotFoundError)', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
         json: () => Promise.resolve({
           code: 'VELES-002',
-          message: "[VELES-002] Collection 'nonexistent' not found",
+          error: "[VELES-002] Collection 'nonexistent' not found",
         }),
       });
 

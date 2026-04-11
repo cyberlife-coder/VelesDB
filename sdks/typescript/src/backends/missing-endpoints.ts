@@ -31,7 +31,12 @@ import type {
   AggregateQueryOptions,
 } from '../types';
 import type { BaseTransport } from './shared';
-import { throwOnError, collectionPath, toNumberArray } from './shared';
+import {
+  throwOnError,
+  collectionPath,
+  toNumberArray,
+  isNotFoundError,
+} from './shared';
 
 // ============================================================================
 // Admin
@@ -190,7 +195,15 @@ export async function matchQuery(
 // Graph — extended endpoints
 // ============================================================================
 
-/** Remove an edge by ID. Returns `true` if removed, `false` if not found. */
+/**
+ * Remove an edge by ID. Returns `true` if removed, `false` if not found.
+ *
+ * Uses [`isNotFoundError`] to absorb both the legacy status-derived
+ * `'NOT_FOUND'` code and the typed `VELES-020 EdgeNotFound` code so
+ * the function behaves identically whether the server handler has
+ * been migrated to `core_error_response` or still uses
+ * `error_response` (PR #586 Devin fix).
+ */
 export async function removeEdge(
   transport: BaseTransport,
   collection: string,
@@ -201,7 +214,7 @@ export async function removeEdge(
     `${collectionPath(collection)}/graph/edges/${edgeId}`
   );
   if (response.error !== undefined) {
-    if (response.error.code === 'VELES-020') {
+    if (isNotFoundError(response.error.code)) {
       return false;
     }
     throwOnError(response, `Collection '${collection}'`);

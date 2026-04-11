@@ -237,14 +237,35 @@ describe('removeEdge', () => {
     expect(removed).toBe(true);
   });
 
-  it('returns false when the server answers VELES-020 (edge not found)', async () => {
+  it('returns false when the server answers typed VELES-020 (edge not found)', async () => {
+    // Modern server: `core_error_response` propagates the VELES-020 code
+    // through the wire, which `isNotFoundError` recognises via the
+    // `EdgeNotFoundError` branch.
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 404,
       json: () =>
         Promise.resolve({
           code: 'VELES-020',
-          message: "[VELES-020] Edge with ID '999' not found",
+          error: "[VELES-020] Edge with ID '999' not found",
+        }),
+    });
+    const removed = await backend.removeEdge('kg', 999);
+    expect(removed).toBe(false);
+  });
+
+  it('returns false when the server answers legacy NOT_FOUND (no code field)', async () => {
+    // Legacy server: `error_response` omits `code`, the transport layer
+    // falls back to `mapStatusToErrorCode(404) → 'NOT_FOUND'`. This guards
+    // against the regression described in PR #586 Devin finding #2 where
+    // the pre-fix check `response.error.code === 'VELES-020'` missed the
+    // status-derived format and threw instead of returning false.
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: () =>
+        Promise.resolve({
+          error: "Edge with ID '999' not found in collection 'kg'",
         }),
     });
     const removed = await backend.removeEdge('kg', 999);
