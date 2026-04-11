@@ -40,6 +40,19 @@ from llamaindex_velesdb._common import (
     parse_graph_traverse_response,
 )
 
+# Lazy VelesDBError resolution. `velesdb` is a runtime dependency for
+# every user of this integration (they pass a `velesdb.Collection`
+# instance to the retriever), but the integration package itself is
+# importable without it (e.g. for documentation, type-stubs, or smoke
+# tests running without the compiled Rust extension). When the typed
+# exception hierarchy is available we catch it alongside the built-in
+# errors; otherwise we fall back to `Exception` which never breaks the
+# defensive `try`/`except` logic below.
+try:
+    from velesdb import VelesDBError as _VelesDBError
+except (ImportError, AttributeError):  # pragma: no cover — optional dependency fallback
+    _VelesDBError = Exception  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -263,7 +276,7 @@ class GraphRetriever(BaseRetriever):
             neighbors = self._traverse_graph(node_id)
             for neighbor_id in neighbors:
                 expanded_ids.add(neighbor_id)
-        except (ValueError, RuntimeError, OSError, TimeoutError, ConnectionError) as exc:
+        except (ValueError, RuntimeError, OSError, TimeoutError, ConnectionError, _VelesDBError) as exc:
             if self._is_timeout(exc):
                 logger.warning(
                     "Graph traversal timeout for node %s, falling back to vector-only",
@@ -312,7 +325,7 @@ class GraphRetriever(BaseRetriever):
                     neighbor_node.metadata["graph_depth"] = 1
                     neighbor_node.metadata["retrieval_mode"] = "graph_expanded"
                     results.append(NodeWithScore(node=neighbor_node, score=0.5))
-            except (ValueError, RuntimeError, OSError, KeyError, ConnectionError) as exc:
+            except (ValueError, RuntimeError, OSError, KeyError, ConnectionError, _VelesDBError) as exc:
                 logger.debug("Failed to fetch neighbour node %s: %s", neighbor_id, exc)
 
     def _extract_node_id(self, node: Any) -> Optional[int]:
@@ -425,7 +438,7 @@ class GraphRetriever(BaseRetriever):
                 results = vs.get_nodes([str(node_id)])
                 if results:
                     return results[0]
-        except (ValueError, RuntimeError, OSError, KeyError, ConnectionError) as exc:
+        except (ValueError, RuntimeError, OSError, KeyError, ConnectionError, _VelesDBError) as exc:
             logger.debug("Failed to fetch node %s from vector store: %s", node_id, exc)
         return None
 

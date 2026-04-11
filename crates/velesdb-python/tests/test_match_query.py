@@ -60,11 +60,16 @@ def test_match_query_with_similarity(temp_db_path):
 
 
 def test_match_query_invalid_non_match_query(temp_db_path):
+    """`match_query` rejects non-MATCH statements with a typed `ValueError`.
+
+    Routed through `core_err` since Wave 3 Commit 2 — `VELES-010 Query`
+    is a query-shape error and surfaces as Python's canonical `ValueError`.
+    """
     db = velesdb.Database(temp_db_path)
     collection = db.create_collection("match_invalid", dimension=4, metric="cosine")
     _seed_collection(collection)
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         collection.match_query("SELECT * FROM match_invalid LIMIT 1")
 
 

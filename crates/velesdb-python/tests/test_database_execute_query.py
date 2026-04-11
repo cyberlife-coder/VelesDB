@@ -7,6 +7,7 @@ Run with: pytest tests/test_database_execute_query.py -v
 
 import pytest
 
+import velesdb
 from conftest import _SKIP_NO_BINDINGS
 
 pytestmark = _SKIP_NO_BINDINGS
@@ -96,11 +97,28 @@ class TestDatabaseExecuteQueryErrors:
     """Error-path coverage: invalid SQL and failed execution."""
 
     def test_invalid_sql_raises_value_error(self, temp_db):
-        """Unparseable SQL raises ValueError (not RuntimeError)."""
-        with pytest.raises((ValueError, RuntimeError)):
+        """Unparseable SQL raises the typed ValueError (VELES-010 Query)."""
+        # VELES-010 (Query parse failures) is routed to PyValueError by
+        # `core_err`. Before Wave 3 Commit 2 this path flowed through
+        # `PyRuntimeError::new_err(e.to_string())` in `database.rs::execute_query`
+        # and accepted either ValueError or RuntimeError — both are now
+        # stale: a pass on `RuntimeError` would mean we silently lost the
+        # ValueError routing.
+        with pytest.raises(ValueError):
             temp_db.execute_query("THIS IS NOT VALID SQL !!!!")
 
-    def test_missing_collection_raises_runtime_error(self, temp_db):
-        """Querying a non-existent collection raises RuntimeError."""
-        with pytest.raises(RuntimeError):
+    def test_missing_collection_raises_collection_not_found(self, temp_db):
+        """Querying a non-existent collection raises `CollectionNotFoundError`.
+
+        Before Wave 3 Commit 2 this path returned a generic `RuntimeError`
+        because `database.rs::execute_query` bypassed `core_err` and used
+        `PyRuntimeError::new_err(e.to_string())`. The new typed dispatch
+        surfaces `VELES-002` as `velesdb.CollectionNotFoundError`, which is
+        itself a subclass of `velesdb.VelesDBError` — the test asserts
+        both hierarchy levels so a future collapse of the exception tree
+        would still be caught.
+        """
+        with pytest.raises(velesdb.CollectionNotFoundError) as exc_info:
             temp_db.execute_query("SELECT * FROM no_such_collection LIMIT 5")
+        assert isinstance(exc_info.value, velesdb.VelesDBError)
+        assert "no_such_collection" in str(exc_info.value)

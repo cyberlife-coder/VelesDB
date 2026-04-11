@@ -108,6 +108,7 @@ impl Collection {
             #[cfg(feature = "persistence")]
             deferred_indexer,
             async_index_builder,
+            auto_reindex: Arc::new(RwLock::new(None)),
         }
     }
 

@@ -2,6 +2,12 @@
 
 > **EPIC-023**: Documentation du modèle de concurrence pour utilisateurs avancés et contributeurs.
 
+> **User-facing write throughput guidance**: see
+> [`docs/guides/WRITE_CONCURRENCY.md`](guides/WRITE_CONCURRENCY.md) for
+> the single-writer-per-collection model, batching patterns, and the
+> Community/Enterprise split. This document covers the internal lock
+> ordering and concurrency primitives used across the engine.
+
 ## Overview
 
 VelesDB utilise un modèle de concurrence basé sur:

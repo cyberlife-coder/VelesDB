@@ -635,11 +635,17 @@ class Database:
         >>> collection.upsert([{"id": 1, "vector": [0.1, 0.2], "payload": {"text": "hello"}}])
     """
 
-    def __init__(self, path: str) -> None:
+    def __init__(
+        self,
+        path: str,
+        config: Optional["VelesConfigOptions"] = None,
+    ) -> None:
         """Open or create a VelesDB database at the specified path.
 
         Args:
             path: Directory path for database storage
+            config: Optional typed configuration (limits, etc.) applied at
+                open time.
         """
         ...
 
@@ -649,9 +655,8 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
-        m: Optional[int] = None,
-        ef_construction: Optional[int] = None,
-        expected_vectors: Optional[int] = None,
+        hnsw: Optional["HnswOptions"] = None,
+        auto_reindex: Optional["AutoReindexOptions"] = None,
     ) -> Collection:
         """Create a new vector collection.
 
@@ -659,10 +664,11 @@ class Database:
             name: Collection name
             dimension: Vector dimension
             metric: Distance metric ("cosine", "euclidean", "dot", "hamming", "jaccard")
-            storage_mode: "full", "sq8", or "binary"
-            m: Optional HNSW M parameter
-            ef_construction: Optional HNSW ef_construction parameter
-            expected_vectors: Optional expected dataset size for auto-tuning M and ef
+            storage_mode: "full", "sq8", "binary", "pq", or "rabitq"
+            hnsw: Optional typed HNSW parameters (replaces the legacy
+                `m` / `ef_construction` / `expected_vectors` kwargs)
+            auto_reindex: Optional auto-reindex policy, attached as a
+                runtime-only hook on the returned collection
 
         Returns:
             The created Collection
@@ -689,9 +695,8 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
-        m: Optional[int] = None,
-        ef_construction: Optional[int] = None,
-        expected_vectors: Optional[int] = None,
+        hnsw: Optional["HnswOptions"] = None,
+        auto_reindex: Optional["AutoReindexOptions"] = None,
     ) -> Collection:
         """Get an existing collection or create a new one.
 
@@ -700,9 +705,8 @@ class Database:
             dimension: Vector dimension (used only if creating)
             metric: Distance metric (used only if creating)
             storage_mode: Storage mode (used only if creating)
-            m: Optional HNSW M parameter (used only if creating)
-            ef_construction: Optional HNSW ef_construction parameter (used only if creating)
-            expected_vectors: Optional expected dataset size (used only if creating)
+            hnsw: Optional typed HNSW parameters (used only if creating)
+            auto_reindex: Optional auto-reindex policy (used only if creating)
 
         Returns:
             The Collection (existing or newly created)
@@ -886,7 +890,7 @@ class VelesQLParameterError(Exception):
 class ParsedStatement:
     """Parsed VelesQL statement with helper inspectors."""
 
-    table_name: str
+    collection_name: Optional[str]
     columns: List[str]
     limit: Optional[int]
     offset: Optional[int]
@@ -1050,8 +1054,13 @@ class PyGraphCollection:
         """Returns (in_degree, out_degree) for a node."""
         ...
 
-    def store_node_payload(self, node_id: int, payload: Dict[str, Any]) -> None:
-        """Store payload (properties) for a node."""
+    def upsert_node_payload(self, node_id: int, payload: Dict[str, Any]) -> None:
+        """Upsert the payload (properties) for a node.
+
+        Renamed from `store_node_payload` in v1.13 to match the Rust core
+        API and the rest of the Python surface (which uses `upsert`
+        everywhere).
+        """
         ...
 
     def get_node_payload(self, node_id: int) -> Optional[Dict[str, Any]]:
@@ -1374,3 +1383,135 @@ class AgentMemory:
     def procedural(self) -> PyProceduralMemory: ...
     @property
     def dimension(self) -> int: ...
+
+
+# ---------------------------------------------------------------------------
+# Typed options dataclasses (Wave 3 Commit 10)
+# ---------------------------------------------------------------------------
+
+
+class HnswOptions:
+    """Typed HNSW parameters for :meth:`Database.create_collection`.
+
+    All fields are optional — unspecified fields fall back to the engine
+    defaults. Replaces the v1.12 flat `m=`, `ef_construction=`,
+    `expected_vectors=` kwargs.
+
+    Example:
+        >>> opts = HnswOptions(m=48, ef_construction=600)
+        >>> db.create_collection("docs", dimension=768, hnsw=opts)
+        >>> # Auto-tuned:
+        >>> opts = HnswOptions.for_dataset_size(128, 1_000_000)
+    """
+
+    m: Optional[int]
+    ef_construction: Optional[int]
+    max_elements: Optional[int]
+    alpha: Optional[float]
+    pq_rescore_oversampling: Optional[int]
+
+    def __init__(
+        self,
+        m: Optional[int] = None,
+        ef_construction: Optional[int] = None,
+        max_elements: Optional[int] = None,
+        alpha: Optional[float] = None,
+        pq_rescore_oversampling: Optional[int] = None,
+    ) -> None: ...
+
+    @staticmethod
+    def for_dataset_size(dimension: int, expected_vectors: int) -> "HnswOptions":
+        """Return an HnswOptions pre-tuned for a specific dataset size."""
+        ...
+
+    @staticmethod
+    def fast() -> "HnswOptions":
+        """Preset optimized for insertion speed (M=16, ef_construction=150)."""
+        ...
+
+    @staticmethod
+    def turbo() -> "HnswOptions":
+        """Preset for maximum insert throughput (~85% recall)."""
+        ...
+
+    @staticmethod
+    def balanced(dimension: int) -> "HnswOptions":
+        """Engine-default balanced preset for the given dimension."""
+        ...
+
+    @staticmethod
+    def high_recall(dimension: int) -> "HnswOptions":
+        """High-recall preset (engine default + 8 M, +200 ef_construction)."""
+        ...
+
+    @staticmethod
+    def max_recall(dimension: int) -> "HnswOptions":
+        """Tightest recall preset for the given dimension."""
+        ...
+
+
+class LimitsOptions:
+    """Tenant-wide guard-rail limits mapped to core `LimitsConfig`.
+
+    All fields are optional — unspecified fields fall back to the engine
+    defaults (max_collections=1000, max_dimensions=4096, etc.).
+    """
+
+    max_collections: Optional[int]
+    max_dimensions: Optional[int]
+    max_vectors_per_collection: Optional[int]
+    max_payload_size: Optional[int]
+    max_perfect_mode_vectors: Optional[int]
+
+    def __init__(
+        self,
+        max_collections: Optional[int] = None,
+        max_dimensions: Optional[int] = None,
+        max_vectors_per_collection: Optional[int] = None,
+        max_payload_size: Optional[int] = None,
+        max_perfect_mode_vectors: Optional[int] = None,
+    ) -> None: ...
+
+
+class AutoReindexOptions:
+    """Per-collection auto-reindex policy mapped to `AutoReindexConfig`.
+
+    Pass an instance to :meth:`Database.create_collection(..., auto_reindex=...)`
+    to attach a runtime-only `AutoReindexManager`. Not persisted —
+    re-attach after every `Database(path)`.
+    """
+
+    enabled: bool
+    param_divergence_threshold: float
+    min_size_for_reindex: int
+    max_latency_regression_percent: float
+    max_recall_regression_percent: float
+    cooldown_secs: int
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        param_divergence_threshold: float = 1.5,
+        min_size_for_reindex: int = 10_000,
+        max_latency_regression_percent: float = 10.0,
+        max_recall_regression_percent: float = 2.0,
+        cooldown_secs: int = 3_600,
+    ) -> None: ...
+
+    @staticmethod
+    def disabled() -> "AutoReindexOptions":
+        """Return a disabled configuration that never triggers a reindex."""
+        ...
+
+
+class VelesConfigOptions:
+    """Global database-level configuration mapped to core `VelesConfig`.
+
+    Currently exposes the `limits` sub-section only. Other sub-sections
+    (search, hnsw, storage) are left at their engine defaults — user
+    tuning is done per-collection via :class:`HnswOptions`.
+    """
+
+    limits: Optional[LimitsOptions]
+
+    def __init__(self, limits: Optional[LimitsOptions] = None) -> None: ...

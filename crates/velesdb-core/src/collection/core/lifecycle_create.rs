@@ -95,15 +95,54 @@ impl Collection {
     /// control over the HNSW graph topology (M, `ef_construction`) while
     /// retaining the standard storage pipeline.
     ///
+    /// Uses the engine default `pq_rescore_oversampling = 4`. Callers that
+    /// need to override the PQ rescore factor should use
+    /// [`Collection::create_with_full_config`] instead.
+    ///
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or the config cannot be saved.
+    #[allow(dead_code)] // Reason: kept as a convenience shortcut for lifecycle tests; the
+                        // canonical constructor is `create_with_full_config`, which is used by all production
+                        // call-sites since Wave 3 Commit 5. Deleting this wrapper would force every test to
+                        // restate `Some(4)` for `pq_rescore_oversampling`, spreading the engine default across
+                        // the test suite.
     pub fn create_with_hnsw_params(
         path: PathBuf,
         dimension: usize,
         metric: DistanceMetric,
         storage_mode: StorageMode,
         hnsw_params: crate::index::hnsw::HnswParams,
+    ) -> Result<Self> {
+        Self::create_with_full_config(path, dimension, metric, storage_mode, hnsw_params, Some(4))
+    }
+
+    /// Creates a new collection with custom HNSW parameters and an explicit
+    /// PQ rescore oversampling factor.
+    ///
+    /// This is the most expressive vector constructor: callers pass a fully
+    /// populated [`HnswParams`] (including `alpha`, `max_elements`, and any
+    /// future fields) together with an explicit `pq_rescore_oversampling`
+    /// override. It is the single underlying factory called by
+    /// [`Collection::create_with_hnsw_params`] (which pins the PQ factor to
+    /// its engine default of `Some(4)`).
+    ///
+    /// Passing `pq_rescore_oversampling = None` keeps the on-disk config
+    /// in "no explicit override" mode, which allows later migrations to
+    /// recompute the factor from the dataset shape without having to
+    /// distinguish a persisted explicit value from a legacy default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config
+    /// cannot be saved.
+    pub fn create_with_full_config(
+        path: PathBuf,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+        hnsw_params: crate::index::hnsw::HnswParams,
+        pq_rescore_oversampling: Option<u32>,
     ) -> Result<Self> {
         let config = CollectionConfig {
             name: Self::name_from_path(&path),
@@ -115,7 +154,7 @@ impl Collection {
             metadata_only: false,
             graph_schema: None,
             embedding_dimension: None,
-            pq_rescore_oversampling: Some(4),
+            pq_rescore_oversampling,
             hnsw_params: Some(hnsw_params),
             #[cfg(feature = "persistence")]
             deferred_indexing: None,

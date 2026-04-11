@@ -4,6 +4,10 @@ This guide explains how VelesDB handles concurrent access, file locking,
 and thread safety. It covers single-process multi-threading, multi-process
 protection, and best practices for production deployments.
 
+> **Looking for write throughput tuning?** See
+> [Write Concurrency Model](WRITE_CONCURRENCY.md) for the single-writer-per-collection
+> model, batching patterns, and Enterprise tier options.
+
 ## Table of Contents
 
 - [Quick Start](#quick-start)

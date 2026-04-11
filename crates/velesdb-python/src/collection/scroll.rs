@@ -35,14 +35,38 @@ impl ScrollIterator {
     }
 
     /// Yield the next batch of points.
+    ///
+    /// Releases the GIL during the actual disk/mmap read performed by
+    /// `scroll_batch`. This is item #17 of Sprint 2 Wave 3 — before
+    /// Commit 3 the GIL was held for the entire batch read, so two
+    /// Python threads scrolling two different collections serialised
+    /// through the interpreter instead of progressing in parallel.
+    ///
+    /// The filter is cloned into an owned `Option<Filter>` before
+    /// crossing the `allow_threads` boundary because `py.allow_threads`
+    /// requires a `'static + Send` closure: a borrow of `self.filter`
+    /// would otherwise be tied to the `&mut self` outer lifetime. The
+    /// `Filter` clone is cheap (the structure is shallow and shared
+    /// where it can be) and pays for itself many times over by
+    /// releasing the GIL for the duration of the page read, which is
+    /// the dominant cost of a scroll step.
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         if self.exhausted {
             return Ok(None);
         }
 
-        let batch = self
-            .inner
-            .scroll_batch(self.cursor, self.batch_size, self.filter.as_ref())
+        // Snapshot inputs for the blocking closure. `inner` is already
+        // `Arc`-backed so the clone is a ref-count bump.
+        let inner = self.inner.clone();
+        let cursor = self.cursor;
+        let batch_size = self.batch_size;
+        let filter_owned = self.filter.clone();
+
+        // Release the GIL while the core walks the mmap region and
+        // applies the optional filter. Any resulting `velesdb_core::Error`
+        // is routed to the typed Python exception hierarchy by `core_err`.
+        let batch = py
+            .allow_threads(move || inner.scroll_batch(cursor, batch_size, filter_owned.as_ref()))
             .map_err(core_err)?;
 
         if batch.points.is_empty() {

@@ -27,6 +27,16 @@ from langchain_velesdb.security import (
     validate_column_name,
 )
 
+# Lazy VelesDBError resolution. See `graph_retriever.py` for the full
+# rationale — in short, the integration is importable without the
+# compiled `velesdb` extension, so we fall back to `Exception` when
+# the typed class is unavailable, ensuring the defensive try/except
+# blocks below still catch the fallback path regardless of runtime.
+try:
+    from velesdb import VelesDBError as _VelesDBError
+except (ImportError, AttributeError):  # pragma: no cover — optional dependency fallback
+    _VelesDBError = Exception  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -183,7 +193,12 @@ class SearchOpsMixin(MultiQueryOpsMixin):
 
         try:
             return collection.search(**search_kwargs)
-        except (RuntimeError, TypeError) as exc:
+        except (RuntimeError, TypeError, ValueError, _VelesDBError) as exc:
+            # Since Wave 3 Commit 2, `VELES-015 SearchNotSupported` is
+            # routed to `ValueError`, and other sparse-search failures
+            # from the Rust layer surface as `VelesDBError` subclasses
+            # rather than flat `RuntimeError`. Catching all three keeps
+            # the dense-only fallback path intact.
             logger.warning(
                 "Hybrid sparse search failed (%s); falling back to dense-only search. "
                 "Ensure the collection was indexed with sparse vectors to enable hybrid search.",

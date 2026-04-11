@@ -178,4 +178,73 @@ impl VectorCollection {
     pub fn indexes_memory_usage(&self) -> usize {
         self.inner.indexes_memory_usage()
     }
+
+    /// Attaches an [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)
+    /// to this collection as a runtime-only hook.
+    ///
+    /// The attachment is **not persisted** to `config.json` — callers must
+    /// re-attach after every [`Database::open`](crate::Database::open).
+    /// This intentional design avoids the `Duration` serde round-trip and
+    /// keeps the collection schema version stable.
+    ///
+    /// Once attached, the manager is consulted by the bulk upsert hot
+    /// path after every successful `upsert_bulk` call. When the manager
+    /// reports that index parameters have diverged from the optimal
+    /// configuration for the current dataset size, a `tracing::info!`
+    /// event is emitted. Automatic index reconstruction is NOT performed
+    /// — that decision is left to the caller.
+    ///
+    /// External consumers can register their own reindex pipeline via
+    /// the manager's event callback ([`AutoReindexManager::on_event`]) or
+    /// poll the divergence state via
+    /// [`Self::check_auto_reindex_divergence`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use velesdb_core::{VectorCollection, DistanceMetric, StorageMode};
+    /// # use velesdb_core::collection::auto_reindex::{AutoReindexConfig, AutoReindexManager};
+    /// # let coll = VectorCollection::create("./data/docs".into(), "docs", 768, DistanceMetric::Cosine, StorageMode::Full)?;
+    /// let manager = Arc::new(AutoReindexManager::new(AutoReindexConfig::default()));
+    /// coll.attach_auto_reindex(manager);
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
+    pub fn attach_auto_reindex(
+        &self,
+        manager: std::sync::Arc<crate::collection::auto_reindex::AutoReindexManager>,
+    ) {
+        self.inner.attach_auto_reindex(manager);
+    }
+
+    /// Detaches the currently attached auto-reindex manager, returning it
+    /// so callers can drop or reuse it. Returns `None` when no manager
+    /// was attached.
+    #[must_use = "detach_auto_reindex returns the previously attached manager — ignore only when you intend to drop it"]
+    pub fn detach_auto_reindex(
+        &self,
+    ) -> Option<std::sync::Arc<crate::collection::auto_reindex::AutoReindexManager>> {
+        self.inner.detach_auto_reindex()
+    }
+
+    /// Returns a clone of the currently attached auto-reindex manager,
+    /// or `None` if none is attached.
+    #[must_use]
+    pub fn auto_reindex_manager(
+        &self,
+    ) -> Option<std::sync::Arc<crate::collection::auto_reindex::AutoReindexManager>> {
+        self.inner.auto_reindex_manager()
+    }
+
+    /// Returns a [`DivergenceCheck`](crate::collection::auto_reindex::DivergenceCheck)
+    /// computed from the attached manager against the collection's current
+    /// state, or `None` when no manager is attached.
+    ///
+    /// Read-only — does not mutate the manager state.
+    #[must_use]
+    pub fn check_auto_reindex_divergence(
+        &self,
+    ) -> Option<crate::collection::auto_reindex::DivergenceCheck> {
+        self.inner.check_auto_reindex_divergence()
+    }
 }

@@ -18,7 +18,7 @@ def test_velesql_parse_simple_select():
     assert parsed.is_valid()
     assert parsed.is_select()
     assert not parsed.is_match()
-    assert parsed.table_name == "documents"
+    assert parsed.collection_name == "documents"
     assert parsed.columns == ["*"]
     assert parsed.limit == 10
     assert parsed.offset is None
@@ -31,7 +31,7 @@ def test_velesql_parse_with_columns():
     parsed = VelesQL.parse("SELECT id, name, price FROM products")
     
     assert parsed.columns == ["id", "name", "price"]
-    assert parsed.table_name == "products"
+    assert parsed.collection_name == "products"
 
 
 def test_velesql_parse_with_where():
@@ -187,4 +187,4 @@ def test_velesql_table_alias():
     )
     
     # Table alias should be accessible
-    assert parsed.table_name == "products"
+    assert parsed.collection_name == "products"

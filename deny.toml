@@ -26,6 +26,12 @@ ignore = [
     # bincode removed from velesdb-core; remains as transitive dep via uniffi -> velesdb-mobile
     { id = "RUSTSEC-2025-0141", reason = "bincode: uniffi transitive (velesdb-mobile), awaiting uniffi upgrade" },
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: unmaintained, transitive dep, no vulnerability" },
+    # RUSTSEC-2026-0097 (rand thread_rng unsound with custom logger) —
+    # production `rand` is on 0.9.3 (patched) via `cargo update`.
+    # Remaining unpatched versions (0.7.3, 0.8.5) are Tauri build-time
+    # transitives via phf → kuchikiki → tauri-utils; upgrading them
+    # requires a full Tauri refresh which is out of scope here.
+    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 + 0.8.5: phf/tauri build transitives, production rand is on 0.9.3 (patched)" },
 ]
 
 [licenses]

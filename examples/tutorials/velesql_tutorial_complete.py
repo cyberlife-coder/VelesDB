@@ -401,7 +401,7 @@ from velesdb import VelesQL
 print(f"  Valid query:   {VelesQL.is_valid('SELECT * FROM kb WHERE vector NEAR $v LIMIT 10')}")
 print(f"  Invalid query: {VelesQL.is_valid('DROP TABLE kb')}")
 parsed = VelesQL.parse("SELECT * FROM support_kb WHERE vector NEAR $v AND category = 'technical' LIMIT 5")
-print(f"\n  Table:         {parsed.table_name}")
+print(f"\n  Collection:    {parsed.collection_name}")
 print(f"  Vector search: {parsed.has_vector_search()}")
 print(f"  WHERE clause:  {parsed.has_where_clause()}")
 print(f"  Limit:         {parsed.limit}")
