@@ -233,6 +233,15 @@ mod tests {
             parse_storage_mode("pq"),
             Ok(StorageMode::ProductQuantization)
         ));
+        assert!(matches!(
+            parse_storage_mode("rabitq"),
+            Ok(StorageMode::RaBitQ)
+        ));
+        // Case-insensitive (delegates to core `StorageMode::from_str`).
+        assert!(matches!(
+            parse_storage_mode("RaBitQ"),
+            Ok(StorageMode::RaBitQ)
+        ));
     }
 
     #[test]
@@ -256,6 +265,7 @@ mod tests {
             StorageMode::SQ8,
             StorageMode::Binary,
             StorageMode::ProductQuantization,
+            StorageMode::RaBitQ,
         ] {
             let s = storage_mode_to_string(mode);
             assert_eq!(parse_storage_mode(s).unwrap(), mode);

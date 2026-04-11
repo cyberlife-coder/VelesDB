@@ -30,7 +30,6 @@ import base64
 import urllib.request
 from io import BytesIO
 
-import numpy as np
 from PIL import Image
 import imagehash
 import velesdb
@@ -99,8 +98,9 @@ def index_barcodes(db: velesdb.Database, photo_dir: str) -> tuple:
 def load_clip_model():
     """Load CLIP ViT-B-32 model for the Detective's semantic map."""
     try:
+        # pylint: disable=import-outside-toplevel,unused-import
         import open_clip
-        import torch
+        import torch  # noqa: F401  # availability probe — used via `torch.no_grad()` in compute_meaning
     except ImportError:
         print("open-clip-torch is required for CLIP embeddings.")
         print("Install: pip install open-clip-torch torch")

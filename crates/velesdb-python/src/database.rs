@@ -54,10 +54,16 @@ impl Database {
     ///     dimension: Vector dimension (e.g., 768 for BERT embeddings)
     ///     metric: Distance metric - "cosine", "euclidean", "dot", "hamming", or "jaccard"
     ///             (default: "cosine")
-    ///     storage_mode: Storage mode - "full", "sq8", or "binary" (default: "full")
-    ///                   - "full": Full f32 precision
-    ///                   - "sq8": 8-bit scalar quantization (4x memory reduction)
-    ///                   - "binary": 1-bit binary quantization (32x memory reduction)
+    ///     storage_mode: Storage mode (default: "full"). Accepted values (case-insensitive,
+    ///                   aliases in parentheses):
+    ///                   - "full" ("f32"): Full f32 precision — best recall, 4 bytes/dim.
+    ///                   - "sq8" ("int8"): 8-bit scalar quantization — 4x compression, ~1% recall loss.
+    ///                   - "binary" ("bit"): 1-bit binary quantization — 32x compression,
+    ///                     best for edge/IoT devices.
+    ///                   - "pq" ("product_quantization"): Product Quantization — 8x-16x compression
+    ///                     via trained codebooks (requires a training step before upserts).
+    ///                   - "rabitq": RaBitQ — 1-bit with rotation + scalar correction,
+    ///                     32x compression with ~1-2% recall loss.
     ///
     /// Returns:
     ///     Collection instance
@@ -66,6 +72,8 @@ impl Database {
     ///     >>> collection = db.create_collection("documents", dimension=768, metric="cosine")
     ///     >>> # With SQ8 quantization for memory savings:
     ///     >>> quantized = db.create_collection("embeddings", dimension=768, storage_mode="sq8")
+    ///     >>> # With RaBitQ for 32x compression with minimal recall loss:
+    ///     >>> rabitq_col = db.create_collection("compact", dimension=768, storage_mode="rabitq")
     ///     >>> # With custom HNSW parameters:
     ///     >>> custom = db.create_collection("docs", dimension=768, m=48, ef_construction=600)
     ///     >>> # Auto-tuned for expected dataset size (optimizes M and ef_construction):

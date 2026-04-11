@@ -29,8 +29,6 @@ class ChunkData(TypedDict):
 class PDFProcessingError(Exception):
     """Error during PDF processing."""
 
-    pass
-
 
 class PDFProcessor:
     """Extract text from PDFs and chunk it for embedding."""

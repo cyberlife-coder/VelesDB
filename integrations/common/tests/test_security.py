@@ -4,7 +4,6 @@ from velesdb_common.security import (
     validate_weight,
     validate_storage_mode,
     SecurityError,
-    validate_k,
     validate_text,
     ALLOWED_METRICS,
     ALLOWED_STORAGE_MODES,

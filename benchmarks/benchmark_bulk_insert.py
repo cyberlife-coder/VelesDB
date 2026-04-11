@@ -99,7 +99,6 @@ def measure_bulk_insert(
 
     # Compute metrics
     throughput = count / total_elapsed
-    batch_throughputs = [batch_size / t for t in batch_times if t > 0]
 
     # Disk size
     db_size = sum(
@@ -228,11 +227,6 @@ def run_benchmark():
     for name, published, midpoint in market:
         ratio = ref_throughput / midpoint
         bar = "#" * min(int(ratio * 10), 30)
-        notes = ""
-        if "gRPC" in name or "REST" in name:
-            notes = "(includes network overhead)"
-        elif "in-process" in name.lower() or "Lance" in name:
-            notes = "(in-process, comparable)"
         print(f"  {name:<20} {published:<12} {ratio:.2f}x          {bar}")
 
     print()

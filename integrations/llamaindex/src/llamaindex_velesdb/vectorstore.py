@@ -42,7 +42,14 @@ from llamaindex_velesdb.node_builder import (
 )
 from llamaindex_velesdb.search_ops import SearchOpsMixin
 from llamaindex_velesdb.graph_ops import GraphOpsMixin
-from llamaindex_velesdb.scroll_ops import ScrollOpsMixin, _scroll_one_batch  # noqa: F401
+from llamaindex_velesdb.scroll_ops import (  # noqa: F401  # pylint: disable=unused-import
+    ScrollOpsMixin,
+    # `_scroll_one_batch` is re-imported intentionally: tests
+    # monkeypatch ``llamaindex_velesdb.vectorstore._scroll_one_batch``
+    # to observe pagination, so the symbol must be bound at module
+    # scope even though nothing in this file calls it directly.
+    _scroll_one_batch,
+)
 
 # Re-export for backward compatibility and discoverability.
 __all__ = [

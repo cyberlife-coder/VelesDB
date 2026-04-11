@@ -135,6 +135,20 @@ fn test_storage_mode_binary_conversion() {
     assert_eq!(core, velesdb_core::StorageMode::Binary);
 }
 
+#[test]
+fn test_storage_mode_product_quantization_conversion() {
+    let mode = StorageMode::ProductQuantization;
+    let core: velesdb_core::StorageMode = mode.into();
+    assert_eq!(core, velesdb_core::StorageMode::ProductQuantization);
+}
+
+#[test]
+fn test_storage_mode_rabitq_conversion() {
+    let mode = StorageMode::Rabitq;
+    let core: velesdb_core::StorageMode = mode.into();
+    assert_eq!(core, velesdb_core::StorageMode::RaBitQ);
+}
+
 // =========================================================================
 // VelesDatabase Tests
 // =========================================================================
@@ -385,11 +399,17 @@ fn test_all_five_metrics() {
 }
 
 // =========================================================================
-// All 3 Storage Modes Integration Tests
+// Storage Modes Integration Tests
 // =========================================================================
+//
+// Covers the three storage modes that accept upserts without a prior
+// training step (Full, Sq8, Binary). `ProductQuantization` and `Rabitq`
+// require a trained quantizer before inserts succeed and are covered by
+// pure conversion tests above — their end-to-end creation+upsert flow
+// is exercised by core and server crates where training helpers live.
 
 #[test]
-fn test_all_three_storage_modes() {
+fn test_untrained_storage_modes_full_upsert_flow() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().to_str().unwrap().to_string();
     let db = VelesDatabase::open(path).unwrap();

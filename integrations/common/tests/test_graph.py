@@ -1,4 +1,3 @@
-import pytest
 from velesdb_common.graph import (
     build_graph_rest_payload,
     is_timeout_exception,

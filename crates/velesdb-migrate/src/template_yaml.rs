@@ -12,7 +12,7 @@ destination:
   collection: migrated_docs
   dimension: 768
   metric: cosine  # cosine, euclidean, or dot
-  storage_mode: full  # full, sq8, or binary
+  storage_mode: full  # full, sq8, binary, pq, rabitq
 
 options:
   batch_size: 1000

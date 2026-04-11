@@ -153,7 +153,8 @@ fn create_vector_collection(
             // Drop the coll handle before the rollback to release any
             // read lock the registry hands back by default.
             drop(coll);
-            if let Err(rollback_err) = state.db.delete_collection(&req.name) {
+            let rollback_outcome = state.db.delete_collection(&req.name);
+            if let Err(ref rollback_err) = rollback_outcome {
                 tracing::warn!(
                     collection = %req.name,
                     rollback_error = %rollback_err,
@@ -161,6 +162,29 @@ fn create_vector_collection(
                     "failed to roll back collection after apply_advanced_config error"
                 );
             }
+
+            // Post-rollback validation (S2-NEW-13, audit A P1 +
+            // Devin ANALYSIS_0002 on PR #582): double-check that the
+            // collection has actually been removed from the registry
+            // before returning the Phase 2 error to the caller. If
+            // the rollback failed AND the collection is still
+            // present, the client retry will hit `CollectionExists`
+            // and have no idea why — log a critical diagnostic so
+            // operators can manually reconcile the orphaned state.
+            // The original Phase 2 error is still the return value
+            // because it is more actionable for the caller.
+            if state.db.get_any_collection(&req.name).is_some() {
+                tracing::error!(
+                    collection = %req.name,
+                    rollback_outcome = ?rollback_outcome,
+                    phase_two_error = %phase_two_err,
+                    "post-rollback invariant violated: collection still present in \
+                     registry after delete_collection was attempted. Manual \
+                     reconciliation required — client retries will fail with \
+                     CollectionExists until the orphaned collection is cleaned up."
+                );
+            }
+
             return Ok(Err(phase_two_err));
         }
     }

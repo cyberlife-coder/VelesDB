@@ -1,14 +1,23 @@
 exclude_paths:
     - .venv/**
+    - '**/.venv/**'
     - .claude/**
     - .tmp/**
     - node_modules/**
+    - '**/node_modules/**'
     - target/**
     - benchmarks/**
     - demos/**
     - docs/**
     - scripts/**
     - conformance/**
+    - examples/**
+    - integrations/**/tests/**
+    - integrations/common/tests/**
+    - examples/tutorials/test_*.py
+    - crates/**/src/**/*_tests.rs
+    - crates/**/src/**/*_test.rs
+    - crates/**/tests/**
 runtimes:
     - node@22.2.0
     - python@3.11.11
