@@ -26,9 +26,11 @@ import type {
   GraphSearchResponse,
   GraphSearchResultItem,
   GraphEdge,
-  QueryApiResponse,
   MatchQueryOptions,
+  MatchQueryResponse,
+  MatchQueryResultItem,
   AggregateQueryOptions,
+  AggregateResponse,
 } from '../types';
 import type { BaseTransport } from './shared';
 import {
@@ -141,35 +143,75 @@ export async function updateGuardrails(
 // Query
 // ============================================================================
 
+/** Raw wire shape of `POST /aggregate`. */
+interface AggregateResponseWire {
+  result: unknown;
+  timing_ms: number;
+  meta: { velesql_contract_version: string; count: number };
+}
+
 /**
  * Execute a VelesQL aggregate query (`SELECT COUNT(*) / AVG(...) / ...`).
  *
  * The server exposes a dedicated `/aggregate` endpoint optimised for
  * group-by + aggregation queries; this wrapper forwards the query
- * string and optional bind parameters verbatim.
+ * string and optional bind parameters verbatim. The return type is
+ * the dedicated `AggregateResponse` — NOT the generic `QueryApiResponse`
+ * — because the wire format is distinct (`{ result, timing_ms, meta }`,
+ * not `{ rows, stats }`).
  */
 export async function aggregate(
   transport: BaseTransport,
   queryString: string,
   params?: Record<string, unknown>,
   options?: AggregateQueryOptions
-): Promise<QueryApiResponse> {
-  const response = await transport.requestJson<QueryApiResponse>(
+): Promise<AggregateResponse> {
+  const body: Record<string, unknown> = {
+    query: queryString,
+    params: params ?? {},
+  };
+  if (options?.collection !== undefined) {
+    body.collection = options.collection;
+  }
+  const response = await transport.requestJson<AggregateResponseWire>(
     'POST',
     '/aggregate',
-    {
-      query: queryString,
-      params: params ?? {},
-      timeout_ms: options?.timeoutMs,
-    }
+    body
   );
   throwOnError(response);
-  return response.data!;
+  const data = response.data!;
+  return {
+    result: data.result,
+    timingMs: data.timing_ms,
+    meta: {
+      velesqlContractVersion: data.meta.velesql_contract_version,
+      count: data.meta.count,
+    },
+  };
+}
+
+/** Raw wire shape of `POST /collections/{name}/match`. */
+interface MatchQueryResponseWire {
+  results: Array<{
+    bindings: Record<string, number>;
+    score?: number;
+    depth: number;
+    projected?: Record<string, unknown>;
+  }>;
+  took_ms: number;
+  count: number;
+  meta: { velesql_contract_version: string };
 }
 
 /**
  * Execute a VelesQL `MATCH (...)` graph query against a specific
  * collection. Thin wrapper around `POST /collections/{name}/match`.
+ *
+ * Returns the dedicated `MatchQueryResponse` type (pattern-binding
+ * rows + meta) rather than the generic `QueryApiResponse`, matching
+ * the actual `MatchQueryResponse` struct emitted by the server. The
+ * optional `vector` + `threshold` in `options` are forwarded to the
+ * MATCH similarity scorer when the query uses `similarity(node.vec, $v)`.
  */
 export async function matchQuery(
   transport: BaseTransport,
@@ -177,18 +219,36 @@ export async function matchQuery(
   queryString: string,
   params?: Record<string, unknown>,
   options?: MatchQueryOptions
-): Promise<QueryApiResponse> {
-  const response = await transport.requestJson<QueryApiResponse>(
+): Promise<MatchQueryResponse> {
+  const body: Record<string, unknown> = {
+    query: queryString,
+    params: params ?? {},
+  };
+  if (options?.vector !== undefined) {
+    body.vector = toNumberArray(options.vector);
+  }
+  if (options?.threshold !== undefined) {
+    body.threshold = options.threshold;
+  }
+  const response = await transport.requestJson<MatchQueryResponseWire>(
     'POST',
     `${collectionPath(collection)}/match`,
-    {
-      query: queryString,
-      params: params ?? {},
-      timeout_ms: options?.timeoutMs,
-    }
+    body
   );
   throwOnError(response, `Collection '${collection}'`);
-  return response.data!;
+  const data = response.data!;
+  const items: MatchQueryResultItem[] = data.results.map((r) => ({
+    bindings: r.bindings,
+    score: r.score,
+    depth: r.depth,
+    projected: r.projected ?? {},
+  }));
+  return {
+    results: items,
+    tookMs: data.took_ms,
+    count: data.count,
+    meta: { velesqlContractVersion: data.meta.velesql_contract_version },
+  };
 }
 
 // ============================================================================

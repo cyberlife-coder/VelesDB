@@ -151,12 +151,12 @@ export class WasmBackend implements IVelesDBBackend {
   }
   async aggregate(
     _q: string, _p?: Record<string, unknown>, _o?: import('../types').AggregateQueryOptions
-  ): Promise<QueryApiResponse> {
+  ): Promise<import('../types').AggregateResponse> {
     return Promise.resolve(wasmNotSupported('Aggregate queries'));
   }
   async matchQuery(
     _c: string, _q: string, _p?: Record<string, unknown>, _o?: import('../types').MatchQueryOptions
-  ): Promise<QueryApiResponse> {
+  ): Promise<import('../types').MatchQueryResponse> {
     return Promise.resolve(wasmNotSupported('MATCH queries'));
   }
   async removeEdge(_c: string, _id: number): Promise<boolean> {

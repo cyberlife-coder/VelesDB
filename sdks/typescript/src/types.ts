@@ -861,7 +861,7 @@ export interface IVelesDBBackend {
     queryString: string,
     params?: Record<string, unknown>,
     options?: AggregateQueryOptions
-  ): Promise<QueryApiResponse>;
+  ): Promise<AggregateResponse>;
 
   /** Execute a VelesQL `MATCH (...)` graph query scoped to a collection. */
   matchQuery(
@@ -869,7 +869,7 @@ export interface IVelesDBBackend {
     queryString: string,
     params?: Record<string, unknown>,
     options?: MatchQueryOptions
-  ): Promise<QueryApiResponse>;
+  ): Promise<MatchQueryResponse>;
 
   /** Remove a graph edge by ID. Returns `true` if removed, `false` if not found. */
   removeEdge(collection: string, edgeId: number): Promise<boolean>;
@@ -1027,14 +1027,60 @@ export interface GraphSearchResponse {
   results: GraphSearchResultItem[];
 }
 
-/** Options for `matchQuery` — reuses the shared VelesQL query API. */
+/**
+ * Options for `matchQuery`. Mirrors the extra fields accepted by
+ * `velesdb_server::handlers::match_query::MatchQueryRequest`
+ * beyond `query` and `params`.
+ */
 export interface MatchQueryOptions {
-  /** Timeout in milliseconds. */
-  timeoutMs?: number;
+  /** Query vector for `similarity()` scoring inside the MATCH clause. */
+  vector?: number[] | Float32Array;
+  /** Similarity threshold (0.0–1.0). */
+  threshold?: number;
 }
 
-/** Aggregate query options. */
+/** Response from `POST /collections/{name}/match`. Mirrors the Rust
+ * `MatchQueryResponse` struct — intentionally distinct from the
+ * `/query` and `/aggregate` response shapes. */
+export interface MatchQueryResponse {
+  /** Pattern matches returned by the MATCH clause. */
+  results: MatchQueryResultItem[];
+  /** Server-side execution time in whole milliseconds. */
+  tookMs: number;
+  /** Number of result rows (matches `results.length`). */
+  count: number;
+  /** Response metadata (VelesQL contract version). */
+  meta: { velesqlContractVersion: string };
+}
+
+/** Single row of a `MatchQueryResponse`. */
+export interface MatchQueryResultItem {
+  /** Variable-binding map from the MATCH pattern. */
+  bindings: Record<string, number>;
+  /** Similarity score, present only when `similarity()` was used. */
+  score?: number;
+  /** Traversal depth reached to produce this row. */
+  depth: number;
+  /** Projected properties from the RETURN clause. */
+  projected: Record<string, unknown>;
+}
+
+/** Options for `aggregate`. Mirrors the extra fields accepted by
+ * `velesdb_core::api_types::QueryRequest` beyond `query` and `params`. */
 export interface AggregateQueryOptions {
-  /** Timeout in milliseconds. */
-  timeoutMs?: number;
+  /**
+   * Optional collection name when the query string does not carry an
+   * explicit `FROM <collection>` clause.
+   */
+  collection?: string;
+}
+
+/** Response from `POST /aggregate`. Mirrors the Rust `AggregationResponse`. */
+export interface AggregateResponse {
+  /** Aggregation result — shape depends on the SELECT clause. */
+  result: unknown;
+  /** Query execution time in milliseconds. */
+  timingMs: number;
+  /** Response metadata. */
+  meta: { velesqlContractVersion: string; count: number };
 }

@@ -166,25 +166,49 @@ describe('aggregate', () => {
     backend = await initBackend();
   });
 
-  it('POSTs to /aggregate with query + params', async () => {
+  it('POSTs to /aggregate with query + params and parses AggregateResponse', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () =>
         Promise.resolve({
-          rows: [{ category: 'tech', n: 42 }],
-          stats: { rows_scanned: 100 },
+          result: [{ category: 'tech', n: 42 }],
+          timing_ms: 12.5,
+          meta: {
+            velesql_contract_version: '3.6',
+            count: 1,
+          },
         }),
     });
 
-    await backend.aggregate('SELECT category, COUNT(*) FROM docs GROUP BY category', {
-      min_score: 0.5,
-    });
+    const resp = await backend.aggregate(
+      'SELECT category, COUNT(*) FROM docs GROUP BY category',
+      { min_score: 0.5 }
+    );
 
     const call = lastCall();
     expect(call.method).toBe('POST');
     expect(call.url).toContain('/aggregate');
     expect(call.body?.query).toBe('SELECT category, COUNT(*) FROM docs GROUP BY category');
     expect(call.body?.params).toEqual({ min_score: 0.5 });
+    expect(call.body).not.toHaveProperty('timeout_ms');
+    expect(resp.result).toEqual([{ category: 'tech', n: 42 }]);
+    expect(resp.timingMs).toBe(12.5);
+    expect(resp.meta.velesqlContractVersion).toBe('3.6');
+    expect(resp.meta.count).toBe(1);
+  });
+
+  it('forwards options.collection as snake_case', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          result: {},
+          timing_ms: 0,
+          meta: { velesql_contract_version: '3.6', count: 0 },
+        }),
+    });
+    await backend.aggregate('SELECT COUNT(*)', {}, { collection: 'docs' });
+    expect(lastCall().body?.collection).toBe('docs');
   });
 });
 
@@ -195,13 +219,26 @@ describe('matchQuery', () => {
     backend = await initBackend();
   });
 
-  it('POSTs to /collections/{name}/match with the query string', async () => {
+  it('POSTs to /collections/{name}/match and maps MatchQueryResponse', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: () => Promise.resolve({ rows: [] }),
+      json: () =>
+        Promise.resolve({
+          results: [
+            {
+              bindings: { a: 1, b: 2 },
+              score: 0.92,
+              depth: 2,
+              projected: { 'a.name': 'Alice' },
+            },
+          ],
+          took_ms: 7,
+          count: 1,
+          meta: { velesql_contract_version: '3.6' },
+        }),
     });
 
-    await backend.matchQuery(
+    const resp = await backend.matchQuery(
       'kg',
       'MATCH (a:Person)-[:KNOWS]->(b) RETURN b',
       { source: 42 }
@@ -212,6 +249,54 @@ describe('matchQuery', () => {
     expect(call.url).toContain('/collections/kg/match');
     expect(call.body?.query).toBe('MATCH (a:Person)-[:KNOWS]->(b) RETURN b');
     expect(call.body?.params).toEqual({ source: 42 });
+    expect(call.body).not.toHaveProperty('timeout_ms');
+
+    expect(resp.results).toHaveLength(1);
+    expect(resp.results[0].bindings).toEqual({ a: 1, b: 2 });
+    expect(resp.results[0].score).toBe(0.92);
+    expect(resp.results[0].depth).toBe(2);
+    expect(resp.results[0].projected).toEqual({ 'a.name': 'Alice' });
+    expect(resp.tookMs).toBe(7);
+    expect(resp.count).toBe(1);
+    expect(resp.meta.velesqlContractVersion).toBe('3.6');
+  });
+
+  it('forwards options.vector + options.threshold for similarity() MATCH', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          results: [],
+          took_ms: 0,
+          count: 0,
+          meta: { velesql_contract_version: '3.6' },
+        }),
+    });
+    await backend.matchQuery(
+      'kg',
+      'MATCH (a:Person) WHERE similarity(a.vec, $v) > 0.7 RETURN a',
+      {},
+      { vector: [0.1, 0.2, 0.3], threshold: 0.7 }
+    );
+    const body = lastCall().body!;
+    expect(body.vector).toEqual([0.1, 0.2, 0.3]);
+    expect(body.threshold).toBe(0.7);
+  });
+
+  it('defaults projected to empty object when server omits it', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          results: [{ bindings: { a: 1 }, depth: 0 }],
+          took_ms: 1,
+          count: 1,
+          meta: { velesql_contract_version: '3.6' },
+        }),
+    });
+    const resp = await backend.matchQuery('kg', 'MATCH (a) RETURN a');
+    expect(resp.results[0].projected).toEqual({});
+    expect(resp.results[0].score).toBeUndefined();
   });
 });
 

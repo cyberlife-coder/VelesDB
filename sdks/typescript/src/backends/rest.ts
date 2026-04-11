@@ -52,7 +52,9 @@ import type {
   GraphSearchRequest as GraphSearchReq,
   GraphSearchResponse,
   MatchQueryOptions,
+  MatchQueryResponse,
   AggregateQueryOptions,
+  AggregateResponse,
 } from '../types';
 import {
   rebuildIndex as _rebuildIndex,
@@ -405,7 +407,7 @@ export class RestBackend implements IVelesDBBackend {
     queryString: string,
     params?: Record<string, unknown>,
     options?: AggregateQueryOptions
-  ): Promise<QueryApiResponse> {
+  ): Promise<AggregateResponse> {
     this.ensureInitialized();
     return _aggregate(this.baseTransport(), queryString, params, options);
   }
@@ -415,7 +417,7 @@ export class RestBackend implements IVelesDBBackend {
     queryString: string,
     params?: Record<string, unknown>,
     options?: MatchQueryOptions
-  ): Promise<QueryApiResponse> {
+  ): Promise<MatchQueryResponse> {
     this.ensureInitialized();
     return _matchQuery(this.baseTransport(), collection, queryString, params, options);
   }

@@ -41,7 +41,9 @@ import type {
   GraphSearchRequest,
   GraphSearchResponse,
   AggregateQueryOptions,
+  AggregateResponse,
   MatchQueryOptions,
+  MatchQueryResponse,
 } from './types';
 import type { FilterInput } from './filter';
 import type { CapabilityMap } from './capabilities';
@@ -630,7 +632,7 @@ export class VelesDB {
     queryString: string,
     params?: Record<string, unknown>,
     options?: AggregateQueryOptions
-  ): Promise<QueryApiResponse> {
+  ): Promise<AggregateResponse> {
     this.ensureInitialized();
     requireNonEmptyString(queryString, 'Query string');
     return this.backend.aggregate(queryString, params, options);
@@ -642,7 +644,7 @@ export class VelesDB {
     queryString: string,
     params?: Record<string, unknown>,
     options?: MatchQueryOptions
-  ): Promise<QueryApiResponse> {
+  ): Promise<MatchQueryResponse> {
     this.ensureInitialized();
     requireNonEmptyString(collection, 'Collection');
     requireNonEmptyString(queryString, 'Query string');
