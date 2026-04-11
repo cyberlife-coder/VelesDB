@@ -8,6 +8,7 @@ import type {
   Collection,
   VectorDocument,
   SearchOptions,
+  SearchQuality,
   SearchResult,
   IVelesDBBackend,
   MultiQuerySearchOptions,
@@ -309,6 +310,7 @@ export class VelesDB {
       vector: number[] | Float32Array;
       k?: number;
       filter?: FilterInput;
+      quality?: SearchQuality;
     }>
   ): Promise<SearchResult[][]> {
     this.ensureInitialized();

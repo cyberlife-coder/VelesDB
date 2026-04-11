@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Sprint 2 Wave 4 (TypeScript SDK)
 
+- **`SearchOptions.quality` forwarded to REST as `mode`**
+  (`sdks/typescript/src/search-quality.ts` +
+  `backends/search-backend.ts`, Commit 5) — the `quality` field that
+  has lived on `SearchOptions` since v1.4 is now actually delivered
+  to the server on the three search endpoints that support it
+  natively: `search`, `searchIds`, `searchBatch`. Closes the
+  `#22 F-API-001` audit finding.
+
+  ```typescript
+  // Named presets
+  await db.search('docs', query, { k: 10, quality: 'fast' });
+  await db.search('docs', query, { k: 10, quality: 'accurate' });
+  await db.search('docs', query, { k: 10, quality: 'autotune' });
+
+  // Template-literal presets (parsed server-side by
+  // velesdb_core::api_types::mode_to_search_quality)
+  await db.search('docs', query, { k: 10, quality: 'custom:256' });
+  await db.search('docs', query, { k: 10, quality: 'adaptive:64:512' });
+
+  // Per-sub-request on batch
+  await db.searchBatch('docs', [
+    { vector: v1, k: 10, quality: 'fast' },
+    { vector: v2, k: 10, quality: 'accurate' },
+  ]);
+  ```
+
+  The new `searchQualityToMode(quality)` helper exported from
+  `@wiscale/velesdb-sdk` is a pure string pass-through: it returns
+  `{ mode: quality }` when a value is supplied and `{}` when
+  undefined, so spreading its result into a request body is safe and
+  keys are omitted cleanly when the caller doesn't override the
+  default.
+
+  **Scope limitation (explicit, not a saupoudrage)**: `textSearch`,
+  `hybridSearch`, and `multiQuerySearch` do NOT accept `quality`.
+  Their core entry points (`VectorCollection::text_search`,
+  `::hybrid_search`, `::multi_query_search`) do not currently take
+  an `ef_search` or `SearchQuality` parameter — adding the option
+  to the SDK would create a silently-ignored field. Supporting
+  quality on those paths requires extending the core first and is
+  tracked as a follow-up (candidate for Sprint 3+).
+
 - **`hnsw_alpha` and `hnsw_max_elements` exposed on `POST /collections`**
   (`velesdb-server::CreateCollectionRequest` + `velesdb-server::handlers::collections::build_hnsw_params_override`
   + `sdks/typescript/src/backends/crud-backend.ts`, Commit 4) —

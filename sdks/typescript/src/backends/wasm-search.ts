@@ -161,11 +161,24 @@ export async function wasmSearchBatch(
     vector: number[] | Float32Array;
     k?: number;
     filter?: FilterInput;
+    /**
+     * Search quality preset. Forwarded through to `wasmSearch` which
+     * currently ignores it because the WASM backend does not yet
+     * support ef_search / SearchQuality. Accepted at the type level
+     * for API parity with the REST backend.
+     */
+    quality?: import('../types').SearchQuality;
   }>
 ): Promise<SearchResult[][]> {
   const results: SearchResult[][] = [];
   for (const s of searches) {
-    results.push(await wasmSearch(ctx, collectionName, s.vector, { k: s.k, filter: s.filter }));
+    results.push(
+      await wasmSearch(ctx, collectionName, s.vector, {
+        k: s.k,
+        filter: s.filter,
+        quality: s.quality,
+      })
+    );
   }
   return results;
 }

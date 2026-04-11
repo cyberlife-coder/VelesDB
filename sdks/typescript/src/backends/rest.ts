@@ -11,6 +11,7 @@ import type {
   Collection,
   VectorDocument,
   SearchOptions,
+  SearchQuality,
   SearchResult,
   MultiQuerySearchOptions,
   CreateIndexOptions,
@@ -358,7 +359,12 @@ export class RestBackend implements IVelesDBBackend {
 
   async searchBatch(
     collection: string,
-    searches: Array<{ vector: number[] | Float32Array; k?: number; filter?: FilterInput }>
+    searches: Array<{
+      vector: number[] | Float32Array;
+      k?: number;
+      filter?: FilterInput;
+      quality?: SearchQuality;
+    }>
   ): Promise<SearchResult[][]> {
     this.ensureInitialized();
     return _searchBatch(this.asSearchTransport(), collection, searches);

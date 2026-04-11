@@ -30,6 +30,8 @@ export { VelesQLBuilder, velesql } from './query-builder';
 export type { RelDirection, RelOptions, NearVectorOptions, FusionOptions } from './query-builder';
 export { f, isTypedFilter, normalizeFilter } from './filter';
 export type { Filter, Condition, CompareOp, FilterInput, JsonValue } from './filter';
+export { searchQualityToMode } from './search-quality';
+export type { SearchQualityWire } from './search-quality';
 export {
   VelesError,
   CollectionExistsError,

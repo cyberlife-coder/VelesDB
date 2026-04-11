@@ -12,6 +12,7 @@ import type {
   Collection,
   VectorDocument,
   SearchOptions,
+  SearchQuality,
   SearchResult,
   MultiQuerySearchOptions,
   CreateIndexOptions,
@@ -437,7 +438,12 @@ export class WasmBackend implements IVelesDBBackend {
 
   async searchBatch(
     collectionName: string,
-    searches: Array<{ vector: number[] | Float32Array; k?: number; filter?: FilterInput }>
+    searches: Array<{
+      vector: number[] | Float32Array;
+      k?: number;
+      filter?: FilterInput;
+      quality?: SearchQuality;
+    }>
   ): Promise<SearchResult[][]> {
     this.ensureInitialized();
     return wasmSearchBatch(this.context(), collectionName, searches);

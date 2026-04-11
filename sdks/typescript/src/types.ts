@@ -687,6 +687,8 @@ export interface IVelesDBBackend {
       vector: number[] | Float32Array;
       k?: number;
       filter?: FilterInput;
+      /** Per-sub-request search quality preset (default: server default). */
+      quality?: SearchQuality;
     }>
   ): Promise<SearchResult[][]>;
 

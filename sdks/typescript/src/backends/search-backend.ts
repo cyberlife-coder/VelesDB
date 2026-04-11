@@ -11,10 +11,12 @@ import type {
   SearchResult,
   MultiQuerySearchOptions,
   SparseVector,
+  SearchQuality,
 } from '../types';
 import type { FilterInput } from '../filter';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath, toNumberArray } from './shared';
+import { searchQualityToMode } from '../search-quality';
 
 /** Batch search response structure (mirrors rest.ts private type). */
 interface BatchSearchResponse {
@@ -40,6 +42,7 @@ export async function search(
     top_k: options?.k ?? 10,
     filter: options?.filter,
     include_vectors: options?.includeVectors ?? false,
+    ...searchQualityToMode(options?.quality),
   };
 
   if (options?.sparseVector) {
@@ -64,12 +67,14 @@ export async function searchBatch(
     vector: number[] | Float32Array;
     k?: number;
     filter?: FilterInput;
+    quality?: SearchQuality;
   }>
 ): Promise<SearchResult[][]> {
-  const formattedSearches = searches.map(s => ({
+  const formattedSearches = searches.map((s) => ({
     vector: toNumberArray(s.vector),
     top_k: s.k ?? 10,
     filter: s.filter,
+    ...searchQualityToMode(s.quality),
   }));
 
   const response = await transport.requestJson<BatchSearchResponse>(
@@ -80,7 +85,7 @@ export async function searchBatch(
 
   throwOnError(response, `Collection '${collection}'`);
 
-  return response.data?.results.map(r => r.results) ?? [];
+  return response.data?.results.map((r) => r.results) ?? [];
 }
 
 export async function textSearch(
@@ -175,6 +180,7 @@ export async function searchIds(
       vector: queryVector,
       top_k: options?.k ?? 10,
       filter: options?.filter,
+      ...searchQualityToMode(options?.quality),
     }
   );
 
