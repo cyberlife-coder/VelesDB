@@ -857,3 +857,91 @@ fn test_diagnostics_not_found() {
     let result = db.collection_diagnostics("nonexistent");
     assert!(result.is_err());
 }
+
+// =========================================================================
+// VelesConfig wiring — Wave 3 Commit 6
+//
+// The root config used to be defined in `config.rs` and loaded only by
+// server/CLI code; `Database::open` ignored it entirely. Commit 6 wires
+// a `config: Arc<VelesConfig>` field into `Database` and exposes the
+// `open_with_config` / `open_with_observer_and_config` constructors.
+// These tests anchor the happy path, the default fallback, and the
+// Arc-based accessor contract so later commits (7, 8, 9) can rely on
+// `db.config()` in every sub-system with confidence.
+// =========================================================================
+
+#[test]
+fn test_database_open_default_config_matches_veles_config_default() {
+    use crate::config::VelesConfig;
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    // `Database::open` must install the exact same `VelesConfig::default()`
+    // a user would get by calling the public builder — otherwise the
+    // "same behaviour as pre-Wave-3" guarantee is broken.
+    let default = VelesConfig::default();
+    let stored = db.config();
+    assert_eq!(
+        stored.limits.max_collections,
+        default.limits.max_collections
+    );
+    assert_eq!(stored.limits.max_dimensions, default.limits.max_dimensions);
+    assert_eq!(stored.wal_batch.enabled, default.wal_batch.enabled);
+    assert_eq!(
+        stored.wal_batch.max_batch_size,
+        default.wal_batch.max_batch_size
+    );
+}
+
+#[test]
+fn test_database_open_with_config_preserves_custom_fields() {
+    use crate::config::{LimitsConfig, VelesConfig, WalBatchConfig};
+
+    let dir = tempdir().unwrap();
+
+    let custom = VelesConfig {
+        limits: LimitsConfig {
+            max_dimensions: 2048,
+            max_vectors_per_collection: 50_000_000,
+            max_collections: 500,
+            max_payload_size: 524_288,
+            max_perfect_mode_vectors: 250_000,
+        },
+        wal_batch: WalBatchConfig {
+            enabled: true,
+            commit_delay_us: 250,
+            max_batch_size: 256,
+        },
+        ..VelesConfig::default()
+    };
+
+    let db = Database::open_with_config(dir.path(), custom).unwrap();
+    let stored = db.config();
+
+    assert_eq!(stored.limits.max_dimensions, 2048);
+    assert_eq!(stored.limits.max_collections, 500);
+    assert_eq!(stored.limits.max_payload_size, 524_288);
+    assert!(stored.wal_batch.enabled);
+    assert_eq!(stored.wal_batch.commit_delay_us, 250);
+    assert_eq!(stored.wal_batch.max_batch_size, 256);
+}
+
+#[test]
+fn test_database_config_arc_shares_same_instance() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    // `config_arc` must hand out clones of the same `Arc`, not
+    // deep-clone the inner struct. Sub-systems (background index
+    // builders, async reindex managers) rely on this so that config
+    // updates propagate without forcing a refcount traversal of the
+    // whole database.
+    let a = db.config_arc();
+    let b = db.config_arc();
+    assert!(std::sync::Arc::ptr_eq(&a, &b));
+    // And the underlying pointer is the same as the `config()` borrow.
+    let r: *const crate::config::VelesConfig = db.config();
+    let a_ptr: *const crate::config::VelesConfig = std::sync::Arc::as_ptr(&a);
+    assert!(std::ptr::eq(a_ptr, r));
+}
