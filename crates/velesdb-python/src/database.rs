@@ -24,6 +24,21 @@ pub struct Database {
     path: PathBuf,
 }
 
+/// Internal HNSW dispatch plan computed under the GIL by
+/// [`Database::create_collection`] and consumed inside a
+/// `py.allow_threads` closure. Kept as a small `Copy` enum so moving
+/// it across the GIL-release boundary is a single memory copy.
+#[derive(Clone, Copy)]
+enum CreatePlan {
+    /// Use `create_vector_collection_with_hnsw` with the given
+    /// `(max_connections, ef_construction)` overrides. Either value
+    /// may be `None` to defer to the engine default for that field.
+    Hnsw(Option<usize>, Option<usize>),
+    /// Use `create_vector_collection_with_options` — engine picks
+    /// both `max_connections` and `ef_construction`.
+    Default,
+}
+
 #[pymethods]
 impl Database {
     /// Create or open a VelesDB database at the specified path.
@@ -38,9 +53,19 @@ impl Database {
     ///     >>> db = velesdb.Database("./my_vectors")
     #[new]
     #[pyo3(signature = (path))]
-    fn new(path: &str) -> PyResult<Self> {
+    fn new(py: Python<'_>, path: &str) -> PyResult<Self> {
+        // Open the database off the GIL. Opening walks the WAL, rebuilds
+        // any in-memory state, and mmaps vector/edge files — on a multi-
+        // million-vector directory this easily reaches multi-second
+        // latency, and holding the GIL for that long blocks every other
+        // Python thread. PyO3 ≥0.20 allows `py: Python<'_>` as the first
+        // parameter of a `#[new]` constructor, which is exactly what we
+        // need to call `allow_threads` here.
         let path_buf = PathBuf::from(path);
-        let db = CoreDatabase::open(&path_buf).map_err(core_err)?;
+        let path_clone = path_buf.clone();
+        let db = py
+            .allow_threads(move || CoreDatabase::open(&path_clone))
+            .map_err(core_err)?;
         Ok(Self {
             inner: Arc::new(db),
             path: path_buf,
@@ -94,8 +119,12 @@ impl Database {
         let distance_metric = parse_metric(metric)?;
         let mode = parse_storage_mode(storage_mode)?;
 
-        // Priority: explicit m/ef > expected_vectors > auto(dimension)
-        if m.is_some() || ef_construction.is_some() {
+        // Compute the HNSW plan under the GIL — cheap, and issuing the
+        // Python UserWarning on the explicit-override branch must happen
+        // before we release the interpreter lock.
+        //
+        // Priority: explicit m/ef > expected_vectors > engine default.
+        let plan = if m.is_some() || ef_construction.is_some() {
             // Warn when expected_vectors is also set: explicit values override
             // the adaptive defaults, so expected_vectors only fills in gaps.
             if expected_vectors.is_some() {
@@ -107,8 +136,6 @@ impl Database {
                     1,
                 );
             }
-            // If expected_vectors is set alongside explicit params, use
-            // for_dataset_size as base then override with explicit values.
             let (m_val, ef_val) = if let Some(n) = expected_vectors {
                 let base = velesdb_core::index::hnsw::HnswParams::for_dataset_size(dimension, n);
                 (
@@ -118,40 +145,48 @@ impl Database {
             } else {
                 (m, ef_construction)
             };
-            self.inner
-                .create_vector_collection_with_hnsw(
-                    name,
-                    dimension,
-                    distance_metric,
-                    mode,
-                    m_val,
-                    ef_val,
-                )
-                .map_err(core_err)?;
+            CreatePlan::Hnsw(m_val, ef_val)
         } else if let Some(n) = expected_vectors {
             let params = velesdb_core::index::hnsw::HnswParams::for_dataset_size(dimension, n);
-            self.inner
-                .create_vector_collection_with_hnsw(
-                    name,
-                    dimension,
-                    distance_metric,
-                    mode,
-                    Some(params.max_connections),
-                    Some(params.ef_construction),
-                )
-                .map_err(core_err)?;
+            CreatePlan::Hnsw(Some(params.max_connections), Some(params.ef_construction))
         } else {
-            self.inner
-                .create_vector_collection_with_options(name, dimension, distance_metric, mode)
-                .map_err(core_err)?;
-        }
+            CreatePlan::Default
+        };
 
+        // Drop the GIL for the disk write + index init. Every string
+        // argument must be cloned into an owned value because the
+        // closure must be `'static + Send`.
+        let name_owned = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        let name_for_closure = name_owned.clone();
+        py.allow_threads(move || match plan {
+            CreatePlan::Hnsw(m_val, ef_val) => inner.create_vector_collection_with_hnsw(
+                &name_for_closure,
+                dimension,
+                distance_metric,
+                mode,
+                m_val,
+                ef_val,
+            ),
+            CreatePlan::Default => inner.create_vector_collection_with_options(
+                &name_for_closure,
+                dimension,
+                distance_metric,
+                mode,
+            ),
+        })
+        .map_err(core_err)?;
+
+        // Registry lookup is O(1) on an in-memory map — keep it under
+        // the GIL. If this miss fires, something raced against the
+        // creation we just did, which is a core-level bug not a user
+        // error.
         let collection = self
             .inner
-            .get_vector_collection(name)
+            .get_vector_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
-        Ok(Collection::new(collection, name.to_string()))
+        Ok(Collection::new(collection, name_owned))
     }
 
     /// Get an existing collection by name.
@@ -204,8 +239,16 @@ impl Database {
     /// Example:
     ///     >>> db.delete_collection("old_collection")
     #[pyo3(signature = (name))]
-    fn delete_collection(&self, name: &str) -> PyResult<()> {
-        self.inner.delete_collection(name).map_err(core_err)
+    fn delete_collection(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+        // `delete_collection` walks the directory tree and unlinks every
+        // file belonging to the collection — that is a `rm -rf`-class
+        // operation and can take tens of milliseconds on hot paths,
+        // several hundred milliseconds on cold ones. Release the GIL so
+        // other Python threads keep running.
+        let name_owned = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        py.allow_threads(move || inner.delete_collection(&name_owned))
+            .map_err(core_err)
     }
 
     /// Create a metadata-only collection (no vectors, no HNSW index).
@@ -226,19 +269,21 @@ impl Database {
     ///     ...     {"id": 1, "payload": {"name": "Widget", "price": 9.99}}
     ///     ... ])
     #[pyo3(signature = (name))]
-    fn create_metadata_collection(&self, name: &str) -> PyResult<Collection> {
-        self.inner
-            .create_metadata_collection(name)
+    fn create_metadata_collection(&self, py: Python<'_>, name: &str) -> PyResult<Collection> {
+        let name_owned = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        let name_for_closure = name_owned.clone();
+        py.allow_threads(move || inner.create_metadata_collection(&name_for_closure))
             .map_err(core_err)?;
 
         // Use get_any_collection to get the registered instance (not a disconnected copy).
         let collection = self
             .inner
-            .get_any_collection(name)
+            .get_any_collection(&name_owned)
             .map(velesdb_core::AnyCollection::as_vector_collection_unchecked)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
-        Ok(Collection::new(collection, name.to_string()))
+        Ok(Collection::new(collection, name_owned))
     }
 
     /// Create an AgentMemory instance for AI agent workflows.
@@ -329,6 +374,7 @@ impl Database {
     #[pyo3(signature = (name, dimension=None, metric="cosine", schema=None))]
     fn create_graph_collection(
         &self,
+        py: Python<'_>,
         name: &str,
         dimension: Option<usize>,
         metric: &str,
@@ -338,24 +384,28 @@ impl Database {
         let graph_schema = schema
             .map(|s| s.inner().clone())
             .unwrap_or_else(GraphSchema::schemaless);
+        let name_owned = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        let name_for_closure = name_owned.clone();
 
-        self.inner
-            .create_collection_typed(
-                name,
+        py.allow_threads(move || {
+            inner.create_collection_typed(
+                &name_for_closure,
                 &CollectionType::Graph {
                     dimension,
                     metric: distance_metric,
                     schema: graph_schema,
                 },
             )
-            .map_err(core_err)?;
+        })
+        .map_err(core_err)?;
 
         let coll = self
             .inner
-            .get_graph_collection(name)
+            .get_graph_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Graph collection not found after creation"))?;
 
-        Ok(PyGraphCollection::new(coll, name.to_string()))
+        Ok(PyGraphCollection::new(coll, name_owned))
     }
 
     /// Execute a VelesQL query string (SELECT, DDL, or DML).
@@ -464,7 +514,15 @@ impl Database {
     ///     >>> print(stats["total_points"])
     #[pyo3(signature = (name))]
     fn analyze_collection(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
-        let stats = self.inner.analyze_collection(name).map_err(core_err)?;
+        // `analyze_collection` walks the column store and the index,
+        // computing cardinality, size histograms, and graph stats. On
+        // a ten-million-row collection it crosses the 1-second mark —
+        // way past the "release the GIL" threshold.
+        let name_owned = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        let stats = py
+            .allow_threads(move || inner.analyze_collection(&name_owned))
+            .map_err(core_err)?;
         let json = serde_json::to_value(&stats)
             .map_err(|e| PyRuntimeError::new_err(format!("Serialization failed: {e}")))?;
         Ok(utils::json_to_python(py, &json))
@@ -490,7 +548,15 @@ impl Database {
     ///     ...     print(stats["row_count"])
     #[pyo3(signature = (name))]
     fn get_collection_stats(&self, py: Python<'_>, name: &str) -> PyResult<Option<PyObject>> {
-        let maybe_stats = self.inner.get_collection_stats(name).map_err(core_err)?;
+        // `get_collection_stats` reads the cached stats file from disk
+        // when the in-memory cache is cold, so in the worst case it
+        // performs a small I/O. Release the GIL so other Python threads
+        // are not blocked on that read.
+        let name_owned = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        let maybe_stats = py
+            .allow_threads(move || inner.get_collection_stats(&name_owned))
+            .map_err(core_err)?;
         maybe_stats
             .map(|stats| {
                 let json = serde_json::to_value(&stats).map_err(|e| {
