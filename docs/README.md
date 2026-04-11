@@ -24,6 +24,7 @@ Detailed guides for using VelesDB features:
 | [CLI & REPL](./guides/CLI_REPL.md) | Command-line interface and interactive shell |
 | [Quantization](./guides/QUANTIZATION.md) | Vector compression (SQ8, Binary) |
 | [Tuning Guide](./guides/TUNING_GUIDE.md) | HNSW parameter tuning and performance optimization |
+| [Write Concurrency](./guides/WRITE_CONCURRENCY.md) | Single-writer-per-collection model, batching patterns, Enterprise tier |
 | [Use Cases](./guides/USE_CASES.md) | Common use cases and recommended configurations |
 | [Troubleshooting](./NEW_USER_TROUBLESHOOTING.md) | Solutions for common issues new users encounter |
 
