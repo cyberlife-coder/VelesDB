@@ -3,6 +3,8 @@
  * @packageDocumentation
  */
 
+import type { FilterInput } from './filter';
+
 /** Supported distance metrics for vector similarity */
 export type DistanceMetric = 'cosine' | 'euclidean' | 'dot' | 'hamming' | 'jaccard';
 
@@ -102,8 +104,8 @@ export interface VectorDocument {
 export interface SearchOptions {
   /** Number of results to return (default: 10) */
   k?: number;
-  /** Filter expression (optional) */
-  filter?: Record<string, unknown>;
+  /** Filter expression (optional). Accepts typed `Filter` (recommended) or legacy raw JSON. */
+  filter?: FilterInput;
   /** Include vectors in results (default: false) */
   includeVectors?: boolean;
   /** Optional sparse vector for hybrid sparse+dense search */
@@ -146,8 +148,8 @@ export interface MultiQuerySearchOptions {
     /** Relative score fusion: sparse vector weight (default: 0.5) */
     sparseWeight?: number;
   };
-  /** Filter expression (optional) */
-  filter?: Record<string, unknown>;
+  /** Filter expression (optional). Accepts typed `Filter` (recommended) or legacy raw JSON. */
+  filter?: FilterInput;
 }
 
 /** Search result */
@@ -338,8 +340,8 @@ export interface ScrollRequest {
   cursor?: string | number;
   /** Number of points per page (1–10000, default 100). */
   batchSize?: number;
-  /** Optional filter object. */
-  filter?: Record<string, unknown>;
+  /** Optional filter expression. Accepts typed `Filter` (recommended) or legacy raw JSON. */
+  filter?: FilterInput;
 }
 
 /** Response from scroll pagination. */
@@ -625,23 +627,23 @@ export interface IVelesDBBackend {
     searches: Array<{
       vector: number[] | Float32Array;
       k?: number;
-      filter?: Record<string, unknown>;
+      filter?: FilterInput;
     }>
   ): Promise<SearchResult[][]>;
-  
+
   /** Full-text search using BM25 */
   textSearch(
     collection: string,
     query: string,
-    options?: { k?: number; filter?: Record<string, unknown> }
+    options?: { k?: number; filter?: FilterInput }
   ): Promise<SearchResult[]>;
-  
+
   /** Hybrid search combining vector and text */
   hybridSearch(
     collection: string,
     vector: number[] | Float32Array,
     textQuery: string,
-    options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+    options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
   ): Promise<SearchResult[]>;
   
   /** Execute VelesQL multi-model query (EPIC-031 US-011) */

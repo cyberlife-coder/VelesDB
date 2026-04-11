@@ -37,6 +37,7 @@ import type {
   ScrollRequest,
   ScrollResponse,
 } from '../types';
+import type { FilterInput } from '../filter';
 import { ConnectionError } from '../types';
 import {
   storeSemanticFact as _storeSemanticFact,
@@ -357,14 +358,14 @@ export class RestBackend implements IVelesDBBackend {
 
   async searchBatch(
     collection: string,
-    searches: Array<{ vector: number[] | Float32Array; k?: number; filter?: Record<string, unknown> }>
+    searches: Array<{ vector: number[] | Float32Array; k?: number; filter?: FilterInput }>
   ): Promise<SearchResult[][]> {
     this.ensureInitialized();
     return _searchBatch(this.asSearchTransport(), collection, searches);
   }
 
   async textSearch(
-    c: string, q: string, o?: { k?: number; filter?: Record<string, unknown> }
+    c: string, q: string, o?: { k?: number; filter?: FilterInput }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
     return _textSearch(this.asSearchTransport(), c, q, o);
@@ -372,7 +373,7 @@ export class RestBackend implements IVelesDBBackend {
 
   async hybridSearch(
     c: string, v: number[] | Float32Array, t: string,
-    o?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+    o?: { k?: number; vectorWeight?: number; filter?: FilterInput }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
     return _hybridSearch(this.asSearchTransport(), c, v, t, o);

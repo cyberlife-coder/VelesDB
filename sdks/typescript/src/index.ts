@@ -28,3 +28,5 @@ export { WasmBackend } from './backends/wasm';
 export { RestBackend } from './backends/rest';
 export { VelesQLBuilder, velesql } from './query-builder';
 export type { RelDirection, RelOptions, NearVectorOptions, FusionOptions } from './query-builder';
+export { f, isTypedFilter, normalizeFilter } from './filter';
+export type { Filter, Condition, CompareOp, FilterInput, JsonValue } from './filter';

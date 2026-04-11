@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Sprint 2 Wave 4 (TypeScript SDK)
+
+- **Typed `Filter` DSL** (`sdks/typescript/src/filter.ts`, Commit 1) —
+  discriminated union mirror of `velesdb_core::filter::Condition`
+  (20 operators) with a fluent builder `f.*` for ergonomic filter
+  construction. Closes the `#19 PROP-FILTER-UNTYPED` audit finding.
+
+  ```typescript
+  import { f, VelesDB } from '@wiscale/velesdb-sdk';
+
+  const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+  await db.init();
+
+  // Typed builder (recommended — compile-time checked)
+  const filter = f.and([
+    f.eq('category', 'tech'),
+    f.gte('price', 100),
+    f.or([f.ilike('title', '%rust%'), f.ilike('title', '%go%')]),
+    f.not(f.isNull('author')),
+  ]);
+
+  const results = await db.search('docs', queryVector, { k: 10, filter });
+  ```
+
+  The 20 operators mirror the Rust enum exactly and serialize to the
+  same wire format (`{type, field, value}` with `rename_all = "snake_case"`):
+  `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `is_null`,
+  `is_not_null`, `and`, `or`, `not`, `like`, `ilike`, `array_contains`,
+  `array_contains_any`, `array_contains_all`, `geo_distance`, `geo_bbox`.
+
+  **Backward compatible**: pre-v1.13 code passing
+  `filter: Record<string, unknown>` continues to work unchanged. The
+  new `FilterInput = Filter | Record<string, unknown>` type is
+  accepted by every `filter?` parameter across `SearchOptions`,
+  `MultiQuerySearchOptions`, `ScrollRequest`, `searchBatch`,
+  `textSearch`, `hybridSearch`, and all WASM/REST backend variants.
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `Filter`, `Condition`, `CompareOp`, `FilterInput`, `JsonValue` (types)
+  - `f` (fluent builder), `isTypedFilter`, `normalizeFilter` (runtime helpers)
+
 ### Breaking Changes
 - **`Collection` removed from public API** — `Collection` is now `pub(crate)` only. External code
   must use `VectorCollection`, `GraphCollection`, `MetadataCollection`, or `AnyCollection`.

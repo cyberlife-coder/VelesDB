@@ -12,6 +12,7 @@ import type {
   MultiQuerySearchOptions,
   SparseVector,
 } from '../types';
+import type { FilterInput } from '../filter';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath, toNumberArray } from './shared';
 
@@ -62,7 +63,7 @@ export async function searchBatch(
   searches: Array<{
     vector: number[] | Float32Array;
     k?: number;
-    filter?: Record<string, unknown>;
+    filter?: FilterInput;
   }>
 ): Promise<SearchResult[][]> {
   const formattedSearches = searches.map(s => ({
@@ -86,7 +87,7 @@ export async function textSearch(
   transport: SearchTransport,
   collection: string,
   query: string,
-  options?: { k?: number; filter?: Record<string, unknown> }
+  options?: { k?: number; filter?: FilterInput }
 ): Promise<SearchResult[]> {
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
@@ -108,7 +109,7 @@ export async function hybridSearch(
   collection: string,
   vector: number[] | Float32Array,
   textQuery: string,
-  options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+  options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
 ): Promise<SearchResult[]> {
   const queryVector = toNumberArray(vector);
 

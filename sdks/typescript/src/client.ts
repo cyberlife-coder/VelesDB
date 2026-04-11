@@ -32,6 +32,7 @@ import type {
   ScrollRequest,
   ScrollResponse,
 } from './types';
+import type { FilterInput } from './filter';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
 import { RestBackend } from './backends/rest';
@@ -307,7 +308,7 @@ export class VelesDB {
     searches: Array<{
       vector: number[] | Float32Array;
       k?: number;
-      filter?: Record<string, unknown>;
+      filter?: FilterInput;
     }>
   ): Promise<SearchResult[][]> {
     this.ensureInitialized();
@@ -360,7 +361,7 @@ export class VelesDB {
   async textSearch(
     collection: string,
     query: string,
-    options?: { k?: number; filter?: Record<string, unknown> }
+    options?: { k?: number; filter?: FilterInput }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
     requireNonEmptyString(query, 'Query');
@@ -381,7 +382,7 @@ export class VelesDB {
     collection: string,
     vector: number[] | Float32Array,
     textQuery: string,
-    options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+    options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
     requireVector(vector, 'Vector');

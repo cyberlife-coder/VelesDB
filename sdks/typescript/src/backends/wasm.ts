@@ -37,6 +37,7 @@ import type {
   ScrollRequest,
   ScrollResponse,
 } from '../types';
+import type { FilterInput } from '../filter';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 import type { SparseVector } from '../types';
 import type { WasmModule, CollectionData, WasmContext } from './wasm-types';
@@ -436,14 +437,14 @@ export class WasmBackend implements IVelesDBBackend {
 
   async searchBatch(
     collectionName: string,
-    searches: Array<{ vector: number[] | Float32Array; k?: number; filter?: Record<string, unknown> }>
+    searches: Array<{ vector: number[] | Float32Array; k?: number; filter?: FilterInput }>
   ): Promise<SearchResult[][]> {
     this.ensureInitialized();
     return wasmSearchBatch(this.context(), collectionName, searches);
   }
 
   async textSearch(
-    collection: string, query: string, options?: { k?: number; filter?: Record<string, unknown> }
+    collection: string, query: string, options?: { k?: number; filter?: FilterInput }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
     return wasmTextSearch(this.context(), collection, query, options);
@@ -451,7 +452,7 @@ export class WasmBackend implements IVelesDBBackend {
 
   async hybridSearch(
     collection: string, vector: number[] | Float32Array, textQuery: string,
-    options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+    options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
     return wasmHybridSearch(this.context(), collection, vector, textQuery, options);
