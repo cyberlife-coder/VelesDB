@@ -23,9 +23,9 @@ def graph_db(tmp_path):
     graph = db.create_graph_collection("kg", dimension=4)
 
     # Store node payloads (with _labels for MATCH label matching)
-    graph.store_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
-    graph.store_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
-    graph.store_node_payload(30, {"_labels": ["Company"], "name": "Acme"})
+    graph.upsert_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
+    graph.upsert_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
+    graph.upsert_node_payload(30, {"_labels": ["Company"], "name": "Acme"})
 
     # Edges: Alice -KNOWS-> Bob, Bob -WORKS_AT-> Acme
     graph.add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})

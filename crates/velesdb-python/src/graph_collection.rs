@@ -242,16 +242,26 @@ impl PyGraphCollection {
         self.inner.node_degree(node_id)
     }
 
-    /// Store payload (properties) for a node.
+    /// Upsert the payload (properties) for a node.
+    ///
+    /// Replaces any pre-existing payload on the given node, following
+    /// the standard VelesDB upsert semantics. Renamed from
+    /// `store_node_payload` in v1.13 to match the Rust core API and
+    /// the rest of the Python surface (which uses `upsert` everywhere).
     ///
     /// Args:
     ///     node_id: The node ID
     ///     payload: Dict of properties to store
     ///
     /// Example:
-    ///     >>> graph.store_node_payload(10, {"name": "Alice", "age": 30})
+    ///     >>> graph.upsert_node_payload(10, {"name": "Alice", "age": 30})
     #[pyo3(signature = (node_id, payload))]
-    fn store_node_payload(&self, py: Python<'_>, node_id: u64, payload: PyObject) -> PyResult<()> {
+    fn upsert_node_payload(
+        &self,
+        py: Python<'_>,
+        node_id: u64,
+        payload: PyObject,
+    ) -> PyResult<()> {
         let value = python_to_json(py, &payload)?;
         py.allow_threads(|| {
             self.inner

@@ -890,7 +890,7 @@ class VelesQLParameterError(Exception):
 class ParsedStatement:
     """Parsed VelesQL statement with helper inspectors."""
 
-    table_name: str
+    collection_name: Optional[str]
     columns: List[str]
     limit: Optional[int]
     offset: Optional[int]
@@ -1054,8 +1054,13 @@ class PyGraphCollection:
         """Returns (in_degree, out_degree) for a node."""
         ...
 
-    def store_node_payload(self, node_id: int, payload: Dict[str, Any]) -> None:
-        """Store payload (properties) for a node."""
+    def upsert_node_payload(self, node_id: int, payload: Dict[str, Any]) -> None:
+        """Upsert the payload (properties) for a node.
+
+        Renamed from `store_node_payload` in v1.13 to match the Rust core
+        API and the rest of the Python surface (which uses `upsert`
+        everywhere).
+        """
         ...
 
     def get_node_payload(self, node_id: int) -> Optional[Dict[str, Any]]:

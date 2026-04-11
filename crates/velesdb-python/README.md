@@ -540,9 +540,9 @@ graph.add_edge({
 })
 
 # Store properties on nodes
-graph.store_node_payload(10, {"name": "Alice", "role": "engineer"})
-graph.store_node_payload(20, {"name": "Bob", "role": "designer"})
-graph.store_node_payload(30, {"name": "Paris", "type": "city"})
+graph.upsert_node_payload(10, {"name": "Alice", "role": "engineer"})
+graph.upsert_node_payload(20, {"name": "Bob", "role": "designer"})
+graph.upsert_node_payload(30, {"name": "Paris", "type": "city"})
 
 # Retrieve node properties
 payload = graph.get_node_payload(10)
@@ -599,9 +599,9 @@ for r in results:
 
 ```python
 # Important: nodes must have _labels in their payload for label-based matching
-graph.store_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
-graph.store_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
-graph.store_node_payload(30, {"_labels": ["City"], "name": "Paris"})
+graph.upsert_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
+graph.upsert_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
+graph.upsert_node_payload(30, {"_labels": ["City"], "name": "Paris"})
 
 # MATCH query: find who Alice knows
 results = graph.match_query(
@@ -644,7 +644,7 @@ from velesdb import VelesQL
 # Parse a query and inspect its structure
 parsed = VelesQL.parse("SELECT id, title FROM documents WHERE category = 'tech' ORDER BY date DESC LIMIT 20")
 
-print(parsed.table_name)       # "documents"
+print(parsed.collection_name)  # "documents"
 print(parsed.columns)          # ["id", "title"]
 print(parsed.limit)            # 20
 print(parsed.offset)           # None
@@ -705,7 +705,7 @@ Key parameters for `ParsedStatement`:
 
 | Property / Method | Returns | Description |
 |-------------------|---------|-------------|
-| `table_name` | `str` or `None` | FROM clause table name |
+| `collection_name` | `str` or `None` | FROM clause collection name |
 | `columns` | `list[str]` | Selected columns (or `["*"]`) |
 | `limit` | `int` or `None` | LIMIT value |
 | `offset` | `int` or `None` | OFFSET value |
