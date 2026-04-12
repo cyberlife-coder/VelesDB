@@ -24,36 +24,42 @@ export interface RestHttpConfig {
   timeout: number;
 }
 
+/** HTTP status → typed error code lookup. */
+const STATUS_ERROR_CODES: Record<number, string> = {
+  400: 'BAD_REQUEST',
+  401: 'UNAUTHORIZED',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'CONFLICT',
+  429: 'RATE_LIMITED',
+  500: 'INTERNAL_ERROR',
+  503: 'SERVICE_UNAVAILABLE',
+};
+
 /** Map an HTTP status code to a typed error code string. */
 export function mapStatusToErrorCode(status: number): string {
-  switch (status) {
-    case 400: return 'BAD_REQUEST';
-    case 401: return 'UNAUTHORIZED';
-    case 403: return 'FORBIDDEN';
-    case 404: return 'NOT_FOUND';
-    case 409: return 'CONFLICT';
-    case 429: return 'RATE_LIMITED';
-    case 500: return 'INTERNAL_ERROR';
-    case 503: return 'SERVICE_UNAVAILABLE';
-    default:  return 'UNKNOWN_ERROR';
+  return STATUS_ERROR_CODES[status] ?? 'UNKNOWN_ERROR';
+}
+
+/** Safely extract a string field from an object, checking multiple keys. */
+function stringField(obj: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    if (typeof obj[key] === 'string') return obj[key] as string;
   }
+  return undefined;
 }
 
 /** Extract error code and message from an error response payload. */
 export function extractErrorPayload(data: unknown): { code?: string; message?: string } {
-  if (!data || typeof data !== 'object') {
-    return {};
-  }
+  if (!data || typeof data !== 'object') return {};
   const payload = data as Record<string, unknown>;
-  const nestedError =
-    payload.error && typeof payload.error === 'object'
-      ? (payload.error as Record<string, unknown>)
-      : undefined;
-  const codeField = nestedError?.code ?? payload.code;
-  const code = typeof codeField === 'string' ? codeField : undefined;
-  const messageField = nestedError?.message ?? payload.message ?? payload.error;
-  const message = typeof messageField === 'string' ? messageField : undefined;
-  return { code, message };
+  const nested = typeof payload.error === 'object' && payload.error
+    ? payload.error as Record<string, unknown>
+    : payload;
+  return {
+    code: stringField(nested, 'code') ?? stringField(payload, 'code'),
+    message: stringField(nested, 'message') ?? stringField(payload, 'message', 'error'),
+  };
 }
 
 /** Parse a node ID from an unknown value (bigint, number, or string). */
@@ -69,48 +75,53 @@ export function parseNodeId(value: unknown): bigint | number {
 }
 
 /** Execute an HTTP request against the REST API. */
+/** Build request headers from config. */
+function buildHeaders(config: RestHttpConfig): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
+  return headers;
+}
+
+/** Wrap a caught error as a ConnectionError. */
+function wrapCatchError(error: unknown): never {
+  if (error instanceof Error && error.name === 'AbortError') {
+    throw new ConnectionError('Request timeout');
+  }
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  const cause = error instanceof Error ? error : undefined;
+  throw new ConnectionError(`Request failed: ${message}`, cause);
+}
+
+/** Execute an HTTP request against the REST API. */
 export async function request<T>(
   config: RestHttpConfig,
   method: string,
   path: string,
   body?: unknown
 ): Promise<TransportResponse<T>> {
-  const url = `${config.baseUrl}${path}`;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (config.apiKey) {
-    headers['Authorization'] = `Bearer ${config.apiKey}`;
-  }
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), config.timeout);
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(`${config.baseUrl}${path}`, {
       method,
-      headers,
+      headers: buildHeaders(config),
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const errorPayload = extractErrorPayload(data);
-      return {
-        error: {
-          code: errorPayload.code ?? mapStatusToErrorCode(response.status),
-          message: errorPayload.message ?? `HTTP ${response.status}`,
-        },
-      };
+      const ep = extractErrorPayload(data);
+      return { error: {
+        code: ep.code ?? mapStatusToErrorCode(response.status),
+        message: ep.message ?? `HTTP ${response.status}`,
+      }};
     }
     return { data };
   } catch (error) {
     clearTimeout(timeoutId);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new ConnectionError('Request timeout');
-    }
-    throw new ConnectionError(
-      `Request failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      error instanceof Error ? error : undefined
-    );
+    wrapCatchError(error);
   }
 }
 

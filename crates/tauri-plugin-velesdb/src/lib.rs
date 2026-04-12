@@ -81,11 +81,6 @@ pub mod types_graph;
 pub use error::{CommandError, Error, Result};
 pub use state::VelesDbState;
 
-// ============================================================================
-// Simple In-Memory Index for Demo (VelesDbExt trait)
-// ============================================================================
-
-
 /// Initializes the `VelesDB` plugin with the default settings.
 ///
 /// Uses `./velesdb_data` as the default path for persistence.
