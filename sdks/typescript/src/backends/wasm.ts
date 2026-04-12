@@ -3,7 +3,7 @@
  *
  * Uses velesdb-wasm for in-browser/Node.js vector operations.
  * Search/query logic lives in wasm-search.ts; unsupported-feature
- * stubs live in wasm-stubs.ts.
+ * stubs live in wasm-stubs.ts and wasm-wave4-stubs.ts.
  */
 
 import type {
@@ -42,9 +42,15 @@ import type { FilterInput } from '../filter';
 import type { CapabilityMap } from '../capabilities';
 import { WASM_CAPABILITIES } from '../capabilities';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
-import { wasmNotSupported } from './shared';
-import type { SparseVector } from '../types';
-import type { WasmModule, CollectionData, WasmContext } from './wasm-types';
+import type { WasmModule, CollectionData } from './wasm-types';
+
+// Internal helpers
+import {
+  toNumericId,
+  canonicalPayloadKey,
+  buildWasmContext,
+  buildCollectionInfo,
+} from './wasm-helpers';
 
 // Search & query delegates
 import {
@@ -56,7 +62,7 @@ import {
   wasmQuery,
 } from './wasm-search';
 
-// Unsupported-feature stubs
+// Unsupported-feature stubs (pre-Wave 4)
 import {
   wasmCreateIndex,
   wasmListIndexes,
@@ -85,6 +91,22 @@ import {
   wasmMatchProceduralPatterns,
 } from './wasm-stubs';
 
+// Wave 4 unsupported stubs
+import {
+  wasmRebuildIndex,
+  wasmGetGuardrails,
+  wasmUpdateGuardrails,
+  wasmAggregate,
+  wasmMatchQuery,
+  wasmRemoveEdge,
+  wasmGetEdgeCount,
+  wasmListNodes,
+  wasmGetNodeEdges,
+  wasmGetNodePayload,
+  wasmUpsertNodePayload,
+  wasmGraphSearch,
+} from './wasm-wave4-stubs';
+
 /**
  * WASM Backend
  *
@@ -101,10 +123,7 @@ export class WasmBackend implements IVelesDBBackend {
   // ========================================================================
 
   async init(): Promise<void> {
-    if (this._initialized) {
-      return;
-    }
-
+    if (this._initialized) { return; }
     try {
       this.wasmModule = await import('@wiscale/velesdb-wasm') as WasmModule;
       await this.wasmModule.default();
@@ -117,158 +136,20 @@ export class WasmBackend implements IVelesDBBackend {
     }
   }
 
-  isInitialized(): boolean {
-    return this._initialized;
-  }
+  isInitialized(): boolean { return this._initialized; }
 
   async close(): Promise<void> {
-    for (const [, data] of this.collections) {
-      data.store.free();
-    }
+    for (const [, data] of this.collections) { data.store.free(); }
     this.collections.clear();
     this._initialized = false;
   }
 
-  capabilities(): Readonly<CapabilityMap> {
-    return WASM_CAPABILITIES;
-  }
-
-  // ==========================================================================
-  // Missing REST endpoint stubs (Sprint 2 Wave 4 — S2-NEW-10)
-  // All throw wasmNotSupported() — none of these features ship in WASM.
-  // ==========================================================================
-
-  async rebuildIndex(_c: string): Promise<import('../types').RebuildIndexResponse> {
-    return Promise.resolve(wasmNotSupported('Index rebuild'));
-  }
-  async getGuardrails(): Promise<import('../types').GuardRailsConfigResponse> {
-    return Promise.resolve(wasmNotSupported('Guardrails'));
-  }
-  async updateGuardrails(
-    _r: import('../types').GuardRailsUpdateRequest
-  ): Promise<import('../types').GuardRailsConfigResponse> {
-    return Promise.resolve(wasmNotSupported('Guardrails'));
-  }
-  async aggregate(
-    _q: string, _p?: Record<string, unknown>, _o?: import('../types').AggregateQueryOptions
-  ): Promise<import('../types').AggregateResponse> {
-    return Promise.resolve(wasmNotSupported('Aggregate queries'));
-  }
-  async matchQuery(
-    _c: string, _q: string, _p?: Record<string, unknown>, _o?: import('../types').MatchQueryOptions
-  ): Promise<import('../types').MatchQueryResponse> {
-    return Promise.resolve(wasmNotSupported('MATCH queries'));
-  }
-  async removeEdge(_c: string, _id: number): Promise<boolean> {
-    return Promise.resolve(wasmNotSupported('Graph edge removal'));
-  }
-  async getEdgeCount(_c: string): Promise<number> {
-    return Promise.resolve(wasmNotSupported('Graph edge count'));
-  }
-  async listNodes(_c: string): Promise<import('../types').ListNodesResponse> {
-    return Promise.resolve(wasmNotSupported('Graph list nodes'));
-  }
-  async getNodeEdges(
-    _c: string, _id: number, _o?: import('../types').GetNodeEdgesOptions
-  ): Promise<GraphEdge[]> {
-    return Promise.resolve(wasmNotSupported('Graph node edges'));
-  }
-  async getNodePayload(
-    _c: string, _id: number
-  ): Promise<import('../types').NodePayloadResponse> {
-    return Promise.resolve(wasmNotSupported('Graph node payload (read)'));
-  }
-  async upsertNodePayload(
-    _c: string, _id: number, _p: Record<string, unknown>
-  ): Promise<void> {
-    return Promise.resolve(wasmNotSupported('Graph node payload (upsert)'));
-  }
-  async graphSearch(
-    _c: string, _r: import('../types').GraphSearchRequest
-  ): Promise<import('../types').GraphSearchResponse> {
-    return Promise.resolve(wasmNotSupported('Graph search'));
-  }
-
-  // ========================================================================
-  // Internal helpers
-  // ========================================================================
+  capabilities(): Readonly<CapabilityMap> { return WASM_CAPABILITIES; }
 
   private ensureInitialized(): void {
     if (!this._initialized || !this.wasmModule) {
       throw new ConnectionError('WASM backend not initialized');
     }
-  }
-
-  private normalizeIdString(id: string): string | null {
-    const trimmed = id.trim();
-    return /^\d+$/.test(trimmed) ? trimmed : null;
-  }
-
-  private canonicalPayloadKeyFromResultId(id: bigint | number | string): string {
-    if (typeof id === 'bigint') {
-      return id.toString();
-    }
-    if (typeof id === 'number') {
-      return String(Math.trunc(id));
-    }
-    const normalized = this.normalizeIdString(id);
-    if (normalized !== null) {
-      return normalized.replace(/^0+(?=\d)/, '');
-    }
-    return String(this.toNumericId(id));
-  }
-
-  private canonicalPayloadKey(id: string | number): string {
-    if (typeof id === 'number') {
-      return String(Math.trunc(id));
-    }
-    const normalized = this.normalizeIdString(id);
-    if (normalized !== null) {
-      return normalized.replace(/^0+(?=\d)/, '');
-    }
-    return String(this.toNumericId(id));
-  }
-
-  private sparseVectorToArrays(sv: SparseVector): { indices: number[]; values: number[] } {
-    const indices: number[] = [];
-    const values: number[] = [];
-    for (const [k, v] of Object.entries(sv)) {
-      indices.push(Number(k));
-      values.push(v);
-    }
-    return { indices, values };
-  }
-
-  private toNumericId(id: string | number): number {
-    if (typeof id === 'number') {
-      return id;
-    }
-    const normalized = this.normalizeIdString(id);
-    if (normalized !== null) {
-      const parsed = Number(normalized);
-      if (Number.isSafeInteger(parsed)) {
-        return parsed;
-      }
-    }
-    let hash = 0;
-    for (let i = 0; i < id.length; i++) {
-      const char = id.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return Math.abs(hash);
-  }
-
-  /** Build a WasmContext for the extracted search/query modules. */
-  private context(): WasmContext {
-    return {
-      wasmModule: this.wasmModule!,
-      getCollection: (name: string) => this.collections.get(name),
-      canonicalPayloadKeyFromResultId: (id) => this.canonicalPayloadKeyFromResultId(id),
-      canonicalPayloadKey: (id) => this.canonicalPayloadKey(id),
-      sparseVectorToArrays: (sv) => this.sparseVectorToArrays(sv),
-      toNumericId: (id) => this.toNumericId(id),
-    };
   }
 
   // ========================================================================
@@ -277,14 +158,11 @@ export class WasmBackend implements IVelesDBBackend {
 
   async createCollection(name: string, config: CollectionConfig): Promise<void> {
     this.ensureInitialized();
-
     if (this.collections.has(name)) {
       throw new VelesDBError(`Collection '${name}' already exists`, 'COLLECTION_EXISTS');
     }
-
     const metric = config.metric ?? 'cosine';
     const store = new this.wasmModule!.VectorStore(config.dimension, metric);
-
     this.collections.set(name, {
       config: { ...config, metric },
       store,
@@ -295,45 +173,23 @@ export class WasmBackend implements IVelesDBBackend {
 
   async deleteCollection(name: string): Promise<void> {
     this.ensureInitialized();
-
     const collection = this.collections.get(name);
-    if (!collection) {
-      throw new NotFoundError(`Collection '${name}'`);
-    }
-
+    if (!collection) { throw new NotFoundError(`Collection '${name}'`); }
     collection.store.free();
     this.collections.delete(name);
   }
 
   async getCollection(name: string): Promise<Collection | null> {
     this.ensureInitialized();
-
-    const collection = this.collections.get(name);
-    if (!collection) {
-      return null;
-    }
-
-    return {
-      name,
-      dimension: collection.config.dimension ?? 0,
-      metric: collection.config.metric ?? 'cosine',
-      count: collection.store.len,
-      createdAt: collection.createdAt,
-    };
+    const data = this.collections.get(name);
+    return data ? buildCollectionInfo(name, data) : null;
   }
 
   async listCollections(): Promise<Collection[]> {
     this.ensureInitialized();
-
     const result: Collection[] = [];
     for (const [name, data] of this.collections) {
-      result.push({
-        name,
-        dimension: data.config.dimension ?? 0,
-        metric: data.config.metric ?? 'cosine',
-        count: data.store.len,
-        createdAt: data.createdAt,
-      });
+      result.push(buildCollectionInfo(name, data));
     }
     return result;
   }
@@ -344,13 +200,10 @@ export class WasmBackend implements IVelesDBBackend {
 
   async insert(collectionName: string, doc: VectorDocument): Promise<void> {
     this.ensureInitialized();
-
     const collection = this.collections.get(collectionName);
-    if (!collection) {
-      throw new NotFoundError(`Collection '${collectionName}'`);
-    }
+    if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
 
-    const id = this.toNumericId(doc.id);
+    const id = toNumericId(doc.id);
     const vector = doc.vector instanceof Float32Array
       ? doc.vector
       : new Float32Array(doc.vector);
@@ -369,17 +222,14 @@ export class WasmBackend implements IVelesDBBackend {
     }
 
     if (doc.payload) {
-      collection.payloads.set(this.canonicalPayloadKey(doc.id), doc.payload);
+      collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
     }
   }
 
   async insertBatch(collectionName: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
-
     const collection = this.collections.get(collectionName);
-    if (!collection) {
-      throw new NotFoundError(`Collection '${collectionName}'`);
-    }
+    if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
 
     for (const doc of docs) {
       if (doc.vector.length !== collection.config.dimension) {
@@ -391,70 +241,47 @@ export class WasmBackend implements IVelesDBBackend {
     }
 
     collection.store.reserve(docs.length);
-
     const batch: Array<[bigint, number[]]> = [];
     for (const doc of docs) {
-      const id = BigInt(this.toNumericId(doc.id));
+      const id = BigInt(toNumericId(doc.id));
       const vector = doc.vector instanceof Float32Array
         ? doc.vector
         : new Float32Array(doc.vector);
-
       if (doc.payload) {
         collection.store.insert_with_payload(id, vector, doc.payload);
       } else {
         batch.push([id, Array.from(vector)]);
       }
     }
-
-    if (batch.length > 0) {
-      collection.store.insert_batch(batch);
-    }
+    if (batch.length > 0) { collection.store.insert_batch(batch); }
 
     for (const doc of docs) {
       if (doc.payload) {
-        collection.payloads.set(this.canonicalPayloadKey(doc.id), doc.payload);
+        collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
       }
     }
   }
 
   async delete(collectionName: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
-
     const collection = this.collections.get(collectionName);
-    if (!collection) {
-      throw new NotFoundError(`Collection '${collectionName}'`);
-    }
-
-    const numericId = this.toNumericId(id);
+    if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
+    const numericId = toNumericId(id);
     const removed = collection.store.remove(BigInt(numericId));
-
-    if (removed) {
-      collection.payloads.delete(this.canonicalPayloadKey(id));
-    }
-
+    if (removed) { collection.payloads.delete(canonicalPayloadKey(id)); }
     return removed;
   }
 
   async get(collectionName: string, id: string | number): Promise<VectorDocument | null> {
     this.ensureInitialized();
-
     const collection = this.collections.get(collectionName);
-    if (!collection) {
-      throw new NotFoundError(`Collection '${collectionName}'`);
-    }
-
-    const numericId = this.toNumericId(id);
+    if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
+    const numericId = toNumericId(id);
     const point = collection.store.get(BigInt(numericId)) as
       | { id: bigint | number; vector: number[] | Float32Array; payload?: Record<string, unknown> | null }
       | null;
-    if (!point) {
-      return null;
-    }
-
-    const payload =
-      point.payload ??
-      collection.payloads.get(this.canonicalPayloadKey(numericId));
-
+    if (!point) { return null; }
+    const payload = point.payload ?? collection.payloads.get(canonicalPayloadKey(numericId));
     return {
       id: String(point.id),
       vector: Array.isArray(point.vector) ? point.vector : Array.from(point.vector),
@@ -468,215 +295,93 @@ export class WasmBackend implements IVelesDBBackend {
 
   async isEmpty(collectionName: string): Promise<boolean> {
     this.ensureInitialized();
-
     const collection = this.collections.get(collectionName);
-    if (!collection) {
-      throw new NotFoundError(`Collection '${collectionName}'`);
-    }
-
+    if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
     return collection.store.is_empty();
   }
 
   async flush(collectionName: string): Promise<void> {
     this.ensureInitialized();
-
     const collection = this.collections.get(collectionName);
-    if (!collection) {
-      throw new NotFoundError(`Collection '${collectionName}'`);
-    }
-
+    if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
     // WASM runs in-memory, flush is a no-op
   }
 
   // ========================================================================
-  // Search & Query — delegates to wasm-search.ts
+  // Search & Query -- delegates to wasm-search.ts
   // ========================================================================
 
-  async search(
-    collectionName: string, query: number[] | Float32Array, options?: SearchOptions
-  ): Promise<SearchResult[]> {
+  async search(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
-    return wasmSearch(this.context(), collectionName, query, options);
+    return wasmSearch(buildWasmContext(this.wasmModule!, this.collections), c, q, o);
   }
 
-  async searchBatch(
-    collectionName: string,
-    searches: Array<{
-      vector: number[] | Float32Array;
-      k?: number;
-      filter?: FilterInput;
-      quality?: SearchQuality;
-    }>
-  ): Promise<SearchResult[][]> {
+  async searchBatch(c: string, s: Array<{ vector: number[] | Float32Array; k?: number; filter?: FilterInput; quality?: SearchQuality }>): Promise<SearchResult[][]> {
     this.ensureInitialized();
-    return wasmSearchBatch(this.context(), collectionName, searches);
+    return wasmSearchBatch(buildWasmContext(this.wasmModule!, this.collections), c, s);
   }
 
-  async textSearch(
-    collection: string, query: string, options?: { k?: number; filter?: FilterInput }
-  ): Promise<SearchResult[]> {
+  async textSearch(c: string, q: string, o?: { k?: number; filter?: FilterInput }): Promise<SearchResult[]> {
     this.ensureInitialized();
-    return wasmTextSearch(this.context(), collection, query, options);
+    return wasmTextSearch(buildWasmContext(this.wasmModule!, this.collections), c, q, o);
   }
 
-  async hybridSearch(
-    collection: string, vector: number[] | Float32Array, textQuery: string,
-    options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
-  ): Promise<SearchResult[]> {
+  async hybridSearch(c: string, v: number[] | Float32Array, t: string, o?: { k?: number; vectorWeight?: number; filter?: FilterInput }): Promise<SearchResult[]> {
     this.ensureInitialized();
-    return wasmHybridSearch(this.context(), collection, vector, textQuery, options);
+    return wasmHybridSearch(buildWasmContext(this.wasmModule!, this.collections), c, v, t, o);
   }
 
-  async query(
-    collection: string, queryString: string,
-    params?: Record<string, unknown>, options?: QueryOptions
-  ): Promise<QueryApiResponse> {
+  async query(c: string, q: string, p?: Record<string, unknown>, o?: QueryOptions): Promise<QueryApiResponse> {
     this.ensureInitialized();
-    return wasmQuery(this.context(), collection, queryString, params, options);
+    return wasmQuery(buildWasmContext(this.wasmModule!, this.collections), c, q, p, o);
   }
 
-  async multiQuerySearch(
-    collection: string, vectors: Array<number[] | Float32Array>,
-    options?: MultiQuerySearchOptions
-  ): Promise<SearchResult[]> {
+  async multiQuerySearch(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
-    return wasmMultiQuerySearch(this.context(), collection, vectors, options);
+    return wasmMultiQuerySearch(buildWasmContext(this.wasmModule!, this.collections), c, v, o);
   }
 
   // ========================================================================
-  // Stubs — delegates to wasm-stubs.ts
+  // Stubs -- delegates to wasm-stubs.ts & wasm-wave4-stubs.ts
   // ========================================================================
 
-  async queryExplain(q: string, p?: Record<string, unknown>, o?: { analyze?: boolean }): Promise<ExplainResponse> {
-    this.ensureInitialized();
-    return wasmQueryExplain(q, p, o);
-  }
+  async queryExplain(q: string, p?: Record<string, unknown>, o?: { analyze?: boolean }): Promise<ExplainResponse> { this.ensureInitialized(); return wasmQueryExplain(q, p, o); }
+  async collectionSanity(c: string): Promise<CollectionSanityResponse> { this.ensureInitialized(); return wasmCollectionSanity(c); }
+  async scroll(c: string, r?: ScrollRequest): Promise<ScrollResponse> { this.ensureInitialized(); return wasmScroll(c, r); }
+  async createIndex(c: string, o: CreateIndexOptions): Promise<void> { this.ensureInitialized(); return wasmCreateIndex(c, o); }
+  async listIndexes(c: string): Promise<IndexInfo[]> { this.ensureInitialized(); return wasmListIndexes(c); }
+  async hasIndex(c: string, l: string, p: string): Promise<boolean> { this.ensureInitialized(); return wasmHasIndex(c, l, p); }
+  async dropIndex(c: string, l: string, p: string): Promise<boolean> { this.ensureInitialized(); return wasmDropIndex(c, l, p); }
+  async addEdge(c: string, e: AddEdgeRequest): Promise<void> { this.ensureInitialized(); return wasmAddEdge(c, e); }
+  async getEdges(c: string, o?: GetEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return wasmGetEdges(c, o); }
+  async traverseGraph(c: string, r: TraverseRequest): Promise<TraverseResponse> { this.ensureInitialized(); return wasmTraverseGraph(c, r); }
+  async traverseParallel(c: string, r: TraverseParallelRequest): Promise<TraverseResponse> { this.ensureInitialized(); return wasmTraverseParallel(c, r); }
+  async getNodeDegree(c: string, n: number): Promise<DegreeResponse> { this.ensureInitialized(); return wasmGetNodeDegree(c, n); }
+  async trainPq(c: string, o?: PqTrainOptions): Promise<string> { this.ensureInitialized(); return wasmTrainPq(c, o); }
+  async streamInsert(c: string, d: VectorDocument[]): Promise<void> { this.ensureInitialized(); return wasmStreamInsert(c, d); }
+  async createGraphCollection(n: string, c?: GraphCollectionConfig): Promise<void> { this.ensureInitialized(); return wasmCreateGraphCollection(n, c); }
+  async getCollectionStats(c: string): Promise<CollectionStatsResponse | null> { this.ensureInitialized(); return wasmGetCollectionStats(c); }
+  async analyzeCollection(c: string): Promise<CollectionStatsResponse> { this.ensureInitialized(); return wasmAnalyzeCollection(c); }
+  async getCollectionConfig(c: string): Promise<CollectionConfigResponse> { this.ensureInitialized(); return wasmGetCollectionConfig(c); }
+  async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return wasmSearchIds(c, q, o); }
+  async storeSemanticFact(c: string, e: SemanticEntry): Promise<void> { this.ensureInitialized(); return wasmStoreSemanticFact(c, e); }
+  async searchSemanticMemory(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmSearchSemanticMemory(c, e, k); }
+  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<void> { this.ensureInitialized(); return wasmRecordEpisodicEvent(c, e); }
+  async recallEpisodicEvents(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmRecallEpisodicEvents(c, e, k); }
+  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<void> { this.ensureInitialized(); return wasmStoreProceduralPattern(c, p); }
+  async matchProceduralPatterns(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmMatchProceduralPatterns(c, e, k); }
 
-  async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
-    this.ensureInitialized();
-    return wasmCollectionSanity(collection);
-  }
-
-  async scroll(collection: string, request?: ScrollRequest): Promise<ScrollResponse> {
-    this.ensureInitialized();
-    return wasmScroll(collection, request);
-  }
-
-  async createIndex(collection: string, options: CreateIndexOptions): Promise<void> {
-    this.ensureInitialized();
-    return wasmCreateIndex(collection, options);
-  }
-
-  async listIndexes(collection: string): Promise<IndexInfo[]> {
-    this.ensureInitialized();
-    return wasmListIndexes(collection);
-  }
-
-  async hasIndex(collection: string, label: string, property: string): Promise<boolean> {
-    this.ensureInitialized();
-    return wasmHasIndex(collection, label, property);
-  }
-
-  async dropIndex(collection: string, label: string, property: string): Promise<boolean> {
-    this.ensureInitialized();
-    return wasmDropIndex(collection, label, property);
-  }
-
-  async addEdge(collection: string, edge: AddEdgeRequest): Promise<void> {
-    this.ensureInitialized();
-    return wasmAddEdge(collection, edge);
-  }
-
-  async getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]> {
-    this.ensureInitialized();
-    return wasmGetEdges(collection, options);
-  }
-
-  async traverseGraph(collection: string, request: TraverseRequest): Promise<TraverseResponse> {
-    this.ensureInitialized();
-    return wasmTraverseGraph(collection, request);
-  }
-
-  async traverseParallel(collection: string, request: TraverseParallelRequest): Promise<TraverseResponse> {
-    this.ensureInitialized();
-    return wasmTraverseParallel(collection, request);
-  }
-
-  async getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse> {
-    this.ensureInitialized();
-    return wasmGetNodeDegree(collection, nodeId);
-  }
-
-  async trainPq(collection: string, options?: PqTrainOptions): Promise<string> {
-    this.ensureInitialized();
-    return wasmTrainPq(collection, options);
-  }
-
-  async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
-    this.ensureInitialized();
-    return wasmStreamInsert(collection, docs);
-  }
-
-  async createGraphCollection(name: string, config?: GraphCollectionConfig): Promise<void> {
-    this.ensureInitialized();
-    return wasmCreateGraphCollection(name, config);
-  }
-
-  async getCollectionStats(collection: string): Promise<CollectionStatsResponse | null> {
-    this.ensureInitialized();
-    return wasmGetCollectionStats(collection);
-  }
-
-  async analyzeCollection(collection: string): Promise<CollectionStatsResponse> {
-    this.ensureInitialized();
-    return wasmAnalyzeCollection(collection);
-  }
-
-  async getCollectionConfig(collection: string): Promise<CollectionConfigResponse> {
-    this.ensureInitialized();
-    return wasmGetCollectionConfig(collection);
-  }
-
-  async searchIds(
-    collection: string, query: number[] | Float32Array, options?: SearchOptions
-  ): Promise<Array<{ id: number; score: number }>> {
-    this.ensureInitialized();
-    return wasmSearchIds(collection, query, options);
-  }
-
-  async storeSemanticFact(collection: string, entry: SemanticEntry): Promise<void> {
-    this.ensureInitialized();
-    return wasmStoreSemanticFact(collection, entry);
-  }
-
-  async searchSemanticMemory(
-    collection: string, embedding: number[], k?: number
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-    return wasmSearchSemanticMemory(collection, embedding, k);
-  }
-
-  async recordEpisodicEvent(collection: string, event: EpisodicEvent): Promise<void> {
-    this.ensureInitialized();
-    return wasmRecordEpisodicEvent(collection, event);
-  }
-
-  async recallEpisodicEvents(
-    collection: string, embedding: number[], k?: number
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-    return wasmRecallEpisodicEvents(collection, embedding, k);
-  }
-
-  async storeProceduralPattern(collection: string, pattern: ProceduralPattern): Promise<void> {
-    this.ensureInitialized();
-    return wasmStoreProceduralPattern(collection, pattern);
-  }
-
-  async matchProceduralPatterns(
-    collection: string, embedding: number[], k?: number
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-    return wasmMatchProceduralPatterns(collection, embedding, k);
-  }
+  // Wave 4 stubs
+  async rebuildIndex(c: string): Promise<import('../types').RebuildIndexResponse> { this.ensureInitialized(); return wasmRebuildIndex(c); }
+  async getGuardrails(): Promise<import('../types').GuardRailsConfigResponse> { this.ensureInitialized(); return wasmGetGuardrails(); }
+  async updateGuardrails(r: import('../types').GuardRailsUpdateRequest): Promise<import('../types').GuardRailsConfigResponse> { this.ensureInitialized(); return wasmUpdateGuardrails(r); }
+  async aggregate(_q: string, _p?: Record<string, unknown>, _o?: import('../types').AggregateQueryOptions): Promise<import('../types').AggregateResponse> { this.ensureInitialized(); return wasmAggregate(_q, _p, _o); }
+  async matchQuery(c: string, q: string, p?: Record<string, unknown>, o?: import('../types').MatchQueryOptions): Promise<import('../types').MatchQueryResponse> { this.ensureInitialized(); return wasmMatchQuery(c, q, p, o); }
+  async removeEdge(c: string, id: number): Promise<boolean> { this.ensureInitialized(); return wasmRemoveEdge(c, id); }
+  async getEdgeCount(c: string): Promise<number> { this.ensureInitialized(); return wasmGetEdgeCount(c); }
+  async listNodes(c: string): Promise<import('../types').ListNodesResponse> { this.ensureInitialized(); return wasmListNodes(c); }
+  async getNodeEdges(c: string, id: number, o?: import('../types').GetNodeEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return wasmGetNodeEdges(c, id, o); }
+  async getNodePayload(c: string, id: number): Promise<import('../types').NodePayloadResponse> { this.ensureInitialized(); return wasmGetNodePayload(c, id); }
+  async upsertNodePayload(c: string, id: number, p: Record<string, unknown>): Promise<void> { this.ensureInitialized(); return wasmUpsertNodePayload(c, id, p); }
+  async graphSearch(c: string, r: import('../types').GraphSearchRequest): Promise<import('../types').GraphSearchResponse> { this.ensureInitialized(); return wasmGraphSearch(c, r); }
 }
