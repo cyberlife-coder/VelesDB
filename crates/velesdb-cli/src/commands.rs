@@ -54,7 +54,7 @@ pub enum Commands {
         action: CollectionCommands,
     },
 
-    /// Data operations (import, export, upsert, get, delete)
+    /// Data operations (import, export, upsert, get, delete, stream-insert)
     Data {
         #[command(subcommand)]
         action: DataCommands,
@@ -323,6 +323,20 @@ pub enum DataCommands {
         /// Output format (table, json)
         #[arg(short, long, default_value = "json")]
         format: String,
+    },
+
+    /// Stream-insert points from stdin (one JSON object per line)
+    #[command(name = "stream-insert")]
+    StreamInsert {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Batch size for micro-batching (points buffered before upsert)
+        #[arg(short, long, default_value = "100")]
+        batch_size: usize,
     },
 }
 

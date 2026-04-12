@@ -206,6 +206,11 @@ fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
             cursor,
             format,
         } => handlers::handle_scroll(&path, &collection, batch_size, cursor, &format),
+        DataCommands::StreamInsert {
+            path,
+            collection,
+            batch_size,
+        } => handlers::handle_stream_insert(&path, &collection, batch_size),
     }
 }
 

@@ -1,4 +1,4 @@
-//! Handlers for data commands: `export`, `import`, `get`, `upsert`, `delete-points`.
+//! Handlers for data commands: `export`, `import`, `get`, `upsert`, `delete-points`, `stream-insert`.
 
 use std::path::{Path, PathBuf};
 
@@ -313,4 +313,119 @@ fn print_scroll_table(batch: &velesdb_core::ScrollBatch, collection: &str) {
     } else {
         println!("\n  {} End of collection", "\u{2713}".green());
     }
+}
+
+/// Handles the `stream-insert` subcommand: reads JSONL from stdin and upserts in micro-batches.
+///
+/// Each line must be a JSON object with `id` (number), `vector` (array of numbers),
+/// and optional `payload` (object). Example:
+/// ```json
+/// {"id": 1, "vector": [0.1, 0.2, 0.3], "payload": {"title": "Doc 1"}}
+/// ```
+pub fn handle_stream_insert(path: &Path, collection: &str, batch_size: usize) -> Result<()> {
+    use std::io::BufRead;
+
+    let db = velesdb_core::Database::open(path)?;
+    let col = db
+        .get_vector_collection(collection)
+        .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
+
+    let stdin = std::io::stdin();
+    let reader = stdin.lock();
+
+    let mut batch: Vec<velesdb_core::Point> = Vec::with_capacity(batch_size);
+    let mut total_inserted: usize = 0;
+    let mut total_errors: usize = 0;
+
+    for line_result in reader.lines() {
+        let line = line_result?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        match parse_point_json(trimmed) {
+            Ok(point) => {
+                batch.push(point);
+                if batch.len() >= batch_size {
+                    let count = batch.len();
+                    flush_batch(&col, &mut batch)?;
+                    total_inserted += count;
+                    eprint!("\r  Inserted: {total_inserted}");
+                }
+            }
+            Err(e) => {
+                total_errors += 1;
+                eprintln!("\r  Skipping invalid line: {e}");
+            }
+        }
+    }
+
+    // Flush remaining batch
+    if !batch.is_empty() {
+        let count = batch.len();
+        flush_batch(&col, &mut batch)?;
+        total_inserted += count;
+    }
+
+    eprintln!();
+    println!(
+        "{} Stream insert complete: {} inserted, {} errors",
+        "\u{2705}".green(),
+        total_inserted.to_string().green(),
+        format_error_count(total_errors),
+    );
+    Ok(())
+}
+
+/// Upserts a batch of points and drains the buffer via `std::mem::take`.
+fn flush_batch(
+    col: &velesdb_core::VectorCollection,
+    batch: &mut Vec<velesdb_core::Point>,
+) -> Result<()> {
+    col.upsert(std::mem::take(batch))
+        .map_err(|e| anyhow::anyhow!("Upsert failed: {e}"))
+}
+
+/// Formats the error count: red if non-zero, plain "0" otherwise.
+fn format_error_count(count: usize) -> String {
+    if count > 0 {
+        count.to_string().red().to_string()
+    } else {
+        "0".to_string()
+    }
+}
+
+/// Parses a single JSONL line into a [`velesdb_core::Point`].
+///
+/// Expected format: `{"id": <u64>, "vector": [<f32>, ...], "payload": {...}}`
+fn parse_point_json(json_str: &str) -> Result<velesdb_core::Point> {
+    let v: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|e| anyhow::anyhow!("JSON parse error: {e}"))?;
+
+    let id = v
+        .get("id")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'id' field"))?;
+
+    let vector = parse_vector_array(&v)?;
+    let payload = v.get("payload").cloned();
+
+    Ok(velesdb_core::Point::new(id, vector, payload))
+}
+
+/// Extracts the `"vector"` field from a JSON value as `Vec<f32>`.
+fn parse_vector_array(v: &serde_json::Value) -> Result<Vec<f32>> {
+    let arr = v
+        .get("vector")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'vector' field"))?;
+
+    arr.iter()
+        .map(|n| {
+            n.as_f64()
+                .map(|f| f as f32)
+                .ok_or_else(|| anyhow::anyhow!("Non-numeric value in vector"))
+        })
+        .collect()
 }

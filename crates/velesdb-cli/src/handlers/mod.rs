@@ -15,7 +15,8 @@ pub use collections::{
     handle_create_vector_collection, handle_delete_collection,
 };
 pub use data::{
-    handle_delete_points, handle_export, handle_get, handle_import, handle_scroll, handle_upsert,
+    handle_delete_points, handle_export, handle_get, handle_import, handle_scroll,
+    handle_stream_insert, handle_upsert,
 };
 pub use index::handle_index;
 pub use info::{handle_analyze, handle_info, handle_list, handle_show};
