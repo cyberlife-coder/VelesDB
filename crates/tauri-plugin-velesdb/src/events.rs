@@ -90,7 +90,9 @@ pub fn emit_collection_created<R: Runtime>(app: &AppHandle<R>, collection: &str)
         operation: "created".to_string(),
         count: None,
     };
-    let _ = app.emit(event_names::COLLECTION_CREATED, payload);
+    if let Err(e) = app.emit(event_names::COLLECTION_CREATED, payload) {
+        tracing::warn!(error = %e, "Failed to emit collection-created event");
+    }
 }
 
 /// Emits a collection deleted event.
@@ -100,7 +102,9 @@ pub fn emit_collection_deleted<R: Runtime>(app: &AppHandle<R>, collection: &str)
         operation: "deleted".to_string(),
         count: None,
     };
-    let _ = app.emit(event_names::COLLECTION_DELETED, payload);
+    if let Err(e) = app.emit(event_names::COLLECTION_DELETED, payload) {
+        tracing::warn!(error = %e, "Failed to emit collection-deleted event");
+    }
 }
 
 /// Emits a collection updated event (after upsert or delete).
@@ -115,7 +119,9 @@ pub fn emit_collection_updated<R: Runtime>(
         operation: operation.to_string(),
         count: Some(count),
     };
-    let _ = app.emit(event_names::COLLECTION_UPDATED, payload);
+    if let Err(e) = app.emit(event_names::COLLECTION_UPDATED, payload) {
+        tracing::warn!(error = %e, "Failed to emit collection-updated event");
+    }
 }
 
 /// Emits an operation progress event.
@@ -143,7 +149,9 @@ pub fn emit_progress<R: Runtime>(
         processed,
         message: message.map(String::from),
     };
-    let _ = app.emit(event_names::OPERATION_PROGRESS, payload);
+    if let Err(e) = app.emit(event_names::OPERATION_PROGRESS, payload) {
+        tracing::warn!(error = %e, "Failed to emit operation-progress event");
+    }
 }
 
 /// Emits an operation complete event.
@@ -160,7 +168,9 @@ pub fn emit_complete<R: Runtime>(
         error: error.map(String::from),
         duration_ms,
     };
-    let _ = app.emit(event_names::OPERATION_COMPLETE, payload);
+    if let Err(e) = app.emit(event_names::OPERATION_COMPLETE, payload) {
+        tracing::warn!(error = %e, "Failed to emit operation-complete event");
+    }
 }
 
 #[cfg(test)]

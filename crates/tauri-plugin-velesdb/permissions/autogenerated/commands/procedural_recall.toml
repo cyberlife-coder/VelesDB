@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-procedural-recall"
+description = "Enables the procedural_recall command without any pre-configured scope."
+commands.allow = ["procedural_recall"]
+
+[[permission]]
+identifier = "deny-procedural-recall"
+description = "Denies the procedural_recall command without any pre-configured scope."
+commands.deny = ["procedural_recall"]

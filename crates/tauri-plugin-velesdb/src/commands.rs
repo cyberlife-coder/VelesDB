@@ -3,12 +3,12 @@
 
 use crate::error::{CommandError, Error};
 use crate::events::{emit_collection_created, emit_collection_deleted, emit_collection_updated};
-#[cfg(feature = "persistence")]
-use crate::helpers::require_vector_collection;
 use crate::helpers::{
     map_core_results, metric_to_string, parse_filter, parse_fusion_strategy, parse_metric,
     parse_storage_mode, require_collection, storage_mode_to_string, timed_search_response,
 };
+#[cfg(feature = "persistence")]
+use crate::helpers::{parse_search_quality, require_vector_collection};
 use crate::state::VelesDbState;
 #[cfg(feature = "persistence")]
 use crate::types::StreamInsertRequest;
@@ -18,10 +18,37 @@ pub use crate::types::{
 use crate::types::{
     BatchSearchRequest, CollectionInfo, CreateCollectionRequest, CreateMetadataCollectionRequest,
     DeletePointsRequest, GetPointsRequest, HybridSearchRequest, MultiQuerySearchRequest,
-    PointOutput, SearchRequest, SearchResponse, TextSearchRequest, TrainPqRequest,
-    UpsertMetadataRequest, UpsertRequest,
+    PointOutput, ScrollRequest, ScrollResponse, SearchRequest, SearchResponse, TextSearchRequest,
+    TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
+
+/// Builds [`velesdb_core::HnswParams`] from optional request fields, falling
+/// back to dimension-based auto-tuned defaults for any omitted parameter.
+#[cfg(feature = "persistence")]
+pub(crate) fn build_hnsw_params(
+    request: &CreateCollectionRequest,
+    storage_mode: velesdb_core::StorageMode,
+) -> velesdb_core::HnswParams {
+    let base = velesdb_core::HnswParams::auto(request.dimension);
+    velesdb_core::HnswParams {
+        max_connections: request.hnsw_m.unwrap_or(base.max_connections),
+        ef_construction: request.hnsw_ef_construction.unwrap_or(base.ef_construction),
+        max_elements: request.hnsw_max_elements.unwrap_or(base.max_elements),
+        storage_mode,
+        alpha: request.hnsw_alpha.unwrap_or(base.alpha),
+    }
+}
+
+/// Returns `true` when the request carries at least one advanced HNSW or PQ
+/// parameter, indicating that [`build_hnsw_params`] should be used.
+pub(crate) const fn has_advanced_params(request: &CreateCollectionRequest) -> bool {
+    request.hnsw_m.is_some()
+        || request.hnsw_ef_construction.is_some()
+        || request.hnsw_alpha.is_some()
+        || request.hnsw_max_elements.is_some()
+        || request.pq_rescore_oversampling.is_some()
+}
 
 /// Creates a new collection.
 #[command]
@@ -31,17 +58,28 @@ pub async fn create_collection<R: Runtime>(
     request: CreateCollectionRequest,
 ) -> std::result::Result<CollectionInfo, CommandError> {
     let metric = parse_metric(&request.metric).map_err(CommandError::from)?;
-
     let storage_mode = parse_storage_mode(&request.storage_mode).map_err(CommandError::from)?;
 
     let result = state
         .with_db(|db| {
-            db.create_vector_collection_with_options(
-                &request.name,
-                request.dimension,
-                metric,
-                storage_mode,
-            )?;
+            if has_advanced_params(&request) {
+                let hnsw_params = build_hnsw_params(&request, storage_mode);
+                db.create_vector_collection_with_params(
+                    &request.name,
+                    request.dimension,
+                    metric,
+                    storage_mode,
+                    hnsw_params,
+                    request.pq_rescore_oversampling,
+                )?;
+            } else {
+                db.create_vector_collection_with_options(
+                    &request.name,
+                    request.dimension,
+                    metric,
+                    storage_mode,
+                )?;
+            }
             Ok(CollectionInfo {
                 name: request.name.clone(),
                 dimension: request.dimension,
@@ -52,7 +90,6 @@ pub async fn create_collection<R: Runtime>(
         })
         .map_err(CommandError::from)?;
 
-    // Emit event
     emit_collection_created(&app, &request.name);
     Ok(result)
 }
@@ -247,7 +284,42 @@ pub async fn delete_points<R: Runtime>(
         .map_err(CommandError::from)
 }
 
+/// Dispatches a single search with optional quality mode.
+///
+/// When quality is `Some`, delegates to `search_with_quality`;
+/// otherwise falls back to the default `search`.
+#[cfg(feature = "persistence")]
+fn dispatch_quality_search(
+    coll: &velesdb_core::VectorCollection,
+    query: &[f32],
+    k: usize,
+    quality: Option<&velesdb_core::SearchQuality>,
+) -> crate::error::Result<Vec<velesdb_core::SearchResult>> {
+    if let Some(q) = quality {
+        coll.search_with_quality(query, k, *q)
+            .map_err(crate::error::Error::Database)
+    } else {
+        coll.search(query, k).map_err(crate::error::Error::Database)
+    }
+}
+
+/// Dispatches a single search (no quality support without `persistence`).
+#[cfg(not(feature = "persistence"))]
+fn dispatch_quality_search(
+    coll: &velesdb_core::VectorCollection,
+    query: &[f32],
+    k: usize,
+    _quality: Option<&()>,
+) -> crate::error::Result<Vec<velesdb_core::SearchResult>> {
+    coll.search(query, k).map_err(crate::error::Error::Database)
+}
+
 /// Searches for similar vectors.
+///
+/// Supports an optional `quality` mode (e.g. "fast", "balanced", "accurate",
+/// "perfect", "auto", "custom:\<ef\>", "adaptive:\<min\>:\<max\>").
+/// Known limitation (#457): when a filter is present, quality is ignored
+/// because `search_with_filter` does not accept a quality parameter yet.
 #[command]
 pub async fn search<R: Runtime>(
     _app: AppHandle<R>,
@@ -256,15 +328,26 @@ pub async fn search<R: Runtime>(
 ) -> std::result::Result<SearchResponse, CommandError> {
     let start = std::time::Instant::now();
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
+    #[cfg(feature = "persistence")]
+    let parsed_quality = parse_search_quality(&request.quality).map_err(CommandError::from)?;
+    #[cfg(not(feature = "persistence"))]
+    let parsed_quality: Option<()> = None;
 
     let results = state
         .with_db(|db| {
             let coll = require_collection(&db, &request.collection)?;
 
+            // Filter takes precedence (known limitation #457: quality ignored
+            // when filter is present). Quality dispatch only when no filter.
             let search_results = if let Some(ref f) = parsed_filter {
                 coll.search_with_filter(&request.vector, request.top_k, f)?
             } else {
-                coll.search(&request.vector, request.top_k)?
+                dispatch_quality_search(
+                    &coll,
+                    &request.vector,
+                    request.top_k,
+                    parsed_quality.as_ref(),
+                )?
             };
             Ok(map_core_results(search_results))
         })
@@ -273,7 +356,11 @@ pub async fn search<R: Runtime>(
     Ok(timed_search_response(results, start))
 }
 
-/// Batch search for multiple query vectors in parallel.
+/// Batch search for multiple query vectors.
+///
+/// When any individual search specifies a `quality` mode, each search is
+/// dispatched individually (per-search quality). Otherwise the optimized
+/// `search_batch_with_filters` batch API is used.
 #[command]
 pub async fn batch_search<R: Runtime>(
     _app: AppHandle<R>,
@@ -281,8 +368,61 @@ pub async fn batch_search<R: Runtime>(
     request: BatchSearchRequest,
 ) -> std::result::Result<Vec<SearchResponse>, CommandError> {
     let start = std::time::Instant::now();
+    let has_quality = request.searches.iter().any(|s| s.quality.is_some());
 
-    let batch_results = state
+    let batch_results = if has_quality {
+        batch_search_per_query(&state, &request)?
+    } else {
+        batch_search_bulk(&state, &request)?
+    };
+
+    let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+    Ok(batch_results
+        .into_iter()
+        .map(|results| SearchResponse { results, timing_ms })
+        .collect())
+}
+
+/// Per-query batch search with per-search quality dispatch.
+fn batch_search_per_query(
+    state: &VelesDbState,
+    request: &BatchSearchRequest,
+) -> std::result::Result<Vec<Vec<crate::types::SearchResult>>, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = require_collection(&db, &request.collection)?;
+            let mut all_results = Vec::with_capacity(request.searches.len());
+            for s in &request.searches {
+                let filter = parse_filter(&s.filter)?;
+                #[cfg(feature = "persistence")]
+                let quality = parse_search_quality(&s.quality)
+                    .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+                #[cfg(not(feature = "persistence"))]
+                let quality: Option<()> = None;
+
+                let search_results = if let Some(ref f) = filter {
+                    coll.search_with_filter(&s.vector, s.top_k, f)?
+                } else {
+                    dispatch_quality_search(&coll, &s.vector, s.top_k, quality.as_ref())?
+                };
+                all_results.push(
+                    search_results
+                        .into_iter()
+                        .map(crate::helpers::map_core_result)
+                        .collect(),
+                );
+            }
+            Ok(all_results)
+        })
+        .map_err(CommandError::from)
+}
+
+/// Optimized bulk batch search (no per-query quality).
+fn batch_search_bulk(
+    state: &VelesDbState,
+    request: &BatchSearchRequest,
+) -> std::result::Result<Vec<Vec<crate::types::SearchResult>>, CommandError> {
+    state
         .with_db(|db| {
             let coll = require_collection(&db, &request.collection)?;
 
@@ -294,12 +434,8 @@ pub async fn batch_search<R: Runtime>(
             let filters: Vec<Option<velesdb_core::Filter>> = request
                 .searches
                 .iter()
-                .map(|s| {
-                    s.filter
-                        .as_ref()
-                        .and_then(|f_json| serde_json::from_value(f_json.clone()).ok())
-                })
-                .collect();
+                .map(|s| parse_filter(&s.filter))
+                .collect::<crate::error::Result<_>>()?;
 
             // Use the maximum top_k across all searches so that every individual
             // query retrieves enough candidates before per-query truncation.
@@ -318,13 +454,7 @@ pub async fn batch_search<R: Runtime>(
                 })
                 .collect::<Vec<_>>())
         })
-        .map_err(CommandError::from)?;
-
-    let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
-    Ok(batch_results
-        .into_iter()
-        .map(|results| SearchResponse { results, timing_ms })
-        .collect())
+        .map_err(CommandError::from)
 }
 
 /// Searches by text using BM25.
@@ -420,6 +550,36 @@ pub async fn flush<R: Runtime>(
             let coll = require_collection(&db, &name)?;
             coll.flush()?;
             Ok(())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Scrolls through collection points with cursor-based pagination.
+#[command]
+pub async fn scroll_collection<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: ScrollRequest,
+) -> std::result::Result<ScrollResponse, CommandError> {
+    let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
+
+    state
+        .with_db(|db| {
+            let coll = require_collection(&db, &request.collection)?;
+            let batch =
+                coll.scroll_batch(request.cursor, request.batch_size, parsed_filter.as_ref())?;
+            Ok(ScrollResponse {
+                points: batch
+                    .points
+                    .into_iter()
+                    .map(|p| PointOutput {
+                        id: p.id,
+                        vector: p.vector,
+                        payload: p.payload,
+                    })
+                    .collect(),
+                next_cursor: batch.next_cursor,
+            })
         })
         .map_err(CommandError::from)
 }
@@ -541,14 +701,19 @@ pub async fn stream_insert<R: Runtime>(
 }
 
 // NOTE: AgentMemory Commands moved to commands_memory.rs (NLOC refactoring)
-pub use crate::commands_memory::{semantic_query, semantic_store};
+pub use crate::commands_memory::{
+    episodic_recent, episodic_record, procedural_learn, procedural_recall, semantic_query,
+    semantic_store,
+};
 
 // NOTE: Secondary Index Commands moved to commands_index.rs
 pub use crate::commands_index::{create_index, drop_index, list_indexes};
 
 // NOTE: Knowledge Graph Commands moved to commands_graph.rs (EPIC-061/US-008 refactoring)
 // Re-export graph commands for backwards compatibility
-pub use crate::commands_graph::{add_edge, get_edges, get_node_degree, traverse_graph};
+pub use crate::commands_graph::{
+    add_edge, create_graph_collection, get_edges, get_node_degree, traverse_graph,
+};
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

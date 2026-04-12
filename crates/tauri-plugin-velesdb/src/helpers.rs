@@ -184,6 +184,22 @@ pub fn parse_filter(filter: &Option<serde_json::Value>) -> Result<Option<velesdb
     }
 }
 
+/// Parses an optional search quality mode string into a [`SearchQuality`].
+///
+/// Delegates to [`velesdb_core::api_types::mode_to_search_quality`] to keep
+/// mode parsing in one place. Returns `Ok(None)` when the mode is absent.
+///
+/// [`SearchQuality`]: velesdb_core::SearchQuality
+#[cfg(feature = "persistence")]
+pub fn parse_search_quality(mode: &Option<String>) -> Result<Option<velesdb_core::SearchQuality>> {
+    match mode {
+        None => Ok(None),
+        Some(m) => velesdb_core::api_types::mode_to_search_quality(m)
+            .ok_or_else(|| Error::InvalidConfig(format!("Unknown search quality mode: '{m}'")))
+            .map(Some),
+    }
+}
+
 /// Wraps search results and a start instant into a `SearchResponse`.
 #[must_use]
 pub fn timed_search_response(
@@ -270,5 +286,53 @@ mod tests {
             let s = storage_mode_to_string(mode);
             assert_eq!(parse_storage_mode(s).unwrap(), mode);
         }
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn test_parse_search_quality_none_returns_none() {
+        assert!(parse_search_quality(&None)
+            .expect("test: should succeed for None")
+            .is_none());
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn test_parse_search_quality_named_modes() {
+        for mode in ["fast", "balanced", "accurate", "perfect", "auto"] {
+            assert!(
+                parse_search_quality(&Some(mode.to_string()))
+                    .expect("test: named mode should succeed")
+                    .is_some(),
+                "mode '{mode}' should parse successfully"
+            );
+        }
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn test_parse_search_quality_custom_and_adaptive() {
+        let custom = parse_search_quality(&Some("custom:256".to_string()))
+            .expect("test: custom should succeed");
+        assert_eq!(custom, Some(velesdb_core::SearchQuality::Custom(256)));
+
+        let adaptive = parse_search_quality(&Some("adaptive:32:512".to_string()))
+            .expect("test: adaptive should succeed");
+        assert_eq!(
+            adaptive,
+            Some(velesdb_core::SearchQuality::Adaptive {
+                min_ef: 32,
+                max_ef: 512,
+            })
+        );
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn test_parse_search_quality_invalid() {
+        assert!(parse_search_quality(&Some("nonexistent".to_string())).is_err());
+        assert!(parse_search_quality(&Some(String::new())).is_err());
+        assert!(parse_search_quality(&Some("custom:abc".to_string())).is_err());
+        assert!(parse_search_quality(&Some("adaptive:512:32".to_string())).is_err());
     }
 }
