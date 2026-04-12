@@ -68,6 +68,7 @@ pub async fn stream_traverse(
     Query(params): Query<StreamTraverseParams>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let start_time = Instant::now();
+    state.onboarding_metrics.record_graph_request();
 
     // Snapshot the parameters and state needed by the blocking worker.
     let coll_handle = state.db.get_graph_collection(&collection);
