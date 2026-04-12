@@ -44,17 +44,26 @@ pub async fn create_index(
     };
 
     match result {
-        Ok(()) => (
-            StatusCode::CREATED,
-            Json(IndexResponse {
-                label: req.label,
-                property: req.property,
-                index_type: req.index_type,
-                cardinality: 0,
-                memory_bytes: 0,
-            }),
-        )
-            .into_response(),
+        Ok(()) => {
+            // Retrieve real cardinality/memory_bytes from the freshly-created index.
+            let (cardinality, memory_bytes) = collection
+                .list_indexes()
+                .into_iter()
+                .find(|i| i.label == req.label && i.property == req.property)
+                .map_or((0, 0), |i| (i.cardinality, i.memory_bytes));
+
+            (
+                StatusCode::CREATED,
+                Json(IndexResponse {
+                    label: req.label,
+                    property: req.property,
+                    index_type: req.index_type,
+                    cardinality,
+                    memory_bytes,
+                }),
+            )
+                .into_response()
+        }
         Err(e) => core_error_response(StatusCode::BAD_REQUEST, &e),
     }
 }
