@@ -245,3 +245,72 @@ pub fn handle_delete_points(path: &Path, collection: &str, ids: &[u64]) -> Resul
     );
     Ok(())
 }
+
+/// Handles the `scroll` subcommand: cursor-based pagination through a collection.
+pub fn handle_scroll(
+    path: &Path,
+    collection: &str,
+    batch_size: usize,
+    cursor: Option<u64>,
+    format: &str,
+) -> Result<()> {
+    let db = velesdb_core::Database::open(path)?;
+    let col = db
+        .get_vector_collection(collection)
+        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+
+    let batch = col
+        .scroll_batch(cursor, batch_size, None)
+        .map_err(|e| anyhow::anyhow!("Scroll failed: {e}"))?;
+
+    if format == "json" {
+        print_scroll_json(&batch)
+    } else {
+        print_scroll_table(&batch, collection);
+        Ok(())
+    }
+}
+
+/// Prints scroll results as JSON (suitable for piping).
+fn print_scroll_json(batch: &velesdb_core::ScrollBatch) -> Result<()> {
+    let output = serde_json::json!({
+        "points": batch.points.iter().map(|p| {
+            serde_json::json!({
+                "id": p.id,
+                "vector": p.vector,
+                "payload": p.payload
+            })
+        }).collect::<Vec<_>>(),
+        "nextCursor": batch.next_cursor
+    });
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+/// Prints scroll results as a colored table.
+fn print_scroll_table(batch: &velesdb_core::ScrollBatch, collection: &str) {
+    println!(
+        "\n{} ({} points)",
+        format!("Scroll: {collection}").bold().underline(),
+        batch.points.len()
+    );
+    for p in &batch.points {
+        println!(
+            "  ID: {} [{} dims]",
+            p.id.to_string().green(),
+            p.vector.len()
+        );
+        if let Some(payload) = &p.payload {
+            println!("    Payload: {payload}");
+        }
+    }
+    if let Some(next) = batch.next_cursor {
+        println!(
+            "\n  Next cursor: {} (pass --cursor {} to continue)",
+            next.to_string().cyan(),
+            next
+        );
+    } else {
+        println!("\n  {} End of collection", "\u{2713}".green());
+    }
+}

@@ -199,6 +199,13 @@ fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
             collection,
             ids,
         } => handlers::handle_delete_points(&path, &collection, &ids),
+        DataCommands::Scroll {
+            path,
+            collection,
+            batch_size,
+            cursor,
+            format,
+        } => handlers::handle_scroll(&path, &collection, batch_size, cursor, &format),
     }
 }
 
@@ -227,6 +234,13 @@ fn dispatch_query_cmd(action: QueryCommands) -> anyhow::Result<()> {
             rrf_k,
             &format,
         ),
+        QueryCommands::BatchSearch {
+            path,
+            collection,
+            vectors,
+            top_k,
+            format,
+        } => handlers::handle_batch_search(&path, &collection, &vectors, top_k, &format),
         QueryCommands::Explain {
             path,
             query,
