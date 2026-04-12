@@ -150,36 +150,15 @@ pub(crate) fn cmd_hybrid_sparse(db: &Database, parts: &[&str]) -> CommandResult 
     CommandResult::Continue
 }
 
-pub(crate) fn cmd_agent(parts: &[&str]) -> CommandResult {
-    if parts.len() < 2 {
-        print_agent_help();
-        return CommandResult::Continue;
-    }
-    match parts[1] {
-        "help" => print_agent_help(),
-        sub => {
-            println!(
-                "{} Agent subcommand '{}' is not yet implemented.\n\
-                 Agent memory management is primarily used via SDK/server.\n",
-                "\u{2139}".cyan(),
-                sub
-            );
-        }
-    }
+pub(crate) fn cmd_agent(_parts: &[&str]) -> CommandResult {
+    println!(
+        "\n{}\n\n  Agent memory management is available via the {} or {}.\n  \
+         See docs/guides/ for usage examples.\n",
+        "Agent Memory".bold().underline(),
+        "Python/TypeScript SDK".cyan(),
+        "REST API".cyan(),
+    );
     CommandResult::Continue
-}
-
-fn print_agent_help() {
-    println!("\n{}", "Agent Commands (Preview)".bold().underline());
-    println!();
-    println!("  Agent memory management is primarily used via the SDK or REST server.");
-    println!("  CLI support is planned for a future release.\n");
-    println!("  Planned subcommands:");
-    println!("    {} Store a memory entry", ".agent store".yellow());
-    println!("    {} Recall memories", ".agent recall".yellow());
-    println!("    {} List stored memories", ".agent list".yellow());
-    println!("    {} Clear agent memory", ".agent clear".yellow());
-    println!();
 }
 
 pub(crate) fn cmd_guardrails() -> CommandResult {
