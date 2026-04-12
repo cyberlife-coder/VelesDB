@@ -165,7 +165,6 @@ mod tests {
                 depth: 1,
                 path: vec![100],
             }],
-            next_cursor: None,
             has_more: false,
             stats: TraversalStats {
                 visited: 1,
