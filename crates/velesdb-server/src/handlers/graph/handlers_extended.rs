@@ -15,7 +15,7 @@ use velesdb_core::collection::graph::TraversalConfig;
 use crate::types::ErrorResponse;
 use crate::AppState;
 
-use super::handlers::get_graph_collection_or_404;
+use super::handlers::graph_preamble;
 use super::types::{
     EdgeCountResponse, EdgeResponse, EdgesResponse, GraphSearchRequest, GraphSearchResponse,
     GraphSearchResultItem, NodeEdgeQueryParams, NodeListResponse, NodePayloadResponse,
@@ -41,7 +41,7 @@ pub async fn remove_edge(
     Path((name, edge_id)): Path<(String, u64)>,
     State(state): State<Arc<AppState>>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
     if coll.remove_edge(edge_id) {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -78,7 +78,7 @@ pub async fn get_edge_count(
     Path(name): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<EdgeCountResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
     Ok(Json(EdgeCountResponse {
         count: coll.edge_count(),
     }))
@@ -101,7 +101,7 @@ pub async fn list_nodes(
     Path(name): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<NodeListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
     let node_ids = coll.all_node_ids();
     let count = node_ids.len();
     Ok(Json(NodeListResponse { node_ids, count }))
@@ -127,7 +127,7 @@ pub async fn get_node_edges(
     Query(params): Query<NodeEdgeQueryParams>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<EdgesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
 
     let raw_edges = match params.direction.to_lowercase().as_str() {
         "in" => coll.get_incoming(node_id),
@@ -181,7 +181,7 @@ pub async fn upsert_node_payload(
     State(state): State<Arc<AppState>>,
     Json(request): Json<UpsertNodePayloadRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
     coll.upsert_node_payload(node_id, &request.payload)
         .map_err(|e| {
             (
@@ -214,7 +214,7 @@ pub async fn get_node_payload(
     Path((name, node_id)): Path<(String, u64)>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<NodePayloadResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
     let payload = coll.get_node_payload(node_id).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -254,7 +254,7 @@ pub async fn traverse_parallel(
         ));
     }
 
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
 
     let config = TraversalConfig::with_range(1, request.max_depth)
         .with_limit(request.limit)
@@ -277,7 +277,6 @@ pub async fn traverse_parallel(
 
     Ok(Json(TraverseResponse {
         results,
-        next_cursor: None,
         has_more,
         stats: TraversalStats {
             visited,
@@ -304,7 +303,7 @@ pub async fn graph_search(
     State(state): State<Arc<AppState>>,
     Json(request): Json<GraphSearchRequest>,
 ) -> Result<Json<GraphSearchResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
 
     if !coll.has_embeddings() {
         return Err((

@@ -3409,11 +3409,6 @@ components:
       required:
       - source
       properties:
-        cursor:
-          type:
-          - string
-          - 'null'
-          description: Optional cursor for pagination (not implemented yet).
         limit:
           type: integer
           description: Maximum number of results to return.
@@ -3447,11 +3442,6 @@ components:
         has_more:
           type: boolean
           description: Whether more results are available.
-        next_cursor:
-          type:
-          - string
-          - 'null'
-          description: Cursor for next page (if applicable).
         results:
           type: array
           items:

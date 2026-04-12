@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct OnboardingMetrics {
     /// Total search requests received.
     pub search_requests_total: AtomicU64,
+    /// Total graph requests received.
+    pub graph_requests_total: AtomicU64,
     /// Total dimension mismatch errors.
     pub dimension_mismatch_total: AtomicU64,
     /// Total searches returning empty results.
@@ -39,5 +41,10 @@ impl OnboardingMetrics {
     pub fn record_filter_parse_error(&self) {
         self.filter_parse_errors_total
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a graph request.
+    pub fn record_graph_request(&self) {
+        self.graph_requests_total.fetch_add(1, Ordering::Relaxed);
     }
 }

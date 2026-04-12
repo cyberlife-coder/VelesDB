@@ -92,7 +92,7 @@ mod tests {
         let limiter = config.limiter();
 
         // Simulate a key (IP address represented as a simple value).
-        let key = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
+        let key = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
 
         // First request should always succeed (bucket starts full).
         assert!(

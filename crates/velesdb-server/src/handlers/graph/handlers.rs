@@ -22,6 +22,20 @@ use super::types::{
     TraverseRequest, TraverseResponse,
 };
 
+/// Shared graph preamble: record metric and resolve collection.
+///
+/// Mirrors [`super::super::search::search_preamble`] for graph handlers.
+/// `GraphCollection` does not expose guard rails, so only the metrics
+/// recording and collection resolution steps are performed.
+#[allow(clippy::result_large_err)]
+pub(super) fn graph_preamble(
+    state: &AppState,
+    name: &str,
+) -> Result<velesdb_core::GraphCollection, (StatusCode, Json<ErrorResponse>)> {
+    state.onboarding_metrics.record_graph_request();
+    get_graph_collection_or_404(state, name)
+}
+
 /// Resolves a `GraphCollection` by name.
 ///
 /// # Returns
@@ -107,7 +121,7 @@ pub async fn get_edges(
         )
     })?;
 
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
 
     let edges: Vec<EdgeResponse> = coll
         .get_edges(Some(&label))
@@ -170,7 +184,7 @@ pub async fn add_edge(
         })?
         .with_properties(properties);
 
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
 
     coll.add_edge(edge).map_err(|e| {
         (
@@ -203,7 +217,7 @@ pub async fn traverse_graph(
     State(state): State<Arc<AppState>>,
     Json(request): Json<TraverseRequest>,
 ) -> Result<Json<TraverseResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
 
     let config = TraversalConfig::with_range(1, request.max_depth)
         .with_limit(request.limit)
@@ -241,7 +255,6 @@ pub async fn traverse_graph(
 
     Ok(Json(TraverseResponse {
         results,
-        next_cursor: None,
         has_more,
         stats: TraversalStats {
             visited,
@@ -269,7 +282,7 @@ pub async fn get_node_degree(
     Path((name, node_id)): Path<(String, u64)>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DegreeResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
     let (in_degree, out_degree) = coll.node_degree(node_id);
     Ok(Json(DegreeResponse {
         in_degree,

@@ -41,8 +41,6 @@ pub struct TraverseRequest {
     /// Maximum number of results to return.
     #[serde(default = "default_limit")]
     pub limit: usize,
-    /// Optional cursor for pagination (not implemented yet).
-    pub cursor: Option<String>,
     /// Filter by relationship types (empty = all types).
     #[serde(default)]
     pub rel_types: Vec<String>,
@@ -65,8 +63,6 @@ fn default_limit() -> usize {
 pub struct TraverseResponse {
     /// List of traversal results.
     pub results: Vec<TraversalResultItem>,
-    /// Cursor for next page (if applicable).
-    pub next_cursor: Option<String>,
     /// Whether more results are available.
     pub has_more: bool,
     /// Traversal statistics.
