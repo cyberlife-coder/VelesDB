@@ -25,7 +25,6 @@ use tauri::{command, AppHandle, Runtime, State};
 
 /// Builds [`velesdb_core::HnswParams`] from optional request fields, falling
 /// back to dimension-based auto-tuned defaults for any omitted parameter.
-#[cfg(feature = "persistence")]
 pub(crate) fn build_hnsw_params(
     request: &CreateCollectionRequest,
     storage_mode: velesdb_core::StorageMode,

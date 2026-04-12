@@ -752,7 +752,7 @@ fn test_episodic_record_request_deserialize() {
 #[test]
 fn test_episodic_recent_request_defaults() {
     use crate::types::EpisodicRecentRequest;
-    let json = r#"{}"#;
+    let json = r"{}";
     let req: EpisodicRecentRequest = serde_json::from_str(json).unwrap();
     assert_eq!(req.limit, 10); // default_top_k
     assert!(req.since_timestamp.is_none());
