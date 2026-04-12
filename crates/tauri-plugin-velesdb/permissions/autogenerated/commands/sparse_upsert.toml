@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-sparse-upsert"
+description = "Enables the sparse_upsert command without any pre-configured scope."
+commands.allow = ["sparse_upsert"]
+
+[[permission]]
+identifier = "deny-sparse-upsert"
+description = "Denies the sparse_upsert command without any pre-configured scope."
+commands.deny = ["sparse_upsert"]

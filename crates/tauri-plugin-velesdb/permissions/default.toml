@@ -19,6 +19,7 @@ permissions = [
     "allow-get-collection",
     "allow-is-empty",
     "allow-flush",
+    "allow-scroll-collection",
     # Point operations
     "allow-upsert",
     "allow-upsert-metadata",
@@ -31,10 +32,23 @@ permissions = [
     "allow-hybrid-search",
     "allow-multi-query-search",
     "allow-query",
-    # AgentMemory (semantic)
+    # Sparse vector operations
+    "allow-sparse-search",
+    "allow-hybrid-sparse-search",
+    "allow-sparse-upsert",
+    # PQ training
+    "allow-train-pq",
+    # Streaming insert
+    "allow-stream-insert",
+    # AgentMemory (semantic, episodic, procedural)
     "allow-semantic-store",
     "allow-semantic-query",
+    "allow-episodic-record",
+    "allow-episodic-recent",
+    "allow-procedural-learn",
+    "allow-procedural-recall",
     # Knowledge Graph
+    "allow-create-graph-collection",
     "allow-add-edge",
     "allow-get-edges",
     "allow-traverse-graph",
@@ -54,6 +68,7 @@ permissions = [
     "allow-get-collection",
     "allow-is-empty",
     "allow-get-points",
+    "allow-scroll-collection",
     "allow-search",
     "allow-batch-search",
     "allow-text-search",
@@ -61,11 +76,15 @@ permissions = [
     "allow-multi-query-search",
     "allow-query",
     "allow-semantic-query",
+    "allow-episodic-recent",
+    "allow-procedural-recall",
     "allow-get-edges",
     "allow-traverse-graph",
     "allow-get-node-degree",
     "allow-traverse-graph-parallel",
     "allow-list-indexes",
+    "allow-sparse-search",
+    "allow-hybrid-sparse-search",
 ]
 
 # Search-only permission set

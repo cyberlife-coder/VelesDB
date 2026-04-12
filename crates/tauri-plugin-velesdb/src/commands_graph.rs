@@ -4,14 +4,56 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::{CommandError, Error};
-use crate::helpers::require_graph_collection;
+use crate::events::emit_collection_created;
+use crate::helpers::{parse_metric, require_graph_collection};
 use crate::state::VelesDbState;
 use crate::types::{
-    AddEdgeRequest, EdgeOutput, GetEdgesRequest, GetNodeDegreeRequest, NodeDegreeOutput,
-    TraversalOutput, TraverseGraphParallelRequest, TraverseGraphRequest,
+    AddEdgeRequest, CollectionInfo, CreateGraphCollectionRequest, EdgeOutput, GetEdgesRequest,
+    GetNodeDegreeRequest, NodeDegreeOutput, TraversalOutput, TraverseGraphParallelRequest,
+    TraverseGraphRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
 use velesdb_core::collection::graph::TraversalConfig;
+use velesdb_core::GraphSchema;
+
+/// Creates a graph collection with optional schema and embeddings.
+///
+/// When `graph_schema` is provided, it is deserialized into a [`GraphSchema`].
+/// When omitted, a schemaless graph is created. If `dimension` is set, node
+/// embeddings are enabled with the given metric.
+#[command]
+pub async fn create_graph_collection<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: CreateGraphCollectionRequest,
+) -> std::result::Result<CollectionInfo, CommandError> {
+    let schema = match &request.graph_schema {
+        Some(json_val) => serde_json::from_value::<GraphSchema>(json_val.clone())
+            .map_err(|e| Error::InvalidConfig(format!("Invalid graph schema: {e}")))?,
+        None => GraphSchema::schemaless(),
+    };
+
+    let result = state
+        .with_db(|db| {
+            if let Some(dim) = request.dimension {
+                let metric = parse_metric(&request.metric)?;
+                db.create_graph_collection_with_embeddings(&request.name, schema, dim, metric)?;
+            } else {
+                db.create_graph_collection(&request.name, schema)?;
+            }
+            Ok(CollectionInfo {
+                name: request.name.clone(),
+                dimension: request.dimension.unwrap_or(0),
+                metric: request.metric.clone(),
+                count: 0,
+                storage_mode: "graph".to_string(),
+            })
+        })
+        .map_err(CommandError::from)?;
+
+    emit_collection_created(&app, &request.name);
+    Ok(result)
+}
 
 /// Adds an edge to the knowledge graph.
 #[command]

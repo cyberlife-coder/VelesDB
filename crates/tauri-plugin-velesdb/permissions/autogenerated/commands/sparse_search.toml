@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-sparse-search"
+description = "Enables the sparse_search command without any pre-configured scope."
+commands.allow = ["sparse_search"]
+
+[[permission]]
+identifier = "deny-sparse-search"
+description = "Denies the sparse_search command without any pre-configured scope."
+commands.deny = ["sparse_search"]

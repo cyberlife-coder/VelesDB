@@ -131,3 +131,79 @@ fn print_search_table(results: &[velesdb_core::SearchResult], strategy: &str, ve
     }
     println!("\n  Total: {} result(s)\n", results.len());
 }
+
+/// Handles the `batch-search` subcommand: independent parallel searches.
+pub fn handle_batch_search(
+    path: &Path,
+    collection: &str,
+    vectors: &str,
+    top_k: usize,
+    format: &str,
+) -> Result<()> {
+    let col = open_vector_collection(path, collection)?;
+    let parsed_vectors = parse_query_vectors(vectors)?;
+
+    let query_refs: Vec<&[f32]> = parsed_vectors.iter().map(Vec::as_slice).collect();
+    let no_filters: Vec<Option<velesdb_core::Filter>> = vec![None; parsed_vectors.len()];
+
+    let batch_results = col
+        .search_batch_with_filters(&query_refs, top_k, &no_filters)
+        .map_err(|e| anyhow::anyhow!("Batch search failed: {e}"))?;
+
+    if format == "json" {
+        print_batch_json(&batch_results)
+    } else {
+        print_batch_table(&batch_results);
+        Ok(())
+    }
+}
+
+/// Prints batch search results as JSON.
+fn print_batch_json(batch: &[Vec<velesdb_core::SearchResult>]) -> Result<()> {
+    let output: Vec<_> = batch
+        .iter()
+        .enumerate()
+        .map(|(i, results)| {
+            serde_json::json!({
+                "query": i,
+                "results": results.iter().map(|r| {
+                    serde_json::json!({
+                        "id": r.point.id,
+                        "score": r.score,
+                        "payload": r.point.payload
+                    })
+                }).collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+/// Prints batch search results as a colored table.
+fn print_batch_table(batch: &[Vec<velesdb_core::SearchResult>]) {
+    for (i, results) in batch.iter().enumerate() {
+        println!(
+            "\n{} (query {})",
+            "Batch Search Results".bold().underline(),
+            (i + 1).to_string().cyan()
+        );
+        if results.is_empty() {
+            println!("  No results found.");
+            continue;
+        }
+        for (j, r) in results.iter().enumerate() {
+            println!(
+                "  {}. ID: {} (score: {:.4})",
+                j + 1,
+                r.point.id.to_string().green(),
+                r.score
+            );
+            if let Some(payload) = &r.point.payload {
+                println!("     Payload: {payload}");
+            }
+        }
+        println!("  Total: {} result(s)", results.len());
+    }
+    println!();
+}

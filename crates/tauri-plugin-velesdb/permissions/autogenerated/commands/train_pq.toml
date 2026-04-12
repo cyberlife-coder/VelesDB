@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-train-pq"
+description = "Enables the train_pq command without any pre-configured scope."
+commands.allow = ["train_pq"]
+
+[[permission]]
+identifier = "deny-train-pq"
+description = "Denies the train_pq command without any pre-configured scope."
+commands.deny = ["train_pq"]

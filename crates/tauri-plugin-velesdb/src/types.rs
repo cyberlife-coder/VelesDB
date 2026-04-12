@@ -48,9 +48,12 @@ pub use velesdb_core::api_types::{
 
 /// Request to create a new collection (Tauri IPC).
 ///
-/// Differs from [`velesdb_core::api_types::CreateCollectionRequest`]: simpler
-/// (no `collection_type`, `hnsw_m`, `hnsw_ef_construction` fields) and uses
-/// `camelCase` deserialization.
+/// Supports optional advanced HNSW tuning parameters (`hnswM`,
+/// `hnswEfConstruction`, `hnswAlpha`, `hnswMaxElements`) and PQ rescore
+/// oversampling (`pqRescoreOversampling`). When all advanced fields are
+/// omitted the collection uses dimension-based auto-tuned defaults.
+///
+/// Uses `camelCase` deserialization for JavaScript callers.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateCollectionRequest {
@@ -64,6 +67,21 @@ pub struct CreateCollectionRequest {
     /// Storage mode: "full", "sq8", "binary".
     #[serde(default = "default_storage_mode")]
     pub storage_mode: String,
+    /// HNSW M parameter (max connections per node). Auto-tuned if omitted.
+    #[serde(default)]
+    pub hnsw_m: Option<usize>,
+    /// HNSW `ef_construction` parameter. Auto-tuned if omitted.
+    #[serde(default)]
+    pub hnsw_ef_construction: Option<usize>,
+    /// HNSW alpha for VAMANA neighbor diversification. Default: 1.2.
+    #[serde(default)]
+    pub hnsw_alpha: Option<f32>,
+    /// HNSW initial max elements capacity. Auto-tuned if omitted.
+    #[serde(default)]
+    pub hnsw_max_elements: Option<usize>,
+    /// PQ rescore oversampling factor. Default: 4.
+    #[serde(default)]
+    pub pq_rescore_oversampling: Option<u32>,
 }
 
 /// Request to create a metadata-only collection.
@@ -72,6 +90,31 @@ pub struct CreateCollectionRequest {
 pub struct CreateMetadataCollectionRequest {
     /// Collection name.
     pub name: String,
+}
+
+/// Request to create a graph collection with optional schema (Tauri IPC).
+///
+/// Supports two modes:
+/// - **Schemaless** (default): pass `graphSchema: { "schemaless": true }` or omit it entirely.
+/// - **Strict**: define `node_types` and `edge_types` in the `graphSchema` JSON object.
+///
+/// When `dimension` is set, node embeddings are enabled with the specified metric.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateGraphCollectionRequest {
+    /// Collection name.
+    pub name: String,
+    /// Optional vector dimension for node embeddings. If omitted, graph has no embeddings.
+    #[serde(default)]
+    pub dimension: Option<usize>,
+    /// Distance metric (when dimension is set). Default: "cosine".
+    #[serde(default = "default_metric")]
+    pub metric: String,
+    /// Graph schema definition as JSON.
+    /// Pass `{ "schemaless": true }` for schemaless mode (default),
+    /// or define `node_types` / `edge_types` for strict mode.
+    #[serde(default)]
+    pub graph_schema: Option<serde_json::Value>,
 }
 
 /// A metadata-only point to insert (no vector).
@@ -150,6 +193,10 @@ pub struct SearchRequest {
     /// Optional metadata filter.
     #[serde(default)]
     pub filter: Option<serde_json::Value>,
+    /// Search quality mode: "fast", "balanced", "accurate", "perfect", "auto",
+    /// "custom:\<ef\>", "adaptive:\<min\>:\<max\>".
+    #[serde(default)]
+    pub quality: Option<String>,
 }
 
 /// Individual search request within a batch.
@@ -164,6 +211,10 @@ pub struct IndividualSearchRequest {
     /// Optional metadata filter.
     #[serde(default)]
     pub filter: Option<serde_json::Value>,
+    /// Search quality mode: "fast", "balanced", "accurate", "perfect", "auto",
+    /// "custom:\<ef\>", "adaptive:\<min\>:\<max\>".
+    #[serde(default)]
+    pub quality: Option<String>,
 }
 
 /// Request for batch search.
@@ -480,17 +531,18 @@ pub struct SemanticQueryResult {
     pub content: String,
 }
 
-/// Request to record an episode.
+/// Request to record an episode in episodic memory.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodicRecordRequest {
+    /// Episode event ID.
+    pub event_id: u64,
     /// Episode description/content.
     pub content: String,
+    /// Timestamp (epoch seconds).
+    pub timestamp: i64,
     /// Embedding vector for the episode.
     pub embedding: Vec<f32>,
-    /// Optional context metadata.
-    #[serde(default)]
-    pub context: Option<serde_json::Value>,
 }
 
 /// Request to query recent episodes.
@@ -500,6 +552,9 @@ pub struct EpisodicRecentRequest {
     /// Number of recent episodes to return.
     #[serde(default = "default_top_k")]
     pub limit: usize,
+    /// Only return episodes since this timestamp (epoch seconds).
+    #[serde(default)]
+    pub since_timestamp: Option<i64>,
 }
 
 /// Result from episodic memory query.
@@ -511,15 +566,112 @@ pub struct EpisodicResult {
     /// Episode content.
     pub content: String,
     /// Timestamp (epoch seconds).
-    pub timestamp: u64,
-    /// Optional context.
-    pub context: Option<serde_json::Value>,
+    pub timestamp: i64,
+}
+
+// ============================================================================
+// ProceduralMemory DTOs
+// ============================================================================
+
+/// Default confidence for procedural learning.
+#[must_use]
+pub const fn default_confidence() -> f32 {
+    1.0
+}
+
+/// Request to learn a procedure.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProceduralLearnRequest {
+    /// Procedure ID.
+    pub procedure_id: u64,
+    /// Procedure name.
+    pub name: String,
+    /// Steps to perform.
+    pub steps: Vec<String>,
+    /// Embedding vector for the procedure.
+    pub embedding: Vec<f32>,
+    /// Confidence level (0.0-1.0). Default: 1.0.
+    #[serde(default = "default_confidence")]
+    pub confidence: f32,
+}
+
+/// Request to recall procedures by similarity.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProceduralRecallRequest {
+    /// Query embedding vector.
+    pub embedding: Vec<f32>,
+    /// Number of results.
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+    /// Minimum confidence threshold. Default: 0.0 (no filter).
+    #[serde(default)]
+    pub min_confidence: f32,
+}
+
+/// Result from procedural memory recall.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProceduralMatchResult {
+    /// Procedure ID.
+    pub id: u64,
+    /// Procedure name.
+    pub name: String,
+    /// Steps.
+    pub steps: Vec<String>,
+    /// Confidence score.
+    pub confidence: f32,
+    /// Similarity score from vector search.
+    pub score: f32,
 }
 
 // ============================================================================
 // Knowledge Graph Types (EPIC-015 US-001) — moved to types_graph.rs
 // ============================================================================
 pub use crate::types_graph::*;
+
+// ============================================================================
+// Scroll DTOs
+// ============================================================================
+
+/// Default batch size for scroll operations.
+#[must_use]
+pub const fn default_batch_size() -> usize {
+    100
+}
+
+/// Request to scroll through collection points.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrollRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Cursor from a previous scroll (omit for the first batch).
+    #[serde(default)]
+    pub cursor: Option<u64>,
+    /// Number of points per batch. Default: 100.
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+    /// Optional metadata filter.
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
+}
+
+/// Response from a scroll operation.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrollResponse {
+    /// Points in this batch.
+    pub points: Vec<PointOutput>,
+    /// Cursor for the next batch (absent when no more points).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<u64>,
+}
+
+// ============================================================================
+// Secondary Index DTOs
+// ============================================================================
 
 /// Request to create a secondary index on a metadata field.
 #[derive(Debug, Deserialize)]

@@ -335,6 +335,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands_query::query,
             commands::is_empty,
             commands::flush,
+            commands::scroll_collection,
             // Sparse vector commands
             commands_sparse::sparse_search,
             commands_sparse::hybrid_sparse_search,
@@ -344,7 +345,12 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             // AgentMemory commands (EPIC-016 US-003)
             commands_memory::semantic_store,
             commands_memory::semantic_query,
+            commands_memory::episodic_record,
+            commands_memory::episodic_recent,
+            commands_memory::procedural_learn,
+            commands_memory::procedural_recall,
             // Knowledge Graph commands (EPIC-015 US-001)
+            commands_graph::create_graph_collection,
             commands_graph::add_edge,
             commands_graph::get_edges,
             commands_graph::traverse_graph,
@@ -363,8 +369,10 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
         .setup(move |app, _api| {
             let state = VelesDbState::new(db_path.clone());
             app.manage(state);
-            // Initialize simple in-memory index for VelesDbExt trait (384 dimensions for AllMiniLML6V2)
-            let simple_index = SimpleIndexState(Arc::new(RwLock::new(SimpleVectorIndex::new(384))));
+            // Initialize simple in-memory index for VelesDbExt trait (default dimension for AllMiniLML6V2)
+            let simple_index = SimpleIndexState(Arc::new(RwLock::new(SimpleVectorIndex::new(
+                crate::types::default_dimension(),
+            ))));
             app.manage(simple_index);
             tracing::info!("VelesDB plugin initialized with path: {:?}", db_path);
             Ok(())

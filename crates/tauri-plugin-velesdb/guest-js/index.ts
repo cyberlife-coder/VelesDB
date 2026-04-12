@@ -31,7 +31,11 @@ import { invoke } from '@tauri-apps/api/core';
 /** Distance metric for vector similarity. */
 export type DistanceMetric = 'cosine' | 'euclidean' | 'dot' | 'hamming' | 'jaccard';
 
-/** Request to create a new collection. */
+/** Storage mode for vector compression. */
+export type StorageMode = 'full' | 'sq8' | 'binary' | 'pq' | 'rabitq';
+
+
+/** Request to create a new vector collection. */
 export interface CreateCollectionRequest {
   /** Collection name (unique identifier). */
   name: string;
@@ -39,6 +43,30 @@ export interface CreateCollectionRequest {
   dimension: number;
   /** Distance metric for similarity calculations. Default: 'cosine'. */
   metric?: DistanceMetric;
+  /** Storage mode for vector compression. Default: 'full'. */
+  storageMode?: StorageMode;
+  /** HNSW M parameter (max connections per node). Auto-tuned if omitted. */
+  hnswM?: number;
+  /** HNSW ef_construction parameter. Auto-tuned if omitted. */
+  hnswEfConstruction?: number;
+  /** HNSW alpha for neighbor diversification. Default: 1.2. */
+  hnswAlpha?: number;
+  /** HNSW initial max elements capacity. Auto-tuned if omitted. */
+  hnswMaxElements?: number;
+  /** PQ rescore oversampling factor. Default: 4. */
+  pqRescoreOversampling?: number;
+}
+
+/** Request to create a graph collection with optional schema. */
+export interface CreateGraphCollectionRequest {
+  /** Collection name (unique identifier). */
+  name: string;
+  /** Optional vector dimension for node embeddings. */
+  dimension?: number;
+  /** Distance metric (when dimension is set). Default: 'cosine'. */
+  metric?: DistanceMetric;
+  /** Graph schema definition. Pass { schemaless: true } for schemaless mode. */
+  graphSchema?: Record<string, unknown>;
 }
 
 /** Request to create a metadata-only collection. */
@@ -73,6 +101,8 @@ export interface CollectionInfo {
   metric: string;
   /** Number of vectors in the collection. */
   count: number;
+  /** Storage mode (full, sq8, binary, pq, rabitq, graph, metadata_only). */
+  storageMode: string;
 }
 
 /** A point (vector with metadata) to insert. */
@@ -101,6 +131,10 @@ export interface SearchRequest {
   vector: number[];
   /** Number of results to return. Default: 10. */
   topK?: number;
+  /** Optional metadata filter. */
+  filter?: Record<string, unknown>;
+  /** Search quality: 'fast', 'balanced', 'accurate', 'perfect', 'auto', or 'custom:<ef>'. */
+  quality?: string;
 }
 
 /** Request for BM25 text search. */
@@ -111,6 +145,8 @@ export interface TextSearchRequest {
   query: string;
   /** Number of results to return. Default: 10. */
   topK?: number;
+  /** Optional metadata filter. */
+  filter?: Record<string, unknown>;
 }
 
 /** Request for hybrid (vector + text) search. */
@@ -125,6 +161,8 @@ export interface HybridSearchRequest {
   topK?: number;
   /** Weight for vector results (0.0-1.0). Default: 0.5. */
   vectorWeight?: number;
+  /** Optional metadata filter. */
+  filter?: Record<string, unknown>;
 }
 
 /** Request for VelesQL query. */
@@ -159,6 +197,8 @@ export interface IndividualSearchRequest {
   topK?: number;
   /** Optional metadata filter. */
   filter?: Record<string, unknown>;
+  /** Search quality: 'fast', 'balanced', 'accurate', 'perfect', 'auto', or 'custom:<ef>'. */
+  quality?: string;
 }
 
 /** Request for batch search. */
@@ -228,6 +268,30 @@ export interface SearchResult {
 export interface SearchResponse {
   /** Search results ordered by relevance. */
   results: SearchResult[];
+  /** Query execution time in milliseconds. */
+  timingMs: number;
+}
+
+/** Hybrid result from VelesQL queries (vector + graph + column data). */
+export interface HybridResult {
+  /** Node/point ID. */
+  nodeId: number;
+  /** Vector similarity score (if applicable). */
+  vectorScore?: number;
+  /** Graph traversal score (if applicable). */
+  graphScore?: number;
+  /** Fused score combining vector and graph components. */
+  fusedScore: number;
+  /** Payload/bindings from the query. */
+  bindings?: Record<string, unknown>;
+  /** Column data from aggregation queries. */
+  columnData?: Record<string, unknown>;
+}
+
+/** Response from VelesQL query operations. */
+export interface QueryResponse {
+  /** Query results. */
+  results: HybridResult[];
   /** Query execution time in milliseconds. */
   timingMs: number;
 }
@@ -454,22 +518,29 @@ export async function hybridSearch(request: HybridSearchRequest): Promise<Search
 }
 
 /**
- * Executes a VelesQL query.
- * 
+ * Executes a VelesQL query (SELECT, MATCH, DDL, DML).
+ *
  * @param request - Query request with VelesQL string
- * @returns Search response with results and timing
+ * @returns Query response with hybrid results and timing
  * @throws {CommandError} If query syntax is invalid or collection doesn't exist
- * 
+ *
  * @example
  * ```typescript
+ * // SELECT query
  * const response = await query({
- *   query: "SELECT * FROM documents WHERE content MATCH 'rust programming' LIMIT 10",
+ *   query: "SELECT * FROM documents WHERE vector NEAR $v LIMIT 10",
+ *   params: { v: queryEmbedding }
+ * });
+ *
+ * // MATCH (graph) query
+ * const response = await query({
+ *   query: "MATCH (d:Doc)-[:AUTHORED_BY]->(a:Person) RETURN a.name",
  *   params: {}
  * });
  * ```
  */
-export async function query(request: QueryRequest): Promise<SearchResponse> {
-  return invoke<SearchResponse>('plugin:velesdb|query', { request });
+export async function query(request: QueryRequest): Promise<QueryResponse> {
+  return invoke<QueryResponse>('plugin:velesdb|query', { request });
 }
 
 /**
@@ -631,10 +702,13 @@ export interface GetEdgesRequest {
 export interface TraverseGraphRequest {
   collection: string;
   source: number;
-  maxDepth: number;
+  /** Maximum traversal depth. Default: 3. */
+  maxDepth?: number;
   relTypes?: string[];
-  limit: number;
-  algorithm: 'bfs' | 'dfs';
+  /** Maximum results to return. Default: 100. */
+  limit?: number;
+  /** Traversal algorithm. Default: 'bfs'. */
+  algorithm?: 'bfs' | 'dfs';
 }
 
 /** Request to get the degree of a node. */
@@ -733,4 +807,240 @@ export async function traverseGraph(request: TraverseGraphRequest): Promise<Trav
  */
 export async function getNodeDegree(request: GetNodeDegreeRequest): Promise<NodeDegreeOutput> {
   return invoke<NodeDegreeOutput>('plugin:velesdb|get_node_degree', { request });
+}
+
+/**
+ * Creates a graph collection with optional schema.
+ *
+ * @param request - Graph collection configuration
+ * @returns Collection info
+ * @throws {CommandError} If collection already exists or parameters are invalid
+ *
+ * @example
+ * ```typescript
+ * // Schemaless graph (default)
+ * const info = await createGraphCollection({ name: 'knowledge' });
+ *
+ * // Graph with embeddings
+ * const info = await createGraphCollection({
+ *   name: 'knowledge', dimension: 768, metric: 'cosine',
+ *   graphSchema: { schemaless: true }
+ * });
+ * ```
+ */
+export async function createGraphCollection(request: CreateGraphCollectionRequest): Promise<CollectionInfo> {
+  return invoke<CollectionInfo>('plugin:velesdb|create_graph_collection', { request });
+}
+
+// ============================================================================
+// Scroll / Pagination
+// ============================================================================
+
+/** Request to scroll through collection points. */
+export interface ScrollRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Cursor from a previous scroll (omit for the first batch). */
+  cursor?: number;
+  /** Number of points per batch. Default: 100. */
+  batchSize?: number;
+  /** Optional metadata filter. */
+  filter?: Record<string, unknown>;
+}
+
+/** Response from a scroll operation. */
+export interface ScrollResponse {
+  /** Points in this batch. */
+  points: PointOutput[];
+  /** Cursor for the next batch (absent when no more points). */
+  nextCursor?: number;
+}
+
+/**
+ * Scrolls through collection points with cursor-based pagination.
+ *
+ * @param request - Scroll parameters
+ * @returns Batch of points and optional next cursor
+ * @throws {CommandError} If collection doesn't exist
+ *
+ * @example
+ * ```typescript
+ * let cursor: number | undefined;
+ * do {
+ *   const batch = await scrollCollection({ collection: 'docs', cursor, batchSize: 50 });
+ *   batch.points.forEach(p => console.log(p.id));
+ *   cursor = batch.nextCursor;
+ * } while (cursor !== undefined);
+ * ```
+ */
+export async function scrollCollection(request: ScrollRequest): Promise<ScrollResponse> {
+  return invoke<ScrollResponse>('plugin:velesdb|scroll_collection', { request });
+}
+
+// ============================================================================
+// Agent Memory — Semantic
+// ============================================================================
+
+/** Request to store knowledge in semantic memory. */
+export interface SemanticStoreRequest {
+  /** Unique ID for this knowledge fact. */
+  id: number;
+  /** Text content of the knowledge. */
+  content: string;
+  /** Embedding vector for the content. */
+  embedding: number[];
+}
+
+/** Request to query semantic memory. */
+export interface SemanticQueryRequest {
+  /** Query embedding vector. */
+  embedding: number[];
+  /** Number of results to return. Default: 10. */
+  topK?: number;
+}
+
+/** Result from semantic memory query. */
+export interface SemanticQueryResult {
+  /** Knowledge fact ID. */
+  id: number;
+  /** Similarity score. */
+  score: number;
+  /** Knowledge content text. */
+  content: string;
+}
+
+/**
+ * Stores a knowledge fact in semantic memory.
+ *
+ * @param request - Semantic store request
+ * @throws {CommandError} On storage failure
+ */
+export async function semanticStore(request: SemanticStoreRequest): Promise<void> {
+  return invoke<void>('plugin:velesdb|semantic_store', { request });
+}
+
+/**
+ * Queries semantic memory by similarity search.
+ *
+ * @param request - Semantic query request
+ * @returns Array of matching knowledge facts
+ */
+export async function semanticQuery(request: SemanticQueryRequest): Promise<SemanticQueryResult[]> {
+  return invoke<SemanticQueryResult[]>('plugin:velesdb|semantic_query', { request });
+}
+
+// ============================================================================
+// Agent Memory — Episodic
+// ============================================================================
+
+/** Request to record an episode. */
+export interface EpisodicRecordRequest {
+  /** Episode event ID. */
+  eventId: number;
+  /** Episode description/content. */
+  content: string;
+  /** Timestamp (epoch seconds). */
+  timestamp: number;
+  /** Embedding vector for the episode. */
+  embedding: number[];
+}
+
+/** Request to query recent episodes. */
+export interface EpisodicRecentRequest {
+  /** Number of recent episodes to return. Default: 10. */
+  limit?: number;
+  /** Only return episodes since this timestamp (epoch seconds). */
+  sinceTimestamp?: number;
+}
+
+/** Result from episodic memory query. */
+export interface EpisodicResult {
+  /** Episode ID. */
+  id: number;
+  /** Episode content. */
+  content: string;
+  /** Timestamp (epoch seconds). */
+  timestamp: number;
+}
+
+/**
+ * Records an episode in episodic memory.
+ *
+ * @param request - Episode to record
+ * @throws {CommandError} On storage failure
+ */
+export async function episodicRecord(request: EpisodicRecordRequest): Promise<void> {
+  return invoke<void>('plugin:velesdb|episodic_record', { request });
+}
+
+/**
+ * Queries recent episodes from episodic memory.
+ *
+ * @param request - Query parameters (limit, since_timestamp)
+ * @returns Array of recent episodes
+ */
+export async function episodicRecent(request: EpisodicRecentRequest): Promise<EpisodicResult[]> {
+  return invoke<EpisodicResult[]>('plugin:velesdb|episodic_recent', { request });
+}
+
+// ============================================================================
+// Agent Memory — Procedural
+// ============================================================================
+
+/** Request to learn a procedure. */
+export interface ProceduralLearnRequest {
+  /** Procedure ID. */
+  procedureId: number;
+  /** Procedure name. */
+  name: string;
+  /** Steps to perform. */
+  steps: string[];
+  /** Embedding vector for the procedure. */
+  embedding: number[];
+  /** Confidence level (0.0-1.0). Default: 1.0. */
+  confidence?: number;
+}
+
+/** Request to recall procedures by similarity. */
+export interface ProceduralRecallRequest {
+  /** Query embedding vector. */
+  embedding: number[];
+  /** Number of results. Default: 10. */
+  topK?: number;
+  /** Minimum confidence threshold. Default: 0.0. */
+  minConfidence?: number;
+}
+
+/** Result from procedural memory recall. */
+export interface ProceduralMatchResult {
+  /** Procedure ID. */
+  id: number;
+  /** Procedure name. */
+  name: string;
+  /** Steps. */
+  steps: string[];
+  /** Confidence score. */
+  confidence: number;
+  /** Similarity score from vector search. */
+  score: number;
+}
+
+/**
+ * Learns a procedure in procedural memory.
+ *
+ * @param request - Procedure to learn
+ * @throws {CommandError} On storage failure
+ */
+export async function proceduralLearn(request: ProceduralLearnRequest): Promise<void> {
+  return invoke<void>('plugin:velesdb|procedural_learn', { request });
+}
+
+/**
+ * Recalls procedures by similarity from procedural memory.
+ *
+ * @param request - Recall parameters
+ * @returns Array of matching procedures
+ */
+export async function proceduralRecall(request: ProceduralRecallRequest): Promise<ProceduralMatchResult[]> {
+  return invoke<ProceduralMatchResult[]>('plugin:velesdb|procedural_recall', { request });
 }
