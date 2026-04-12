@@ -150,7 +150,10 @@ pub async fn analyze_collection(
             (StatusCode::OK, Json(response)).into_response()
         }
         Err(e) => {
-            let status = if e.to_string().contains("not found") {
+            let status = if matches!(
+                e,
+                velesdb_core::Error::CollectionNotFound(_) | velesdb_core::Error::PointNotFound(_)
+            ) {
                 StatusCode::NOT_FOUND
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
