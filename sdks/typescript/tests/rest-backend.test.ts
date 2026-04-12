@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RestBackend } from '../src/backends/rest';
 import { VelesDBError, NotFoundError, ConnectionError, ValidationError } from '../src/types';
+import { CollectionNotFoundError } from '../src/errors';
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -102,14 +103,64 @@ describe('RestBackend', () => {
       expect(col?.dimension).toBe(128);
     });
 
-    it('should return null for non-existent collection', async () => {
+    it('should return null for non-existent collection (typed VELES-002)', async () => {
+      // Modern server emits the VELES-002 code verbatim via
+      // `core_error_response`; the transport layer recognises
+      // `CollectionNotFoundError` as the "absent" signal and returns null.
       mockFetch.mockResolvedValueOnce({
         ok: false,
-        json: () => Promise.resolve({ code: 'NOT_FOUND', message: 'Not found' }),
+        status: 404,
+        json: () => Promise.resolve({
+          code: 'VELES-002',
+          error: "[VELES-002] Collection 'nonexistent' not found",
+        }),
       });
 
       const col = await backend.getCollection('nonexistent');
       expect(col).toBeNull();
+    });
+
+    it('should return null for non-existent collection (legacy status-derived NOT_FOUND)', async () => {
+      // Legacy server handlers that still use `error_response` omit
+      // the `code` field entirely. The transport layer falls back to
+      // `mapStatusToErrorCode(404)` → `'NOT_FOUND'`, which
+      // `returnNullOnNotFound` recognises via `isNotFoundError`. This
+      // guards against the regression described in PR #586 Devin
+      // finding #1 where the pre-fix `instanceof CollectionNotFoundError`
+      // check missed the legacy format and threw instead of returning null.
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({
+          error: "Collection 'nonexistent' not found",
+        }),
+      });
+
+      const col = await backend.getCollection('nonexistent');
+      expect(col).toBeNull();
+    });
+
+    it('throwOnError preserves legacy NotFoundError when resourceLabel provided (PR #586 Devin #7)', async () => {
+      // Pre-v1.13 callers narrow on `(e instanceof NotFoundError)` for
+      // REST 404 responses without VELES codes. The commit that
+      // introduced parseVelesError temporarily lost this path; this
+      // regression test guards against losing it again.
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({
+          error: 'Collection not found',
+        }),
+      });
+      // getCollection uses returnNullOnNotFound (returns null), so
+      // reach into a method that calls throwOnError with a label:
+      // listCollections on a backend that 404s is unusual, but we
+      // can exercise the helper directly via a method that passes
+      // resourceLabel. `multiQuerySearch` calls
+      // `throwOnError(response, "Collection '...'")`.
+      await expect(
+        backend.multiQuerySearch('missing', [[0.1, 0.2]])
+      ).rejects.toThrow(NotFoundError);
     });
 
     it('should delete a collection', async () => {
@@ -357,15 +408,18 @@ describe('RestBackend', () => {
       expect(results[0].score).toBe(0.95);
     });
 
-    it('should handle collection not found', async () => {
+    it('should handle collection not found (typed VELES-002 → CollectionNotFoundError)', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
-        json: () => Promise.resolve({ code: 'NOT_FOUND', message: 'Collection not found' }),
+        json: () => Promise.resolve({
+          code: 'VELES-002',
+          error: "[VELES-002] Collection 'nonexistent' not found",
+        }),
       });
 
       await expect(backend.multiQuerySearch('nonexistent', [[0.1, 0.2]]))
-        .rejects.toThrow(NotFoundError);
+        .rejects.toThrow(CollectionNotFoundError);
     });
 
     it('should use default fusion strategy when not specified', async () => {

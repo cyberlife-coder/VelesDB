@@ -7,6 +7,374 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Sprint 2 Wave 4 (TypeScript SDK)
+
+- **12 missing REST endpoint wrappers surfaced on the TS SDK**
+  (`sdks/typescript/src/backends/missing-endpoints.ts` + plumbing
+  in `rest.ts`, `wasm.ts`, `client.ts`, `types.ts`, Commit 8) —
+  closes the `S2-NEW-10` audit finding. The pre-v1.13 SDK
+  covered only the core CRUD + search paths; 12 server endpoints
+  were un-reachable from TS callers without resorting to
+  hand-written `fetch`. Every wrapper is now exposed on
+  `VelesDB` and fully typed.
+
+  New methods on `VelesDB`:
+  ```typescript
+  // Admin
+  await db.rebuildIndex('docs');                                // POST /collections/{name}/index/rebuild
+  const caps = await db.getGuardrails();                        // GET  /guardrails
+  await db.updateGuardrails({ maxDepth: 15, rateLimitQps: 200 }); // PUT  /guardrails
+
+  // Query
+  await db.aggregate('SELECT category, COUNT(*) FROM docs GROUP BY category'); // POST /aggregate
+  await db.matchQuery('kg', 'MATCH (a:Person)-[:KNOWS]->(b) RETURN b');        // POST /collections/{name}/match
+
+  // Graph
+  await db.removeEdge('kg', 42);                                // DELETE /collections/{name}/graph/edges/{id}
+  const n = await db.getEdgeCount('kg');                        // GET    /collections/{name}/graph/edges/count
+  const nodes = await db.listNodes('kg');                       // GET    /collections/{name}/graph/nodes
+  const edges = await db.getNodeEdges('kg', 10, { direction: 'in', label: 'KNOWS' });
+  const payload = await db.getNodePayload('kg', 10);            // GET    /collections/{name}/graph/nodes/{id}/payload
+  await db.upsertNodePayload('kg', 10, { name: 'Alice' });      // PUT    /collections/{name}/graph/nodes/{id}/payload
+  const res = await db.graphSearch('kg', { vector: [...], k: 5 }); // POST  /collections/{name}/graph/search
+  ```
+
+  All 12 wrappers honour the `snake_case ↔ camelCase` convention
+  used across the existing SDK (request bodies converted
+  camel→snake, responses converted snake→camel). `removeEdge`
+  follows the same "map-to-null" convention as `getCollection`:
+  if the server answers `VELES-020` (edge not found) the helper
+  returns `false` instead of throwing, so callers can use the
+  boolean return value.
+
+  **Scope limitation (explicit, not a saupoudrage)**: the 13th
+  endpoint listed in the audit — `GET /collections/{name}/graph/
+  traverse/stream` — is a Server-Sent Events endpoint, not a
+  plain JSON response. Wiring it to the TS SDK requires a
+  streaming-fetch abstraction that does not exist today in the
+  SDK codebase; adding a blocking "collect everything then
+  return" wrapper would defeat the whole point of the streaming
+  design. Deferred to a dedicated Sprint 3+ "streaming API"
+  commit that introduces the abstraction properly.
+
+  **WASM backend**: every new method on `IVelesDBBackend` is
+  implemented on `WasmBackend` too, throwing `wasmNotSupported`
+  for each — the features require persistent server-side
+  infrastructure (guard rails, graph, rebuild). The WASM
+  `CapabilityMap` already reports these as `false`.
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `RebuildIndexResponse`, `GuardRailsUpdateRequest`,
+    `GuardRailsConfigResponse`, `ListNodesResponse`,
+    `GetNodeEdgesOptions`, `NodePayloadResponse`,
+    `GraphSearchRequest`, `GraphSearchResponse`,
+    `GraphSearchResultItem`, `MatchQueryOptions`,
+    `AggregateQueryOptions`
+
+- **`db.capabilities()` API — static feature map per backend**
+  (`sdks/typescript/src/capabilities.ts` + client + both backends,
+  Commit 7) — closes the `#24 F-BACK-002` audit finding. Callers
+  can now inspect the active backend's feature set at
+  construction time and gracefully degrade their workflow instead
+  of catching a runtime `NOT_SUPPORTED` error after the fact.
+
+  ```typescript
+  import { VelesDB, type CapabilityMap } from '@wiscale/velesdb-sdk';
+
+  const db = new VelesDB({ backend: 'wasm' });
+  await db.init();
+
+  const caps: Readonly<CapabilityMap> = db.capabilities();
+  if (caps.graphTraversal) {
+    await db.traverseGraph('kg', { source: 1, direction: 'out' });
+  } else {
+    // WASM backend does not ship graph traversal — fall back to
+    // REST or a pure in-memory traversal
+  }
+  ```
+
+  The map is **frozen at backend construction** and does NOT
+  round-trip to a live server. It reflects the features the SDK
+  version actually wraps for the selected backend — callers who
+  want live server feature flags should still catch `VelesError`
+  at the call site.
+
+  `CapabilityMap` has 13 boolean fields covering every major SDK
+  surface: `vectorSearch`, `textSearch`, `hybridSearch`,
+  `multiQuerySearch`, `sparseSearch`, `scroll`, `graphTraversal`,
+  `secondaryIndexes`, `agentMemory`, `streamInsert`, `pqTraining`,
+  `velesqlQuery`, `collectionIntrospection`. REST advertises all
+  13 as `true`; WASM advertises the 5 search-and-query paths as
+  `true` and the 8 persistent/graph/streaming paths as `false`
+  (matching the `wasmNotSupported()` stubs).
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `CapabilityMap` (interface)
+  - `REST_CAPABILITIES`, `WASM_CAPABILITIES` (frozen singletons)
+
+- **WASM backend index-management stubs now throw explicitly**
+  (`sdks/typescript/src/backends/wasm-stubs.ts`, Commit 6) — closes
+  the `#23 F-BACK-001` audit finding where `wasmListIndexes`,
+  `wasmHasIndex`, and `wasmDropIndex` silently returned `[]` and
+  `false` respectively. Those empty results made callers believe
+  "this collection has no indexes / the drop succeeded" when in
+  reality the WASM backend does not support index management at
+  all. The stubs now throw a `VelesDBError` with code
+  `'NOT_SUPPORTED'` via the shared `wasmNotSupported()` helper,
+  making the capability boundary visible upfront.
+
+  ```typescript
+  const db = new VelesDB({ backend: 'wasm' });
+  await db.init();
+
+  // Pre-v1.13: silently returned [] — caller never knew the op
+  //            was unsupported and wrote code around an empty list.
+  // v1.13:     throws VelesDBError('... not supported in WASM
+  //            backend. Use REST backend.')
+  try {
+    const indexes = await db.listIndexes('docs');
+  } catch (e) {
+    if (e instanceof VelesDBError && e.code === 'NOT_SUPPORTED') {
+      // fall back to REST backend or a pure in-memory index
+    }
+  }
+  ```
+
+  `wasmCreateIndex` is also aligned onto the shared
+  `wasmNotSupported()` helper (it previously threw a bespoke
+  `Error`) so all four index-management stubs emit identical error
+  shapes.
+
+- **`SearchOptions.quality` forwarded to REST as `mode`**
+  (`sdks/typescript/src/search-quality.ts` +
+  `backends/search-backend.ts`, Commit 5) — the `quality` field that
+  has lived on `SearchOptions` since v1.4 is now actually delivered
+  to the server on the three search endpoints that support it
+  natively: `search`, `searchIds`, `searchBatch`. Closes the
+  `#22 F-API-001` audit finding.
+
+  ```typescript
+  // Named presets
+  await db.search('docs', query, { k: 10, quality: 'fast' });
+  await db.search('docs', query, { k: 10, quality: 'accurate' });
+  await db.search('docs', query, { k: 10, quality: 'autotune' });
+
+  // Template-literal presets (parsed server-side by
+  // velesdb_core::api_types::mode_to_search_quality)
+  await db.search('docs', query, { k: 10, quality: 'custom:256' });
+  await db.search('docs', query, { k: 10, quality: 'adaptive:64:512' });
+
+  // Per-sub-request on batch
+  await db.searchBatch('docs', [
+    { vector: v1, k: 10, quality: 'fast' },
+    { vector: v2, k: 10, quality: 'accurate' },
+  ]);
+  ```
+
+  The new `searchQualityToMode(quality)` helper exported from
+  `@wiscale/velesdb-sdk` is a pure string pass-through: it returns
+  `{ mode: quality }` when a value is supplied and `{}` when
+  undefined, so spreading its result into a request body is safe and
+  keys are omitted cleanly when the caller doesn't override the
+  default.
+
+  **Scope limitation (explicit, not a saupoudrage)**: `textSearch`,
+  `hybridSearch`, and `multiQuerySearch` do NOT accept `quality`.
+  Their core entry points (`VectorCollection::text_search`,
+  `::hybrid_search`, `::multi_query_search`) do not currently take
+  an `ef_search` or `SearchQuality` parameter — adding the option
+  to the SDK would create a silently-ignored field. Supporting
+  quality on those paths requires extending the core first and is
+  tracked as a follow-up (candidate for Sprint 3+).
+
+- **`hnsw_alpha` and `hnsw_max_elements` exposed on `POST /collections`**
+  (`velesdb-server::CreateCollectionRequest` + `velesdb-server::handlers::collections::build_hnsw_params_override`
+  + `sdks/typescript/src/backends/crud-backend.ts`, Commit 4) —
+  closes the `#21 PROP-HNSW-ALPHA` audit finding where the TS SDK's
+  `HnswParams` interface advertised `alpha` and `maxElements` but the
+  REST layer silently dropped them.
+
+  Both fields existed in the core `HnswParams` struct (used by the
+  Python SDK via v1.13 `HnswOptions`) but the REST handler's
+  `create_vector_collection_with_hnsw` path only carried `hnsw_m`
+  and `hnsw_ef_construction`. The handler now routes through
+  `Database::create_vector_collection_with_params` (the same entry
+  point Python uses) whenever any HNSW tuning field is supplied,
+  building a full `HnswParams` from `HnswParams::auto(dimension)`
+  and overriding just the fields the caller provided.
+
+  ```typescript
+  import { VelesDB } from '@wiscale/velesdb-sdk';
+  const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+  await db.init();
+
+  await db.createCollection('rag', {
+    dimension: 1536,
+    metric: 'cosine',
+    storageMode: 'full',
+    hnsw: {
+      m: 48,
+      efConstruction: 600,
+      alpha: 1.5,            // NEW — VAMANA diversification
+      maxElements: 1_000_000 // NEW — pre-size for bulk import
+    },
+  });
+  ```
+
+  Any combination of the four HNSW fields is valid: supplying only
+  `alpha` works, supplying only `maxElements` works, and the
+  unspecified fields inherit the dimension-aware engine defaults.
+  `GET /collections/{name}/config` echoes the full `hnsw_params`
+  block so callers can verify the persisted values.
+
+  **Backward compatible**: the two new fields are optional on the
+  wire (`#[serde(default)]`). Pre-v1.13 clients that send only
+  `hnsw_m` / `hnsw_ef_construction` continue to work unchanged, and
+  the legacy `Database::create_vector_collection_with_hnsw` helper
+  remains in the core API for other callers (Python, CLI, WASM).
+
+- **Advanced `CollectionConfig` fields wired through to REST**
+  (`sdks/typescript/src/types.ts` + `backends/crud-backend.ts` +
+  `backends/admin-backend.ts`, Commit 3) — the TS SDK now exposes
+  every advanced create-time option accepted by
+  `velesdb_core::api_types::CreateCollectionRequest` and every
+  advanced field returned by `CollectionConfigResponse`. Closes the
+  `#18 PROP-CONFIG-ADVANCED` audit finding.
+
+  New create-time fields on `CollectionConfig`:
+
+  ```typescript
+  import { VelesDB, type CollectionConfig } from '@wiscale/velesdb-sdk';
+
+  const config: CollectionConfig = {
+    dimension: 1536,
+    metric: 'cosine',
+    storageMode: 'pq',
+    hnsw: { m: 48, efConstruction: 600 },
+    // — NEW advanced options (all optional, default to engine behaviour) —
+    pqRescoreOversampling: 8,                        // PQ/SQ8 candidate rescoring factor
+    deferredIndexing: {                              // US-366 in-memory buffer
+      enabled: true,
+      mergeThreshold: 5000,
+      maxBufferAgeMs: 30_000,
+    },
+    asyncIndexBuilder: {                             // Issue #488 parallel bulk build
+      mergeThreshold: 50_000,
+      segmentCount: 8,
+    },
+  };
+  await db.createCollection('rag', config);
+  ```
+
+  The three new sub-interfaces (`DeferredIndexerOptions`,
+  `AsyncIndexBuilderOptions`) are TS-ergonomic camelCase mirrors of
+  the Rust `DeferredIndexerConfig` / `AsyncIndexBuilderConfig`
+  structs. The crud-backend converts them to the snake_case wire
+  format (`merge_threshold`, `max_buffer_age_ms`, `segment_count`)
+  before forwarding, and omits any field the caller did not supply
+  so the server falls back to its defaults.
+
+  New read-time fields on `CollectionConfigResponse`:
+  `schemaVersion`, `pqRescoreOversampling`, `hnswParams`,
+  `deferredIndexing`, `asyncIndexBuilder`. Consumers can now inspect
+  the on-disk schema version and the effective advanced configuration
+  of an existing collection via `db.getCollectionConfig()`.
+
+  **Backward compatible**: every new field is optional. Callers that
+  don't pass them see zero behavioural change — the REST body omits
+  the keys and the server applies defaults. Existing code compiles
+  and runs unchanged.
+
+- **Typed error hierarchy with verbatim `VELES-XXX` codes**
+  (`sdks/typescript/src/errors.ts`, Commit 2) — 36 typed error classes,
+  one per `velesdb_core::Error` variant, all extending a new `VelesError`
+  base class which itself extends `VelesDBError` for backward compat.
+  Closes the `#20 PROP-ERR-TSSDK` audit finding.
+
+  ```typescript
+  import {
+    CollectionNotFoundError,
+    DimensionMismatchError,
+    GuardRailError,
+    VelesError,
+  } from '@wiscale/velesdb-sdk';
+
+  try {
+    await db.search('docs', queryVector, { k: 10 });
+  } catch (e) {
+    if (e instanceof CollectionNotFoundError) {
+      // VELES-002 — e.code is preserved verbatim
+      console.log('code:', e.code); // "VELES-002"
+    } else if (e instanceof DimensionMismatchError) {
+      // VELES-004
+    } else if (e instanceof GuardRailError) {
+      // VELES-027 — rate limit, timeout, cardinality, etc.
+    } else if (e instanceof VelesError) {
+      // Any other VELES-XXX, forward-compat with newer core versions
+    } else {
+      throw e;
+    }
+  }
+  ```
+
+  The SDK no longer fabricates fake codes like `'NOT_FOUND'` when
+  dispatching server responses. The transport layer (`shared.ts::throwOnError`)
+  now routes via `parseVelesError(code, message)`, which instantiates
+  the matching typed class from the server's exact `VELES-XXX` code.
+
+  **Backward compatibility**: the four legacy client-side error classes
+  (`ConnectionError`, `ValidationError`, `NotFoundError`, `BackpressureError`)
+  are unchanged — they cover connection/validation/WASM-lookup scenarios
+  that never carry a `VELES-XXX` code. Existing `catch (e instanceof
+  VelesDBError)` handlers continue to catch everything they did before.
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `VelesError` (base class for server errors)
+  - 36 typed sub-classes (`CollectionNotFoundError`, `DimensionMismatchError`,
+    `StorageError`, `QueryError`, `GuardRailError`, ...)
+  - `parseVelesError(code, message)` — runtime discriminator factory
+  - `VELES_ERROR_CODES` — ordered const array of all 36 codes
+  - `VelesErrorCode` — union type of every known code
+
+- **Typed `Filter` DSL** (`sdks/typescript/src/filter.ts`, Commit 1) —
+  discriminated union mirror of `velesdb_core::filter::Condition`
+  (20 operators) with a fluent builder `f.*` for ergonomic filter
+  construction. Closes the `#19 PROP-FILTER-UNTYPED` audit finding.
+
+  ```typescript
+  import { f, VelesDB } from '@wiscale/velesdb-sdk';
+
+  const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+  await db.init();
+
+  // Typed builder (recommended — compile-time checked)
+  const filter = f.and([
+    f.eq('category', 'tech'),
+    f.gte('price', 100),
+    f.or([f.ilike('title', '%rust%'), f.ilike('title', '%go%')]),
+    f.not(f.isNull('author')),
+  ]);
+
+  const results = await db.search('docs', queryVector, { k: 10, filter });
+  ```
+
+  The 20 operators mirror the Rust enum exactly and serialize to the
+  same wire format (`{type, field, value}` with `rename_all = "snake_case"`):
+  `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `is_null`,
+  `is_not_null`, `and`, `or`, `not`, `like`, `ilike`, `array_contains`,
+  `array_contains_any`, `array_contains_all`, `geo_distance`, `geo_bbox`.
+
+  **Backward compatible**: pre-v1.13 code passing
+  `filter: Record<string, unknown>` continues to work unchanged. The
+  new `FilterInput = Filter | Record<string, unknown>` type is
+  accepted by every `filter?` parameter across `SearchOptions`,
+  `MultiQuerySearchOptions`, `ScrollRequest`, `searchBatch`,
+  `textSearch`, `hybridSearch`, and all WASM/REST backend variants.
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `Filter`, `Condition`, `CompareOp`, `FilterInput`, `JsonValue` (types)
+  - `f` (fluent builder), `isTypedFilter`, `normalizeFilter` (runtime helpers)
+
 ### Breaking Changes
 - **`Collection` removed from public API** — `Collection` is now `pub(crate)` only. External code
   must use `VectorCollection`, `GraphCollection`, `MetadataCollection`, or `AnyCollection`.

@@ -8,6 +8,13 @@
  */
 
 import { NotFoundError, VelesDBError } from '../types';
+import {
+  parseVelesError,
+  CollectionNotFoundError,
+  PointNotFoundError,
+  EdgeNotFoundError,
+  NodeNotFoundError,
+} from '../errors';
 
 // ---------------------------------------------------------------------------
 // Unified transport interface
@@ -40,10 +47,22 @@ export interface TransportError {
 /**
  * Throw a typed error when the transport response contains an error payload.
  *
- * - If `code === 'NOT_FOUND'` and a `resourceLabel` is provided, throws
- *   `NotFoundError` with the label.
- * - Otherwise throws `VelesDBError`.
- * - When no error is present, the function is a no-op.
+ * Routing priority (PR #586 Devin finding #7 — preserve v1.12 catch
+ * ergonomics):
+ *
+ * 1. **Legacy `NotFoundError` compat** — when the server transmits
+ *    no VELES code (so the transport layer fills in
+ *    `'NOT_FOUND'` via `mapStatusToErrorCode(404)`) AND a
+ *    `resourceLabel` was passed by the caller, throw the v1.12
+ *    `NotFoundError(resourceLabel)`. This keeps pre-v1.13 handlers
+ *    catching `(e instanceof NotFoundError)` on REST 404 responses
+ *    working unchanged.
+ * 2. **Typed VELES error** — otherwise delegate to
+ *    `parseVelesError(code, message)`, which instantiates the
+ *    matching `VelesError` sub-class (e.g. `CollectionNotFoundError`
+ *    for `VELES-002`) when the server emitted a typed code.
+ *
+ * When no error is present, the function is a no-op.
  */
 export function throwOnError(
   response: TransportResponse<unknown>,
@@ -52,19 +71,36 @@ export function throwOnError(
   if (!response.error) {
     return;
   }
+  // Legacy path: status-derived 'NOT_FOUND' with a caller-supplied
+  // resource label still throws the pre-v1.13 `NotFoundError` for
+  // backward source compatibility with handlers that narrow on it.
   if (response.error.code === 'NOT_FOUND' && resourceLabel !== undefined) {
     throw new NotFoundError(resourceLabel);
   }
-  throw new VelesDBError(response.error.message, response.error.code);
+  throw parseVelesError(response.error.code, response.error.message);
 }
 
 /**
- * Like `throwOnError`, but returns `null` on NOT_FOUND instead of throwing.
- * Useful for `getCollection`, `get`, `getCollectionStats`, etc.
+ * Like `throwOnError`, but returns a sentinel on "not found" instead of
+ * throwing. Useful for `getCollection`, `get`, `getCollectionStats`,
+ * etc. where `null` is the expected "absent" result.
  *
- * @returns `true` if there was a NOT_FOUND error (caller should return null),
- *          `undefined` otherwise (no error).
- * @throws {VelesDBError} for any non-NOT_FOUND error.
+ * Recognises **two** server response formats (PR #586 Devin fix):
+ *
+ * - **Typed** — the server emitted a `VELES-XXX` code via
+ *   `core_error_response`. Any of `VELES-002` (CollectionNotFound),
+ *   `VELES-003` (PointNotFound), `VELES-020` (EdgeNotFound), or
+ *   `VELES-022` (NodeNotFound) signals "absent".
+ * - **Legacy / status-derived** — the server emitted no `code` field
+ *   (via `error_response`), so the transport layer filled in
+ *   `'NOT_FOUND'` from the HTTP 404 status. This branch keeps older
+ *   handlers that have not yet been migrated working correctly.
+ *
+ * @returns `true` if the error indicates the resource is missing,
+ *          signalling the caller should return `null`; `undefined`
+ *          when no error is present.
+ * @throws {VelesError} for any non-"not found" error, typed by VELES
+ *         code when available.
  */
 export function returnNullOnNotFound(
   response: TransportResponse<unknown>
@@ -72,10 +108,35 @@ export function returnNullOnNotFound(
   if (!response.error) {
     return undefined;
   }
-  if (response.error.code === 'NOT_FOUND') {
+  if (isNotFoundError(response.error.code)) {
     return true;
   }
-  throw new VelesDBError(response.error.message, response.error.code);
+  throw parseVelesError(response.error.code, response.error.message);
+}
+
+/**
+ * Shared "is this a not-found error code?" predicate used by
+ * `returnNullOnNotFound` and by individual endpoint wrappers that
+ * need to convert a 404 into a boolean/null sentinel (e.g.
+ * `removeEdge` → `false`).
+ *
+ * Accepts both the legacy status-derived `'NOT_FOUND'` string and
+ * every typed `VELES-XXX` code that means "resource missing".
+ */
+export function isNotFoundError(code: string | undefined): boolean {
+  if (code === undefined) {
+    return false;
+  }
+  if (code === 'NOT_FOUND') {
+    return true;
+  }
+  const err = parseVelesError(code, '');
+  return (
+    err instanceof CollectionNotFoundError ||
+    err instanceof PointNotFoundError ||
+    err instanceof EdgeNotFoundError ||
+    err instanceof NodeNotFoundError
+  );
 }
 
 // ---------------------------------------------------------------------------

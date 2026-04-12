@@ -2940,6 +2940,15 @@
           "graph_schema": {
             "description": "Graph schema (only for `collection_type = \"graph\"`).\n\nAccepted as a free-form JSON object matching\n`velesdb_core::GraphSchema`. `GraphSchema::schemaless()` is\nused when the field is absent."
           },
+          "hnsw_alpha": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "VAMANA alpha for neighbor diversification (default derived from dimension).\n\nValues > 1.0 bias `select_neighbors` toward diversity over proximity,\nproducing a more navigable graph with better recall. The engine\ndefault is 1.2 (VAMANA paper recommendation). Set to 1.0 for strict\nnearest-neighbor selection.",
+            "example": 1.2
+          },
           "hnsw_ef_construction": {
             "type": [
               "integer",
@@ -2956,6 +2965,15 @@
             ],
             "description": "HNSW M parameter (number of bi-directional links per node).",
             "example": 32,
+            "minimum": 0
+          },
+          "hnsw_max_elements": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Initial HNSW capacity (grows automatically if exceeded).\n\nPre-sizing matters for bulk imports: the engine avoids repeated\nrealloc-and-copy cycles when the final population is known upfront.\nUse this when migrating a large existing corpus into a fresh\ncollection.",
+            "example": 1000000,
             "minimum": 0
           },
           "metric": {

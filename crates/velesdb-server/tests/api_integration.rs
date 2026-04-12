@@ -4005,6 +4005,183 @@ async fn test_create_with_invalid_async_index_builder_returns_400() {
     );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// PROP-HNSW-ALPHA (Sprint 2 Wave 4 #21): CreateCollectionRequest accepts
+// hnsw_alpha and hnsw_max_elements alongside the existing hnsw_m and
+// hnsw_ef_construction; GET /collections/{name}/config echoes the full
+// HnswParams.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Nominal round-trip: create a collection with `hnsw_alpha` and
+/// `hnsw_max_elements`, then GET /config and verify the values landed in
+/// the persisted `hnsw_params` block.
+#[tokio::test]
+async fn test_create_with_hnsw_alpha_and_max_elements_round_trip() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "hnsw_tuned",
+                        "dimension": 128,
+                        "metric": "cosine",
+                        "hnsw_m": 48,
+                        "hnsw_ef_construction": 600,
+                        "hnsw_alpha": 1.5,
+                        "hnsw_max_elements": 500_000
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/hnsw_tuned/config")
+                .body(Body::empty())
+                .expect("test: build describe request"),
+        )
+        .await
+        .expect("test: describe request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+
+    let hnsw_params = &json["hnsw_params"];
+    assert!(
+        hnsw_params.is_object(),
+        "hnsw_params must be populated when any tuning field is supplied, got: {hnsw_params}"
+    );
+    assert_eq!(
+        hnsw_params["max_connections"], 48,
+        "hnsw_m must round-trip as max_connections"
+    );
+    assert_eq!(
+        hnsw_params["ef_construction"], 600,
+        "hnsw_ef_construction must round-trip"
+    );
+    assert!(
+        (hnsw_params["alpha"].as_f64().expect("alpha is f64") - 1.5).abs() < f64::EPSILON,
+        "hnsw_alpha must round-trip: {}",
+        hnsw_params["alpha"]
+    );
+    assert_eq!(
+        hnsw_params["max_elements"], 500_000,
+        "hnsw_max_elements must round-trip"
+    );
+}
+
+/// Edge: supplying only `hnsw_alpha` (no `hnsw_m`/`hnsw_ef_construction`)
+/// must still trigger the `with_params` path so the alpha value reaches
+/// disk. The other fields inherit the dimension-aware auto defaults.
+#[tokio::test]
+async fn test_create_with_only_hnsw_alpha_uses_auto_defaults_for_rest() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "alpha_only",
+                        "dimension": 128,
+                        "metric": "cosine",
+                        "hnsw_alpha": 1.8
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/alpha_only/config")
+                .body(Body::empty())
+                .expect("test: build describe request"),
+        )
+        .await
+        .expect("test: describe request failed");
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+
+    let hnsw_params = &json["hnsw_params"];
+    let alpha = hnsw_params["alpha"].as_f64().expect("alpha is f64");
+    // alpha is stored as f32 on disk and widened to f64 in the JSON
+    // response; compare with f32 epsilon (≈1.19e-7) to absorb the
+    // widening rounding (e.g. 1.8 → 1.7999999523162842).
+    assert!(
+        (alpha - 1.8).abs() < 1e-6,
+        "custom alpha must be persisted, got: {alpha}"
+    );
+    // max_connections and ef_construction inherit HnswParams::auto(128)
+    // — just assert they are non-zero engine defaults (24 for dim<=256).
+    assert!(
+        hnsw_params["max_connections"].as_u64().unwrap_or(0) > 0,
+        "max_connections must inherit auto default"
+    );
+    assert!(
+        hnsw_params["ef_construction"].as_u64().unwrap_or(0) > 0,
+        "ef_construction must inherit auto default"
+    );
+}
+
+/// Negative: a non-numeric `hnsw_alpha` must be rejected at parse time
+/// with 422 Unprocessable Entity (Axum's default `JsonRejection` status
+/// for type-mismatched request bodies).
+#[tokio::test]
+async fn test_create_with_invalid_hnsw_alpha_returns_422() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "bad_alpha",
+                        "dimension": 8,
+                        "metric": "cosine",
+                        "hnsw_alpha": "not a number"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
 /// Regression: when Phase 2 (`apply_advanced_config`) fails after
 /// Phase 1 created the base collection, the handler must roll back
 /// the collection via `Database::delete_collection` so the client

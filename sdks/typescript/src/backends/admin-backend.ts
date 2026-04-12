@@ -100,24 +100,30 @@ export async function analyzeCollection(
   return mapStatsResponse(response.data!);
 }
 
-export async function getCollectionConfig(
-  transport: AdminTransport,
-  collection: string
-): Promise<CollectionConfigResponse> {
-  const response = await transport.requestJson<{
-    name: string;
-    dimension: number;
-    metric: string;
-    storage_mode: string;
-    point_count: number;
-    metadata_only: boolean;
-    graph_schema?: Record<string, unknown>;
-    embedding_dimension?: number;
-  }>('GET', `${collectionPath(collection)}/config`);
+/** Raw wire shape of `/collections/{name}/config` — matches `velesdb_core::api_types::CollectionConfigResponse`. */
+interface CollectionConfigWire {
+  name: string;
+  dimension: number;
+  metric: string;
+  storage_mode: string;
+  point_count: number;
+  metadata_only: boolean;
+  graph_schema?: Record<string, unknown>;
+  embedding_dimension?: number;
+  schema_version?: number;
+  pq_rescore_oversampling?: number;
+  hnsw_params?: Record<string, unknown>;
+  deferred_indexing?: Record<string, unknown>;
+  async_index_builder?: Record<string, unknown>;
+}
 
-  throwOnError(response, `Collection '${collection}'`);
-
-  const data = response.data!;
+/**
+ * Map a raw `CollectionConfigWire` (snake_case from REST) into the
+ * camelCase `CollectionConfigResponse` exposed to TS callers.
+ * Kept separate from `getCollectionConfig` so the mapping stays
+ * unit-testable and the HTTP function remains under the NLOC limit.
+ */
+function mapConfigResponse(data: CollectionConfigWire): CollectionConfigResponse {
   return {
     name: data.name,
     dimension: data.dimension,
@@ -127,5 +133,24 @@ export async function getCollectionConfig(
     metadataOnly: data.metadata_only,
     graphSchema: data.graph_schema,
     embeddingDimension: data.embedding_dimension,
+    schemaVersion: data.schema_version,
+    pqRescoreOversampling: data.pq_rescore_oversampling,
+    hnswParams: data.hnsw_params,
+    deferredIndexing: data.deferred_indexing,
+    asyncIndexBuilder: data.async_index_builder,
   };
+}
+
+export async function getCollectionConfig(
+  transport: AdminTransport,
+  collection: string
+): Promise<CollectionConfigResponse> {
+  const response = await transport.requestJson<CollectionConfigWire>(
+    'GET',
+    `${collectionPath(collection)}/config`
+  );
+
+  throwOnError(response, `Collection '${collection}'`);
+
+  return mapConfigResponse(response.data!);
 }

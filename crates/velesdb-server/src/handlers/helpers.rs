@@ -37,37 +37,44 @@ pub(crate) fn core_error_response(
 }
 
 /// Look up a type-erased collection by name, returning a 404 response on miss.
+///
+/// Emits `VELES-002 CollectionNotFound` via [`core_error_response`] so that
+/// SDK clients (TS, Python, …) can surface a typed
+/// `CollectionNotFoundError` via `instanceof`. Fixes PR #586 Devin
+/// finding #1: the prior `error_response` call set `code: None`, which
+/// serde skipped from the JSON body. Clients then fell back to a
+/// status-derived `'NOT_FOUND'` string and could not discriminate
+/// collection-not-found from point/edge/node-not-found.
 #[allow(clippy::result_large_err)]
 pub(crate) fn get_collection_or_404(
     state: &AppState,
     name: &str,
 ) -> Result<velesdb_core::AnyCollection, axum::response::Response> {
     state.db.get_any_collection(name).ok_or_else(|| {
-        error_response(
+        core_error_response(
             StatusCode::NOT_FOUND,
-            format!("Collection '{name}' not found"),
+            &velesdb_core::Error::CollectionNotFound(name.to_string()),
         )
     })
 }
 
 /// Look up a vector collection by name, returning a 404 response on miss.
+///
+/// Emits `VELES-002 CollectionNotFound` (same typed-error rationale as
+/// [`get_collection_or_404`]). The "or is not a vector collection"
+/// disambiguation lives in the response body message — the code field
+/// stays VELES-002 so typed-error clients can still narrow on
+/// `CollectionNotFoundError`.
 #[allow(clippy::result_large_err)]
 pub(crate) fn get_vector_collection_or_404(
     state: &AppState,
     name: &str,
 ) -> Result<velesdb_core::collection::VectorCollection, axum::response::Response> {
     state.db.get_vector_collection(name).ok_or_else(|| {
-        (
+        core_error_response(
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!(
-                    "Collection '{}' not found or is not a vector collection",
-                    name
-                ),
-                code: None,
-            }),
+            &velesdb_core::Error::CollectionNotFound(name.to_string()),
         )
-            .into_response()
     })
 }
 

@@ -166,7 +166,13 @@ pub async fn get_point(
             "payload": point.payload
         }))
         .into_response(),
-        None => error_response(StatusCode::NOT_FOUND, format!("Point {} not found", id)),
+        // PR #586 Devin fix: emit `VELES-003 PointNotFound` via
+        // `core_error_response` so typed-error clients surface
+        // `PointNotFoundError` instead of a generic fallback.
+        None => core_error_response(
+            StatusCode::NOT_FOUND,
+            &velesdb_core::Error::PointNotFound(id),
+        ),
     }
 }
 

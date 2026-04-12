@@ -266,7 +266,8 @@ describe('VelesDB Client', () => {
     it('should call backend queryExplain', async () => {
       mockBackend.queryExplain.mockResolvedValue({ queryType: 'SELECT', plan: [] });
       await db.queryExplain('SELECT * FROM docs', {});
-      expect(mockBackend.queryExplain).toHaveBeenCalledWith('SELECT * FROM docs', {});
+      // client forwards (query, params, options) — options is undefined when caller omits it
+      expect(mockBackend.queryExplain).toHaveBeenCalledWith('SELECT * FROM docs', {}, undefined);
     });
 
     it('should validate collectionSanity input', async () => {

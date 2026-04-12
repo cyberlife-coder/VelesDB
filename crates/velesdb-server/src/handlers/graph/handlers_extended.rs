@@ -45,11 +45,17 @@ pub async fn remove_edge(
     if coll.remove_edge(edge_id) {
         Ok(StatusCode::NO_CONTENT)
     } else {
+        // PR #586 Devin fix: emit `VELES-020 EdgeNotFound` with the
+        // verbatim code so typed-error clients surface
+        // `EdgeNotFoundError` instead of falling back to a status-
+        // derived `'NOT_FOUND'` string. The error message retains the
+        // collection context for operators reading server logs.
+        let err = velesdb_core::Error::EdgeNotFound(edge_id);
         Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: format!("Edge {edge_id} not found in collection '{name}'"),
-                code: None,
+                error: format!("{err} in collection '{name}'"),
+                code: Some(err.code().to_string()),
             }),
         ))
     }

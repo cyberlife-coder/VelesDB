@@ -3,6 +3,9 @@
  * @packageDocumentation
  */
 
+import type { FilterInput } from './filter';
+import type { CapabilityMap } from './capabilities';
+
 /** Supported distance metrics for vector similarity */
 export type DistanceMetric = 'cosine' | 'euclidean' | 'dot' | 'hamming' | 'jaccard';
 
@@ -47,6 +50,38 @@ export interface HnswParams {
   alpha?: number;
 }
 
+/**
+ * Deferred indexing configuration (`velesdb_core::collection::streaming::DeferredIndexerConfig`).
+ *
+ * When enabled, inserts are buffered in memory and batch-merged into the
+ * HNSW index once the buffer reaches `mergeThreshold` or once the oldest
+ * buffered vector is older than `maxBufferAgeMs`. Trades insert latency
+ * for throughput.
+ */
+export interface DeferredIndexerOptions {
+  /** Whether deferred indexing is enabled (default: false). */
+  enabled?: boolean;
+  /** Number of buffered vectors that triggers a merge into HNSW. */
+  mergeThreshold?: number;
+  /** Max age (ms) of the oldest buffered vector before a time-based merge. */
+  maxBufferAgeMs?: number;
+}
+
+/**
+ * Async index builder configuration (`velesdb_core::collection::streaming::AsyncIndexBuilderConfig`).
+ *
+ * Enables the parallel segment-based `AsyncIndexBuilder` for bulk inserts
+ * (Issue #488 — Bulk Insert V2). Used when the collection is known to
+ * receive large bulk loads where the extra segment coordination cost is
+ * amortised over millions of inserts.
+ */
+export interface AsyncIndexBuilderOptions {
+  /** Buffered vector count that triggers a build (default: 10_000). */
+  mergeThreshold?: number;
+  /** Number of segments for parallel construction (default: num_cpus). */
+  segmentCount?: number;
+}
+
 /** Collection configuration */
 export interface CollectionConfig {
   /** Vector dimension (e.g., 768 for BERT, 1536 for GPT). Required for vector collections. */
@@ -57,6 +92,8 @@ export interface CollectionConfig {
    * - 'full': Full f32 precision (3 KB/vector for 768D)
    * - 'sq8': 8-bit scalar quantization, 4x memory reduction (~1% recall loss)
    * - 'binary': 1-bit binary quantization, 32x memory reduction (edge/IoT)
+   * - 'pq': Product quantization (requires training via `trainPq`)
+   * - 'rabitq': RaBitQ quantization (binary + rescoring)
    */
   storageMode?: StorageMode;
   /** Collection type: 'vector' (default) or 'metadata_only' */
@@ -65,6 +102,18 @@ export interface CollectionConfig {
   description?: string;
   /** Optional HNSW parameters for index tuning */
   hnsw?: HnswParams;
+  /**
+   * PQ rescore oversampling factor (quantised storage modes only).
+   *
+   * The search pipeline fetches `max(k * factor, k + 32)` candidates from
+   * HNSW and rescores them with full-precision ADC. Default is `4`.
+   * Setting `0` disables rescoring (fastest, lowest recall).
+   */
+  pqRescoreOversampling?: number;
+  /** Deferred indexing buffer configuration (US-366). */
+  deferredIndexing?: DeferredIndexerOptions;
+  /** Parallel async index builder configuration (Issue #488). */
+  asyncIndexBuilder?: AsyncIndexBuilderOptions;
 }
 
 /** Collection metadata */
@@ -102,8 +151,8 @@ export interface VectorDocument {
 export interface SearchOptions {
   /** Number of results to return (default: 10) */
   k?: number;
-  /** Filter expression (optional) */
-  filter?: Record<string, unknown>;
+  /** Filter expression (optional). Accepts typed `Filter` (recommended) or legacy raw JSON. */
+  filter?: FilterInput;
   /** Include vectors in results (default: false) */
   includeVectors?: boolean;
   /** Optional sparse vector for hybrid sparse+dense search */
@@ -146,8 +195,8 @@ export interface MultiQuerySearchOptions {
     /** Relative score fusion: sparse vector weight (default: 0.5) */
     sparseWeight?: number;
   };
-  /** Filter expression (optional) */
-  filter?: Record<string, unknown>;
+  /** Filter expression (optional). Accepts typed `Filter` (recommended) or legacy raw JSON. */
+  filter?: FilterInput;
 }
 
 /** Search result */
@@ -338,8 +387,8 @@ export interface ScrollRequest {
   cursor?: string | number;
   /** Number of points per page (1–10000, default 100). */
   batchSize?: number;
-  /** Optional filter object. */
-  filter?: Record<string, unknown>;
+  /** Optional filter expression. Accepts typed `Filter` (recommended) or legacy raw JSON. */
+  filter?: FilterInput;
 }
 
 /** Response from scroll pagination. */
@@ -417,7 +466,7 @@ export interface CollectionStatsResponse {
   columnStats?: Record<string, ColumnStatsDetail>;
 }
 
-/** Collection configuration response */
+/** Collection configuration response. Mirrors `velesdb_core::api_types::CollectionConfigResponse`. */
 export interface CollectionConfigResponse {
   name: string;
   dimension: number;
@@ -427,6 +476,19 @@ export interface CollectionConfigResponse {
   metadataOnly: boolean;
   graphSchema?: Record<string, unknown>;
   embeddingDimension?: number;
+  /**
+   * On-disk schema version. Increments when the persisted `config.json`
+   * format changes in a way older `VelesDB` versions cannot safely read.
+   */
+  schemaVersion?: number;
+  /** PQ rescore oversampling factor — see `CollectionConfig.pqRescoreOversampling`. */
+  pqRescoreOversampling?: number;
+  /** Persisted HNSW parameters when customised at create time (raw server JSON). */
+  hnswParams?: Record<string, unknown>;
+  /** Deferred indexing configuration (`null` / absent when the feature is disabled for this collection). */
+  deferredIndexing?: Record<string, unknown>;
+  /** Async index builder configuration (`null` / absent when the feature is disabled for this collection). */
+  asyncIndexBuilder?: Record<string, unknown>;
 }
 
 // ============================================================================
@@ -584,9 +646,19 @@ export interface CreateIndexOptions {
 export interface IVelesDBBackend {
   /** Initialize the backend */
   init(): Promise<void>;
-  
+
   /** Check if backend is initialized */
   isInitialized(): boolean;
+
+  /**
+   * Return the static capability map for this backend.
+   *
+   * The map is frozen at backend construction — it does NOT round-trip
+   * to a live server. Use it to gracefully degrade UI / workflow when
+   * a feature is not available instead of catching a runtime
+   * `NOT_SUPPORTED` error after the fact.
+   */
+  capabilities(): Readonly<CapabilityMap>;
   
   /** Create a new collection */
   createCollection(name: string, config: CollectionConfig): Promise<void>;
@@ -625,23 +697,25 @@ export interface IVelesDBBackend {
     searches: Array<{
       vector: number[] | Float32Array;
       k?: number;
-      filter?: Record<string, unknown>;
+      filter?: FilterInput;
+      /** Per-sub-request search quality preset (default: server default). */
+      quality?: SearchQuality;
     }>
   ): Promise<SearchResult[][]>;
-  
+
   /** Full-text search using BM25 */
   textSearch(
     collection: string,
     query: string,
-    options?: { k?: number; filter?: Record<string, unknown> }
+    options?: { k?: number; filter?: FilterInput }
   ): Promise<SearchResult[]>;
-  
+
   /** Hybrid search combining vector and text */
   hybridSearch(
     collection: string,
     vector: number[] | Float32Array,
     textQuery: string,
-    options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+    options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
   ): Promise<SearchResult[]>;
   
   /** Execute VelesQL multi-model query (EPIC-031 US-011) */
@@ -770,6 +844,64 @@ export interface IVelesDBBackend {
     embedding: number[],
     k?: number
   ): Promise<SearchResult[]>;
+
+  // Sprint 2 Wave 4 — S2-NEW-10: missing REST endpoint wrappers
+
+  /** Rebuild a collection's HNSW index (compacts tombstones). */
+  rebuildIndex(collection: string): Promise<RebuildIndexResponse>;
+
+  /** Read the current process-wide guard-rails configuration. */
+  getGuardrails(): Promise<GuardRailsConfigResponse>;
+
+  /** Partial-update the process-wide guard-rails configuration. */
+  updateGuardrails(req: GuardRailsUpdateRequest): Promise<GuardRailsConfigResponse>;
+
+  /** Execute a VelesQL aggregate query (COUNT/AVG/GROUP BY/...). */
+  aggregate(
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: AggregateQueryOptions
+  ): Promise<AggregateResponse>;
+
+  /** Execute a VelesQL `MATCH (...)` graph query scoped to a collection. */
+  matchQuery(
+    collection: string,
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: MatchQueryOptions
+  ): Promise<MatchQueryResponse>;
+
+  /** Remove a graph edge by ID. Returns `true` if removed, `false` if not found. */
+  removeEdge(collection: string, edgeId: number): Promise<boolean>;
+
+  /** Total edge count in a graph collection. */
+  getEdgeCount(collection: string): Promise<number>;
+
+  /** List every node ID in a graph collection. */
+  listNodes(collection: string): Promise<ListNodesResponse>;
+
+  /** Get edges adjacent to a node (filterable by direction + label). */
+  getNodeEdges(
+    collection: string,
+    nodeId: number,
+    options?: GetNodeEdgesOptions
+  ): Promise<GraphEdge[]>;
+
+  /** Read the JSON payload attached to a graph node. */
+  getNodePayload(collection: string, nodeId: number): Promise<NodePayloadResponse>;
+
+  /** Upsert (create or replace) the JSON payload of a graph node. */
+  upsertNodePayload(
+    collection: string,
+    nodeId: number,
+    payload: Record<string, unknown>
+  ): Promise<void>;
+
+  /** Vector similarity search scoped to graph nodes only. */
+  graphSearch(
+    collection: string,
+    request: GraphSearchRequest
+  ): Promise<GraphSearchResponse>;
 }
 
 /** Error types */
@@ -811,4 +943,146 @@ export class BackpressureError extends VelesDBError {
     super(message, 'BACKPRESSURE');
     this.name = 'BackpressureError';
   }
+}
+
+// ============================================================================
+// Additional endpoint types (Sprint 2 Wave 4 — S2-NEW-10)
+// ============================================================================
+
+/** Result of `POST /collections/{name}/index/rebuild`. */
+export interface RebuildIndexResponse {
+  /** Informational message from the server. */
+  message: string;
+  /** Collection name. */
+  collection: string;
+  /** Number of tombstoned entries compacted during rebuild. */
+  compactedEntries: number;
+}
+
+/** Guard-rails config sent to `PUT /guardrails` (partial update). */
+export interface GuardRailsUpdateRequest {
+  maxDepth?: number;
+  maxCardinality?: number;
+  memoryLimitBytes?: number;
+  timeoutMs?: number;
+  rateLimitQps?: number;
+  circuitFailureThreshold?: number;
+  circuitRecoverySeconds?: number;
+}
+
+/** Guard-rails config returned by `GET /guardrails` and `PUT /guardrails`. */
+export interface GuardRailsConfigResponse {
+  maxDepth: number;
+  maxCardinality: number;
+  memoryLimitBytes: number;
+  timeoutMs: number;
+  rateLimitQps: number;
+  circuitFailureThreshold: number;
+  circuitRecoverySeconds: number;
+}
+
+/** Options for `listNodes`. */
+export interface ListNodesResponse {
+  /** Node IDs in insertion order. */
+  nodeIds: number[];
+  /** Total count — matches `nodeIds.length`. */
+  count: number;
+}
+
+/** Options for `getNodeEdges`. Mirrors `NodeEdgeQueryParams` on the server. */
+export interface GetNodeEdgesOptions {
+  /** Edge direction: "in", "out" (default), or "both". */
+  direction?: 'in' | 'out' | 'both';
+  /** Optional label filter. */
+  label?: string;
+}
+
+/** Result of `GET /collections/{name}/graph/nodes/{id}/payload`. */
+export interface NodePayloadResponse {
+  /** Node ID. */
+  nodeId: number;
+  /** Stored payload — `null` if no payload has been set. */
+  payload: Record<string, unknown> | null;
+}
+
+/** Request body for `POST /collections/{name}/graph/search`. */
+export interface GraphSearchRequest {
+  /** Query vector for embedding similarity. */
+  vector: number[] | Float32Array;
+  /** Number of results (default: 10). */
+  k?: number;
+}
+
+/** Single result item from `graphSearch`. */
+export interface GraphSearchResultItem {
+  /** Node ID. */
+  id: number;
+  /** Similarity score. */
+  score: number;
+  /** Optional node payload (mirror of `GraphSearchResultItem.payload`). */
+  payload?: Record<string, unknown> | null;
+}
+
+/** Response of `graphSearch`. */
+export interface GraphSearchResponse {
+  /** Result items ordered by score. */
+  results: GraphSearchResultItem[];
+}
+
+/**
+ * Options for `matchQuery`. Mirrors the extra fields accepted by
+ * `velesdb_server::handlers::match_query::MatchQueryRequest`
+ * beyond `query` and `params`.
+ */
+export interface MatchQueryOptions {
+  /** Query vector for `similarity()` scoring inside the MATCH clause. */
+  vector?: number[] | Float32Array;
+  /** Similarity threshold (0.0–1.0). */
+  threshold?: number;
+}
+
+/** Response from `POST /collections/{name}/match`. Mirrors the Rust
+ * `MatchQueryResponse` struct — intentionally distinct from the
+ * `/query` and `/aggregate` response shapes. */
+export interface MatchQueryResponse {
+  /** Pattern matches returned by the MATCH clause. */
+  results: MatchQueryResultItem[];
+  /** Server-side execution time in whole milliseconds. */
+  tookMs: number;
+  /** Number of result rows (matches `results.length`). */
+  count: number;
+  /** Response metadata (VelesQL contract version). */
+  meta: { velesqlContractVersion: string };
+}
+
+/** Single row of a `MatchQueryResponse`. */
+export interface MatchQueryResultItem {
+  /** Variable-binding map from the MATCH pattern. */
+  bindings: Record<string, number>;
+  /** Similarity score, present only when `similarity()` was used. */
+  score?: number;
+  /** Traversal depth reached to produce this row. */
+  depth: number;
+  /** Projected properties from the RETURN clause. */
+  projected: Record<string, unknown>;
+}
+
+/** Options for `aggregate`. Mirrors the extra fields accepted by
+ * `velesdb_core::api_types::QueryRequest` beyond `query` and `params`. */
+export interface AggregateQueryOptions {
+  /**
+   * Optional collection name when the query string does not carry an
+   * explicit `FROM <collection>` clause.
+   */
+  collection?: string;
+}
+
+/** Response from `POST /aggregate`. Mirrors the Rust `AggregationResponse`. */
+export interface AggregateResponse {
+  /** Aggregation result — shape depends on the SELECT clause. */
+  result: unknown;
+  /** Query execution time in milliseconds. */
+  timingMs: number;
+  /** Response metadata. */
+  meta: { velesqlContractVersion: string; count: number };
 }

@@ -1979,6 +1979,19 @@ components:
             Accepted as a free-form JSON object matching
             `velesdb_core::GraphSchema`. `GraphSchema::schemaless()` is
             used when the field is absent.
+        hnsw_alpha:
+          type:
+          - number
+          - 'null'
+          format: float
+          description: |-
+            VAMANA alpha for neighbor diversification (default derived from dimension).
+
+            Values > 1.0 bias `select_neighbors` toward diversity over proximity,
+            producing a more navigable graph with better recall. The engine
+            default is 1.2 (VAMANA paper recommendation). Set to 1.0 for strict
+            nearest-neighbor selection.
+          example: 1.2
         hnsw_ef_construction:
           type:
           - integer
@@ -1992,6 +2005,19 @@ components:
           - 'null'
           description: HNSW M parameter (number of bi-directional links per node).
           example: 32
+          minimum: 0
+        hnsw_max_elements:
+          type:
+          - integer
+          - 'null'
+          description: |-
+            Initial HNSW capacity (grows automatically if exceeded).
+
+            Pre-sizing matters for bulk imports: the engine avoids repeated
+            realloc-and-copy cycles when the final population is known upfront.
+            Use this when migrating a large existing corpus into a fresh
+            collection.
+          example: 1000000
           minimum: 0
         metric:
           type: string

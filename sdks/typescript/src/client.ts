@@ -8,6 +8,7 @@ import type {
   Collection,
   VectorDocument,
   SearchOptions,
+  SearchQuality,
   SearchResult,
   IVelesDBBackend,
   MultiQuerySearchOptions,
@@ -31,7 +32,21 @@ import type {
   AgentMemoryConfig,
   ScrollRequest,
   ScrollResponse,
+  RebuildIndexResponse,
+  GuardRailsUpdateRequest,
+  GuardRailsConfigResponse,
+  ListNodesResponse,
+  GetNodeEdgesOptions,
+  NodePayloadResponse,
+  GraphSearchRequest,
+  GraphSearchResponse,
+  AggregateQueryOptions,
+  AggregateResponse,
+  MatchQueryOptions,
+  MatchQueryResponse,
 } from './types';
+import type { FilterInput } from './filter';
+import type { CapabilityMap } from './capabilities';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
 import { RestBackend } from './backends/rest';
@@ -307,7 +322,8 @@ export class VelesDB {
     searches: Array<{
       vector: number[] | Float32Array;
       k?: number;
-      filter?: Record<string, unknown>;
+      filter?: FilterInput;
+      quality?: SearchQuality;
     }>
   ): Promise<SearchResult[][]> {
     this.ensureInitialized();
@@ -360,7 +376,7 @@ export class VelesDB {
   async textSearch(
     collection: string,
     query: string,
-    options?: { k?: number; filter?: Record<string, unknown> }
+    options?: { k?: number; filter?: FilterInput }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
     requireNonEmptyString(query, 'Query');
@@ -381,7 +397,7 @@ export class VelesDB {
     collection: string,
     vector: number[] | Float32Array,
     textQuery: string,
-    options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+    options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
     requireVector(vector, 'Vector');
@@ -584,6 +600,140 @@ export class VelesDB {
       await this.backend.close();
       this.initialized = false;
     }
+  }
+
+  // ==========================================================================
+  // Sprint 2 Wave 4 — S2-NEW-10: additional REST endpoint wrappers
+  // ==========================================================================
+
+  /** Rebuild the HNSW index of a collection (compacts tombstones). */
+  async rebuildIndex(collection: string): Promise<RebuildIndexResponse> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.backend.rebuildIndex(collection);
+  }
+
+  /** Read the current process-wide guard-rails configuration. */
+  async getGuardrails(): Promise<GuardRailsConfigResponse> {
+    this.ensureInitialized();
+    return this.backend.getGuardrails();
+  }
+
+  /** Partial-update the process-wide guard-rails configuration. */
+  async updateGuardrails(
+    req: GuardRailsUpdateRequest
+  ): Promise<GuardRailsConfigResponse> {
+    this.ensureInitialized();
+    return this.backend.updateGuardrails(req);
+  }
+
+  /** Execute a VelesQL aggregate query (COUNT/AVG/GROUP BY/...). */
+  async aggregate(
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: AggregateQueryOptions
+  ): Promise<AggregateResponse> {
+    this.ensureInitialized();
+    requireNonEmptyString(queryString, 'Query string');
+    return this.backend.aggregate(queryString, params, options);
+  }
+
+  /** Execute a VelesQL `MATCH (...)` graph query scoped to a collection. */
+  async matchQuery(
+    collection: string,
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: MatchQueryOptions
+  ): Promise<MatchQueryResponse> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    requireNonEmptyString(queryString, 'Query string');
+    return this.backend.matchQuery(collection, queryString, params, options);
+  }
+
+  /** Remove a graph edge by ID. Returns `true` if removed, `false` if not found. */
+  async removeEdge(collection: string, edgeId: number): Promise<boolean> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.backend.removeEdge(collection, edgeId);
+  }
+
+  /** Total edge count in a graph collection. */
+  async getEdgeCount(collection: string): Promise<number> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.backend.getEdgeCount(collection);
+  }
+
+  /** List every node ID in a graph collection. */
+  async listNodes(collection: string): Promise<ListNodesResponse> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.backend.listNodes(collection);
+  }
+
+  /** Get edges adjacent to a node (filterable by direction + label). */
+  async getNodeEdges(
+    collection: string,
+    nodeId: number,
+    options?: GetNodeEdgesOptions
+  ): Promise<GraphEdge[]> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.backend.getNodeEdges(collection, nodeId, options);
+  }
+
+  /** Read the JSON payload attached to a graph node. */
+  async getNodePayload(
+    collection: string,
+    nodeId: number
+  ): Promise<NodePayloadResponse> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.backend.getNodePayload(collection, nodeId);
+  }
+
+  /** Upsert (create or replace) the JSON payload of a graph node. */
+  async upsertNodePayload(
+    collection: string,
+    nodeId: number,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.backend.upsertNodePayload(collection, nodeId, payload);
+  }
+
+  /** Vector similarity search scoped to graph nodes only. */
+  async graphSearch(
+    collection: string,
+    request: GraphSearchRequest
+  ): Promise<GraphSearchResponse> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.backend.graphSearch(collection, request);
+  }
+
+  /**
+   * Return the static capability map of the active backend.
+   *
+   * The map is frozen at backend construction and reflects the
+   * features the SDK wraps for the selected backend (`rest` or
+   * `wasm`). Use it to gracefully degrade workflows when a feature
+   * is not available instead of catching a runtime `NOT_SUPPORTED`
+   * error after the fact.
+   *
+   * @example
+   * ```typescript
+   * if (db.capabilities().graphTraversal) {
+   *   await db.traverseGraph('kg', { source: 1, direction: 'out' });
+   * } else {
+   *   // fall back to REST or another data path
+   * }
+   * ```
+   */
+  capabilities(): Readonly<CapabilityMap> {
+    return this.backend.capabilities();
   }
 
   /**

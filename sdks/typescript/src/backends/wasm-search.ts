@@ -12,6 +12,7 @@ import type {
   QueryOptions,
   QueryApiResponse,
 } from '../types';
+import type { FilterInput } from '../filter';
 import { NotFoundError, VelesDBError } from '../types';
 import type { WasmContext } from './wasm-types';
 
@@ -76,7 +77,7 @@ function searchWithFilter(
   collection: ReturnType<WasmContext['getCollection']>,
   queryVector: Float32Array,
   k: number,
-  filter: Record<string, unknown>
+  filter: FilterInput
 ): SearchResult[] {
   const results = collection!.store.search_with_filter(queryVector, k, filter) as Array<{
     id: bigint;
@@ -159,12 +160,25 @@ export async function wasmSearchBatch(
   searches: Array<{
     vector: number[] | Float32Array;
     k?: number;
-    filter?: Record<string, unknown>;
+    filter?: FilterInput;
+    /**
+     * Search quality preset. Forwarded through to `wasmSearch` which
+     * currently ignores it because the WASM backend does not yet
+     * support ef_search / SearchQuality. Accepted at the type level
+     * for API parity with the REST backend.
+     */
+    quality?: import('../types').SearchQuality;
   }>
 ): Promise<SearchResult[][]> {
   const results: SearchResult[][] = [];
   for (const s of searches) {
-    results.push(await wasmSearch(ctx, collectionName, s.vector, { k: s.k, filter: s.filter }));
+    results.push(
+      await wasmSearch(ctx, collectionName, s.vector, {
+        k: s.k,
+        filter: s.filter,
+        quality: s.quality,
+      })
+    );
   }
   return results;
 }
@@ -191,7 +205,7 @@ export async function wasmTextSearch(
   ctx: WasmContext,
   collectionName: string,
   query: string,
-  options?: { k?: number; filter?: Record<string, unknown> }
+  options?: { k?: number; filter?: FilterInput }
 ): Promise<SearchResult[]> {
   const collection = ctx.getCollection(collectionName);
   if (!collection) {
@@ -208,7 +222,7 @@ export async function wasmHybridSearch(
   collectionName: string,
   vector: number[] | Float32Array,
   textQuery: string,
-  options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+  options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
 ): Promise<SearchResult[]> {
   const collection = ctx.getCollection(collectionName);
   if (!collection) {

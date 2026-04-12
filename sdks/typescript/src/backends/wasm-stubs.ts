@@ -41,26 +41,35 @@ import { wasmNotSupported } from './shared';
 export async function wasmCreateIndex(
   _collection: string, _options: CreateIndexOptions
 ): Promise<void> {
-  throw new Error(
-    'WasmBackend: createIndex is not yet supported. ' +
-    'Index operations require the REST backend with velesdb-server.'
-  );
+  wasmNotSupported('Index management (createIndex)');
 }
 
 export async function wasmListIndexes(_collection: string): Promise<IndexInfo[]> {
-  return [];
+  // F-BACK-001 (Sprint 2 Wave 4 #23): the pre-v1.13 stub returned `[]`,
+  // which made callers silently believe "this collection has no
+  // indexes" when in fact the backend does not support index
+  // management at all. We now throw so the caller sees the real
+  // capability boundary at the first call instead of silently
+  // operating on wrong assumptions.
+  wasmNotSupported('Index management (listIndexes)');
 }
 
 export async function wasmHasIndex(
   _collection: string, _label: string, _property: string
 ): Promise<boolean> {
-  return false;
+  // F-BACK-001: pre-v1.13 stub returned `false`, which made every
+  // `hasIndex` call look like "no index" and led callers to
+  // unconditionally call `createIndex` (which throws). Throw here
+  // so the real capability boundary is visible upfront.
+  wasmNotSupported('Index management (hasIndex)');
 }
 
 export async function wasmDropIndex(
   _collection: string, _label: string, _property: string
 ): Promise<boolean> {
-  return false;
+  // F-BACK-001: pre-v1.13 stub returned `false` ("nothing to drop")
+  // which looked like a successful no-op. Throw explicitly.
+  wasmNotSupported('Index management (dropIndex)');
 }
 
 // ---------------------------------------------------------------------------
