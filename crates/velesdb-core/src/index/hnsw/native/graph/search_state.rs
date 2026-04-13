@@ -186,6 +186,7 @@ pub(super) fn gather_unvisited_neighbors<'a>(
             // only containing IDs of successfully inserted nodes.
             // - Condition 1: neighbor < vectors.len().
             // SAFETY: Batch gathering of unvisited neighbor vectors.
+            debug_assert!(neighbor < vectors.len(), "neighbor {neighbor} out of bounds (len {})", vectors.len());
             let vec = unsafe { vectors.get_unchecked(neighbor) };
             batch.push((neighbor, vec));
         }
