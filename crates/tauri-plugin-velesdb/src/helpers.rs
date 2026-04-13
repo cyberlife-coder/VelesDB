@@ -57,40 +57,42 @@ fn extract_weight(
 }
 
 /// Parses fusion strategy from string and optional params.
-#[must_use]
-#[allow(clippy::cast_possible_truncation)]
-// Reason: JSON u64 → u32 for k; value is a small config number (typically 60).
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidConfig`] if the fusion strategy is unknown or if
+/// the RRF `k` parameter exceeds `u32::MAX`.
 pub fn parse_fusion_strategy(
     fusion: &str,
     params: Option<&serde_json::Value>,
-) -> velesdb_core::fusion::FusionStrategy {
+) -> Result<velesdb_core::fusion::FusionStrategy> {
     use velesdb_core::fusion::FusionStrategy;
     match fusion.to_lowercase().as_str() {
         "rrf" => {
-            let k = params
+            let raw_k = params
                 .and_then(|p| p.get("k"))
                 .and_then(serde_json::Value::as_u64)
-                .unwrap_or(60) as u32;
-            FusionStrategy::RRF { k }
+                .unwrap_or(60);
+            let k = u32::try_from(raw_k).map_err(|_| {
+                Error::InvalidConfig(format!("RRF k value {raw_k} exceeds u32 range"))
+            })?;
+            Ok(FusionStrategy::RRF { k })
         }
-        "average" => FusionStrategy::Average,
-        "maximum" => FusionStrategy::Maximum,
-        "weighted" => FusionStrategy::Weighted {
+        "average" => Ok(FusionStrategy::Average),
+        "maximum" => Ok(FusionStrategy::Maximum),
+        "weighted" => Ok(FusionStrategy::Weighted {
             avg_weight: extract_weight(params, "avgWeight", "avg_weight", 0.6),
             max_weight: extract_weight(params, "maxWeight", "max_weight", 0.3),
             hit_weight: extract_weight(params, "hitWeight", "hit_weight", 0.1),
-        },
-        "relative_score" | "rsf" => FusionStrategy::RelativeScore {
+        }),
+        "relative_score" | "rsf" => Ok(FusionStrategy::RelativeScore {
             dense_weight: extract_weight(params, "denseWeight", "dense_weight", 0.5),
             sparse_weight: extract_weight(params, "sparseWeight", "sparse_weight", 0.5),
-        },
-        unknown => {
-            tracing::warn!(
-                strategy = unknown,
-                "Unknown fusion strategy; falling back to RRF(k=60)"
-            );
-            FusionStrategy::RRF { k: 60 }
-        }
+        }),
+        unknown => Err(Error::InvalidConfig(format!(
+            "Unknown fusion strategy: '{unknown}'. \
+             Valid strategies: rrf, average, maximum, weighted, relative_score, rsf"
+        ))),
     }
 }
 
@@ -136,20 +138,22 @@ pub fn map_core_results(
 
 /// Looks up a collection by name, returning a typed error on miss.
 ///
-/// Returns a `VectorCollection` for any collection type (vector, graph,
-/// or metadata) by using `get_any_collection` and the unchecked cast
-/// `AnyCollection::as_vector_collection_unchecked`. Callers that
-/// invoke vector-specific methods on a collection produced from a
-/// graph or metadata variant may observe empty or nonsensical
-/// results — a proper typed split is tracked as the F2.2 post-seed
-/// EPIC (see `docs/ARCHITECTURE.md`).
+/// Returns a `VectorCollection` only if the underlying collection is
+/// actually a vector collection. Returns [`Error::InvalidConfig`] if the
+/// collection exists but is a graph or metadata collection.
 pub fn require_collection(
     db: &velesdb_core::Database,
     name: &str,
 ) -> Result<velesdb_core::VectorCollection> {
-    db.get_any_collection(name)
-        .map(velesdb_core::AnyCollection::as_vector_collection_unchecked)
-        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+    let any_coll = db
+        .get_any_collection(name)
+        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?;
+    if !any_coll.is_vector() {
+        return Err(Error::InvalidConfig(format!(
+            "Collection '{name}' is not a vector collection"
+        )));
+    }
+    Ok(any_coll.as_vector_collection_unchecked())
 }
 
 /// Looks up a `VectorCollection` by name, returning a typed error on miss.
@@ -334,5 +338,81 @@ mod tests {
         assert!(parse_search_quality(&Some(String::new())).is_err());
         assert!(parse_search_quality(&Some("custom:abc".to_string())).is_err());
         assert!(parse_search_quality(&Some("adaptive:512:32".to_string())).is_err());
+    }
+
+    // =====================================================================
+    // Fusion strategy tests
+    // =====================================================================
+
+    #[test]
+    fn test_parse_fusion_strategy_valid_strategies() {
+        use velesdb_core::fusion::FusionStrategy;
+
+        assert!(matches!(
+            parse_fusion_strategy("rrf", None),
+            Ok(FusionStrategy::RRF { k: 60 })
+        ));
+        assert!(matches!(
+            parse_fusion_strategy("average", None),
+            Ok(FusionStrategy::Average)
+        ));
+        assert!(matches!(
+            parse_fusion_strategy("maximum", None),
+            Ok(FusionStrategy::Maximum)
+        ));
+        assert!(matches!(
+            parse_fusion_strategy("weighted", None),
+            Ok(FusionStrategy::Weighted { .. })
+        ));
+        assert!(matches!(
+            parse_fusion_strategy("relative_score", None),
+            Ok(FusionStrategy::RelativeScore { .. })
+        ));
+        assert!(matches!(
+            parse_fusion_strategy("rsf", None),
+            Ok(FusionStrategy::RelativeScore { .. })
+        ));
+    }
+
+    #[test]
+    fn test_parse_fusion_strategy_rrf_custom_k() {
+        use velesdb_core::fusion::FusionStrategy;
+
+        let params = serde_json::json!({ "k": 30 });
+        let result = parse_fusion_strategy("rrf", Some(&params)).expect("test: valid RRF k");
+        assert!(matches!(result, FusionStrategy::RRF { k: 30 }));
+    }
+
+    #[test]
+    fn test_parse_fusion_strategy_unknown_returns_error() {
+        let result = parse_fusion_strategy("nonexistent", None);
+        assert!(result.is_err(), "unknown strategy should return error");
+    }
+
+    #[test]
+    fn test_parse_fusion_strategy_case_insensitive() {
+        assert!(parse_fusion_strategy("RRF", None).is_ok());
+        assert!(parse_fusion_strategy("Average", None).is_ok());
+        assert!(parse_fusion_strategy("MAXIMUM", None).is_ok());
+    }
+
+    // =====================================================================
+    // require_collection type-check tests
+    // =====================================================================
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn test_require_collection_rejects_graph_collection() {
+        let tmp = tempfile::TempDir::new().expect("test: create temp dir");
+        let db = velesdb_core::Database::open(tmp.path().to_str().expect("test: path"))
+            .expect("test: open db");
+        db.create_graph_collection("kg", velesdb_core::GraphSchema::schemaless())
+            .expect("test: create graph collection");
+
+        let result = require_collection(&db, "kg");
+        assert!(
+            result.is_err(),
+            "require_collection should reject graph collections"
+        );
     }
 }
