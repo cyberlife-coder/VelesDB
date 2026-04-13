@@ -11,6 +11,10 @@ use crate::velesql::{QueryCache, QueryPlanner};
 
 use crate::index::sparse::SparseInvertedIndex;
 
+use crate::collection::graph::property_index::{
+    CompositeIndexManager, IndexAdvisor, QueryPatternTracker,
+};
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use parking_lot::{Mutex, RwLock};
@@ -91,6 +95,11 @@ impl Collection {
             property_index: Arc::new(RwLock::new(parts.property_index)),
             label_index: Arc::new(RwLock::new(parts.label_index)),
             range_index: Arc::new(RwLock::new(parts.range_index)),
+            graph_range_indexes: Arc::new(RwLock::new(HashMap::new())),
+            edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
+            composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
+            query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
+            index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
             edge_store: Arc::new(parts.edge_store),
             sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),

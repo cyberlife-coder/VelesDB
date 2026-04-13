@@ -15,17 +15,16 @@ mod advisor;
 mod composite;
 mod range;
 
-// Reason: EPIC-047 types are scaffolded but not yet wired to the query planner.
-// Re-exports are used by property_index_tests; suppress unused-import warnings.
-#[allow(unused_imports)]
 pub(crate) use advisor::PredicateType;
-#[allow(unused_imports)]
+#[allow(unused_imports)] // Reason: PatternStats used by property_index_tests
 pub use advisor::{IndexAdvisor, IndexSuggestion, PatternStats, QueryPattern, QueryPatternTracker};
 #[allow(unused_imports)]
+// Reason: Used by property_index_tests; not referenced from production code yet
 pub(crate) use composite::CompositeIndexType;
-#[allow(unused_imports)]
+#[allow(unused_imports)] // Reason: CompositeGraphIndex used by property_index_tests
 pub use composite::{CompositeGraphIndex, CompositeIndexManager};
 #[allow(unused_imports)]
+// Reason: IndexIntersection, OrderedValue used by property_index_tests
 pub use range::{CompositeRangeIndex, EdgePropertyIndex, IndexIntersection, OrderedValue};
 
 use super::helpers::{make_label_prop_key, safe_bitmap_id, PostcardPersistence};

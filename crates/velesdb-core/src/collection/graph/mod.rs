@@ -51,7 +51,7 @@ mod label_table;
 mod label_table_tests;
 mod metrics;
 mod node;
-mod property_index;
+pub(crate) mod property_index;
 mod range_index;
 mod schema;
 mod streaming;

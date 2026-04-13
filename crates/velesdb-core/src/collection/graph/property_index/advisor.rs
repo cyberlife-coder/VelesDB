@@ -7,9 +7,9 @@
 // - u64/usize->f64 for statistics: precision loss acceptable for query planning
 // - All values are bounded by collection sizes and query counts
 // - Used for index selection heuristics, not financial calculations
-// Reason: EPIC-047 US-005 — all types in this module are scaffolded for the
-// auto-index-advisor feature and will be wired once the query planner integrates.
-#![allow(dead_code)]
+// EPIC-047 US-005 — auto-index advisor based on query pattern tracking.
+// Fields are initialized in Collection; query-side methods are wired
+// but not yet called from the MATCH pipeline.
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
@@ -73,6 +73,7 @@ impl QueryPatternTracker {
     }
 
     /// Sets the slow query threshold.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future auto-tuning configuration
     pub fn set_threshold(&mut self, threshold_ms: u64) {
         self.slow_query_threshold_ms = threshold_ms;
     }
@@ -104,6 +105,7 @@ impl QueryPatternTracker {
 
     /// Returns patterns that are slow (above threshold).
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API — used by tests and future EXPLAIN/ANALYZE output
     pub fn slow_patterns(&self) -> Vec<(&QueryPattern, &PatternStats)> {
         self.patterns
             .iter()
@@ -142,6 +144,7 @@ impl IndexAdvisor {
     }
 
     /// Registers an existing index.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future DDL CREATE INDEX handler
     pub fn register_index(&mut self, name: impl Into<String>) {
         self.existing_indexes.insert(name.into());
     }

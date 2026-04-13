@@ -3,10 +3,6 @@
 //! Populates `CompositeRangeIndex`, `EdgePropertyIndex`, `CompositeIndexManager`,
 //! and `QueryPatternTracker` when nodes and edges are mutated.
 
-// Reason: Lookup and advisor methods are public API for the query evaluator
-// but not yet called from the MATCH pipeline; full integration is next pass.
-#![allow(dead_code)]
-
 use crate::collection::graph::property_index::{
     CompositeRangeIndex, EdgePropertyIndex, IndexSuggestion,
 };
@@ -106,7 +102,7 @@ impl Collection {
                 for &(prop_name, prop_value) in &properties {
                     let key = range_index_key(label, prop_name);
                     if let Some(idx) = range_indexes.get_mut(&key) {
-                        idx.remove(node_id, prop_value);
+                        let _removed = idx.remove(node_id, prop_value);
                     }
                 }
             }
@@ -140,14 +136,13 @@ impl Collection {
             let key = edge_index_key(rel_type, prop_name);
             edge_indexes
                 .entry(key)
-                .or_insert_with(|| {
-                    EdgePropertyIndex::new(rel_type.to_string(), prop_name.clone())
-                })
+                .or_insert_with(|| EdgePropertyIndex::new(rel_type.to_string(), prop_name.clone()))
                 .insert(edge_id, prop_value);
         }
     }
 
     /// Records a query pattern for the index advisor.
+    #[allow(dead_code)] // Reason: Public API for query evaluator — called when MATCH pipeline integrates pattern tracking
     pub(crate) fn record_query_pattern(
         &self,
         labels: Vec<String>,
@@ -174,6 +169,7 @@ impl Collection {
 
     /// Returns index suggestions based on tracked query patterns.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API for query evaluator — called when MATCH pipeline integrates auto-suggestion
     pub(crate) fn index_suggestions(&self) -> Vec<IndexSuggestion> {
         let tracker = self.query_pattern_tracker.read();
         self.index_advisor.read().suggest(&tracker)
@@ -181,6 +177,7 @@ impl Collection {
 
     /// Looks up node IDs matching a greater-than predicate.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API for query evaluator — used when MATCH WHERE predicate delegates to graph range index
     pub(crate) fn graph_range_lookup_gt(
         &self,
         label: &str,
@@ -189,11 +186,14 @@ impl Collection {
     ) -> Option<Vec<u64>> {
         let key = range_index_key(label, property);
         let indexes = self.graph_range_indexes.read();
-        indexes.get(&key).map(|idx| idx.lookup_gt(value))
+        indexes
+            .get(&key)
+            .map(|idx: &CompositeRangeIndex| idx.lookup_gt(value))
     }
 
     /// Looks up node IDs matching a less-than predicate.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API for query evaluator — used when MATCH WHERE predicate delegates to graph range index
     pub(crate) fn graph_range_lookup_lt(
         &self,
         label: &str,
@@ -202,11 +202,14 @@ impl Collection {
     ) -> Option<Vec<u64>> {
         let key = range_index_key(label, property);
         let indexes = self.graph_range_indexes.read();
-        indexes.get(&key).map(|idx| idx.lookup_lt(value))
+        indexes
+            .get(&key)
+            .map(|idx: &CompositeRangeIndex| idx.lookup_lt(value))
     }
 
     /// Looks up node IDs matching a range predicate.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API for query evaluator — used when MATCH WHERE predicate delegates to graph range index
     pub(crate) fn graph_range_lookup(
         &self,
         label: &str,
@@ -216,11 +219,14 @@ impl Collection {
     ) -> Option<Vec<u64>> {
         let key = range_index_key(label, property);
         let indexes = self.graph_range_indexes.read();
-        indexes.get(&key).map(|idx| idx.lookup_range(lower, upper))
+        indexes
+            .get(&key)
+            .map(|idx: &CompositeRangeIndex| idx.lookup_range(lower, upper))
     }
 
     /// Looks up node IDs matching an exact value.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API for query evaluator — used when MATCH WHERE predicate delegates to graph range index
     pub(crate) fn graph_range_lookup_exact(
         &self,
         label: &str,
@@ -231,11 +237,12 @@ impl Collection {
         let indexes = self.graph_range_indexes.read();
         indexes
             .get(&key)
-            .map(|idx| idx.lookup_exact(value).to_vec())
+            .map(|idx: &CompositeRangeIndex| idx.lookup_exact(value).to_vec())
     }
 
     /// Looks up node IDs via composite index for multi-property equality.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API for query evaluator — used when MATCH WHERE predicate delegates to composite index
     pub(crate) fn composite_index_lookup(
         &self,
         label: &str,

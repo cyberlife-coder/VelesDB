@@ -39,7 +39,15 @@ impl Collection {
     /// collection.add_edge(edge)?;
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
+        let edge_id = edge.id();
+        let rel_type = edge.label().to_string();
+        let properties = edge.properties().clone();
+
         self.edge_store.add_edge(edge)?;
+
+        // Populate edge property indexes (EPIC-047).
+        self.index_edge_properties(edge_id, &rel_type, &properties);
+
         // Bump write generation so any cached plan for this collection is
         // invalidated on the next query (CACHE-01).
         self.write_generation
@@ -272,17 +280,27 @@ impl Collection {
     ///
     /// Returns an error if storage fails.
     pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
-        // LOCK ORDER: payload_storage(3) → label_index(7).
+        // LOCK ORDER: payload_storage(3) → label_index(7) → graph_range_indexes(7).
         let mut storage = self.payload_storage.write();
 
-        // Remove old labels if this is an update (not a fresh insert).
+        // Remove old labels and property indexes if this is an update.
         let mut label_idx = self.label_index.write();
         if let Ok(Some(old_payload)) = storage.retrieve(node_id) {
             label_idx.remove_from_payload(node_id, &old_payload);
+            // Release label_index before touching graph property indexes
+            // (both are at lock order 7, no ordering between them).
+            drop(label_idx);
+            self.deindex_node_properties(node_id, &old_payload);
+            label_idx = self.label_index.write();
         }
 
         storage.store(node_id, payload)?;
         label_idx.index_from_payload(node_id, payload);
+        drop(label_idx);
+        drop(storage);
+
+        // Populate graph property indexes (EPIC-047).
+        self.index_node_properties(node_id, payload);
 
         // Bump write generation so any cached plan for this collection is
         // invalidated on the next query (CACHE-01).

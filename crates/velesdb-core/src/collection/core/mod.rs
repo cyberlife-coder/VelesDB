@@ -21,6 +21,7 @@ mod flush_defer_tests;
 mod graph_api;
 #[cfg(test)]
 mod graph_api_tests;
+mod graph_property_index_wiring;
 mod graph_traversal_helpers;
 mod index_management;
 #[cfg(test)]

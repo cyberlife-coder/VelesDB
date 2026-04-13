@@ -6,9 +6,9 @@
 //! B-tree storage via [`BTreeOrderedIndex`], differing only in their metadata
 //! (label vs relationship-type) and public API surface.
 
-// Reason: EPIC-047 US-002/US-003/US-004 — all types in this module are scaffolded
-// for range indexes and edge property indexes, will be wired once the query planner integrates.
-#![allow(dead_code)]
+// EPIC-047 US-002/US-003/US-004 — range indexes and edge property indexes.
+// Index population is wired via graph_property_index_wiring.rs;
+// query-side lookups are wired but not yet called from MATCH pipeline.
 
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
@@ -168,12 +168,14 @@ impl CompositeRangeIndex {
 
     /// Returns the label.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
     pub fn label(&self) -> &str {
         &self.label
     }
 
     /// Returns the property.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
     pub fn property(&self) -> &str {
         &self.property
     }
@@ -238,12 +240,14 @@ impl EdgePropertyIndex {
 
     /// Returns the relationship type.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
     pub fn rel_type(&self) -> &str {
         &self.rel_type
     }
 
     /// Returns the property.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
     pub fn property(&self) -> &str {
         &self.property
     }
@@ -254,17 +258,20 @@ impl EdgePropertyIndex {
     }
 
     /// Removes an edge from the index.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future edge removal wiring
     pub fn remove(&mut self, edge_id: u64, value: &Value) -> bool {
         self.index.remove(edge_id, value)
     }
 
     /// Looks up edges by exact value.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API — used by tests and future query planner integration
     pub fn lookup_exact(&self, value: &Value) -> &[u64] {
         self.index.lookup_exact(value)
     }
 
     /// Range lookup for edges.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future query planner integration
     pub fn lookup_range(&self, lower: Option<&Value>, upper: Option<&Value>) -> Vec<u64> {
         self.index.lookup_range(lower, upper)
     }
@@ -275,8 +282,10 @@ impl EdgePropertyIndex {
 // =============================================================================
 
 /// Utilities for intersecting index results.
+#[allow(dead_code)] // Reason: Public API — used by tests and future multi-predicate MATCH evaluation
 pub struct IndexIntersection;
 
+#[allow(dead_code)] // Reason: Public API — used by tests and future multi-predicate MATCH evaluation
 impl IndexIntersection {
     /// Intersects multiple node ID sets using RoaringBitmap for efficiency.
     #[must_use]
