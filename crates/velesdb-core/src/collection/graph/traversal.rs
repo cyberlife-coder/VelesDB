@@ -8,8 +8,6 @@
 //! For large graphs, the module provides streaming iterators that yield results
 //! lazily without loading all visited nodes into memory at once.
 
-#![allow(dead_code)] // WIP: Will be used by MATCH clause execution
-
 use super::EdgeStore;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -73,9 +71,8 @@ impl TraversalResult {
     /// public API boundary.
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
-    // Reason: Call sites pass owned SmallVecs (often via move or clone); taking
-    // by value avoids requiring callers to borrow-then-clone at call sites that
-    // already own the value.
+    // Reason: Constructor used by MATCH clause traversal (Wave 6 wiring).
+    #[allow(dead_code)]
     pub(crate) fn from_smallvec(target_id: u64, path: TraversalPath, depth: u32) -> Self {
         Self {
             target_id,

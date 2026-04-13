@@ -142,7 +142,7 @@ class Collection:
     ) -> list[dict[str, Any]]:
         kwargs: dict[str, Any] = {"top_k": top_k}
         if vector is not None:
-            kwargs["vector"] = list(vector)
+            kwargs["vector"] = vector
         if filter is not None:
             kwargs["filter"] = filter
         if sparse_vector is not None:
@@ -321,18 +321,35 @@ class Database:
     ) -> "Collection":
         """Return an existing collection or create it if missing.
 
-        When the collection already exists, it is returned as-is — ``dimension``,
-        ``metric``, ``storage_mode``, ``hnsw``, and ``auto_reindex`` are
-        ignored for the lookup path and no compatibility check is performed
-        against the stored configuration.
+        When the collection already exists, its ``dimension`` and ``metric``
+        are validated against the requested parameters. A ``ValueError`` is
+        raised on mismatch. Other parameters (``storage_mode``, ``hnsw``,
+        ``auto_reindex``) are ignored for the lookup path.
 
         Args and accepted storage modes are identical to :meth:`create_collection`.
 
         Returns:
             Existing :class:`Collection` if found, otherwise a freshly created one.
+
+        Raises:
+            ValueError: If the existing collection has a different dimension or metric.
         """
         existing = self.get_collection(name)
         if existing is not None:
+            existing_dim = existing._inner.dimension
+            existing_metric = existing._inner.metric
+            if existing_dim != dimension:
+                raise ValueError(
+                    f"Collection '{name}' exists with dimension {existing_dim}, "
+                    f"but requested dimension {dimension}. "
+                    f"Use a different name or matching parameters."
+                )
+            if existing_metric != metric:
+                raise ValueError(
+                    f"Collection '{name}' exists with metric '{existing_metric}', "
+                    f"but requested metric '{metric}'. "
+                    f"Use a different name or matching parameters."
+                )
             return existing
         return self.create_collection(
             name,
