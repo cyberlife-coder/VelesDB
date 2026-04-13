@@ -65,25 +65,34 @@ impl Collection {
         let strategy = super::match_planner::MatchQueryPlanner::plan(match_clause, &stats);
         tracing::debug!(strategy = ?strategy, "MATCH execution strategy selected");
 
-        // Dispatch based on strategy. VectorFirst and Parallel fall back to
-        // GraphFirst until Phase B/D implement dedicated paths.
-        match &strategy {
-            super::match_planner::MatchExecutionStrategy::VectorFirst { .. } => {
-                tracing::warn!(
-                    "VectorFirst MATCH strategy selected but not yet implemented; \
-                     falling back to GraphFirst"
-                );
+        // Dispatch based on strategy.
+        let result = match &strategy {
+            super::match_planner::MatchExecutionStrategy::VectorFirst {
+                similarity_alias,
+                top_k,
+                threshold,
+            } => {
+                let vf_results = self.execute_match_vector_first(
+                    match_clause,
+                    params,
+                    ctx,
+                    similarity_alias,
+                    *top_k,
+                    *threshold,
+                )?;
+                self.finalize_match_results(match_clause, vf_results, ctx)
             }
             super::match_planner::MatchExecutionStrategy::Parallel { .. } => {
                 tracing::warn!(
                     "Parallel MATCH strategy selected but not yet implemented; \
                      falling back to GraphFirst"
                 );
+                self.execute_match_pipeline(match_clause, params, ctx)
             }
-            super::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {}
-        }
-
-        let result = self.execute_match_pipeline(match_clause, params, ctx);
+            super::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {
+                self.execute_match_pipeline(match_clause, params, ctx)
+            }
+        };
 
         // W6-A3: Record metrics.
         let max_depth = super::match_planner::MatchQueryPlanner::count_hops(match_clause);
@@ -110,7 +119,19 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
         let match_results = self.execute_match_with_context(match_clause, params, Some(ctx))?;
+        self.finalize_match_results(match_clause, match_results, ctx)
+    }
 
+    /// Applies ORDER BY, conversion to `SearchResult`, cardinality check,
+    /// LIMIT, and latency recording to a set of `MatchResult`s.
+    ///
+    /// Shared by both GraphFirst and VectorFirst strategies.
+    fn finalize_match_results(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        match_results: Vec<super::match_exec::MatchResult>,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Vec<SearchResult>> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
             .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;

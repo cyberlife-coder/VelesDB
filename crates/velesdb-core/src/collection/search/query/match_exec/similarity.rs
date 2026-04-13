@@ -292,7 +292,7 @@ impl Collection {
 
     /// Sorts scored results by similarity — descending for similarity metrics,
     /// ascending for distance metrics.
-    fn sort_by_score(results: &mut [MatchResult], higher_is_better: bool) {
+    pub(super) fn sort_by_score(results: &mut [MatchResult], higher_is_better: bool) {
         if higher_is_better {
             results.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
         } else {

@@ -13,6 +13,7 @@
 
 mod similarity;
 mod start_nodes;
+mod vector_first;
 mod where_eval;
 
 use crate::collection::graph::{concurrent_bfs_stream, StreamingConfig};
