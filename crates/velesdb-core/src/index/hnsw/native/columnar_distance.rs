@@ -14,6 +14,10 @@
 //!
 //! No manual SIMD intrinsics are needed.
 
+// Reason: PDX block-columnar distance kernels — pre-built for PDX search integration.
+// Wired into the search pipeline when ColumnarVectors are populated during reorder_for_locality.
+#![allow(dead_code)]
+
 use super::columnar_vectors::PDX_BLOCK_SIZE;
 
 /// Computes squared L2 distances from `query` to all vectors in a PDX block.

@@ -22,7 +22,7 @@ pub const FREEZE_THRESHOLD: usize = 10_000;
 /// which is gated behind `feature = "persistence"`. Without that feature the
 /// compiler cannot see those usages, so the lint is suppressed here rather than
 /// at the module level to keep the scope as narrow as possible.
-#[allow(dead_code)]
+#[allow(dead_code)] // Reason: Used by sparse::persistence behind `feature = "persistence"`
 pub(crate) struct FrozenSegment {
     /// Posting lists per term. The `f32` is the max absolute weight for that term.
     pub(crate) postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
@@ -34,7 +34,7 @@ pub(crate) struct FrozenSegment {
 
 impl FrozenSegment {
     /// Creates a new frozen segment from postings and a document count.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Used by sparse::persistence behind `feature = "persistence"`
     pub(crate) fn new(
         postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
         doc_count: usize,
@@ -121,7 +121,7 @@ impl SparseInvertedIndex {
     // Reason: called from `collection::core::crud::upsert_bulk` and `internal_bench::sparse_insert_batch`.
     // The dead_code lint has a false positive because the call site reaches this method through
     // a `RwLockWriteGuard<BTreeMap<_,SparseInvertedIndex>>` deref chain which the lint does not trace.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: False positive — called via RwLockWriteGuard deref chain
     pub(crate) fn insert_batch_chunk(&self, docs: &[(u64, SparseVector)]) {
         if docs.is_empty() {
             return;
@@ -391,7 +391,7 @@ impl SparseInvertedIndex {
     ///
     /// Only called from `index::sparse::persistence` (feature = "persistence").
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Called from sparse::persistence behind `feature = "persistence"`
     pub(crate) fn from_frozen_segment(segment: FrozenSegment) -> Self {
         let doc_count = segment.doc_count as u64;
         Self {

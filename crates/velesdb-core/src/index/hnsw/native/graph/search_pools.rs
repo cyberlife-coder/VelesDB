@@ -49,6 +49,7 @@ impl BitVecVisited {
     /// Returns `true` if the given node ID has been marked as visited.
     ///
     /// Returns `false` for IDs beyond the current capacity (no panic).
+    #[allow(dead_code)] // Reason: Read-only query — used in doc examples and future search paths
     #[inline]
     pub(crate) fn contains(&self, id: usize) -> bool {
         let word_idx = id / 64;

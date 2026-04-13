@@ -45,7 +45,7 @@ pub struct ShardedVectors {
     /// 16 independent shards, each with its own lock.
     shards: [RwLock<VectorShard>; NUM_SHARDS],
     /// Vector dimension (kept for future validation)
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Stored for dimension-mismatch checks in future insert validation
     dimension: usize,
 }
 
@@ -55,7 +55,6 @@ impl Default for ShardedVectors {
     }
 }
 
-#[allow(dead_code)] // API prepared for future use
 impl ShardedVectors {
     /// Creates new empty sharded vector storage with specified dimension.
     #[must_use]
@@ -254,6 +253,7 @@ impl ShardedVectors {
     ///     // Use buffer for parallel computation...
     /// });
     /// ```
+    #[allow(dead_code)] // Reason: API completeness — zero-alloc buffer reuse for repeated searches
     pub fn collect_into(&self, buffer: &mut Vec<(usize, Vec<f32>)>) {
         buffer.clear();
         let total_len = self.len();

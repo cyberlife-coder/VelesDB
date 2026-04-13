@@ -34,14 +34,22 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 // which only contains IDs of successfully inserted nodes.
                 // - Condition 1: candidate_id < vectors.len().
                 // SAFETY: Neighbor selection after search — bounds check eliminated.
-                debug_assert!(candidate_id < vectors.len(), "candidate_id {candidate_id} out of bounds (len {})", vectors.len());
+                debug_assert!(
+                    candidate_id < vectors.len(),
+                    "candidate_id {candidate_id} out of bounds (len {})",
+                    vectors.len()
+                );
                 let candidate_vec = unsafe { vectors.get_unchecked(candidate_id) };
 
                 let is_diverse = selected.iter().all(|&selected_id| {
                     // SAFETY: selected_id is a valid node_id already confirmed above.
                     // - Condition 1: selected_id < vectors.len().
                     // SAFETY: Pairwise diversity check in neighbor selection.
-                    debug_assert!(selected_id < vectors.len(), "selected_id {selected_id} out of bounds (len {})", vectors.len());
+                    debug_assert!(
+                        selected_id < vectors.len(),
+                        "selected_id {selected_id} out of bounds (len {})",
+                        vectors.len()
+                    );
                     let dist_to_selected = self
                         .distance
                         .distance(candidate_vec, unsafe { vectors.get_unchecked(selected_id) });
@@ -130,7 +138,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // SAFETY: neighbor is a valid node_id from the graph's neighbor list.
         // - Condition 1: neighbor < vectors.len().
         // SAFETY: Distance computation for backward pruning.
-        debug_assert!(neighbor < vectors.len(), "neighbor {neighbor} out of bounds (len {})", vectors.len());
+        debug_assert!(
+            neighbor < vectors.len(),
+            "neighbor {neighbor} out of bounds (len {})",
+            vectors.len()
+        );
         let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
 
         let _ = layers[layer].with_neighbors_mut(neighbor, |neighbors| {
@@ -145,7 +157,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
             // SAFETY: new_node was just inserted, so new_node < vectors.len().
             // SAFETY: Distance from neighbor to new candidate for eviction check.
-            debug_assert!(new_node < vectors.len(), "new_node {new_node} out of bounds (len {})", vectors.len());
+            debug_assert!(
+                new_node < vectors.len(),
+                "new_node {new_node} out of bounds (len {})",
+                vectors.len()
+            );
             let new_dist = self
                 .distance
                 .distance(neighbor_vec, unsafe { vectors.get_unchecked(new_node) });
@@ -173,7 +189,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // SAFETY: new_node was just inserted, so new_node < vectors.len().
         // - Condition 1: `new_node` index is valid because it was just registered in vectors.
         // SAFETY: Finding the most redundant neighbor (closest to new_node).
-        debug_assert!(new_node < vectors.len(), "new_node {new_node} out of bounds (len {})", vectors.len());
+        debug_assert!(
+            new_node < vectors.len(),
+            "new_node {new_node} out of bounds (len {})",
+            vectors.len()
+        );
         let new_vec = unsafe { vectors.get_unchecked(new_node) };
 
         let mut worst_idx = 0;
@@ -185,7 +205,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // SAFETY: n is a valid node_id from the graph's neighbor list.
             // - Condition 1: n < vectors.len().
             // SAFETY: O(M) scan for eviction candidates.
-            debug_assert!(n < vectors.len(), "n {n} out of bounds (len {})", vectors.len());
+            debug_assert!(
+                n < vectors.len(),
+                "n {n} out of bounds (len {})",
+                vectors.len()
+            );
             let n_vec = unsafe { vectors.get_unchecked(n) };
             let d_to_anchor = self.distance.distance(anchor_vec, n_vec);
             let d_to_new = self.distance.distance(new_vec, n_vec);

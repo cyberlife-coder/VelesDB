@@ -13,7 +13,6 @@ use crate::distance::DistanceMetric;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 
 // =========================================================================
 // Helpers

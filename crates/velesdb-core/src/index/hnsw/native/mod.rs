@@ -27,14 +27,12 @@
 //!   using Hierarchical Navigable Small World graphs" (Malkov & Yashunin, 2016)
 //! - arXiv: <https://arxiv.org/abs/1603.09320>
 
-// Native implementation internals - keep warning policy permissive for low-level code
-#![allow(dead_code)]
-#![allow(unused_imports)]
+// Low-level HNSW internals: precision-loss casts are validated, doc_markdown
+// flags false positives on algorithm names (HNSW, RaBitQ, VAMANA).
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
-#![allow(clippy::unused_self)]
 
 mod backend_adapter;
 mod batch_schedule;

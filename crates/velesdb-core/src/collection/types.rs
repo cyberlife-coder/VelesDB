@@ -303,7 +303,7 @@ pub(crate) struct Collection {
 
 impl Collection {
     /// Returns a reference to the named sparse indexes lock (EPIC-062 sparse integration).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Used in tests for sparse index verification
     pub(crate) fn sparse_indexes(&self) -> &Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>> {
         &self.sparse_indexes
     }
@@ -369,7 +369,6 @@ impl Collection {
     ///
     /// Future: auto-enable from persisted StreamingConfig on open (STREAM-01)
     #[cfg(feature = "persistence")]
-    #[allow(dead_code)] // Reason: Called via VectorCollection/server inner delegation
     pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
         use crate::collection::streaming::StreamIngester;
         let ingester = StreamIngester::new(self.clone(), config);

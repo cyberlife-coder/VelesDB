@@ -30,6 +30,7 @@ impl Layer {
     }
 
     /// Gets the neighbors of a node.
+    #[allow(dead_code)] // Reason: Used in tests (layer_tests, graph_tests) for adjacency verification
     #[inline]
     pub(crate) fn get_neighbors(&self, node_id: NodeId) -> Vec<NodeId> {
         if node_id < self.neighbors.len() {
@@ -78,7 +79,7 @@ impl Layer {
     }
 
     /// Adds a neighbor to a node's adjacency list.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Used in tests for graph construction verification
     pub(super) fn add_neighbor(&self, node_id: NodeId, neighbor: NodeId) {
         if node_id < self.neighbors.len() {
             self.neighbors[node_id].write().push(neighbor);

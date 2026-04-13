@@ -42,6 +42,7 @@ pub trait DistanceEngine: Send + Sync {
 ///
 /// This is the single source of truth for metric-to-SIMD dispatch.
 /// All SIMD-based `DistanceEngine` implementations delegate here.
+#[allow(dead_code)] // Reason: Central dispatch — used by CpuDistance; kept as reference impl
 #[inline]
 pub(crate) fn simd_distance_for_metric(metric: DistanceMetric, a: &[f32], b: &[f32]) -> f32 {
     match metric {

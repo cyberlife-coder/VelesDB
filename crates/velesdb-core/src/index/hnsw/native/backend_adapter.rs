@@ -214,6 +214,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// graph.
     ///
     /// Returns `(effective_ef, stagnation_limit)`.
+    #[allow(dead_code)] // Reason: Tested in backend_adapter_tests; wired in batch insert V2
     #[must_use]
     pub(in crate::index::hnsw::native) fn adaptive_ef_for_batch(
         &self,

@@ -356,3 +356,66 @@ fn test_execute_query_str_returns_consistent_results() {
         "repeated queries should return the same count"
     );
 }
+
+// ─── enable_streaming() ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_enable_streaming_sends_and_searches() {
+    let (coll, _dir) = create_test_vc();
+
+    // Enable streaming ingestion via the VectorCollection public API.
+    let config = crate::collection::streaming::StreamingConfig {
+        buffer_size: 100,
+        batch_size: 4,
+        flush_interval_ms: 50,
+    };
+    coll.enable_streaming(config);
+
+    // Send points through the streaming channel.
+    for i in 1..=4u64 {
+        let mut vec = vec![0.0_f32; 4];
+        vec[(i as usize - 1) % 4] = 1.0;
+        let p = Point::new(i, vec, None);
+        coll.stream_insert(p).expect("test: stream_insert ok");
+    }
+
+    // Poll until all 4 points are flushed and searchable (max 5s).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let found = coll
+            .get(&[1, 2, 3, 4])
+            .iter()
+            .filter(|p| p.is_some())
+            .count();
+        if found == 4 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for stream flush (found {found}/4)"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 4).unwrap();
+    assert!(
+        !results.is_empty(),
+        "streamed points should be searchable after drain"
+    );
+    assert_eq!(results[0].point.id, 1, "closest match should be id=1");
+}
+
+#[test]
+fn test_stream_insert_without_enable_returns_not_configured() {
+    let (coll, _dir) = create_test_vc();
+
+    let p = Point::new(1, vec![1.0, 0.0, 0.0, 0.0], None);
+    let err = coll.stream_insert(p).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::collection::streaming::BackpressureError::NotConfigured
+        ),
+        "expected NotConfigured, got: {err}"
+    );
+}

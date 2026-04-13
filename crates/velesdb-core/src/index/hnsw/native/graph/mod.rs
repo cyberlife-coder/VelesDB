@@ -23,7 +23,7 @@ mod search_tests;
 
 use super::columnar_vectors::ColumnarVectors;
 use super::distance::DistanceEngine;
-use super::layer::{Layer, NodeId};
+use super::layer::Layer;
 use crate::perf_optimizations::ContiguousVectors;
 use locking::{record_lock_acquire, record_lock_release, LockRank};
 use parking_lot::RwLock;
@@ -313,6 +313,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Executes a closure with a layers read snapshot and tracked lock rank.
+    #[allow(dead_code)] // Reason: API surface — layers-only access for callers not needing vectors
     #[inline]
     pub(in crate::index::hnsw::native) fn with_layers_read<R>(
         &self,

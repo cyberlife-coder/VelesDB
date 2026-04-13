@@ -30,10 +30,12 @@ pub(crate) enum LockRank {
     /// `vectors` RwLock — rank 10 (acquired first)
     Vectors = 10,
     /// `columnar` RwLock — rank 15 (PDX block-columnar layout)
+    #[allow(dead_code)] // Reason: PDX columnar lock rank — used when PDX search is wired
     Columnar = 15,
     /// `layers` RwLock — rank 20 (acquired after vectors/columnar)
     Layers = 20,
     /// Per-node neighbor lists — rank 30 (acquired last)
+    #[allow(dead_code)] // Reason: Neighbor-level lock rank — reserved for fine-grained locking
     Neighbors = 30,
 }
 
@@ -106,6 +108,7 @@ pub(crate) fn record_lock_release(rank: LockRank) {
 /// Returns the current depth of the lock rank stack for this thread.
 ///
 /// Useful for assertions in tests. Requires debug_assertions (always true in test builds).
+#[allow(dead_code)] // Reason: Debug introspection — available for lock-ordering tests
 #[cfg(all(test, debug_assertions))]
 pub(crate) fn lock_depth() -> usize {
     LOCK_RANK_STACK.with(|stack| stack.borrow().len())

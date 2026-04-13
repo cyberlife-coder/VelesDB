@@ -476,11 +476,9 @@ unsafe impl Sync for NativeHnswInner {}
 // Compile-time assertion: NativeHnswInner must satisfy Send + Sync.
 // If the struct gains a non-Send/Sync field, this causes a build error
 // rather than a subtle runtime data race.
-const _: () = {
+const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
-    fn check() {
-        assert_send_sync::<NativeHnswInner>();
-    }
+    assert_send_sync::<NativeHnswInner>();
 };
 
 // ============================================================================
