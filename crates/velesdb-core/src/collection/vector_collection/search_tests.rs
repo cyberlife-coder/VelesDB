@@ -374,7 +374,10 @@ async fn test_enable_streaming_sends_and_searches() {
     // Send points through the streaming channel.
     for i in 1..=4u64 {
         let mut vec = vec![0.0_f32; 4];
-        vec[(i as usize - 1) % 4] = 1.0;
+        // Reason: i is bounded 1..=4, always fits in usize
+        #[allow(clippy::cast_possible_truncation)]
+        let idx = (i as usize - 1) % 4;
+        vec[idx] = 1.0;
         let p = Point::new(i, vec, None);
         coll.stream_insert(p).expect("test: stream_insert ok");
     }

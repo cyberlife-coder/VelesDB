@@ -79,6 +79,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Adaptive number of entry-point probes for high-recall searches.
     #[inline]
+    #[allow(clippy::unused_self)] // Reason: method receiver accesses graph config in future adaptive tuning
     fn adaptive_num_probes(&self, count: usize, ef_search: usize, k: usize) -> usize {
         if count < 10_000 || ef_search <= (k * 4).max(64) {
             return 1;

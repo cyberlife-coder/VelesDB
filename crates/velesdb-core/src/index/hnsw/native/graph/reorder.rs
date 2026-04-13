@@ -78,6 +78,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Runs BFS on the given layer, draining the queue and appending nodes to `order`.
+    #[allow(clippy::unused_self)] // Reason: method receiver for future per-graph config
     fn bfs_walk(
         &self,
         layer: &super::super::layer::Layer,
@@ -100,6 +101,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Appends any unvisited nodes (disconnected components) to `order`.
+    #[allow(clippy::unused_self)] // Reason: method receiver for future per-graph config
     fn append_unvisited(&self, visited: &[bool], order: &mut Vec<NodeId>) {
         for (node, &was_visited) in visited.iter().enumerate() {
             if !was_visited {

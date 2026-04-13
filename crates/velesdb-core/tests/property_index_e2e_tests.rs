@@ -11,7 +11,7 @@
 //! 7. Negative tests: un-indexed lookups, non-existent labels, edge cases
 //!
 //! Tests exercise the integration between `PropertyIndex`, `RangeIndex`,
-//! `GraphCollection`, `LabelIndex`, and the VelesQL MATCH pipeline.
+//! `GraphCollection`, `LabelIndex`, and the `VelesQL` MATCH pipeline.
 
 // Reason: test-only casts (u64 literals, loop counters) are safe and bounded.
 #![allow(clippy::cast_possible_truncation)]
