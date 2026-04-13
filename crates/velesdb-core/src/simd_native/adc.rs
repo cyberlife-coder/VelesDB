@@ -3,12 +3,12 @@
 //! Provides SIMD-accelerated distance computation using precomputed lookup tables.
 //! Dispatches to AVX2 gather, NEON, or scalar path based on runtime detection.
 //!
-//! The public-crate API (`adc_distances_batch`) is wired into the PQ search
-//! pipeline in Phase 03. Functions are marked `#[allow(dead_code)]` until then.
+//! The public-crate API ([`adc_distances_batch`]) is called from the PQ
+//! rescoring pipeline in [`crate::quantization::pq::pq_adc_batch_rescore`].
 
-// `adc_distances_batch` is the Phase 03 search hot-path; suppressed until wired into
-// the PQ rescoring pipeline. Remove this allow when Phase 03 integration is complete.
-#![allow(dead_code)]
+// The sole caller (`pq_adc_batch_rescore`) is persistence-gated, so all items
+// in this module are dead when persistence is disabled.
+#![cfg_attr(not(feature = "persistence"), allow(dead_code))]
 
 #[allow(unused_imports)] // simd_level/SimdLevel used only on x86_64/aarch64 targets
 use super::dispatch::{simd_level, SimdLevel};

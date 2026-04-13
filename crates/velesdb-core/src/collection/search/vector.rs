@@ -6,7 +6,9 @@ use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
 use crate::point::SearchResult;
-use crate::quantization::{distance_pq_l2, PQVector, ProductQuantizer, StorageMode};
+use crate::quantization::{
+    distance_pq_l2, pq_adc_batch_rescore, PQVector, ProductQuantizer, StorageMode,
+};
 use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
 
@@ -63,6 +65,10 @@ impl Collection {
     }
 
     /// Rescores PQ candidates using the product quantizer cache.
+    ///
+    /// For Euclidean metric with enough candidates, uses SIMD-accelerated
+    /// batch ADC via [`pq_adc_batch_rescore`]. Falls back to per-item
+    /// scalar scoring for small batches or non-Euclidean metrics.
     fn rescore_pq_candidates(
         &self,
         query: &[f32],
@@ -77,18 +83,11 @@ impl Collection {
             return index_results.into_iter().take(k).collect();
         };
 
-        let mut rescored: Vec<ScoredResult> = index_results
-            .into_iter()
-            .map(|sr| {
-                let score = pq_cache.get(&sr.id).map_or(sr.score, |pq_vec| {
-                    rescore_with_metric(query, pq_vec, quantizer, metric).unwrap_or_else(|err| {
-                        tracing::warn!(sr.id, %err, "PQ rescore failed; using HNSW score");
-                        sr.score
-                    })
-                });
-                ScoredResult::new(sr.id, score)
-            })
-            .collect();
+        let mut rescored = if metric == DistanceMetric::Euclidean {
+            rescore_euclidean_batch(query, quantizer, &pq_cache, &index_results)
+        } else {
+            rescore_per_item(query, quantizer, metric, &pq_cache, &index_results)
+        };
 
         resolve::sort_scored_by_metric(&mut rescored, higher_is_better);
         rescored.truncate(k);
@@ -170,6 +169,86 @@ fn rescore_with_metric(
         let reconstructed = quantizer.reconstruct(pq_vec)?;
         Ok(metric.calculate(&rotated_query, &reconstructed))
     }
+}
+
+/// Batch SIMD-accelerated ADC rescoring for Euclidean metric.
+///
+/// Collects PQ vectors from the cache, computes distances in one SIMD batch
+/// via [`pq_adc_batch_rescore`], and maps scores back to candidates.
+/// Candidates without a cached PQ vector keep their original HNSW score.
+fn rescore_euclidean_batch(
+    query: &[f32],
+    quantizer: &ProductQuantizer,
+    pq_cache: &std::collections::HashMap<u64, PQVector>,
+    index_results: &[ScoredResult],
+) -> Vec<ScoredResult> {
+    // Collect candidates that have cached PQ codes; the rest keep their HNSW score.
+    let mut with_pq: Vec<(usize, &PQVector)> = Vec::with_capacity(index_results.len());
+
+    for (i, sr) in index_results.iter().enumerate() {
+        if let Some(pq_vec) = pq_cache.get(&sr.id) {
+            with_pq.push((i, pq_vec));
+        }
+    }
+
+    // Start with original scores; overwrite those we can rescore.
+    let mut scores: Vec<ScoredResult> = index_results
+        .iter()
+        .map(|sr| ScoredResult::new(sr.id, sr.score))
+        .collect();
+
+    if with_pq.is_empty() {
+        return scores;
+    }
+
+    let pq_refs: Vec<&PQVector> = with_pq.iter().map(|&(_, pq)| pq).collect();
+
+    match pq_adc_batch_rescore(quantizer, query, &pq_refs) {
+        Ok(batch_distances) => {
+            for (batch_idx, &(orig_idx, _)) in with_pq.iter().enumerate() {
+                scores[orig_idx] =
+                    ScoredResult::new(index_results[orig_idx].id, batch_distances[batch_idx]);
+            }
+        }
+        Err(err) => {
+            // ADC batch failed (should not happen with valid quantizer);
+            // fall back to per-item scalar scoring.
+            tracing::warn!(%err, "batch ADC rescore failed; falling back to scalar");
+            for &(orig_idx, pq_vec) in &with_pq {
+                scores[orig_idx] = ScoredResult::new(
+                    index_results[orig_idx].id,
+                    distance_pq_l2(query, pq_vec, quantizer),
+                );
+            }
+        }
+    }
+
+    scores
+}
+
+/// Per-item rescoring for non-Euclidean metrics (cosine, dot product).
+///
+/// Reconstructs the full vector from PQ codes and computes the metric
+/// in the (optionally OPQ-rotated) space.
+fn rescore_per_item(
+    query: &[f32],
+    quantizer: &ProductQuantizer,
+    metric: DistanceMetric,
+    pq_cache: &std::collections::HashMap<u64, PQVector>,
+    index_results: &[ScoredResult],
+) -> Vec<ScoredResult> {
+    index_results
+        .iter()
+        .map(|sr| {
+            let score = pq_cache.get(&sr.id).map_or(sr.score, |pq_vec| {
+                rescore_with_metric(query, pq_vec, quantizer, metric).unwrap_or_else(|err| {
+                    tracing::warn!(sr.id, %err, "PQ rescore failed; using HNSW score");
+                    sr.score
+                })
+            });
+            ScoredResult::new(sr.id, score)
+        })
+        .collect()
 }
 
 impl Collection {

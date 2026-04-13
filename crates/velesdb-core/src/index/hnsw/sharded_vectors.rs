@@ -45,7 +45,8 @@ pub struct ShardedVectors {
     /// 16 independent shards, each with its own lock.
     shards: [RwLock<VectorShard>; NUM_SHARDS],
     /// Vector dimension (kept for future validation)
-    #[allow(dead_code)] // Reason: Stored for dimension-mismatch checks in future insert validation
+    #[allow(dead_code)]
+    // Reason: Stored for dimension-mismatch checks in future insert validation
     dimension: usize,
 }
 
