@@ -22,6 +22,9 @@ pub(crate) fn error_response(status: StatusCode, message: String) -> axum::respo
 
 /// Build an error response from a [`velesdb_core::Error`], including the
 /// VELES-XXX code in the JSON body.
+///
+/// Prefer [`auto_core_error_response`] which derives the HTTP status
+/// automatically from the error variant.
 pub(crate) fn core_error_response(
     status: StatusCode,
     error: &velesdb_core::Error,
@@ -34,6 +37,52 @@ pub(crate) fn core_error_response(
         }),
     )
         .into_response()
+}
+
+/// Derive the canonical HTTP status code from a [`velesdb_core::Error`].
+///
+/// Centralizes the error→status mapping so that every handler returns
+/// consistent HTTP codes for the same error variant.
+pub(crate) fn http_status_for_error(e: &velesdb_core::Error) -> StatusCode {
+    use velesdb_core::Error;
+    match e {
+        // 404 Not Found
+        Error::CollectionNotFound(_)
+        | Error::PointNotFound(_)
+        | Error::EdgeNotFound(_)
+        | Error::NodeNotFound(_) => StatusCode::NOT_FOUND,
+
+        // 409 Conflict
+        Error::CollectionExists(_) | Error::EdgeExists(_) => StatusCode::CONFLICT,
+
+        // 400 Bad Request — client input errors
+        Error::DimensionMismatch { .. }
+        | Error::InvalidVector(_)
+        | Error::InvalidCollectionName { .. }
+        | Error::InvalidDimension { .. }
+        | Error::Config(_)
+        | Error::Query(_)
+        | Error::InvalidEdgeLabel(_)
+        | Error::InvalidQuantizerConfig(_)
+        | Error::SchemaValidation(_)
+        | Error::VectorNotAllowed(_)
+        | Error::VectorRequired(_)
+        | Error::SearchNotSupported(_)
+        | Error::GraphNotSupported(_)
+        | Error::Overflow(_) => StatusCode::BAD_REQUEST,
+
+        // 503 Service Unavailable
+        Error::DatabaseLocked(_) | Error::GuardRail(_) => StatusCode::SERVICE_UNAVAILABLE,
+
+        // 500 Internal Server Error — everything else
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// Build an error response from a [`velesdb_core::Error`], automatically
+/// deriving the HTTP status code from the error variant.
+pub(crate) fn auto_core_error_response(error: &velesdb_core::Error) -> axum::response::Response {
+    core_error_response(http_status_for_error(error), error)
 }
 
 /// Look up a type-erased collection by name, returning a 404 response on miss.

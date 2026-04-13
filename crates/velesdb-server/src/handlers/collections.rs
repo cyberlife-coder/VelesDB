@@ -13,7 +13,7 @@ use crate::AppState;
 use velesdb_core::index::HnswParams;
 use velesdb_core::{DistanceMetric, StorageMode};
 
-use super::helpers::{core_error_response, error_response, get_collection_or_404};
+use super::helpers::{auto_core_error_response, error_response, get_collection_or_404};
 
 /// List all collections.
 #[utoipa::path(
@@ -61,7 +61,7 @@ pub async fn create_collection(
 
     match result {
         Ok(()) => create_collection_success_response(&req),
-        Err(e) => core_error_response(StatusCode::BAD_REQUEST, &e),
+        Err(e) => auto_core_error_response(&e),
     }
 }
 
@@ -489,7 +489,7 @@ pub async fn delete_collection(
             "name": name
         }))
         .into_response(),
-        Err(e) => core_error_response(StatusCode::NOT_FOUND, &e),
+        Err(e) => auto_core_error_response(&e),
     }
 }
 
@@ -544,12 +544,17 @@ pub async fn flush_collection(
         Err(resp) => return resp,
     };
 
-    match collection.flush() {
-        Ok(()) => Json(serde_json::json!({
+    let result = tokio::task::spawn_blocking(move || collection.flush()).await;
+    match result {
+        Ok(Ok(())) => Json(serde_json::json!({
             "message": "Flushed successfully",
             "collection": name
         }))
         .into_response(),
-        Err(e) => core_error_response(StatusCode::INTERNAL_SERVER_ERROR, &e),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(join_err) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("flush task panicked: {join_err}"),
+        ),
     }
 }
