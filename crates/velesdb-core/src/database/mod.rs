@@ -26,6 +26,7 @@ mod ddl_executor;
 mod dml_executor;
 mod graph_ops;
 mod introspection_executor;
+mod join_pushdown;
 mod metadata_ops;
 mod persistence;
 mod query_engine;

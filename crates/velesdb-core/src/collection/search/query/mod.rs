@@ -39,6 +39,7 @@ pub mod join;
 mod join_tests;
 #[cfg(test)]
 mod let_execution_tests;
+mod match_dispatch;
 pub mod match_exec;
 #[cfg(test)]
 mod match_exec_tests;
