@@ -93,11 +93,11 @@ export interface IVelesDBBackend {
   /** List all collections */
   listCollections(): Promise<Collection[]>;
 
-  /** Insert a single vector */
-  insert(collection: string, doc: VectorDocument): Promise<void>;
+  /** Upsert (insert or replace) a single vector */
+  upsert(collection: string, doc: VectorDocument): Promise<void>;
 
-  /** Insert multiple vectors */
-  insertBatch(collection: string, docs: VectorDocument[]): Promise<void>;
+  /** Upsert (insert or replace) multiple vectors */
+  upsertBatch(collection: string, docs: VectorDocument[]): Promise<void>;
 
   /** Search for similar vectors */
   search(

@@ -74,15 +74,15 @@ await db.createCollection('documents', {
   metric: 'cosine'
 });
 
-// 3. Insert vectors with metadata
-await db.insert('documents', {
+// 3. Upsert vectors with metadata
+await db.upsert('documents', {
   id: 'doc-1',
   vector: new Float32Array(768).fill(0.1),
   payload: { title: 'Hello World', category: 'greeting' }
 });
 
-// 4. Batch insert for better throughput
-await db.insertBatch('documents', [
+// 4. Batch upsert for better throughput
+await db.upsertBatch('documents', [
   { id: 'doc-2', vector: new Float32Array(768).fill(0.2), payload: { title: 'Second doc' } },
   { id: 'doc-3', vector: new Float32Array(768).fill(0.3), payload: { title: 'Third doc' } },
 ]);
@@ -113,7 +113,7 @@ await db.init();
 
 // Same API as WASM backend
 await db.createCollection('products', { dimension: 1536 });
-await db.insert('products', { id: 1, vector: embedding });
+await db.upsert('products', { id: 1, vector: embedding });
 const results = await db.search('products', queryVector, { k: 10 });
 ```
 
@@ -214,14 +214,14 @@ List all collections. Returns an array of `Collection` objects.
 
 ---
 
-### Insert and Retrieve
+### Upsert and Retrieve
 
-#### `db.insert(collection, document)`
+#### `db.upsert(collection, document)`
 
-Insert a single vector document.
+Upsert (insert or replace) a single vector document.
 
 ```typescript
-await db.insert('docs', {
+await db.upsert('docs', {
   id: 'unique-id',
   vector: [0.1, 0.2, 0.3],    // number[] or Float32Array
   payload: { key: 'value' },   // optional metadata
@@ -229,12 +229,12 @@ await db.insert('docs', {
 });
 ```
 
-#### `db.insertBatch(collection, documents)`
+#### `db.upsertBatch(collection, documents)`
 
-Insert multiple vectors in a single call. More efficient than repeated `insert()`.
+Upsert multiple vectors in a single call. More efficient than repeated `upsert()`.
 
 ```typescript
-await db.insertBatch('docs', [
+await db.upsertBatch('docs', [
   { id: 'a', vector: vecA, payload: { title: 'First' } },
   { id: 'b', vector: vecB, payload: { title: 'Second' } },
 ]);
@@ -802,7 +802,7 @@ import {
 
 ## Performance Tips
 
-1. **Use `insertBatch()`** instead of repeated `insert()` calls
+1. **Use `upsertBatch()`** instead of repeated `upsert()` calls
 2. **Reuse `Float32Array`** buffers for query vectors when possible
 3. **Use WASM backend** for browser apps (zero network latency)
 4. **Use `searchIds()`** when you only need IDs and scores (skips payload transfer)

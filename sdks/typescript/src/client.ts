@@ -158,16 +158,16 @@ export class VelesDB {
   // Point CRUD
   // ========================================================================
 
-  async insert(collection: string, doc: VectorDocument): Promise<void> {
+  async upsert(collection: string, doc: VectorDocument): Promise<void> {
     this.ensureInitialized();
     validateDocument(doc, this.config);
-    await this.backend.insert(collection, doc);
+    await this.backend.upsert(collection, doc);
   }
 
-  async insertBatch(collection: string, docs: VectorDocument[]): Promise<void> {
+  async upsertBatch(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
     validateDocsBatch(docs, doc => validateDocument(doc, this.config));
-    await this.backend.insertBatch(collection, docs);
+    await this.backend.upsertBatch(collection, docs);
   }
 
   async delete(collection: string, id: string | number): Promise<boolean> {

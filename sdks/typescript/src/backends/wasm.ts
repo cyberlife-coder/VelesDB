@@ -198,7 +198,7 @@ export class WasmBackend implements IVelesDBBackend {
   // Point CRUD
   // ========================================================================
 
-  async insert(collectionName: string, doc: VectorDocument): Promise<void> {
+  async upsert(collectionName: string, doc: VectorDocument): Promise<void> {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
@@ -226,7 +226,7 @@ export class WasmBackend implements IVelesDBBackend {
     }
   }
 
-  async insertBatch(collectionName: string, docs: VectorDocument[]): Promise<void> {
+  async upsertBatch(collectionName: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }

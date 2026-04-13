@@ -200,13 +200,13 @@ describe('RestBackend', () => {
       vi.clearAllMocks();
     });
 
-    it('should insert a vector', async () => {
+    it('should upsert a vector', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({}),
       });
 
-      await backend.insert('test', {
+      await backend.upsert('test', {
         id: 1,
         vector: [1.0, 0.0, 0.0],
         payload: { title: 'Test' },
@@ -227,13 +227,13 @@ describe('RestBackend', () => {
       );
     });
 
-    it('should insert batch', async () => {
+    it('should upsert batch', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({}),
       });
 
-      await backend.insertBatch('test', [
+      await backend.upsertBatch('test', [
         { id: 1, vector: [1.0, 0.0] },
         { id: 2, vector: [0.0, 1.0] },
       ]);
@@ -294,7 +294,7 @@ describe('RestBackend', () => {
 
     it('should reject non-numeric IDs for REST operations', async () => {
       await expect(
-        backend.insert('test', {
+        backend.upsert('test', {
           id: 'doc-1',
           vector: [1.0, 0.0, 0.0],
         })
@@ -308,7 +308,7 @@ describe('RestBackend', () => {
       const tooLarge = Number.MAX_SAFE_INTEGER + 1;
 
       await expect(
-        backend.insert('test', {
+        backend.upsert('test', {
           id: tooLarge,
           vector: [1.0, 0.0, 0.0],
         })

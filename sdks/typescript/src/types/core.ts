@@ -134,7 +134,7 @@ export interface Collection {
 /** Sparse vector: mapping from term/dimension index to weight */
 export type SparseVector = Record<number, number>;
 
-/** Vector document to insert */
+/** Vector document to upsert */
 export interface VectorDocument {
   /** Unique identifier */
   id: string | number;
