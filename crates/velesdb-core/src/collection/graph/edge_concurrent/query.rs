@@ -196,10 +196,15 @@ impl ConcurrentEdgeStore {
         self.edge_ids.read().is_empty()
     }
 
-    /// Returns the number of distinct edge labels in the label table.
+    /// Returns the number of distinct edge labels in the graph.
+    ///
+    /// Reads from the CSR snapshot's interned label table, triggering a
+    /// lazy rebuild if dirty. Returns 0 when the store has no edges.
     #[must_use]
     pub fn label_count(&self) -> usize {
-        self.label_table.read().len()
+        self.ensure_csr_fresh();
+        let snapshot = self.csr_snapshot.load();
+        snapshot.distinct_label_count()
     }
 
     /// Returns all edges across all shards (cloned).

@@ -230,6 +230,13 @@ impl CsrSnapshot {
         self.targets.len()
     }
 
+    /// Returns the number of distinct edge labels in this snapshot.
+    #[must_use]
+    #[inline]
+    pub fn distinct_label_count(&self) -> usize {
+        self.label_table.len()
+    }
+
     /// Checks whether a label string exists in the interned table.
     ///
     /// Used for fast pre-filtering: if a rel-type filter contains labels
