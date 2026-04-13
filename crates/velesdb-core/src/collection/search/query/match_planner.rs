@@ -3,11 +3,6 @@
 //! This module provides cost-based query planning for MATCH queries,
 //! choosing between Graph-First, Vector-First, or Parallel execution.
 
-#![allow(dead_code)]
-// Reason: plan(), count_hops(), CollectionStats are called from select_dispatch.rs;
-// remaining items (explain, estimate_selectivity) are consumed by EXPLAIN pipeline
-// and velesdb-server — not all paths are live in core yet.
-
 // Reason: Numeric casts in query planning are intentional:
 // - u64->f64 for limit calculations: precision loss acceptable for estimates
 // - f32->f64 for selectivity: values bounded (0.0-1.0 range)

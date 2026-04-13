@@ -82,13 +82,9 @@ impl Collection {
                 )?;
                 self.finalize_match_results(match_clause, vf_results, ctx)
             }
-            super::match_planner::MatchExecutionStrategy::Parallel { .. } => {
-                tracing::warn!(
-                    "Parallel MATCH strategy selected but not yet implemented; \
-                     falling back to GraphFirst"
-                );
-                self.execute_match_pipeline(match_clause, params, ctx)
-            }
+            super::match_planner::MatchExecutionStrategy::Parallel {
+                ref vector_hint, ..
+            } => self.execute_match_parallel(match_clause, params, ctx, vector_hint),
             super::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {
                 self.execute_match_pipeline(match_clause, params, ctx)
             }
@@ -125,7 +121,53 @@ impl Collection {
     /// Applies ORDER BY, conversion to `SearchResult`, cardinality check,
     /// LIMIT, and latency recording to a set of `MatchResult`s.
     ///
-    /// Shared by both GraphFirst and VectorFirst strategies.
+    /// Executes the Parallel MATCH strategy (Wave 6 Phase D).
+    ///
+    /// Runs GraphFirst and VectorFirst sequentially, then merges the result
+    /// sets by `node_id` (union semantics -- best score wins for duplicates).
+    ///
+    /// True parallel execution (rayon/tokio) is a future optimisation; the
+    /// sequential approach is correct and avoids concurrency complexity for
+    /// typical MATCH query sizes.
+    fn execute_match_parallel(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        ctx: &crate::guardrails::QueryContext,
+        vector_hint: &super::match_planner::MatchExecutionStrategy,
+    ) -> Result<Vec<SearchResult>> {
+        // Phase 1: GraphFirst path.
+        let graph_results = self.execute_match_with_context(match_clause, params, Some(ctx))?;
+
+        // Phase 2: VectorFirst path (extract hint parameters).
+        let vector_results = if let super::match_planner::MatchExecutionStrategy::VectorFirst {
+            similarity_alias,
+            top_k,
+            threshold,
+        } = vector_hint
+        {
+            self.execute_match_vector_first(
+                match_clause,
+                params,
+                ctx,
+                similarity_alias,
+                *top_k,
+                *threshold,
+            )?
+        } else {
+            tracing::warn!(
+                "Parallel strategy vector_hint is not VectorFirst; \
+                     skipping vector path"
+            );
+            Vec::new()
+        };
+
+        // Phase 3: Merge by node_id (union, best score wins).
+        let merged = merge_match_results(graph_results, vector_results);
+        self.finalize_match_results(match_clause, merged, ctx)
+    }
+
+    /// Shared by GraphFirst, VectorFirst, and Parallel strategies.
     fn finalize_match_results(
         &self,
         match_clause: &crate::velesql::MatchClause,
@@ -339,5 +381,133 @@ fn inject_let_into_payloads(results: &mut [SearchResult], per_result_let: &[Vec<
                 map.insert(name.clone(), serde_json::Value::from(f64::from(*value)));
             }
         }
+    }
+}
+
+/// Merges two sets of `MatchResult`s by `node_id` (union semantics).
+///
+/// When both sets contain the same `node_id`, the result with the higher
+/// `score` is kept. Results without a score compare as `f32::NEG_INFINITY`.
+/// The merged output is sorted by score descending.
+fn merge_match_results(
+    graph_results: Vec<super::match_exec::MatchResult>,
+    vector_results: Vec<super::match_exec::MatchResult>,
+) -> Vec<super::match_exec::MatchResult> {
+    use std::collections::HashMap;
+
+    let mut by_node: HashMap<u64, super::match_exec::MatchResult> =
+        HashMap::with_capacity(graph_results.len() + vector_results.len());
+
+    for r in graph_results {
+        by_node.insert(r.node_id, r);
+    }
+
+    for r in vector_results {
+        let node_id = r.node_id;
+        match by_node.entry(node_id) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let new_score = r.score.unwrap_or(f32::NEG_INFINITY);
+                let old_score = entry.get().score.unwrap_or(f32::NEG_INFINITY);
+                if new_score > old_score {
+                    entry.insert(r);
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(r);
+            }
+        }
+    }
+
+    let mut merged: Vec<super::match_exec::MatchResult> = by_node.into_values().collect();
+    merged.sort_by(|a, b| {
+        let sa = a.score.unwrap_or(f32::NEG_INFINITY);
+        let sb = b.score.unwrap_or(f32::NEG_INFINITY);
+        sb.total_cmp(&sa)
+    });
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::match_exec::MatchResult;
+    use super::merge_match_results;
+
+    fn mr(node_id: u64, score: Option<f32>) -> MatchResult {
+        let mut r = MatchResult::new(node_id, 0, Vec::new());
+        r.score = score;
+        r
+    }
+
+    #[test]
+    fn test_merge_empty_inputs() {
+        let merged = merge_match_results(Vec::new(), Vec::new());
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn test_merge_graph_only() {
+        let graph = vec![mr(1, None), mr(2, Some(0.5))];
+        let merged = merge_match_results(graph, Vec::new());
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].node_id, 2);
+    }
+
+    #[test]
+    fn test_merge_vector_only() {
+        let vector = vec![mr(3, Some(0.9)), mr(4, Some(0.7))];
+        let merged = merge_match_results(Vec::new(), vector);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].node_id, 3);
+        assert_eq!(merged[1].node_id, 4);
+    }
+
+    #[test]
+    fn test_merge_union_distinct_nodes() {
+        let graph = vec![mr(1, None), mr(2, None)];
+        let vector = vec![mr(3, Some(0.8)), mr(4, Some(0.6))];
+        let merged = merge_match_results(graph, vector);
+        assert_eq!(merged.len(), 4);
+    }
+
+    #[test]
+    fn test_merge_duplicate_keeps_higher_score() {
+        let graph = vec![mr(1, Some(0.3))];
+        let vector = vec![mr(1, Some(0.9))];
+        let merged = merge_match_results(graph, vector);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].node_id, 1);
+        assert!((merged[0].score.expect("test: should have score") - 0.9).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_merge_duplicate_graph_wins_when_higher() {
+        let graph = vec![mr(1, Some(0.95))];
+        let vector = vec![mr(1, Some(0.5))];
+        let merged = merge_match_results(graph, vector);
+        assert_eq!(merged.len(), 1);
+        assert!((merged[0].score.expect("test: should have score") - 0.95).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_merge_sorted_descending() {
+        let graph = vec![mr(1, Some(0.3)), mr(2, Some(0.1))];
+        let vector = vec![mr(3, Some(0.9)), mr(4, Some(0.5))];
+        let merged = merge_match_results(graph, vector);
+        let scores: Vec<f32> = merged
+            .iter()
+            .map(|r| r.score.unwrap_or(f32::NEG_INFINITY))
+            .collect();
+        for w in scores.windows(2) {
+            assert!(w[0] >= w[1], "scores should be descending: {scores:?}");
+        }
+    }
+
+    #[test]
+    fn test_merge_none_scores_sorted_last() {
+        let graph = vec![mr(1, None), mr(2, None)];
+        let vector = vec![mr(3, Some(0.5))];
+        let merged = merge_match_results(graph, vector);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].node_id, 3);
     }
 }
