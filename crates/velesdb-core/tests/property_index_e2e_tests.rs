@@ -65,14 +65,8 @@ fn test_property_index_auto_populated_on_node_insert() {
     }
 
     // THEN: verify index has entries for (Person, age) and (Person, city).
-    assert!(
-        index.has_index("Person", "age"),
-        "age index should exist"
-    );
-    assert!(
-        index.has_index("Person", "city"),
-        "city index should exist"
-    );
+    assert!(index.has_index("Person", "age"), "age index should exist");
+    assert!(index.has_index("Person", "city"), "city index should exist");
 
     // Verify lookup: node 0 has age=10.
     let age_10_nodes = index.lookup("Person", "age", &serde_json::json!(10));
@@ -97,18 +91,12 @@ fn test_property_index_auto_populated_on_node_insert() {
         "20 nodes (0,5,10,...,95) should have city=Paris"
     );
     for n in (0u32..100).step_by(5) {
-        assert!(
-            paris_bitmap.contains(n),
-            "node {n} should have city=Paris"
-        );
+        assert!(paris_bitmap.contains(n), "node {n} should have city=Paris");
     }
 
     // Verify an unknown value returns None (no entries).
     let unknown = index.lookup("Person", "city", &serde_json::json!("Atlantis"));
-    assert!(
-        unknown.is_none(),
-        "Atlantis should not be in the index"
-    );
+    assert!(unknown.is_none(), "Atlantis should not be in the index");
 
     // Verify an un-indexed property returns None.
     let not_indexed = index.lookup("Person", "email", &serde_json::json!("test@example.com"));
@@ -207,8 +195,7 @@ fn test_composite_property_filter_via_match() {
 
     // Connect nodes sequentially: 1->2, 2->3, ..., 19->20.
     for i in 1u64..20 {
-        let edge = GraphEdge::new(i, i, i + 1, "NEXT")
-            .expect("test: create edge");
+        let edge = GraphEdge::new(i, i, i + 1, "NEXT").expect("test: create edge");
         gc.add_edge(edge).expect("test: add edge");
     }
 
@@ -271,10 +258,7 @@ fn test_composite_property_filter_via_match() {
     }
 
     // Verify we found at least some results (sanity).
-    assert!(
-        !results.is_empty(),
-        "MATCH should find at least one path"
-    );
+    assert!(!results.is_empty(), "MATCH should find at least one path");
 }
 
 // =========================================================================
@@ -315,10 +299,7 @@ fn test_property_index_survives_node_update() {
     // Old value should NOT contain node 1.
     let old_lookup = index.lookup("Person", "age", &serde_json::json!(25));
     let old_contains = old_lookup.is_some_and(|b| b.contains(1));
-    assert!(
-        !old_contains,
-        "node 1 should NOT be in age=25 after update"
-    );
+    assert!(!old_contains, "node 1 should NOT be in age=25 after update");
 
     // New value SHOULD contain node 1.
     assert!(
@@ -449,8 +430,7 @@ fn test_match_where_range_filter_gt() {
 
     // Connect: 1->2, 2->3, ..., 9->10.
     for i in 1u64..10 {
-        let edge = GraphEdge::new(i, i, i + 1, "NEXT")
-            .expect("test: create edge");
+        let edge = GraphEdge::new(i, i, i + 1, "NEXT").expect("test: create edge");
         gc.add_edge(edge).expect("test: add edge");
     }
 
@@ -540,8 +520,7 @@ fn test_label_index_auto_populated_on_insert() {
 
     // Edges: each Person -> next Company.
     for i in 1u64..=5 {
-        let edge = GraphEdge::new(i, i, i + 5, "WORKS_AT")
-            .expect("test: create edge");
+        let edge = GraphEdge::new(i, i, i + 5, "WORKS_AT").expect("test: create edge");
         gc.add_edge(edge).expect("test: add edge");
     }
 
@@ -636,10 +615,7 @@ fn test_property_index_remove_on_delete() {
         !after_bitmap.contains(1),
         "node 1 should be removed from index"
     );
-    assert!(
-        after_bitmap.contains(2),
-        "node 2 should still be in index"
-    );
+    assert!(after_bitmap.contains(2), "node 2 should still be in index");
 }
 
 // =========================================================================
@@ -660,13 +636,17 @@ fn test_property_index_unindexed_lookup_returns_none() {
 
     // Wrong property.
     assert!(
-        index.lookup("Person", "email", &serde_json::json!("test")).is_none(),
+        index
+            .lookup("Person", "email", &serde_json::json!("test"))
+            .is_none(),
         "un-indexed property should return None"
     );
 
     // Wrong label.
     assert!(
-        index.lookup("Animal", "age", &serde_json::json!(25)).is_none(),
+        index
+            .lookup("Animal", "age", &serde_json::json!(25))
+            .is_none(),
         "un-indexed label should return None"
     );
 }
@@ -746,9 +726,10 @@ fn test_property_index_persistence_round_trip() {
     index.on_add_node("Person", 1, &props);
 
     // Serialize and deserialize.
-    let bytes = index.to_bytes().expect("test: serialization should succeed");
-    let restored =
-        PropertyIndex::from_bytes(&bytes).expect("test: deserialization should succeed");
+    let bytes = index
+        .to_bytes()
+        .expect("test: serialization should succeed");
+    let restored = PropertyIndex::from_bytes(&bytes).expect("test: deserialization should succeed");
 
     // Verify data survives round-trip.
     assert!(
@@ -790,9 +771,10 @@ fn test_range_index_persistence_round_trip() {
     index.insert("Event", "timestamp", &serde_json::json!(300), 3);
 
     // Serialize and deserialize.
-    let bytes = index.to_bytes().expect("test: serialization should succeed");
-    let restored =
-        RangeIndex::from_bytes(&bytes).expect("test: deserialization should succeed");
+    let bytes = index
+        .to_bytes()
+        .expect("test: serialization should succeed");
+    let restored = RangeIndex::from_bytes(&bytes).expect("test: deserialization should succeed");
 
     // Range query on restored index.
     let gt_150 = restored.range_greater_than("Event", "timestamp", &serde_json::json!(150));
