@@ -42,6 +42,25 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
 )
 
 
+# Canonical metric names used by the Rust engine (DistanceMetric::canonical_name).
+# Maps common aliases to the canonical form so Python-side comparisons are
+# consistent regardless of which spelling the user provides.
+_METRIC_ALIASES: dict[str, str] = {
+    "dotproduct": "dot",
+    "dot_product": "dot",
+    "inner": "dot",
+    "ip": "dot",
+    "l2": "euclidean",
+    "cos": "cosine",
+}
+
+
+def _normalize_metric(m: str) -> str:
+    """Normalize a metric name to its canonical form."""
+    key = m.strip().lower()
+    return _METRIC_ALIASES.get(key, key)
+
+
 class GraphStore:
     """Compatibility adapter for GraphStore call shapes."""
 
@@ -344,7 +363,7 @@ class Database:
                     f"but requested dimension {dimension}. "
                     f"Use a different name or matching parameters."
                 )
-            if existing_metric != metric:
+            if _normalize_metric(existing_metric) != _normalize_metric(metric):
                 raise ValueError(
                     f"Collection '{name}' exists with metric '{existing_metric}', "
                     f"but requested metric '{metric}'. "

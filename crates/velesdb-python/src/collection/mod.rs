@@ -119,7 +119,7 @@ impl Collection {
         let _ = dict.set_item(PyString::intern(py, "dimension"), config.dimension);
         let _ = dict.set_item(
             PyString::intern(py, "metric"),
-            format!("{:?}", config.metric).to_lowercase(),
+            config.metric.canonical_name(),
         );
         let _ = dict.set_item(
             PyString::intern(py, "storage_mode"),
@@ -152,10 +152,10 @@ impl Collection {
     /// Get the distance metric used by this collection.
     ///
     /// Returns:
-    ///     str: The metric name (e.g. "cosine", "euclidean", "dot")
+    ///     str: The canonical metric name (e.g. "cosine", "euclidean", "dot")
     #[getter]
     fn metric(&self) -> String {
-        format!("{:?}", self.inner.metric()).to_lowercase()
+        self.inner.metric().canonical_name().to_owned()
     }
 
     /// Get the storage mode of this collection.

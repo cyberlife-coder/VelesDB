@@ -278,9 +278,12 @@ fn extract_similarity_condition(where_clause: Option<&Condition>) -> Result<&Sim
 /// Returns the WHERE clause with the first `Similarity` leaf replaced by nothing.
 ///
 /// When the entire WHERE is just a `Similarity`, returns `None`.
-/// When `Similarity` is inside AND/OR, removes it and simplifies:
-/// - `AND(sim, X)` or `AND(X, sim)` → `Some(X)`
-/// - `OR(sim, X)` or `OR(X, sim)` → `Some(X)`
+/// When `Similarity` is inside AND or OR, removes it and simplifies:
+/// - `AND(sim, X)` or `AND(X, sim)` → `Some(X)` (both must hold; sim is
+///   already satisfied by the vector search, so only X remains)
+/// - `OR(sim, X)` or `OR(X, sim)` → `None` (either branch suffices; the
+///   sim branch is already satisfied by the vector search, so the entire
+///   OR is satisfied — no residual filter needed)
 ///
 /// This allows the graph validation step to skip re-evaluating the similarity
 /// condition (already handled by the vector search threshold filter).
@@ -300,8 +303,9 @@ fn strip_sim(cond: &Condition) -> Option<Condition> {
             (Some(l), Some(r)) => Some(Condition::And(Box::new(l), Box::new(r))),
         },
         Condition::Or(left, right) => match (strip_sim(left), strip_sim(right)) {
-            (None, None) => None,
-            (None, Some(r)) | (Some(r), None) => Some(r),
+            // If either branch was the similarity condition, the entire OR
+            // is satisfied by the vector search — no residual filter needed.
+            (None | Some(_), None) | (None, Some(_)) => None,
             (Some(l), Some(r)) => Some(Condition::Or(Box::new(l), Box::new(r))),
         },
         Condition::Not(inner) => strip_sim(inner).map(|c| Condition::Not(Box::new(c))),
@@ -397,12 +401,31 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_similarity_keeps_other_in_or() {
+    fn test_strip_similarity_drops_entire_or() {
         let cmp = make_comparison_condition();
         let sim = make_sim_condition();
         let cond = Condition::Or(Box::new(cmp.clone()), Box::new(sim));
         let stripped = strip_similarity_from_where(Some(&cond));
-        assert!(stripped.is_some(), "OR(cmp, sim) should keep cmp");
+        assert!(
+            stripped.is_none(),
+            "OR(cmp, sim) should be None — the similarity branch satisfies the entire OR"
+        );
+    }
+
+    #[test]
+    fn test_strip_similarity_preserves_or_without_sim() {
+        let cmp1 = make_comparison_condition();
+        let cmp2 = Condition::Comparison(Comparison {
+            column: "price".to_string(),
+            operator: CompareOp::Gt,
+            value: Value::Float(42.0),
+        });
+        let cond = Condition::Or(Box::new(cmp1), Box::new(cmp2));
+        let stripped = strip_similarity_from_where(Some(&cond));
+        assert!(
+            matches!(stripped, Some(Condition::Or(..))),
+            "OR(cmp1, cmp2) with no similarity should preserve both branches"
+        );
     }
 
     #[test]
