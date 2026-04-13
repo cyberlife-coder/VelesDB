@@ -1,205 +1,160 @@
-"""VelesDB REST API client."""
+"""VelesDB native client — wraps the velesdb Python bindings directly."""
 
-import asyncio
+import tempfile
 from typing import Any
 
-import httpx
-
-from .config import get_settings
-
-
-class VelesDBConnectionError(Exception):
-    """Error connecting to VelesDB server."""
+import velesdb
 
 
 class VelesDBClient:
-    """Async client for VelesDB REST API with persistent connection."""
+    """Synchronous VelesDB client backed by native Python bindings.
 
-    _client: httpx.AsyncClient | None = None
-    _lock: asyncio.Lock | None = None
-    _lock_init: bool = False  # Flag to ensure single init
+    Replaces the previous httpx-based REST client. All calls go directly
+    into the embedded Rust engine — no network hop, no server process.
 
-    def __init__(self, base_url: str | None = None, timeout: float = 30.0):
-        settings = get_settings()
-        self.base_url = base_url or settings.velesdb_url
-        self.timeout = timeout
-        # Initialize lock once at first instance creation
-        if not VelesDBClient._lock_init:
-            VelesDBClient._lock = asyncio.Lock()
-            VelesDBClient._lock_init = True
+    The GIL is released during every Rust call (search, upsert, delete),
+    so CPU-bound work does not block other threads.
+    """
 
-    @classmethod
-    def _get_lock(cls) -> asyncio.Lock:
-        """Get the async lock (initialized at first instance)."""
-        if cls._lock is None:
-            cls._lock = asyncio.Lock()
-        return cls._lock
+    def __init__(
+        self,
+        data_path: str | None = None,
+        *,
+        _base_url: str | None = None,
+        _timeout: float | None = None,
+    ) -> None:
+        """Open a VelesDB database at *data_path*.
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create persistent HTTP client (thread-safe)."""
-        async with self._get_lock():
-            if VelesDBClient._client is None or VelesDBClient._client.is_closed:
-                VelesDBClient._client = httpx.AsyncClient(
-                    base_url=self.base_url,
-                    timeout=self.timeout
-                )
-        return VelesDBClient._client
-
-    async def health_check(self) -> bool:
+        Args:
+            data_path: Directory for persistent vector storage.
+                If ``None``, a per-process temporary directory is used.
+            _base_url: Ignored — kept for backward-compat call sites that
+                pass ``base_url=`` as a keyword.
+            _timeout: Ignored — native calls have no network timeout.
         """
-        Check if VelesDB server is healthy.
+        if data_path is None:
+            # Create a temp dir that lives for the lifetime of this object.
+            self._tmpdir = tempfile.TemporaryDirectory()
+            data_path = self._tmpdir.name
+        else:
+            self._tmpdir = None
 
-        Returns:
-            True if healthy, False otherwise
+        self._db = velesdb.Database(data_path)
 
-        Raises:
-            VelesDBConnectionError: If cannot connect to server
-        """
-        try:
-            client = await self._get_client()
-            response = await client.get("/health")
-            return response.status_code == 200
-        except httpx.ConnectError as e:
-            raise VelesDBConnectionError(f"Cannot connect to VelesDB: {e}") from e
-        except Exception:
-            return False
+    # ------------------------------------------------------------------
+    # Collection management
+    # ------------------------------------------------------------------
 
-    async def create_collection(
+    def create_collection(
         self,
         name: str,
         dimension: int,
-        metric: str = "cosine"
+        metric: str = "cosine",
     ) -> dict[str, Any]:
-        """
-        Create a new collection.
-
-        Args:
-            name: Collection name
-            dimension: Vector dimension
-            metric: Distance metric (cosine, euclidean, dot)
+        """Create a new vector collection.
 
         Returns:
-            Collection info
+            Info dict with collection metadata.
+
+        Raises:
+            velesdb.CollectionExistsError: If the collection already exists.
         """
-        client = await self._get_client()
-        response = await client.post(
-            "/collections",
-            json={
-                "name": name,
-                "dimension": dimension,
-                "metric": metric
-            }
-        )
-        response.raise_for_status()
-        return response.json()
+        col = self._db.create_collection(name, dimension=dimension, metric=metric)
+        return col.info()
 
-    async def collection_exists(self, name: str) -> bool:
-        """Check if a collection exists."""
-        try:
-            client = await self._get_client()
-            response = await client.get(f"/collections/{name}")
-            return response.status_code == 200
-        except Exception:
-            return False
+    def collection_exists(self, name: str) -> bool:
+        """Return True if a collection with *name* already exists."""
+        return self._db.get_collection(name) is not None
 
-    async def upsert_points(
+    def get_collection_info(self, name: str) -> dict[str, Any]:
+        """Return collection metadata dict.
+
+        Raises:
+            velesdb.CollectionNotFoundError: If the collection does not exist.
+        """
+        col = self._db.get_collection(name)
+        if col is None:
+            raise velesdb.CollectionNotFoundError(
+                f"Collection '{name}' not found"
+            )
+        return col.info()
+
+    def delete_collection(self, name: str) -> dict[str, Any]:
+        """Drop an entire collection.
+
+        Returns:
+            Result dict with ``{"deleted": name}``.
+        """
+        self._db.drop_collection(name)
+        return {"deleted": name}
+
+    # ------------------------------------------------------------------
+    # Point operations
+    # ------------------------------------------------------------------
+
+    def upsert_points(
         self,
         collection: str,
-        points: list[dict[str, Any]]
+        points: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """
-        Insert or update points in a collection.
+        """Insert or update *points* in *collection*.
 
         Args:
-            collection: Collection name
-            points: List of points with id, vector, and payload
+            collection: Collection name.
+            points: List of dicts with ``id`` (int), ``vector`` (list[float]),
+                and optional ``payload`` (dict).
 
         Returns:
-            Upsert result
+            Result dict with ``{"upserted": <count>}``.
         """
-        client = await self._get_client()
-        response = await client.post(
-            f"/collections/{collection}/points",
-            json={"points": points}
-        )
-        response.raise_for_status()
-        return response.json()
+        col = self._db.get_collection(collection)
+        if col is None:
+            raise velesdb.CollectionNotFoundError(
+                f"Collection '{collection}' not found"
+            )
+        count = col.upsert(points)
+        return {"upserted": count}
 
-    async def search(
+    def search(
         self,
         collection: str,
         query_vector: list[float],
         top_k: int = 10,
-        filter_: dict[str, Any] | None = None
+        filter_: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """
-        Search for similar vectors.
+        """Search for similar vectors in *collection*.
 
         Args:
-            collection: Collection name
-            query_vector: Query vector
-            top_k: Number of results
-            filter_: Optional metadata filter
+            collection: Collection name.
+            query_vector: Dense query embedding.
+            top_k: Maximum number of results.
+            filter_: Optional metadata filter dict.
 
         Returns:
-            Search results
+            Dict with ``{"results": [{"id": ..., "score": ..., "payload": ...}]}``.
         """
-        payload: dict[str, Any] = {
-            "vector": query_vector,
-            "top_k": top_k
-        }
+        col = self._db.get_collection(collection)
+        if col is None:
+            raise velesdb.CollectionNotFoundError(
+                f"Collection '{collection}' not found"
+            )
+        results = col.search(vector=query_vector, top_k=top_k, filter=filter_)
+        return {"results": results}
 
-        if filter_:
-            payload["filter"] = filter_
-
-        client = await self._get_client()
-        response = await client.post(
-            f"/collections/{collection}/search",
-            json=payload
-        )
-        response.raise_for_status()
-        return response.json()
-
-    async def delete_point(
+    def delete_point(
         self,
         collection: str,
-        point_id: int
+        point_id: int,
     ) -> dict[str, Any]:
-        """
-        Delete a single point by ID.
-
-        Args:
-            collection: Collection name
-            point_id: Point ID to delete
+        """Delete a single point by ID.
 
         Returns:
-            Delete result
+            Dict with ``{"deleted": point_id}``.
         """
-        client = await self._get_client()
-        response = await client.delete(
-            f"/collections/{collection}/points/{point_id}"
-        )
-        response.raise_for_status()
-        return response.json()
-
-    async def delete_collection(self, name: str) -> dict[str, Any]:
-        """
-        Delete an entire collection.
-        
-        Args:
-            name: Collection name
-            
-        Returns:
-            Delete result
-        """
-        client = await self._get_client()
-        response = await client.delete(f"/collections/{name}")
-        response.raise_for_status()
-        return response.json()
-
-    async def get_collection_info(self, name: str) -> dict[str, Any]:
-        """Get collection information."""
-        client = await self._get_client()
-        response = await client.get(f"/collections/{name}")
-        response.raise_for_status()
-        return response.json()
+        col = self._db.get_collection(collection)
+        if col is None:
+            raise velesdb.CollectionNotFoundError(
+                f"Collection '{collection}' not found"
+            )
+        col.delete([point_id])
+        return {"deleted": point_id}

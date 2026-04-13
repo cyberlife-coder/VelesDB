@@ -166,17 +166,18 @@ mod tests {
         });
     }
 
-    /// Other errors fall back to PyRuntimeError, not a VelesDBError subclass.
+    /// Engine/IO/internal errors fall back to VelesDBError so callers can
+    /// use `except velesdb.VelesDBError` as a catch-all.
     #[test]
-    fn test_core_err_fallback_to_runtime_error() {
+    fn test_core_err_fallback_to_veles_db_error() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let err = core_err(velesdb_core::Error::Internal("oops".into()));
             assert!(
-                err.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py),
-                "expected PyRuntimeError fallback, got {err:?}"
+                err.is_instance_of::<VelesDBError>(py),
+                "expected VelesDBError fallback, got {err:?}"
             );
-            // Must NOT be mistaken for a typed VelesDB error.
+            // Must NOT be mistaken for a typed subclass.
             assert!(
                 !err.is_instance_of::<DimensionMismatchError>(py),
                 "internal error should not be DimensionMismatchError"
@@ -427,24 +428,29 @@ mod tests {
         });
     }
 
+    /// Storage errors map to VelesDBError so `except velesdb.VelesDBError` catches them.
     #[test]
-    fn test_core_err_storage_is_runtime_error() {
+    fn test_core_err_storage_is_veles_db_error() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let err = core_err(CoreError::Storage("disk full".into()));
-            assert!(err.is_instance_of::<PyRuntimeError>(py));
-            // Engine errors stay as generic RuntimeError and must NOT be
-            // confused with any of the typed VelesDB subclasses.
-            assert!(!err.is_instance_of::<VelesDBError>(py));
+            assert!(
+                err.is_instance_of::<VelesDBError>(py),
+                "Storage must map to VelesDBError so except velesdb.VelesDBError catches it"
+            );
+            // Must not be confused with any specific subclass.
+            assert!(!err.is_instance_of::<DimensionMismatchError>(py));
+            assert!(!err.is_instance_of::<CollectionNotFoundError>(py));
         });
     }
 
+    /// Internal errors map to VelesDBError (same as Storage, Io, etc.).
     #[test]
-    fn test_core_err_internal_is_runtime_error() {
+    fn test_core_err_internal_is_veles_db_error() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let err = core_err(CoreError::Internal("BUG: unreachable".into()));
-            assert!(err.is_instance_of::<PyRuntimeError>(py));
+            assert!(err.is_instance_of::<VelesDBError>(py));
         });
     }
 

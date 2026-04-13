@@ -16,7 +16,7 @@ dependencies = [
     "python-multipart>=0.0.6,<1.0.0",
     "sentence-transformers>=2.2.0,<4.0.0",
     "pymupdf>=1.23.0,<2.0.0",
-    "httpx>=0.25.0,<1.0.0",
+    "velesdb>=1.12.0",
     "pydantic>=2.5.0,<3.0.0",
     "pydantic-settings>=2.1.0,<3.0.0",
     "aiofiles>=23.0.0,<25.0.0",
@@ -25,9 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.0,<9.0",
-    "pytest-asyncio>=0.21.0,<1.0.0",
     "pytest-cov>=4.1.0,<7.0.0",
-    "httpx>=0.25.0,<1.0.0",
 ]
 
 [build-system]
@@ -38,7 +36,6 @@ build-backend = "hatchling.build"
 packages = ["src"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-v --cov=src --cov-report=term-missing"
 

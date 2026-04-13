@@ -2,7 +2,7 @@
 //!
 //! Extracted from collection.rs to reduce file size and improve maintainability.
 
-use pyo3::exceptions::{PyKeyError, PyMemoryError, PyOverflowError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyKeyError, PyMemoryError, PyOverflowError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::{BTreeMap, HashMap};
@@ -31,14 +31,14 @@ use velesdb_core::{Filter, Point, SearchResult};
 /// | VELES-003  | `PointNotFound`           | `KeyError`                    |
 /// | VELES-004  | `DimensionMismatch`       | `DimensionMismatchError`      |
 /// | VELES-005  | `InvalidVector`           | `ValueError`                  |
-/// | VELES-006  | `Storage`                 | `RuntimeError`                |
-/// | VELES-007  | `Index`                   | `RuntimeError`                |
-/// | VELES-008  | `IndexCorrupted`          | `RuntimeError`                |
+/// | VELES-006  | `Storage`                 | `VelesDBError`                |
+/// | VELES-007  | `Index`                   | `VelesDBError`                |
+/// | VELES-008  | `IndexCorrupted`          | `VelesDBError`                |
 /// | VELES-009  | `Config`                  | `ValueError`                  |
 /// | VELES-010  | `Query`                   | `ValueError`                  |
-/// | VELES-011  | `Io`                      | `RuntimeError`                |
-/// | VELES-012  | `Serialization`           | `RuntimeError`                |
-/// | VELES-013  | `Internal`                | `RuntimeError`                |
+/// | VELES-011  | `Io`                      | `VelesDBError`                |
+/// | VELES-012  | `Serialization`           | `VelesDBError`                |
+/// | VELES-013  | `Internal`                | `VelesDBError`                |
 /// | VELES-014  | `VectorNotAllowed`        | `ValueError`                  |
 /// | VELES-015  | `SearchNotSupported`      | `ValueError`                  |
 /// | VELES-016  | `VectorRequired`          | `ValueError`                  |
@@ -49,24 +49,24 @@ use velesdb_core::{Filter, Point, SearchResult};
 /// | VELES-021  | `InvalidEdgeLabel`        | `ValueError`                  |
 /// | VELES-022  | `NodeNotFound`            | `KeyError`                    |
 /// | VELES-023  | `Overflow`                | `OverflowError`               |
-/// | VELES-024  | `ColumnStoreError`        | `RuntimeError`                |
-/// | VELES-025  | `GpuError`                | `RuntimeError`                |
-/// | VELES-026  | `EpochMismatch`           | `RuntimeError`                |
-/// | VELES-027  | `GuardRail`               | `RuntimeError`                |
+/// | VELES-024  | `ColumnStoreError`        | `VelesDBError`                |
+/// | VELES-025  | `GpuError`                | `VelesDBError`                |
+/// | VELES-026  | `EpochMismatch`           | `VelesDBError`                |
+/// | VELES-027  | `GuardRail`               | `VelesDBError`                |
 /// | VELES-028  | `InvalidQuantizerConfig`  | `ValueError`                  |
-/// | VELES-029  | `TrainingFailed`          | `RuntimeError`                |
-/// | VELES-030  | `SparseIndexError`        | `RuntimeError`                |
+/// | VELES-029  | `TrainingFailed`          | `VelesDBError`                |
+/// | VELES-030  | `SparseIndexError`        | `VelesDBError`                |
 /// | VELES-031  | `DatabaseLocked`          | `DatabaseLockedError`         |
 /// | VELES-032  | `InvalidDimension`        | `ValueError`                  |
 /// | VELES-033  | `AllocationFailed`        | `MemoryError`                 |
 /// | VELES-034  | `InvalidCollectionName`   | `ValueError`                  |
-/// | VELES-035  | `SnapshotBuildFailed`     | `RuntimeError`                |
-/// | VELES-036  | `IncompatibleSchemaVersion` | `RuntimeError`              |
+/// | VELES-035  | `SnapshotBuildFailed`     | `VelesDBError`                |
+/// | VELES-036  | `IncompatibleSchemaVersion` | `VelesDBError`              |
 ///
 /// The wildcard arm at the bottom handles future variants added under
 /// the `#[non_exhaustive]` attribute on `velesdb_core::Error`. New
-/// variants fall through to `RuntimeError` until this mapping is
-/// updated; the unit test `test_core_err_mapping_is_exhaustive_via_code`
+/// variants fall through to `VelesDBError` until this mapping is
+/// updated; the unit test `test_core_err_mapping_covers_every_code`
 /// in `exceptions.rs` guards against silently adding a code without a
 /// Python mapping.
 pub fn core_err(e: velesdb_core::Error) -> PyErr {
@@ -108,7 +108,8 @@ pub fn core_err(e: velesdb_core::Error) -> PyErr {
         E::Overflow(_) => PyOverflowError::new_err(e.to_string()),
         E::AllocationFailed(_) => PyMemoryError::new_err(e.to_string()),
 
-        // Engine / IO / internal — generic RuntimeError
+        // Engine / IO / internal — VelesDBError so callers can catch with
+        // `except velesdb.VelesDBError` as a catch-all for all engine errors.
         E::Storage(_)
         | E::Index(_)
         | E::IndexCorrupted(_)
@@ -122,13 +123,15 @@ pub fn core_err(e: velesdb_core::Error) -> PyErr {
         | E::TrainingFailed(_)
         | E::SparseIndexError(_)
         | E::SnapshotBuildFailed(_)
-        | E::IncompatibleSchemaVersion { .. } => PyRuntimeError::new_err(e.to_string()),
+        | E::IncompatibleSchemaVersion { .. } => {
+            crate::exceptions::VelesDBError::new_err(e.to_string())
+        }
 
-        // Forward-compat: unknown future variants fall back to RuntimeError.
+        // Forward-compat: unknown future variants fall back to VelesDBError.
         // A new variant added to `velesdb_core::Error` should trigger the
         // unit test `test_core_err_mapping_covers_every_code` and be given
         // an explicit arm above before this wildcard catches it silently.
-        _ => PyRuntimeError::new_err(e.to_string()),
+        _ => crate::exceptions::VelesDBError::new_err(e.to_string()),
     }
 }
 
