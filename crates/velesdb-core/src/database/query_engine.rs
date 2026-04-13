@@ -415,6 +415,7 @@ impl Database {
     /// 1. Analyze WHERE for pushdown-eligible conditions
     /// 2. Strip pushed conditions from base query
     /// 3. For each JOIN: lookup, filtered, or full `ColumnStore` path
+    /// 4. Apply post-join filters (cross-source predicates)
     fn execute_single_select(
         &self,
         query: &crate::velesql::Query,
@@ -429,20 +430,9 @@ impl Database {
             return base_collection.execute_query(&single_query, params);
         }
 
-        let join_tables =
-            crate::collection::search::query::pushdown::extract_join_tables(&query.select.joins);
-        let graph_vars = std::collections::HashSet::new();
-        let analysis = query.select.where_clause.as_ref().map(|wc| {
-            crate::collection::search::query::pushdown::analyze_for_pushdown(
-                wc,
-                &graph_vars,
-                &join_tables,
-            )
-        });
+        let analysis = Self::analyze_join_pushdown_for_select(&query.select);
 
-        let pushed = analysis
-            .as_ref()
-            .map_or_else(Vec::new, |a| a.column_store_filters.clone());
+        let pushed = analysis.column_store_filters.clone();
 
         single_query.select.joins.clear();
         if !pushed.is_empty() {
@@ -453,6 +443,73 @@ impl Database {
         let mut results = base_collection.execute_query(&single_query, params)?;
         for join in &query.select.joins {
             results = self.execute_single_join(&results, join, &pushed)?;
+        }
+
+        // Apply post-join filters: cross-source predicates that reference
+        // columns from both the base collection and joined ColumnStore tables.
+        if !analysis.post_join_filters.is_empty() {
+            results = Self::apply_post_join_filters(
+                &base_collection,
+                results,
+                &analysis.post_join_filters,
+                params,
+                &query.select.from_alias,
+            )?;
+        }
+
+        Ok(results)
+    }
+
+    /// Runs pushdown analysis on a SELECT statement's WHERE clause and JOINs.
+    ///
+    /// Returns the classified conditions so the caller can route each filter
+    /// to the correct execution phase (pre-join, during-join, post-join).
+    fn analyze_join_pushdown_for_select(
+        stmt: &crate::velesql::SelectStatement,
+    ) -> crate::collection::search::query::pushdown::PushdownAnalysis {
+        let join_tables =
+            crate::collection::search::query::pushdown::extract_join_tables(&stmt.joins);
+        let graph_vars: std::collections::HashSet<String> =
+            stmt.from_alias.iter().cloned().collect();
+        let analysis = stmt.where_clause.as_ref().map_or_else(
+            crate::collection::search::query::pushdown::PushdownAnalysis::default,
+            |wc| {
+                crate::collection::search::query::pushdown::analyze_for_pushdown(
+                    wc,
+                    &graph_vars,
+                    &join_tables,
+                )
+            },
+        );
+        tracing::debug!(
+            column_store = analysis.column_store_filters.len(),
+            graph = analysis.graph_filters.len(),
+            post_join = analysis.post_join_filters.len(),
+            has_pushdown = analysis.has_pushdown(),
+            "JOIN pushdown analysis"
+        );
+        analysis
+    }
+
+    /// Applies post-join filters to merged results.
+    ///
+    /// Post-join filters are cross-source predicates that reference columns
+    /// from both the base collection and joined tables. They can only be
+    /// evaluated after the JOIN has merged payloads from both sides.
+    fn apply_post_join_filters(
+        base_collection: &crate::collection::Collection,
+        mut results: Vec<SearchResult>,
+        post_join_filters: &[crate::velesql::Condition],
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        from_aliases: &[String],
+    ) -> Result<Vec<SearchResult>> {
+        for filter in post_join_filters {
+            results = base_collection.apply_where_condition_to_results(
+                results,
+                filter,
+                params,
+                from_aliases,
+            )?;
         }
         Ok(results)
     }

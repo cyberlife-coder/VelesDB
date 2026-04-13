@@ -4,8 +4,6 @@
 //! data source, enabling filters to be pushed down before JOIN operations
 //! for significant performance improvements.
 
-#![allow(dead_code)]
-
 use crate::velesql::{Condition, JoinClause};
 use std::collections::HashSet;
 

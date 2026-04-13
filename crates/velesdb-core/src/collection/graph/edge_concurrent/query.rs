@@ -196,6 +196,12 @@ impl ConcurrentEdgeStore {
         self.edge_ids.read().is_empty()
     }
 
+    /// Returns the number of distinct edge labels in the label table.
+    #[must_use]
+    pub fn label_count(&self) -> usize {
+        self.label_table.read().len()
+    }
+
     /// Returns all edges across all shards (cloned).
     ///
     /// Uses the `edge_ids` registry to look up each edge exactly once in its

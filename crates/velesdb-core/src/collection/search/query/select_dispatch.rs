@@ -10,9 +10,100 @@ use crate::point::SearchResult;
 
 use super::{distinct, pushdown, ExtractedComponents, MAX_LIMIT};
 
+/// Global MATCH query metrics collector (EPIC-050).
+///
+/// Uses `LazyLock` for thread-safe one-time initialisation.
+/// Per-collection metrics registries are a future enhancement.
+static MATCH_METRICS: std::sync::LazyLock<super::match_metrics::MatchMetrics> =
+    std::sync::LazyLock::new(super::match_metrics::MatchMetrics::new);
+
 impl Collection {
+    /// Computes collection statistics for MATCH query planning.
+    ///
+    /// Gathers node count, edge count, average degree, and label statistics
+    /// from the live collection data structures for cost-based strategy selection.
+    // Reason: usize->f64 casts are for cost-estimation ratios, not precise calculations.
+    #[allow(clippy::cast_precision_loss)]
+    fn compute_match_collection_stats(&self) -> super::match_planner::CollectionStats {
+        let total_nodes = self.len();
+        let total_edges = self.edge_store.len();
+        let avg_degree = if total_nodes > 0 {
+            total_edges as f64 / total_nodes as f64
+        } else {
+            0.0
+        };
+        let label_count = self.edge_store.label_count();
+        let label_selectivity = if label_count > 0 {
+            1.0 / label_count as f64
+        } else {
+            1.0
+        };
+        super::match_planner::CollectionStats {
+            total_nodes,
+            total_edges,
+            avg_degree,
+            label_count,
+            label_selectivity,
+        }
+    }
+
     /// Dispatches a MATCH query through the graph traversal path.
+    ///
+    /// Calls the cost-based `MatchQueryPlanner` to select an execution strategy,
+    /// records query metrics via the global `MATCH_METRICS` collector, then
+    /// delegates to the graph traversal engine.
     pub(super) fn dispatch_match_query(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Vec<SearchResult>> {
+        let start = std::time::Instant::now();
+
+        // W6-A2: Cost-based strategy selection.
+        let stats = self.compute_match_collection_stats();
+        let strategy = super::match_planner::MatchQueryPlanner::plan(match_clause, &stats);
+        tracing::debug!(strategy = ?strategy, "MATCH execution strategy selected");
+
+        // Dispatch based on strategy. VectorFirst and Parallel fall back to
+        // GraphFirst until Phase B/D implement dedicated paths.
+        match &strategy {
+            super::match_planner::MatchExecutionStrategy::VectorFirst { .. } => {
+                tracing::warn!(
+                    "VectorFirst MATCH strategy selected but not yet implemented; \
+                     falling back to GraphFirst"
+                );
+            }
+            super::match_planner::MatchExecutionStrategy::Parallel { .. } => {
+                tracing::warn!(
+                    "Parallel MATCH strategy selected but not yet implemented; \
+                     falling back to GraphFirst"
+                );
+            }
+            super::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {}
+        }
+
+        let result = self.execute_match_pipeline(match_clause, params, ctx);
+
+        // W6-A3: Record metrics.
+        let max_depth = super::match_planner::MatchQueryPlanner::count_hops(match_clause);
+        match &result {
+            Ok(results) => {
+                MATCH_METRICS.record_success(start.elapsed(), results.len(), max_depth);
+            }
+            Err(_) => {
+                MATCH_METRICS.record_failure(start.elapsed());
+            }
+        }
+
+        result
+    }
+
+    /// Executes the MATCH pipeline: traversal, ordering, conversion, and limits.
+    ///
+    /// Factored out of `dispatch_match_query` so metrics recording wraps the
+    /// entire operation cleanly.
+    fn execute_match_pipeline(
         &self,
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
@@ -123,24 +214,33 @@ impl Collection {
     }
 
     /// Analyzes JOIN pushdown opportunities (EPIC-031 US-006).
+    ///
+    /// Returns a [`PushdownAnalysis`](pushdown::PushdownAnalysis) classifying
+    /// WHERE conditions by data source so the caller can route each filter to
+    /// the correct execution stage.
     #[allow(clippy::unused_self)]
-    pub(super) fn analyze_join_pushdown(&self, stmt: &crate::velesql::SelectStatement) {
+    pub(super) fn analyze_join_pushdown(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+    ) -> pushdown::PushdownAnalysis {
         if stmt.joins.is_empty() {
-            return;
+            return pushdown::PushdownAnalysis::default();
         }
-        if let Some(ref cond) = stmt.where_clause {
-            let graph_vars: std::collections::HashSet<String> =
-                stmt.from_alias.iter().cloned().collect();
-            let join_tables = pushdown::extract_join_tables(&stmt.joins);
-            let analysis = pushdown::analyze_for_pushdown(cond, &graph_vars, &join_tables);
-            tracing::debug!(
-                column_store_filters = analysis.column_store_filters.len(),
-                graph_filters = analysis.graph_filters.len(),
-                post_join_filters = analysis.post_join_filters.len(),
-                has_pushdown = analysis.has_pushdown(),
-                "JOIN pushdown analysis complete"
-            );
-        }
+        let Some(ref cond) = stmt.where_clause else {
+            return pushdown::PushdownAnalysis::default();
+        };
+        let graph_vars: std::collections::HashSet<String> =
+            stmt.from_alias.iter().cloned().collect();
+        let join_tables = pushdown::extract_join_tables(&stmt.joins);
+        let analysis = pushdown::analyze_for_pushdown(cond, &graph_vars, &join_tables);
+        tracing::debug!(
+            column_store_filters = analysis.column_store_filters.len(),
+            graph_filters = analysis.graph_filters.len(),
+            post_join_filters = analysis.post_join_filters.len(),
+            has_pushdown = analysis.has_pushdown(),
+            "JOIN pushdown analysis complete"
+        );
+        analysis
     }
 
     /// Applies DISTINCT, ORDER BY (with LET bindings), OFFSET, LIMIT, and
