@@ -27,6 +27,7 @@ pub(crate) struct HnswSafetyCounters {
 
 impl HnswSafetyCounters {
     /// Creates a new counter set with all values at zero.
+    #[allow(dead_code)] // Reason: Used only via HNSW_COUNTERS static initialization
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -52,6 +53,7 @@ impl HnswSafetyCounters {
     }
 
     /// Increments the invariant violation counter.
+    #[allow(dead_code)] // Reason: Observability — wired into lock-rank violation detection
     #[inline]
     pub fn record_invariant_violation(&self) {
         self.invariant_violation_total
@@ -59,6 +61,7 @@ impl HnswSafetyCounters {
     }
 
     /// Increments the corruption detection counter.
+    #[allow(dead_code)] // Reason: Observability — wired into graph integrity checks
     #[inline]
     pub fn record_corruption(&self) {
         self.corruption_detected_total
@@ -90,4 +93,5 @@ pub(crate) struct CounterSnapshot {
 }
 
 /// Global safety counters instance — always active in all builds.
+#[allow(dead_code)] // Reason: Observability infrastructure — used from locking module
 pub(crate) static HNSW_COUNTERS: HnswSafetyCounters = HnswSafetyCounters::new();

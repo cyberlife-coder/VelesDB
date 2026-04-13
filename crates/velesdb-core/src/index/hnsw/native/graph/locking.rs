@@ -17,6 +17,7 @@
 //! (no thread-local stack overhead). In debug builds, full stack-based
 //! tracking with tracing warnings is enabled.
 
+#[cfg(debug_assertions)]
 use super::safety_counters::HNSW_COUNTERS;
 
 /// Lock rank values — monotonically increasing acquisition order.
