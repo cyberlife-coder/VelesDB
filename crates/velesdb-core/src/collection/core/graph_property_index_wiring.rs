@@ -142,7 +142,6 @@ impl Collection {
     }
 
     /// Records a query pattern for the index advisor.
-    #[allow(dead_code)] // Reason: Public API for query evaluator — called when MATCH pipeline integrates pattern tracking
     pub(crate) fn record_query_pattern(
         &self,
         labels: Vec<String>,

@@ -4,9 +4,11 @@
 //! file NLOC under 500. These methods handle MATCH dispatch, parallel
 //! execution, result merging, and MATCH-specific metrics.
 
+use crate::collection::graph::property_index::PredicateType;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
+use crate::velesql::{CompareOp, Condition};
 
 use super::MAX_LIMIT;
 
@@ -99,6 +101,15 @@ impl Collection {
             Err(_) => {
                 MATCH_METRICS.record_failure(start.elapsed());
             }
+        }
+
+        // S4-10: Record query pattern for the index advisor.
+        if result.is_ok() {
+            // Reason: u128->u64 cast; query durations < u64::MAX ms (~585 millennia)
+            #[allow(clippy::cast_possible_truncation)]
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            let (labels, properties, predicates) = extract_match_query_pattern(match_clause);
+            self.record_query_pattern(labels, properties, predicates, elapsed_ms);
         }
 
         result
@@ -208,6 +219,86 @@ impl Collection {
             .update_graph_latency(graph_latency_us);
         self.guard_rails.circuit_breaker.record_success();
         Ok(results)
+    }
+}
+
+/// Extracts labels, property names, and predicate types from a MATCH clause
+/// for index advisor pattern tracking (S4-10).
+///
+/// Labels come from all `NodePattern.labels` across every pattern.
+/// Properties and predicates come from the WHERE clause conditions.
+fn extract_match_query_pattern(
+    match_clause: &crate::velesql::MatchClause,
+) -> (Vec<String>, Vec<String>, Vec<PredicateType>) {
+    let mut labels: Vec<String> = match_clause
+        .patterns
+        .iter()
+        .flat_map(|p| p.nodes.iter())
+        .flat_map(|n| n.labels.iter())
+        .cloned()
+        .collect();
+    labels.sort_unstable();
+    labels.dedup();
+
+    let mut properties: Vec<String> = Vec::new();
+    let mut predicates: Vec<PredicateType> = Vec::new();
+
+    if let Some(ref cond) = match_clause.where_clause {
+        collect_condition_predicates(cond, &mut properties, &mut predicates);
+    }
+
+    properties.sort_unstable();
+    properties.dedup();
+
+    (labels, properties, predicates)
+}
+
+/// Recursively walks a `Condition` tree and collects property names and
+/// their corresponding `PredicateType` for the index advisor.
+// Reason: Condition is #[non_exhaustive] — the wildcard arm is required for
+// forward-compatibility when new variants are added, even though the compiler
+// currently sees all arms as covered within the same crate.
+#[allow(unreachable_patterns)]
+fn collect_condition_predicates(
+    cond: &Condition,
+    properties: &mut Vec<String>,
+    predicates: &mut Vec<PredicateType>,
+) {
+    match cond {
+        Condition::Comparison(c) => {
+            properties.push(c.column.clone());
+            let pred = match c.operator {
+                CompareOp::Eq | CompareOp::NotEq => PredicateType::Equality,
+                CompareOp::Gt | CompareOp::Gte | CompareOp::Lt | CompareOp::Lte => {
+                    PredicateType::Range
+                }
+            };
+            predicates.push(pred);
+        }
+        Condition::In(i) => {
+            properties.push(i.column.clone());
+            predicates.push(PredicateType::In);
+        }
+        Condition::Between(b) => {
+            properties.push(b.column.clone());
+            predicates.push(PredicateType::Range);
+        }
+        Condition::Like(l) => {
+            properties.push(l.column.clone());
+            predicates.push(PredicateType::Like);
+        }
+        Condition::And(lhs, rhs) | Condition::Or(lhs, rhs) => {
+            collect_condition_predicates(lhs, properties, predicates);
+            collect_condition_predicates(rhs, properties, predicates);
+        }
+        Condition::Not(inner) | Condition::Group(inner) => {
+            collect_condition_predicates(inner, properties, predicates);
+        }
+        // All remaining variants (vector search, similarity, null checks,
+        // full-text match, graph match, contains, geo conditions, and any
+        // future #[non_exhaustive] additions) do not map to property index
+        // predicates — intentionally skipped.
+        _ => {}
     }
 }
 
