@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 use tower::ServiceExt;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -22,7 +21,7 @@ use velesdb_core::Database;
 use velesdb_server::ApiDoc;
 use velesdb_server::{
     auth::{auth_middleware, AuthState},
-    config::{parse_api_keys_env, CliOverrides, ServerConfig},
+    config::{build_cors_layer, parse_api_keys_env, CliOverrides, CorsConfig, ServerConfig},
     routes::api_routes,
     AppState, OnboardingMetrics,
 };
@@ -90,6 +89,21 @@ fn log_startup(cfg: &ServerConfig) {
     } else {
         tracing::info!("Rate limiting disabled");
     }
+    log_cors_config(&cfg.cors);
+}
+
+fn log_cors_config(cors: &CorsConfig) {
+    if cors.is_permissive() {
+        tracing::warn!(
+            "CORS is permissive (all origins allowed). \
+             Set [cors] allowed_origins in velesdb.toml for production."
+        );
+    } else {
+        tracing::info!(
+            "CORS restricted to {} origin(s)",
+            cors.allowed_origins.len()
+        );
+    }
 }
 
 fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
@@ -128,6 +142,7 @@ fn build_router(
     state: Arc<AppState>,
     auth_state: AuthState,
     rate_limit: u32,
+    cors: &CorsConfig,
 ) -> anyhow::Result<Router> {
     let routes = api_routes();
 
@@ -155,12 +170,14 @@ fn build_router(
         api_router.merge(Router::<()>::new().merge(swagger_ui))
     };
 
+    let cors_layer = build_cors_layer(cors);
+
     let router = api_router
         .layer(axum::middleware::from_fn_with_state(
             auth_state,
             auth_middleware,
         ))
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer)
         .layer(TraceLayer::new_for_http());
 
     if rate_limit > 0 {
@@ -416,7 +433,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = init_app_state(&cfg.data_dir)?;
     let auth_state = AuthState::new(cfg.api_keys.clone());
-    let app = build_router(state.clone(), auth_state, cfg.rate_limit)?;
+    let app = build_router(state.clone(), auth_state, cfg.rate_limit, &cfg.cors)?;
 
     if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
         serve_tls(
