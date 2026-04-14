@@ -125,7 +125,7 @@ export class WasmBackend implements IVelesDBBackend {
   async init(): Promise<void> {
     if (this._initialized) { return; }
     try {
-      this.wasmModule = await import('@wiscale/velesdb-wasm') as WasmModule;
+      this.wasmModule = await import('@wiscale/velesdb-wasm') as unknown as WasmModule;
       await this.wasmModule.default();
       this._initialized = true;
     } catch (error) {
@@ -161,8 +161,9 @@ export class WasmBackend implements IVelesDBBackend {
     if (this.collections.has(name)) {
       throw new VelesDBError(`Collection '${name}' already exists`, 'COLLECTION_EXISTS');
     }
+    const dimension = config.dimension ?? 0;
     const metric = config.metric ?? 'cosine';
-    const store = new this.wasmModule!.VectorStore(config.dimension, metric);
+    const store = new this.wasmModule!.VectorStore(dimension, metric);
     this.collections.set(name, {
       config: { ...config, metric },
       store,
@@ -277,9 +278,7 @@ export class WasmBackend implements IVelesDBBackend {
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
     const numericId = toNumericId(id);
-    const point = collection.store.get(BigInt(numericId)) as
-      | { id: bigint | number; vector: number[] | Float32Array; payload?: Record<string, unknown> | null }
-      | null;
+    const point = collection.store.get(BigInt(numericId));
     if (!point) { return null; }
     const payload = point.payload ?? collection.payloads.get(canonicalPayloadKey(numericId));
     return {
@@ -297,7 +296,7 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
-    return collection.store.is_empty();
+    return collection.store.is_empty;
   }
 
   async flush(collectionName: string): Promise<void> {
