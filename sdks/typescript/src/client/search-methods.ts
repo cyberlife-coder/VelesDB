@@ -29,6 +29,7 @@ import type {
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
+  StreamUpsertResponse,
 } from '../types';
 import type { FilterInput } from '../filter';
 import { ValidationError } from '../types';
@@ -132,6 +133,17 @@ export function streamInsert(
 ): Promise<void> {
   validateDocsBatch(docs, doc => validateDocument(doc, config));
   return backend.streamInsert(collection, docs);
+}
+
+/** Batch upsert points via the NDJSON streaming endpoint. */
+export function streamUpsertPoints(
+  backend: IVelesDBBackend,
+  config: VelesDBConfig,
+  collection: string,
+  docs: VectorDocument[]
+): Promise<StreamUpsertResponse> {
+  validateDocsBatch(docs, doc => validateDocument(doc, config));
+  return backend.streamUpsertPoints(collection, docs);
 }
 
 /** Scroll through collection points with cursor-based pagination. */

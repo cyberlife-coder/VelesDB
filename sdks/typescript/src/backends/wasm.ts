@@ -78,6 +78,7 @@ import {
   wasmScroll,
   wasmTrainPq,
   wasmStreamInsert,
+  wasmStreamUpsertPoints,
   wasmCreateGraphCollection,
   wasmGetCollectionStats,
   wasmAnalyzeCollection,
@@ -358,6 +359,7 @@ export class WasmBackend implements IVelesDBBackend {
   async getNodeDegree(c: string, n: number): Promise<DegreeResponse> { this.ensureInitialized(); return wasmGetNodeDegree(c, n); }
   async trainPq(c: string, o?: PqTrainOptions): Promise<string> { this.ensureInitialized(); return wasmTrainPq(c, o); }
   async streamInsert(c: string, d: VectorDocument[]): Promise<void> { this.ensureInitialized(); return wasmStreamInsert(c, d); }
+  async streamUpsertPoints(c: string, d: VectorDocument[]): Promise<import('../types').StreamUpsertResponse> { this.ensureInitialized(); return wasmStreamUpsertPoints(c, d); }
   async createGraphCollection(n: string, c?: GraphCollectionConfig): Promise<void> { this.ensureInitialized(); return wasmCreateGraphCollection(n, c); }
   async getCollectionStats(c: string): Promise<CollectionStatsResponse | null> { this.ensureInitialized(); return wasmGetCollectionStats(c); }
   async analyzeCollection(c: string): Promise<CollectionStatsResponse> { this.ensureInitialized(); return wasmAnalyzeCollection(c); }

@@ -61,6 +61,7 @@ import type {
   MatchQueryResponse,
   AggregateQueryOptions,
   AggregateResponse,
+  StreamUpsertResponse,
 } from './endpoints';
 
 /** Backend interface that all backends must implement */
@@ -210,6 +211,15 @@ export interface IVelesDBBackend {
 
   /** Stream-insert documents with backpressure support */
   streamInsert(collection: string, docs: VectorDocument[]): Promise<void>;
+
+  /**
+   * Batch upsert points via the NDJSON streaming endpoint.
+   *
+   * Sends all documents as a single NDJSON request to
+   * `POST /collections/{name}/points/stream` (up to 100 MB).
+   * Returns server-side processing statistics.
+   */
+  streamUpsertPoints(collection: string, docs: VectorDocument[]): Promise<StreamUpsertResponse>;
 
   // Graph Collection Management (Phase 8)
 

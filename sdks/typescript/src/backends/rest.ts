@@ -48,6 +48,7 @@ import type {
   MatchQueryResponse,
   AggregateQueryOptions,
   AggregateResponse,
+  StreamUpsertResponse,
 } from '../types';
 import type { FilterInput } from '../filter';
 import type { CapabilityMap } from '../capabilities';
@@ -104,7 +105,7 @@ import { query as _query, queryExplain as _queryExplain, collectionSanity as _co
 import { scroll as _scroll } from './scroll-backend';
 import { getCollectionStats as _getCollectionStats, analyzeCollection as _analyzeCollection, getCollectionConfig as _getCollectionConfig } from './admin-backend';
 import { createIndex as _createIndex, listIndexes as _listIndexes, hasIndex as _hasIndex, dropIndex as _dropIndex } from './index-backend';
-import { trainPq as _trainPq, streamInsert as _streamInsert } from './streaming-backend';
+import { trainPq as _trainPq, streamInsert as _streamInsert, streamUpsertPoints as _streamUpsertPoints } from './streaming-backend';
 import {
   createCollection as _createCollection, deleteCollection as _deleteCollection,
   getCollection as _getCollection, listCollections as _listCollections,
@@ -215,6 +216,7 @@ export class RestBackend implements IVelesDBBackend {
   // Streaming / PQ
   async trainPq(c: string, o?: PqTrainOptions): Promise<string> { this.ensureInitialized(); return _trainPq(buildStreamingTransport(this.httpConfig), c, o); }
   async streamInsert(c: string, d: VectorDocument[]): Promise<void> { this.ensureInitialized(); return _streamInsert(buildStreamingTransport(this.httpConfig), c, d); }
+  async streamUpsertPoints(c: string, d: VectorDocument[]): Promise<StreamUpsertResponse> { this.ensureInitialized(); return _streamUpsertPoints(buildStreamingTransport(this.httpConfig), c, d); }
 
   // Agent Memory
   async storeSemanticFact(c: string, e: SemanticEntry): Promise<void> { this.ensureInitialized(); return _storeSemanticFact(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e); }

@@ -147,3 +147,23 @@ export interface AggregateResponse {
   /** Response metadata. */
   meta: { velesqlContractVersion: string; count: number };
 }
+
+/**
+ * Response from `POST /collections/{name}/points/stream` (NDJSON batch upsert).
+ *
+ * The server returns statistics about the stream processing: how many points
+ * were inserted, how many were malformed, how many upserts failed, and how
+ * many network errors occurred while reading the request body.
+ */
+export interface StreamUpsertResponse {
+  /** Informational message from the server. */
+  message: string;
+  /** Number of points successfully upserted. */
+  inserted: number;
+  /** Number of NDJSON lines that could not be parsed as a valid Point. */
+  malformed: number;
+  /** Number of points where the upsert operation itself failed. */
+  failedUpserts: number;
+  /** Number of HTTP body stream read errors (non-zero means truncated transfer). */
+  networkErrors: number;
+}

@@ -44,6 +44,7 @@ import type {
   AggregateResponse,
   MatchQueryOptions,
   MatchQueryResponse,
+  StreamUpsertResponse,
 } from './types';
 import type { FilterInput } from './filter';
 import type { CapabilityMap } from './capabilities';
@@ -256,6 +257,11 @@ export class VelesDB {
   async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
     return searchMethods.streamInsert(this.backend, this.config, collection, docs);
+  }
+
+  async streamUpsertPoints(collection: string, docs: VectorDocument[]): Promise<StreamUpsertResponse> {
+    this.ensureInitialized();
+    return searchMethods.streamUpsertPoints(this.backend, this.config, collection, docs);
   }
 
   async searchIds(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<Array<{ id: number; score: number }>> {
