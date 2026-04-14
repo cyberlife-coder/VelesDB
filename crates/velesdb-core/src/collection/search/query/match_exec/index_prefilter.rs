@@ -28,11 +28,15 @@ struct ExtractedPredicate {
 enum PredicateKind {
     /// Equality: `column = value`
     Exact(serde_json::Value),
-    /// Greater than: `column > value`
+    /// Strict greater than: `column > value` (Bound::Excluded)
     Gt(serde_json::Value),
-    /// Less than: `column < value`
+    /// Greater than or equal: `column >= value` (Bound::Included)
+    Gte(serde_json::Value),
+    /// Strict less than: `column < value` (Bound::Excluded)
     Lt(serde_json::Value),
-    /// Range: `column BETWEEN low AND high`
+    /// Less than or equal: `column <= value` (Bound::Included)
+    Lte(serde_json::Value),
+    /// Range: `column BETWEEN low AND high` (both Bound::Included)
     Range(serde_json::Value, serde_json::Value),
 }
 
@@ -159,6 +163,9 @@ fn execute_single_lookup(
         PredicateKind::Exact(val) => collection.graph_range_lookup_exact(label, property, val),
         PredicateKind::Gt(val) => collection.graph_range_lookup_gt(label, property, val),
         PredicateKind::Lt(val) => collection.graph_range_lookup_lt(label, property, val),
+        // GTE/LTE use graph_range_lookup with inclusive bounds (Bound::Included).
+        PredicateKind::Gte(val) => collection.graph_range_lookup(label, property, Some(val), None),
+        PredicateKind::Lte(val) => collection.graph_range_lookup(label, property, None, Some(val)),
         PredicateKind::Range(low, high) => {
             collection.graph_range_lookup(label, property, Some(low), Some(high))
         }
@@ -229,8 +236,10 @@ fn comparison_to_predicate(
 
     let kind = match cmp.operator {
         CompareOp::Eq => PredicateKind::Exact(json_val),
-        CompareOp::Gt | CompareOp::Gte => PredicateKind::Gt(json_val),
-        CompareOp::Lt | CompareOp::Lte => PredicateKind::Lt(json_val),
+        CompareOp::Gt => PredicateKind::Gt(json_val),
+        CompareOp::Gte => PredicateKind::Gte(json_val),
+        CompareOp::Lt => PredicateKind::Lt(json_val),
+        CompareOp::Lte => PredicateKind::Lte(json_val),
         CompareOp::NotEq => return None, // Negation cannot be pre-filtered
     };
 
@@ -449,5 +458,56 @@ mod tests {
         assert_eq!(pred.alias, "n");
         assert_eq!(pred.property, "age");
         assert!(matches!(pred.kind, PredicateKind::Range(_, _)));
+    }
+
+    // Regression tests for Devin finding: GTE/LTE must use inclusive bounds,
+    // not strict GT/LT (which would exclude boundary values from prefilter).
+
+    #[test]
+    fn test_gte_maps_to_gte_not_gt() {
+        let cond = Condition::Comparison(Comparison {
+            column: "n.age".to_string(),
+            operator: CompareOp::Gte,
+            value: Value::Integer(30),
+        });
+        let params = HashMap::new();
+        let preds = extract_predicates(&cond, &params);
+        assert_eq!(preds.len(), 1);
+        assert!(
+            matches!(preds[0].kind, PredicateKind::Gte(_)),
+            "GTE must map to PredicateKind::Gte (inclusive), not Gt (exclusive)"
+        );
+    }
+
+    #[test]
+    fn test_lte_maps_to_lte_not_lt() {
+        let cond = Condition::Comparison(Comparison {
+            column: "n.price".to_string(),
+            operator: CompareOp::Lte,
+            value: Value::Float(99.99),
+        });
+        let params = HashMap::new();
+        let preds = extract_predicates(&cond, &params);
+        assert_eq!(preds.len(), 1);
+        assert!(
+            matches!(preds[0].kind, PredicateKind::Lte(_)),
+            "LTE must map to PredicateKind::Lte (inclusive), not Lt (exclusive)"
+        );
+    }
+
+    #[test]
+    fn test_strict_gt_maps_to_gt() {
+        let cond = Condition::Comparison(Comparison {
+            column: "n.score".to_string(),
+            operator: CompareOp::Gt,
+            value: Value::Float(0.5),
+        });
+        let params = HashMap::new();
+        let preds = extract_predicates(&cond, &params);
+        assert_eq!(preds.len(), 1);
+        assert!(
+            matches!(preds[0].kind, PredicateKind::Gt(_)),
+            "Strict GT must map to PredicateKind::Gt (exclusive)"
+        );
     }
 }

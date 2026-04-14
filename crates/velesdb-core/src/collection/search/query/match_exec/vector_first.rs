@@ -462,4 +462,30 @@ mod tests {
         assert!(passes_threshold(0.5, 0.5, false));
         assert!(!passes_threshold(0.7, 0.5, false));
     }
+
+    // Regression test: Devin review — NOT(Similarity) must be preserved.
+    // Stripping NOT(sim) inverts query semantics: "reject high-similarity"
+    // becomes "no filter at all".
+
+    #[test]
+    fn test_strip_sim_preserves_not_similarity() {
+        let sim = make_sim_condition();
+        let cond = Condition::Not(Box::new(sim));
+        let stripped = strip_similarity_from_where(Some(&cond));
+        assert!(
+            matches!(stripped, Some(Condition::Not(_))),
+            "NOT(Similarity) must be preserved — it is a meaningful residual filter"
+        );
+    }
+
+    #[test]
+    fn test_strip_sim_preserves_not_non_sim() {
+        let cmp = make_comparison_condition();
+        let cond = Condition::Not(Box::new(cmp));
+        let stripped = strip_similarity_from_where(Some(&cond));
+        assert!(
+            matches!(stripped, Some(Condition::Not(_))),
+            "NOT(comparison) should always be preserved"
+        );
+    }
 }

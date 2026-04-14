@@ -158,3 +158,11 @@ class VelesDBClient:
             )
         col.delete([point_id])
         return {"deleted": point_id}
+
+    def health_check(self) -> bool:
+        """Return True if the database is operational."""
+        try:
+            self._db.list_collections()
+            return True
+        except Exception:
+            return False

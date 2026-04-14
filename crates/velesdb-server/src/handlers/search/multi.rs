@@ -11,9 +11,7 @@ use std::sync::Arc;
 use crate::types::{ErrorResponse, MultiQuerySearchRequest, SearchResponse};
 use crate::AppState;
 
-use super::pipeline::{
-    finish_search_with_cb, parse_filter_or_400, validate_query_dimension,
-};
+use super::pipeline::{finish_search_with_cb, parse_filter_or_400, validate_query_dimension};
 use super::workers::run_blocking_search;
 use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
