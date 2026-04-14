@@ -1,7 +1,7 @@
 #![cfg(feature = "persistence")]
 //! E2E BDD tests for MATCH WHERE index prefilter pipeline.
 //!
-//! Exercises the full path: VelesQL parse -> MATCH planner -> index prefilter
+//! Exercises the full path: `VelesQL` parse -> MATCH planner -> index prefilter
 //! -> graph traversal -> WHERE evaluation -> results. Verifies that property
 //! indexes accelerate MATCH queries WITHOUT changing correctness.
 //!
@@ -9,8 +9,9 @@
 //! - GTE/LTE boundary values must be included (not excluded by strict GT/LT)
 //! - Compound AND with index narrows correctly
 
-// Reason: test IDs are small literals, safe truncation.
+// Reason: test IDs are small literals, safe truncation and precision loss acceptable.
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_precision_loss)]
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,7 +24,7 @@ use velesdb_core::{Database, DistanceMetric, Point, VectorCollection};
 // Helpers
 // =========================================================================
 
-/// Creates a VectorCollection with 10 nodes having _labels, age, city.
+/// Creates a `VectorCollection` with 10 nodes having `_labels`, age, city.
 /// Ages: 20..29, cities alternate Paris/London.
 fn setup_collection() -> (TempDir, VectorCollection) {
     let dir = TempDir::new().expect("test: tempdir");

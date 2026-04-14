@@ -407,11 +407,11 @@ mod tests {
         };
         let map = build_alias_label_map(&pattern);
         assert_eq!(
-            map.get("n").map(|v| v.as_slice()),
+            map.get("n").map(Vec::as_slice),
             Some(["Person".to_string()].as_slice())
         );
         assert_eq!(
-            map.get("m").map(|v| v.as_slice()),
+            map.get("m").map(Vec::as_slice),
             Some(["Company".to_string()].as_slice())
         );
     }
