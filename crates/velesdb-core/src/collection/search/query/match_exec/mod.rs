@@ -11,6 +11,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
+mod index_prefilter;
 mod similarity;
 mod start_nodes;
 mod vector_first;
@@ -150,6 +151,8 @@ struct SingleNodeCtx<'a> {
     seen_pairs: &'a mut std::collections::HashSet<(u64, u64)>,
     all_results: &'a mut Vec<MatchResult>,
     limit: usize,
+    /// S4-08: Pre-computed index filter set. `None` = no index available.
+    prefilter: Option<std::collections::HashSet<u64>>,
 }
 
 /// Mutable state carried through BFS traversal of a single pattern.
@@ -270,6 +273,12 @@ impl Collection {
             return Ok(());
         }
 
+        // S4-08: Compute index pre-filter once per pattern.
+        let prefilter = match_clause
+            .where_clause
+            .as_ref()
+            .and_then(|wc| index_prefilter::compute_index_prefilter(self, pattern, wc, params));
+
         let mut seen_pairs: std::collections::HashSet<(u64, u64)> =
             std::collections::HashSet::new();
 
@@ -281,6 +290,7 @@ impl Collection {
                 seen_pairs: &mut seen_pairs,
                 all_results,
                 limit,
+                prefilter,
             };
             return self.collect_single_node_results(&start_nodes, &mut sn_ctx);
         }
@@ -404,6 +414,10 @@ impl Collection {
         for (node_id, bindings) in start_nodes {
             if ctx.all_results.len() >= ctx.limit {
                 break;
+            }
+            // S4-08: Fast-reject via index pre-filter.
+            if !index_prefilter::passes_prefilter(ctx.prefilter.as_ref(), *node_id) {
+                continue;
             }
             if let Some(ref where_clause) = ctx.match_clause.where_clause {
                 if !self.evaluate_where_condition(

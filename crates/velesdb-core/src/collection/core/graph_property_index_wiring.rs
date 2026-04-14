@@ -176,7 +176,6 @@ impl Collection {
 
     /// Looks up node IDs matching a greater-than predicate.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API for query evaluator — used when MATCH WHERE predicate delegates to graph range index
     pub(crate) fn graph_range_lookup_gt(
         &self,
         label: &str,
@@ -192,7 +191,6 @@ impl Collection {
 
     /// Looks up node IDs matching a less-than predicate.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API for query evaluator — used when MATCH WHERE predicate delegates to graph range index
     pub(crate) fn graph_range_lookup_lt(
         &self,
         label: &str,
@@ -208,7 +206,6 @@ impl Collection {
 
     /// Looks up node IDs matching a range predicate.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API for query evaluator — used when MATCH WHERE predicate delegates to graph range index
     pub(crate) fn graph_range_lookup(
         &self,
         label: &str,
@@ -225,7 +222,6 @@ impl Collection {
 
     /// Looks up node IDs matching an exact value.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API for query evaluator — used when MATCH WHERE predicate delegates to graph range index
     pub(crate) fn graph_range_lookup_exact(
         &self,
         label: &str,
@@ -241,7 +237,6 @@ impl Collection {
 
     /// Looks up node IDs via composite index for multi-property equality.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API for query evaluator — used when MATCH WHERE predicate delegates to composite index
     pub(crate) fn composite_index_lookup(
         &self,
         label: &str,
