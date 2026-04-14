@@ -172,65 +172,67 @@ fn create_vector_collection(
     }
 
     // Phase 2: persist advanced overrides if any were requested.
-    //
-    // If this phase fails, we MUST roll back the Phase 1 collection
-    // creation so callers do not end up with a half-initialised
-    // collection on disk that would subsequently fail every retry
-    // with `CollectionExists`. Any delete error during rollback is
-    // logged but we still surface the original Phase 2 error to the
-    // caller because it is more actionable.
     if advanced.has_any() {
-        let Some(coll) = state.db.get_vector_collection(&req.name) else {
-            return Ok(Err(velesdb_core::error::Error::CollectionNotFound(
-                req.name.clone(),
-            )));
-        };
-        if let Err(phase_two_err) = coll.apply_advanced_config(
-            advanced.pq_rescore_oversampling,
-            #[cfg(feature = "persistence")]
-            advanced.deferred_indexing,
-            advanced.async_index_builder,
-        ) {
-            // Drop the coll handle before the rollback to release any
-            // read lock the registry hands back by default.
-            drop(coll);
-            let rollback_outcome = state.db.delete_collection(&req.name);
-            if let Err(ref rollback_err) = rollback_outcome {
-                tracing::warn!(
-                    collection = %req.name,
-                    rollback_error = %rollback_err,
-                    phase_two_error = %phase_two_err,
-                    "failed to roll back collection after apply_advanced_config error"
-                );
-            }
-
-            // Post-rollback validation (S2-NEW-13, audit A P1 +
-            // Devin ANALYSIS_0002 on PR #582): double-check that the
-            // collection has actually been removed from the registry
-            // before returning the Phase 2 error to the caller. If
-            // the rollback failed AND the collection is still
-            // present, the client retry will hit `CollectionExists`
-            // and have no idea why — log a critical diagnostic so
-            // operators can manually reconcile the orphaned state.
-            // The original Phase 2 error is still the return value
-            // because it is more actionable for the caller.
-            if state.db.get_any_collection(&req.name).is_some() {
-                tracing::error!(
-                    collection = %req.name,
-                    rollback_outcome = ?rollback_outcome,
-                    phase_two_error = %phase_two_err,
-                    "post-rollback invariant violated: collection still present in \
-                     registry after delete_collection was attempted. Manual \
-                     reconciliation required — client retries will fail with \
-                     CollectionExists until the orphaned collection is cleaned up."
-                );
-            }
-
-            return Ok(Err(phase_two_err));
-        }
+        return Ok(apply_advanced_with_rollback(state, &req.name, advanced));
     }
 
     Ok(Ok(()))
+}
+
+/// Applies advanced config overrides with rollback on failure.
+///
+/// If `apply_advanced_config` fails, deletes the collection to avoid
+/// orphaned half-initialised state, and logs diagnostics for operators.
+fn apply_advanced_with_rollback(
+    state: &AppState,
+    name: &str,
+    advanced: AdvancedCreateOverrides,
+) -> velesdb_core::error::Result<()> {
+    let Some(coll) = state.db.get_vector_collection(name) else {
+        return Err(velesdb_core::error::Error::CollectionNotFound(
+            name.to_string(),
+        ));
+    };
+    if let Err(phase_two_err) = coll.apply_advanced_config(
+        advanced.pq_rescore_oversampling,
+        #[cfg(feature = "persistence")]
+        advanced.deferred_indexing,
+        advanced.async_index_builder,
+    ) {
+        drop(coll);
+        let rollback_outcome = state.db.delete_collection(name);
+        if let Err(ref rollback_err) = rollback_outcome {
+            tracing::warn!(
+                collection = %name,
+                rollback_error = %rollback_err,
+                phase_two_error = %phase_two_err,
+                "failed to roll back collection after apply_advanced_config error"
+            );
+        }
+        log_rollback_invariant(state, name, &rollback_outcome, &phase_two_err);
+        return Err(phase_two_err);
+    }
+    Ok(())
+}
+
+/// Logs a critical diagnostic if a collection survives rollback.
+fn log_rollback_invariant(
+    state: &AppState,
+    name: &str,
+    rollback_outcome: &velesdb_core::error::Result<()>,
+    phase_two_err: &velesdb_core::error::Error,
+) {
+    if state.db.get_any_collection(name).is_some() {
+        tracing::error!(
+            collection = %name,
+            rollback_outcome = ?rollback_outcome,
+            phase_two_error = %phase_two_err,
+            "post-rollback invariant violated: collection still present in \
+             registry after delete_collection was attempted. Manual \
+             reconciliation required — client retries will fail with \
+             CollectionExists until the orphaned collection is cleaned up."
+        );
+    }
 }
 
 /// Parsed advanced override fields for the create-collection pipeline.

@@ -3,6 +3,7 @@
 pub(crate) mod batch;
 pub(crate) mod multi;
 mod pipeline;
+mod workers;
 
 use axum::{
     extract::{Path, State},
@@ -21,9 +22,9 @@ use crate::AppState;
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 use pipeline::{
     execute_search_request, finish_search_ids_with_cb, finish_search_with_cb,
-    finish_search_with_status, parse_filter_or_400, run_blocking_search,
-    run_search_with_optional_timeout, timeout_response, validate_query_dimension,
+    finish_search_with_status, parse_filter_or_400, timeout_response, validate_query_dimension,
 };
+use workers::{run_blocking_search, run_search_with_optional_timeout};
 
 #[allow(unused_imports)]
 pub use batch::__path_batch_search;
@@ -120,7 +121,7 @@ pub async fn search(
     let search_result = match execution {
         Ok(Ok(inner)) => inner,
         Ok(Err(resp)) => return resp,
-        Err(pipeline::TimeoutElapsed) => {
+        Err(workers::TimeoutElapsed) => {
             // Timeout elapsed: record the circuit-breaker failure and
             // return a 408 with the budget echoed back to the caller.
             collection.guard_rails().circuit_breaker.record_failure();
@@ -348,7 +349,7 @@ pub async fn search_ids(
     let search_result = match execution {
         Ok(Ok(inner)) => inner,
         Ok(Err(resp)) => return resp,
-        Err(pipeline::TimeoutElapsed) => {
+        Err(workers::TimeoutElapsed) => {
             collection.guard_rails().circuit_breaker.record_failure();
             let ms = timeout_ms.unwrap_or_default();
             return timeout_response(&name, ms);
