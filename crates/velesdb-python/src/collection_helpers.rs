@@ -182,7 +182,11 @@ fn payload_to_python(py: Python<'_>, payload: &Option<serde_json::Value>) -> PyO
 ///
 /// Uses `PyDict::new()` + `set_item()` directly and `PyString::intern()` for
 /// static keys to avoid repeated string allocation.
-pub fn search_result_to_dict(py: Python<'_>, result: &SearchResult) -> PyObject {
+pub fn search_result_to_dict(
+    py: Python<'_>,
+    result: &SearchResult,
+    include_vectors: bool,
+) -> PyObject {
     let dict = PyDict::new(py);
     // PyString::intern reuses the same Python string object across calls
     let _ = dict.set_item(PyString::intern(py, "id"), result.point.id);
@@ -191,6 +195,12 @@ pub fn search_result_to_dict(py: Python<'_>, result: &SearchResult) -> PyObject 
         PyString::intern(py, "payload"),
         payload_to_python(py, &result.point.payload),
     );
+    if include_vectors {
+        let _ = dict.set_item(
+            PyString::intern(py, "vector"),
+            result.point.vector.as_slice(),
+        );
+    }
     dict.into_any().unbind()
 }
 
@@ -235,10 +245,14 @@ pub fn point_to_dict(py: Python<'_>, point: &Point) -> PyObject {
 }
 
 /// Convert a list of `SearchResult`s to Python dicts.
-pub fn search_results_to_dicts(py: Python<'_>, results: Vec<SearchResult>) -> Vec<PyObject> {
+pub fn search_results_to_dicts(
+    py: Python<'_>,
+    results: Vec<SearchResult>,
+    include_vectors: bool,
+) -> Vec<PyObject> {
     results
         .into_iter()
-        .map(|r| search_result_to_dict(py, &r))
+        .map(|r| search_result_to_dict(py, &r, include_vectors))
         .collect()
 }
 

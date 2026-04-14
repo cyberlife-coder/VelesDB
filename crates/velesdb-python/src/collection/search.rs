@@ -46,7 +46,7 @@ impl Collection {
     ///
     /// Returns:
     ///     List of dicts with id, score, and payload.
-    #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None, sparse_index_name=None))]
+    #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None, sparse_index_name=None, include_vectors=false))]
     fn search(
         &self,
         py: Python<'_>,
@@ -55,6 +55,7 @@ impl Collection {
         top_k: usize,
         filter: Option<PyObject>,
         sparse_index_name: Option<String>,
+        include_vectors: bool,
     ) -> PyResult<Vec<PyObject>> {
         // Phase 1: Parse Python args (GIL held — required for PyObject access)
         let dense = vector.as_ref().map(|v| extract_vector(py, v)).transpose()?;
@@ -76,7 +77,7 @@ impl Collection {
         })?;
 
         // Phase 3: Convert results (GIL held — required for PyObject creation)
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, include_vectors))
     }
 
     /// Search for similar vectors with custom HNSW ef_search parameter.
@@ -96,7 +97,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Search with a named quality mode (fast, balanced, accurate, perfect, autotune).
@@ -124,7 +125,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Search returning only IDs and scores.
@@ -168,7 +169,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Full-text search using BM25 ranking.
@@ -195,7 +196,7 @@ impl Collection {
             }
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Hybrid search combining vector similarity and text search.
@@ -229,7 +230,7 @@ impl Collection {
             .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Batch search for multiple query vectors in parallel.
@@ -277,7 +278,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Parallel batch search for multiple query vectors.
@@ -463,7 +464,7 @@ impl Collection {
             .map(|query_results| {
                 query_results
                     .iter()
-                    .map(|r| search_result_to_dict(py, r))
+                    .map(|r| search_result_to_dict(py, r, false))
                     .collect()
             })
             .collect()
