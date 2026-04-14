@@ -291,9 +291,18 @@ fn strip_similarity_from_where(where_clause: Option<&Condition>) -> Option<Condi
     where_clause.and_then(strip_sim)
 }
 
-/// Recursively removes the first `Similarity` leaf from a condition tree.
+/// Recursively removes `Similarity` leaves from a condition tree.
 ///
 /// Returns `None` when the condition itself is a `Similarity` leaf.
+///
+/// # Limitations
+///
+/// - Strips ALL `Similarity` leaves, not just the one handled by
+///   vector search. Multiple similarity predicates in a single MATCH
+///   WHERE clause are not supported by VectorFirst strategy.
+/// - Does NOT recurse into `Not` nodes: `NOT(similarity(...) > 0.8)`
+///   is a meaningful residual filter (reject high-similarity matches)
+///   and must be preserved.
 fn strip_sim(cond: &Condition) -> Option<Condition> {
     match cond {
         Condition::Similarity(_) => None,
@@ -308,7 +317,9 @@ fn strip_sim(cond: &Condition) -> Option<Condition> {
             (None | Some(_), None) | (None, Some(_)) => None,
             (Some(l), Some(r)) => Some(Condition::Or(Box::new(l), Box::new(r))),
         },
-        Condition::Not(inner) => strip_sim(inner).map(|c| Condition::Not(Box::new(c))),
+        // NOT(Similarity) is a meaningful residual: "reject matches above
+        // threshold". Do not strip — preserve the entire NOT subtree.
+        Condition::Not(_) => Some(cond.clone()),
         Condition::Group(inner) => strip_sim(inner).map(|c| Condition::Group(Box::new(c))),
         other => Some(other.clone()),
     }

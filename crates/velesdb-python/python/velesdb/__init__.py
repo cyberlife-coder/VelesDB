@@ -161,7 +161,7 @@ class Collection:
     ) -> list[dict[str, Any]]:
         kwargs: dict[str, Any] = {"top_k": top_k}
         if vector is not None:
-            kwargs["vector"] = vector
+            kwargs["vector"] = list(vector)
         if filter is not None:
             kwargs["filter"] = filter
         if sparse_vector is not None:

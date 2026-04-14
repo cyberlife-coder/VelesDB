@@ -336,15 +336,35 @@ pub fn build_cors_layer(cors: &CorsConfig) -> tower_http::cors::CorsLayer {
         .allow_methods(methods)
         .max_age(std::time::Duration::from_secs(cors.max_age_secs));
 
-    let layer = if cors.allowed_headers.iter().any(|h| h == "*") {
+    // Per CORS spec (Fetch Standard), credentials mode is incompatible
+    // with wildcard headers — browsers will reject the preflight response.
+    // When both are configured, log a warning and skip the wildcard.
+    let has_wildcard_headers = cors.allowed_headers.iter().any(|h| h == "*");
+    let layer = if has_wildcard_headers && !cors.allow_credentials {
         layer.allow_headers(Any)
     } else {
+        if has_wildcard_headers && cors.allow_credentials {
+            tracing::warn!(
+                "CORS: allow_credentials=true is incompatible with wildcard \
+                 headers per CORS spec. Falling back to default headers \
+                 (Content-Type, Authorization)."
+            );
+        }
         let headers: Vec<axum::http::HeaderName> = cors
             .allowed_headers
             .iter()
+            .filter(|h| h.as_str() != "*")
             .filter_map(|h| h.parse().ok())
             .collect();
-        layer.allow_headers(headers)
+        if headers.is_empty() && cors.allow_credentials {
+            // Sensible defaults when wildcard was the only header configured
+            layer.allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+            ])
+        } else {
+            layer.allow_headers(headers)
+        }
     };
 
     if cors.allow_credentials {
