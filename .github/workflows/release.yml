@@ -36,6 +36,10 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  checks: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0

@@ -23,6 +23,9 @@ concurrency:
   group: bench-scalability-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   RUST_VERSION: "1.86"
   CARGO_TERM_COLOR: always
