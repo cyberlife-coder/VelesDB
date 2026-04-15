@@ -313,7 +313,7 @@ fn resolve_cors(defaults: CorsConfig, section: CorsSection) -> CorsConfig {
 /// for full backward compatibility. Otherwise, constructs a restrictive
 /// layer with the specified origins, methods, and headers.
 pub fn build_cors_layer(cors: &CorsConfig) -> tower_http::cors::CorsLayer {
-    use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+    use tower_http::cors::{AllowOrigin, CorsLayer};
 
     if cors.is_permissive() {
         return CorsLayer::permissive();
@@ -324,7 +324,6 @@ pub fn build_cors_layer(cors: &CorsConfig) -> tower_http::cors::CorsLayer {
         .iter()
         .filter_map(|o| o.parse().ok())
         .collect();
-
     let methods: Vec<axum::http::Method> = cors
         .allowed_methods
         .iter()
@@ -336,41 +335,48 @@ pub fn build_cors_layer(cors: &CorsConfig) -> tower_http::cors::CorsLayer {
         .allow_methods(methods)
         .max_age(std::time::Duration::from_secs(cors.max_age_secs));
 
-    // Per CORS spec (Fetch Standard), credentials mode is incompatible
-    // with wildcard headers — browsers will reject the preflight response.
-    // When both are configured, log a warning and skip the wildcard.
-    let has_wildcard_headers = cors.allowed_headers.iter().any(|h| h == "*");
-    let layer = if has_wildcard_headers && !cors.allow_credentials {
-        layer.allow_headers(Any)
-    } else {
-        if has_wildcard_headers && cors.allow_credentials {
-            tracing::warn!(
-                "CORS: allow_credentials=true is incompatible with wildcard \
-                 headers per CORS spec. Falling back to default headers \
-                 (Content-Type, Authorization)."
-            );
-        }
-        let headers: Vec<axum::http::HeaderName> = cors
-            .allowed_headers
-            .iter()
-            .filter(|h| h.as_str() != "*")
-            .filter_map(|h| h.parse().ok())
-            .collect();
-        if headers.is_empty() && cors.allow_credentials {
-            // Sensible defaults when wildcard was the only header configured
-            layer.allow_headers([
-                axum::http::header::CONTENT_TYPE,
-                axum::http::header::AUTHORIZATION,
-            ])
-        } else {
-            layer.allow_headers(headers)
-        }
-    };
+    let layer = apply_cors_headers_policy(layer, cors);
 
     if cors.allow_credentials {
         layer.allow_credentials(true)
     } else {
         layer
+    }
+}
+
+/// Applies the headers policy to a `CorsLayer`, honouring the CORS spec rule that
+/// `allow_credentials=true` is incompatible with wildcard headers (browsers reject
+/// the preflight). Logs a warning and falls back to default headers in that case.
+fn apply_cors_headers_policy(
+    layer: tower_http::cors::CorsLayer,
+    cors: &CorsConfig,
+) -> tower_http::cors::CorsLayer {
+    use tower_http::cors::Any;
+
+    let has_wildcard = cors.allowed_headers.iter().any(|h| h == "*");
+    if has_wildcard && !cors.allow_credentials {
+        return layer.allow_headers(Any);
+    }
+    if has_wildcard && cors.allow_credentials {
+        tracing::warn!(
+            "CORS: allow_credentials=true is incompatible with wildcard \
+             headers per CORS spec. Falling back to default headers \
+             (Content-Type, Authorization)."
+        );
+    }
+    let headers: Vec<axum::http::HeaderName> = cors
+        .allowed_headers
+        .iter()
+        .filter(|h| h.as_str() != "*")
+        .filter_map(|h| h.parse().ok())
+        .collect();
+    if headers.is_empty() && cors.allow_credentials {
+        layer.allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+        ])
+    } else {
+        layer.allow_headers(headers)
     }
 }
 

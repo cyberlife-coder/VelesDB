@@ -96,52 +96,61 @@ impl Collection {
             if results.len() >= limit {
                 break;
             }
-
             ctx.check_timeout()
                 .map_err(|e| Error::GuardRail(e.to_string()))?;
 
-            let node_id = candidate.point.id;
-            let Some(pattern) = match_clause.patterns.first() else {
-                continue;
-            };
-
-            if !self.candidate_matches_start_pattern(node_id, pattern, &payload_guard) {
-                continue;
-            }
-
-            let graph_ok = if pattern.relationships.is_empty() {
-                self.candidate_passes_where(node_id, match_clause, params, &payload_guard, pattern)?
-            } else {
-                self.candidate_has_graph_path(
-                    node_id,
-                    match_clause,
-                    params,
-                    &payload_guard,
-                    pattern,
-                )?
-            };
-
-            if graph_ok {
-                let mut mr = MatchResult::new(node_id, 0, Vec::new());
-                mr.score = Some(candidate.score);
-
-                if let Some(alias) = pattern.nodes.first().and_then(|n| n.alias.as_ref()) {
-                    mr.bindings.insert(alias.clone(), node_id);
-                }
-
-                mr.projected = self.project_properties_with_score(
-                    &mr.bindings,
-                    &match_clause.return_clause,
-                    Some(candidate.score),
-                    &payload_guard,
-                );
-
+            if let Some(mr) =
+                self.try_match_candidate(candidate, match_clause, params, &payload_guard)?
+            {
                 results.push(mr);
             }
         }
 
         Self::sort_by_score(&mut results, higher_is_better);
         Ok(results)
+    }
+
+    /// Builds a [`MatchResult`] for a single vector candidate when it satisfies
+    /// the start pattern, WHERE filters, and any graph relationships.
+    /// Returns `Ok(None)` when the candidate is rejected.
+    fn try_match_candidate(
+        &self,
+        candidate: &crate::point::SearchResult,
+        match_clause: &MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+        payload_guard: &crate::storage::LogPayloadStorage,
+    ) -> Result<Option<MatchResult>> {
+        let node_id = candidate.point.id;
+        let Some(pattern) = match_clause.patterns.first() else {
+            return Ok(None);
+        };
+
+        if !self.candidate_matches_start_pattern(node_id, pattern, payload_guard) {
+            return Ok(None);
+        }
+
+        let graph_ok = if pattern.relationships.is_empty() {
+            self.candidate_passes_where(node_id, match_clause, params, payload_guard, pattern)?
+        } else {
+            self.candidate_has_graph_path(node_id, match_clause, params, payload_guard, pattern)?
+        };
+
+        if !graph_ok {
+            return Ok(None);
+        }
+
+        let mut mr = MatchResult::new(node_id, 0, Vec::new());
+        mr.score = Some(candidate.score);
+        if let Some(alias) = pattern.nodes.first().and_then(|n| n.alias.as_ref()) {
+            mr.bindings.insert(alias.clone(), node_id);
+        }
+        mr.projected = self.project_properties_with_score(
+            &mr.bindings,
+            &match_clause.return_clause,
+            Some(candidate.score),
+            payload_guard,
+        );
+        Ok(Some(mr))
     }
 
     /// Checks whether a candidate node matches the start node pattern

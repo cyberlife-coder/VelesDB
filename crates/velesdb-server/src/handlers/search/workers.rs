@@ -47,28 +47,37 @@ where
         > + Send
         + 'static,
 {
-    // A zero-millisecond budget is treated as an immediate short-circuit:
-    // we do not even spawn the blocking worker before returning the
-    // timeout signal. This guarantees deterministic behaviour for test
-    // fixtures that want to exercise the 408 path without depending on
-    // the runtime scheduler to win a race against `Duration::ZERO`, and
-    // matches the intuitive semantic that "zero budget" means "no budget
-    // to spend".
+    // A zero-millisecond budget short-circuits immediately: we do not spawn
+    // the blocking worker. Keeps the 408 path deterministic for tests and
+    // matches the intuitive semantic that "zero budget" means "no budget".
     if matches!(timeout_ms, Some(0)) {
         return Err(TimeoutElapsed);
     }
 
     let handle = tokio::task::spawn_blocking(work);
-
     match timeout_ms {
-        Some(ms) => {
-            let duration = std::time::Duration::from_millis(ms);
-            match tokio::time::timeout(duration, handle).await {
-                Ok(join_result) => Ok(unwrap_join(join_result)),
-                Err(_elapsed) => Err(TimeoutElapsed),
-            }
-        }
+        Some(ms) => await_with_timeout(handle, ms).await,
         None => Ok(unwrap_join(handle.await)),
+    }
+}
+
+/// Awaits a `spawn_blocking` join handle with a millisecond budget. Returns
+/// `Err(TimeoutElapsed)` when the budget expires before the worker finishes;
+/// the spawned task continues to run (Tokio cannot interrupt blocking code).
+#[allow(clippy::result_large_err)]
+async fn await_with_timeout(
+    handle: tokio::task::JoinHandle<
+        Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response>,
+    >,
+    ms: u64,
+) -> Result<
+    Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response>,
+    TimeoutElapsed,
+> {
+    let duration = std::time::Duration::from_millis(ms);
+    match tokio::time::timeout(duration, handle).await {
+        Ok(join_result) => Ok(unwrap_join(join_result)),
+        Err(_elapsed) => Err(TimeoutElapsed),
     }
 }
 

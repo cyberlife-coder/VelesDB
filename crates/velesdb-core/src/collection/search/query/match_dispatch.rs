@@ -316,12 +316,6 @@ fn merge_match_results(
 ) -> Vec<super::match_exec::MatchResult> {
     use std::collections::HashMap;
 
-    let worse_sentinel = if higher_is_better {
-        f32::NEG_INFINITY
-    } else {
-        f32::MAX
-    };
-
     let mut by_node: HashMap<u64, super::match_exec::MatchResult> =
         HashMap::with_capacity(graph_results.len() + vector_results.len());
 
@@ -330,28 +324,49 @@ fn merge_match_results(
     }
 
     for r in vector_results {
-        let node_id = r.node_id;
-        match by_node.entry(node_id) {
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                let new_score = r.score.unwrap_or(worse_sentinel);
-                let old_score = entry.get().score.unwrap_or(worse_sentinel);
-                let new_wins = if higher_is_better {
-                    new_score > old_score
-                } else {
-                    new_score < old_score
-                };
-                if new_wins {
-                    entry.insert(r);
-                }
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(r);
-            }
-        }
+        upsert_better_score(&mut by_node, r, higher_is_better);
     }
 
     let mut merged: Vec<super::match_exec::MatchResult> = by_node.into_values().collect();
-    // Reuse the same polarity-aware sort logic as sort_by_score in similarity.rs.
+    sort_match_results_by_score(&mut merged, higher_is_better);
+    merged
+}
+
+/// Inserts `candidate` into `by_node`, keeping whichever entry has the better score.
+fn upsert_better_score(
+    by_node: &mut std::collections::HashMap<u64, super::match_exec::MatchResult>,
+    candidate: super::match_exec::MatchResult,
+    higher_is_better: bool,
+) {
+    let worse_sentinel = if higher_is_better {
+        f32::NEG_INFINITY
+    } else {
+        f32::MAX
+    };
+    match by_node.entry(candidate.node_id) {
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            let new_score = candidate.score.unwrap_or(worse_sentinel);
+            let old_score = entry.get().score.unwrap_or(worse_sentinel);
+            let new_wins = if higher_is_better {
+                new_score > old_score
+            } else {
+                new_score < old_score
+            };
+            if new_wins {
+                entry.insert(candidate);
+            }
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(candidate);
+        }
+    }
+}
+
+/// Sorts `merged` by score using the same polarity-aware logic as `sort_by_score` in `similarity.rs`.
+fn sort_match_results_by_score(
+    merged: &mut [super::match_exec::MatchResult],
+    higher_is_better: bool,
+) {
     if higher_is_better {
         merged.sort_by(|a, b| {
             let sa = a.score.unwrap_or(f32::NEG_INFINITY);
@@ -365,7 +380,6 @@ fn merge_match_results(
             sa.total_cmp(&sb)
         });
     }
-    merged
 }
 
 #[cfg(test)]
