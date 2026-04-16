@@ -45,6 +45,8 @@ mod hybrid_compositions;
 mod index_management;
 #[path = "bdd/introspection.rs"]
 mod introspection;
+#[path = "bdd/match_graph_first.rs"]
+mod match_graph_first;
 #[path = "bdd/match_vector_first.rs"]
 mod match_vector_first;
 #[path = "bdd/operators.rs"]
