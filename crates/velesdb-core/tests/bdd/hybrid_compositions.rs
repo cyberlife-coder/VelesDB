@@ -666,3 +666,305 @@ fn test_delete_then_near_excludes_deleted() {
         );
     }
 }
+
+// =========================================================================
+// S4-16: BM25 + vector RRF pure fusion BDD
+// -------------------------------------------------------------------------
+// DESIGN: "Pure" hybrid = RRF fusion of BM25 text search and vector kNN
+// with no graph pattern. VelesQL exposes this pattern via the public
+// `VectorCollection::hybrid_search` API, which is the canonical entry
+// point for BM25+vector fusion. The surface-level alternative
+// `NEAR $v AND column MATCH 'term'` routes through the same fusion
+// pipeline (see `search/query/execution_paths.rs::dispatch_near_with_filter`)
+// and is covered separately by `test_near_match_bm25_with_vector_affinity`.
+//
+// We assert against the public engine API because it yields fully
+// deterministic input to the RRF formula and lets us hand-compute the
+// expected fused scores from the two branch rank orders. Formula:
+//   score(doc) = w_v * 1/(rank_v + k)  +  w_t * 1/(rank_t + k)
+// with defaults w_v = w_t = 0.5 and k = 60 (per FusionStrategy::rrf_default).
+// =========================================================================
+
+/// Populates a "hybrid_pure" collection with 4 documents having distinct
+/// vector directions and distinct text content. Vectors are aligned on the
+/// unit axes so cosine ranks are unambiguous.
+fn setup_hybrid_pure_collection(db: &Database) {
+    db.create_vector_collection("hybrid_pure", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create hybrid_pure collection");
+    let vc = db
+        .get_vector_collection("hybrid_pure")
+        .expect("test: get hybrid_pure collection");
+
+    vc.upsert(vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(json!({"title": "rust programming language"})),
+        ),
+        Point::new(
+            2,
+            vec![0.0, 1.0, 0.0, 0.0],
+            Some(json!({"title": "programming programming guide"})),
+        ),
+        Point::new(
+            3,
+            vec![0.0, 0.0, 1.0, 0.0],
+            Some(json!({"title": "cooking recipes"})),
+        ),
+        Point::new(
+            4,
+            vec![0.0, 0.0, 0.0, 1.0],
+            Some(json!({"title": "garden flowers"})),
+        ),
+    ])
+    .expect("test: upsert hybrid_pure corpus");
+}
+
+/// Computes the expected RRF fused score for a given document ID from the
+/// empirical rank orders of the vector and text branches.
+///
+/// Returns 0.0 for branches where the doc does not appear.
+fn rrf_score(vector_rank: Option<usize>, text_rank: Option<usize>) -> f32 {
+    const VECTOR_WEIGHT: f32 = 0.5;
+    const TEXT_WEIGHT: f32 = 0.5;
+    const RRF_K: f32 = 60.0;
+
+    // Reason: empirical ranks from test fixtures are < 16; usize->f32 exact.
+    #[allow(clippy::cast_precision_loss)]
+    let v_term = vector_rank.map_or(0.0, |r| VECTOR_WEIGHT / (r as f32 + RRF_K));
+    #[allow(clippy::cast_precision_loss)]
+    let t_term = text_rank.map_or(0.0, |r| TEXT_WEIGHT / (r as f32 + RRF_K));
+    v_term + t_term
+}
+
+/// Returns the position (0-indexed rank) of `id` in `ranking`, or `None`.
+fn rank_of(ranking: &[u64], id: u64) -> Option<usize> {
+    ranking.iter().position(|&x| x == id)
+}
+
+/// GIVEN a collection of 4 documents with distinct vectors and text payloads
+/// WHEN `hybrid_search` runs with the canonical RRF settings (alpha=None =>
+///      0.5/0.5 weights, rrf_k=60) for top-5
+/// THEN the fused score for every returned document matches the hand-computed
+///      formula `0.5/(rv+60) + 0.5/(rt+60)` using the empirical ranks from
+///      each branch, and the order is fused-score descending.
+///
+/// This validates that k=60 and the `1/(k+rank+1)` (0-indexed +1 internally,
+/// which matches `rank_as_f32 + rrf_k`) formula are actually applied.
+#[test]
+fn test_hybrid_rrf_fused_score_matches_hand_computed_formula() {
+    let (_dir, db) = create_test_db();
+    setup_hybrid_pure_collection(&db);
+    let vc = db
+        .get_vector_collection("hybrid_pure")
+        .expect("test: get hybrid_pure");
+
+    let query_vec = [1.0, 0.0, 0.0, 0.0];
+    let query_text = "programming";
+
+    // Snapshot per-branch ranks to derive expected RRF scores.
+    // Over-fetch (k * 2) matches the hybrid_search internal gate.
+    let vector_only = vc.search(&query_vec, 10).expect("test: vector-only search");
+    let vector_ranking: Vec<u64> = vector_only.iter().map(|r| r.point.id).collect();
+
+    let text_only = vc
+        .text_search(query_text, 10)
+        .expect("test: text-only search");
+    let text_ranking: Vec<u64> = text_only.iter().map(|r| r.point.id).collect();
+
+    // Sanity: the corpus contains the query tokens on known ids.
+    assert!(
+        !text_ranking.is_empty(),
+        "text branch must find at least one match for 'programming'"
+    );
+
+    let fused = vc
+        .hybrid_search(&query_vec, query_text, 5, None)
+        .expect("test: hybrid_search should succeed");
+
+    assert!(!fused.is_empty(), "hybrid search must return fused results");
+
+    // Verify every fused score equals the hand-computed RRF formula.
+    for hit in &fused {
+        let expected = rrf_score(
+            rank_of(&vector_ranking, hit.point.id),
+            rank_of(&text_ranking, hit.point.id),
+        );
+        assert!(
+            (hit.score - expected).abs() < 1e-6,
+            "RRF fused score mismatch for id={}: actual={}, expected={} \
+             (vector_rank={:?}, text_rank={:?})",
+            hit.point.id,
+            hit.score,
+            expected,
+            rank_of(&vector_ranking, hit.point.id),
+            rank_of(&text_ranking, hit.point.id),
+        );
+    }
+
+    // Verify the results are sorted by fused score descending.
+    for w in fused.windows(2) {
+        assert!(
+            w[0].score >= w[1].score,
+            "fused scores must be non-increasing: {} >= {} (ids {} vs {})",
+            w[0].score,
+            w[1].score,
+            w[0].point.id,
+            w[1].point.id
+        );
+    }
+}
+
+/// GIVEN a corpus where two docs have rank assignments that are a
+///       permutation of each other across the two branches:
+///       doc A: vector rank 0, text rank 1
+///       doc B: vector rank 1, text rank 0
+/// WHEN `hybrid_search` fuses the branches with equal weights
+/// THEN both docs receive identical fused scores
+///      (`0.5/60 + 0.5/61 = 0.5/61 + 0.5/60`), and both appear in the
+///      final top-k with fused-score ties broken deterministically.
+#[test]
+fn test_hybrid_rrf_permuted_ranks_produce_identical_fused_scores() {
+    let (_dir, db) = create_test_db();
+    db.create_vector_collection("tied", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create tied collection");
+    let vc = db.get_vector_collection("tied").expect("test: get tied");
+
+    // Two docs, both matching the text query at TF=1. The vector ranking
+    // is determined by cosine to [1, 0, 0, 0]: id=1 (exact) ranks above
+    // id=2 (orthogonal, similarity 0). BM25 ranks: id=2's payload is
+    // shorter, so it ranks above id=1.
+    vc.upsert(vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(json!({"title": "programming rust language guide book"})),
+        ),
+        Point::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0],
+            Some(json!({"title": "programming"})),
+        ),
+    ])
+    .expect("test: upsert tied corpus");
+
+    let query_vec = [1.0, 0.0, 0.0, 0.0];
+    let query_text = "programming";
+
+    // Snapshot empirical per-branch ranks so the test stays robust to the
+    // exact BM25 parameters used by the index.
+    let vector_only = vc.search(&query_vec, 10).expect("test: vector-only search");
+    let text_only = vc
+        .text_search(query_text, 10)
+        .expect("test: text-only search");
+    let vector_rank_1 = rank_of(
+        &vector_only.iter().map(|r| r.point.id).collect::<Vec<_>>(),
+        1,
+    );
+    let vector_rank_2 = rank_of(
+        &vector_only.iter().map(|r| r.point.id).collect::<Vec<_>>(),
+        2,
+    );
+    let text_rank_1 = rank_of(&text_only.iter().map(|r| r.point.id).collect::<Vec<_>>(), 1);
+    let text_rank_2 = rank_of(&text_only.iter().map(|r| r.point.id).collect::<Vec<_>>(), 2);
+
+    // Precondition: ranks must be a permutation (swap pattern) for the
+    // fused scores to tie. If BM25 tuning ever changes this, the test
+    // diagnoses the setup issue instead of failing cryptically.
+    assert_eq!(
+        (vector_rank_1, text_rank_1),
+        (Some(0), Some(1)),
+        "fixture precondition: id=1 must rank top in vector, second in text"
+    );
+    assert_eq!(
+        (vector_rank_2, text_rank_2),
+        (Some(1), Some(0)),
+        "fixture precondition: id=2 must rank second in vector, top in text"
+    );
+
+    let fused = vc
+        .hybrid_search(&query_vec, query_text, 10, None)
+        .expect("test: hybrid_search should succeed");
+    let fused_map: std::collections::HashMap<u64, f32> =
+        fused.iter().map(|r| (r.point.id, r.score)).collect();
+
+    let score_1 = fused_map
+        .get(&1)
+        .copied()
+        .expect("test: id=1 must be in fused results");
+    let score_2 = fused_map
+        .get(&2)
+        .copied()
+        .expect("test: id=2 must be in fused results");
+
+    let expected = 0.5_f32 / 60.0 + 0.5_f32 / 61.0;
+    assert!(
+        (score_1 - expected).abs() < 1e-6,
+        "id=1 permuted-rank RRF score mismatch: {} != {}",
+        score_1,
+        expected
+    );
+    assert!(
+        (score_2 - expected).abs() < 1e-6,
+        "id=2 permuted-rank RRF score mismatch: {} != {}",
+        score_2,
+        expected
+    );
+    assert!(
+        (score_1 - score_2).abs() < f32::EPSILON,
+        "permuted rank pair must yield identical fused scores: {score_1} vs {score_2}"
+    );
+}
+
+/// GIVEN a corpus where the text query matches zero documents
+/// WHEN `hybrid_search` runs
+/// THEN RRF collapses to the pure vector ranking: fused scores equal
+///      `0.5 / (rank + 60)` for each doc in vector order, and the result
+///      order matches the vector-only ranking exactly.
+#[test]
+fn test_hybrid_rrf_empty_text_side_collapses_to_vector_ranking() {
+    let (_dir, db) = create_test_db();
+    setup_hybrid_pure_collection(&db);
+    let vc = db
+        .get_vector_collection("hybrid_pure")
+        .expect("test: get hybrid_pure");
+
+    let query_vec = [1.0, 0.0, 0.0, 0.0];
+    // This term does not appear in any payload.
+    let query_text = "zzzzzzzzzzzzzzzz_no_match";
+
+    let vector_only = vc.search(&query_vec, 10).expect("test: vector-only search");
+    let fused = vc
+        .hybrid_search(&query_vec, query_text, 4, None)
+        .expect("test: hybrid_search should succeed");
+
+    assert!(
+        !fused.is_empty(),
+        "empty text side must not zero out the vector branch"
+    );
+
+    // Order must match the vector-only ranking for the prefix of length |fused|.
+    let fused_ids: Vec<u64> = fused.iter().map(|r| r.point.id).collect();
+    let vector_prefix: Vec<u64> = vector_only
+        .iter()
+        .take(fused_ids.len())
+        .map(|r| r.point.id)
+        .collect();
+    assert_eq!(
+        fused_ids, vector_prefix,
+        "empty BM25 side must collapse to vector ranking"
+    );
+
+    // Every fused score must equal 0.5 / (rank + 60) with no text contribution.
+    for (rank, hit) in fused.iter().enumerate() {
+        let expected = rrf_score(Some(rank), None);
+        assert!(
+            (hit.score - expected).abs() < 1e-6,
+            "rank {} id {} fused score {} != expected vector-only {}",
+            rank,
+            hit.point.id,
+            hit.score,
+            expected,
+        );
+    }
+}
