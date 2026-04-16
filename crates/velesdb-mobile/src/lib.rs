@@ -173,19 +173,63 @@ impl VelesDatabase {
         Ok(())
     }
 
-    /// Gets a collection by name.
+    /// Creates a graph collection for knowledge graph workloads.
+    ///
+    /// Creates a schemaless graph collection (no node embeddings).
+    /// For graph collections with node embeddings, use
+    /// [`create_graph_collection_with_embeddings`](Self::create_graph_collection_with_embeddings).
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique name for the collection
+    pub fn create_graph_collection(&self, name: String) -> Result<(), VelesError> {
+        self.inner
+            .create_graph_collection(&name, velesdb_core::GraphSchema::schemaless())?;
+        Ok(())
+    }
+
+    /// Creates a graph collection with node embeddings.
+    ///
+    /// Nodes in this collection can store vector embeddings and support
+    /// similarity search alongside graph traversal.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique name for the collection
+    /// * `dimension` - Vector dimension for node embeddings
+    /// * `metric` - Distance metric for similarity calculations
+    pub fn create_graph_collection_with_embeddings(
+        &self,
+        name: String,
+        dimension: u32,
+        metric: DistanceMetric,
+    ) -> Result<(), VelesError> {
+        self.inner.create_graph_collection_with_embeddings(
+            &name,
+            velesdb_core::GraphSchema::schemaless(),
+            usize::try_from(dimension).unwrap_or(usize::MAX),
+            metric.into(),
+        )?;
+        Ok(())
+    }
+
+    /// Gets a vector collection by name.
     ///
     /// Returns `None` if the collection does not exist.
-    /// Checks all registries (vector, graph, metadata) via `get_any_collection`.
+    /// Returns an error if the collection exists but is not a vector collection
+    /// (use [`get_graph_collection`](Self::get_graph_collection) for graph collections).
     pub fn get_collection(&self, name: String) -> Result<Option<Arc<VelesCollection>>, VelesError> {
         match self.inner.get_any_collection(&name) {
             Some(any_coll) => {
-                // F2.2 mitigation: the mobile surface exposes a single
-                // `VelesCollection` type, so we use the unchecked cast
-                // here. Callers that invoke vector-specific methods on
-                // a graph or metadata collection will observe empty
-                // results at runtime. A proper typed split is tracked
-                // as the F2.2 post-seed EPIC.
+                if !any_coll.is_vector() {
+                    return Err(VelesError::Collection {
+                        message: format!(
+                            "Collection '{}' is not a vector collection. \
+                             Use get_graph_collection() for graph collections.",
+                            name
+                        ),
+                    });
+                }
                 let vc = any_coll.as_vector_collection_unchecked();
                 Ok(Some(Arc::new(VelesCollection { inner: vc })))
             }

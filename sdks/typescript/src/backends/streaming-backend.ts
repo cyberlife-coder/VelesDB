@@ -2,7 +2,7 @@
  * Streaming Backend operations for VelesDB REST API.
  *
  * Extracted from rest.ts to keep file size manageable.
- * Implements: trainPq, streamInsert.
+ * Implements: trainPq, streamInsert, streamUpsertPoints.
  */
 
 import type {
@@ -10,6 +10,7 @@ import type {
   PqTrainOptions,
   SparseVector,
   RestPointId,
+  StreamUpsertResponse,
 } from '../types';
 import { BackpressureError, ConnectionError, VelesDBError } from '../types';
 import type { BaseTransport } from './shared';
@@ -137,5 +138,107 @@ export async function streamInsert(
         error instanceof Error ? error : undefined
       );
     }
+  }
+}
+
+/**
+ * Batch upsert points via the NDJSON streaming endpoint.
+ *
+ * Sends all documents as a single `application/x-ndjson` POST to
+ * `POST /collections/{name}/points/stream` (100 MB body limit on the server).
+ * Each document is serialised as one JSON line (NDJSON format) matching the
+ * server-side `Point` schema: `{ "id": <u64>, "vector": [...], "payload": {...} }`.
+ *
+ * Unlike `streamInsert` (which sends one point per HTTP request via the
+ * bounded ingestion channel), this function sends the entire batch in a
+ * single request, making it far more efficient for bulk loads.
+ *
+ * The server returns statistics about the processing (inserted, malformed,
+ * failed, network errors). If any points failed, the function still resolves
+ * with the response so the caller can inspect partial results. A 429 response
+ * raises `BackpressureError` for caller-side retry logic.
+ */
+export async function streamUpsertPoints(
+  transport: StreamingTransport,
+  collection: string,
+  docs: VectorDocument[]
+): Promise<StreamUpsertResponse> {
+  const ndjsonLines = docs.map(doc => {
+    const restId = transport.parseRestPointId(doc.id);
+    const vector = toNumberArray(doc.vector);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const point: Record<string, any> = {
+      id: restId,
+      vector,
+      payload: doc.payload ?? null,
+    };
+
+    if (doc.sparseVector) {
+      point.sparse_vector = transport.sparseVectorToRestFormat(doc.sparseVector);
+    }
+
+    return JSON.stringify(point);
+  });
+
+  const body = ndjsonLines.join('\n');
+  const url = `${transport.baseUrl}${collectionPath(collection)}/points/stream`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/x-ndjson',
+  };
+
+  if (transport.apiKey) {
+    headers['Authorization'] = `Bearer ${transport.apiKey}`;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), transport.timeout);
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (response.status === 429) {
+      throw new BackpressureError();
+    }
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const errorPayload = transport.extractErrorPayload(data);
+      throw new VelesDBError(
+        errorPayload.message ?? `HTTP ${response.status}`,
+        errorPayload.code ?? transport.mapStatusToErrorCode(response.status)
+      );
+    }
+
+    const data = await response.json().catch(() => ({}));
+    return {
+      message: typeof data.message === 'string' ? data.message : 'Stream processed',
+      inserted: typeof data.inserted === 'number' ? data.inserted : 0,
+      malformed: typeof data.malformed === 'number' ? data.malformed : 0,
+      failedUpserts: typeof data.failed_upserts === 'number' ? data.failed_upserts : 0,
+      networkErrors: typeof data.network_errors === 'number' ? data.network_errors : 0,
+    };
+  } catch (error) {
+    clearTimeout(timeoutId);
+
+    if (error instanceof BackpressureError || error instanceof VelesDBError) {
+      throw error;
+    }
+
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new ConnectionError('Request timeout');
+    }
+
+    throw new ConnectionError(
+      `Stream upsert failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error instanceof Error ? error : undefined
+    );
   }
 }

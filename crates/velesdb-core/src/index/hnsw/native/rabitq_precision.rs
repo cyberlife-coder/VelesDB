@@ -25,7 +25,7 @@
 //!   of distance evaluations per search)
 
 use super::distance::DistanceEngine;
-use super::graph::{NativeHnsw, NO_ENTRY_POINT};
+use super::graph::NativeHnsw;
 use super::layer::NodeId;
 use crate::quantization::{RaBitQIndex, RaBitQVectorStore};
 use parking_lot::{Mutex, RwLock};

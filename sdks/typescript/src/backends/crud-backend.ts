@@ -3,7 +3,7 @@
  *
  * Extracted from rest.ts to keep file size manageable.
  * Implements: createCollection, deleteCollection, getCollection,
- * listCollections, insert, insertBatch, delete, get, isEmpty, flush.
+ * listCollections, upsert, upsertBatch, delete, get, isEmpty, flush.
  */
 
 import type {
@@ -149,7 +149,7 @@ export async function listCollections(
   return response.data ?? [];
 }
 
-export async function insert(
+export async function upsert(
   transport: CrudTransport,
   collection: string,
   doc: VectorDocument
@@ -165,7 +165,7 @@ export async function insert(
   throwOnError(response, `Collection '${collection}'`);
 }
 
-export async function insertBatch(
+export async function upsertBatch(
   transport: CrudTransport,
   collection: string,
   docs: VectorDocument[]

@@ -1,7 +1,3 @@
-# WARNING: This workflow does not verify that CI has passed on the tagged commit.
-# Always ensure CI is green before pushing a tag.
-# A proper fix would use workflow_run trigger to gate on CI completion,
-# but that requires significant refactoring of the release pipeline.
 name: Release
 
 on:
@@ -40,6 +36,10 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  checks: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -71,7 +71,38 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           [[ "$VERSION" == *"-"* ]] && echo "is_prerelease=true" >> $GITHUB_OUTPUT || echo "is_prerelease=false" >> $GITHUB_OUTPUT
-          echo "📦 Version: $VERSION"
+          echo "Version: $VERSION"
+
+      - name: Verify CI passed on tagged commit (REL-06)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="${{ github.sha }}"
+          echo "Checking CI status for commit $SHA..."
+
+          # Query check runs for this commit
+          RESULT=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+            --jq '[.check_runs[] | select(.name == "CI Success")] | first')
+
+          if [ -z "$RESULT" ] || [ "$RESULT" = "null" ]; then
+            echo "::error::No CI workflow found for commit $SHA. Push to main/develop first to trigger CI, then tag."
+            exit 1
+          fi
+
+          CONCLUSION=$(echo "$RESULT" | jq -r '.conclusion // empty')
+          STATUS=$(echo "$RESULT" | jq -r '.status // empty')
+
+          if [ "$STATUS" != "completed" ]; then
+            echo "::error::CI is still running ($STATUS) on commit $SHA. Wait for CI to complete before tagging."
+            exit 1
+          fi
+
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::CI failed ($CONCLUSION) on commit $SHA. Fix CI before releasing."
+            exit 1
+          fi
+
+          echo "CI passed on commit $SHA"
 
   # ===========================================================================
   # 1b. Pre-publish Validation Gate (REL-05)

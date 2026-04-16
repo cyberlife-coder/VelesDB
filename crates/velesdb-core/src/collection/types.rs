@@ -3,6 +3,10 @@
 //! Configuration types (`CollectionConfig`, `CURRENT_SCHEMA_VERSION`) live in
 //! the sibling `collection_config` module.
 
+use crate::collection::graph::property_index::{
+    CompositeIndexManager, CompositeRangeIndex, EdgePropertyIndex, IndexAdvisor,
+    QueryPatternTracker,
+};
 use crate::collection::graph::{
     ConcurrentEdgeStore, GraphSchema, LabelIndex, PropertyIndex, RangeIndex,
 };
@@ -199,6 +203,33 @@ pub(crate) struct Collection {
     /// Range index for O(log n) range queries on graph nodes (EPIC-009).
     pub(super) range_index: Arc<RwLock<RangeIndex>>,
 
+    /// Graph node property range indexes keyed by `"label.property"` (EPIC-047).
+    ///
+    /// Populated automatically when nodes are stored via `store_node_payload`.
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    pub(crate) graph_range_indexes: Arc<RwLock<HashMap<String, CompositeRangeIndex>>>,
+
+    /// Edge property indexes keyed by `"rel_type.property"` (EPIC-047).
+    ///
+    /// Populated automatically when edges with properties are added.
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    pub(crate) edge_range_indexes: Arc<RwLock<HashMap<String, EdgePropertyIndex>>>,
+
+    /// Composite index manager for multi-property lookups (EPIC-047).
+    ///
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    pub(crate) composite_index_manager: Arc<RwLock<CompositeIndexManager>>,
+
+    /// Query pattern tracker for auto-index suggestion (EPIC-047).
+    ///
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    pub(crate) query_pattern_tracker: Arc<RwLock<QueryPatternTracker>>,
+
+    /// Index advisor that suggests indexes based on tracked patterns (EPIC-047).
+    ///
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    pub(crate) index_advisor: Arc<RwLock<IndexAdvisor>>,
+
     /// Concurrent edge store for knowledge graph relationships (EPIC-015).
     ///
     /// Uses sharded internal locking (256 shards) — no outer `RwLock` needed.
@@ -303,7 +334,7 @@ pub(crate) struct Collection {
 
 impl Collection {
     /// Returns a reference to the named sparse indexes lock (EPIC-062 sparse integration).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Used in tests for sparse index verification
     pub(crate) fn sparse_indexes(&self) -> &Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>> {
         &self.sparse_indexes
     }
@@ -369,7 +400,6 @@ impl Collection {
     ///
     /// Future: auto-enable from persisted StreamingConfig on open (STREAM-01)
     #[cfg(feature = "persistence")]
-    #[allow(dead_code)] // Reason: Called via VectorCollection/server inner delegation
     pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
         use crate::collection::streaming::StreamIngester;
         let ingester = StreamIngester::new(self.clone(), config);

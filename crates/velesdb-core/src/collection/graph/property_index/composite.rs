@@ -2,9 +2,9 @@
 //!
 //! Provides O(1) hash-based lookups on (label, property1, property2, ...) combinations.
 
-// Reason: EPIC-047 US-001 — all types in this module are scaffolded for the
-// composite graph index feature and will be wired once the query planner integrates.
-#![allow(dead_code)]
+// EPIC-047 US-001 — composite graph indexes for multi-property lookups.
+// Index population is wired via graph_property_index_wiring.rs;
+// query-side lookups are wired but not yet called from MATCH pipeline.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,6 +37,7 @@ pub struct CompositeGraphIndex {
     hash_index: HashMap<u64, Vec<u64>>,
 }
 
+#[allow(dead_code)] // Reason: Public API — used by tests and future query planner + index management
 impl CompositeGraphIndex {
     /// Creates a new composite index.
     #[must_use]
@@ -186,6 +187,7 @@ impl CompositeIndexManager {
     }
 
     /// Creates a new composite index.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future DDL CREATE INDEX handler
     pub fn create_index(
         &mut self,
         name: impl Into<String>,
@@ -209,11 +211,13 @@ impl CompositeIndexManager {
     }
 
     /// Gets a mutable index by name.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future DDL index management
     pub fn get_mut(&mut self, name: &str) -> Option<&mut CompositeGraphIndex> {
         self.indexes.get_mut(name)
     }
 
     /// Drops an index by name.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future DDL DROP INDEX handler
     pub fn drop_index(&mut self, name: &str) -> bool {
         self.indexes.remove(name).is_some()
     }
@@ -230,6 +234,7 @@ impl CompositeIndexManager {
 
     /// Lists all index names.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API — used by tests and future DDL SHOW INDEXES handler
     pub fn list_indexes(&self) -> Vec<&str> {
         self.indexes.keys().map(String::as_str).collect()
     }

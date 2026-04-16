@@ -265,7 +265,6 @@ fn test_search_multi_entry_vs_standard() {
 fn test_concurrent_insert_search_no_deadlock() {
     use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
 
     let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 500));
@@ -708,7 +707,6 @@ fn test_hnsw_no_deadlock_during_parallel_insert_search() {
 fn test_concurrent_insert_delete_search_at_index_level() {
     use crate::distance::DistanceMetric as DM;
     use crate::index::hnsw::native_index::NativeHnswIndex;
-    use crate::index::VectorIndex;
     use std::sync::Arc;
     use std::thread;
 
@@ -809,7 +807,6 @@ fn test_concurrent_insert_delete_search_at_index_level() {
 fn test_delete_exclusion_under_concurrent_search() {
     use crate::distance::DistanceMetric as DM;
     use crate::index::hnsw::native_index::NativeHnswIndex;
-    use crate::index::VectorIndex;
     use std::sync::atomic::{AtomicBool, Ordering as AtomOrd};
     use std::sync::Arc;
     use std::thread;

@@ -256,6 +256,12 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
                 # Validate existing collection dimension matches
                 info = self._collection.info()
                 existing_dim = info.get("dimension", 0)
+                if existing_dim == 0 and dimension > 0:
+                    raise ValueError(
+                        f"Collection '{self.collection_name}' is metadata-only "
+                        f"(dimension=0) but requested dimension={dimension}. "
+                        f"Use a vector collection."
+                    )
                 if existing_dim != 0 and existing_dim != dimension:
                     raise ValueError(
                         f"Collection '{self.collection_name}' exists with dimension "

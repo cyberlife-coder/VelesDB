@@ -78,6 +78,7 @@ import {
   wasmScroll,
   wasmTrainPq,
   wasmStreamInsert,
+  wasmStreamUpsertPoints,
   wasmCreateGraphCollection,
   wasmGetCollectionStats,
   wasmAnalyzeCollection,
@@ -125,7 +126,7 @@ export class WasmBackend implements IVelesDBBackend {
   async init(): Promise<void> {
     if (this._initialized) { return; }
     try {
-      this.wasmModule = await import('@wiscale/velesdb-wasm') as WasmModule;
+      this.wasmModule = await import('@wiscale/velesdb-wasm') as unknown as WasmModule;
       await this.wasmModule.default();
       this._initialized = true;
     } catch (error) {
@@ -161,8 +162,9 @@ export class WasmBackend implements IVelesDBBackend {
     if (this.collections.has(name)) {
       throw new VelesDBError(`Collection '${name}' already exists`, 'COLLECTION_EXISTS');
     }
+    const dimension = config.dimension ?? 0;
     const metric = config.metric ?? 'cosine';
-    const store = new this.wasmModule!.VectorStore(config.dimension, metric);
+    const store = new this.wasmModule!.VectorStore(dimension, metric);
     this.collections.set(name, {
       config: { ...config, metric },
       store,
@@ -198,7 +200,7 @@ export class WasmBackend implements IVelesDBBackend {
   // Point CRUD
   // ========================================================================
 
-  async insert(collectionName: string, doc: VectorDocument): Promise<void> {
+  async upsert(collectionName: string, doc: VectorDocument): Promise<void> {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
@@ -226,7 +228,7 @@ export class WasmBackend implements IVelesDBBackend {
     }
   }
 
-  async insertBatch(collectionName: string, docs: VectorDocument[]): Promise<void> {
+  async upsertBatch(collectionName: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
@@ -277,9 +279,7 @@ export class WasmBackend implements IVelesDBBackend {
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
     const numericId = toNumericId(id);
-    const point = collection.store.get(BigInt(numericId)) as
-      | { id: bigint | number; vector: number[] | Float32Array; payload?: Record<string, unknown> | null }
-      | null;
+    const point = collection.store.get(BigInt(numericId));
     if (!point) { return null; }
     const payload = point.payload ?? collection.payloads.get(canonicalPayloadKey(numericId));
     return {
@@ -297,7 +297,7 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
-    return collection.store.is_empty();
+    return collection.store.is_empty;
   }
 
   async flush(collectionName: string): Promise<void> {
@@ -359,6 +359,7 @@ export class WasmBackend implements IVelesDBBackend {
   async getNodeDegree(c: string, n: number): Promise<DegreeResponse> { this.ensureInitialized(); return wasmGetNodeDegree(c, n); }
   async trainPq(c: string, o?: PqTrainOptions): Promise<string> { this.ensureInitialized(); return wasmTrainPq(c, o); }
   async streamInsert(c: string, d: VectorDocument[]): Promise<void> { this.ensureInitialized(); return wasmStreamInsert(c, d); }
+  async streamUpsertPoints(c: string, d: VectorDocument[]): Promise<import('../types').StreamUpsertResponse> { this.ensureInitialized(); return wasmStreamUpsertPoints(c, d); }
   async createGraphCollection(n: string, c?: GraphCollectionConfig): Promise<void> { this.ensureInitialized(); return wasmCreateGraphCollection(n, c); }
   async getCollectionStats(c: string): Promise<CollectionStatsResponse | null> { this.ensureInitialized(); return wasmGetCollectionStats(c); }
   async analyzeCollection(c: string): Promise<CollectionStatsResponse> { this.ensureInitialized(); return wasmAnalyzeCollection(c); }

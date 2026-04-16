@@ -109,3 +109,62 @@ fn test_count_hops() {
     let hops = MatchQueryPlanner::count_hops(&match_clause);
     assert_eq!(hops, 1);
 }
+
+// =========================================================================
+// W6-A: stats-to-strategy regression tests
+// =========================================================================
+
+#[test]
+fn test_planner_with_empty_collection_stats_defaults_to_graph_first() {
+    let match_clause = make_match_clause(false, Some(10));
+    let stats = CollectionStats::default();
+    let strategy = MatchQueryPlanner::plan(&match_clause, &stats);
+    assert!(
+        matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
+        "empty collection should use GraphFirst"
+    );
+}
+
+#[test]
+fn test_planner_with_zero_labels_sets_full_selectivity() {
+    let stats = CollectionStats {
+        total_nodes: 100,
+        total_edges: 50,
+        avg_degree: 0.5,
+        label_count: 0,
+        label_selectivity: 1.0,
+    };
+    let match_clause = make_match_clause(false, Some(10));
+    let strategy = MatchQueryPlanner::plan(&match_clause, &stats);
+    assert!(
+        matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
+        "zero labels should use GraphFirst for non-similarity queries"
+    );
+}
+
+#[test]
+fn test_planner_graph_first_returns_start_labels() {
+    let match_clause = make_match_clause(false, Some(10));
+    let stats = default_stats();
+    let strategy = MatchQueryPlanner::plan(&match_clause, &stats);
+    if let MatchExecutionStrategy::GraphFirst { start_labels, .. } = strategy {
+        assert_eq!(start_labels, vec!["Person".to_string()]);
+    } else {
+        panic!("expected GraphFirst strategy");
+    }
+}
+
+#[test]
+fn test_planner_vector_first_returns_threshold() {
+    let match_clause = make_match_clause(true, Some(10));
+    let stats = default_stats();
+    let strategy = MatchQueryPlanner::plan(&match_clause, &stats);
+    if let MatchExecutionStrategy::VectorFirst { threshold, .. } = strategy {
+        assert!(
+            (threshold - 0.8).abs() < f32::EPSILON,
+            "threshold should match similarity condition"
+        );
+    } else {
+        panic!("expected VectorFirst strategy");
+    }
+}

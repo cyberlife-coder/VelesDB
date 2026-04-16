@@ -196,6 +196,86 @@ describe('Filter builders — logical combinators', () => {
 });
 
 // ============================================================================
+// Convenience combinators: notIn, between
+// ============================================================================
+
+describe('Filter builders — convenience combinators', () => {
+  it('notIn produces NOT(IN(field, values))', () => {
+    const filter = f.notIn('status', ['deleted', 'archived']);
+    expect(filter).toEqual({
+      condition: {
+        type: 'not',
+        condition: {
+          type: 'in',
+          field: 'status',
+          values: ['deleted', 'archived'],
+        },
+      },
+    });
+  });
+
+  it('notIn copies the values array (no mutation leak)', () => {
+    const values: string[] = ['a', 'b'];
+    const filter = f.notIn('tag', values);
+    values.push('c');
+    expect((filter.condition as { condition: { values: string[] } }).condition.values).toHaveLength(2);
+  });
+
+  it('notIn with empty values array produces a valid filter', () => {
+    const filter = f.notIn('status', []);
+    expect(filter).toEqual({
+      condition: {
+        type: 'not',
+        condition: {
+          type: 'in',
+          field: 'status',
+          values: [],
+        },
+      },
+    });
+  });
+
+  it('between produces AND([GTE(field, low), LTE(field, high)])', () => {
+    const filter = f.between('price', 10, 100);
+    expect(filter).toEqual({
+      condition: {
+        type: 'and',
+        conditions: [
+          { type: 'gte', field: 'price', value: 10 },
+          { type: 'lte', field: 'price', value: 100 },
+        ],
+      },
+    });
+  });
+
+  it('between with same low and high produces a point range', () => {
+    const filter = f.between('score', 42, 42);
+    expect(filter).toEqual({
+      condition: {
+        type: 'and',
+        conditions: [
+          { type: 'gte', field: 'score', value: 42 },
+          { type: 'lte', field: 'score', value: 42 },
+        ],
+      },
+    });
+  });
+
+  it('between accepts string boundaries', () => {
+    const filter = f.between('name', 'A', 'M');
+    expect(filter).toEqual({
+      condition: {
+        type: 'and',
+        conditions: [
+          { type: 'gte', field: 'name', value: 'A' },
+          { type: 'lte', field: 'name', value: 'M' },
+        ],
+      },
+    });
+  });
+});
+
+// ============================================================================
 // Edge cases: boundaries, empties, large structures
 // ============================================================================
 

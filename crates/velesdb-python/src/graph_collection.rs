@@ -415,7 +415,7 @@ impl PyGraphCollection {
 
         Ok(results
             .iter()
-            .map(|r| search_result_to_dict(py, r))
+            .map(|r| search_result_to_dict(py, r, false))
             .collect())
     }
 

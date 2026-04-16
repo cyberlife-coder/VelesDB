@@ -287,6 +287,14 @@ fn apply_store_to_mmap(
     if end <= mmap_data.len() {
         mmap_data[offset..end].copy_from_slice(data);
         index.insert(id, offset);
+    } else {
+        tracing::warn!(
+            id = id,
+            offset = offset,
+            end = end,
+            mmap_len = mmap_data.len(),
+            "WAL replay: skipping vector — mmap too small"
+        );
     }
 }
 

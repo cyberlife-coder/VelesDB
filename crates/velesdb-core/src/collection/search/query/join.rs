@@ -3,8 +3,6 @@
 //! This module implements JOIN execution between graph traversal results
 //! and ColumnStore data with adaptive batch sizing.
 
-#![allow(dead_code)]
-
 use crate::column_store::ColumnStore;
 use crate::error::{Error, Result};
 use crate::point::{Point, SearchResult};

@@ -207,6 +207,36 @@ class Collection:
         """
         ...
 
+    def upsert_bulk_numpy_json(
+        self,
+        vectors: "np.ndarray",
+        ids: List[int],
+        json_payloads: List[Optional[str]],
+    ) -> int:
+        """Bulk upsert with numpy vectors and JSON-encoded payloads.
+
+        Accepts pre-serialised JSON strings instead of Python dicts to
+        avoid the overhead of a Python→Rust dict conversion when the
+        caller already has JSON available (e.g. from a database cursor
+        or a streaming API response).
+
+        Args:
+            vectors: numpy.ndarray of shape (n, dimension), dtype float32,
+                C-contiguous.
+            ids: List of integer point IDs (length n).
+            json_payloads: List of JSON strings — one per point, or None
+                for points with no payload (length n).
+
+        Returns:
+            Number of inserted points.
+
+        Raises:
+            ValueError: If ids or json_payloads length != number of rows
+                in vectors, if vectors is not C-contiguous, or if a
+                JSON string is malformed.
+        """
+        ...
+
     def stream_insert(self, points: List[Dict[str, Any]]) -> int:
         """Insert points via the streaming ingestion channel.
 
@@ -622,6 +652,41 @@ class Collection:
 
         Raises:
             ValueError: If required columns are missing or dimensions mismatch.
+        """
+        ...
+
+
+class ScrollIterator:
+    """Iterator returned by ``Collection.scroll()`` that yields batches of points.
+
+    Each call to ``__next__`` fetches the next batch from the collection
+    using a server-side cursor, releasing the GIL during the disk/mmap read.
+    Iteration ends when there are no more points to return.
+
+    This class is not instantiated directly — use ``Collection.scroll()``
+    to obtain one.
+
+    Example:
+        >>> for batch in collection.scroll(batch_size=500):
+        ...     for point in batch:
+        ...         print(point["id"], point["payload"])
+    """
+
+    def __iter__(self) -> "ScrollIterator":
+        """Return self (this iterator is its own iterator)."""
+        ...
+
+    def __next__(self) -> Union[List[Dict[str, Any]], Any]:
+        """Return the next batch of points.
+
+        Returns:
+            A list of point dicts when ``as_dataframe=False`` (the default),
+            or a ``pandas.DataFrame`` / ``polars.DataFrame`` when
+            ``as_dataframe=True``.
+
+        Raises:
+            StopIteration: When all points have been yielded.
+            RuntimeError: If an error occurs reading the next batch from disk.
         """
         ...
 

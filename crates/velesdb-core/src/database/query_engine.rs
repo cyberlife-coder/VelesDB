@@ -415,6 +415,7 @@ impl Database {
     /// 1. Analyze WHERE for pushdown-eligible conditions
     /// 2. Strip pushed conditions from base query
     /// 3. For each JOIN: lookup, filtered, or full `ColumnStore` path
+    /// 4. Apply post-join filters (cross-source predicates)
     fn execute_single_select(
         &self,
         query: &crate::velesql::Query,
@@ -429,20 +430,9 @@ impl Database {
             return base_collection.execute_query(&single_query, params);
         }
 
-        let join_tables =
-            crate::collection::search::query::pushdown::extract_join_tables(&query.select.joins);
-        let graph_vars = std::collections::HashSet::new();
-        let analysis = query.select.where_clause.as_ref().map(|wc| {
-            crate::collection::search::query::pushdown::analyze_for_pushdown(
-                wc,
-                &graph_vars,
-                &join_tables,
-            )
-        });
+        let analysis = Self::analyze_join_pushdown_for_select(&query.select);
 
-        let pushed = analysis
-            .as_ref()
-            .map_or_else(Vec::new, |a| a.column_store_filters.clone());
+        let pushed = analysis.column_store_filters.clone();
 
         single_query.select.joins.clear();
         if !pushed.is_empty() {
@@ -454,8 +444,24 @@ impl Database {
         for join in &query.select.joins {
             results = self.execute_single_join(&results, join, &pushed)?;
         }
+
+        // Apply post-join filters: cross-source predicates that reference
+        // columns from both the base collection and joined ColumnStore tables.
+        if !analysis.post_join_filters.is_empty() {
+            results = Self::apply_post_join_filters(
+                &base_collection,
+                results,
+                &analysis.post_join_filters,
+                params,
+                &query.select.from_alias,
+            )?;
+        }
+
         Ok(results)
     }
+
+    // NOTE: analyze_join_pushdown_for_select, apply_post_join_filters
+    // moved to join_pushdown.rs (NLOC/file reduction)
 
     /// Inserts a compiled plan into the cache after a cache miss (CACHE-02).
     fn populate_plan_cache(&self, query: &crate::velesql::Query) {

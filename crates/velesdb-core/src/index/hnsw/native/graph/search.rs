@@ -79,6 +79,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Adaptive number of entry-point probes for high-recall searches.
     #[inline]
+    #[allow(clippy::unused_self)] // Reason: method receiver accesses graph config in future adaptive tuning
     fn adaptive_num_probes(&self, count: usize, ef_search: usize, k: usize) -> usize {
         if count < 10_000 || ef_search <= (k * 4).max(64) {
             return 1;
@@ -222,10 +223,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             let dimension = vectors.dimension();
             let prefetch_dist = crate::simd_native::calculate_prefetch_distance(dimension);
             let mut best = entry;
-            // SAFETY: `entry` is a valid node_id from entry_point (always a
-            // successfully inserted node).
-            // - Condition 1: entry < vectors.len() (from a prior successful insert).
-            // SAFETY: Hot-path greedy descent — bounds check eliminated.
+            debug_assert!(
+                entry < vectors.len(),
+                "entry {entry} out of bounds (len {})",
+                vectors.len()
+            );
+            // SAFETY: entry < vectors.len() — verified by debug_assert above.
             let entry_vec = unsafe { vectors.get_unchecked(entry) };
             let mut best_dist = self.distance.distance(query, entry_vec);
 
@@ -297,10 +300,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 Self::prefetch_neighbors(neighbors, vectors, i + prefetch_dist, 1);
             }
 
-            // SAFETY: neighbor is a valid node_id from the graph's
-            // neighbor list, only containing IDs of inserted nodes.
-            // - Condition 1: neighbor < vectors.len().
-            // SAFETY: Inner loop of greedy descent — bounds check eliminated.
+            debug_assert!(
+                neighbor < vectors.len(),
+                "neighbor {neighbor} out of bounds (len {})",
+                vectors.len()
+            );
+            // SAFETY: neighbor < vectors.len() — verified by debug_assert above.
             let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
             let dist = self.distance.distance(query, neighbor_vec);
             if dist < *best_dist {
@@ -349,10 +354,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
             // Initialize entry points
             for &ep in entry_points {
-                // SAFETY: ep is a valid node_id from entry_point or random probe,
-                // always IDs of successfully inserted nodes.
-                // - Condition 1: ep < vectors.len().
-                // SAFETY: Entry-point initialization in search hot path.
+                debug_assert!(
+                    ep < vectors.len(),
+                    "ep {ep} out of bounds (len {})",
+                    vectors.len()
+                );
+                // SAFETY: ep < vectors.len() — verified by debug_assert above.
                 let ep_vec = unsafe { vectors.get_unchecked(ep) };
                 let dist = self.distance.distance(query, ep_vec);
                 state.push_candidate(ep, dist);

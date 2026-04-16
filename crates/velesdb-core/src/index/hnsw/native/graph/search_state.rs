@@ -182,10 +182,12 @@ pub(super) fn gather_unvisited_neighbors<'a>(
         }
 
         if visited.insert(neighbor) {
-            // SAFETY: neighbor is a valid node_id from the graph's neighbor list,
-            // only containing IDs of successfully inserted nodes.
-            // - Condition 1: neighbor < vectors.len().
-            // SAFETY: Batch gathering of unvisited neighbor vectors.
+            debug_assert!(
+                neighbor < vectors.len(),
+                "neighbor {neighbor} out of bounds (len {})",
+                vectors.len()
+            );
+            // SAFETY: neighbor < vectors.len() — verified by debug_assert above.
             let vec = unsafe { vectors.get_unchecked(neighbor) };
             batch.push((neighbor, vec));
         }

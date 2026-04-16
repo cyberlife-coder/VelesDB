@@ -7,8 +7,6 @@
 //! - **Standard**: Full f32 distances (`NativeHnsw`)
 //! - **`RaBitQ`**: Binary traversal + f32 re-ranking (`RaBitQPrecisionHnsw`)
 
-// Temporarily allow dead_code until integration into HnswIndex
-#![allow(dead_code)]
 #![allow(clippy::cast_precision_loss)]
 
 use super::native::rabitq_precision::RaBitQPrecisionHnsw;
@@ -43,6 +41,7 @@ pub struct NativeHnswInner {
     /// The underlying HNSW backend (standard or `RaBitQ`).
     backend: HnswBackend,
     /// The distance metric used.
+    #[allow(dead_code)] // Reason: Exposed via `metric()` accessor — API surface for callers
     metric: DistanceMetric,
 }
 
@@ -80,6 +79,7 @@ impl NativeHnswInner {
     /// # Errors
     ///
     /// Returns an error if vector storage pre-allocation fails.
+    #[allow(dead_code)] // Reason: Convenience constructor — public API surface for callers
     pub fn new_with_storage_mode(
         metric: DistanceMetric,
         max_connections: usize,
@@ -185,6 +185,7 @@ impl NativeHnswInner {
     }
 
     /// Searches the HNSW graph and returns results as `NativeNeighbour` structs.
+    #[allow(dead_code)] // Reason: API surface — used by callers needing typed neighbour results
     #[inline]
     #[must_use]
     pub fn search_neighbours(
@@ -370,6 +371,7 @@ impl NativeHnswInner {
     }
 
     /// Returns the number of elements in the index.
+    #[allow(dead_code)] // Reason: API surface — introspection accessor for callers
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
@@ -380,6 +382,7 @@ impl NativeHnswInner {
     }
 
     /// Returns true if the index is empty.
+    #[allow(dead_code)] // Reason: API surface — emptiness check paired with `len()`
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -390,6 +393,7 @@ impl NativeHnswInner {
     }
 
     /// Returns the distance metric used by this index.
+    #[allow(dead_code)] // Reason: API surface — metric accessor for callers
     #[inline]
     #[must_use]
     pub fn metric(&self) -> DistanceMetric {
@@ -468,6 +472,14 @@ unsafe impl Send for NativeHnswInner {}
 // - Condition 2: Exposed APIs do not bypass synchronization primitives.
 // SAFETY: `&NativeHnswInner` can be shared safely across threads.
 unsafe impl Sync for NativeHnswInner {}
+
+// Compile-time assertion: NativeHnswInner must satisfy Send + Sync.
+// If the struct gains a non-Send/Sync field, this causes a build error
+// rather than a subtle runtime data race.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<NativeHnswInner>();
+};
 
 // ============================================================================
 // Tests moved to native_inner_tests.rs per project rules

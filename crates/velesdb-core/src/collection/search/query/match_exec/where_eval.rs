@@ -68,7 +68,7 @@ const fn invert_order(op: crate::velesql::CompareOp) -> crate::velesql::CompareO
 }
 
 /// Resolves a query vector from a `VectorExpr`, looking up parameters as needed.
-fn resolve_query_vector(
+pub(super) fn resolve_query_vector(
     vector: &crate::velesql::VectorExpr,
     params: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<f32>> {

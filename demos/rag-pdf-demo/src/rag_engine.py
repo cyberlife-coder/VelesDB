@@ -21,19 +21,19 @@ class RAGEngine:
         self.velesdb = VelesDBClient()
         self._documents: dict[str, dict[str, Any]] = {}
 
-    async def ensure_collection(self) -> None:
+    def ensure_collection(self) -> None:
         """Ensure the RAG collection exists in VelesDB."""
         collection_name = self.settings.collection_name
 
-        if not await self.velesdb.collection_exists(collection_name):
-            await self.velesdb.create_collection(
+        if not self.velesdb.collection_exists(collection_name):
+            self.velesdb.create_collection(
                 name=collection_name,
                 dimension=self.embedding_service.dimension,
                 metric="cosine"
             )
         
         # Load existing documents from VelesDB
-        await self._load_existing_documents()
+        self._load_existing_documents()
 
     @staticmethod
     def _init_doc_entries(
@@ -84,26 +84,26 @@ class RAGEngine:
             if pages_set is not None:
                 doc_info["pages"] = len(pages_set)
 
-    async def _fetch_total_points(self) -> int:
+    def _fetch_total_points(self) -> int:
         """Return the point count for the RAG collection, or 0 on failure."""
         try:
-            collection_info = await self.velesdb.get_collection_info(
+            collection_info = self.velesdb.get_collection_info(
                 self.settings.collection_name
             )
             return int(collection_info.get("point_count", 0))
         except Exception:
             return 0
 
-    async def _load_existing_documents(self) -> None:
+    def _load_existing_documents(self) -> None:
         """Load document metadata from existing points in VelesDB."""
         try:
-            total_points = await self._fetch_total_points()
+            total_points = self._fetch_total_points()
             if total_points == 0:
                 return  # No points to load
 
             # Use a dummy vector to retrieve all points with their payloads
             dummy_vector = [0.0] * self.embedding_service.dimension
-            raw = await self.velesdb.search(
+            raw = self.velesdb.search(
                 collection=self.settings.collection_name,
                 query_vector=dummy_vector,
                 top_k=total_points,  # Get ALL chunks
@@ -119,7 +119,7 @@ class RAGEngine:
             print(f"Warning: Could not load existing documents: {e}")
             # Continue with empty documents list
 
-    async def ingest_document(self, pdf_path: Path) -> dict[str, Any]:
+    def ingest_document(self, pdf_path: Path) -> dict[str, Any]:
         """
         Ingest a PDF document into VelesDB.
 
@@ -129,7 +129,7 @@ class RAGEngine:
         Returns:
             Ingestion result with stats
         """
-        await self.ensure_collection()
+        self.ensure_collection()
 
         # Process PDF into chunks (with timing)
         t0 = time.perf_counter()
@@ -174,7 +174,7 @@ class RAGEngine:
 
         # Upsert to VelesDB (with timing)
         t2 = time.perf_counter()
-        await self.velesdb.upsert_points(
+        self.velesdb.upsert_points(
             self.settings.collection_name,
             points
         )
@@ -202,7 +202,7 @@ class RAGEngine:
             "insert_time_ms": round(insert_time_ms, 2)
         }
 
-    async def ingest_text(
+    def ingest_text(
         self,
         text: str,
         document_name: str
@@ -217,7 +217,7 @@ class RAGEngine:
         Returns:
             Ingestion result with stats
         """
-        await self.ensure_collection()
+        self.ensure_collection()
 
         # Chunk the text (with timing)
         t0 = time.perf_counter()
@@ -265,7 +265,7 @@ class RAGEngine:
 
         # Upsert to VelesDB (with timing)
         t2 = time.perf_counter()
-        await self.velesdb.upsert_points(
+        self.velesdb.upsert_points(
             self.settings.collection_name,
             points
         )
@@ -292,7 +292,7 @@ class RAGEngine:
             "insert_time_ms": round(insert_time_ms, 2)
         }
 
-    async def search(
+    def search(
         self,
         query: str,
         top_k: int = 5,
@@ -321,7 +321,7 @@ class RAGEngine:
 
         # Search VelesDB (with timing)
         t1 = time.perf_counter()
-        results = await self.velesdb.search(
+        results = self.velesdb.search(
             collection=self.settings.collection_name,
             query_vector=query_embedding,
             top_k=top_k,
@@ -346,7 +346,7 @@ class RAGEngine:
             "search_time_ms": round(search_time_ms, 2)
         }
 
-    async def list_documents(self) -> list[dict[str, Any]]:
+    def list_documents(self) -> list[dict[str, Any]]:
         """
         List all indexed documents.
 
@@ -355,7 +355,7 @@ class RAGEngine:
         """
         return list(self._documents.values())
 
-    async def delete_document(self, document_name: str) -> dict[str, Any]:
+    def delete_document(self, document_name: str) -> dict[str, Any]:
         """
         Delete a document and all its chunks from VelesDB.
 
@@ -376,7 +376,7 @@ class RAGEngine:
         # Delete each chunk from VelesDB
         for chunk_id in chunk_ids:
             try:
-                await self.velesdb.delete_point(
+                self.velesdb.delete_point(
                     self.settings.collection_name,
                     chunk_id
                 )
@@ -398,7 +398,7 @@ class RAGEngine:
         
         return result
 
-    async def health_check(self) -> dict[str, Any]:
+    def health_check(self) -> dict[str, Any]:
         """
         Check system health.
 
@@ -407,7 +407,7 @@ class RAGEngine:
         """
         velesdb_ok = False
         try:
-            velesdb_ok = await self.velesdb.health_check()
+            velesdb_ok = self.velesdb.health_check()
         except Exception:
             pass
 

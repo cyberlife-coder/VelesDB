@@ -42,6 +42,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-Dwarnings"
@@ -152,7 +155,6 @@ jobs:
 
       - name: Audit performance claims consistency
         run: python3 scripts/check-perf-claims.py --no-criterion
-        continue-on-error: true  # Advisory — does not block merge
 
       - name: Check doctests compile
         run: |

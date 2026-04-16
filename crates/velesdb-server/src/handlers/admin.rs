@@ -15,7 +15,7 @@ use crate::types::{
 use crate::AppState;
 
 use super::helpers::{
-    core_error_response, error_response, get_collection_or_404, get_vector_collection_or_404,
+    auto_core_error_response, error_response, get_collection_or_404, get_vector_collection_or_404,
 };
 
 /// Get detailed collection configuration (HNSW params, storage mode, schema, etc.).
@@ -112,8 +112,9 @@ pub async fn rebuild_index(
         Err(resp) => return resp,
     };
 
-    match collection.rebuild_index() {
-        Ok(compacted) => (
+    let result = tokio::task::spawn_blocking(move || collection.rebuild_index()).await;
+    match result {
+        Ok(Ok(compacted)) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "message": "Index rebuilt",
@@ -122,7 +123,11 @@ pub async fn rebuild_index(
             })),
         )
             .into_response(),
-        Err(e) => core_error_response(StatusCode::INTERNAL_SERVER_ERROR, &e),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(join_err) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("rebuild_index task panicked: {join_err}"),
+        ),
     }
 }
 
@@ -144,22 +149,20 @@ pub async fn analyze_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.analyze_collection(&name) {
-        Ok(stats) => {
+    let coll_name = name.clone();
+    let state_clone = state.clone();
+    let result =
+        tokio::task::spawn_blocking(move || state_clone.db.analyze_collection(&coll_name)).await;
+    match result {
+        Ok(Ok(stats)) => {
             let response = map_stats_to_response(&stats);
             (StatusCode::OK, Json(response)).into_response()
         }
-        Err(e) => {
-            let status = if matches!(
-                e,
-                velesdb_core::Error::CollectionNotFound(_) | velesdb_core::Error::PointNotFound(_)
-            ) {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            core_error_response(status, &e)
-        }
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(join_err) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("analyze_collection task panicked: {join_err}"),
+        ),
     }
 }
 
@@ -190,7 +193,7 @@ pub async fn get_collection_stats(
             StatusCode::NOT_FOUND,
             format!("No stats for '{name}'. Run POST /collections/{name}/analyze first."),
         ),
-        Err(e) => core_error_response(StatusCode::INTERNAL_SERVER_ERROR, &e),
+        Err(e) => auto_core_error_response(&e),
     }
 }
 

@@ -15,7 +15,7 @@
  * 
  * await db.init();
  * await db.createCollection('docs', { dimension: 768 });
- * await db.insert('docs', { id: '1', vector: [...] });
+ * await db.upsert('docs', { id: '1', vector: [...] });
  * const results = await db.search('docs', queryVector, { k: 10 });
  * ```
  * 

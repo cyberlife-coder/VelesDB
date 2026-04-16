@@ -611,10 +611,16 @@ fn test_create_metadata_collection() {
     db.create_metadata_collection("meta_test".to_string())
         .unwrap();
 
-    let col = db.get_collection("meta_test".to_string()).unwrap().unwrap();
+    // Metadata collections are not vector collections, so get_collection
+    // should return an error directing the caller to the typed API.
+    let result = db.get_collection("meta_test".to_string());
+    assert!(
+        result.is_err(),
+        "get_collection should reject non-vector collections"
+    );
 
-    assert!(col.is_metadata_only());
-    assert_eq!(col.dimension(), 0);
+    // Verify the collection was created (visible in list)
+    assert!(db.list_collections().contains(&"meta_test".to_string()));
 }
 
 #[test]
@@ -632,6 +638,49 @@ fn test_regular_collection_not_metadata_only() {
         .unwrap();
 
     assert!(!col.is_metadata_only());
+}
+
+// =========================================================================
+// Graph Collection Tests
+// =========================================================================
+
+#[test]
+fn test_create_graph_collection() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_graph_collection("kg".to_string()).unwrap();
+
+    assert!(db.list_collections().contains(&"kg".to_string()));
+}
+
+#[test]
+fn test_create_graph_collection_with_embeddings() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_graph_collection_with_embeddings("kg_emb".to_string(), 128, DistanceMetric::Cosine)
+        .unwrap();
+
+    assert!(db.list_collections().contains(&"kg_emb".to_string()));
+}
+
+#[test]
+fn test_get_collection_rejects_graph_collection() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_graph_collection("kg_reject".to_string()).unwrap();
+
+    // get_collection should reject a graph collection with a clear error
+    let result = db.get_collection("kg_reject".to_string());
+    assert!(
+        result.is_err(),
+        "get_collection should reject graph collections"
+    );
 }
 
 // =========================================================================

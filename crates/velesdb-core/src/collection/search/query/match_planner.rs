@@ -3,9 +3,6 @@
 //! This module provides cost-based query planning for MATCH queries,
 //! choosing between Graph-First, Vector-First, or Parallel execution.
 
-#![allow(dead_code)]
-// Planner is used by execute_match integration
-
 // Reason: Numeric casts in query planning are intentional:
 // - u64->f64 for limit calculations: precision loss acceptable for estimates
 // - f32->f64 for selectivity: values bounded (0.0-1.0 range)

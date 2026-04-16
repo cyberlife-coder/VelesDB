@@ -292,6 +292,26 @@ export const f = {
     };
   },
 
+  // --- Convenience combinators ----------------------------------------------
+
+  /** `field NOT IN (values...)` — shorthand for `not(in(field, values))`. */
+  notIn(field: string, values: JsonValue[]): Filter {
+    return { condition: { type: 'not', condition: { type: 'in', field, values: [...values] } } };
+  },
+
+  /** `field BETWEEN low AND high` — shorthand for `and([gte(field, low), lte(field, high)])`. */
+  between(field: string, low: JsonValue, high: JsonValue): Filter {
+    return {
+      condition: {
+        type: 'and',
+        conditions: [
+          { type: 'gte', field, value: low },
+          { type: 'lte', field, value: high },
+        ],
+      },
+    };
+  },
+
   // --- Logical --------------------------------------------------------------
 
   /** Logical AND — the filters list is copied and flattened to root conditions. */

@@ -14,7 +14,14 @@ import type {
 } from '../types';
 import type { FilterInput } from '../filter';
 import { NotFoundError, VelesDBError } from '../types';
-import type { WasmContext } from './wasm-types';
+import type {
+  WasmContext,
+  WasmDenseResult,
+  WasmSparseResult,
+  WasmFilteredResult,
+  WasmHybridResult,
+  WasmSearchResultItem,
+} from './wasm-types';
 
 // ---------------------------------------------------------------------------
 // Dense search (optionally with sparse/hybrid/filter)
@@ -27,11 +34,11 @@ function searchSparseOnly(
   values: number[],
   k: number
 ): SearchResult[] {
-  const sparseResults = collection!.store.sparse_search(
+  const sparseResults: WasmSparseResult[] = collection!.store.sparse_search(
     new Uint32Array(indices),
     new Float32Array(values),
     k
-  ) as Array<{ doc_id: bigint | number; score: number }>;
+  );
 
   return sparseResults.map(r => ({
     id: String(r.doc_id),
@@ -48,22 +55,23 @@ function searchHybridFusion(
   values: number[],
   k: number
 ): SearchResult[] {
-  const denseResults = collection!.store.search(queryVector, k) as Array<[bigint, number]>;
-  const sparseResults = collection!.store.sparse_search(
+  const denseResults: WasmDenseResult[] = collection!.store.search(queryVector, k);
+  const sparseResults: WasmSparseResult[] = collection!.store.sparse_search(
     new Uint32Array(indices),
     new Float32Array(values),
     k
-  ) as Array<{ doc_id: bigint | number; score: number }>;
-
-  const denseForFuse = denseResults.map(([id, score]: [bigint, number]) => [Number(id), score]);
-  const sparseForFuse = sparseResults.map(
-    (r: { doc_id: bigint | number; score: number }) => [Number(r.doc_id), r.score]
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const fused = (ctx.wasmModule as any).hybrid_search_fuse(
-    denseForFuse, sparseForFuse, 60
-  ) as Array<{ doc_id: bigint | number; score: number }>;
+  const denseForFuse: Array<[number, number]> = denseResults.map(
+    ([id, score]) => [Number(id), score]
+  );
+  const sparseForFuse: Array<[number, number]> = sparseResults.map(
+    r => [Number(r.doc_id), r.score]
+  );
+
+  const fused: WasmSparseResult[] = ctx.wasmModule.hybrid_search_fuse(
+    denseForFuse, sparseForFuse, 60, k
+  );
 
   return fused.slice(0, k).map(r => ({
     id: String(r.doc_id),
@@ -79,12 +87,9 @@ function searchWithFilter(
   k: number,
   filter: FilterInput
 ): SearchResult[] {
-  const results = collection!.store.search_with_filter(queryVector, k, filter) as Array<{
-    id: bigint;
-    score: number;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    payload: any;
-  }>;
+  const results: WasmFilteredResult[] = collection!.store.search_with_filter(
+    queryVector, k, filter
+  );
 
   return results.map(r => ({
     id: String(r.id),
@@ -99,9 +104,9 @@ function searchDenseOnly(
   queryVector: Float32Array,
   k: number
 ): SearchResult[] {
-  const rawResults = collection!.store.search(queryVector, k) as Array<[bigint, number]>;
+  const rawResults: WasmDenseResult[] = collection!.store.search(queryVector, k);
 
-  return rawResults.map(([id, score]: [bigint, number]) => {
+  return rawResults.map(([id, score]) => {
     const result: SearchResult = { id: String(id), score };
     const payload = collection!.payloads.get(ctx.canonicalPayloadKeyFromResultId(id));
     if (payload) {
@@ -191,7 +196,7 @@ export async function wasmSearchBatch(
 function mapWasmResult(
   ctx: WasmContext,
   collection: ReturnType<WasmContext['getCollection']>,
-  r: [bigint | number, number] | { id: bigint | number; score: number; payload?: Record<string, unknown> }
+  r: WasmSearchResultItem
 ): SearchResult {
   if (Array.isArray(r)) {
     const key = ctx.canonicalPayloadKeyFromResultId(r[0]);
@@ -212,8 +217,7 @@ export async function wasmTextSearch(
     throw new NotFoundError(`Collection '${collectionName}'`);
   }
   const k = options?.k ?? 10;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = collection.store.text_search(query, k, undefined) as Array<any>;
+  const raw: WasmSearchResultItem[] = collection.store.text_search(query, k, undefined);
   return raw.map(r => mapWasmResult(ctx, collection, r));
 }
 
@@ -231,9 +235,10 @@ export async function wasmHybridSearch(
   const queryVector = vector instanceof Float32Array ? vector : new Float32Array(vector);
   const k = options?.k ?? 10;
   const vectorWeight = options?.vectorWeight ?? 0.5;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = collection.store.hybrid_search(queryVector, textQuery, k, vectorWeight) as Array<any>;
-  return raw.map((r: { id: bigint | number; score: number; payload?: Record<string, unknown> }) => {
+  const raw: WasmHybridResult[] = collection.store.hybrid_search(
+    queryVector, textQuery, k, vectorWeight
+  );
+  return raw.map(r => {
     const key = ctx.canonicalPayloadKeyFromResultId(r.id);
     return { id: String(r.id), score: r.score, payload: r.payload ?? collection.payloads.get(key) };
   });
@@ -266,14 +271,13 @@ export async function wasmMultiQuerySearch(
   });
 
   const strategy = options?.fusion ?? 'rrf';
-  const raw = collection.store.multi_query_search(
+  const raw: WasmSearchResultItem[] = collection.store.multi_query_search(
     flat,
     numVectors,
     options?.k ?? 10,
     strategy,
     options?.fusionParams?.k ?? 60
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ) as Array<any>;
+  );
 
   return raw.map(r => mapWasmResult(ctx, collection, r));
 }
@@ -305,14 +309,13 @@ export async function wasmQuery(
     typeof requestedK === 'number' && Number.isInteger(requestedK) && requestedK > 0
       ? requestedK
       : 10;
-  const raw = collection.store.query(
+  const raw: Record<string, unknown>[] = collection.store.query(
     paramsVector instanceof Float32Array ? paramsVector : new Float32Array(paramsVector),
     k
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ) as Array<any>;
+  );
 
   return {
-    results: raw as Record<string, unknown>[],
+    results: raw,
     stats: {
       executionTimeMs: 0,
       strategy: 'wasm-query',

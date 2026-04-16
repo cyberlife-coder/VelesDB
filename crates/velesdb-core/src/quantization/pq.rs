@@ -383,7 +383,7 @@ impl ProductQuantizer {
 /// `pq_vector.codes.len() == quantizer.codebook.num_subspaces`. These invariants
 /// are enforced at insert/train time and asserted only in debug builds.
 #[must_use]
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
 pub(crate) fn distance_pq_l2(
     query_vector: &[f32],
     pq_vector: &PQVector,
@@ -402,7 +402,7 @@ pub(crate) fn distance_pq_l2(
 /// The LUT is indexed as `lut[subspace * k + centroid_id]`.
 /// This is the hot inner loop for batch ADC scoring.
 #[must_use]
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
 pub(crate) fn distance_pq_l2_with_lut(
     pq_vector: &PQVector,
     lut: &[f32],
@@ -415,6 +415,66 @@ pub(crate) fn distance_pq_l2_with_lut(
         .map(|(subspace, &code)| lut[subspace * num_centroids + usize::from(code)])
         .sum::<f32>()
         .sqrt()
+}
+
+/// Minimum batch size for SIMD ADC path.
+///
+/// Below this threshold the overhead of building code slices and dispatching
+/// through `adc_distances_batch` exceeds the scalar per-item path.
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
+const ADC_SIMD_BATCH_THRESHOLD: usize = 8;
+
+/// Batch ADC rescoring using SIMD-accelerated distance computation.
+///
+/// Builds a single LUT from the query vector (applying OPQ rotation if
+/// present), then dispatches to [`crate::simd_native::adc::adc_distances_batch`]
+/// for vectorized distance computation across all candidates.
+///
+/// Returns `(index, sqrt_distance)` pairs preserving the input order.
+///
+/// Falls back to scalar per-item scoring when the batch is smaller than
+/// [`ADC_SIMD_BATCH_THRESHOLD`] or when the SIMD path returns an error.
+///
+/// # Errors
+///
+/// Returns `Err` only if LUT construction parameters are inconsistent
+/// (zero subspaces). In practice this cannot happen with a validly
+/// trained `ProductQuantizer`.
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
+pub(crate) fn pq_adc_batch_rescore(
+    quantizer: &ProductQuantizer,
+    query: &[f32],
+    pq_vectors: &[&PQVector],
+) -> crate::error::Result<Vec<f32>> {
+    if pq_vectors.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let m = quantizer.codebook.num_subspaces;
+
+    // Small batches: scalar path avoids slice-building overhead.
+    if pq_vectors.len() < ADC_SIMD_BATCH_THRESHOLD {
+        let lut = quantizer.precompute_lut(query);
+        let k = quantizer.codebook.num_centroids;
+        return Ok(pq_vectors
+            .iter()
+            .map(|pq_vec| distance_pq_l2_with_lut(pq_vec, &lut, k))
+            .collect());
+    }
+
+    // Build LUT once (includes OPQ rotation).
+    let lut = quantizer.precompute_lut(query);
+
+    // Collect code slices for the SIMD kernel.
+    let code_slices: Vec<&[u16]> = pq_vectors
+        .iter()
+        .map(|pq_vec| pq_vec.codes.as_slice())
+        .collect();
+
+    // SIMD-accelerated ADC returns squared L2 sums; apply sqrt for L2 distance.
+    let squared_dists = crate::simd_native::adc::adc_distances_batch(&lut, &code_slices, m)?;
+
+    Ok(squared_dists.iter().map(|&d| d.sqrt()).collect())
 }
 
 #[cfg(test)]

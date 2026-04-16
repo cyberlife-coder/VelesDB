@@ -3,12 +3,12 @@
 //! Provides SIMD-accelerated distance computation using precomputed lookup tables.
 //! Dispatches to AVX2 gather, NEON, or scalar path based on runtime detection.
 //!
-//! The public-crate API (`adc_distances_batch`) is wired into the PQ search
-//! pipeline in Phase 03. Functions are marked `#[allow(dead_code)]` until then.
+//! The public-crate API ([`adc_distances_batch`]) is called from the PQ
+//! rescoring pipeline in [`crate::quantization::pq::pq_adc_batch_rescore`].
 
-// `adc_distances_batch` is the Phase 03 search hot-path; suppressed until wired into
-// the PQ rescoring pipeline. Remove this allow when Phase 03 integration is complete.
-#![allow(dead_code)]
+// The sole caller (`pq_adc_batch_rescore`) is persistence-gated, so all items
+// in this module are dead when persistence is disabled.
+#![cfg_attr(not(feature = "persistence"), allow(dead_code))]
 
 #[allow(unused_imports)] // simd_level/SimdLevel used only on x86_64/aarch64 targets
 use super::dispatch::{simd_level, SimdLevel};
@@ -27,16 +27,29 @@ use super::reduction::hsum_avx256;
 ///
 /// A vector of distances, one per code vector.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `m` is zero or `lut.len()` is not divisible by `m`.
-#[must_use]
-pub(crate) fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Vec<f32> {
-    assert!(m > 0, "m must be > 0");
-    assert!(lut.len() % m == 0, "lut length must be divisible by m");
+/// Returns `Err` if `m` is zero or `lut.len()` is not divisible by `m`.
+pub(crate) fn adc_distances_batch(
+    lut: &[f32],
+    codes: &[&[u16]],
+    m: usize,
+) -> crate::error::Result<Vec<f32>> {
+    if m == 0 {
+        return Err(crate::error::Error::InvalidVector(
+            "ADC subspace count m must be > 0".into(),
+        ));
+    }
+    if lut.len() % m != 0 {
+        return Err(crate::error::Error::InvalidVector(format!(
+            "ADC lookup table length {} is not divisible by m={}",
+            lut.len(),
+            m
+        )));
+    }
     let k = lut.len() / m;
 
-    match simd_level() {
+    Ok(match simd_level() {
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 | SimdLevel::Avx512 => {
             // SAFETY: AVX2 ADC gather kernel requires CPU feature.
@@ -76,7 +89,7 @@ pub(crate) fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Ve
                 .collect()
         }
         _ => adc_batch_scalar(lut, codes, m, k),
-    }
+    })
 }
 
 /// Scalar ADC distance for a batch of code vectors.
@@ -260,7 +273,7 @@ mod tests {
         let lut = make_sequential_lut(m, k);
         let codes: Vec<u16> = vec![0, 1, 2, 3];
         let codes_ref: Vec<&[u16]> = vec![codes.as_slice()];
-        let result = adc_distances_batch(&lut, &codes_ref, m);
+        let result = adc_distances_batch(&lut, &codes_ref, m).expect("test: valid ADC input");
         assert_eq!(result.len(), 1);
         assert!(
             (result[0] - 30.0).abs() < 1e-6,
@@ -279,7 +292,7 @@ mod tests {
         let c1: Vec<u16> = vec![0, 0];
         let c2: Vec<u16> = vec![3, 3];
         let codes_ref: Vec<&[u16]> = vec![c1.as_slice(), c2.as_slice()];
-        let result = adc_distances_batch(&lut, &codes_ref, m);
+        let result = adc_distances_batch(&lut, &codes_ref, m).expect("test: valid ADC input");
         assert_eq!(result.len(), 2);
         assert!((result[0] - 4.0).abs() < 1e-6);
         assert!((result[1] - 10.0).abs() < 1e-6);
@@ -294,7 +307,7 @@ mod tests {
         // Expected: sum of lut[s*256+0] for s=0..7 = 0+256+512+768+1024+1280+1536+1792 = 7168
         let codes: Vec<u16> = vec![0; 8];
         let codes_ref: Vec<&[u16]> = vec![codes.as_slice()];
-        let result = adc_distances_batch(&lut, &codes_ref, m);
+        let result = adc_distances_batch(&lut, &codes_ref, m).expect("test: valid ADC input");
         assert!(
             (result[0] - 7168.0).abs() < 1e-2,
             "expected 7168.0, got {}",
@@ -312,7 +325,7 @@ mod tests {
         // Expected: lut[1] + lut[5] + lut[9] + lut[13] + lut[17] = 1+5+9+13+17 = 45
         let codes: Vec<u16> = vec![1, 1, 1, 1, 1];
         let codes_ref: Vec<&[u16]> = vec![codes.as_slice()];
-        let result = adc_distances_batch(&lut, &codes_ref, m);
+        let result = adc_distances_batch(&lut, &codes_ref, m).expect("test: valid ADC input");
         assert!(
             (result[0] - 45.0).abs() < 1e-6,
             "expected 45.0, got {}",
@@ -341,7 +354,8 @@ mod tests {
         // Scalar reference
         let scalar_result = adc_batch_scalar(&lut, &codes_ref, m, k);
         // Dispatch (may use AVX2 or scalar depending on platform)
-        let dispatch_result = adc_distances_batch(&lut, &codes_ref, m);
+        let dispatch_result =
+            adc_distances_batch(&lut, &codes_ref, m).expect("test: valid ADC input");
 
         assert!(
             (scalar_result[0] - dispatch_result[0]).abs() < 1e-4,

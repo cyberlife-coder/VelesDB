@@ -21,7 +21,9 @@ use crate::types::{
 use crate::AppState;
 use velesdb_core::Point;
 
-use crate::handlers::helpers::{core_error_response, error_response, get_vector_collection_or_404};
+use crate::handlers::helpers::{
+    auto_core_error_response, error_response, get_vector_collection_or_404,
+};
 
 use velesdb_core::index::sparse::SparseVector;
 
@@ -114,7 +116,7 @@ pub async fn upsert_points(
             }))
             .into_response()
         }
-        Ok(Err(e)) => core_error_response(StatusCode::BAD_REQUEST, &e),
+        Ok(Err(e)) => auto_core_error_response(&e),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Task panicked: {e}"),
@@ -167,12 +169,9 @@ pub async fn get_point(
         }))
         .into_response(),
         // PR #586 Devin fix: emit `VELES-003 PointNotFound` via
-        // `core_error_response` so typed-error clients surface
+        // `auto_core_error_response` so typed-error clients surface
         // `PointNotFoundError` instead of a generic fallback.
-        None => core_error_response(
-            StatusCode::NOT_FOUND,
-            &velesdb_core::Error::PointNotFound(id),
-        ),
+        None => auto_core_error_response(&velesdb_core::Error::PointNotFound(id)),
     }
 }
 
@@ -205,7 +204,7 @@ pub async fn delete_point(
             "id": id
         }))
         .into_response(),
-        Err(e) => core_error_response(StatusCode::BAD_REQUEST, &e),
+        Err(e) => auto_core_error_response(&e),
     }
 }
 
@@ -258,7 +257,7 @@ pub async fn scroll_points(
 
     match result {
         Ok(Ok(batch)) => build_scroll_response(batch),
-        Ok(Err(e)) => core_error_response(StatusCode::BAD_REQUEST, &e),
+        Ok(Err(e)) => auto_core_error_response(&e),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Task panicked: {e}"),

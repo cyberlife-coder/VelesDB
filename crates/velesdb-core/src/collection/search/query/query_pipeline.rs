@@ -138,7 +138,9 @@ impl Collection {
         results: &mut Vec<SearchResult>,
         fctx: &QueryFinalizationContext<'_>,
     ) -> Result<()> {
-        self.analyze_join_pushdown(fctx.stmt);
+        // Run pushdown analysis for diagnostic tracing at Collection level.
+        // The actual pushdown execution happens in Database::execute_single_select().
+        let _analysis = self.analyze_join_pushdown(fctx.stmt);
         self.check_guardrails_and_record(fctx.ctx, results.len())?;
 
         *results = self.apply_select_postprocessing(

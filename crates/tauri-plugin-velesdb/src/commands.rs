@@ -591,7 +591,8 @@ pub async fn multi_query_search<R: Runtime>(
     request: MultiQuerySearchRequest,
 ) -> std::result::Result<SearchResponse, CommandError> {
     let start = std::time::Instant::now();
-    let fusion_strategy = parse_fusion_strategy(&request.fusion, request.fusion_params.as_ref());
+    let fusion_strategy = parse_fusion_strategy(&request.fusion, request.fusion_params.as_ref())
+        .map_err(CommandError::from)?;
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
 
     let results = state

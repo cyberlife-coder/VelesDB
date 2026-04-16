@@ -31,6 +31,7 @@ import type {
   SearchOptions,
   ScrollRequest,
   ScrollResponse,
+  StreamUpsertResponse,
 } from '../types';
 import { wasmNotSupported } from './shared';
 
@@ -147,6 +148,12 @@ export async function wasmStreamInsert(
   _collection: string, _docs: VectorDocument[]
 ): Promise<void> {
   wasmNotSupported('Streaming insert');
+}
+
+export async function wasmStreamUpsertPoints(
+  _collection: string, _docs: VectorDocument[]
+): Promise<StreamUpsertResponse> {
+  wasmNotSupported('Streaming batch upsert');
 }
 
 // ---------------------------------------------------------------------------

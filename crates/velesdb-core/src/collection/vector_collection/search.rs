@@ -470,6 +470,19 @@ impl VectorCollection {
         self.inner.delta_buffer.is_active()
     }
 
+    /// Enables streaming ingestion on this collection.
+    ///
+    /// Creates a [`StreamIngester`](crate::collection::streaming::StreamIngester) with
+    /// the given `config` and stores it internally. Points can then be submitted via
+    /// [`stream_insert`](Self::stream_insert) or [`stream_insert_batch`](Self::stream_insert_batch).
+    ///
+    /// Calling this when streaming is already active replaces the existing
+    /// ingester (the old drain task is aborted via `Drop`).
+    #[cfg(feature = "persistence")]
+    pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
+        self.inner.enable_streaming(config);
+    }
+
     /// Executes a raw VelesQL string, parsing it before execution.
     ///
     /// # Errors

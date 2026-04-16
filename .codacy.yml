@@ -234,8 +234,11 @@ engines:
       # --- HNSW beam search hot path (lock-held greedy descent + prefetch) ---
       - "crates/velesdb-core/src/index/hnsw/native/graph/search.rs"
 
-      # --- Server handlers (HTTP glue, not engine logic) ---
-      - "crates/velesdb-server/src/handlers/**"
+      # --- Server handlers: only files exceeding CC/NLOC Codacy limits ---
+      # pipeline.rs (771 NLOC): async search pipeline with filter/fusion/scoring branches
+      - "crates/velesdb-server/src/handlers/search/pipeline.rs"
+      # collections.rs (560 NLOC): CRUD handler with serde deserialization + validation branches
+      - "crates/velesdb-server/src/handlers/collections.rs"
 
       # --- ORDER BY ordering (Lizard false positive: counts impl block + free fn as one unit) ---
       # ScoreContext::new is 5 lines but Lizard merges the impl block with the

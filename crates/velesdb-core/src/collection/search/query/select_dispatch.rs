@@ -1,8 +1,10 @@
 //! Internal dispatch helpers for SELECT query execution.
 //!
 //! Extracted from the main `query/mod.rs` to keep that file under 500 NLOC.
-//! These methods handle MATCH dispatch, CBO strategy, main SELECT dispatch,
-//! JOIN pushdown analysis, and post-processing (DISTINCT / ORDER BY / LIMIT).
+//! These methods handle CBO strategy, main SELECT dispatch, JOIN pushdown
+//! analysis, and post-processing (DISTINCT / ORDER BY / LIMIT).
+//!
+//! MATCH-specific dispatch lives in `match_dispatch.rs` (Extract Module).
 
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -11,47 +13,6 @@ use crate::point::SearchResult;
 use super::{distinct, pushdown, ExtractedComponents, MAX_LIMIT};
 
 impl Collection {
-    /// Dispatches a MATCH query through the graph traversal path.
-    pub(super) fn dispatch_match_query(
-        &self,
-        match_clause: &crate::velesql::MatchClause,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        ctx: &crate::guardrails::QueryContext,
-    ) -> Result<Vec<SearchResult>> {
-        let match_results = self.execute_match_with_context(match_clause, params, Some(ctx))?;
-
-        ctx.check_timeout()
-            .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-
-        let mut sorted = match_results;
-        if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
-            for item in order_by.iter().rev() {
-                self.order_match_results(&mut sorted, &item.expression, item.descending);
-            }
-        }
-
-        let mut results = self
-            .match_results_to_search_results(sorted)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-        // Final cardinality check for MATCH path (EPIC-048 US-003).
-        ctx.check_cardinality(results.len())
-            .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-        if let Some(limit) = match_clause.return_clause.limit {
-            let limit = usize::try_from(limit).unwrap_or(MAX_LIMIT).min(MAX_LIMIT);
-            results.truncate(limit);
-        }
-        // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
-        #[allow(clippy::cast_possible_truncation)]
-        let graph_latency_us = ctx.elapsed().as_micros() as u64;
-        self.query_planner
-            .stats()
-            .update_graph_latency(graph_latency_us);
-        self.guard_rails.circuit_breaker.record_success();
-        Ok(results)
-    }
-
     /// Computes the CBO execution strategy and over-fetch factor for the query.
     pub(super) fn compute_cbo_strategy(
         &self,
@@ -123,24 +84,33 @@ impl Collection {
     }
 
     /// Analyzes JOIN pushdown opportunities (EPIC-031 US-006).
+    ///
+    /// Returns a [`PushdownAnalysis`](pushdown::PushdownAnalysis) classifying
+    /// WHERE conditions by data source so the caller can route each filter to
+    /// the correct execution stage.
     #[allow(clippy::unused_self)]
-    pub(super) fn analyze_join_pushdown(&self, stmt: &crate::velesql::SelectStatement) {
+    pub(super) fn analyze_join_pushdown(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+    ) -> pushdown::PushdownAnalysis {
         if stmt.joins.is_empty() {
-            return;
+            return pushdown::PushdownAnalysis::default();
         }
-        if let Some(ref cond) = stmt.where_clause {
-            let graph_vars: std::collections::HashSet<String> =
-                stmt.from_alias.iter().cloned().collect();
-            let join_tables = pushdown::extract_join_tables(&stmt.joins);
-            let analysis = pushdown::analyze_for_pushdown(cond, &graph_vars, &join_tables);
-            tracing::debug!(
-                column_store_filters = analysis.column_store_filters.len(),
-                graph_filters = analysis.graph_filters.len(),
-                post_join_filters = analysis.post_join_filters.len(),
-                has_pushdown = analysis.has_pushdown(),
-                "JOIN pushdown analysis complete"
-            );
-        }
+        let Some(ref cond) = stmt.where_clause else {
+            return pushdown::PushdownAnalysis::default();
+        };
+        let graph_vars: std::collections::HashSet<String> =
+            stmt.from_alias.iter().cloned().collect();
+        let join_tables = pushdown::extract_join_tables(&stmt.joins);
+        let analysis = pushdown::analyze_for_pushdown(cond, &graph_vars, &join_tables);
+        tracing::debug!(
+            column_store_filters = analysis.column_store_filters.len(),
+            graph_filters = analysis.graph_filters.len(),
+            post_join_filters = analysis.post_join_filters.len(),
+            has_pushdown = analysis.has_pushdown(),
+            "JOIN pushdown analysis complete"
+        );
+        analysis
     }
 
     /// Applies DISTINCT, ORDER BY (with LET bindings), OFFSET, LIMIT, and
