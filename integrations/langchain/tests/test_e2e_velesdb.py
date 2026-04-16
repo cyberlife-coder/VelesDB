@@ -207,7 +207,7 @@ class TestE2EVelesDBAdvanced:
             "reinforcement learning policy optimization agent",
         ]
         # GIVEN: insert 8 docs
-        ids = embeddings.embed_documents(texts)
+        _embeddings_cache = embeddings.embed_documents(texts)
         store = VelesDBVectorStore(
             embedding=embeddings,
             path=temp_dir,
