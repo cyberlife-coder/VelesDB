@@ -15,6 +15,8 @@
 //! LIMIT / OFFSET, and FUSION clauses. Each of these features lives in a
 //! dedicated sibling module so this file stays a pure orchestrator.
 
+use std::collections::HashMap;
+
 use velesdb_core::velesql::{Condition, Query, SelectStatement, VectorSearch};
 
 use crate::database::DatabaseInner;
@@ -272,6 +274,20 @@ fn apply_fusion(
     ))
 }
 
+/// Builds an `id -> index` lookup map so the vector-row collectors can
+/// resolve ids in O(1) instead of O(n) per row (Devin Review Finding F10).
+///
+/// The non-fusion path walks every scored row, calls this once per query,
+/// and then hits the map N times; overall work goes from O(n^2) to O(n).
+fn build_id_to_idx(store: &crate::vector_store::VectorStore) -> HashMap<u64, usize> {
+    store
+        .ids
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| (id, i))
+        .collect()
+}
+
 /// Fusion-path collector: returns every scored row verbatim, skipping
 /// the residual WHERE re-check because [`fusion_branch_from_residual`]
 /// already applied it (Devin Review Finding Q). Only used when there is
@@ -280,6 +296,10 @@ fn collect_vector_rows_unfiltered(
     scored: &[(u64, f32)],
     store: &crate::vector_store::VectorStore,
 ) -> Result<Vec<OwnedScanRow>, String> {
+    // Finding F10: hash-map lookup, O(1) per row, O(n) build cost paid
+    // once. Previous `store.ids.iter().position(...)` was O(n) per row,
+    // i.e. O(n^2) overall — catastrophic on 10k+ row collections.
+    let id_to_idx = build_id_to_idx(store);
     let mut out = Vec::with_capacity(scored.len());
     for &(id, score) in scored {
         // INVARIANT: fused scores come from the union of the vector
@@ -287,7 +307,7 @@ fn collect_vector_rows_unfiltered(
         // (ids from `store.ids`). If the id isn't in the store, drop it
         // rather than panicking — fusion strategies like RRF may pair
         // the same id from both branches, but never invent new ids.
-        let Some(idx) = store.ids.iter().position(|&x| x == id) else {
+        let Some(&idx) = id_to_idx.get(&id) else {
             continue;
         };
         let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
@@ -302,17 +322,21 @@ fn collect_vector_rows(
     filters: &WhereFilters,
     params: &Params,
 ) -> Result<Vec<OwnedScanRow>, String> {
+    // Finding F10: same O(n) → O(1) lookup as
+    // `collect_vector_rows_unfiltered` but on the filtered path. The
+    // map is built once before the loop, so the overall cost is O(n)
+    // instead of O(n^2) (previous `.position(...)` walked store.ids
+    // for every scored row).
+    let id_to_idx = build_id_to_idx(store);
     let mut out = Vec::with_capacity(scored.len());
     for &(id, score) in scored {
         // INVARIANT: `compute_scores` only yields ids that were in
-        // `store.ids` at scoring time, so this `position` always finds
-        // the row. We propagate an explicit error rather than `.expect()`
+        // `store.ids` at scoring time, so this `get` always finds the
+        // row. We propagate an explicit error rather than `.expect()`
         // (Devin Review Finding N) to avoid a panic in production paths
         // if some future refactor breaks the invariant.
-        let idx = store
-            .ids
-            .iter()
-            .position(|&x| x == id)
+        let idx = *id_to_idx
+            .get(&id)
             .ok_or_else(|| format!("internal: compute_scores yielded unknown id {id}"))?;
         let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
         if !filters.passes(id, payload, idx, store, params)? {
@@ -530,5 +554,44 @@ mod tests {
         let params = parse_params(Some(r#"{"q": [1.0, 0.0]}"#)).expect("test: p");
         let err = execute(&mut db, &q, &params);
         assert!(err.is_err());
+    }
+
+    // --- Finding F10: O(n) id lookup scales linearly, not quadratically ---
+    //
+    // Regression test: with 500 rows, the previous O(n^2) `.position(...)`
+    // path did 500 * 500 = 250_000 id comparisons per NEAR query. The
+    // hash-map path does ~500 lookups. This test asserts correctness at a
+    // scale large enough that a future regression to `.position(...)` would
+    // visibly slow the suite; the numbers themselves are not the point —
+    // correctness is.
+
+    #[test]
+    fn test_select_near_scales_with_hashmap_lookup() {
+        let mut db = DatabaseInner::new();
+        db.create_collection("vecs_large", 4, "cosine")
+            .expect("test: create");
+        let store = db.get_shared_store("vecs_large").expect("test: store");
+        for i in 0u64..500 {
+            #[allow(clippy::cast_precision_loss)]
+            let val = i as f32;
+            crate::store_insert::insert_with_payload(
+                &mut store.borrow_mut(),
+                i,
+                &[val, 0.0, 0.0, 0.0],
+                None,
+            );
+        }
+        drop(store);
+        let q = parse_query("SELECT * FROM vecs_large WHERE vector NEAR $q LIMIT 10");
+        let params = parse_params(Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#)).expect("test: p");
+        let rows = execute(&mut db, &q, &params).expect("test: near");
+        // With cosine, only rows with strictly positive first component
+        // match; row id=0 has a zero-norm vector and returns NaN score
+        // (filtered out). We assert we got 10 rows (LIMIT) and that they
+        // are all from the seeded collection (id < 500).
+        assert_eq!(rows.len(), 10);
+        for row in &rows {
+            assert!(row.id() < 500, "id should come from seeded range");
+        }
     }
 }
