@@ -110,28 +110,28 @@ fn dispatch_dml(
     match dml {
         DmlStatement::Insert(s) | DmlStatement::Upsert(s) => {
             let n = velesql_insert::execute(db, s, params)?;
-            Ok(synthesize_count_rows(n))
+            synthesize_count_rows(n)
         }
         DmlStatement::Update(s) => {
             let n = velesql_update::execute(db, s, params)?;
-            Ok(synthesize_count_rows(n))
+            synthesize_count_rows(n)
         }
         DmlStatement::Delete(s) => {
             let n = velesql_delete::execute(db, s, params)?;
-            Ok(synthesize_count_rows(n))
+            synthesize_count_rows(n)
         }
         DmlStatement::InsertEdge(s) => {
             velesql_graph::insert_edge(db, s, params)?;
-            Ok(synthesize_count_rows(1))
+            synthesize_count_rows(1)
         }
         DmlStatement::DeleteEdge(s) => {
             let n = velesql_graph::delete_edge(db, s)?;
-            Ok(synthesize_count_rows(n))
+            synthesize_count_rows(n)
         }
         DmlStatement::SelectEdges(s) => velesql_graph::select_edges(db, s, params),
         DmlStatement::InsertNode(s) => {
             velesql_graph::insert_node(db, s)?;
-            Ok(synthesize_count_rows(1))
+            synthesize_count_rows(1)
         }
         _ => Err(format!("Unsupported DML variant in WASM: {dml:?}")),
     }
@@ -148,15 +148,23 @@ fn reject_unsupported_top_level(query: &Query) -> Result<(), String> {
 }
 
 /// Synthesizes count rows for INSERT / UPDATE / DELETE statement results.
-fn synthesize_count_rows(count: u32) -> Vec<QueryResultRow> {
+///
+/// Every layer falls back to the next on serialization failure. The
+/// outermost fallback (`serde_json::Value::Null`) cannot fail in
+/// practice — serde_json serializes `null` in a single step with no
+/// allocation branches — but we propagate the error via `?` rather than
+/// `.expect()` (Devin Review Finding N) so the DML path is panic-free.
+fn synthesize_count_rows(count: u32) -> Result<Vec<QueryResultRow>, String> {
+    // INVARIANT: the fallback chain below is total — each inner call
+    // returns `Ok` for the previous step's failure case. We still
+    // propagate the last-resort error through `?` to avoid `.expect()`.
     (0..count)
-        .map(|_| {
-            QueryResultRow::build(0, 0.0, None).unwrap_or_else(|_| {
-                QueryResultRow::synthetic(serde_json::json!({})).unwrap_or_else(|_| {
-                    QueryResultRow::synthetic(serde_json::Value::Null)
-                        .expect("JSON null serializes")
-                })
-            })
+        .map(|_| match QueryResultRow::build(0, 0.0, None) {
+            Ok(row) => Ok(row),
+            Err(_) => match QueryResultRow::synthetic(serde_json::json!({})) {
+                Ok(row) => Ok(row),
+                Err(_) => QueryResultRow::synthetic(serde_json::Value::Null),
+            },
         })
         .collect()
 }

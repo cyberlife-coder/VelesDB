@@ -543,10 +543,32 @@ fn build_match_row_triple(
     QueryResultRow::synthetic(serde_json::Value::Object(map))
 }
 
+/// Builds the JSON shape returned for a single MATCH-bound node.
+///
+/// Layout: payload fields are flattened at the alias root so the returned
+/// object is symmetric with the MATCH WHERE scope (where `a.name` resolves
+/// at the root of the alias — see [`build_merged_payload`]). Without this
+/// symmetry, `WHERE a.name = 'Alice'` filtered by root-level `name` but
+/// the returned JSON required `a.payload.name` — a scope mismatch for JS
+/// callers (Devin Review Finding O).
+///
+/// Collision rule: `id` and `labels` are reserved — the graph node id and
+/// the node's own label list always win over any same-named payload key.
+/// A MATCH targets the graph node identifier / label set, never a
+/// coincidentally-named payload field.
 fn node_json(id: u64, data: &WasmGraphNode) -> serde_json::Value {
-    serde_json::json!({
-        "id": id,
-        "labels": data.labels.clone(),
-        "payload": data.payload.clone().unwrap_or(serde_json::Value::Null),
-    })
+    let mut map = serde_json::Map::new();
+    if let Some(serde_json::Value::Object(obj)) = &data.payload {
+        for (k, v) in obj {
+            // Skip payload keys that would collide with reserved graph
+            // identifiers; they are re-inserted authoritatively below.
+            if k == "id" || k == "labels" {
+                continue;
+            }
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    map.insert("id".to_string(), serde_json::json!(id));
+    map.insert("labels".to_string(), serde_json::json!(data.labels.clone()));
+    serde_json::Value::Object(map)
 }

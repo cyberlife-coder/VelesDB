@@ -1204,6 +1204,106 @@ fn test_bdd_match_multi_pattern_returns_clear_error() {
         "error should reference the persistence-enabled backend, got: {msg}"
     );
 }
+
+// =========================================================================
+// Regression: MATCH node output matches WHERE alias scope
+// (Devin Review PR #594 Finding O — scope asymmetry).
+// =========================================================================
+//
+// Before the fix, `node_json` wrapped node data in a nested object:
+// `{"id": N, "labels": [...], "payload": {"name": "Alice"}}`. JS callers
+// had to read `a.payload.name` even though `WHERE a.name = 'Alice'` (used
+// on the input side) resolved `name` at the root of the alias scope. The
+// fix flattens the output: payload fields are merged at the alias root
+// so `a.name` works symmetrically on read and write. Node id always
+// wins the collision with a literal payload `id` / `labels` key (same
+// rule as MATCH WHERE).
+
+#[test]
+fn test_bdd_match_output_structure_matches_where_scope_flat() {
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.name = 'Alice' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: match");
+    assert_eq!(r.row_count(), 1);
+    // Each returned row's `a` object must expose `name` at the root —
+    // NOT under a nested `payload` key.
+    let rows: serde_json::Value = serde_json::from_str(&r.rows_json()).expect("test: parse rows");
+    let arr = rows.as_array().expect("test: array");
+    assert_eq!(arr.len(), 1);
+    let a = &arr[0]["a"];
+    assert_eq!(
+        a["name"], "Alice",
+        "`a.name` must resolve at the alias root, got: {a}"
+    );
+    assert_eq!(a["id"], 1, "node id must be present at the root, got: {a}");
+    assert!(
+        a["labels"].as_array().is_some(),
+        "`a.labels` must be present at the root, got: {a}"
+    );
+    // Backward-incompatible shape (nested `payload`) must NOT appear.
+    assert!(
+        a.get("payload").is_none(),
+        "flat output: nested `payload` key must not exist, got: {a}"
+    );
+}
+
+#[test]
+fn test_bdd_match_output_where_filters_on_returned_fields_roundtrip() {
+    // Non-regression: WHERE filter + returned row shape agree on field
+    // names (`name`, `city`). If a predicate on `b.city = 'Lyon'` filters
+    // the row set, the returned JSON for `b` must also carry `city` at
+    // the alias root — so a JS caller can do
+    // `rows[i].b.city === rows[i].b.city` symmetrically.
+    let mut db = DatabaseInner::new();
+    seed_cities_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.city = 'Lyon' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: where-filter roundtrip");
+    assert_eq!(r.row_count(), 1);
+    let rows: serde_json::Value = serde_json::from_str(&r.rows_json()).expect("test: parse rows");
+    let arr = rows.as_array().expect("test: array");
+    let b = &arr[0]["b"];
+    assert_eq!(b["city"], "Lyon");
+    assert_eq!(b["name"], "Bob");
+    assert_eq!(b["id"], 11);
+}
+
+#[test]
+fn test_bdd_match_output_node_id_wins_payload_collision() {
+    // Collision rule: if a payload carries a literal `"id"` field, the
+    // GRAPH node id wins — symmetric with the MATCH WHERE collision rule
+    // exercised by `test_match_where_payload_id_does_not_shadow_node_id`.
+    let mut db = DatabaseInner::new();
+    execute(
+        &mut db,
+        "INSERT NODE INTO graph (id = 42, payload = '{\"name\": \"X\", \"id\": 999, \"labels\": [\"Person\"]}')",
+        None,
+    )
+    .expect("test: shadowed id");
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person) WHERE a.id = 42 RETURN a LIMIT 10",
+        None,
+    )
+    .expect("test: match");
+    assert_eq!(r.row_count(), 1);
+    let rows: serde_json::Value = serde_json::from_str(&r.rows_json()).expect("test: parse rows");
+    let a = &rows[0]["a"];
+    assert_eq!(
+        a["id"], 42,
+        "graph node id (42) must win over payload `id` (999) in output, got: {a}"
+    );
+    assert_eq!(a["name"], "X");
+}
+
 // =========================================================================
 // Regression: TRUNCATE preserves the collection's StorageMode
 // (Devin Review PR #594 Finding M — future-compat).

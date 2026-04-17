@@ -116,8 +116,12 @@ impl WhereFilters {
         // scores for a single vector and would otherwise silently return
         // wrong rows for the second threshold.
         velesql_similarity::assert_single_similarity_vector(normalized.as_ref())?;
-        let similarity_cond = velesql_similarity::find_similarity(normalized.as_ref());
-        let residual = velesql_similarity::strip_similarity(normalized.as_ref());
+        // Finding P: `normalized` is already push_not_inward-ed above;
+        // use the pre-normalized variants to skip redundant clones + tree
+        // walks inside `find_similarity` / `strip_similarity`.
+        let similarity_cond =
+            velesql_similarity::find_similarity_pre_normalized(normalized.as_ref());
+        let residual = velesql_similarity::strip_similarity_pre_normalized(normalized.as_ref());
         let eval = similarity_cond
             .as_ref()
             .map(|c| SimilarityEvaluator::new(db, &stmt.from, c, params))
@@ -149,6 +153,19 @@ impl WhereFilters {
             params,
         )
     }
+
+    /// Returns `true` if this filter set has no `similarity()` predicate.
+    ///
+    /// Used by the fusion path to short-circuit `collect_vector_rows`'
+    /// post-filter: when fusion has already applied the residual WHERE
+    /// via `fusion_branch_from_residual` AND there is no similarity leaf
+    /// to re-evaluate, the post-filter is fully redundant and can be
+    /// skipped (Devin Review Finding Q). The non-fusion path must still
+    /// apply the post-filter — this accessor is only consulted under a
+    /// fusion-active branch.
+    fn has_no_similarity(&self) -> bool {
+        self.eval.is_none()
+    }
 }
 
 // --- Vector NEAR ---------------------------------------------------------
@@ -169,6 +186,14 @@ fn execute_vector_search(
     let residual_without_vector = strip_vector_search(stmt.where_clause.as_ref());
     let filters = WhereFilters::build(db, stmt, params, Some(residual_without_vector.clone()))?;
 
+    // Finding Q: when fusion is active AND the filter set has no
+    // similarity predicate to re-evaluate row-wise, the residual WHERE
+    // has already been applied by `fusion_branch_from_residual` — the
+    // post-filter in `collect_vector_rows` would duplicate that work.
+    // We skip it by passing `None` for the filter set in that case.
+    // The non-fusion path (and fusion + similarity) still applies
+    // `filters.passes()` so correctness is preserved.
+    let mut fusion_residual_already_applied = false;
     if let Some(clause) = &stmt.fusion_clause {
         scored = apply_fusion(
             &scored,
@@ -177,9 +202,14 @@ fn execute_vector_search(
             filters.residual.as_ref(),
             params,
         )?;
+        fusion_residual_already_applied = filters.has_no_similarity();
     }
 
-    collect_vector_rows(&scored, &borrowed, &filters, params)
+    if fusion_residual_already_applied {
+        collect_vector_rows_unfiltered(&scored, &borrowed)
+    } else {
+        collect_vector_rows(&scored, &borrowed, &filters, params)
+    }
 }
 
 fn validate_vector_collection(
@@ -242,6 +272,30 @@ fn apply_fusion(
     ))
 }
 
+/// Fusion-path collector: returns every scored row verbatim, skipping
+/// the residual WHERE re-check because [`fusion_branch_from_residual`]
+/// already applied it (Devin Review Finding Q). Only used when there is
+/// no similarity predicate to re-evaluate row-wise.
+fn collect_vector_rows_unfiltered(
+    scored: &[(u64, f32)],
+    store: &crate::vector_store::VectorStore,
+) -> Result<Vec<OwnedScanRow>, String> {
+    let mut out = Vec::with_capacity(scored.len());
+    for &(id, score) in scored {
+        // INVARIANT: fused scores come from the union of the vector
+        // branch (which only yields known ids) and the payload branch
+        // (ids from `store.ids`). If the id isn't in the store, drop it
+        // rather than panicking — fusion strategies like RRF may pair
+        // the same id from both branches, but never invent new ids.
+        let Some(idx) = store.ids.iter().position(|&x| x == id) else {
+            continue;
+        };
+        let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
+        out.push((id, score, payload.cloned()));
+    }
+    Ok(out)
+}
+
 fn collect_vector_rows(
     scored: &[(u64, f32)],
     store: &crate::vector_store::VectorStore,
@@ -250,11 +304,16 @@ fn collect_vector_rows(
 ) -> Result<Vec<OwnedScanRow>, String> {
     let mut out = Vec::with_capacity(scored.len());
     for &(id, score) in scored {
+        // INVARIANT: `compute_scores` only yields ids that were in
+        // `store.ids` at scoring time, so this `position` always finds
+        // the row. We propagate an explicit error rather than `.expect()`
+        // (Devin Review Finding N) to avoid a panic in production paths
+        // if some future refactor breaks the invariant.
         let idx = store
             .ids
             .iter()
             .position(|&x| x == id)
-            .expect("compute_scores only yields known ids");
+            .ok_or_else(|| format!("internal: compute_scores yielded unknown id {id}"))?;
         let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
         if !filters.passes(id, payload, idx, store, params)? {
             continue;
@@ -314,19 +373,22 @@ fn finalize_plain(
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
 ) -> Result<Vec<QueryResultRow>, String> {
+    // INVARIANT: `QueryResultRow::build` only fails on serde_json encoding
+    // errors, which cannot occur here (all inputs are typed primitives and
+    // already-validated JSON payloads). We still propagate the error via
+    // `?` rather than `.expect()` (Devin Review Finding N) so a future
+    // change to the payload representation fails cleanly.
     let mut sortable: Vec<SortableRow> = rows
         .into_iter()
         .map(|(id, score, payload)| {
-            let row = QueryResultRow::build(id, score, payload.as_ref())
-                .expect("row serialization never fails with typed inputs");
-            SortableRow {
+            QueryResultRow::build(id, score, payload.as_ref()).map(|row| SortableRow {
                 id,
                 score,
                 payload,
                 row,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     velesql_orderby::sort_rows(stmt, &mut sortable);
     let rows: Vec<QueryResultRow> = sortable.into_iter().map(|s| s.row).collect();
     Ok(apply_limit_offset(stmt, rows))

@@ -12,6 +12,14 @@
 //! The caller hands us the full scanned row set (after WHERE), then this
 //! module decides whether to return the raw rows, group them, or apply
 //! DISTINCT. Vector / similarity / fusion concerns live outside.
+//!
+//! # NLOC budget
+//!
+//! Measured NLOC is 409 (via lizard) — well under the 500-line ceiling.
+//! If this file grows past 450 NLOC, split the projection-building
+//! helpers (`write_plain_columns`, `write_aggregates`, `write_group_keys`)
+//! into a sibling `velesql_aggregate_project.rs`. See Devin Review
+//! Finding R.
 
 use std::collections::BTreeMap;
 

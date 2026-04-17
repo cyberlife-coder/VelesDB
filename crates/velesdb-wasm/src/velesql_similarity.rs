@@ -36,11 +36,32 @@ use crate::velesql_value::{resolve_vector, Params};
 /// Returns an owned `SimilarityCondition` because [`push_not_inward`]
 /// may have synthesized a flipped-op form that has no home in the
 /// caller's borrowed AST.
+///
+/// Defensive variant kept for callers that have NOT yet De-Morgan-
+/// normalized their condition. The hot SELECT build path uses
+/// [`find_similarity_pre_normalized`] after calling `push_not_inward`
+/// once (Devin Review Finding P). Tests exercise this public entry
+/// point directly.
+#[allow(dead_code)] // Defensive variant — see `find_similarity_pre_normalized`.
 pub(crate) fn find_similarity(cond: Option<&Condition>) -> Option<SimilarityCondition> {
     cond.cloned()
         .map(push_not_inward)
         .as_ref()
         .and_then(find_similarity_normalized)
+}
+
+/// Same as [`find_similarity`] but skips the internal [`push_not_inward`]
+/// call — caller has already normalized the condition.
+///
+/// Used by [`crate::velesql_select::WhereFilters::build`] to avoid a
+/// redundant tree walk + clone when both `find_similarity` and
+/// `strip_similarity` would otherwise normalize the same tree twice
+/// (Devin Review Finding P). The public [`find_similarity`] keeps its
+/// defensive normalization for callers that don't pre-normalize.
+pub(crate) fn find_similarity_pre_normalized(
+    cond: Option<&Condition>,
+) -> Option<SimilarityCondition> {
+    cond.and_then(find_similarity_normalized)
 }
 
 /// Recursive walk over a condition that is already De-Morgan-normalized:
@@ -130,11 +151,19 @@ where
 /// Once normalized, the strip pass only sees bare `Similarity(_)`
 /// leaves, which [`strip_condition_if`] removes while preserving the
 /// surrounding And/Or/Not/Group structure.
+#[allow(dead_code)] // Defensive variant — see `strip_similarity_pre_normalized`.
 pub(crate) fn strip_similarity(cond: Option<&Condition>) -> Option<Condition> {
     let normalized = cond.cloned().map(push_not_inward);
-    strip_condition_if(normalized.as_ref(), &|c| {
-        matches!(c, Condition::Similarity(_))
-    })
+    strip_similarity_pre_normalized(normalized.as_ref())
+}
+
+/// Same as [`strip_similarity`] but skips the internal [`push_not_inward`]
+/// call — caller has already normalized the condition.
+///
+/// Paired with [`find_similarity_pre_normalized`] to avoid a double tree
+/// walk in the hot SELECT build path (Devin Review Finding P).
+pub(crate) fn strip_similarity_pre_normalized(cond: Option<&Condition>) -> Option<Condition> {
+    strip_condition_if(cond, &|c| matches!(c, Condition::Similarity(_)))
 }
 
 /// Recursively strips any sub-condition that satisfies `should_remove`.
