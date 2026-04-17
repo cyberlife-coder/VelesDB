@@ -145,11 +145,30 @@ impl QueryResultRow {
 /// - [`row_count`](Self::row_count) — number of rows in the result
 /// - [`message`](Self::message) — human-readable status message
 /// - [`row`](Self::row) / [`rows_json`](Self::rows_json) — row accessors
+///
+/// # Row count semantics (Devin Review Finding F13)
+///
+/// For row-returning statements (`SELECT`, `SHOW`, `DESCRIBE`, `SELECT
+/// EDGES`, `MATCH`) `row_count()` is `rows.len()` and `rows_json()`
+/// materialises every row.
+///
+/// For row-affecting statements (`INSERT`, `UPSERT`, `UPDATE`, `DELETE`,
+/// graph mutations) `row_count()` returns an explicit `mutation_count`
+/// field and `rows_json()` is the empty array. Previously the executor
+/// allocated N placeholder rows (`{"id":0,"score":0.0}`) so that
+/// `rows.len()` matched the affected-row count — O(n) allocation for
+/// zero information content, plus a misleading JSON payload.
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct QueryResult {
     kind: QueryResultKind,
     rows: Vec<QueryResultRow>,
+    /// Explicit affected-row count for mutation statements.
+    ///
+    /// `Some(n)` when the result represents a DML mutation (and no
+    /// placeholder rows were materialised). `None` when the count is
+    /// identical to `rows.len()` (row-returning paths).
+    mutation_count: Option<u32>,
     message: String,
 }
 
@@ -165,11 +184,17 @@ impl QueryResult {
         self.kind.as_str().to_string()
     }
 
-    /// Number of rows in the result (`0` for DDL / admin / empty results).
+    /// Number of rows affected or returned (`0` for DDL / admin / empty).
+    ///
+    /// For mutation statements the value comes from the explicit
+    /// `mutation_count` field (set by `from_mutation`). For everything
+    /// else it equals `rows.len()`. See the struct-level docs for the
+    /// rationale behind the dual accounting (Finding F13).
     #[wasm_bindgen(getter, js_name = rowCount)]
     pub fn row_count(&self) -> u32 {
         // u32 is enough: a single query will never return > 4 billion rows.
-        u32::try_from(self.rows.len()).unwrap_or(u32::MAX)
+        self.mutation_count
+            .unwrap_or_else(|| u32::try_from(self.rows.len()).unwrap_or(u32::MAX))
     }
 
     /// Human-readable status message (for display / logging).
@@ -211,11 +236,33 @@ impl QueryResult {
 
 impl QueryResult {
     /// Builds the final result, attaching the human-readable status message.
+    ///
+    /// Row-returning paths (SELECT, SHOW, DESCRIBE, MATCH, ...) materialise
+    /// actual rows and `mutation_count` is `None`: `row_count()` reflects
+    /// `rows.len()`.
     pub(crate) fn from_parts(kind: QueryResultKind, rows: Vec<QueryResultRow>) -> Self {
         let count = u32::try_from(rows.len()).unwrap_or(u32::MAX);
         Self {
             kind,
             rows,
+            mutation_count: None,
+            message: build_message(kind, count),
+        }
+    }
+
+    /// Builds a DML mutation result — carries an explicit affected-row
+    /// count with zero placeholder rows (Devin Review Finding F13).
+    ///
+    /// Used by `INSERT`, `UPSERT`, `UPDATE`, `DELETE`, and graph DML
+    /// dispatch paths. The previous implementation allocated N copies of
+    /// `QueryResultRow { id: 0, score: 0.0, data_json: "{\"id\":0,...}" }`
+    /// just so `rows.len()` matched the count — wasting O(n) allocations
+    /// on every mutation.
+    pub(crate) fn from_mutation(kind: QueryResultKind, count: u32) -> Self {
+        Self {
+            kind,
+            rows: Vec::new(),
+            mutation_count: Some(count),
             message: build_message(kind, count),
         }
     }
