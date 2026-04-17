@@ -53,7 +53,8 @@ fn execute_single_node(
         let Some(node_data) = borrowed.get_node(nid) else {
             continue;
         };
-        if !node_payload_passes_where(node, nid, node_data, clause.where_clause.as_ref()) {
+        let bindings = [make_binding(node, nid, node_data, "a")];
+        if !matches_where_in_match_scope(clause.where_clause.as_ref(), &bindings) {
             continue;
         }
         if (out.len() as u64) >= limit {
@@ -120,15 +121,21 @@ fn expand_one_hop(
 ) -> Result<(), String> {
     let default_node = WasmGraphNode::default();
     let a_node = store.get_node(sid).unwrap_or(&default_node);
-    if !node_payload_passes_where(ctx.na, sid, a_node, where_clause) {
-        return Ok(());
-    }
     for edge in directed_filter_edges(store, sid, ctx.rel) {
         let other = other_endpoint(&edge, sid);
         let Some(b_node) = store.get_node(other) else {
             continue;
         };
         if !matches_label(b_node, ctx.lb.as_deref()) {
+            continue;
+        }
+        // WHERE is evaluated with both aliases bound so predicates on `b`
+        // (e.g. `WHERE b.name = 'Bob'`) work the same as on `a`.
+        let bindings = [
+            make_binding(ctx.na, sid, a_node, "a"),
+            make_binding(ctx.nb, other, b_node, "b"),
+        ];
+        if !matches_where_in_match_scope(where_clause, &bindings) {
             continue;
         }
         if (out.len() as u64) >= limit {
@@ -202,9 +209,10 @@ fn execute_2_hop(
     let borrowed = store.borrow();
     let ctx = TwoHopContext::new(pattern);
     let limit = clause.return_clause.limit.unwrap_or(u64::MAX);
+    let where_clause = clause.where_clause.as_ref();
     let mut out = Vec::new();
     for a_id in borrowed.candidate_nodes(ctx.la.as_deref()) {
-        expand_from_a(&borrowed, a_id, &ctx, limit, &mut out)?;
+        expand_from_a(&borrowed, a_id, &ctx, where_clause, limit, &mut out)?;
         if (out.len() as u64) >= limit {
             break;
         }
@@ -242,6 +250,7 @@ fn expand_from_a(
     store: &WasmGraphStore,
     a_id: u64,
     ctx: &TwoHopContext<'_>,
+    where_clause: Option<&Condition>,
     limit: u64,
     out: &mut Vec<QueryResultRow>,
 ) -> Result<(), String> {
@@ -253,7 +262,7 @@ fn expand_from_a(
         if !matches_label(b_node, ctx.lb.as_deref()) {
             continue;
         }
-        expand_from_b(store, a_id, b_id, b_node, ctx, limit, out)?;
+        expand_from_b(store, a_id, b_id, b_node, ctx, where_clause, limit, out)?;
         if (out.len() as u64) >= limit {
             return Ok(());
         }
@@ -261,12 +270,14 @@ fn expand_from_a(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn expand_from_b(
     store: &WasmGraphStore,
     a_id: u64,
     b_id: u64,
     b_node: &WasmGraphNode,
     ctx: &TwoHopContext<'_>,
+    where_clause: Option<&Condition>,
     limit: u64,
     out: &mut Vec<QueryResultRow>,
 ) -> Result<(), String> {
@@ -278,6 +289,17 @@ fn expand_from_b(
             continue;
         };
         if !matches_label(c_node, ctx.lc.as_deref()) {
+            continue;
+        }
+        // WHERE evaluates with all three aliases bound; mid-/end-node
+        // predicates (e.g. `WHERE b.age > 30`, `WHERE c.name = 'X'`)
+        // resolve against the correct node.
+        let bindings = [
+            make_binding(ctx.na, a_id, a_node, "a"),
+            make_binding(ctx.nb, b_id, b_node, "b"),
+            make_binding(ctx.nc, c_id, c_node, "c"),
+        ];
+        if !matches_where_in_match_scope(where_clause, &bindings) {
             continue;
         }
         if (out.len() as u64) >= limit {
@@ -326,49 +348,80 @@ fn first_type(r: &RelationshipPattern) -> Option<String> {
     r.types.first().cloned()
 }
 
-fn node_payload_passes_where(
-    node: &NodePattern,
+/// One alias → (id, payload) binding used during WHERE evaluation.
+///
+/// At most 3 bindings exist (1-, 2-, or 3-node MATCH pattern). Owned
+/// `String` alias avoids lifetime plumbing in the bindings slice; payload
+/// is a cloned `serde_json::Value` since the matcher consumes references.
+struct AliasBinding {
+    alias: String,
     id: u64,
-    node_data: &WasmGraphNode,
+    payload: serde_json::Value,
+}
+
+/// Evaluates a MATCH WHERE clause in a scope where multiple node aliases
+/// are bound.
+///
+/// Strategy: build a merged JSON payload keyed by alias
+/// (`{"a": <a_payload>, "b": <b_payload>, ...}`) and reuse
+/// [`crate::velesql_where::matches`]. Dotted column references like
+/// `b.name` resolve naturally via `get_nested_field` (which splits on
+/// `.`). Bare column references (no alias prefix) fall back to the
+/// first-bound node — backward compatible with pre-fix tests that write
+/// `WHERE name = ...` without a prefix.
+///
+/// An unbound alias prefix (`z.x` with no binding `z`) silently yields
+/// `false` via the same "missing column" semantics that
+/// `velesql_where::matches` already applies to missing payload fields.
+fn matches_where_in_match_scope(
     where_clause: Option<&Condition>,
+    bindings: &[AliasBinding],
 ) -> bool {
     let Some(cond) = where_clause else {
         return true;
     };
-    let alias = node.alias.as_deref();
-    let rewritten = rewrite_alias_prefix(cond, alias);
-    let payload = node_data.payload.clone().unwrap_or(serde_json::Value::Null);
-    crate::velesql_where::matches(&rewritten, id, Some(&payload), &Params::new()).unwrap_or(false)
+    let Some(first) = bindings.first() else {
+        // Defensive: a MATCH always has at least one bound node.
+        return false;
+    };
+    let merged = build_merged_payload(bindings, &first.payload);
+    crate::velesql_where::matches(cond, first.id, Some(&merged), &Params::new()).unwrap_or(false)
 }
 
-/// Strips `alias.` prefixes on column references inside a WHERE condition.
-fn rewrite_alias_prefix(cond: &Condition, alias: Option<&str>) -> Condition {
-    let Some(alias) = alias else {
-        return cond.clone();
-    };
-    let prefix = format!("{alias}.");
-    match cond {
-        Condition::Comparison(c) => {
-            let mut nc = c.clone();
-            if let Some(stripped) = nc.column.strip_prefix(&prefix) {
-                nc.column = stripped.to_string();
-            }
-            Condition::Comparison(nc)
+/// Builds a flat JSON object suitable for alias-scoped WHERE evaluation.
+///
+/// Layout:
+/// - copies all top-level fields of the first-bound node at the root
+///   (enables bare `WHERE name = ...` to resolve against node `a`);
+/// - inserts each bound alias as a top-level key (enables
+///   `WHERE b.name = ...` to resolve via `get_nested_field` walking
+///   `b` → `name`). Aliases are inserted AFTER the first-node fields
+///   so an alias name always wins a collision.
+fn build_merged_payload(
+    bindings: &[AliasBinding],
+    first_payload: &serde_json::Value,
+) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    if let Some(obj) = first_payload.as_object() {
+        for (k, v) in obj {
+            map.insert(k.clone(), v.clone());
         }
-        Condition::And(l, r) => Condition::And(
-            Box::new(rewrite_alias_prefix(l, Some(alias))),
-            Box::new(rewrite_alias_prefix(r, Some(alias))),
-        ),
-        Condition::Or(l, r) => Condition::Or(
-            Box::new(rewrite_alias_prefix(l, Some(alias))),
-            Box::new(rewrite_alias_prefix(r, Some(alias))),
-        ),
-        Condition::Not(inner) => Condition::Not(Box::new(rewrite_alias_prefix(inner, Some(alias)))),
-        Condition::Group(inner) => {
-            Condition::Group(Box::new(rewrite_alias_prefix(inner, Some(alias))))
-        }
-        other => other.clone(),
     }
+    for b in bindings {
+        map.insert(b.alias.clone(), b.payload.clone());
+    }
+    serde_json::Value::Object(map)
+}
+
+/// Builds a single binding from a `(NodePattern, id, data)` triple.
+///
+/// Falls back to alias `a`/`b`/`c` by position when the pattern omits an
+/// explicit alias — matches the convention already used by the row
+/// builders.
+fn make_binding(node: &NodePattern, id: u64, data: &WasmGraphNode, fallback: &str) -> AliasBinding {
+    let alias = node.alias.clone().unwrap_or_else(|| fallback.to_string());
+    let payload = data.payload.clone().unwrap_or(serde_json::Value::Null);
+    AliasBinding { alias, id, payload }
 }
 
 // --- Row builders --------------------------------------------------------

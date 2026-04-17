@@ -479,3 +479,175 @@ fn test_match_outgoing_unaffected_by_fix() {
     assert_eq!(r.row_count(), 1);
     assert!(r.rows_json().contains("\"name\":\"Bob\""));
 }
+
+// =========================================================================
+// Regression: MATCH WHERE evaluates against all bound node aliases
+// (Devin Review PR #594 finding ANALYSIS_0004).
+// =========================================================================
+//
+// Before the fix, `rewrite_alias_prefix` only stripped the starting node's
+// alias from WHERE predicates. Any reference to a non-starting alias
+// (e.g. `b.name` in a 1-hop or `b.age`, `c.x` in a 2-hop) was looked up
+// as a literal field named `"b.name"` in the starting node's payload and
+// silently returned 0 rows. The fix binds every node alias in scope and
+// evaluates the WHERE against the full bindings map.
+//
+// The helpers below seed richer payloads (city, age) because the default
+// `seed_graph` fixture only carries `name`.
+
+fn seed_cities_graph(db: &mut DatabaseInner) {
+    execute(
+        db,
+        "INSERT NODE INTO graph (id = 10, payload = '{\"name\": \"Alice\", \"city\": \"Paris\", \"age\": 30, \"labels\": [\"Person\"]}')",
+        None,
+    )
+    .expect("test: alice");
+    execute(
+        db,
+        "INSERT NODE INTO graph (id = 11, payload = '{\"name\": \"Bob\", \"city\": \"Lyon\", \"age\": 40, \"labels\": [\"Person\"]}')",
+        None,
+    )
+    .expect("test: bob");
+    execute(
+        db,
+        "INSERT NODE INTO graph (id = 12, payload = '{\"name\": \"Carol\", \"city\": \"Paris\", \"age\": 25, \"labels\": [\"Person\"]}')",
+        None,
+    )
+    .expect("test: carol");
+    // Alice (Paris) -KNOWS-> Bob (Lyon); Alice -KNOWS-> Carol (Paris).
+    execute(
+        db,
+        "INSERT EDGE INTO graph (source = 10, target = 11, label = 'KNOWS')",
+        None,
+    )
+    .expect("test: edge a->b");
+    execute(
+        db,
+        "INSERT EDGE INTO graph (source = 10, target = 12, label = 'KNOWS')",
+        None,
+    )
+    .expect("test: edge a->c");
+}
+
+#[test]
+fn test_match_where_filters_second_node_by_payload() {
+    // `b.name = 'Bob'`: predicate references node `b`, not the starting
+    // node. Before the fix: 0 rows. Expected: the single Alice->Bob edge.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.name = 'Bob' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: match where on b");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "predicate on b.name should filter to the Alice->Bob edge, got: {}",
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(rows.contains("\"name\":\"Alice\""), "a is Alice: {rows}");
+    assert!(rows.contains("\"name\":\"Bob\""), "b is Bob: {rows}");
+}
+
+#[test]
+fn test_match_where_filters_both_nodes_with_and() {
+    // `a.city = 'Paris' AND b.city = 'Lyon'`: only Alice(Paris)->Bob(Lyon).
+    let mut db = DatabaseInner::new();
+    seed_cities_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.city = 'Paris' AND b.city = 'Lyon' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: both nodes AND");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "only Alice(Paris)->Bob(Lyon) matches, got: {}",
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(rows.contains("\"name\":\"Alice\""));
+    assert!(rows.contains("\"name\":\"Bob\""));
+    // Paris->Paris (Alice->Carol) is filtered out.
+    assert!(
+        !rows.contains("\"name\":\"Carol\""),
+        "Alice->Carol must be excluded, got: {rows}"
+    );
+}
+
+#[test]
+fn test_match_where_two_hop_filters_middle_node() {
+    // 2-hop: Alice -KNOWS-> Bob -KNOWS-> Carol. WHERE `b.name = 'Bob'`
+    // must filter against the MIDDLE node, not the starting one. Before
+    // the fix, 2-hop had no WHERE evaluation at all (all paths returned);
+    // with no `b` binding, `b.name` would have been a dead-letter key.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person) WHERE b.name = 'Bob' RETURN a, b, c LIMIT 10",
+        None,
+    )
+    .expect("test: 2-hop where on b");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "Alice->Bob->Carol is the only 2-hop path with b.name='Bob', got: {}",
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(
+        rows.contains("\"name\":\"Alice\"")
+            && rows.contains("\"name\":\"Bob\"")
+            && rows.contains("\"name\":\"Carol\""),
+        "expected the full Alice->Bob->Carol triple, got: {rows}"
+    );
+}
+
+#[test]
+fn test_match_where_bare_field_applies_to_first_node() {
+    // Backward compat: `WHERE name = 'Alice'` (no alias prefix) must
+    // resolve against the starting node `a`.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE name = 'Alice' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: bare field on first node");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "bare `name` must bind to node a, got: {}",
+        r.rows_json()
+    );
+    assert!(r.rows_json().contains("\"name\":\"Alice\""));
+    assert!(r.rows_json().contains("\"name\":\"Bob\""));
+}
+
+#[test]
+fn test_match_where_unknown_alias_returns_empty() {
+    // Negative: `z.name` references an alias that doesn't exist in the
+    // pattern. Consistent with the "missing field" convention used by
+    // `velesql_where` (comparisons on missing fields return false), this
+    // must yield an empty result rather than an error or a panic.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE z.name = 'Alice' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: unknown alias executes without error");
+    assert_eq!(
+        r.row_count(),
+        0,
+        "unknown alias must silently filter to empty, got: {}",
+        r.rows_json()
+    );
+}
