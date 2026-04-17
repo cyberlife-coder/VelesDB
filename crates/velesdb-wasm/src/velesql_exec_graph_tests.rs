@@ -651,3 +651,110 @@ fn test_match_where_unknown_alias_returns_empty() {
         r.rows_json()
     );
 }
+
+// =========================================================================
+// Regression: `NOT IN` on a missing column aligns with `!=` (returns false)
+// (Devin Review PR #594 Finding B — semantic inconsistency).
+// =========================================================================
+//
+// Before the fix, `eval_in` returned `Ok(c.negated)` for a missing
+// column: `IN` gave `false` (correct) but `NOT IN` gave `true`. This
+// contradicted `eval_comparison`, which returns `false` uniformly for
+// all operators (including `!=`) on missing columns. The fix aligns
+// `eval_in` with that convention: missing column → `false`, regardless
+// of operator polarity.
+//
+// These tests exercise the WASM WHERE matcher through MATCH because
+// the single-node MATCH variant runs WHERE with a single alias scope,
+// which is the simplest path to exercise `eval_in` / `eval_comparison`
+// end-to-end in the demo executor.
+
+#[test]
+fn test_eval_in_missing_column_returns_false() {
+    // Baseline: the pre-existing behaviour was already `false`.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    // `city` is absent from every seed_graph node (they only carry `name`).
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person) WHERE a.city IN ('Paris','Lyon') RETURN a LIMIT 10",
+        None,
+    )
+    .expect("test: in on missing col");
+    assert_eq!(
+        r.row_count(),
+        0,
+        "missing `city`: IN returns false for every row, got: {}",
+        r.rows_json()
+    );
+}
+
+#[test]
+fn test_eval_not_in_missing_column_returns_false() {
+    // REGRESSION: before the fix this returned 3 rows (every Person,
+    // because `NOT IN` on a missing column was `true`). After the fix
+    // it returns 0 rows, consistent with `!=` on a missing column.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person) WHERE a.city NOT IN ('Paris','Lyon') RETURN a LIMIT 10",
+        None,
+    )
+    .expect("test: not-in on missing col");
+    assert_eq!(
+        r.row_count(),
+        0,
+        "missing `city`: NOT IN must also return false (missing-column rule), got: {}",
+        r.rows_json()
+    );
+}
+
+#[test]
+fn test_eval_ne_missing_column_returns_false() {
+    // Backward-compat guard: `!=` on a missing column was already
+    // false and must remain false. This pins the convention that
+    // Finding B's fix aligns `NOT IN` with.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person) WHERE a.city != 'Paris' RETURN a LIMIT 10",
+        None,
+    )
+    .expect("test: != on missing col");
+    assert_eq!(
+        r.row_count(),
+        0,
+        "missing `city`: != must return false, got: {}",
+        r.rows_json()
+    );
+}
+
+#[test]
+fn test_eval_not_in_present_column_still_excludes_matches() {
+    // Non-regression: when the column IS present, `NOT IN` must still
+    // work — the fix only changes the missing-column branch.
+    let mut db = DatabaseInner::new();
+    seed_cities_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person) WHERE a.city NOT IN ('Lyon') RETURN a LIMIT 10",
+        None,
+    )
+    .expect("test: not-in on present col");
+    // Alice (Paris) and Carol (Paris) match; Bob (Lyon) is excluded.
+    assert_eq!(
+        r.row_count(),
+        2,
+        "NOT IN('Lyon') must exclude Bob only, got: {}",
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(rows.contains("\"name\":\"Alice\""));
+    assert!(rows.contains("\"name\":\"Carol\""));
+    assert!(
+        !rows.contains("\"name\":\"Bob\""),
+        "Bob (Lyon) must be filtered, got: {rows}"
+    );
+}

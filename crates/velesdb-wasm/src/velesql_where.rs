@@ -80,6 +80,17 @@ fn column_value(
 }
 
 /// Evaluates a comparison (column op value).
+///
+/// Missing-column convention (shared across the whole WASM WHERE evaluator):
+/// when the column can't be resolved (no payload field, no such alias,
+/// missing special `id`), the predicate silently returns `false` — for
+/// ALL operators, including `!=`, `NOT IN`, `NOT LIKE`, `BETWEEN`. This
+/// deviates from SQL NULL three-valued logic (where `col != 'x'` on NULL
+/// would be NULL, not false) but is consistent within the WASM demo
+/// scope: "a row whose column is absent never matches, neither positively
+/// nor negatively". `IS NULL` is the only operator that treats absence
+/// as a positive match. See `eval_in` and `eval_between` for the matching
+/// behaviour on `IN/NOT IN` and `BETWEEN`.
 fn eval_comparison(
     cmp: &velesdb_core::velesql::Comparison,
     id: u64,
@@ -88,7 +99,7 @@ fn eval_comparison(
 ) -> Result<bool, String> {
     let right = resolve_value(&cmp.value, params)?;
     let Some(left) = column_value(&cmp.column, id, payload) else {
-        // Missing column: only `IS NULL` matches missing, all comparisons are false.
+        // Missing column: see module-level convention above.
         return Ok(false);
     };
     Ok(match cmp.operator {
@@ -111,6 +122,13 @@ fn eval_comparison(
 }
 
 /// Evaluates an IN / NOT IN condition.
+///
+/// Missing-column convention: when the column can't be resolved, both
+/// `IN` and `NOT IN` return `false`. This matches `eval_comparison`
+/// (where `col != 'x'` on a missing column also returns `false`) and
+/// keeps the WASM WHERE semantics uniform: a missing row never matches,
+/// regardless of operator polarity. See `eval_comparison` for the
+/// full rationale.
 fn eval_in(
     c: &velesdb_core::velesql::InCondition,
     id: u64,
@@ -118,7 +136,10 @@ fn eval_in(
     params: &Params,
 ) -> Result<bool, String> {
     let Some(left) = column_value(&c.column, id, payload) else {
-        return Ok(c.negated); // NOT IN a missing column is true; IN is false.
+        // Missing column: see module-level convention. Both IN and NOT IN
+        // fail for that row, so returning `false` regardless of `negated`
+        // is the correct uniform behaviour.
+        return Ok(false);
     };
     let mut found = false;
     for v in &c.values {
