@@ -152,3 +152,4 @@ todo_analysis_report_updated.md
 
 #Ignore vscode AI rules
 .github\instructions\codacy.instructions.md
+*.egg-info/

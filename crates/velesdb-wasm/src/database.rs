@@ -138,6 +138,11 @@ impl WasmDatabase {
 
     /// Deletes a named collection and frees its memory.
     ///
+    /// **Note**: any [`WasmCollectionHandle`] previously obtained via
+    /// [`get_collection`](Self::get_collection) remains functional after
+    /// deletion (its `Rc` keeps the inner store alive). Creating a new
+    /// collection with the same name will NOT reuse the old handle's data.
+    ///
     /// # Errors
     /// Returns an error if the collection does not exist.
     pub fn delete_collection(&mut self, name: &str) -> Result<(), JsValue> {

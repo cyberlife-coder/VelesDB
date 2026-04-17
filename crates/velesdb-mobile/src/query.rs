@@ -104,7 +104,9 @@ pub(crate) fn to_result_row(
 
     if let Some(serde_json::Value::Object(payload)) = &result.point.payload {
         for (k, v) in payload {
-            map.insert(k.clone(), v.clone());
+            if k != "id" && k != "score" {
+                map.insert(k.clone(), v.clone());
+            }
         }
     }
 
