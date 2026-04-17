@@ -592,3 +592,111 @@ const _: () = {
     // when the assertions above only consult the string form.
     let _ = QueryResultKind::Rows;
 };
+
+// =========================================================================
+// Regression: DELETE on vector collection keeps remaining rows intact
+// (Devin Review PR #594 finding #2 — remove_at_index desync).
+// =========================================================================
+
+#[test]
+fn test_delete_middle_vector_keeps_remaining_ids_and_vectors_consistent() {
+    let mut db = db_with_vectors();
+    // Five distinct vectors in a 4-dim cosine collection. Five is
+    // important: with fewer elements the shift-vs-swap difference can
+    // coincide by luck (e.g. 3 items, remove middle => both produce
+    // [first, last]).
+    execute(
+        &mut db,
+        "INSERT INTO vecs (id, vector, tag) VALUES (1, $v, 'first')",
+        Some(r#"{"v": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: insert 1");
+    execute(
+        &mut db,
+        "INSERT INTO vecs (id, vector, tag) VALUES (2, $v, 'two')",
+        Some(r#"{"v": [0.0, 1.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: insert 2");
+    execute(
+        &mut db,
+        "INSERT INTO vecs (id, vector, tag) VALUES (3, $v, 'three')",
+        Some(r#"{"v": [0.0, 0.0, 1.0, 0.0]}"#),
+    )
+    .expect("test: insert 3");
+    execute(
+        &mut db,
+        "INSERT INTO vecs (id, vector, tag) VALUES (4, $v, 'four')",
+        Some(r#"{"v": [0.0, 0.0, 0.0, 1.0]}"#),
+    )
+    .expect("test: insert 4");
+    execute(
+        &mut db,
+        "INSERT INTO vecs (id, vector, tag) VALUES (5, $v, 'five')",
+        Some(r#"{"v": [0.5, 0.5, 0.5, 0.5]}"#),
+    )
+    .expect("test: insert 5");
+
+    // Delete a middle row (id=2). Correct swap_remove behaviour: id=5
+    // slides into slot 1; ids become [1, 5, 3, 4]. Under the buggy
+    // drain+swap mix the id array is [1, 5, 3, 4] but the vector buffer
+    // slides instead, so slot 1 of data would hold vector of id=3.
+    let del = execute(&mut db, "DELETE FROM vecs WHERE id = 2", None).expect("test: delete");
+    assert_eq!(del.kind(), "deletion");
+
+    // NEAR [1,0,0,0] => id=1 must be top-1 with score ~1.0.
+    let r1 = execute(
+        &mut db,
+        "SELECT id FROM vecs WHERE vector NEAR $q LIMIT 5",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: near 1");
+    assert!(
+        r1.rows_json().contains("\"id\":1"),
+        "id=1 must still be searchable after middle delete, got: {}",
+        r1.rows_json()
+    );
+
+    // NEAR [0,0,0,1] => id=4 must be top-1. If the bug mis-aligns id=4
+    // with the vector of what used to be id=5, this will fail.
+    let r4 = execute(
+        &mut db,
+        "SELECT id FROM vecs WHERE vector NEAR $q LIMIT 1",
+        Some(r#"{"q": [0.0, 0.0, 0.0, 1.0]}"#),
+    )
+    .expect("test: near 4");
+    assert!(
+        r4.rows_json().contains("\"id\":4"),
+        "id=4 must still be the best match for [0,0,0,1], got: {}",
+        r4.rows_json()
+    );
+
+    // NEAR [0.5,0.5,0.5,0.5] (id=5's exact vector) must return id=5.
+    let r5 = execute(
+        &mut db,
+        "SELECT id FROM vecs WHERE vector NEAR $q LIMIT 1",
+        Some(r#"{"q": [0.5, 0.5, 0.5, 0.5]}"#),
+    )
+    .expect("test: near 5");
+    assert!(
+        r5.rows_json().contains("\"id\":5"),
+        "id=5 must still be top-1 for its own vector, got: {}",
+        r5.rows_json()
+    );
+
+    // Payload (tag) must follow id — no cross-wiring.
+    let r = execute(&mut db, "SELECT * FROM vecs LIMIT 10", None).expect("test: select all");
+    assert_eq!(r.row_count(), 4);
+    let body = r.rows_json();
+    assert!(
+        body.contains("\"id\":1") && body.contains("\"tag\":\"first\""),
+        "id=1 must still map to tag='first', got: {body}"
+    );
+    assert!(
+        body.contains("\"id\":5") && body.contains("\"tag\":\"five\""),
+        "id=5 must still map to tag='five', got: {body}"
+    );
+    assert!(
+        !body.contains("\"id\":2"),
+        "deleted row must not leak into results, got: {body}"
+    );
+}
