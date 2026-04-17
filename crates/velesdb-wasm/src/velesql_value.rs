@@ -66,7 +66,7 @@ pub(crate) fn resolve_vector(expr: &VectorExpr, params: &Params) -> Result<Vec<f
             let value = params
                 .get(name.as_str())
                 .ok_or_else(|| format!("Vector parameter ${name} is not bound"))?;
-            json_to_f32_vec(value, name)
+            json_to_f32_vec(value, name.as_str())
         }
         // Defensive: `VectorExpr` is `#[non_exhaustive]`.
         _ => Err(format!("Unsupported VectorExpr variant in WASM: {expr:?}")),
@@ -74,7 +74,11 @@ pub(crate) fn resolve_vector(expr: &VectorExpr, params: &Params) -> Result<Vec<f
 }
 
 /// Converts a JSON array of numbers into `Vec<f32>`.
-fn json_to_f32_vec(value: &serde_json::Value, name: &str) -> Result<Vec<f32>, String> {
+///
+/// Shared by `resolve_vector` (parameter-bound vectors in WHERE NEAR) and the
+/// INSERT dispatcher (parameter-bound vectors in VALUES). A single source of
+/// truth keeps dimension/overflow handling consistent across call sites.
+pub(crate) fn json_to_f32_vec(value: &serde_json::Value, name: &str) -> Result<Vec<f32>, String> {
     let arr = value
         .as_array()
         .ok_or_else(|| format!("Parameter ${name} must be a JSON array of numbers"))?;
@@ -171,8 +175,8 @@ mod tests {
 
     #[test]
     fn test_resolve_value_string() {
-        let v = resolve_value(&Value::String("x".to_string()), &Params::new())
-            .expect("test: string");
+        let v =
+            resolve_value(&Value::String("x".to_string()), &Params::new()).expect("test: string");
         assert_eq!(v, serde_json::json!("x"));
     }
 
@@ -207,8 +211,7 @@ mod tests {
     #[test]
     fn test_resolve_vector_param_bound() {
         let p = params_from(r#"{"q": [0.5, 0.25]}"#);
-        let v = resolve_vector(&VectorExpr::Parameter("q".to_string()), &p)
-            .expect("test: bound");
+        let v = resolve_vector(&VectorExpr::Parameter("q".to_string()), &p).expect("test: bound");
         assert_eq!(v.len(), 2);
         assert!((v[0] - 0.5).abs() < 1e-6);
     }

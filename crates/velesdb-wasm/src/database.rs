@@ -13,6 +13,7 @@ use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
 
+use crate::graph_store::WasmGraphStore;
 use crate::parsing;
 use crate::store_new;
 use crate::vector_store::VectorStore;
@@ -22,24 +23,50 @@ use crate::vector_store::VectorStore;
 // ---------------------------------------------------------------------------
 
 type SharedStore = Rc<RefCell<VectorStore>>;
+type SharedGraph = Rc<RefCell<WasmGraphStore>>;
 
 // ---------------------------------------------------------------------------
 // Inner (testable) logic — returns String errors
 // ---------------------------------------------------------------------------
 
 /// Inner database state with `String`-error methods for native-target tests.
-struct DatabaseInner {
+pub(crate) struct DatabaseInner {
     collections: HashMap<String, SharedStore>,
+    /// In-memory graph stores keyed by collection name.
+    ///
+    /// Created lazily the first time any graph statement targets a given
+    /// name. JS callers do not need to `CREATE COLLECTION` before running
+    /// `INSERT EDGE` — the executor handles the auto-provision.
+    graphs: HashMap<String, SharedGraph>,
 }
 
 impl DatabaseInner {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             collections: HashMap::new(),
+            graphs: HashMap::new(),
         }
     }
 
-    fn create_collection(
+    /// Returns a shared handle to the named graph store, creating it lazily
+    /// when absent.
+    pub(crate) fn graph_store(&mut self, name: &str) -> SharedGraph {
+        if let Some(g) = self.graphs.get(name) {
+            return Rc::clone(g);
+        }
+        let g = Rc::new(RefCell::new(WasmGraphStore::new()));
+        self.graphs.insert(name.to_owned(), Rc::clone(&g));
+        g
+    }
+
+    /// Returns a shared handle to the named graph store without creating
+    /// one. Used by the executor when we don't want auto-provision (e.g.
+    /// a DELETE or SELECT on a graph that must already exist).
+    pub(crate) fn get_graph_store(&self, name: &str) -> Option<SharedGraph> {
+        self.graphs.get(name).map(Rc::clone)
+    }
+
+    pub(crate) fn create_collection(
         &mut self,
         name: &str,
         dimension: usize,
@@ -70,14 +97,14 @@ impl DatabaseInner {
         Ok(())
     }
 
-    fn delete_collection(&mut self, name: &str) -> Result<(), String> {
+    pub(crate) fn delete_collection(&mut self, name: &str) -> Result<(), String> {
         if self.collections.remove(name).is_none() {
             return Err(format!("Collection '{name}' not found"));
         }
         Ok(())
     }
 
-    fn collection_names(&self) -> Vec<String> {
+    pub(crate) fn collection_names(&self) -> Vec<String> {
         self.collections.keys().cloned().collect()
     }
 
@@ -93,7 +120,7 @@ impl DatabaseInner {
             .collect()
     }
 
-    fn get_shared_store(&self, name: &str) -> Result<SharedStore, String> {
+    pub(crate) fn get_shared_store(&self, name: &str) -> Result<SharedStore, String> {
         self.collections
             .get(name)
             .map(Rc::clone)
@@ -222,6 +249,47 @@ impl WasmDatabase {
     #[wasm_bindgen(getter)]
     pub fn collection_count(&self) -> usize {
         self.inner.collection_count()
+    }
+
+    /// Executes a VelesQL statement against this database.
+    ///
+    /// Supports SELECT, INSERT / UPSERT, UPDATE, DELETE, DDL (CREATE / DROP /
+    /// TRUNCATE COLLECTION), introspection (SHOW COLLECTIONS, DESCRIBE
+    /// COLLECTION), and admin (FLUSH as no-op). Unsupported surfaces such as
+    /// MATCH, TRAIN QUANTIZER, FUSION clauses, compound queries and graph
+    /// DML return a descriptive error instead of crashing. See the
+    /// [`velesql_exec`](crate::velesql_exec) module rustdoc for the full
+    /// statement matrix.
+    ///
+    /// # Parameters
+    /// * `sql` — VelesQL query string.
+    /// * `params_json` — Optional JSON object with query parameters (keys
+    ///   are bare names; use `$name` syntax in SQL). Pass `null` or `"{}"`
+    ///   when no parameters are needed.
+    ///
+    /// # Example (JavaScript)
+    /// ```javascript
+    /// const db = new WasmDatabase();
+    /// db.createMetadataCollection("docs");
+    /// const r = db.executeQuery(
+    ///     "INSERT INTO docs (id, title) VALUES (1, 'hello')",
+    ///     null
+    /// );
+    /// console.log(r.kind, r.rowCount, r.rowsJson);
+    /// ```
+    ///
+    /// # Errors
+    /// Returns a `JsValue` error string when parsing fails, parameters are
+    /// invalid, the target collection does not exist, or the statement uses
+    /// a feature that WASM does not support.
+    #[wasm_bindgen(js_name = executeQuery)]
+    pub fn execute_query(
+        &mut self,
+        sql: &str,
+        params_json: Option<String>,
+    ) -> Result<crate::velesql_result::QueryResult, JsValue> {
+        crate::velesql_exec::execute(&mut self.inner, sql, params_json.as_deref())
+            .map_err(|e| JsValue::from_str(&e))
     }
 }
 

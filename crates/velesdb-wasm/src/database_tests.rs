@@ -255,8 +255,7 @@ fn test_create_metadata_collection_duplicate_fails() {
 fn test_contains_reports_existing_collection() {
     let mut db = DatabaseInner::new();
     assert!(!db.contains("docs"));
-    db.create_metadata_collection("docs")
-        .expect("test: create");
+    db.create_metadata_collection("docs").expect("test: create");
     assert!(db.contains("docs"));
     assert!(!db.contains("ghost"));
 }

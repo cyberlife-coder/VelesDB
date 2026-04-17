@@ -7,7 +7,7 @@
 
 use std::cmp::Ordering;
 
-use velesdb_core::velesql::{CompareOp, Condition, Value};
+use velesdb_core::velesql::{CompareOp, Condition};
 
 use crate::velesql_value::{json_values_cmp, json_values_equal, resolve_value, Params};
 
@@ -29,10 +29,12 @@ pub(crate) fn matches(
         Condition::Between(c) => eval_between(c, id, payload, params),
         Condition::Like(c) => eval_like(c, payload),
         Condition::IsNull(c) => Ok(eval_is_null(c, id, payload)),
-        Condition::And(l, r) => Ok(matches(l, id, payload, params)?
-            && matches(r, id, payload, params)?),
-        Condition::Or(l, r) => Ok(matches(l, id, payload, params)?
-            || matches(r, id, payload, params)?),
+        Condition::And(l, r) => {
+            Ok(matches(l, id, payload, params)? && matches(r, id, payload, params)?)
+        }
+        Condition::Or(l, r) => {
+            Ok(matches(l, id, payload, params)? || matches(r, id, payload, params)?)
+        }
         Condition::Not(inner) => Ok(!matches(inner, id, payload, params)?),
         Condition::Group(inner) => matches(inner, id, payload, params),
         Condition::VectorSearch(_)
@@ -41,15 +43,13 @@ pub(crate) fn matches(
             "Vector NEAR clauses are handled by the SELECT dispatcher, not by the WHERE filter"
                 .to_string(),
         ),
-        Condition::Similarity(_) => Err(
-            "similarity() threshold filters are not supported in WASM".to_string(),
-        ),
+        Condition::Similarity(_) => {
+            Err("similarity() threshold filters are not supported in WASM".to_string())
+        }
         Condition::GraphMatch(_) => {
             Err("Graph MATCH predicates are not supported in WASM".to_string())
         }
-        Condition::Match(_) => {
-            Err("MATCH (BM25) conditions are not supported in WASM".to_string())
-        }
+        Condition::Match(_) => Err("MATCH (BM25) conditions are not supported in WASM".to_string()),
         Condition::Contains(_) | Condition::ContainsText(_) => {
             Err("CONTAINS / CONTAINS_TEXT conditions are not supported in WASM".to_string())
         }
@@ -67,10 +67,10 @@ pub(crate) fn matches(
 /// Looks up a column value:
 /// - `id` refers to the point id.
 /// - anything else is a payload field (supports dot-nested access).
-fn column_value<'a>(
+fn column_value(
     column: &str,
     id: u64,
-    payload: Option<&'a serde_json::Value>,
+    payload: Option<&serde_json::Value>,
 ) -> Option<serde_json::Value> {
     if column == "id" {
         return Some(serde_json::json!(id));
@@ -223,8 +223,7 @@ fn eval_is_null(
     id: u64,
     payload: Option<&serde_json::Value>,
 ) -> bool {
-    let present = column_value(&c.column, id, payload)
-        .is_some_and(|v| !v.is_null());
+    let present = column_value(&c.column, id, payload).is_some_and(|v| !v.is_null());
     if c.is_null {
         !present
     } else {

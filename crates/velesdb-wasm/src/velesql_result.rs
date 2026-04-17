@@ -53,6 +53,7 @@ impl QueryResultKind {
 /// matches the Mobile bindings contract and lets the JavaScript caller do a
 /// single `JSON.parse()` per row.
 #[wasm_bindgen]
+#[derive(Debug)]
 pub struct QueryResultRow {
     id: u64,
     score: f32,
@@ -145,6 +146,7 @@ impl QueryResultRow {
 /// - [`message`](Self::message) — human-readable status message
 /// - [`row`](Self::row) / [`rows_json`](Self::rows_json) — row accessors
 #[wasm_bindgen]
+#[derive(Debug)]
 pub struct QueryResult {
     kind: QueryResultKind,
     rows: Vec<QueryResultRow>,
@@ -220,12 +222,14 @@ impl QueryResult {
 
     /// Returns the kind for native tests.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn kind_enum(&self) -> QueryResultKind {
         self.kind
     }
 
     /// Returns the raw row slice for native tests.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn rows_ref(&self) -> &[QueryResultRow] {
         &self.rows
     }
@@ -263,11 +267,12 @@ pub(crate) fn classify_query(query: &velesdb_core::velesql::Query) -> QueryResul
     }
 }
 
-/// Distinguishes DELETE from other DML (INSERT/UPSERT/UPDATE).
+/// Distinguishes DELETE / row-returning / row-affecting DML variants.
 fn classify_dml(query: &velesdb_core::velesql::Query) -> QueryResultKind {
     use velesdb_core::velesql::DmlStatement;
     match query.dml.as_ref() {
         Some(DmlStatement::Delete(_) | DmlStatement::DeleteEdge(_)) => QueryResultKind::Deletion,
+        Some(DmlStatement::SelectEdges(_)) => QueryResultKind::Rows,
         _ => QueryResultKind::Mutation,
     }
 }
@@ -322,10 +327,7 @@ mod tests {
 
     #[test]
     fn test_build_message_rows() {
-        assert_eq!(
-            build_message(QueryResultKind::Rows, 3),
-            "3 row(s) returned"
-        );
+        assert_eq!(build_message(QueryResultKind::Rows, 3), "3 row(s) returned");
     }
 
     #[test]
