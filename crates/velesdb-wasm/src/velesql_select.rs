@@ -111,6 +111,11 @@ impl WhereFilters {
             None => stmt.where_clause.clone(),
         };
         let normalized = base.map(crate::velesql_logic::push_not_inward);
+        // Finding H: reject WHERE clauses that mix similarity() predicates
+        // against distinct query vectors — SimilarityEvaluator pre-computes
+        // scores for a single vector and would otherwise silently return
+        // wrong rows for the second threshold.
+        velesql_similarity::assert_single_similarity_vector(normalized.as_ref())?;
         let similarity_cond = velesql_similarity::find_similarity(normalized.as_ref());
         let residual = velesql_similarity::strip_similarity(normalized.as_ref());
         let eval = similarity_cond

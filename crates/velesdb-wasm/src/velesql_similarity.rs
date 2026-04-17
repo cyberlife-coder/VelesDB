@@ -6,8 +6,17 @@
 //!
 //! This module only decides "is this row's similarity <op> threshold?" —
 //! the actual vector NEAR ranking stays in `velesql_select::vector_path`.
+//!
+//! # Limitations (WASM pre-seed scope)
+//!
+//! - **Single query vector per statement.** [`SimilarityEvaluator`]
+//!   pre-computes scores against one query vector for the whole row scan.
+//!   WHERE clauses that mix `similarity()` predicates against different
+//!   query vectors are rejected via
+//!   [`assert_single_similarity_vector`]. Use the core
+//!   (persistence-enabled) backend for multi-vector queries.
 
-use velesdb_core::velesql::{CompareOp, Condition, SimilarityCondition};
+use velesdb_core::velesql::{CompareOp, Condition, SimilarityCondition, VectorExpr};
 
 use crate::database::DatabaseInner;
 use crate::velesql_logic::push_not_inward;
@@ -46,6 +55,65 @@ fn find_similarity_normalized(cond: &Condition) -> Option<SimilarityCondition> {
         }
         Condition::Not(inner) | Condition::Group(inner) => find_similarity_normalized(inner),
         _ => None,
+    }
+}
+
+/// Rejects WHERE clauses that contain two `similarity()` predicates
+/// referencing different query vectors (finding H).
+///
+/// [`SimilarityEvaluator`] pre-computes scores against ONE query vector
+/// (the first similarity predicate found). If the WHERE tree contains a
+/// second `similarity()` with a DIFFERENT vector, the evaluator would
+/// silently reuse the first vector's scores for the second threshold —
+/// returning wrong rows.
+///
+/// Rather than extending the evaluator to key scores by vector (more
+/// code for a pre-seed WASM demo surface, plus N× more scorer passes),
+/// we fail loud: the caller gets an explicit error pointing them at the
+/// core (persistence-enabled) backend for multi-vector queries.
+///
+/// Identity is by `VectorExpr` equality, which treats two distinct
+/// parameter names as distinct and two distinct literal vectors as
+/// distinct — the same binding / literal used twice is accepted.
+///
+/// The input is expected to already be De-Morgan-normalized via
+/// [`push_not_inward`] so no `NOT` wraps a `Similarity(_)`.
+pub(crate) fn assert_single_similarity_vector(cond: Option<&Condition>) -> Result<(), String> {
+    let mut first: Option<VectorExpr> = None;
+    if let Some(c) = cond {
+        walk_similarity_vectors(c, &mut |v| match &first {
+            None => {
+                first = Some(v.clone());
+                Ok(())
+            }
+            Some(existing) if existing == v => Ok(()),
+            Some(_) => Err(
+                "Multiple similarity() conditions with different query vectors are not yet \
+                 supported in WASM. Use a single similarity() predicate or use core \
+                 (persistence-enabled) for multi-vector queries."
+                    .to_string(),
+            ),
+        })?;
+    }
+    Ok(())
+}
+
+/// Visits every `SimilarityCondition` in `cond` and calls `visit` with
+/// its `vector` expression. Short-circuits on the first `Err` returned
+/// by the visitor — used by [`assert_single_similarity_vector`] to stop
+/// as soon as a second distinct vector is seen.
+fn walk_similarity_vectors<F>(cond: &Condition, visit: &mut F) -> Result<(), String>
+where
+    F: FnMut(&VectorExpr) -> Result<(), String>,
+{
+    match cond {
+        Condition::Similarity(s) => visit(&s.vector),
+        Condition::And(l, r) | Condition::Or(l, r) => {
+            walk_similarity_vectors(l, visit)?;
+            walk_similarity_vectors(r, visit)
+        }
+        Condition::Not(inner) | Condition::Group(inner) => walk_similarity_vectors(inner, visit),
+        _ => Ok(()),
     }
 }
 
@@ -501,5 +569,85 @@ mod tests {
         let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.5 AND x = 1");
         let residual = strip_similarity(Some(&c)).expect("test: residual");
         assert!(find_similarity(Some(&residual)).is_none());
+    }
+
+    // --- assert_single_similarity_vector: finding H ---------------------------
+
+    #[test]
+    fn test_assert_single_sim_vec_accepts_none() {
+        assert!(assert_single_similarity_vector(None).is_ok());
+    }
+
+    #[test]
+    fn test_assert_single_sim_vec_accepts_no_similarity() {
+        let c = parse_cond("SELECT * FROM t WHERE x = 1");
+        assert!(assert_single_similarity_vector(Some(&c)).is_ok());
+    }
+
+    #[test]
+    fn test_assert_single_sim_vec_accepts_single_predicate() {
+        let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.5");
+        assert!(assert_single_similarity_vector(Some(&c)).is_ok());
+    }
+
+    #[test]
+    fn test_assert_single_sim_vec_accepts_same_param_twice() {
+        let c = parse_cond(
+            "SELECT * FROM t WHERE similarity(vector, $q) > 0.5 AND similarity(vector, $q) < 0.9",
+        );
+        assert!(assert_single_similarity_vector(Some(&c)).is_ok());
+    }
+
+    #[test]
+    fn test_assert_single_sim_vec_rejects_different_params_and() {
+        let c = parse_cond(
+            "SELECT * FROM t WHERE similarity(vector, $a) > 0.5 AND similarity(vector, $b) > 0.3",
+        );
+        let err = assert_single_similarity_vector(Some(&c));
+        assert!(err.is_err());
+        assert!(
+            err.expect_err("test: err")
+                .contains("Multiple similarity()"),
+            "error must name the feature"
+        );
+    }
+
+    #[test]
+    fn test_assert_single_sim_vec_rejects_different_params_or() {
+        let c = parse_cond(
+            "SELECT * FROM t WHERE similarity(vector, $a) > 0.5 OR similarity(vector, $b) > 0.3",
+        );
+        assert!(assert_single_similarity_vector(Some(&c)).is_err());
+    }
+
+    #[test]
+    fn test_assert_single_sim_vec_rejects_param_vs_literal() {
+        // A param vector and a literal vector are distinct VectorExprs
+        // even if the runtime-bound value would match — identity is at
+        // the AST level.
+        let c = parse_cond(
+            "SELECT * FROM t WHERE similarity(vector, $q) > 0.5 AND similarity(vector, [1.0, 0.0]) > 0.3",
+        );
+        assert!(assert_single_similarity_vector(Some(&c)).is_err());
+    }
+
+    #[test]
+    fn test_assert_single_sim_vec_accepts_same_literal_twice() {
+        let c = parse_cond(
+            "SELECT * FROM t WHERE similarity(vector, [1.0, 0.0]) > 0.5 AND similarity(vector, [1.0, 0.0]) < 0.9",
+        );
+        assert!(assert_single_similarity_vector(Some(&c)).is_ok());
+    }
+
+    #[test]
+    fn test_assert_single_sim_vec_walks_under_not_compound() {
+        // A compound `NOT (sim_a AND sim_b)` must still be caught.
+        // After De-Morgan normalization it becomes `sim_a' OR sim_b'` with
+        // flipped ops — the two distinct vectors are still present.
+        let raw = parse_cond(
+            "SELECT * FROM t WHERE NOT (similarity(vector, $a) > 0.5 AND similarity(vector, $b) > 0.3)",
+        );
+        let normalized = push_not_inward(raw);
+        assert!(assert_single_similarity_vector(Some(&normalized)).is_err());
     }
 }

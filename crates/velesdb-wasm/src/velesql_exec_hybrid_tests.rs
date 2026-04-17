@@ -507,3 +507,97 @@ fn test_and_similarity_with_predicate_still_filters_correctly() {
     assert!(ids.contains(&1));
     assert!(ids.contains(&2));
 }
+
+// =========================================================================
+// Multiple similarity() conditions (finding H)
+// =========================================================================
+//
+// `SimilarityEvaluator` pre-computes scores for ONE query vector. When
+// the WHERE clause contains two `similarity()` predicates referencing
+// DIFFERENT vectors, the evaluator silently reuses the first vector's
+// scores for both thresholds — returning wrong rows. We fail loud
+// instead (option 2: explicit error, no silent wrong answers).
+
+#[test]
+fn test_multiple_similarity_same_vector_is_accepted() {
+    // Two similarity() predicates that reference the SAME param `$q`
+    // must be accepted. Range predicate: keep rows with 0.5 < sim < 0.999.
+    // id 1: sim=1.0 → NOT (sim < 0.999) → dropped
+    // id 2: sim≈0.9939 → 0.5 < 0.9939 < 0.999 → kept
+    // id 3 / id 4: sim=0 → NOT (sim > 0.5) → dropped
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE similarity(vector, $q) > 0.5 AND similarity(vector, $q) < 0.999 LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: same-vector similarity range");
+    assert_eq!(r.row_count(), 1);
+    assert_eq!(r.row(0).expect("test: row").id(), 2);
+}
+
+#[test]
+fn test_multiple_similarity_different_params_returns_error_and() {
+    // Two similarity() predicates referencing DIFFERENT params must be
+    // rejected with a clear error rather than silently scored against
+    // only `$q1`.
+    let mut db = db_with_vectors();
+    let err = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE similarity(vector, $q1) > 0.5 AND similarity(vector, $q2) > 0.3 LIMIT 10",
+        Some(r#"{"q1": [1.0, 0.0, 0.0, 0.0], "q2": [0.0, 1.0, 0.0, 0.0]}"#),
+    );
+    assert!(err.is_err(), "multi-vector similarity must fail loud");
+    let msg = err.expect_err("test: err");
+    assert!(
+        msg.contains("Multiple similarity()"),
+        "error should name the feature, got: {msg}"
+    );
+}
+
+#[test]
+fn test_multiple_similarity_different_params_returns_error_or() {
+    // Same check under OR composition: the evaluator still pre-computes
+    // for one vector only, so we must reject.
+    let mut db = db_with_vectors();
+    let err = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE similarity(vector, $q1) > 0.5 OR similarity(vector, $q2) > 0.5 LIMIT 10",
+        Some(r#"{"q1": [1.0, 0.0, 0.0, 0.0], "q2": [0.0, 1.0, 0.0, 0.0]}"#),
+    );
+    assert!(err.is_err());
+    assert!(err
+        .expect_err("test: err")
+        .contains("Multiple similarity()"));
+}
+
+#[test]
+fn test_multiple_similarity_same_literal_vector_is_accepted() {
+    // Two similarity() predicates referencing the SAME literal vector
+    // must be accepted (identity of the VectorExpr is what matters, not
+    // param vs. literal).
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE similarity(vector, [1.0, 0.0, 0.0, 0.0]) > 0.5 AND similarity(vector, [1.0, 0.0, 0.0, 0.0]) < 0.999 LIMIT 10",
+        None,
+    )
+    .expect("test: same-literal similarity range");
+    assert_eq!(r.row_count(), 1);
+    assert_eq!(r.row(0).expect("test: row").id(), 2);
+}
+
+#[test]
+fn test_multiple_similarity_different_literals_returns_error() {
+    // Two distinct literal vectors → same rejection.
+    let mut db = db_with_vectors();
+    let err = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE similarity(vector, [1.0, 0.0, 0.0, 0.0]) > 0.5 AND similarity(vector, [0.0, 1.0, 0.0, 0.0]) > 0.3 LIMIT 10",
+        None,
+    );
+    assert!(err.is_err());
+    assert!(err
+        .expect_err("test: err")
+        .contains("Multiple similarity()"));
+}
