@@ -100,6 +100,7 @@ impl WhereFilters {
         let similarity_cond = velesql_similarity::find_similarity(base.as_ref());
         let residual = velesql_similarity::strip_similarity(base.as_ref());
         let eval = similarity_cond
+            .as_ref()
             .map(|c| SimilarityEvaluator::new(db, &stmt.from, c, params))
             .transpose()?;
         Ok(Self { residual, eval })

@@ -199,3 +199,78 @@ fn test_similarity_unbound_param_errors() {
     );
     assert!(err.is_err());
 }
+
+// =========================================================================
+// NOT similarity — polarity preservation (finding E)
+// =========================================================================
+
+#[test]
+fn test_similarity_not_greater_than_becomes_lte() {
+    // `NOT sim > 0.5` must behave like `sim <= 0.5`: keeps the rows with
+    // a low score, drops the high-score ones. Here id=1 (1.0) and id=2
+    // (~0.9939) are above 0.5; id=3 and id=4 are at 0.0.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE NOT similarity(vector, $q) > 0.5 LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: NOT sim > 0.5");
+    // Complement of the >0.5 set: ids 3 and 4.
+    assert_eq!(r.row_count(), 2);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&3));
+    assert!(ids.contains(&4));
+}
+
+#[test]
+fn test_similarity_not_less_than_becomes_gte() {
+    // `NOT sim < 0.5` → `sim >= 0.5`: keeps ids 1 and 2.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE NOT similarity(vector, $q) < 0.5 LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: NOT sim < 0.5");
+    assert_eq!(r.row_count(), 2);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+}
+
+#[test]
+fn test_similarity_not_equal_becomes_neq() {
+    // `NOT sim = 1.0` → `sim != 1.0`: only id=1 has exact cosine 1.0.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE NOT similarity(vector, $q) = 1.0 LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: NOT sim = 1.0");
+    // All ids except id=1 (which has score == 1.0).
+    assert_eq!(r.row_count(), 3);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(!ids.contains(&1));
+}
+
+#[test]
+fn test_similarity_plain_without_not_is_unchanged() {
+    // Non-regression: plain `sim > 0.5` still behaves as before.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE similarity(vector, $q) > 0.5 LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: plain sim > 0.5");
+    // ids 1 and 2 are > 0.5.
+    assert_eq!(r.row_count(), 2);
+}
