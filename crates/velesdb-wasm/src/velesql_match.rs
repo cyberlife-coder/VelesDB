@@ -83,7 +83,6 @@ fn execute_1_hop(
         rel: &pattern.relationships[0],
         la: first_label(&pattern.nodes[0]),
         lb: first_label(&pattern.nodes[1]),
-        rel_type: first_type(&pattern.relationships[0]),
     };
     let limit = clause.return_clause.limit.unwrap_or(u64::MAX);
     let mut out = Vec::new();
@@ -109,7 +108,6 @@ struct OneHopContext<'p> {
     rel: &'p RelationshipPattern,
     la: Option<String>,
     lb: Option<String>,
-    rel_type: Option<String>,
 }
 
 fn expand_one_hop(
@@ -125,11 +123,8 @@ fn expand_one_hop(
     if !node_payload_passes_where(ctx.na, sid, a_node, where_clause) {
         return Ok(());
     }
-    for edge in store.filter_edges(Some(sid), None, ctx.rel_type.as_deref()) {
-        if !direction_is_compatible(ctx.rel, edge, sid) {
-            continue;
-        }
-        let other = other_endpoint(edge, sid);
+    for edge in directed_filter_edges(store, sid, ctx.rel) {
+        let other = other_endpoint(&edge, sid);
         let Some(b_node) = store.get_node(other) else {
             continue;
         };
@@ -144,6 +139,52 @@ fn expand_one_hop(
         )?);
     }
     Ok(())
+}
+
+/// Returns edges incident to `anchor` that are compatible with the
+/// relationship's direction and (optionally) its type filter.
+///
+/// - `Outgoing`: edges where `source == anchor`.
+/// - `Incoming`: edges where `target == anchor`.
+/// - `Both`: union of outgoing and incoming, deduplicated by edge id. A
+///   self-loop (`source == target == anchor`) appears once.
+///
+/// The helper returns owned `WasmEdge` values so the caller can continue
+/// borrowing the store mutably/immutably without lifetime contention.
+fn directed_filter_edges(
+    store: &WasmGraphStore,
+    anchor: u64,
+    rel: &RelationshipPattern,
+) -> Vec<WasmEdge> {
+    let label = first_type(rel);
+    let label_ref = label.as_deref();
+    match rel.direction {
+        Direction::Outgoing => store
+            .filter_edges(Some(anchor), None, label_ref)
+            .cloned()
+            .collect(),
+        Direction::Incoming => store
+            .filter_edges(None, Some(anchor), label_ref)
+            .cloned()
+            .collect(),
+        Direction::Both => {
+            let mut edges: Vec<WasmEdge> = store
+                .filter_edges(Some(anchor), None, label_ref)
+                .cloned()
+                .collect();
+            let mut seen: std::collections::HashSet<u64> = edges.iter().map(|e| e.id).collect();
+            for e in store.filter_edges(None, Some(anchor), label_ref) {
+                if seen.insert(e.id) {
+                    edges.push(e.clone());
+                }
+            }
+            edges
+        }
+        _ => store
+            .filter_edges(Some(anchor), None, label_ref)
+            .cloned()
+            .collect(),
+    }
 }
 
 fn execute_2_hop(
@@ -180,8 +221,6 @@ struct TwoHopContext<'p> {
     lc: Option<String>,
     r1: &'p RelationshipPattern,
     r2: &'p RelationshipPattern,
-    r1_type: Option<String>,
-    r2_type: Option<String>,
 }
 
 impl<'p> TwoHopContext<'p> {
@@ -195,8 +234,6 @@ impl<'p> TwoHopContext<'p> {
             lc: first_label(&pattern.nodes[2]),
             r1: &pattern.relationships[0],
             r2: &pattern.relationships[1],
-            r1_type: first_type(&pattern.relationships[0]),
-            r2_type: first_type(&pattern.relationships[1]),
         }
     }
 }
@@ -208,11 +245,8 @@ fn expand_from_a(
     limit: u64,
     out: &mut Vec<QueryResultRow>,
 ) -> Result<(), String> {
-    for edge_ab in store.filter_edges(Some(a_id), None, ctx.r1_type.as_deref()) {
-        if !direction_is_compatible(ctx.r1, edge_ab, a_id) {
-            continue;
-        }
-        let b_id = other_endpoint(edge_ab, a_id);
+    for edge_ab in directed_filter_edges(store, a_id, ctx.r1) {
+        let b_id = other_endpoint(&edge_ab, a_id);
         let Some(b_node) = store.get_node(b_id) else {
             continue;
         };
@@ -238,11 +272,8 @@ fn expand_from_b(
 ) -> Result<(), String> {
     let default_node = WasmGraphNode::default();
     let a_node = store.get_node(a_id).unwrap_or(&default_node);
-    for edge_bc in store.filter_edges(Some(b_id), None, ctx.r2_type.as_deref()) {
-        if !direction_is_compatible(ctx.r2, edge_bc, b_id) {
-            continue;
-        }
-        let c_id = other_endpoint(edge_bc, b_id);
+    for edge_bc in directed_filter_edges(store, b_id, ctx.r2) {
+        let c_id = other_endpoint(&edge_bc, b_id);
         let Some(c_node) = store.get_node(c_id) else {
             continue;
         };
@@ -285,15 +316,6 @@ fn inferred_graph_store(
         .unwrap_or_else(|| "graph".to_string());
     db.get_graph_store(&name)
         .ok_or_else(|| format!("Graph '{name}' is empty; no data to match"))
-}
-
-fn direction_is_compatible(rel: &RelationshipPattern, edge: &WasmEdge, anchor: u64) -> bool {
-    match rel.direction {
-        Direction::Outgoing => edge.source == anchor,
-        Direction::Incoming => edge.target == anchor,
-        Direction::Both => edge.source == anchor || edge.target == anchor,
-        _ => true,
-    }
 }
 
 fn first_label(n: &NodePattern) -> Option<String> {

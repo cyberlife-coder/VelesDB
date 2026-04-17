@@ -263,3 +263,131 @@ fn test_insert_edge_with_unbound_param_errors() {
     );
     assert!(err.is_err());
 }
+
+// =========================================================================
+// Regression tests for MATCH direction handling (Devin review finding #1).
+// =========================================================================
+//
+// Before the fix, `expand_one_hop`, `expand_from_a`, and `expand_from_b`
+// always filtered edges by `source == anchor` and then re-checked direction,
+// so patterns using `<-[:REL]-` (incoming) returned 0 rows and `-[:REL]-`
+// (undirected) dropped the incoming half. These tests pin the corrected
+// behaviour.
+
+/// Seeds a directed graph `Alice -KNOWS-> Bob -KNOWS-> Carol` for direction
+/// tests. Every node carries label `Person`.
+fn seed_directed_pair(db: &mut DatabaseInner) {
+    seed_graph(db);
+}
+
+#[test]
+fn test_match_incoming_direction_returns_rows() {
+    // Before the fix: 0 rows (bug). Expected: Bob<-KNOWS-Alice.
+    let mut db = DatabaseInner::new();
+    seed_directed_pair(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)<-[:KNOWS]-(b:Person) WHERE a.name = 'Bob' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: match incoming");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "incoming MATCH from Bob should find Alice, got: {}",
+        r.rows_json()
+    );
+    assert!(
+        r.rows_json().contains("\"name\":\"Alice\""),
+        "Bob's incoming KNOWS neighbour is Alice, got: {}",
+        r.rows_json()
+    );
+}
+
+#[test]
+fn test_match_incoming_direction_terminal_node_returns_rows() {
+    // Carol has an incoming KNOWS edge from Bob; no outgoing.
+    let mut db = DatabaseInner::new();
+    seed_directed_pair(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)<-[:KNOWS]-(b:Person) WHERE a.name = 'Carol' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: match incoming terminal");
+    assert_eq!(r.row_count(), 1);
+    assert!(r.rows_json().contains("\"name\":\"Bob\""));
+}
+
+#[test]
+fn test_match_undirected_returns_both_sides_for_middle_node() {
+    // Bob has both an incoming (Alice->Bob) and an outgoing (Bob->Carol)
+    // KNOWS edge. Undirected MATCH anchored on Bob must yield both.
+    let mut db = DatabaseInner::new();
+    seed_directed_pair(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]-(b:Person) WHERE a.name = 'Bob' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: match undirected");
+    assert_eq!(
+        r.row_count(),
+        2,
+        "Bob is incident to 2 KNOWS edges (Alice<->Bob<->Carol), got {}: {}",
+        r.row_count(),
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(
+        rows.contains("\"name\":\"Alice\"") && rows.contains("\"name\":\"Carol\""),
+        "both neighbours must appear, got: {rows}"
+    );
+}
+
+#[test]
+fn test_match_undirected_dedups_self_loop() {
+    // A self-loop (source == target == anchor) must appear once in an
+    // undirected MATCH, not twice.
+    let mut db = DatabaseInner::new();
+    execute(
+        &mut db,
+        "INSERT NODE INTO graph (id = 7, payload = '{\"name\": \"Self\", \"labels\": [\"Person\"]}')",
+        None,
+    )
+    .expect("test: node");
+    execute(
+        &mut db,
+        "INSERT EDGE INTO graph (source = 7, target = 7, label = 'LIKES')",
+        None,
+    )
+    .expect("test: self-loop");
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:LIKES]-(b:Person) WHERE a.name = 'Self' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: undirected self-loop");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "self-loop under undirected MATCH should appear once, got: {}",
+        r.rows_json()
+    );
+}
+
+#[test]
+fn test_match_outgoing_unaffected_by_fix() {
+    // Guard: outgoing direction (the only case currently exercised by the
+    // existing suite) still behaves exactly as before.
+    let mut db = DatabaseInner::new();
+    seed_directed_pair(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.name = 'Alice' RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: outgoing");
+    assert_eq!(r.row_count(), 1);
+    assert!(r.rows_json().contains("\"name\":\"Bob\""));
+}
