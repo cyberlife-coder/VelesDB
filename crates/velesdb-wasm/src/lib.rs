@@ -56,6 +56,7 @@ mod filter;
 mod fusion;
 mod graph;
 mod graph_persistence;
+mod graph_store;
 mod graph_worker_hints;
 mod hybrid_quantized;
 mod idb_helpers;
@@ -72,7 +73,29 @@ mod vector_ops;
 mod vector_store;
 mod vector_store_persistence;
 mod velesql;
+mod velesql_admin;
+mod velesql_aggregate;
+mod velesql_ddl;
+mod velesql_delete;
+mod velesql_exec;
+mod velesql_explain;
+mod velesql_fusion;
+mod velesql_graph;
 mod velesql_helpers;
+mod velesql_insert;
+mod velesql_introspection;
+mod velesql_join;
+mod velesql_logic;
+mod velesql_match;
+mod velesql_orderby;
+mod velesql_result;
+mod velesql_scan;
+mod velesql_select;
+mod velesql_setops;
+mod velesql_similarity;
+mod velesql_update;
+mod velesql_value;
+mod velesql_where;
 
 pub use agent::SemanticMemory;
 pub use database::{WasmCollectionHandle, WasmDatabase};
@@ -141,3 +164,27 @@ macro_rules! console_log {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_tests.rs"]
+mod velesql_exec_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_aggregate_tests.rs"]
+mod velesql_exec_aggregate_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_setops_tests.rs"]
+mod velesql_exec_setops_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_join_tests.rs"]
+mod velesql_exec_join_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_hybrid_tests.rs"]
+mod velesql_exec_hybrid_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_graph_tests.rs"]
+mod velesql_exec_graph_tests;

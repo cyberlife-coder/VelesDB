@@ -2,6 +2,10 @@
 
 use crate::{StorageMode, VectorStore};
 
+#[cfg(test)]
+#[path = "store_insert_tests.rs"]
+mod tests;
+
 /// Encodes a vector into the store's buffers based on storage mode.
 ///
 /// This is the single encoding path for all insert operations. SQ8 and
@@ -86,29 +90,61 @@ pub fn insert_with_payload(
 }
 
 /// Removes a vector at the given index.
+///
+/// All parallel arrays (`ids`, `payloads`, `sq8_mins`, `sq8_scales`, and
+/// the per-mode data buffer) are updated with matching `swap_remove`
+/// semantics so that they stay in sync. Previously the id/payload/min/scale
+/// arrays used `swap_remove` (O(1), swaps the last element into `idx`)
+/// while `data` / `data_sq8` / `data_binary` used `drain` (O(n), shifts
+/// everything left). When removing a non-last index, this desynchronised
+/// ids from the vector bytes at `idx`. The fix is to use swap-remove on
+/// the chunked buffers too — order is not preserved by removal anyway, so
+/// this is both cheaper and correct.
 pub fn remove_at_index(store: &mut VectorStore, idx: usize) {
     store.ids.swap_remove(idx);
     store.payloads.swap_remove(idx);
 
     match store.storage_mode {
         StorageMode::Full => {
-            let start = idx * store.dimension;
-            let end = start + store.dimension;
-            store.data.drain(start..end);
+            swap_remove_chunk(&mut store.data, idx, store.dimension);
         }
         // ProductQuantization/RaBitQ use SQ8 path as fallback in WASM context
         StorageMode::SQ8 | StorageMode::ProductQuantization | StorageMode::RaBitQ => {
             store.sq8_mins.swap_remove(idx);
             store.sq8_scales.swap_remove(idx);
-            let start = idx * store.dimension;
-            let end = start + store.dimension;
-            store.data_sq8.drain(start..end);
+            swap_remove_chunk(&mut store.data_sq8, idx, store.dimension);
         }
         StorageMode::Binary => {
             let bytes_per = store.dimension.div_ceil(8);
-            let start = idx * bytes_per;
-            let end = start + bytes_per;
-            store.data_binary.drain(start..end);
+            swap_remove_chunk(&mut store.data_binary, idx, bytes_per);
         }
     }
+}
+
+/// Swap-removes a contiguous chunk of `chunk_size` elements starting at
+/// `idx * chunk_size`, mirroring `Vec::swap_remove` for the parallel id
+/// / payload arrays.
+///
+/// Edge cases:
+/// - `chunk_size == 0` (metadata-only collection): no-op.
+/// - `idx` points to the last chunk: truncate only.
+/// - Any other index: swap the chunk at `idx` with the last chunk, then
+///   truncate.
+///
+/// # Panics
+/// Debug-asserts that `buf.len() >= (idx + 1) * chunk_size`. In release
+/// builds the caller guarantees this (the id array was checked before).
+fn swap_remove_chunk<T: Copy>(buf: &mut Vec<T>, idx: usize, chunk_size: usize) {
+    if chunk_size == 0 {
+        return;
+    }
+    debug_assert!(buf.len() >= (idx + 1) * chunk_size);
+    let last_chunk_start = buf.len() - chunk_size;
+    let target_start = idx * chunk_size;
+    if target_start != last_chunk_start {
+        for offset in 0..chunk_size {
+            buf.swap(target_start + offset, last_chunk_start + offset);
+        }
+    }
+    buf.truncate(last_chunk_start);
 }

@@ -224,3 +224,279 @@ fn test_wasm_database_default_trait() {
     let db = WasmDatabase::default();
     assert_eq!(db.inner.collection_count(), 0);
 }
+
+// =========================================================================
+// Metadata collection tests (S4-13)
+// =========================================================================
+
+#[test]
+fn test_create_metadata_collection_succeeds() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("docs")
+        .expect("test: metadata create should succeed");
+    assert_eq!(db.collection_count(), 1);
+    let store = db
+        .get_shared_store("docs")
+        .expect("test: metadata store retrievable");
+    assert_eq!(store.borrow().dimension(), 0);
+    assert!(store.borrow().is_metadata_only());
+}
+
+#[test]
+fn test_create_metadata_collection_duplicate_fails() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("docs")
+        .expect("test: first create");
+    let err = db.create_metadata_collection("docs");
+    assert!(err.is_err(), "duplicate metadata create should fail");
+}
+
+#[test]
+fn test_contains_reports_existing_collection() {
+    let mut db = DatabaseInner::new();
+    assert!(!db.contains("docs"));
+    db.create_metadata_collection("docs").expect("test: create");
+    assert!(db.contains("docs"));
+    assert!(!db.contains("ghost"));
+}
+
+// =========================================================================
+// Graph store lifecycle (Devin Review PR #594 finding #3)
+// =========================================================================
+//
+// Collections and their associated graph stores share a namespace. Dropping
+// a collection must also drop any graph store so that recreating a
+// collection with the same name cannot resurface ghost nodes/edges.
+
+#[test]
+fn test_delete_collection_also_drops_associated_graph_store() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("g").expect("test: create");
+
+    // Populate the graph store.
+    let g = db.graph_store("g");
+    g.borrow_mut().upsert_node(1, None, vec!["Person".into()]);
+    g.borrow_mut()
+        .insert_edge(None, 1, 2, "KNOWS".into(), None)
+        .expect("test: insert edge");
+    drop(g);
+    assert!(
+        db.has_graph_store("g"),
+        "graph store should exist after seed"
+    );
+
+    // Dropping the collection must drop its graph store.
+    db.delete_collection("g").expect("test: delete");
+    assert!(
+        !db.has_graph_store("g"),
+        "graph store must be removed when collection is dropped"
+    );
+
+    // Recreating with the same name must not resurface the old graph data.
+    db.create_metadata_collection("g").expect("test: recreate");
+    assert!(
+        !db.has_graph_store("g"),
+        "lazy creation only: fresh collection has no graph store yet"
+    );
+    let g2 = db.graph_store("g");
+    assert!(
+        g2.borrow().all_node_ids().is_empty(),
+        "newly-provisioned graph store must be empty"
+    );
+    assert!(
+        g2.borrow().edges().is_empty(),
+        "newly-provisioned graph store must have no edges"
+    );
+}
+
+#[test]
+fn test_delete_collection_without_graph_store_does_not_panic() {
+    // Negative: a collection that never had any graph DML must still be
+    // droppable without touching `self.graphs`.
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("no_graph")
+        .expect("test: create");
+    assert!(!db.has_graph_store("no_graph"));
+    db.delete_collection("no_graph").expect("test: delete ok");
+}
+
+#[test]
+fn test_clear_graph_store_empties_existing_graph() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("g").expect("test: create");
+    let g = db.graph_store("g");
+    g.borrow_mut().upsert_node(1, None, vec![]);
+    g.borrow_mut()
+        .insert_edge(None, 1, 2, "R".into(), None)
+        .expect("test: insert edge");
+    drop(g);
+
+    db.clear_graph_store("g");
+
+    assert!(db.has_graph_store("g"), "clear must not remove the store");
+    let g2 = db.get_graph_store("g").expect("test: still registered");
+    assert!(g2.borrow().all_node_ids().is_empty());
+    assert!(g2.borrow().edges().is_empty());
+}
+
+#[test]
+fn test_clear_graph_store_no_op_on_absent_name() {
+    let mut db = DatabaseInner::new();
+    // Must not panic even though no graph store has ever been created.
+    db.clear_graph_store("ghost");
+    assert!(!db.has_graph_store("ghost"));
+}
+
+#[test]
+fn test_collection_summaries_lists_vector_and_metadata() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("vecs", 4, "cosine")
+        .expect("test: vector");
+    db.create_metadata_collection("docs")
+        .expect("test: metadata");
+    let mut summaries = db.collection_summaries();
+    summaries.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(summaries[0], ("docs".to_string(), 0, true));
+    assert_eq!(summaries[1], ("vecs".to_string(), 4, false));
+}
+
+// =========================================================================
+// Handle semantics across TRUNCATE / DROP (Devin Review Finding F12)
+// =========================================================================
+//
+// Pre-F12: TRUNCATE did delete+recreate, swapping the Rc. Outstanding
+// handles obtained before the TRUNCATE kept pointing to the OLD store
+// and silently operated on stale data.
+//
+// Post-F12: TRUNCATE clears the backing store in place through the shared
+// Rc. Outstanding handles observe the wipe atomically.
+//
+// DROP semantics are unchanged: the old handle retains its Rc to the
+// detached store; a new CREATE with the same name is distinct from that
+// old handle's data.
+
+#[test]
+fn test_handle_reflects_truncate_clear() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("vecs", 4, "cosine")
+        .expect("test: create");
+
+    // Obtain a handle BEFORE the truncate and populate through it.
+    let handle = db.get_shared_store("vecs").expect("test: handle");
+    handle
+        .borrow_mut()
+        .insert(1, &[1.0, 0.0, 0.0, 0.0])
+        .expect("test: insert 1");
+    handle
+        .borrow_mut()
+        .insert(2, &[0.0, 1.0, 0.0, 0.0])
+        .expect("test: insert 2");
+    assert_eq!(handle.borrow().len(), 2);
+
+    // Run TRUNCATE through the VelesQL executor. The OLD handle must
+    // observe the wipe — this is the core F12 invariant.
+    let r = crate::velesql_exec::execute(&mut db, "TRUNCATE vecs", None).expect("test: truncate");
+    assert_eq!(r.kind(), "ddl");
+
+    assert_eq!(
+        handle.borrow().len(),
+        0,
+        "outstanding handle must see the truncate-cleared store"
+    );
+    // Dimension, metric, and storage mode are preserved on the same
+    // struct (clear() does not touch them).
+    assert_eq!(handle.borrow().dimension(), 4);
+
+    // Re-populate through the same handle and verify the database sees
+    // the inserts — proving the Rc is still wired to the database.
+    handle
+        .borrow_mut()
+        .insert(3, &[0.0, 0.0, 1.0, 0.0])
+        .expect("test: post-truncate insert");
+    let fresh = db.get_shared_store("vecs").expect("test: fresh handle");
+    assert_eq!(fresh.borrow().len(), 1);
+}
+
+#[test]
+fn test_handle_after_drop_is_detached_from_new_create() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("vecs", 4, "cosine")
+        .expect("test: create");
+
+    let old_handle = db.get_shared_store("vecs").expect("test: handle");
+    old_handle
+        .borrow_mut()
+        .insert(1, &[1.0, 0.0, 0.0, 0.0])
+        .expect("test: insert");
+
+    // DROP the collection — the database forgets the Rc, but the old
+    // handle keeps its own clone of the Rc (single-threaded WASM: no
+    // dangling references, just a detached store).
+    db.delete_collection("vecs").expect("test: drop");
+    assert_eq!(
+        old_handle.borrow().len(),
+        1,
+        "old handle still points to the detached store"
+    );
+
+    // Re-CREATE under the same name: this must be a fresh, empty store
+    // distinct from the old handle's Rc.
+    db.create_collection("vecs", 4, "cosine")
+        .expect("test: re-create");
+    let new_handle = db.get_shared_store("vecs").expect("test: new handle");
+    assert_eq!(
+        new_handle.borrow().len(),
+        0,
+        "fresh collection must be empty"
+    );
+
+    // Insertions through the new handle are invisible to the old one
+    // (they point to different Rcs).
+    new_handle
+        .borrow_mut()
+        .insert(42, &[0.0, 1.0, 0.0, 0.0])
+        .expect("test: insert");
+    assert_eq!(new_handle.borrow().len(), 1);
+    assert_eq!(
+        old_handle.borrow().len(),
+        1,
+        "old handle must not see new-collection inserts"
+    );
+}
+
+#[test]
+fn test_handle_survives_truncate_on_metadata_collection() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("meta").expect("test: create");
+    let handle = db.get_shared_store("meta").expect("test: handle");
+    // Seed a payload through the handle.
+    {
+        let mut b = handle.borrow_mut();
+        b.ids.push(1);
+        b.payloads.push(Some(serde_json::json!({"k": "v"})));
+    }
+    assert_eq!(handle.borrow().len(), 1);
+
+    crate::velesql_exec::execute(&mut db, "TRUNCATE meta", None).expect("test: truncate");
+    assert_eq!(handle.borrow().len(), 0);
+    assert_eq!(handle.borrow().dimension(), 0, "still metadata-only");
+}
+
+#[test]
+fn test_truncate_on_missing_collection_errors_without_invalidating_other_handles() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("real").expect("test: create");
+    let handle = db.get_shared_store("real").expect("test: handle");
+    {
+        let mut b = handle.borrow_mut();
+        b.ids.push(7);
+        b.payloads.push(Some(serde_json::json!({"n": 7})));
+    }
+
+    // TRUNCATE on a ghost collection must error without touching other
+    // collections' handles.
+    let err = crate::velesql_exec::execute(&mut db, "TRUNCATE ghost", None);
+    assert!(err.is_err());
+    assert_eq!(handle.borrow().len(), 1, "untouched collection intact");
+}
