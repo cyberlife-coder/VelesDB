@@ -73,6 +73,9 @@ mod vector_store;
 mod vector_store_persistence;
 mod velesql;
 mod velesql_helpers;
+mod velesql_result;
+mod velesql_value;
+mod velesql_where;
 
 pub use agent::SemanticMemory;
 pub use database::{WasmCollectionHandle, WasmDatabase};
