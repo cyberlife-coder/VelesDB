@@ -354,8 +354,21 @@ fn find_vector_search(cond: Option<&Condition>) -> Option<&VectorSearch> {
 
 /// Returns the condition with every `VectorSearch` / `VectorFusedSearch` /
 /// `SparseVectorSearch` subtree removed.
+///
+/// The input is first passed through [`crate::velesql_logic::push_not_inward`]
+/// so NOT is De-Morgan-distributed before stripping — symmetric with
+/// [`velesql_similarity::strip_similarity`]. Without this normalization, a
+/// query like `NOT (vector NEAR $q OR cat = 'a')` would recurse into the
+/// NOT wrapper, collapse the stripped VectorSearch under OR to `None`
+/// (via `combine_after_strip`, finding G), then wrap `None` back up
+/// through Not → None, leaving `WhereFilters.normalized` empty and
+/// `passes()` true for every row. Instead, `push_not_inward` rewrites to
+/// `NOT VectorSearch AND NOT cat='a'`; the strip pass removes only the
+/// bare VectorSearch leaf (logically `true` via the external NEAR path),
+/// and `true AND NOT cat='a'` correctly reduces to `NOT cat='a'`.
 fn strip_vector_search(cond: Option<&Condition>) -> Option<Condition> {
-    velesql_similarity::strip_condition_if(cond, &|c| {
+    let normalized = cond.cloned().map(crate::velesql_logic::push_not_inward);
+    velesql_similarity::strip_condition_if(normalized.as_ref(), &|c| {
         matches!(
             c,
             Condition::VectorSearch(_)

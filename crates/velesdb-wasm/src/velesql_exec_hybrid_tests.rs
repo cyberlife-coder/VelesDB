@@ -601,3 +601,131 @@ fn test_multiple_similarity_different_literals_returns_error() {
         .expect_err("test: err")
         .contains("Multiple similarity()"));
 }
+
+// =========================================================================
+// NOT over compound VectorSearch (finding I) — strip_vector_search
+// De-Morgan-normalization symmetry with strip_similarity
+// =========================================================================
+//
+// `strip_similarity` normalizes with `push_not_inward` BEFORE stripping so
+// a compound `NOT (sim > 0.5 OR cat = 'a')` residual becomes
+// `sim <= 0.5 AND cat != 'a'` — the similarity leaf is stripped out and
+// the cat predicate survives with its negation preserved.
+//
+// `strip_vector_search` now applies the same normalization. Without it,
+// `NOT (vector NEAR $q OR cat = 'a')` recursed directly under the NOT →
+// under the OR → stripped the VectorSearch → `combine_after_strip` collapsed
+// the OR to `None` (finding G: `true OR x = true`) → the NOT arm mapped
+// `None` to `None` → `WhereFilters.normalized` was `None` → every scanned
+// row silently passed the post-filter. Symmetric fix: normalize first,
+// rewrite `Not(Or(VS, pred))` to `And(Not(VS), flip(pred))`, then strip
+// only bare `VectorSearch` leaves so the surviving `flip(pred)` side
+// correctly post-filters.
+//
+// Semantic convention: a branch stripped out is logically `true` (the
+// external NEAR path accepts every row with a score). This applies to
+// bare `VectorSearch` AND to `Not(VectorSearch)` sub-branches — the latter
+// collapses to `None` via the `Not` arm of `strip_condition_if` since
+// `strip(VS)` is `None` and `.map(|c| Not(c))` on `None` stays `None`.
+// That keeps the fix symmetric with `strip_similarity` and produces an
+// internally consistent `¬VS = true` model across every NOT compound.
+//
+// Fixture: 4 rows from `db_with_vectors()` (2 cat='a', 2 cat='b').
+
+#[test]
+fn test_not_or_vector_near_and_predicate_returns_correct_rows() {
+    // `NOT (vector NEAR $q OR cat = 'a')` — the bug finding I targets.
+    // Pre-fix: None residual, every row passes → 4 rows (WRONG).
+    // Post-fix: push_not_inward rewrites to `Not(VS) AND cat != 'a'`;
+    // strip removes the `Not(VS)` branch (externally true), leaving
+    // `cat != 'a'` as residual. Rows with cat='b' (ids 3, 4) survive.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE NOT (vector NEAR $q OR cat = 'a') LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: NOT (NEAR OR pred)");
+    assert_eq!(
+        r.row_count(),
+        2,
+        "residual must be `cat != 'a'` after De Morgan + strip"
+    );
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&3));
+    assert!(ids.contains(&4));
+}
+
+#[test]
+fn test_not_and_vector_near_and_predicate_returns_all_rows() {
+    // `NOT (vector NEAR $q AND cat = 'a')` — symmetric case. Under the
+    // `¬VS = true` convention (stripped branches are externally true):
+    //   push_not_inward → `Not(VS) OR cat != 'a'`
+    //   strip           → `None OR cat != 'a'` (None side)
+    //   combine Or      → `None` (finding G: `true OR x = true`)
+    // Residual is `None`, no post-filter, all 4 scored rows survive.
+    //
+    // This is an intentional semantic shift from the pre-fix behaviour
+    // (which accidentally returned 2 rows via an asymmetric strip path
+    // that skipped push_not_inward). Post-fix is internally consistent
+    // with case 1 above and with `strip_similarity`'s Or-collapse rule.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE NOT (vector NEAR $q AND cat = 'a') LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: NOT (NEAR AND pred)");
+    assert_eq!(
+        r.row_count(),
+        4,
+        "NOT (VS AND pred) under ¬VS=true collapses to true → all rows"
+    );
+}
+
+#[test]
+fn test_not_vector_near_bare_returns_all_rows() {
+    // `NOT (vector NEAR $q)` — bare NOT over a single VectorSearch leaf.
+    // `push_not_inward` keeps `Not(VS)` unchanged (VS has no negation
+    // flag in the logic module). `strip_vector_search` then sees
+    // `Not(VS)`: recurses into VS (stripped → None), `.map(|c| Not(c))`
+    // on None stays None. Residual is None; every scored row passes.
+    //
+    // This pins the `¬VS = true` convention at the leaf level and
+    // guards against a future refactor silently switching to `¬VS = false`.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE NOT (vector NEAR $q) LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: NOT (NEAR)");
+    assert_eq!(
+        r.row_count(),
+        4,
+        "bare NOT (VS) collapses residual to None under ¬VS=true"
+    );
+}
+
+#[test]
+fn test_bare_or_vector_near_and_predicate_unchanged_non_regression() {
+    // Non-regression for finding G: without a NOT wrapper, the existing
+    // strip_vector_search + combine_after_strip(Or, None, Some) = None
+    // path still holds. `vector NEAR $q OR cat = 'a'` yields 4 rows
+    // because the OR is trivially satisfied by the NEAR branch.
+    // This test is intentionally redundant with
+    // `test_or_near_with_predicate_does_not_filter_non_matching_rows`
+    // above — it's kept here as a guard for finding I's change to
+    // strip_vector_search so any future refactor that accidentally
+    // de-normalizes the non-NOT path is caught in this block.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE vector NEAR $q OR cat = 'a' LIMIT 4",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: bare OR near (non-regression)");
+    assert_eq!(r.row_count(), 4);
+}
