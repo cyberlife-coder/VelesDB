@@ -103,6 +103,18 @@ impl VectorStore {
         }
     }
 
+    /// Returns the typed storage mode for Rust-side callers.
+    ///
+    /// The WASM binding exposes the string form via
+    /// [`storage_mode`](Self::storage_mode); this accessor is `pub(crate)`
+    /// so the DDL path can preserve the mode through TRUNCATE without
+    /// round-tripping through the string representation (Devin Review
+    /// Finding M).
+    #[must_use]
+    pub(crate) fn storage_mode_kind(&self) -> StorageMode {
+        self.storage_mode
+    }
+
     /// Returns the number of vectors in the store.
     #[wasm_bindgen(getter)]
     #[must_use]

@@ -1204,3 +1204,68 @@ fn test_bdd_match_multi_pattern_returns_clear_error() {
         "error should reference the persistence-enabled backend, got: {msg}"
     );
 }
+// =========================================================================
+// Regression: TRUNCATE preserves the collection's StorageMode
+// (Devin Review PR #594 Finding M — future-compat).
+// =========================================================================
+//
+// Before the fix, `truncate` recreated the collection via
+// `create_collection`, which hard-coded `StorageMode::Full`. If a future
+// code path ever created a collection with SQ8/Binary/PQ/RaBitQ, TRUNCATE
+// would silently flip it to Full. The fix reads back the existing storage
+// mode and uses it when re-provisioning.
+
+#[test]
+fn test_bdd_truncate_preserves_storage_mode_full() {
+    // Baseline: Full mode round-trips through TRUNCATE (this is what the
+    // public WASM surface creates today).
+    let mut db = DatabaseInner::new();
+    db.create_collection("vecs", 4, "cosine")
+        .expect("test: create");
+    let before_mode = db
+        .get_shared_store("vecs")
+        .expect("test: before store")
+        .borrow()
+        .storage_mode();
+    execute(&mut db, "TRUNCATE vecs", None).expect("test: truncate");
+    let after_mode = db
+        .get_shared_store("vecs")
+        .expect("test: after store")
+        .borrow()
+        .storage_mode();
+    assert_eq!(
+        before_mode, after_mode,
+        "TRUNCATE must preserve Full storage mode, got before={before_mode}, after={after_mode}"
+    );
+}
+
+#[test]
+fn test_bdd_truncate_preserves_storage_mode_sq8() {
+    // Forward-compat: if the underlying store is created in SQ8 mode
+    // directly (as it can be via `VectorStore::new_with_mode`), TRUNCATE
+    // must re-provision it in SQ8, not silently drop back to Full. Uses
+    // the `install_store` test seam because the public WASM DDL surface
+    // currently only creates Full-mode collections.
+    use crate::vector_store::VectorStore;
+    let mut db = DatabaseInner::new();
+    let sq8_store = VectorStore::new_with_mode(4, "cosine", "sq8")
+        .map_err(|e| format!("{e:?}"))
+        .expect("test: sq8 store");
+    db.install_store("vecs", sq8_store).expect("test: install");
+    let before_mode = db
+        .get_shared_store("vecs")
+        .expect("test: before")
+        .borrow()
+        .storage_mode();
+    assert_eq!(before_mode, "sq8", "fixture must start in SQ8");
+    execute(&mut db, "TRUNCATE vecs", None).expect("test: truncate");
+    let after_mode = db
+        .get_shared_store("vecs")
+        .expect("test: after")
+        .borrow()
+        .storage_mode();
+    assert_eq!(
+        after_mode, "sq8",
+        "TRUNCATE must preserve SQ8 storage mode, got {after_mode}"
+    );
+}

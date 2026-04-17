@@ -82,6 +82,10 @@ fn drop_collection(db: &mut DatabaseInner, stmt: &DropCollectionStatement) -> Re
 /// `TRUNCATE` removes all rows but preserves the collection definition.
 /// Any associated graph store (same name) is cleared in-place so ghost
 /// nodes/edges cannot survive a TRUNCATE (Devin review PR #594 #3).
+///
+/// Storage mode (Full / SQ8 / Binary / PQ / RaBitQ) is preserved across
+/// the re-provisioning step (Devin Review Finding M). Without this,
+/// TRUNCATE on a non-Full collection would silently downgrade it to Full.
 fn truncate(db: &mut DatabaseInner, stmt: &TruncateStatement) -> Result<(), String> {
     let summary = db
         .collection_summaries()
@@ -89,7 +93,9 @@ fn truncate(db: &mut DatabaseInner, stmt: &TruncateStatement) -> Result<(), Stri
         .find(|(name, _, _)| name == &stmt.collection)
         .ok_or_else(|| format!("Collection '{}' not found", stmt.collection))?;
     let (_, dim, is_metadata) = summary;
-    let metric_name = metric_for_existing(db, &stmt.collection)?;
+    // Read back the current metric + storage mode BEFORE dropping the
+    // collection — after `delete_collection` the store is gone.
+    let (metric_name, storage_mode) = read_existing_collection_state(db, &stmt.collection)?;
     db.delete_collection(&stmt.collection)?;
     // delete_collection also dropped the graph store; the subsequent
     // create re-provisions the collection, and any further graph DML
@@ -100,10 +106,24 @@ fn truncate(db: &mut DatabaseInner, stmt: &TruncateStatement) -> Result<(), Stri
     if is_metadata {
         db.create_metadata_collection(&stmt.collection)?;
     } else {
-        db.create_collection(&stmt.collection, dim, &metric_name)?;
+        db.create_collection_with_mode(&stmt.collection, dim, &metric_name, storage_mode)?;
     }
     db.clear_graph_store(&stmt.collection);
     Ok(())
+}
+
+/// Reads back the metric string and typed storage mode of an existing
+/// collection. Split from [`truncate`] so the store borrow is released
+/// before `delete_collection` re-borrows the map.
+fn read_existing_collection_state(
+    db: &DatabaseInner,
+    name: &str,
+) -> Result<(String, crate::StorageMode), String> {
+    let handle = db.get_shared_store(name)?;
+    let borrowed = handle.borrow();
+    let metric_name = metric_to_string(borrowed.metric)?;
+    let storage_mode = borrowed.storage_mode_kind();
+    Ok((metric_name, storage_mode))
 }
 
 /// `ANALYZE` returns synthetic statistics about the target collection.
@@ -132,24 +152,32 @@ fn index_noop_row(op: &str, collection: &str, field: &str) -> Result<QueryResult
     QueryResultRow::synthetic(payload)
 }
 
-/// Reads back the metric of an existing collection as a canonical string.
-fn metric_for_existing(db: &DatabaseInner, name: &str) -> Result<String, String> {
-    let handle = db.get_shared_store(name)?;
-    let borrowed = handle.borrow();
-    Ok(metric_to_string(borrowed.metric))
-}
-
-fn metric_to_string(m: velesdb_core::DistanceMetric) -> String {
+/// Converts a [`velesdb_core::DistanceMetric`] into its canonical VelesQL
+/// string form for re-provisioning via
+/// [`DatabaseInner::create_collection_with_mode`].
+///
+/// Fails loud on unknown variants rather than silently defaulting to
+/// `"cosine"` (Devin Review Finding L). `DistanceMetric` is
+/// `#[non_exhaustive]` — a future variant added in core would otherwise
+/// cause TRUNCATE to silently rebuild the collection with the wrong
+/// metric. The error surfaces an explicit, actionable failure instead.
+fn metric_to_string(m: velesdb_core::DistanceMetric) -> Result<String, String> {
     use velesdb_core::DistanceMetric;
-    match m {
+    let s = match m {
         DistanceMetric::Cosine => "cosine",
         DistanceMetric::Euclidean => "euclidean",
         DistanceMetric::DotProduct => "dot",
         DistanceMetric::Hamming => "hamming",
         DistanceMetric::Jaccard => "jaccard",
-        _ => "cosine",
-    }
-    .to_string()
+        // TODO(US-S4-13): update when DistanceMetric gains new variants.
+        // Surfacing Err rather than silently rebuilding with cosine.
+        _ => {
+            return Err(format!(
+                "Unknown distance metric {m:?}; refusing to silently default for TRUNCATE"
+            ))
+        }
+    };
+    Ok(s.to_string())
 }
 
 #[cfg(test)]
@@ -224,6 +252,34 @@ mod tests {
             execute(&mut db, &parse_ddl("DROP INDEX ON docs (category)")).expect("test: drop idx");
         assert_eq!(rows.len(), 1);
         assert!(rows[0].data_json_ref().contains("DROP INDEX"));
+    }
+
+    // --- Finding L: metric_to_string round-trip (DDL side) ---------------
+    //
+    // For every currently-supported variant, metric_to_string must produce
+    // a string that `parse_metric_inner` (the DDL side) accepts back. Any
+    // future variant added in core without updating these matches surfaces
+    // as an Err rather than silently defaulting to "cosine".
+
+    #[test]
+    fn test_metric_to_string_roundtrip_for_all_supported_variants() {
+        use velesdb_core::DistanceMetric;
+        for m in [
+            DistanceMetric::Cosine,
+            DistanceMetric::Euclidean,
+            DistanceMetric::DotProduct,
+            DistanceMetric::Hamming,
+            DistanceMetric::Jaccard,
+        ] {
+            let s = metric_to_string(m).expect("supported variant must serialize");
+            // The string must round-trip through `create_collection` (which
+            // delegates to `parse_metric_inner`).
+            let mut db = DatabaseInner::new();
+            let name = format!("tmp_{m:?}");
+            db.create_collection(&name, 4, &s).unwrap_or_else(|e| {
+                panic!("metric_to_string produced unparseable string '{s}': {e}")
+            });
+        }
     }
 
     #[test]

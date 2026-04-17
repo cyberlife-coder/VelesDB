@@ -72,11 +72,42 @@ impl DatabaseInner {
         dimension: usize,
         metric: &str,
     ) -> Result<(), String> {
+        self.create_collection_with_mode(name, dimension, metric, crate::StorageMode::Full)
+    }
+
+    /// Creates a collection with an explicit storage mode.
+    ///
+    /// Used by the TRUNCATE path to preserve the existing storage mode
+    /// (Full / SQ8 / Binary / PQ / RaBitQ) when re-provisioning the
+    /// collection. `create_collection` delegates to this with
+    /// `StorageMode::Full` for backward compatibility with the public
+    /// WASM surface. Fixes Devin Review Finding M.
+    pub(crate) fn create_collection_with_mode(
+        &mut self,
+        name: &str,
+        dimension: usize,
+        metric: &str,
+        mode: crate::StorageMode,
+    ) -> Result<(), String> {
         if self.collections.contains_key(name) {
             return Err(format!("Collection '{name}' already exists"));
         }
         let parsed_metric = parsing::parse_metric_inner(metric)?;
-        let store = store_new::create_store(dimension, parsed_metric, crate::StorageMode::Full);
+        let store = store_new::create_store(dimension, parsed_metric, mode);
+        self.collections
+            .insert(name.to_owned(), Rc::new(RefCell::new(store)));
+        Ok(())
+    }
+
+    /// Installs a pre-built store under `name`. Test-only helper used to
+    /// seed non-Full storage modes without going through the public DDL
+    /// surface (which currently only supports Full). Returns an error if
+    /// a collection by that name already exists.
+    #[cfg(test)]
+    pub(crate) fn install_store(&mut self, name: &str, store: VectorStore) -> Result<(), String> {
+        if self.collections.contains_key(name) {
+            return Err(format!("Collection '{name}' already exists"));
+        }
         self.collections
             .insert(name.to_owned(), Rc::new(RefCell::new(store)));
         Ok(())

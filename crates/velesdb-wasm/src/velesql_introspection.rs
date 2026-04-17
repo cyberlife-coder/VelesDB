@@ -66,6 +66,13 @@ fn describe_collection(
 }
 
 /// Canonical string form of a distance metric.
+///
+/// Returns `"unknown"` for variants not yet recognised by the WASM
+/// introspection surface (Devin Review Finding L). `DistanceMetric` is
+/// `#[non_exhaustive]`; a future variant added in core surfaces honestly
+/// as `"unknown"` rather than silently masquerading as cosine in
+/// `DESCRIBE COLLECTION`.
+// TODO(US-S4-13): update when DistanceMetric gains new variants.
 fn metric_to_string(m: velesdb_core::DistanceMetric) -> &'static str {
     use velesdb_core::DistanceMetric;
     match m {
@@ -74,9 +81,7 @@ fn metric_to_string(m: velesdb_core::DistanceMetric) -> &'static str {
         DistanceMetric::DotProduct => "dot",
         DistanceMetric::Hamming => "hamming",
         DistanceMetric::Jaccard => "jaccard",
-        // `DistanceMetric` is `#[non_exhaustive]`; unknown variants fall back
-        // to "cosine" for display stability.
-        _ => "cosine",
+        _ => "unknown",
     }
 }
 
@@ -138,6 +143,23 @@ mod tests {
         let db = DatabaseInner::new();
         let err = execute(&db, &parse_intro("DESCRIBE COLLECTION ghost"));
         assert!(err.is_err());
+    }
+
+    // --- Finding L: metric_to_string coverage (introspection side) ------
+    //
+    // Exhaustive coverage of currently-supported DistanceMetric variants.
+    // A future variant added in core without updating the match arms
+    // surfaces honestly as "unknown" in DESCRIBE COLLECTION (never as a
+    // silent "cosine" masquerade).
+
+    #[test]
+    fn test_introspection_metric_to_string_all_supported_variants() {
+        use velesdb_core::DistanceMetric;
+        assert_eq!(metric_to_string(DistanceMetric::Cosine), "cosine");
+        assert_eq!(metric_to_string(DistanceMetric::Euclidean), "euclidean");
+        assert_eq!(metric_to_string(DistanceMetric::DotProduct), "dot");
+        assert_eq!(metric_to_string(DistanceMetric::Hamming), "hamming");
+        assert_eq!(metric_to_string(DistanceMetric::Jaccard), "jaccard");
     }
 
     #[test]
