@@ -869,3 +869,152 @@ fn test_match_where_missing_param_returns_error() {
         "error should mention the unbound parameter, got: {msg}"
     );
 }
+
+// =========================================================================
+// Regression: MATCH WHERE allows filtering by alias-qualified node id
+// (Devin Review PR #594 Finding C — feature gap).
+// =========================================================================
+//
+// Before the fix, `make_binding` stored only the payload. The merged
+// payload fed to `velesql_where::matches` had no way to surface the
+// node id through `get_nested_field("a.id")`, so predicates like
+// `WHERE a.id = 1` matched 0 rows. The fix injects the node id as a
+// top-level `"id"` field inside each alias object (and also at the
+// root of the merged payload, for the bare `WHERE id = ...` form that
+// falls through to the starting node).
+
+#[test]
+fn test_match_where_by_node_id_on_starting_node() {
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.id = 1 RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: filter by a.id");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "Alice (id=1) has exactly one outgoing KNOWS edge, got: {}",
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(rows.contains("\"name\":\"Alice\""));
+    assert!(rows.contains("\"name\":\"Bob\""));
+}
+
+#[test]
+fn test_match_where_by_node_id_on_second_node() {
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.id = 2 RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: filter by b.id");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "Bob (id=2) receives exactly one KNOWS edge (from Alice), got: {}",
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(rows.contains("\"name\":\"Alice\""));
+    assert!(rows.contains("\"name\":\"Bob\""));
+}
+
+#[test]
+fn test_match_where_by_node_id_with_param() {
+    // Combines Finding A (params threaded) and Finding C (node id
+    // injection): `WHERE a.id = $aid` must resolve both.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.id = $aid RETURN a, b LIMIT 10",
+        Some(r#"{"aid": 2}"#),
+    )
+    .expect("test: id via param");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "Bob (id=2) has one outgoing KNOWS edge to Carol, got: {}",
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(rows.contains("\"name\":\"Bob\""));
+    assert!(rows.contains("\"name\":\"Carol\""));
+}
+
+#[test]
+fn test_match_where_bare_id_targets_starting_node() {
+    // Backward-compat: `WHERE id = 1` (no alias prefix) must resolve
+    // against the starting node's id — same convention as bare
+    // `WHERE name = 'Alice'` in `test_match_where_bare_field_applies_to_first_node`.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE id = 1 RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: bare id on starting node");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "bare `id = 1` must target node a, got: {}",
+        r.rows_json()
+    );
+    assert!(r.rows_json().contains("\"name\":\"Alice\""));
+    assert!(r.rows_json().contains("\"name\":\"Bob\""));
+}
+
+#[test]
+fn test_match_where_payload_id_does_not_shadow_node_id() {
+    // Edge case / documented collision rule: when a user payload
+    // carries a field literally named `"id"` (e.g. an application-
+    // level primary key that differs from the graph node id), the
+    // GRAPH node id always wins in a MATCH WHERE clause. A MATCH
+    // targets the graph identifier; overriding that with an arbitrary
+    // payload key would silently break pattern-matching semantics.
+    let mut db = DatabaseInner::new();
+    // Insert a node where the payload contains its own "id" = 999
+    // but the graph node id is 42.
+    execute(
+        &mut db,
+        "INSERT NODE INTO graph (id = 42, payload = '{\"name\": \"Shadowed\", \"id\": 999, \"labels\": [\"Person\"]}')",
+        None,
+    )
+    .expect("test: insert shadowed");
+
+    // `WHERE a.id = 42` must match (graph node id wins).
+    let r_node = execute(
+        &mut db,
+        "MATCH (a:Person) WHERE a.id = 42 RETURN a LIMIT 10",
+        None,
+    )
+    .expect("test: a.id=42");
+    assert_eq!(
+        r_node.row_count(),
+        1,
+        "graph node id must be reachable via a.id, got: {}",
+        r_node.rows_json()
+    );
+
+    // `WHERE a.id = 999` (the payload's shadowed id) must NOT match:
+    // the node id (42) wins the collision, so 999 is nobody's id.
+    let r_shadow = execute(
+        &mut db,
+        "MATCH (a:Person) WHERE a.id = 999 RETURN a LIMIT 10",
+        None,
+    )
+    .expect("test: a.id=999");
+    assert_eq!(
+        r_shadow.row_count(),
+        0,
+        "payload `id` must not shadow node id in MATCH WHERE, got: {}",
+        r_shadow.rows_json()
+    );
+}

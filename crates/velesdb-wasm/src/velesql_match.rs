@@ -410,7 +410,7 @@ fn matches_where_in_match_scope(
         // Defensive: a MATCH always has at least one bound node.
         return Ok(false);
     };
-    let merged = build_merged_payload(bindings, &first.payload);
+    let merged = build_merged_payload(bindings, &first.payload, first.id);
     crate::velesql_where::matches(cond, first.id, Some(&merged), params)
 }
 
@@ -423,9 +423,19 @@ fn matches_where_in_match_scope(
 ///   `WHERE b.name = ...` to resolve via `get_nested_field` walking
 ///   `b` → `name`). Aliases are inserted AFTER the first-node fields
 ///   so an alias name always wins a collision.
+///
+/// Node-id injection: for every binding, the node `id` is injected as
+/// an `id` field inside its alias object so predicates like
+/// `WHERE a.id = 1` / `WHERE b.id = $x` resolve correctly. The bare
+/// root gets the first binding's id too, so `WHERE id = 1` (no alias
+/// prefix, backward-compatible) still matches the starting node. Node
+/// id always wins a collision with a payload field of the same name —
+/// a MATCH WHERE targets the graph node identifier, not an arbitrary
+/// user-defined "id" field.
 fn build_merged_payload(
     bindings: &[AliasBinding],
     first_payload: &serde_json::Value,
+    first_id: u64,
 ) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     if let Some(obj) = first_payload.as_object() {
@@ -433,10 +443,29 @@ fn build_merged_payload(
             map.insert(k.clone(), v.clone());
         }
     }
+    // Bare `id` at the root resolves to the starting node's id (node
+    // id wins over any payload field called "id").
+    map.insert("id".to_string(), serde_json::json!(first_id));
     for b in bindings {
-        map.insert(b.alias.clone(), b.payload.clone());
+        map.insert(b.alias.clone(), payload_with_id(&b.payload, b.id));
     }
     serde_json::Value::Object(map)
+}
+
+/// Clones `payload`, injecting the node `id` as a top-level field.
+///
+/// - `Null` / non-object payload → `{"id": <id>}`.
+/// - Object payload → same object with `"id"` set to the node id. Any
+///   pre-existing `"id"` field in the user payload is overwritten: the
+///   graph node identifier is the semantic anchor of a MATCH WHERE,
+///   never a coincidentally-named payload key.
+fn payload_with_id(payload: &serde_json::Value, id: u64) -> serde_json::Value {
+    let mut obj = match payload {
+        serde_json::Value::Object(map) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+    obj.insert("id".to_string(), serde_json::json!(id));
+    serde_json::Value::Object(obj)
 }
 
 /// Builds a single binding from a `(NodePattern, id, data)` triple.
