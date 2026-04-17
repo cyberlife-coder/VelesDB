@@ -224,3 +224,53 @@ fn test_wasm_database_default_trait() {
     let db = WasmDatabase::default();
     assert_eq!(db.inner.collection_count(), 0);
 }
+
+// =========================================================================
+// Metadata collection tests (S4-13)
+// =========================================================================
+
+#[test]
+fn test_create_metadata_collection_succeeds() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("docs")
+        .expect("test: metadata create should succeed");
+    assert_eq!(db.collection_count(), 1);
+    let store = db
+        .get_shared_store("docs")
+        .expect("test: metadata store retrievable");
+    assert_eq!(store.borrow().dimension(), 0);
+    assert!(store.borrow().is_metadata_only());
+}
+
+#[test]
+fn test_create_metadata_collection_duplicate_fails() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("docs")
+        .expect("test: first create");
+    let err = db.create_metadata_collection("docs");
+    assert!(err.is_err(), "duplicate metadata create should fail");
+}
+
+#[test]
+fn test_contains_reports_existing_collection() {
+    let mut db = DatabaseInner::new();
+    assert!(!db.contains("docs"));
+    db.create_metadata_collection("docs")
+        .expect("test: create");
+    assert!(db.contains("docs"));
+    assert!(!db.contains("ghost"));
+}
+
+#[test]
+fn test_collection_summaries_lists_vector_and_metadata() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("vecs", 4, "cosine")
+        .expect("test: vector");
+    db.create_metadata_collection("docs")
+        .expect("test: metadata");
+    let mut summaries = db.collection_summaries();
+    summaries.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(summaries[0], ("docs".to_string(), 0, true));
+    assert_eq!(summaries[1], ("vecs".to_string(), 4, false));
+}

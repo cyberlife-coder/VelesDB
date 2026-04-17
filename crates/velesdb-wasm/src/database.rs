@@ -55,6 +55,21 @@ impl DatabaseInner {
         Ok(())
     }
 
+    /// Creates a metadata-only collection (dimension = 0, no vectors).
+    ///
+    /// Useful for storing reference data, lookups, or auxiliary information
+    /// that does not require vector similarity search. Mirrors the Mobile
+    /// bindings surface (`create_metadata_collection`).
+    pub(crate) fn create_metadata_collection(&mut self, name: &str) -> Result<(), String> {
+        if self.collections.contains_key(name) {
+            return Err(format!("Collection '{name}' already exists"));
+        }
+        let store = store_new::create_metadata_only();
+        self.collections
+            .insert(name.to_owned(), Rc::new(RefCell::new(store)));
+        Ok(())
+    }
+
     fn delete_collection(&mut self, name: &str) -> Result<(), String> {
         if self.collections.remove(name).is_none() {
             return Err(format!("Collection '{name}' not found"));
@@ -66,11 +81,27 @@ impl DatabaseInner {
         self.collections.keys().cloned().collect()
     }
 
+    /// Returns `(name, dimension, is_metadata_only)` tuples for introspection.
+    pub(crate) fn collection_summaries(&self) -> Vec<(String, usize, bool)> {
+        self.collections
+            .iter()
+            .map(|(name, store)| {
+                let borrowed = store.borrow();
+                let dim = borrowed.dimension();
+                (name.clone(), dim, dim == 0)
+            })
+            .collect()
+    }
+
     fn get_shared_store(&self, name: &str) -> Result<SharedStore, String> {
         self.collections
             .get(name)
             .map(Rc::clone)
             .ok_or_else(|| format!("Collection '{name}' not found"))
+    }
+
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.collections.contains_key(name)
     }
 
     fn collection_count(&self) -> usize {
@@ -133,6 +164,21 @@ impl WasmDatabase {
     ) -> Result<(), JsValue> {
         self.inner
             .create_collection(name, dimension, metric)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Creates a metadata-only collection (no vectors, only payloads).
+    ///
+    /// A metadata-only collection accepts `INSERT`/`UPDATE`/`DELETE` via
+    /// `execute_query()` without requiring a `vector` column, making it the
+    /// ideal target for reference data, lookup tables, or auxiliary metadata.
+    ///
+    /// # Errors
+    /// Returns an error if the collection already exists.
+    #[wasm_bindgen(js_name = createMetadataCollection)]
+    pub fn create_metadata_collection(&mut self, name: &str) -> Result<(), JsValue> {
+        self.inner
+            .create_metadata_collection(name)
             .map_err(|e| JsValue::from_str(&e))
     }
 
