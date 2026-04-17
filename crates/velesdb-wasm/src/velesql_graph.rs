@@ -85,6 +85,11 @@ fn extend_labels_from_value(v: &serde_json::Value, labels: &mut Vec<String>) {
 }
 
 /// Executes `INSERT EDGE INTO g (source = …, target = …, label = '…', …)`.
+///
+/// Propagates the uniqueness error from
+/// [`crate::graph_store::WasmGraphStore::insert_edge`] when the caller
+/// supplies an explicit `id` that collides with an existing edge (Devin
+/// Review Finding J).
 pub(crate) fn insert_edge(
     db: &mut DatabaseInner,
     stmt: &InsertEdgeStatement,
@@ -98,7 +103,7 @@ pub(crate) fn insert_edge(
         stmt.target,
         stmt.label.clone(),
         payload,
-    );
+    )?;
     Ok(())
 }
 

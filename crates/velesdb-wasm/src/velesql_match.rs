@@ -14,6 +14,12 @@ use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
 
 /// Executes a MATCH query.
+///
+/// Only single-pattern MATCH is supported in the WASM executor. A query
+/// with multiple comma-separated patterns (e.g.
+/// `MATCH (a:X), (b:Y) RETURN a, b`) surfaces a clear error so callers
+/// know to use the persistent core backend (Devin Review Finding K) —
+/// rather than silently dropping all patterns after the first.
 pub(crate) fn execute_match(
     db: &mut DatabaseInner,
     query: &Query,
@@ -24,6 +30,13 @@ pub(crate) fn execute_match(
     };
     if clause.patterns.is_empty() {
         return Ok(Vec::new());
+    }
+    if clause.patterns.len() > 1 {
+        return Err(format!(
+            "Multi-pattern MATCH is not yet supported in WASM ({} patterns in this query). \
+             Use a single pattern or use core (persistence-enabled) for multi-pattern MATCH.",
+            clause.patterns.len()
+        ));
     }
     let pattern = &clause.patterns[0];
     match pattern.nodes.len() {

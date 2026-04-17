@@ -96,6 +96,15 @@ impl WasmGraphStore {
 
     /// Inserts a directed edge. If `explicit_id` is `Some`, uses it; else
     /// assigns the next monotonic id. Returns the final edge id.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when `explicit_id` collides with an edge already in the
+    /// store. Without this check, `delete_edge_by_id(n)` would delete every
+    /// duplicate at once — a data-integrity risk for user SQL like
+    /// `INSERT EDGE (id = 1, ...)` executed twice (Devin Review Finding J).
+    /// Auto-assigned ids (via `next_edge_id`) are always unique by
+    /// construction and never fail this check.
     pub(crate) fn insert_edge(
         &mut self,
         explicit_id: Option<u64>,
@@ -103,7 +112,14 @@ impl WasmGraphStore {
         target: u64,
         label: String,
         payload: Option<serde_json::Value>,
-    ) -> u64 {
+    ) -> Result<u64, String> {
+        if let Some(eid) = explicit_id {
+            if self.edges.iter().any(|e| e.id == eid) {
+                return Err(format!(
+                    "Edge id {eid} already exists; explicit edge ids must be unique"
+                ));
+            }
+        }
         let id = explicit_id.unwrap_or_else(|| {
             let next = self.next_edge_id;
             self.next_edge_id = self.next_edge_id.saturating_add(1);
@@ -123,7 +139,7 @@ impl WasmGraphStore {
             label,
             payload,
         });
-        id
+        Ok(id)
     }
 
     /// Deletes an edge by id. Returns `true` if an edge was removed.
@@ -205,15 +221,21 @@ mod tests {
     #[test]
     fn test_insert_edge_assigns_sequential_ids() {
         let mut g = WasmGraphStore::new();
-        let a = g.insert_edge(None, 1, 2, "KNOWS".to_string(), None);
-        let b = g.insert_edge(None, 2, 3, "KNOWS".to_string(), None);
+        let a = g
+            .insert_edge(None, 1, 2, "KNOWS".to_string(), None)
+            .expect("test: insert a");
+        let b = g
+            .insert_edge(None, 2, 3, "KNOWS".to_string(), None)
+            .expect("test: insert b");
         assert_eq!(a + 1, b);
     }
 
     #[test]
     fn test_delete_edge_returns_true_on_match() {
         let mut g = WasmGraphStore::new();
-        let id = g.insert_edge(None, 1, 2, "KNOWS".to_string(), None);
+        let id = g
+            .insert_edge(None, 1, 2, "KNOWS".to_string(), None)
+            .expect("test: insert");
         assert!(g.delete_edge_by_id(id));
         assert!(!g.delete_edge_by_id(id));
     }
@@ -221,8 +243,10 @@ mod tests {
     #[test]
     fn test_filter_edges_by_label() {
         let mut g = WasmGraphStore::new();
-        g.insert_edge(None, 1, 2, "KNOWS".to_string(), None);
-        g.insert_edge(None, 2, 3, "LIKES".to_string(), None);
+        g.insert_edge(None, 1, 2, "KNOWS".to_string(), None)
+            .expect("test: knows");
+        g.insert_edge(None, 2, 3, "LIKES".to_string(), None)
+            .expect("test: likes");
         let hits: Vec<_> = g.filter_edges(None, None, Some("KNOWS")).collect();
         assert_eq!(hits.len(), 1);
     }
@@ -230,9 +254,12 @@ mod tests {
     #[test]
     fn test_delete_edges_where() {
         let mut g = WasmGraphStore::new();
-        g.insert_edge(None, 1, 2, "KNOWS".to_string(), None);
-        g.insert_edge(None, 1, 3, "KNOWS".to_string(), None);
-        g.insert_edge(None, 2, 3, "LIKES".to_string(), None);
+        g.insert_edge(None, 1, 2, "KNOWS".to_string(), None)
+            .expect("test: e1");
+        g.insert_edge(None, 1, 3, "KNOWS".to_string(), None)
+            .expect("test: e2");
+        g.insert_edge(None, 2, 3, "LIKES".to_string(), None)
+            .expect("test: e3");
         let n = g.delete_edges_where(|e| e.source == 1);
         assert_eq!(n, 2);
         assert_eq!(g.edges().len(), 1);
@@ -251,8 +278,61 @@ mod tests {
     #[test]
     fn test_explicit_edge_id_updates_counter() {
         let mut g = WasmGraphStore::new();
-        g.insert_edge(Some(100), 1, 2, "X".to_string(), None);
-        let next = g.insert_edge(None, 2, 3, "Y".to_string(), None);
+        g.insert_edge(Some(100), 1, 2, "X".to_string(), None)
+            .expect("test: explicit id");
+        let next = g
+            .insert_edge(None, 2, 3, "Y".to_string(), None)
+            .expect("test: next");
         assert_eq!(next, 101);
+    }
+
+    // --- Finding J: duplicate explicit edge id rejection -----------------
+
+    #[test]
+    fn test_insert_edge_with_duplicate_explicit_id_returns_error() {
+        let mut g = WasmGraphStore::new();
+        g.insert_edge(Some(1), 1, 2, "KNOWS".to_string(), None)
+            .expect("test: first insert");
+        let err = g.insert_edge(Some(1), 3, 4, "KNOWS".to_string(), None);
+        assert!(err.is_err(), "duplicate explicit id must be rejected");
+        let msg = err.expect_err("test: err");
+        assert!(
+            msg.contains("already exists") && msg.contains('1'),
+            "error should mention existing id, got: {msg}"
+        );
+        // Store unchanged: only the first edge should exist.
+        assert_eq!(g.edges().len(), 1);
+    }
+
+    #[test]
+    fn test_insert_edge_with_auto_assigned_id_never_collides() {
+        // Auto-assigned ids are monotonic; even after an explicit id bumps
+        // `next_edge_id`, subsequent `None` inserts keep succeeding.
+        let mut g = WasmGraphStore::new();
+        g.insert_edge(Some(42), 1, 2, "KNOWS".to_string(), None)
+            .expect("test: explicit");
+        for src in 10..20u64 {
+            g.insert_edge(None, src, src + 1, "R".to_string(), None)
+                .expect("test: auto");
+        }
+        // 1 explicit + 10 auto = 11 edges, all distinct ids.
+        assert_eq!(g.edges().len(), 11);
+        let mut ids: Vec<u64> = g.edges().iter().map(|e| e.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 11, "every id must be unique");
+    }
+
+    #[test]
+    fn test_insert_edge_after_delete_can_reuse_same_explicit_id() {
+        let mut g = WasmGraphStore::new();
+        g.insert_edge(Some(7), 1, 2, "KNOWS".to_string(), None)
+            .expect("test: first");
+        assert!(g.delete_edge_by_id(7));
+        // Once freed, the explicit id is reusable.
+        g.insert_edge(Some(7), 5, 6, "KNOWS".to_string(), None)
+            .expect("test: reuse after delete");
+        assert_eq!(g.edges().len(), 1);
+        assert_eq!(g.edges()[0].source, 5);
     }
 }

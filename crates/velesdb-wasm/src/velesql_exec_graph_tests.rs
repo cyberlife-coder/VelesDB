@@ -1018,3 +1018,189 @@ fn test_match_where_payload_id_does_not_shadow_node_id() {
         r_shadow.rows_json()
     );
 }
+
+// =========================================================================
+// Regression: explicit graph edge ids must be unique
+// (Devin Review PR #594 Finding J — data integrity).
+// =========================================================================
+//
+// Before the fix, `WasmGraphStore::insert_edge` accepted duplicate explicit
+// ids. A second `INSERT EDGE INTO g (id = 1, ...)` appended a second edge
+// with id 1 to the store, and a subsequent `DELETE EDGE 1 FROM g` deleted
+// both at once — silent data loss. The fix rejects the duplicate at
+// insertion time with a clear error.
+
+#[test]
+fn test_bdd_insert_edge_duplicate_explicit_id_is_rejected() {
+    let mut db = DatabaseInner::new();
+    execute(
+        &mut db,
+        "INSERT EDGE INTO g (id = 1, source = 1, target = 2, label = 'KNOWS')",
+        None,
+    )
+    .expect("test: first edge");
+    let err = execute(
+        &mut db,
+        "INSERT EDGE INTO g (id = 1, source = 3, target = 4, label = 'KNOWS')",
+        None,
+    );
+    assert!(err.is_err(), "duplicate explicit id must be rejected");
+    let msg = err.expect_err("test: err");
+    assert!(
+        msg.contains("already exists") && msg.contains('1'),
+        "error should mention the colliding id, got: {msg}"
+    );
+    // Store unchanged: SELECT EDGES still returns exactly one edge.
+    let r = execute(&mut db, "SELECT EDGES FROM g", None).expect("test: select");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "failed duplicate insert must not have added a second edge, got: {}",
+        r.rows_json()
+    );
+    assert!(
+        r.rows_json().contains("\"source\":1"),
+        "the one surviving edge is the first inserted (source=1), got: {}",
+        r.rows_json()
+    );
+}
+
+#[test]
+fn test_bdd_insert_edge_auto_id_never_collides_with_explicit() {
+    // Mix explicit + auto ids: the auto counter is bumped past explicit
+    // values (see `next_edge_id` logic), so implicit inserts never
+    // collide — and each explicit insert only checks against the current
+    // edge set, not the historical counter.
+    let mut db = DatabaseInner::new();
+    execute(
+        &mut db,
+        "INSERT EDGE INTO g (id = 100, source = 1, target = 2, label = 'REL')",
+        None,
+    )
+    .expect("test: explicit 100");
+    for n in 0..5 {
+        execute(
+            &mut db,
+            &format!(
+                "INSERT EDGE INTO g (source = {src}, target = {tgt}, label = 'AUTO')",
+                src = n + 10,
+                tgt = n + 11
+            ),
+            None,
+        )
+        .expect("test: auto insert");
+    }
+    let r = execute(&mut db, "SELECT EDGES FROM g", None).expect("test: select");
+    assert_eq!(
+        r.row_count(),
+        6,
+        "1 explicit + 5 auto = 6 unique edges, got: {}",
+        r.rows_json()
+    );
+}
+
+#[test]
+fn test_bdd_insert_edge_after_delete_can_reuse_explicit_id() {
+    // Non-regression + semantic: once an explicit id is freed via
+    // DELETE EDGE, a subsequent INSERT EDGE with the same explicit id is
+    // accepted (the uniqueness check is against the CURRENT edge set).
+    let mut db = DatabaseInner::new();
+    execute(
+        &mut db,
+        "INSERT EDGE INTO g (id = 7, source = 1, target = 2, label = 'KNOWS')",
+        None,
+    )
+    .expect("test: first");
+    execute(&mut db, "DELETE EDGE 7 FROM g", None).expect("test: delete");
+    // Id 7 is now free — re-inserting it must succeed.
+    execute(
+        &mut db,
+        "INSERT EDGE INTO g (id = 7, source = 5, target = 6, label = 'KNOWS')",
+        None,
+    )
+    .expect("test: reuse after delete");
+    let r = execute(&mut db, "SELECT EDGES FROM g", None).expect("test: select");
+    assert_eq!(r.row_count(), 1);
+    assert!(
+        r.rows_json().contains("\"source\":5"),
+        "reused edge must carry the new source, got: {}",
+        r.rows_json()
+    );
+}
+
+// =========================================================================
+// Regression: multi-pattern MATCH must surface a clear error
+// (Devin Review PR #594 Finding K — silent partial execution).
+// =========================================================================
+//
+// Before the fix, `execute_match` only considered `clause.patterns[0]`.
+// A query like `MATCH (a:X), (b:Y) RETURN a, b` silently dropped `(b:Y)`
+// and returned rows from the first pattern alone. The fix fails loud
+// when `clause.patterns.len() > 1`, pointing callers at the persistent
+// core backend.
+
+#[test]
+fn test_bdd_match_single_pattern_works() {
+    // Non-regression: single-pattern MATCH keeps its behaviour.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b LIMIT 10",
+        None,
+    )
+    .expect("test: single pattern");
+    assert_eq!(r.row_count(), 2);
+}
+
+#[test]
+fn test_bdd_match_multi_pattern_returns_clear_error() {
+    // The public VelesQL parser today returns `patterns.len() == 1` for
+    // every successful MATCH parse (see
+    // `parser::match_patterns::parse_pattern_list`). That makes Finding
+    // K's silent-ignore scenario unreachable via SQL alone — but the
+    // AST type signature (`patterns: Vec<GraphPattern>`) still allows a
+    // future parser or a programmatic caller to hand the executor a
+    // multi-pattern MATCH. This test exercises that code path directly
+    // by building the AST, ensuring the executor fails loud rather than
+    // silently dropping additional patterns.
+    use std::collections::HashMap;
+    use velesdb_core::velesql::{GraphPattern, NodePattern, Parser};
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    // Start from a valid single-pattern query so every other field
+    // (RETURN, LIMIT, etc.) is well-formed.
+    let mut parsed = Parser::parse("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b LIMIT 10")
+        .expect("test: parse baseline");
+    // Inject a second pattern so `patterns.len() == 2`.
+    let clause = parsed.match_clause.as_mut().expect("test: has match");
+    let second = GraphPattern {
+        name: None,
+        nodes: vec![NodePattern {
+            alias: Some("c".to_string()),
+            labels: vec!["Person".to_string()],
+            properties: HashMap::new(),
+            collection: None,
+        }],
+        relationships: Vec::new(),
+    };
+    clause.patterns.push(second);
+    assert_eq!(clause.patterns.len(), 2, "test fixture pre-condition");
+
+    let err = crate::velesql_graph::execute_match(
+        &mut db,
+        &parsed,
+        &crate::velesql_value::parse_params(None).expect("test: params"),
+    );
+    assert!(err.is_err(), "multi-pattern MATCH must be rejected loud");
+    let msg = err.expect_err("test: err");
+    assert!(
+        msg.contains("Multi-pattern MATCH") || msg.contains("multi-pattern"),
+        "error must describe the unsupported feature, got: {msg}"
+    );
+    // The error must also point the user at the persistent core backend.
+    assert!(
+        msg.contains("core") || msg.contains("persistence"),
+        "error should reference the persistence-enabled backend, got: {msg}"
+    );
+}

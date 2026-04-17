@@ -276,7 +276,9 @@ fn test_delete_collection_also_drops_associated_graph_store() {
     // Populate the graph store.
     let g = db.graph_store("g");
     g.borrow_mut().upsert_node(1, None, vec!["Person".into()]);
-    g.borrow_mut().insert_edge(None, 1, 2, "KNOWS".into(), None);
+    g.borrow_mut()
+        .insert_edge(None, 1, 2, "KNOWS".into(), None)
+        .expect("test: insert edge");
     drop(g);
     assert!(
         db.has_graph_store("g"),
@@ -324,7 +326,9 @@ fn test_clear_graph_store_empties_existing_graph() {
     db.create_metadata_collection("g").expect("test: create");
     let g = db.graph_store("g");
     g.borrow_mut().upsert_node(1, None, vec![]);
-    g.borrow_mut().insert_edge(None, 1, 2, "R".into(), None);
+    g.borrow_mut()
+        .insert_edge(None, 1, 2, "R".into(), None)
+        .expect("test: insert edge");
     drop(g);
 
     db.clear_graph_store("g");
