@@ -17,7 +17,7 @@ use crate::velesql_value::Params;
 pub(crate) fn execute_match(
     db: &mut DatabaseInner,
     query: &Query,
-    _params: &Params,
+    params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
     let Some(clause) = query.match_clause.as_ref() else {
         return Err("MATCH clause missing".to_string());
@@ -27,9 +27,9 @@ pub(crate) fn execute_match(
     }
     let pattern = &clause.patterns[0];
     match pattern.nodes.len() {
-        1 => execute_single_node(db, clause, pattern),
-        2 => execute_1_hop(db, clause, pattern),
-        3 => execute_2_hop(db, clause, pattern),
+        1 => execute_single_node(db, clause, pattern, params),
+        2 => execute_1_hop(db, clause, pattern, params),
+        3 => execute_2_hop(db, clause, pattern, params),
         _ => Err(format!(
             "MATCH patterns with more than 2 hops are not yet supported in WASM ({} nodes)",
             pattern.nodes.len()
@@ -41,6 +41,7 @@ fn execute_single_node(
     db: &mut DatabaseInner,
     clause: &MatchClause,
     pattern: &GraphPattern,
+    params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
     let node = &pattern.nodes[0];
     let label = first_label(node);
@@ -54,7 +55,7 @@ fn execute_single_node(
             continue;
         };
         let bindings = [make_binding(node, nid, node_data, "a")];
-        if !matches_where_in_match_scope(clause.where_clause.as_ref(), &bindings) {
+        if !matches_where_in_match_scope(clause.where_clause.as_ref(), &bindings, params)? {
             continue;
         }
         if (out.len() as u64) >= limit {
@@ -69,6 +70,7 @@ fn execute_1_hop(
     db: &mut DatabaseInner,
     clause: &MatchClause,
     pattern: &GraphPattern,
+    params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
     if pattern.relationships.len() != 1 {
         return Err(format!(
@@ -93,6 +95,7 @@ fn execute_1_hop(
             sid,
             &ctx,
             clause.where_clause.as_ref(),
+            params,
             limit,
             &mut out,
         )?;
@@ -111,11 +114,13 @@ struct OneHopContext<'p> {
     lb: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn expand_one_hop(
     store: &WasmGraphStore,
     sid: u64,
     ctx: &OneHopContext<'_>,
     where_clause: Option<&Condition>,
+    params: &Params,
     limit: u64,
     out: &mut Vec<QueryResultRow>,
 ) -> Result<(), String> {
@@ -135,7 +140,7 @@ fn expand_one_hop(
             make_binding(ctx.na, sid, a_node, "a"),
             make_binding(ctx.nb, other, b_node, "b"),
         ];
-        if !matches_where_in_match_scope(where_clause, &bindings) {
+        if !matches_where_in_match_scope(where_clause, &bindings, params)? {
             continue;
         }
         if (out.len() as u64) >= limit {
@@ -198,6 +203,7 @@ fn execute_2_hop(
     db: &mut DatabaseInner,
     clause: &MatchClause,
     pattern: &GraphPattern,
+    params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
     if pattern.relationships.len() != 2 {
         return Err(format!(
@@ -212,7 +218,7 @@ fn execute_2_hop(
     let where_clause = clause.where_clause.as_ref();
     let mut out = Vec::new();
     for a_id in borrowed.candidate_nodes(ctx.la.as_deref()) {
-        expand_from_a(&borrowed, a_id, &ctx, where_clause, limit, &mut out)?;
+        expand_from_a(&borrowed, a_id, &ctx, where_clause, params, limit, &mut out)?;
         if (out.len() as u64) >= limit {
             break;
         }
@@ -246,11 +252,13 @@ impl<'p> TwoHopContext<'p> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn expand_from_a(
     store: &WasmGraphStore,
     a_id: u64,
     ctx: &TwoHopContext<'_>,
     where_clause: Option<&Condition>,
+    params: &Params,
     limit: u64,
     out: &mut Vec<QueryResultRow>,
 ) -> Result<(), String> {
@@ -262,7 +270,17 @@ fn expand_from_a(
         if !matches_label(b_node, ctx.lb.as_deref()) {
             continue;
         }
-        expand_from_b(store, a_id, b_id, b_node, ctx, where_clause, limit, out)?;
+        expand_from_b(
+            store,
+            a_id,
+            b_id,
+            b_node,
+            ctx,
+            where_clause,
+            params,
+            limit,
+            out,
+        )?;
         if (out.len() as u64) >= limit {
             return Ok(());
         }
@@ -278,6 +296,7 @@ fn expand_from_b(
     b_node: &WasmGraphNode,
     ctx: &TwoHopContext<'_>,
     where_clause: Option<&Condition>,
+    params: &Params,
     limit: u64,
     out: &mut Vec<QueryResultRow>,
 ) -> Result<(), String> {
@@ -299,7 +318,7 @@ fn expand_from_b(
             make_binding(ctx.nb, b_id, b_node, "b"),
             make_binding(ctx.nc, c_id, c_node, "c"),
         ];
-        if !matches_where_in_match_scope(where_clause, &bindings) {
+        if !matches_where_in_match_scope(where_clause, &bindings, params)? {
             continue;
         }
         if (out.len() as u64) >= limit {
@@ -373,19 +392,26 @@ struct AliasBinding {
 /// An unbound alias prefix (`z.x` with no binding `z`) silently yields
 /// `false` via the same "missing column" semantics that
 /// `velesql_where::matches` already applies to missing payload fields.
+///
+/// `params` is the query-level parameter map, threaded through the MATCH
+/// executor so `$param` placeholders inside the WHERE clause resolve to
+/// their bound JSON value. An unbound `$param` surfaces as an `Err` from
+/// the inner matcher and is propagated up to the caller of
+/// `execute_match` (no silent zero-row result).
 fn matches_where_in_match_scope(
     where_clause: Option<&Condition>,
     bindings: &[AliasBinding],
-) -> bool {
+    params: &Params,
+) -> Result<bool, String> {
     let Some(cond) = where_clause else {
-        return true;
+        return Ok(true);
     };
     let Some(first) = bindings.first() else {
         // Defensive: a MATCH always has at least one bound node.
-        return false;
+        return Ok(false);
     };
     let merged = build_merged_payload(bindings, &first.payload);
-    crate::velesql_where::matches(cond, first.id, Some(&merged), &Params::new()).unwrap_or(false)
+    crate::velesql_where::matches(cond, first.id, Some(&merged), params)
 }
 
 /// Builds a flat JSON object suitable for alias-scoped WHERE evaluation.

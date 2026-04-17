@@ -758,3 +758,114 @@ fn test_eval_not_in_present_column_still_excludes_matches() {
         "Bob (Lyon) must be filtered, got: {rows}"
     );
 }
+
+// =========================================================================
+// Regression: MATCH WHERE threads query `$params` through the scope
+// (Devin Review PR #594 Finding A — BUG).
+// =========================================================================
+//
+// Before the fix, `execute_match` accepted the `Params` map but dropped
+// it on the floor: `matches_where_in_match_scope` hardcoded a fresh
+// `Params::new()` when calling `velesql_where::matches`. Any
+// `$placeholder` inside a MATCH WHERE silently resolved to nothing and
+// the row count collapsed to zero. The fix threads `&Params` through
+// `execute_single_node`, `execute_1_hop`, `execute_2_hop`,
+// `expand_one_hop`, `expand_from_a`, and `expand_from_b` down to the
+// matcher, and converts the return type to `Result<bool, String>` so
+// that an unbound parameter surfaces as an error instead of a zero-row
+// result.
+
+#[test]
+fn test_match_where_with_param_on_first_node() {
+    // `WHERE a.name = $name` + params `{"name":"Alice"}` must return
+    // Alice's outgoing KNOWS edge. Before the fix: 0 rows.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.name = $name RETURN a, b LIMIT 10",
+        Some(r#"{"name":"Alice"}"#),
+    )
+    .expect("test: param on first node");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "Alice-KNOWS-Bob is the only edge matching a.name=$name, got: {}",
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(rows.contains("\"name\":\"Alice\""), "a is Alice: {rows}");
+    assert!(rows.contains("\"name\":\"Bob\""), "b is Bob: {rows}");
+}
+
+#[test]
+fn test_match_where_with_param_on_second_node() {
+    // Parameters on the non-starting node's predicate also resolve,
+    // proving the params map is threaded through every expansion layer.
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE b.name = $bname RETURN a, b LIMIT 10",
+        Some(r#"{"bname":"Carol"}"#),
+    )
+    .expect("test: param on second node");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "Bob-KNOWS-Carol is the only edge matching b.name=$bname, got: {}",
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(rows.contains("\"name\":\"Bob\""), "a is Bob: {rows}");
+    assert!(rows.contains("\"name\":\"Carol\""), "b is Carol: {rows}");
+}
+
+#[test]
+fn test_match_where_with_multiple_params() {
+    // AND between two parameterised predicates exercises the full
+    // `eval_and` + `resolve_value` path with both sides needing params.
+    let mut db = DatabaseInner::new();
+    seed_cities_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.city = $a_city AND b.city = $b_city RETURN a, b LIMIT 10",
+        Some(r#"{"a_city":"Paris","b_city":"Lyon"}"#),
+    )
+    .expect("test: two params");
+    assert_eq!(
+        r.row_count(),
+        1,
+        "only Alice(Paris)->Bob(Lyon) matches both params, got: {}",
+        r.rows_json()
+    );
+    let rows = r.rows_json();
+    assert!(rows.contains("\"name\":\"Alice\""));
+    assert!(rows.contains("\"name\":\"Bob\""));
+    assert!(
+        !rows.contains("\"name\":\"Carol\""),
+        "Alice->Carol (Paris->Paris) must be filtered out, got: {rows}"
+    );
+}
+
+#[test]
+fn test_match_where_missing_param_returns_error() {
+    // Negative: referencing an unbound `$param` must surface as an
+    // `Err`, not as a silent zero-row result. Before the fix this was
+    // impossible to detect because `matches_where_in_match_scope`
+    // swallowed the error via `.unwrap_or(false)` on a fresh empty
+    // params map (so every row looked "missing-param → false").
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let err = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.name = $unknown RETURN a, b LIMIT 10",
+        Some("{}"),
+    );
+    assert!(err.is_err(), "unbound $unknown must be an error");
+    let msg = err.expect_err("test: err");
+    assert!(
+        msg.contains("$unknown") || msg.contains("not bound"),
+        "error should mention the unbound parameter, got: {msg}"
+    );
+}
