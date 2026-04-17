@@ -76,7 +76,20 @@ fn execute_plain(
 /// Bundles the payload + similarity filters applied row-wise by the SELECT
 /// pipeline. Keeps `execute_plain` and `execute_vector_search` readable
 /// without duplicating the row-check boilerplate.
+///
+/// Two condition views are kept:
+///
+/// - `normalized`: the full WHERE clause after [`push_not_inward`]. Still
+///   contains `Similarity(_)` leaves; evaluated row-wise via
+///   [`velesql_similarity::evaluate_where_with_similarity`] so boolean
+///   composition (AND / OR / NOT) around similarity stays correct —
+///   notably for De-Morgan-rewritten compounds like
+///   `NOT (sim > t AND x = 1)` ⇒ `sim <= t OR x != 1`.
+/// - `residual`: the normalized clause with every `Similarity(_)` leaf
+///   stripped out. Used by the fusion path's "payload branch" where we
+///   only want rows matching the non-vector, non-similarity predicates.
 struct WhereFilters {
+    normalized: Option<Condition>,
     residual: Option<Condition>,
     eval: Option<SimilarityEvaluator>,
 }
@@ -97,13 +110,18 @@ impl WhereFilters {
             Some(already_stripped) => already_stripped,
             None => stmt.where_clause.clone(),
         };
-        let similarity_cond = velesql_similarity::find_similarity(base.as_ref());
-        let residual = velesql_similarity::strip_similarity(base.as_ref());
+        let normalized = base.map(crate::velesql_logic::push_not_inward);
+        let similarity_cond = velesql_similarity::find_similarity(normalized.as_ref());
+        let residual = velesql_similarity::strip_similarity(normalized.as_ref());
         let eval = similarity_cond
             .as_ref()
             .map(|c| SimilarityEvaluator::new(db, &stmt.from, c, params))
             .transpose()?;
-        Ok(Self { residual, eval })
+        Ok(Self {
+            normalized,
+            residual,
+            eval,
+        })
     }
 
     fn passes(
@@ -111,20 +129,20 @@ impl WhereFilters {
         id: u64,
         payload: Option<&serde_json::Value>,
         idx: usize,
-        store: &crate::vector_store::VectorStore,
+        _store: &crate::vector_store::VectorStore,
         params: &Params,
     ) -> Result<bool, String> {
-        if let Some(cond) = self.residual.as_ref() {
-            if !velesql_where::matches(cond, id, payload, params)? {
-                return Ok(false);
-            }
-        }
-        if let Some(eval) = self.eval.as_ref() {
-            if !eval.passes(store, idx) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        let Some(cond) = self.normalized.as_ref() else {
+            return Ok(true);
+        };
+        velesql_similarity::evaluate_where_with_similarity(
+            cond,
+            id,
+            payload,
+            idx,
+            self.eval.as_ref(),
+            params,
+        )
     }
 }
 

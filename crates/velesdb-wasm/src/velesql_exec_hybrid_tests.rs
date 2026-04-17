@@ -274,3 +274,141 @@ fn test_similarity_plain_without_not_is_unchanged() {
     // ids 1 and 2 are > 0.5.
     assert_eq!(r.row_count(), 2);
 }
+
+// =========================================================================
+// De Morgan over compound NOT (finding F) — end-to-end semantics
+// =========================================================================
+//
+// These tests pin the De Morgan rewrite applied by
+// `velesql_logic::push_not_inward`. They all use the 4-row fixture
+// from `db_with_vectors()`:
+//
+// | id | vec                  | cat |  sim vs [1,0,0,0] |
+// |----|----------------------|-----|-------------------|
+// |  1 | [1.0, 0, 0, 0]       | 'a' |   1.0             |
+// |  2 | [0.9, 0.1, 0, 0]     | 'a' |   ~0.9939         |
+// |  3 | [0, 1.0, 0, 0]       | 'b' |   0.0             |
+// |  4 | [0, 0, 1.0, 0]       | 'b' |   0.0             |
+
+#[test]
+fn test_not_compound_similarity_and_predicate_is_demorgan_distributed() {
+    // `NOT (sim > 0.5 AND cat = 'a')` must distribute to
+    // `sim <= 0.5 OR cat != 'a'` — the pre-fix implementation kept the
+    // un-flipped similarity in the extractor AND left `NOT (cat='a')`
+    // as residual, producing `sim > 0.5 AND cat != 'a'` (= row 2 only).
+    //
+    // Correct answer: rows where (sim <= 0.5) OR (cat != 'a')
+    //   id 1: sim=1.0 (no) OR cat='a' (no) → false
+    //   id 2: sim≈0.99 (no) OR cat='a' (no) → false
+    //   id 3: sim=0.0 (yes) → true
+    //   id 4: sim=0.0 (yes) → true
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE NOT (similarity(vector, $q) > 0.5 AND cat = 'a') LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: NOT (sim AND pred)");
+    assert_eq!(r.row_count(), 2);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&3));
+    assert!(ids.contains(&4));
+}
+
+#[test]
+fn test_not_compound_similarity_or_predicate_is_demorgan_distributed() {
+    // `NOT (sim > 0.5 OR cat = 'b')` must distribute to
+    // `sim <= 0.5 AND cat != 'b'`.
+    //   id 1: sim=1.0 → sim<=0.5 false → false
+    //   id 2: sim≈0.99 → sim<=0.5 false → false
+    //   id 3: cat='b' → cat!='b' false → false
+    //   id 4: cat='b' → cat!='b' false → false
+    // Expected: 0 rows.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE NOT (similarity(vector, $q) > 0.5 OR cat = 'b') LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: NOT (sim OR pred)");
+    assert_eq!(r.row_count(), 0);
+}
+
+#[test]
+fn test_not_double_negation_simplifies() {
+    // `NOT NOT (sim > 0.5)` must collapse to `sim > 0.5`, keeping ids 1 and 2.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE NOT (NOT similarity(vector, $q) > 0.5) LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: NOT NOT sim > 0.5");
+    assert_eq!(r.row_count(), 2);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+}
+
+#[test]
+fn test_not_nested_compound_with_similarity() {
+    // `NOT (cat = 'a' OR (id = 3 AND sim > 0.5))`
+    //   → `cat != 'a' AND (id != 3 OR sim <= 0.5)`
+    //   id 1: cat='a' → cat!='a' false → false
+    //   id 2: cat='a' → cat!='a' false → false
+    //   id 3: cat!='a' (true) AND (id!=3 (false) OR sim<=0.5 (true, sim=0))
+    //         → true AND (false OR true) → true
+    //   id 4: cat!='a' (true) AND (id!=3 (true) OR sim<=0.5 (true))
+    //         → true AND true → true
+    // Expected: ids 3 and 4.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE NOT (cat = 'a' OR (id = 3 AND similarity(vector, $q) > 0.5)) LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: deep nested NOT");
+    assert_eq!(r.row_count(), 2);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&3));
+    assert!(ids.contains(&4));
+}
+
+#[test]
+fn test_not_simple_predicate_without_similarity_still_correct() {
+    // Non-regression: `NOT (cat = 'a' AND id = 1)` on a metadata-only
+    // collection (no similarity at all) must still produce the correct
+    // De Morgan expansion: `cat != 'a' OR id != 1`.
+    //
+    // Fixture: 3 rows with cats 'a', 'a', 'b' at ids 1, 2, 3.
+    //   id 1 cat='a': cat!='a' false OR id!=1 false → false
+    //   id 2 cat='a': cat!='a' false OR id!=1 true  → true
+    //   id 3 cat='b': cat!='b' (true, since b!=a) OR id!=1 true → true
+    // Expected: ids 2 and 3.
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("m").expect("test: create");
+    execute(
+        &mut db,
+        "INSERT INTO m (id, cat) VALUES (1, 'a'), (2, 'a'), (3, 'b')",
+        None,
+    )
+    .expect("test: seed");
+    let r = execute(
+        &mut db,
+        "SELECT * FROM m WHERE NOT (cat = 'a' AND id = 1) LIMIT 10",
+        None,
+    )
+    .expect("test: NOT (cat AND id)");
+    assert_eq!(r.row_count(), 2);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&2));
+    assert!(ids.contains(&3));
+}

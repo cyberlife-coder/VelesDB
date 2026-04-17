@@ -85,6 +85,7 @@ mod velesql_helpers;
 mod velesql_insert;
 mod velesql_introspection;
 mod velesql_join;
+mod velesql_logic;
 mod velesql_match;
 mod velesql_orderby;
 mod velesql_result;

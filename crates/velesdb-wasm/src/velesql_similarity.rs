@@ -10,54 +10,60 @@
 use velesdb_core::velesql::{CompareOp, Condition, SimilarityCondition};
 
 use crate::database::DatabaseInner;
-use crate::vector_store::VectorStore;
+use crate::velesql_logic::push_not_inward;
 use crate::velesql_value::{resolve_vector, Params};
-
-// VectorStore is used in the `passes()` signature for future-proofing (e.g.
-// lazy per-row evaluation); keep the parameter to avoid breaking callers.
-const _: fn(&VectorStore) = |_s| {};
 
 /// Walks the condition tree and returns the first `similarity()` predicate.
 ///
-/// A `NOT similarity(v, $q) <op> t` subtree surfaces as a `Similarity`
-/// with the operator flipped by [`flip_similarity_op`] so the caller
-/// (typically [`SimilarityEvaluator`]) applies the correct polarity.
-/// Without this rewrite, the naive walker would descend into the `NOT`
-/// wrapper and return the un-flipped inner similarity, silently
-/// inverting the user's intent.
+/// The input is first passed through [`push_not_inward`] so every `NOT`
+/// is pushed all the way down to leaves via De Morgan distribution. As
+/// a result this walker only ever encounters bare `Similarity(_)`
+/// leaves (with the operator already flipped if the original query
+/// wrapped them in one or more `NOT`s) — no special-case handling for
+/// `NOT Similarity(...)` is needed here. This correctly covers all
+/// compound forms such as `NOT (sim > 0.5 AND x = 1)`, which
+/// De-Morgan-rewrites to `sim <= 0.5 OR x != 1` before the walk.
 ///
-/// Returns an owned `SimilarityCondition` because the flipped form is
-/// synthesized on the fly and has no home in the original AST.
+/// Returns an owned `SimilarityCondition` because [`push_not_inward`]
+/// may have synthesized a flipped-op form that has no home in the
+/// caller's borrowed AST.
 pub(crate) fn find_similarity(cond: Option<&Condition>) -> Option<SimilarityCondition> {
-    let cond = cond?;
+    cond.cloned()
+        .map(push_not_inward)
+        .as_ref()
+        .and_then(find_similarity_normalized)
+}
+
+/// Recursive walk over a condition that is already De-Morgan-normalized:
+/// every `NOT` wraps a negation-agnostic leaf (`LIKE`, `BETWEEN`, ...),
+/// and no `NOT` wraps a compound or a `Similarity`. See
+/// [`find_similarity`] for the normalization contract.
+fn find_similarity_normalized(cond: &Condition) -> Option<SimilarityCondition> {
     match cond {
         Condition::Similarity(s) => Some(s.clone()),
         Condition::And(l, r) | Condition::Or(l, r) => {
-            find_similarity(Some(l)).or_else(|| find_similarity(Some(r)))
+            find_similarity_normalized(l).or_else(|| find_similarity_normalized(r))
         }
-        Condition::Not(inner) => {
-            if let Condition::Similarity(s) = inner.as_ref() {
-                let mut flipped = s.clone();
-                flipped.operator = flip_similarity_op(s.operator);
-                return Some(flipped);
-            }
-            find_similarity(Some(inner))
-        }
-        Condition::Group(inner) => find_similarity(Some(inner)),
+        Condition::Not(inner) | Condition::Group(inner) => find_similarity_normalized(inner),
         _ => None,
     }
 }
 
 /// Returns the condition with every `similarity()` predicate removed.
 ///
-/// The input is first passed through [`normalize_not_similarity`] so
-/// any `NOT similarity(...)` subtree is rewritten into a regular
-/// `similarity(flipped-op, ...)` predicate. Without this normalization,
-/// the strip would return `None.map(Not)` = `None`, dropping the whole
-/// subtree and silently flipping the polarity (see [`flip_similarity_op`]
-/// for the rationale).
+/// The input is first passed through [`push_not_inward`] so NOT is
+/// De-Morgan-distributed before stripping. Without this, a compound
+/// NOT like `NOT (sim > 0.5 AND x = 1)` would recurse into the NOT
+/// wrapper, collapse the inner similarity to `None`, and leave
+/// `NOT(x = 1)` as residual — semantically equivalent to
+/// `sim > 0.5 AND NOT(x = 1)` instead of the correct
+/// `sim <= 0.5 OR x != 1`.
+///
+/// Once normalized, the strip pass only sees bare `Similarity(_)`
+/// leaves, which [`strip_condition_if`] removes while preserving the
+/// surrounding And/Or/Not/Group structure.
 pub(crate) fn strip_similarity(cond: Option<&Condition>) -> Option<Condition> {
-    let normalized = cond.map(normalize_not_similarity);
+    let normalized = cond.cloned().map(push_not_inward);
     strip_condition_if(normalized.as_ref(), &|c| {
         matches!(c, Condition::Similarity(_))
     })
@@ -100,48 +106,12 @@ where
     }
 }
 
-/// Rewrites `NOT similarity(v, $q) <op> t` into `similarity(v, $q) <flipped-op> t`.
-///
-/// Without this rewrite, `strip_condition_if` over `NOT similarity(...)`
-/// would recurse into the `NOT` wrapper, strip the inner similarity to
-/// `None`, and `None.map(Not)` collapses back to `None` — dropping the
-/// whole NOT subtree silently. The companion [`find_similarity`] would
-/// then return the un-flipped inner similarity and the executor would
-/// apply the threshold with the wrong polarity (e.g. `NOT sim > 0.5`
-/// would behave like `sim > 0.5` instead of `sim <= 0.5`).
-///
-/// The normalization is local: only `NOT` directly wrapping a
-/// `Similarity` is rewritten. `NOT (similarity(...) AND x = 1)` is NOT
-/// distributed (that would require full De-Morgan rewriting), and the
-/// residual error surface is unchanged for non-similarity NOT subtrees.
-pub(crate) fn normalize_not_similarity(cond: &Condition) -> Condition {
-    match cond {
-        Condition::Not(inner) => {
-            if let Condition::Similarity(sim) = inner.as_ref() {
-                let mut flipped = sim.clone();
-                flipped.operator = flip_similarity_op(sim.operator);
-                return Condition::Similarity(flipped);
-            }
-            Condition::Not(Box::new(normalize_not_similarity(inner)))
-        }
-        Condition::And(l, r) => Condition::And(
-            Box::new(normalize_not_similarity(l)),
-            Box::new(normalize_not_similarity(r)),
-        ),
-        Condition::Or(l, r) => Condition::Or(
-            Box::new(normalize_not_similarity(l)),
-            Box::new(normalize_not_similarity(r)),
-        ),
-        Condition::Group(inner) => Condition::Group(Box::new(normalize_not_similarity(inner))),
-        other => other.clone(),
-    }
-}
-
 /// Flips a comparison operator to its logical complement.
 ///
-/// Used by [`normalize_not_similarity`] to rewrite a `NOT` around a
-/// similarity predicate as a flipped-operator similarity. `CompareOp`
-/// is `#[non_exhaustive]`; unknown variants fall back to the input
+/// Used by [`push_not_inward`](crate::velesql_logic::push_not_inward)
+/// and the similarity-specific rewrites to negate a `similarity()`
+/// predicate without rebuilding its surrounding AST. `CompareOp` is
+/// `#[non_exhaustive]`; unknown variants fall back to the input
 /// (identity) rather than panicking — deterministic and auditable via
 /// the existing similarity tests.
 pub(crate) fn flip_similarity_op(op: CompareOp) -> CompareOp {
@@ -171,12 +141,11 @@ where
 
 /// Holds pre-computed similarity scores by row index for fast filtering.
 ///
-/// Scores are computed once at construction time against the full collection
-/// so `passes(idx)` is an O(1) lookup instead of re-running the metric
-/// kernel for every row in the scan loop.
+/// Scores are computed once at construction time against the full
+/// collection so [`Self::passes_with_cond`] is an O(1) lookup instead
+/// of re-running the metric kernel for every row in the scan loop.
 #[derive(Debug)]
 pub(crate) struct SimilarityEvaluator {
-    cond: SimilarityCondition,
     /// Score at row `i` for the pre-resolved query vector.
     scores: Vec<f32>,
 }
@@ -218,19 +187,22 @@ impl SimilarityEvaluator {
             borrowed.storage_mode,
         );
         let scores = scored.into_iter().map(|(_, s)| s).collect();
-        Ok(Self {
-            cond: cond.clone(),
-            scores,
-        })
+        Ok(Self { scores })
     }
 
-    /// Returns `true` if the vector at row `idx` passes the similarity test.
-    pub(crate) fn passes(&self, _store: &VectorStore, idx: usize) -> bool {
+    /// Returns `true` if the given `sim` predicate passes at row `idx`.
+    ///
+    /// Used by [`evaluate_where_with_similarity`] when it encounters a
+    /// `Similarity` leaf. The score cache is reused so we don't recompute
+    /// vectors per row; the operator and threshold come from the AST
+    /// node so rewrites by [`push_not_inward`] (e.g. `>` flipped to `<=`
+    /// under a NOT) surface with the right polarity without mutating
+    /// the evaluator.
+    pub(crate) fn passes_with_cond(&self, cond: &SimilarityCondition, idx: usize) -> bool {
         let score = self.scores.get(idx).copied().unwrap_or(0.0);
-        let op = self.cond.operator;
         #[allow(clippy::cast_possible_truncation)]
-        let threshold = self.cond.threshold as f32;
-        match op {
+        let threshold = cond.threshold as f32;
+        match cond.operator {
             CompareOp::Gt => score > threshold,
             CompareOp::Gte => score >= threshold,
             CompareOp::Lt => score < threshold,
@@ -239,6 +211,59 @@ impl SimilarityEvaluator {
             CompareOp::NotEq => (score - threshold).abs() >= f32::EPSILON,
             _ => false,
         }
+    }
+}
+
+/// Evaluates a WHERE condition against a row, treating `Similarity`
+/// leaves as an inline dispatch to `eval` (when provided).
+///
+/// This keeps the boolean composition (AND / OR / NOT) semantically
+/// correct even when a similarity predicate sits inside an OR or deep
+/// under a De-Morgan-rewritten NOT — which the previous "strip
+/// similarity out + AND with evaluator" composition got wrong (it
+/// always conjoined, so `OR sim` collapsed to `AND sim`).
+///
+/// Non-similarity leaves delegate to [`crate::velesql_where::matches`]
+/// for identical semantics. The input `cond` is expected to already
+/// be De-Morgan-normalized via [`push_not_inward`]; callers that build
+/// the condition through [`find_similarity`] / [`strip_similarity`]
+/// do this automatically.
+pub(crate) fn evaluate_where_with_similarity(
+    cond: &Condition,
+    id: u64,
+    payload: Option<&serde_json::Value>,
+    idx: usize,
+    eval: Option<&SimilarityEvaluator>,
+    params: &Params,
+) -> Result<bool, String> {
+    match cond {
+        Condition::And(l, r) => Ok(evaluate_where_with_similarity(
+            l, id, payload, idx, eval, params,
+        )? && evaluate_where_with_similarity(
+            r, id, payload, idx, eval, params,
+        )?),
+        Condition::Or(l, r) => Ok(evaluate_where_with_similarity(
+            l, id, payload, idx, eval, params,
+        )? || evaluate_where_with_similarity(
+            r, id, payload, idx, eval, params,
+        )?),
+        Condition::Not(inner) => Ok(!evaluate_where_with_similarity(
+            inner, id, payload, idx, eval, params,
+        )?),
+        Condition::Group(inner) => {
+            evaluate_where_with_similarity(inner, id, payload, idx, eval, params)
+        }
+        Condition::Similarity(sim) => {
+            // No evaluator => no vector collection context; this should
+            // never happen when the query was validated upstream, but we
+            // surface a clear error rather than silently passing or
+            // failing the row.
+            let evaluator = eval.ok_or_else(|| {
+                "similarity() predicate found without a vector-collection evaluator".to_string()
+            })?;
+            Ok(evaluator.passes_with_cond(sim, idx))
+        }
+        other => crate::velesql_where::matches(other, id, payload, params),
     }
 }
 
