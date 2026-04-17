@@ -39,6 +39,10 @@ exclude_paths:
     - crates/velesdb-python/**
     - crates/velesdb-mobile/**
     - crates/velesdb-wasm/**
+    - .env
+    - '**/.env'
+    - '**/.env.*'
+    - '**/.env.local'
 runtimes:
     - node@22.2.0
     - python@3.11.11

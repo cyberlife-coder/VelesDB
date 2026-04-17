@@ -73,6 +73,12 @@ exclude_paths:
   - "node_modules/**"
   - "target/**"
   - ".tmp/**"
+  # Local environment files (gitignored, never committed). Trivy scans the
+  # local filesystem including gitignored files, flagging dev-only tokens.
+  # Codacy Cloud only sees tracked files so this is a local-CLI-only concern.
+  - "**/.env"
+  - "**/.env.*"
+  - "**/.env.local"
 
   # --- Audited unsafe code (false positive suppression) ---
   # Codacy's "unsafe detected" rule cannot distinguish documented from
