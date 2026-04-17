@@ -260,6 +260,89 @@ fn test_contains_reports_existing_collection() {
     assert!(!db.contains("ghost"));
 }
 
+// =========================================================================
+// Graph store lifecycle (Devin Review PR #594 finding #3)
+// =========================================================================
+//
+// Collections and their associated graph stores share a namespace. Dropping
+// a collection must also drop any graph store so that recreating a
+// collection with the same name cannot resurface ghost nodes/edges.
+
+#[test]
+fn test_delete_collection_also_drops_associated_graph_store() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("g").expect("test: create");
+
+    // Populate the graph store.
+    let g = db.graph_store("g");
+    g.borrow_mut().upsert_node(1, None, vec!["Person".into()]);
+    g.borrow_mut().insert_edge(None, 1, 2, "KNOWS".into(), None);
+    drop(g);
+    assert!(
+        db.has_graph_store("g"),
+        "graph store should exist after seed"
+    );
+
+    // Dropping the collection must drop its graph store.
+    db.delete_collection("g").expect("test: delete");
+    assert!(
+        !db.has_graph_store("g"),
+        "graph store must be removed when collection is dropped"
+    );
+
+    // Recreating with the same name must not resurface the old graph data.
+    db.create_metadata_collection("g").expect("test: recreate");
+    assert!(
+        !db.has_graph_store("g"),
+        "lazy creation only: fresh collection has no graph store yet"
+    );
+    let g2 = db.graph_store("g");
+    assert!(
+        g2.borrow().all_node_ids().is_empty(),
+        "newly-provisioned graph store must be empty"
+    );
+    assert!(
+        g2.borrow().edges().is_empty(),
+        "newly-provisioned graph store must have no edges"
+    );
+}
+
+#[test]
+fn test_delete_collection_without_graph_store_does_not_panic() {
+    // Negative: a collection that never had any graph DML must still be
+    // droppable without touching `self.graphs`.
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("no_graph")
+        .expect("test: create");
+    assert!(!db.has_graph_store("no_graph"));
+    db.delete_collection("no_graph").expect("test: delete ok");
+}
+
+#[test]
+fn test_clear_graph_store_empties_existing_graph() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("g").expect("test: create");
+    let g = db.graph_store("g");
+    g.borrow_mut().upsert_node(1, None, vec![]);
+    g.borrow_mut().insert_edge(None, 1, 2, "R".into(), None);
+    drop(g);
+
+    db.clear_graph_store("g");
+
+    assert!(db.has_graph_store("g"), "clear must not remove the store");
+    let g2 = db.get_graph_store("g").expect("test: still registered");
+    assert!(g2.borrow().all_node_ids().is_empty());
+    assert!(g2.borrow().edges().is_empty());
+}
+
+#[test]
+fn test_clear_graph_store_no_op_on_absent_name() {
+    let mut db = DatabaseInner::new();
+    // Must not panic even though no graph store has ever been created.
+    db.clear_graph_store("ghost");
+    assert!(!db.has_graph_store("ghost"));
+}
+
 #[test]
 fn test_collection_summaries_lists_vector_and_metadata() {
     let mut db = DatabaseInner::new();

@@ -80,6 +80,8 @@ fn drop_collection(db: &mut DatabaseInner, stmt: &DropCollectionStatement) -> Re
 }
 
 /// `TRUNCATE` removes all rows but preserves the collection definition.
+/// Any associated graph store (same name) is cleared in-place so ghost
+/// nodes/edges cannot survive a TRUNCATE (Devin review PR #594 #3).
 fn truncate(db: &mut DatabaseInner, stmt: &TruncateStatement) -> Result<(), String> {
     let summary = db
         .collection_summaries()
@@ -89,11 +91,19 @@ fn truncate(db: &mut DatabaseInner, stmt: &TruncateStatement) -> Result<(), Stri
     let (_, dim, is_metadata) = summary;
     let metric_name = metric_for_existing(db, &stmt.collection)?;
     db.delete_collection(&stmt.collection)?;
+    // delete_collection also dropped the graph store; the subsequent
+    // create re-provisions the collection, and any further graph DML
+    // will lazily re-create a fresh graph store. We still clear any
+    // graph store that might have been re-created between the two
+    // calls (defensive — currently unreachable but keeps the invariant
+    // explicit).
     if is_metadata {
-        db.create_metadata_collection(&stmt.collection)
+        db.create_metadata_collection(&stmt.collection)?;
     } else {
-        db.create_collection(&stmt.collection, dim, &metric_name)
+        db.create_collection(&stmt.collection, dim, &metric_name)?;
     }
+    db.clear_graph_store(&stmt.collection);
+    Ok(())
 }
 
 /// `ANALYZE` returns synthetic statistics about the target collection.

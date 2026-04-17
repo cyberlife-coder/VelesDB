@@ -175,6 +175,15 @@ impl WasmGraphStore {
             None => self.all_node_ids(),
         }
     }
+
+    /// Removes every node and edge and resets the edge-id counter.
+    /// Used by `TRUNCATE COLLECTION` so the surrounding collection name
+    /// keeps its identity but the graph data is wiped.
+    pub(crate) fn clear(&mut self) {
+        self.nodes.clear();
+        self.edges.clear();
+        self.next_edge_id = 1;
+    }
 }
 
 #[cfg(test)]

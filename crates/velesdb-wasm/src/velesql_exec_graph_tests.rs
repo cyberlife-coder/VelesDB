@@ -376,6 +376,94 @@ fn test_match_undirected_dedups_self_loop() {
     );
 }
 
+// =========================================================================
+// Regression: DROP / TRUNCATE clear associated graph store
+// (Devin Review PR #594 finding #3).
+// =========================================================================
+//
+// Before the fix, `DROP COLLECTION g` and `TRUNCATE g` left any graph
+// store keyed by `g` intact. Re-creating `g` then surfaced stale nodes
+// and edges from the previous lifecycle.
+
+#[test]
+fn test_drop_collection_removes_graph_store() {
+    let mut db = DatabaseInner::new();
+    // Auto-provision the graph store by inserting a node+edge via SQL.
+    execute(
+        &mut db,
+        "INSERT NODE INTO g (id = 1, payload = '{\"name\": \"Alice\"}')",
+        None,
+    )
+    .expect("test: node");
+    execute(
+        &mut db,
+        "INSERT EDGE INTO g (source = 1, target = 2, label = 'KNOWS')",
+        None,
+    )
+    .expect("test: edge");
+    // Materialise the backing collection so DROP has something to remove.
+    db.create_metadata_collection("g").expect("test: create");
+
+    // DROP the collection.
+    execute(&mut db, "DROP COLLECTION g", None).expect("test: drop");
+
+    // Recreate and assert the graph store is fresh.
+    db.create_metadata_collection("g").expect("test: recreate");
+    let err = execute(&mut db, "SELECT EDGES FROM g", None);
+    assert!(
+        err.is_err(),
+        "empty graph store: no edges to select (got: {err:?})"
+    );
+}
+
+#[test]
+fn test_truncate_collection_clears_graph_store() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("g").expect("test: create");
+    execute(
+        &mut db,
+        "INSERT NODE INTO g (id = 1, payload = '{\"name\": \"Alice\"}')",
+        None,
+    )
+    .expect("test: node");
+    execute(
+        &mut db,
+        "INSERT EDGE INTO g (source = 1, target = 2, label = 'KNOWS')",
+        None,
+    )
+    .expect("test: edge");
+    // Sanity: SELECT EDGES returns the seeded edge.
+    let before = execute(&mut db, "SELECT EDGES FROM g", None).expect("test: before");
+    assert_eq!(before.row_count(), 1);
+
+    // TRUNCATE must wipe the graph data too.
+    execute(&mut db, "TRUNCATE g", None).expect("test: truncate");
+
+    let after = execute(&mut db, "SELECT EDGES FROM g", None);
+    match after {
+        Ok(r) => assert_eq!(
+            r.row_count(),
+            0,
+            "graph store must be empty after TRUNCATE, got: {}",
+            r.rows_json()
+        ),
+        Err(e) => assert!(
+            e.contains("empty") || e.contains("not found"),
+            "unexpected error: {e}"
+        ),
+    }
+}
+
+#[test]
+fn test_drop_collection_without_graph_store_does_not_fail() {
+    // Negative: DROP a collection that never had graph DML on it must
+    // not panic or spuriously error on the graph side.
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("plain")
+        .expect("test: create");
+    execute(&mut db, "DROP COLLECTION plain", None).expect("test: drop plain");
+}
+
 #[test]
 fn test_match_outgoing_unaffected_by_fix() {
     // Guard: outgoing direction (the only case currently exercised by the

@@ -97,11 +97,37 @@ impl DatabaseInner {
         Ok(())
     }
 
+    /// Drops the named collection and any graph store sharing that name.
+    ///
+    /// Collections and their associated graph stores share a single
+    /// namespace: dropping a collection also drops its graph store so that
+    /// a subsequent `CREATE COLLECTION` with the same name cannot surface
+    /// ghost nodes/edges left over from the previous lifecycle. Fixes
+    /// Devin review PR #594 finding #3.
     pub(crate) fn delete_collection(&mut self, name: &str) -> Result<(), String> {
         if self.collections.remove(name).is_none() {
             return Err(format!("Collection '{name}' not found"));
         }
+        // Drop the associated graph store, if any. No error when absent:
+        // many collections never have a graph store attached.
+        self.graphs.remove(name);
         Ok(())
+    }
+
+    /// Clears every node and edge in the graph store keyed by `name`, if
+    /// one exists. Used by `TRUNCATE COLLECTION` to keep the collection
+    /// namespace intact while wiping its graph data.
+    pub(crate) fn clear_graph_store(&mut self, name: &str) {
+        if let Some(g) = self.graphs.get(name) {
+            g.borrow_mut().clear();
+        }
+    }
+
+    /// Returns `true` if a graph store is currently registered under
+    /// `name`. Intended for tests that assert graph lifecycle semantics.
+    #[cfg(test)]
+    pub(crate) fn has_graph_store(&self, name: &str) -> bool {
+        self.graphs.contains_key(name)
     }
 
     pub(crate) fn collection_names(&self) -> Vec<String> {
