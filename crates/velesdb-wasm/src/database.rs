@@ -268,10 +268,19 @@ impl WasmDatabase {
 
     /// Deletes a named collection and frees its memory.
     ///
-    /// **Note**: any [`WasmCollectionHandle`] previously obtained via
-    /// [`get_collection`](Self::get_collection) remains functional after
-    /// deletion (its `Rc` keeps the inner store alive). Creating a new
-    /// collection with the same name will NOT reuse the old handle's data.
+    /// # Handle semantics
+    ///
+    /// Any [`WasmCollectionHandle`] previously obtained via
+    /// [`get_collection`](Self::get_collection) keeps its own `Rc` to the
+    /// backing store — mechanically the data is NOT freed on the spot.
+    /// The handle continues to reference the *old* store, detached from
+    /// the database. A subsequent `CREATE COLLECTION` with the same name
+    /// allocates a **new** store, distinct from the old handle's data.
+    ///
+    /// Callers that want handles to observe later mutations should re-
+    /// obtain a fresh handle after any CREATE. Note that `TRUNCATE`
+    /// clears in place (see Devin Review Finding F12), so outstanding
+    /// handles DO see the wipe — only DROP detaches.
     ///
     /// # Errors
     /// Returns an error if the collection does not exist.
@@ -358,6 +367,17 @@ impl WasmDatabase {
 ///
 /// Operations on this handle mutate the shared collection. Multiple handles
 /// to the same collection are valid (single-threaded WASM — no data races).
+///
+/// # Lifetime across DDL (Devin Review Finding F12)
+///
+/// | Operation  | Effect on outstanding handles                              |
+/// |------------|-----------------------------------------------------------|
+/// | `TRUNCATE` | Handle keeps pointing to the same (now-emptied) store.    |
+/// | `DROP`     | Handle retains its `Rc` to the OLD store, detached from    |
+/// |            | the database. A later `CREATE` with the same name creates |
+/// |            | a NEW store that the old handle does not see.             |
+/// | `CREATE`   | Fresh handles obtained via `get_collection` are required  |
+/// |            | to observe the new store when reusing a dropped name.     |
 #[wasm_bindgen]
 pub struct WasmCollectionHandle {
     inner: SharedStore,

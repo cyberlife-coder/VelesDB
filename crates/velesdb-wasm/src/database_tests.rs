@@ -360,3 +360,143 @@ fn test_collection_summaries_lists_vector_and_metadata() {
     assert_eq!(summaries[0], ("docs".to_string(), 0, true));
     assert_eq!(summaries[1], ("vecs".to_string(), 4, false));
 }
+
+// =========================================================================
+// Handle semantics across TRUNCATE / DROP (Devin Review Finding F12)
+// =========================================================================
+//
+// Pre-F12: TRUNCATE did delete+recreate, swapping the Rc. Outstanding
+// handles obtained before the TRUNCATE kept pointing to the OLD store
+// and silently operated on stale data.
+//
+// Post-F12: TRUNCATE clears the backing store in place through the shared
+// Rc. Outstanding handles observe the wipe atomically.
+//
+// DROP semantics are unchanged: the old handle retains its Rc to the
+// detached store; a new CREATE with the same name is distinct from that
+// old handle's data.
+
+#[test]
+fn test_handle_reflects_truncate_clear() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("vecs", 4, "cosine")
+        .expect("test: create");
+
+    // Obtain a handle BEFORE the truncate and populate through it.
+    let handle = db.get_shared_store("vecs").expect("test: handle");
+    handle
+        .borrow_mut()
+        .insert(1, &[1.0, 0.0, 0.0, 0.0])
+        .expect("test: insert 1");
+    handle
+        .borrow_mut()
+        .insert(2, &[0.0, 1.0, 0.0, 0.0])
+        .expect("test: insert 2");
+    assert_eq!(handle.borrow().len(), 2);
+
+    // Run TRUNCATE through the VelesQL executor. The OLD handle must
+    // observe the wipe — this is the core F12 invariant.
+    let r = crate::velesql_exec::execute(&mut db, "TRUNCATE vecs", None).expect("test: truncate");
+    assert_eq!(r.kind(), "ddl");
+
+    assert_eq!(
+        handle.borrow().len(),
+        0,
+        "outstanding handle must see the truncate-cleared store"
+    );
+    // Dimension, metric, and storage mode are preserved on the same
+    // struct (clear() does not touch them).
+    assert_eq!(handle.borrow().dimension(), 4);
+
+    // Re-populate through the same handle and verify the database sees
+    // the inserts — proving the Rc is still wired to the database.
+    handle
+        .borrow_mut()
+        .insert(3, &[0.0, 0.0, 1.0, 0.0])
+        .expect("test: post-truncate insert");
+    let fresh = db.get_shared_store("vecs").expect("test: fresh handle");
+    assert_eq!(fresh.borrow().len(), 1);
+}
+
+#[test]
+fn test_handle_after_drop_is_detached_from_new_create() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("vecs", 4, "cosine")
+        .expect("test: create");
+
+    let old_handle = db.get_shared_store("vecs").expect("test: handle");
+    old_handle
+        .borrow_mut()
+        .insert(1, &[1.0, 0.0, 0.0, 0.0])
+        .expect("test: insert");
+
+    // DROP the collection — the database forgets the Rc, but the old
+    // handle keeps its own clone of the Rc (single-threaded WASM: no
+    // dangling references, just a detached store).
+    db.delete_collection("vecs").expect("test: drop");
+    assert_eq!(
+        old_handle.borrow().len(),
+        1,
+        "old handle still points to the detached store"
+    );
+
+    // Re-CREATE under the same name: this must be a fresh, empty store
+    // distinct from the old handle's Rc.
+    db.create_collection("vecs", 4, "cosine")
+        .expect("test: re-create");
+    let new_handle = db.get_shared_store("vecs").expect("test: new handle");
+    assert_eq!(
+        new_handle.borrow().len(),
+        0,
+        "fresh collection must be empty"
+    );
+
+    // Insertions through the new handle are invisible to the old one
+    // (they point to different Rcs).
+    new_handle
+        .borrow_mut()
+        .insert(42, &[0.0, 1.0, 0.0, 0.0])
+        .expect("test: insert");
+    assert_eq!(new_handle.borrow().len(), 1);
+    assert_eq!(
+        old_handle.borrow().len(),
+        1,
+        "old handle must not see new-collection inserts"
+    );
+}
+
+#[test]
+fn test_handle_survives_truncate_on_metadata_collection() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("meta").expect("test: create");
+    let handle = db.get_shared_store("meta").expect("test: handle");
+    // Seed a payload through the handle.
+    {
+        let mut b = handle.borrow_mut();
+        b.ids.push(1);
+        b.payloads.push(Some(serde_json::json!({"k": "v"})));
+    }
+    assert_eq!(handle.borrow().len(), 1);
+
+    crate::velesql_exec::execute(&mut db, "TRUNCATE meta", None).expect("test: truncate");
+    assert_eq!(handle.borrow().len(), 0);
+    assert_eq!(handle.borrow().dimension(), 0, "still metadata-only");
+}
+
+#[test]
+fn test_truncate_on_missing_collection_errors_without_invalidating_other_handles() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("real").expect("test: create");
+    let handle = db.get_shared_store("real").expect("test: handle");
+    {
+        let mut b = handle.borrow_mut();
+        b.ids.push(7);
+        b.payloads.push(Some(serde_json::json!({"n": 7})));
+    }
+
+    // TRUNCATE on a ghost collection must error without touching other
+    // collections' handles.
+    let err = crate::velesql_exec::execute(&mut db, "TRUNCATE ghost", None);
+    assert!(err.is_err());
+    assert_eq!(handle.borrow().len(), 1, "untouched collection intact");
+}

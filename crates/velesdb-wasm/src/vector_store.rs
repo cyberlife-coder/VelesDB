@@ -103,18 +103,6 @@ impl VectorStore {
         }
     }
 
-    /// Returns the typed storage mode for Rust-side callers.
-    ///
-    /// The WASM binding exposes the string form via
-    /// [`storage_mode`](Self::storage_mode); this accessor is `pub(crate)`
-    /// so the DDL path can preserve the mode through TRUNCATE without
-    /// round-tripping through the string representation (Devin Review
-    /// Finding M).
-    #[must_use]
-    pub(crate) fn storage_mode_kind(&self) -> StorageMode {
-        self.storage_mode
-    }
-
     /// Returns the number of vectors in the store.
     #[wasm_bindgen(getter)]
     #[must_use]
@@ -494,7 +482,16 @@ impl VectorStore {
         }
     }
 
-    /// Clears all vectors from the store.
+    /// Clears all vectors, payloads, and auxiliary indexes from the
+    /// store in place.
+    ///
+    /// Preserves `dimension`, `metric`, and `storage_mode` so the store
+    /// can be re-populated without reallocation. Any sparse index is
+    /// dropped: it would otherwise reference rows that no longer exist.
+    ///
+    /// Used by `TRUNCATE` (Devin Review Finding F12) so that outstanding
+    /// `WasmCollectionHandle`s holding an `Rc` to this store observe the
+    /// wipe atomically instead of pointing to a stale clone.
     #[wasm_bindgen]
     pub fn clear(&mut self) {
         self.ids.clear();
@@ -504,6 +501,7 @@ impl VectorStore {
         self.sq8_mins.clear();
         self.sq8_scales.clear();
         self.payloads.clear();
+        self.sparse_index = None;
     }
 
     /// Returns memory usage estimate in bytes.
