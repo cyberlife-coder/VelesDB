@@ -161,3 +161,103 @@ fn test_join_missing_right_collection_errors() {
     );
     assert!(err.is_err());
 }
+
+// =========================================================================
+// Alias-qualified WHERE (finding D) — nominal
+// =========================================================================
+
+fn db_with_orders_products() -> DatabaseInner {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("orders")
+        .expect("test: orders");
+    execute(
+        &mut db,
+        "INSERT INTO orders (id, product_id, total) VALUES \
+         (1, 100, 30), (2, 100, 50), (3, 200, 75), (4, 200, 20)",
+        None,
+    )
+    .expect("test: seed orders");
+    db.create_metadata_collection("products")
+        .expect("test: products");
+    execute(
+        &mut db,
+        "INSERT INTO products (id, name) VALUES (100, 'Widget'), (200, 'Gadget')",
+        None,
+    )
+    .expect("test: seed products");
+    db
+}
+
+#[test]
+fn test_join_where_qualified_column_on_left_table() {
+    // `orders.total > 40` must traverse the alias-scoped nested mirror,
+    // not literally match a flat `"orders.total"` key (which existed in
+    // the pre-fix behaviour and silently failed).
+    let mut db = db_with_orders_products();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM orders JOIN products ON orders.product_id = products.id \
+         WHERE orders.total > 40 LIMIT 10",
+        None,
+    )
+    .expect("test: qualified left");
+    // Orders 2 (50) and 3 (75) pass the threshold.
+    assert_eq!(r.row_count(), 2);
+}
+
+#[test]
+fn test_join_where_qualified_column_on_right_table() {
+    let mut db = db_with_orders_products();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM orders JOIN products ON orders.product_id = products.id \
+         WHERE products.name = 'Widget' LIMIT 10",
+        None,
+    )
+    .expect("test: qualified right");
+    // Orders 1 and 2 are linked to product 100 (Widget).
+    assert_eq!(r.row_count(), 2);
+}
+
+#[test]
+fn test_join_where_qualified_multiple_tables_with_and() {
+    let mut db = db_with_orders_products();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM orders JOIN products ON orders.product_id = products.id \
+         WHERE orders.total > 40 AND products.name = 'Gadget' LIMIT 10",
+        None,
+    )
+    .expect("test: qualified and");
+    // Order 3 (total=75, product=Gadget) is the only match.
+    assert_eq!(r.row_count(), 1);
+}
+
+#[test]
+fn test_join_where_unqualified_still_works() {
+    // Non-regression: bare `total` still resolves via the flat mirror.
+    let mut db = db_with_orders_products();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM orders JOIN products ON orders.product_id = products.id \
+         WHERE total > 40 LIMIT 10",
+        None,
+    )
+    .expect("test: unqualified");
+    assert_eq!(r.row_count(), 2);
+}
+
+#[test]
+fn test_join_where_qualified_unbound_alias_returns_zero() {
+    // Unbound alias prefix (`unknown.col`) silently fails per the WASM
+    // WHERE "missing column returns false" convention — no rows match.
+    let mut db = db_with_orders_products();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM orders JOIN products ON orders.product_id = products.id \
+         WHERE unknown.col = 1 LIMIT 10",
+        None,
+    )
+    .expect("test: unbound alias");
+    assert_eq!(r.row_count(), 0);
+}

@@ -5,9 +5,16 @@
 //! only equality predicates (`ON a.col = b.col`), which covers the 95 %
 //! case and keeps the executor readable.
 //!
-//! Each joined row is flattened into a single JSON object. Right-side
-//! columns are prefixed with the alias (or table name) to avoid clobbering
-//! the left-side row shape (`alias.col`).
+//! Row layout in the join pipeline (see [`JoinedRow::values`]):
+//! 1. A **flat mirror** of both tables' columns at the root (last-writer
+//!    wins on collision — the alias-qualified form below is the
+//!    unambiguous way to disambiguate, same as standard SQL).
+//! 2. A **nested object per alias** so alias-qualified references like
+//!    `WHERE orders.total > 40` traverse into `orders → total` via
+//!    [`crate::filter::get_nested_field`]'s split-on-dot navigation.
+//!
+//! The two shapes coexist so bare columns (`WHERE total > 40`) still
+//! work while alias-qualified refs no longer silently fail.
 
 use velesdb_core::velesql::{JoinClause, JoinType, SelectStatement};
 
@@ -50,30 +57,40 @@ impl JoinedRow {
     fn from_left(row: OwnedScanRow, default_alias: &str) -> Self {
         let (id, _score, payload) = row;
         let mut values = serde_json::Map::new();
-        if let Some(serde_json::Value::Object(obj)) = payload {
+        if let Some(serde_json::Value::Object(obj)) = &payload {
             for (k, v) in obj {
                 values.insert(k.clone(), v.clone());
-                values.insert(format!("{default_alias}.{k}"), v);
             }
         }
         values.insert("id".to_string(), serde_json::json!(id));
-        values.insert(format!("{default_alias}.id"), serde_json::json!(id));
+        // Alias-scoped nested mirror: `WHERE users.name = ...` navigates
+        // `users → name` through `get_nested_field`. The nested object
+        // always carries the node id so `WHERE users.id = ...` resolves
+        // even when the payload itself has no `id` key.
+        values.insert(
+            default_alias.to_string(),
+            nest_payload_with_id(payload.as_ref(), id),
+        );
         Self { id, values }
     }
 
     fn merge_right(&self, right_row: &OwnedScanRow, right_alias: &str) -> Self {
         let mut values = self.values.clone();
         let (right_id, _score, right_payload) = right_row;
-        values.insert(format!("{right_alias}.id"), serde_json::json!(*right_id));
         if let Some(serde_json::Value::Object(obj)) = right_payload {
             for (k, v) in obj {
-                values.insert(format!("{right_alias}.{k}"), v.clone());
-                // Un-prefixed mirrors make unqualified WHERE predicates work
-                // for right-side columns (only inserted when the key isn't
-                // already occupied by the left side).
-                values.entry(k.clone()).or_insert_with(|| v.clone());
+                // Flat mirror: last-writer wins on collision. Documented in
+                // the module docstring — use the alias-qualified form to
+                // disambiguate, same as standard SQL.
+                values.insert(k.clone(), v.clone());
             }
         }
+        // Alias-scoped nested mirror for the right side. Overwrites any
+        // prior entry (e.g. a null-padded placeholder from LEFT JOIN).
+        values.insert(
+            right_alias.to_string(),
+            nest_payload_with_id(right_payload.as_ref(), *right_id),
+        );
         Self {
             id: self.id,
             values,
@@ -82,12 +99,32 @@ impl JoinedRow {
 
     fn merge_right_null(&self, right_alias: &str) -> Self {
         let mut values = self.values.clone();
-        values.insert(format!("{right_alias}.id"), serde_json::Value::Null);
+        // Alias-scoped nested mirror for the un-matched right side: the
+        // alias exists but its `id` is null. `WHERE foo.id IS NULL` works
+        // via `get_nested_field`.
+        values.insert(
+            right_alias.to_string(),
+            serde_json::json!({ "id": serde_json::Value::Null }),
+        );
         Self {
             id: self.id,
             values,
         }
     }
+}
+
+/// Clones `payload` into an object with the row id injected as `"id"`.
+///
+/// Used to build the alias-scoped nested mirror in [`JoinedRow`]. A
+/// `None` or non-object payload yields `{"id": <id>}` so that
+/// `get_nested_field("alias.id")` still works.
+fn nest_payload_with_id(payload: Option<&serde_json::Value>, id: u64) -> serde_json::Value {
+    let mut obj = match payload {
+        Some(serde_json::Value::Object(map)) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+    obj.insert("id".to_string(), serde_json::json!(id));
+    serde_json::Value::Object(obj)
 }
 
 fn apply_join(
@@ -179,12 +216,30 @@ fn rows_match(
     right_key: &str,
     right_alias: &str,
 ) -> bool {
-    let left_val = left.values.get(left_key).cloned();
+    let left_val = lookup_join_key(&left.values, left_key);
     let right_val = extract_right_value(right, right_key, right_alias);
     match (left_val, right_val) {
         (Some(a), Some(b)) => crate::velesql_value::json_values_equal(&a, &b),
         _ => false,
     }
+}
+
+/// Looks up a (possibly alias-qualified) key in the joined row's flat/nested
+/// map. `"users.id"` walks `users → id` via the nested alias object; `"id"`
+/// falls back to the flat root. Keeps the lookup symmetric with the WHERE
+/// evaluator's `get_nested_field` semantics.
+fn lookup_join_key(
+    values: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<serde_json::Value> {
+    if let Some((head, tail)) = key.split_once('.') {
+        if let Some(nested) = values.get(head) {
+            if let Some(v) = crate::filter::get_nested_field(nested, tail) {
+                return Some(v.clone());
+            }
+        }
+    }
+    values.get(key).cloned()
 }
 
 fn extract_right_value(row: &OwnedScanRow, key: &str, alias: &str) -> Option<serde_json::Value> {
