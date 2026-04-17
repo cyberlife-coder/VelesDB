@@ -412,3 +412,98 @@ fn test_not_simple_predicate_without_similarity_still_correct() {
     assert!(ids.contains(&2));
     assert!(ids.contains(&3));
 }
+
+// =========================================================================
+// OR(stripped-leaf, predicate) collapses to "no post-filter" (finding G)
+// =========================================================================
+//
+// These tests pin the semantics of `strip_condition_if` under `OR`. A
+// branch stripped out is logically `true` (handled externally by the
+// vector / similarity path). Therefore:
+//   - `true AND x` = `x`         → residual is `x`
+//   - `true OR x`  = `true`      → residual is None (no post-filter)
+//
+// The pre-fix behaviour collapsed `OR(None, Some(x))` to `Some(x)`, which
+// turned "all rows (from NEAR) OR cat = 'a'" into a post-filter of just
+// "cat = 'a'" — wrongly dropping rows that didn't match the predicate,
+// even though they already passed the implicit vector branch.
+
+#[test]
+fn test_or_near_with_predicate_does_not_filter_non_matching_rows() {
+    // `vector NEAR $q OR cat = 'a'`: semantically the NEAR branch matches
+    // every row (with a score), so the OR is trivially satisfied. The
+    // residual must not post-filter on `cat = 'a'`. All 4 rows survive.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE vector NEAR $q OR cat = 'a' LIMIT 4",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: OR near");
+    assert_eq!(r.row_count(), 4, "OR branch must not drop non-'a' rows");
+}
+
+#[test]
+fn test_or_similarity_with_predicate_does_not_filter_out_rows_below_threshold() {
+    // `similarity(v, $q) > 0.5 OR cat = 'a'`:
+    //   id 1: sim=1.0 (true) → true
+    //   id 2: sim≈0.99 (true) → true
+    //   id 3: cat='b', sim=0 → false OR false → false
+    //   id 4: cat='b', sim=0 → false OR false → false
+    // Expected: ids 1 and 2 (both match via similarity or cat=a).
+    // This exercises evaluate_where_with_similarity's OR arm, not the
+    // strip path — but it guards against a regression should the
+    // similarity branch ever route through strip_similarity's residual.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE similarity(vector, $q) > 0.5 OR cat = 'a' LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: OR similarity");
+    assert_eq!(r.row_count(), 2);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+}
+
+#[test]
+fn test_and_near_with_predicate_still_filters_correctly() {
+    // Non-regression: `vector NEAR $q AND cat = 'a' LIMIT 4` must still
+    // restrict results to rows with cat='a' (ids 1 and 2). `true AND x`
+    // collapses to `x`, so the residual is the cat predicate.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE vector NEAR $q AND cat = 'a' LIMIT 4",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: AND near");
+    assert_eq!(r.row_count(), 2);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+}
+
+#[test]
+fn test_and_similarity_with_predicate_still_filters_correctly() {
+    // Non-regression: `similarity(v, $q) > 0.5 AND cat = 'a'` must still
+    // restrict to rows matching both predicates. ids 1 and 2 pass.
+    let mut db = db_with_vectors();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE similarity(vector, $q) > 0.5 AND cat = 'a' LIMIT 10",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: AND similarity");
+    assert_eq!(r.row_count(), 2);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+}

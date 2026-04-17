@@ -86,15 +86,15 @@ where
         return None;
     }
     match cond {
-        Condition::And(l, r) => combine_binary(
+        Condition::And(l, r) => combine_after_strip(
             strip_condition_if(Some(l), should_remove),
             strip_condition_if(Some(r), should_remove),
-            Condition::And,
+            LogicalOp::And,
         ),
-        Condition::Or(l, r) => combine_binary(
+        Condition::Or(l, r) => combine_after_strip(
             strip_condition_if(Some(l), should_remove),
             strip_condition_if(Some(r), should_remove),
-            Condition::Or,
+            LogicalOp::Or,
         ),
         Condition::Not(inner) => {
             strip_condition_if(Some(inner), should_remove).map(|c| Condition::Not(Box::new(c)))
@@ -128,14 +128,59 @@ pub(crate) fn flip_similarity_op(op: CompareOp) -> CompareOp {
     }
 }
 
-fn combine_binary<F>(l: Option<Condition>, r: Option<Condition>, ctor: F) -> Option<Condition>
-where
-    F: FnOnce(Box<Condition>, Box<Condition>) -> Condition,
-{
-    match (l, r) {
-        (Some(a), Some(b)) => Some(ctor(Box::new(a), Box::new(b))),
-        (Some(only), None) | (None, Some(only)) => Some(only),
-        (None, None) => None,
+/// Which boolean operator was at this node before a branch was stripped.
+///
+/// Needed by [`combine_after_strip`] to apply the correct identity: a
+/// stripped-out branch is logically `true` (handled externally by the
+/// scoring / NEAR / similarity path), so:
+/// - `And`: `true AND x = x`  — drop only the stripped side
+/// - `Or` : `true OR x  = true` — whole OR is trivially satisfied
+#[derive(Copy, Clone)]
+pub(crate) enum LogicalOp {
+    /// Conjunction. A stripped branch is the identity for `And`.
+    And,
+    /// Disjunction. A stripped branch is the absorbing element for `Or`.
+    Or,
+}
+
+/// Combines two already-stripped branches while preserving the semantics
+/// of the original logical operator.
+///
+/// A `None` argument means that side was stripped, i.e. logically `true`
+/// once the external path (vector NEAR, similarity scorer) handles it.
+/// This is the key correctness fix for finding G: under `Or`, a stripped
+/// branch absorbs the whole node (`true OR x = true`), so the residual
+/// post-filter must be `None` — not the surviving side.
+///
+/// Truth table (`a` / `b` = stripped? ; result = residual post-filter):
+///
+/// | op  | a / b          | result      |
+/// |-----|----------------|-------------|
+/// | And | (None, None)   | None        |
+/// | And | (Some(x), None)| Some(x)     |
+/// | And | (None, Some(y))| Some(y)     |
+/// | And | (Some(x), Some(y)) | Some(x AND y) |
+/// | Or  | (None, None)   | None        |
+/// | Or  | (Some(_), None)| **None**    |
+/// | Or  | (None, Some(_))| **None**    |
+/// | Or  | (Some(x), Some(y)) | Some(x OR y) |
+fn combine_after_strip(
+    l: Option<Condition>,
+    r: Option<Condition>,
+    op: LogicalOp,
+) -> Option<Condition> {
+    match (op, l, r) {
+        // Both sides survived → rebuild the original node.
+        (LogicalOp::And, Some(a), Some(b)) => Some(Condition::And(Box::new(a), Box::new(b))),
+        (LogicalOp::Or, Some(a), Some(b)) => Some(Condition::Or(Box::new(a), Box::new(b))),
+        // AND with a stripped side → the surviving side becomes the
+        // residual (`true AND x = x`).
+        (LogicalOp::And, Some(only), None) | (LogicalOp::And, None, Some(only)) => Some(only),
+        // OR with ANY stripped side → whole OR is trivially satisfied by
+        // the external path (`true OR x = true`). No residual post-filter.
+        (LogicalOp::Or, _, None) | (LogicalOp::Or, None, _) => None,
+        // Both sides stripped out → nothing left.
+        (_, None, None) => None,
     }
 }
 
@@ -381,5 +426,80 @@ mod tests {
         let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) >= 0.8");
         let sim = find_similarity(Some(&c)).expect("test: plain similarity");
         assert_eq!(sim.operator, CompareOp::Gte);
+    }
+
+    // --- combine_after_strip: finding G ---------------------------------------
+
+    fn leaf(op: CompareOp, v: i64) -> Condition {
+        use velesdb_core::velesql::{Comparison, Value};
+        Condition::Comparison(Comparison {
+            column: "x".into(),
+            operator: op,
+            value: Value::Integer(v),
+        })
+    }
+
+    #[test]
+    fn test_combine_and_both_some_rebuilds_and_node() {
+        let a = leaf(CompareOp::Eq, 1);
+        let b = leaf(CompareOp::Eq, 2);
+        let out = combine_after_strip(Some(a), Some(b), LogicalOp::And);
+        assert!(matches!(out, Some(Condition::And(_, _))));
+    }
+
+    #[test]
+    fn test_combine_and_one_none_returns_surviving_side() {
+        let a = leaf(CompareOp::Eq, 1);
+        let out = combine_after_strip(Some(a.clone()), None, LogicalOp::And);
+        assert_eq!(out, Some(a.clone()));
+        let out = combine_after_strip(None, Some(a.clone()), LogicalOp::And);
+        assert_eq!(out, Some(a));
+    }
+
+    #[test]
+    fn test_combine_and_both_none_is_none() {
+        assert!(combine_after_strip(None, None, LogicalOp::And).is_none());
+    }
+
+    #[test]
+    fn test_combine_or_both_some_rebuilds_or_node() {
+        let a = leaf(CompareOp::Eq, 1);
+        let b = leaf(CompareOp::Eq, 2);
+        let out = combine_after_strip(Some(a), Some(b), LogicalOp::Or);
+        assert!(matches!(out, Some(Condition::Or(_, _))));
+    }
+
+    #[test]
+    fn test_combine_or_one_none_collapses_to_none() {
+        // The key fix for finding G: `true OR x = true`, so the residual
+        // post-filter is None — NOT the surviving side.
+        let a = leaf(CompareOp::Eq, 1);
+        assert!(combine_after_strip(Some(a.clone()), None, LogicalOp::Or).is_none());
+        assert!(combine_after_strip(None, Some(a), LogicalOp::Or).is_none());
+    }
+
+    #[test]
+    fn test_combine_or_both_none_is_none() {
+        assert!(combine_after_strip(None, None, LogicalOp::Or).is_none());
+    }
+
+    #[test]
+    fn test_strip_similarity_or_predicate_collapses_to_none() {
+        // BDD-style regression of finding G at the strip layer: a
+        // `similarity() OR x = 1` query has `None` residual after
+        // stripping the similarity leaf — the OR is trivially satisfied.
+        let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.5 OR x = 1");
+        assert!(
+            strip_similarity(Some(&c)).is_none(),
+            "OR(stripped, x) must collapse to None (true OR x = true)"
+        );
+    }
+
+    #[test]
+    fn test_strip_similarity_and_predicate_keeps_predicate() {
+        // Non-regression: `similarity() AND x = 1` still strips to `x = 1`.
+        let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.5 AND x = 1");
+        let residual = strip_similarity(Some(&c)).expect("test: residual");
+        assert!(find_similarity(Some(&residual)).is_none());
     }
 }
