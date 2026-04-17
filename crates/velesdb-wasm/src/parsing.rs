@@ -23,7 +23,7 @@ pub fn parse_metric(metric: &str) -> Result<DistanceMetric, JsValue> {
     parse_metric_inner(metric).map_err(|e| JsValue::from_str(&e))
 }
 
-fn parse_metric_inner(metric: &str) -> Result<DistanceMetric, String> {
+pub(crate) fn parse_metric_inner(metric: &str) -> Result<DistanceMetric, String> {
     use std::str::FromStr;
 
     DistanceMetric::from_str(metric).map_err(std::string::ToString::to_string)

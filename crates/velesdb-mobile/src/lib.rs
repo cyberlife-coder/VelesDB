@@ -51,11 +51,13 @@ mod agent;
 mod collection;
 mod collection_sparse;
 mod graph;
+mod query;
 mod types;
 
 pub use agent::{SemanticResult, VelesSemanticMemory};
 pub use collection::VelesCollection;
 pub use graph::{MobileGraphEdge, MobileGraphNode, MobileGraphStore, TraversalResult};
+pub use query::{QueryResult, QueryResultKind, QueryResultRow};
 pub use types::{
     DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileCollectionStats,
     MobileIndexInfo, PqTrainConfig, SearchQuality, SearchResult, StorageMode, VelesError,
@@ -289,6 +291,74 @@ impl VelesDatabase {
             })?;
 
         Ok("PQ training complete".to_string())
+    }
+
+    /// Executes an arbitrary VelesQL query and returns structured results.
+    ///
+    /// This is the primary entry point for mobile apps to run the full
+    /// VelesQL surface: SELECT, INSERT, UPDATE, DELETE, MATCH, DDL
+    /// (CREATE/DROP/ALTER/TRUNCATE), TRAIN QUANTIZER, SHOW, DESCRIBE,
+    /// EXPLAIN, ANALYZE, and FLUSH.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - VelesQL query string
+    /// * `params_json` - Optional JSON object with query parameters
+    ///   (keys are bare names; use `$name` syntax in SQL).
+    ///   Pass `None` or `"{}"` when no parameters are needed.
+    ///
+    /// # Returns
+    ///
+    /// A [`QueryResult`] containing the result kind, rows (as JSON strings),
+    /// row count, and a human-readable status message.
+    ///
+    /// # Example (Swift)
+    ///
+    /// ```swift
+    /// let result = try db.executeQuery(
+    ///     sql: "SELECT * FROM docs LIMIT 10",
+    ///     paramsJson: nil
+    /// )
+    /// for row in result.rows {
+    ///     let json = try JSONSerialization.jsonObject(with: row.dataJson.data(using: .utf8)!)
+    ///     print(json)
+    /// }
+    /// ```
+    pub fn execute_query(
+        &self,
+        sql: String,
+        params_json: Option<String>,
+    ) -> Result<QueryResult, VelesError> {
+        let parsed =
+            velesdb_core::velesql::Parser::parse(&sql).map_err(|e| VelesError::Database {
+                message: format!("VelesQL parse error: {}", e.message),
+            })?;
+
+        let params = query::parse_params(params_json)?;
+        let kind = query::classify_query(&parsed);
+
+        let core_results =
+            self.inner
+                .execute_query(&parsed, &params)
+                .map_err(|e| VelesError::Database {
+                    message: format!("Query execution failed: {e}"),
+                })?;
+
+        let rows: Result<Vec<QueryResultRow>, VelesError> =
+            core_results.iter().map(query::to_result_row).collect();
+        let rows = rows?;
+
+        #[allow(clippy::cast_possible_truncation)]
+        // Reason: row count from a single query will not exceed u32::MAX.
+        let row_count = rows.len() as u32;
+        let message = query::build_message(&kind, row_count);
+
+        Ok(QueryResult {
+            kind,
+            rows,
+            row_count,
+            message,
+        })
     }
 }
 

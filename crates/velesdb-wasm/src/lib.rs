@@ -51,6 +51,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 mod agent;
+mod database;
 mod filter;
 mod fusion;
 mod graph;
@@ -74,6 +75,7 @@ mod velesql;
 mod velesql_helpers;
 
 pub use agent::SemanticMemory;
+pub use database::{WasmCollectionHandle, WasmDatabase};
 pub use graph::{GraphEdge, GraphNode, GraphStore};
 pub use vector_store::VectorStore;
 pub use velesdb_core::DistanceMetric;
