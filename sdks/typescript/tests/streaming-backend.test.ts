@@ -486,6 +486,43 @@ describe('streamInsert', () => {
     ).rejects.toThrow(BackpressureError);
   });
 
+  it('throws VelesDBError on non-ok / non-429 / non-202 response', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: () =>
+        Promise.resolve({
+          code: 'VELES-009',
+          message: 'Invalid payload',
+        }),
+    });
+
+    const transport = buildTransport();
+    await expect(
+      streamInsert(transport, 'docs', [{ id: 1, vector: [0.1] }])
+    ).rejects.toThrow(VelesDBError);
+  });
+
+  it('throws ConnectionError when fetch aborts (AbortError)', async () => {
+    const abortError = new Error('Aborted');
+    abortError.name = 'AbortError';
+    mockFetch.mockRejectedValueOnce(abortError);
+
+    const transport = buildTransport();
+    await expect(
+      streamInsert(transport, 'docs', [{ id: 1, vector: [0.1] }])
+    ).rejects.toThrow(ConnectionError);
+  });
+
+  it('throws ConnectionError on generic network failure', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('DNS failure'));
+
+    const transport = buildTransport();
+    await expect(
+      streamInsert(transport, 'docs', [{ id: 1, vector: [0.1] }])
+    ).rejects.toThrow(ConnectionError);
+  });
+
   it('calls fetch once per document for multi-doc input', async () => {
     mockFetch
       .mockResolvedValueOnce({
