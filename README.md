@@ -141,6 +141,23 @@ memory.procedural.learn(1, "answer_geography", steps, embedding, confidence=0.8)
 
 ---
 
+## Known Limitations
+
+VelesDB is honest about its boundaries. The following are current scope limits of the open-source Community Edition — each is either a deliberate design trade-off or a feature tracked for a separate Enterprise edition. We list them here so you can make an informed technical choice.
+
+| # | Limitation | Scope | Tracked |
+|---|------------|-------|---------|
+| 1 | **Single writer per collection** — WAL is serialized; concurrent writers contend on the same fsync lock. | Design trade-off (local-first, crash-safe by default). Read throughput is unaffected. | Concurrent WAL writer is planned for the Enterprise edition (separate product, not yet public). See [docs/CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md). |
+| 2 | **No distributed replication** — VelesDB is single-node. No Raft, no sharding, no automatic failover in Core. | Deliberate: the sweet spot is local-first / embedded. | Raft-based replication is tracked internally for the Enterprise edition. Contact us for timeline. |
+| 3 | **No advanced RBAC / multi-tenant isolation** — The `DatabaseObserver` hook is shipped (Core) and can be wired to a homegrown RBAC layer, but a production-grade RBAC/audit implementation is not in Core. | Core ships the hook, not the policy engine. | Enterprise feature. |
+| 4 | **WASM MATCH limited to 2 hops** — The browser build of `velesdb-wasm` supports 1- and 2-hop graph `MATCH` patterns today. 3+ hop `MATCH` works fully in native builds (server / Python / mobile / CLI) via `velesdb-core`. | Scope of Sprint 4 item S4-13. | Tracked, not a correctness issue — native path already supports full traversal. |
+| 5 | **SIFT1M benchmark fingerprints not yet pinned** — The standardized SIFT1M loader (`--features bench-sift1m`) currently runs in placeholder-hash mode: on first download it prints the observed SHA-256 for the four `.fvecs`/`.ivecs` files so they can be manually pinned into the loader. | Not a correctness issue — the benchmark runs and reports Recall@10 correctly. Integrity pinning is a one-time bootstrap step. | Tracked; fingerprints will be committed after first verified run on a reference machine. |
+| 6 | **No head-to-head Docker Compose benchmark vs Qdrant / Chroma / FAISS yet** — The SIFT1M benchmark (new in v1.13.0) is the standardized cross-implementation comparable number and matches the dataset used by every major ANN paper. A one-shot Docker Compose harness that runs all four systems on the same machine is deferred until the benchmark infrastructure stabilizes. | Transparency: side-by-side numbers require infrastructure we have not frozen yet. | Tracked; SIFT1M already gives comparable recall@10 numbers against the literature. |
+
+None of the above is a correctness gap — the Community Edition is production-ready for single-node, local-first deployments. The items above are feature-scope boundaries, not bugs.
+
+---
+
 ## Getting Started in 60 Seconds
 
 ### Install
