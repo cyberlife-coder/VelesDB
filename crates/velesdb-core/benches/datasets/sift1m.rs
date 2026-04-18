@@ -114,9 +114,14 @@ pub fn load_sift1m() -> Result<Sift1M, DatasetError> {
     read_full_dataset(&cache_dir)
 }
 
-/// Loads a subset for smoke-testing (`n_base` base + `n_query` queries).
+/// Loads a SIFT1M subset for smoke testing.
 ///
-/// Ground truth is truncated proportionally.
+/// Truncates base vectors to `n_base`, queries to `n_query`. Filters each
+/// groundtruth row to retain only IDs that reference vectors still present
+/// in the truncated base, so Recall@k is meaningful on the subset. Queries
+/// whose filtered groundtruth row is shorter than `k` will produce
+/// best-effort recall against what remains (caller should divide by
+/// `min(k, filtered_gt.len())`).
 ///
 /// # Errors
 /// Same error envelope as [`load_sift1m`].
@@ -124,8 +129,25 @@ pub fn load_sift1m_subset(n_base: usize, n_query: usize) -> Result<Sift1M, Datas
     let mut full = load_sift1m()?;
     full.base.truncate(n_base);
     full.query.truncate(n_query);
-    full.groundtruth.truncate(n_query);
+    full.groundtruth = filter_groundtruth(full.groundtruth, n_base, n_query);
     Ok(full)
+}
+
+/// Truncates `groundtruth` to `n_query` rows and filters each surviving row
+/// to retain only IDs that reference vectors still present after the base
+/// truncation (`id < n_base`). Without this filter, `intersection_ratio`
+/// would count out-of-range IDs as misses and report artificially low recall.
+pub(crate) fn filter_groundtruth(
+    groundtruth: Vec<Vec<u32>>,
+    n_base: usize,
+    n_query: usize,
+) -> Vec<Vec<u32>> {
+    let n_base_u32 = u32::try_from(n_base).unwrap_or(u32::MAX);
+    groundtruth
+        .into_iter()
+        .take(n_query)
+        .map(|row| row.into_iter().filter(|&id| id < n_base_u32).collect())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

@@ -145,6 +145,11 @@ fn measure_recall_at_10(
     let mut sum = 0.0_f64;
     let mut counted = 0_usize;
     for (q, gt) in queries.iter().zip(groundtruth.iter()) {
+        // Subset-mode may leave a groundtruth row empty after filtering
+        // out-of-range IDs — nothing to score, skip rather than bias the mean.
+        if gt.is_empty() {
+            continue;
+        }
         let Ok(results) = index.search_with_quality(q, K, quality) else {
             continue;
         };
@@ -158,15 +163,24 @@ fn measure_recall_at_10(
     }
 }
 
-/// Intersection-over-k between a search result set and the top-k of groundtruth.
+/// Intersection ratio between a search result set and the top-k of groundtruth.
+///
+/// Denominator is `min(k, groundtruth.len())` so that subset-mode runs
+/// (where `load_sift1m_subset` filters out-of-range IDs per row) still
+/// report meaningful recall. Returns `0.0` when the groundtruth row is
+/// empty after filtering (no valid neighbours remain in the truncated base).
 fn intersection_ratio(results: &[ScoredResult], groundtruth: &[u32], k: usize) -> f64 {
+    let denom = k.min(groundtruth.len());
+    if denom == 0 {
+        return 0.0;
+    }
     let gt_top: std::collections::HashSet<u64> = groundtruth
         .iter()
         .take(k)
         .map(|&id| u64::from(id))
         .collect();
     let hits = results.iter().filter(|r| gt_top.contains(&r.id)).count();
-    hits as f64 / k as f64
+    hits as f64 / denom as f64
 }
 
 criterion_group!(benches, bench_sift1m_recall_at_10);
