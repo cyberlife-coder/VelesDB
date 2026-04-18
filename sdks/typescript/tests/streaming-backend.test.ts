@@ -347,6 +347,25 @@ describe('trainPq', () => {
       CollectionNotFoundError
     );
   });
+
+  // NOTE: trainPq interpolates collection name without escaping — tracked in
+  // TODO(S4-FOLLOWUP-TRAINPQ-ESCAPE) for a separate source-level fix. This
+  // test pins the current behavior so future escaping is caught as a
+  // breaking change.
+  it('interpolates collection name raw into the VelesQL query (pre-existing limitation)', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { message: 'ok' },
+    });
+
+    await trainPq(transport, 'my collection');
+
+    expect(transport.requestJson).toHaveBeenCalledWith(
+      'POST',
+      '/query',
+      { query: 'TRAIN QUANTIZER ON my collection WITH (m=8, k=256)' }
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -460,9 +479,33 @@ describe('streamInsert', () => {
     expect(body.vector).toEqual([1.0, 2.0, 3.0]);
   });
 
-  it('does not throw on HTTP 202 Accepted', async () => {
+  // NOTE: streamInsert omits payload from JSON body when undefined, unlike
+  // streamUpsertPoints which serializes it as null. Tracked in
+  // TODO(S4-FOLLOWUP-STREAMINSERT-PAYLOAD) for a separate source-level
+  // alignment. This test pins the current behavior.
+  it('omits payload key from JSON body when doc.payload is undefined (pre-existing limitation)', async () => {
     mockFetch.mockResolvedValueOnce({
-      ok: false,
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    });
+
+    const transport = buildTransport();
+    await streamInsert(transport, 'docs', [{ id: 1, vector: [0.1] }]);
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const rawBody = opts.body as string;
+    expect(rawBody).not.toContain('"payload"');
+
+    const body = JSON.parse(rawBody) as Record<string, unknown>;
+    expect('payload' in body).toBe(false);
+  });
+
+  it('does not throw on HTTP 202 Accepted', async () => {
+    // Real fetch() sets Response.ok = true for all 2xx statuses (including 202),
+    // so we mock ok: true, status: 202 to match actual runtime behavior.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
       status: 202,
       json: () => Promise.resolve({}),
     });
@@ -471,6 +514,26 @@ describe('streamInsert', () => {
     await expect(
       streamInsert(transport, 'docs', [{ id: 1, vector: [0.1] }])
     ).resolves.toBeUndefined();
+  });
+
+  it('returns without reading JSON body on realistic 202 success path', async () => {
+    // Realistic 202 path: ok: true, status: 202. The function should return
+    // early (the !response.ok guard is skipped, and 202 matches the success
+    // path), so response.json() must NOT be called.
+    const jsonSpy = vi.fn(() => Promise.resolve({}));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: jsonSpy,
+    });
+
+    const transport = buildTransport();
+    await expect(
+      streamInsert(transport, 'docs', [{ id: 1, vector: [0.1] }])
+    ).resolves.toBeUndefined();
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 
   it('throws BackpressureError on HTTP 429', async () => {
