@@ -441,23 +441,32 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
     # ------------------------------------------------------------------
 
     def get_nodes(self, node_ids: List[str], **kwargs: Any) -> List[TextNode]:
-        """Retrieve nodes by their IDs."""
-        if not node_ids or self._collection is None:
+        """Retrieve nodes by their LlamaIndex string IDs.
+
+        The string IDs are hashed through ``_stable_hash_id`` before the
+        VelesDB lookup, matching the insertion path in ``node_builder``.
+        For callers that already hold the hashed integer IDs (e.g. graph
+        traversals), use :meth:`get_nodes_by_int_ids` to avoid an extra
+        round of hashing.
+        """
+        if not node_ids:
             return []
-        int_ids = [_stable_hash_id(nid) for nid in node_ids]
+        return self.get_nodes_by_int_ids([_stable_hash_id(nid) for nid in node_ids])
+
+    def get_nodes_by_int_ids(self, int_ids: List[int]) -> List[TextNode]:
+        """Retrieve nodes by their VelesDB **internal integer point IDs**.
+
+        Use this when callers already hold the int IDs that VelesDB
+        stores (e.g. hash-based IDs produced by ``stable_hash_id`` during
+        insertion, or IDs returned from a graph traversal). Passing those
+        ints back through :meth:`get_nodes` would call ``_stable_hash_id``
+        on the string form of an already-hashed int and silently return
+        nothing.
+        """
+        if not int_ids or self._collection is None:
+            return []
         points = self._collection.get(int_ids)
-        result = []
-        for pt in points:
-            if pt:
-                p = pt.get("payload", {})
-                result.append(
-                    TextNode(
-                        text=p.get("text", ""),
-                        id_=p.get("node_id", ""),
-                        metadata=self._metadata_from_payload(p),
-                    )
-                )
-        return result
+        return [self._node_from_result(pt) for pt in points if pt]
 
     def get_collection_info(self) -> dict:
         """Get collection configuration information."""

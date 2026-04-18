@@ -481,20 +481,23 @@ class GraphRetriever(BaseRetriever):
         return parse_graph_traverse_response(response)
 
     def _fetch_node(self, node_id: int) -> Optional[TextNode]:
-        """Fetch a node by ID from the vector store.
+        """Fetch a node by its **internal integer ID** (already hashed).
 
-        Args:
-            node_id: Node ID.
-
-        Returns:
-            TextNode or None if not found.
+        ``node_id`` is the hash-based int returned by
+        ``_extract_node_id`` / ``stable_hash_id(uuid)``. Delegates to
+        :meth:`VelesDBVectorStore.get_nodes_by_int_ids`, which passes the
+        ID straight to the underlying collection — using
+        :meth:`~VelesDBVectorStore.get_nodes` instead would re-hash the
+        int's string form and return nothing, making graph expansion a
+        silent no-op.
         """
         try:
             vs = self._index._vector_store
-            if hasattr(vs, "get_nodes"):
-                results = vs.get_nodes([str(node_id)])
-                if results:
-                    return results[0]
+            fetcher = getattr(vs, "get_nodes_by_int_ids", None)
+            if fetcher is None:
+                return None
+            results = fetcher([node_id])
+            return results[0] if results else None
         except (ValueError, RuntimeError, OSError, KeyError, ConnectionError, _VelesDBError) as exc:
             logger.debug("Failed to fetch node %s from vector store: %s", node_id, exc)
         return None
