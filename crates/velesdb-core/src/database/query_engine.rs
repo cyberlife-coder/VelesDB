@@ -172,10 +172,7 @@ impl Database {
     /// The returned plan's `estimated_cost_ms` and `filter_strategy` are
     /// calibrated via `CostEstimator` when stats exist for the query's
     /// primary collection. Falls back to heuristics otherwise.
-    fn build_plan_with_stats(
-        &self,
-        query: &crate::velesql::Query,
-    ) -> crate::velesql::QueryPlan {
+    fn build_plan_with_stats(&self, query: &crate::velesql::Query) -> crate::velesql::QueryPlan {
         let primary = &query.select.from;
         let core_stats = self.get_collection_stats(primary).ok().flatten();
         let indexed = std::collections::HashSet::new();

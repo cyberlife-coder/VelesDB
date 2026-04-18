@@ -302,8 +302,7 @@ impl QueryPlan {
             let (selectivity, estimation_method, estimated_rows) =
                 Self::estimate_filter_stats(stmt, filter_conditions, stats);
 
-            filter_strategy =
-                Self::resolve_filter_strategy(selectivity, has_vector_search, stats);
+            filter_strategy = Self::resolve_filter_strategy(selectivity, has_vector_search, stats);
 
             nodes.push(PlanNode::Filter(FilterPlan {
                 conditions: filter_conditions.join(" AND "),
@@ -442,13 +441,18 @@ impl QueryPlan {
         let est = CostEstimator::new(s);
         // Pre-filter: full scan + filter evaluation, then HNSW on the
         // reduced set.
-        let pre_filter = est.estimate_filter_cost_from_selectivity(selectivity).total()
+        let pre_filter = est
+            .estimate_filter_cost_from_selectivity(selectivity)
+            .total()
             + est.estimate_hnsw_search_cost(10).total() * selectivity;
         // Post-filter: full HNSW pass, then filter evaluation on the
         // top-k results (small constant cost, approximated by selectivity
         // weight applied to the filter cost).
         let post_filter = est.estimate_hnsw_search_cost(10).total()
-            + est.estimate_filter_cost_from_selectivity(selectivity).total() * 0.01;
+            + est
+                .estimate_filter_cost_from_selectivity(selectivity)
+                .total()
+                * 0.01;
 
         if pre_filter < post_filter {
             FilterStrategy::PreFilter

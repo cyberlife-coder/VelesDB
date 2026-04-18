@@ -20,12 +20,12 @@
 // cardinalities where ±1 ULP has no operational impact on query planning.
 #![allow(clippy::cast_precision_loss)]
 
+use super::explain::{MatchTraversalPlan, PlanNode, VectorSearchPlan};
 use crate::collection::query_cost::cost_model::OperationCostFactors;
 use crate::collection::stats::next_after;
 use crate::collection::stats::CollectionStats;
 use crate::collection::stats::Histogram;
 use crate::velesql::ast::{CompareOp, Condition, Value};
-use super::explain::{MatchTraversalPlan, PlanNode, VectorSearchPlan};
 
 // ---------------------------------------------------------------------------
 // Backward-compatibility constants
