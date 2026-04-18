@@ -70,10 +70,11 @@ pub enum DatasetError {
     Io(#[from] io::Error),
 }
 
-/// Canonical download URL (INRIA TEXMEX mirror). Override with
-/// `VELESDB_SIFT1M_URL` for a corporate mirror.
-const DEFAULT_URL: &str = "ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz";
-/// Secondary mirror. Tried if the primary HEAD request fails.
+/// HTTP mirror used as the default download URL. Override with
+/// `VELESDB_SIFT1M_URL` env for corporate mirrors. `ureq` only supports
+/// HTTP/HTTPS, so the INRIA FTP endpoint cannot be used here — the HTTP
+/// mirror served by `corpus-texmex.irisa.fr` is the canonical fetch
+/// target for this loader.
 const HTTPS_MIRROR: &str = "http://corpus-texmex.irisa.fr/sift.tar.gz";
 
 /// Base vectors: 1M × 128D.
