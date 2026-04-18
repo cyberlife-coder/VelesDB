@@ -190,16 +190,51 @@ class GraphRetriever(BaseRetriever):
     def _init_native_graph(
         self, db_path: Optional[str], collection_name: Optional[str]
     ) -> Any:
-        """Resolve db_path and open the native graph collection."""
+        """Resolve the shared Database and open the native graph collection.
+
+        Reuses the index's vector store lazy Database instance (via
+        ``_get_db()``) instead of opening a second ``velesdb.Database`` on
+        the same path, which would trigger VELES-031 (exclusive write-lock).
+
+        Falls back to path-based open when the vector store does not expose
+        ``_get_db`` (e.g. REST-only stores or custom implementations).
+        """
+        if not collection_name:
+            raise ValueError(
+                "Native mode requires 'graph_collection_name'."
+            )
+        try:
+            vs = self._index._vector_store
+            get_db = getattr(vs, "_get_db", None)
+        except AttributeError:
+            get_db = None
+
+        if get_db is not None:
+            return self._open_graph_from_shared_db(get_db, collection_name)
+        return self._open_graph_from_path(db_path, collection_name)
+
+    def _open_graph_from_shared_db(
+        self, get_db: Any, collection_name: str
+    ) -> Any:
+        """Open graph collection from the vector store's shared Database."""
+        db = get_db()
+        graph = db.get_graph_collection(collection_name)
+        if graph is None:
+            raise ValueError(
+                f"Graph collection '{collection_name}' not found "
+                "in the shared database."
+            )
+        return graph
+
+    def _open_graph_from_path(
+        self, db_path: Optional[str], collection_name: str
+    ) -> Any:
+        """Open graph collection by resolving db_path (fallback path)."""
         resolved_path = db_path or _infer_db_path(self._index)
         if resolved_path is None:
             raise ValueError(
                 "Native mode requires 'db_path' or an index whose vector store "
                 "exposes a '_db_path' / '_path' attribute."
-            )
-        if not collection_name:
-            raise ValueError(
-                "Native mode requires 'graph_collection_name'."
             )
         return open_native_graph(resolved_path, collection_name)
 
@@ -329,7 +364,29 @@ class GraphRetriever(BaseRetriever):
                 logger.debug("Failed to fetch neighbour node %s: %s", neighbor_id, exc)
 
     def _extract_node_id(self, node: Any) -> Optional[int]:
-        """Extract numeric node ID from a LlamaIndex node."""
+        """Extract numeric node ID from a LlamaIndex node.
+
+        ID convention (llamaindex): node IDs are **hash-based** via
+        ``_stable_hash_id(node.node_id)``. The extraction path in practice
+        is the ``_id_from_node_id`` fallback:
+
+          1. ``_id_from_metadata`` looks for ``id`` / ``doc_id`` /
+             ``node_id`` in ``node.metadata`` — in the default flow NONE
+             of these are present (``node_builder.py`` stores ``id`` at
+             the top level of the point dict, not in the payload; and
+             ``vectorstore._metadata_from_payload`` explicitly excludes
+             ``node_id`` from metadata).
+          2. ``_id_from_node_id`` reads ``node.node_id`` (the UUID string
+             assigned by LlamaIndex) and returns
+             ``stable_hash_id(node.node_id)``.
+
+        Callers adding graph edges MUST use the same ``_stable_hash_id``
+        of the original ``node_id`` as ``source`` / ``target``. This
+        differs from the langchain integration, which uses the internal
+        VelesDB point ID via ``metadata["_int_id"]`` — see
+        ``integrations/langchain/src/langchain_velesdb/graph_retriever.py``
+        ``_build_expanded_results``.
+        """
         try:
             found, from_meta = self._id_from_metadata(node)
             if found:
@@ -424,20 +481,23 @@ class GraphRetriever(BaseRetriever):
         return parse_graph_traverse_response(response)
 
     def _fetch_node(self, node_id: int) -> Optional[TextNode]:
-        """Fetch a node by ID from the vector store.
+        """Fetch a node by its **internal integer ID** (already hashed).
 
-        Args:
-            node_id: Node ID.
-
-        Returns:
-            TextNode or None if not found.
+        ``node_id`` is the hash-based int returned by
+        ``_extract_node_id`` / ``stable_hash_id(uuid)``. Delegates to
+        :meth:`VelesDBVectorStore.get_nodes_by_int_ids`, which passes the
+        ID straight to the underlying collection — using
+        :meth:`~VelesDBVectorStore.get_nodes` instead would re-hash the
+        int's string form and return nothing, making graph expansion a
+        silent no-op.
         """
         try:
             vs = self._index._vector_store
-            if hasattr(vs, "get_nodes"):
-                results = vs.get_nodes([str(node_id)])
-                if results:
-                    return results[0]
+            fetcher = getattr(vs, "get_nodes_by_int_ids", None)
+            if fetcher is None:
+                return None
+            results = fetcher([node_id])
+            return results[0] if results else None
         except (ValueError, RuntimeError, OSError, KeyError, ConnectionError, _VelesDBError) as exc:
             logger.debug("Failed to fetch node %s from vector store: %s", node_id, exc)
         return None

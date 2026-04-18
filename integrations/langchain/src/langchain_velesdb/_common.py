@@ -37,16 +37,26 @@ def payload_to_doc_parts(result: dict) -> Tuple[str, dict]:
     Centralises the payload → Document field extraction used by
     ``search_ops``, ``vectorstore``, and ``graph_ops``.
 
+    The internal numeric point ID is injected as ``metadata["_int_id"]``
+    so that callers such as ``GraphRetriever`` can use it as a stable
+    integer seed for graph traversal without needing to parse opaque
+    string IDs or relying on ``"id"`` / ``"doc_id"`` payload fields.
+
     Args:
-        result: A raw VelesDB result dict containing a ``"payload"`` key.
+        result: A raw VelesDB result dict containing a ``"payload"`` key
+            and optionally an ``"id"`` key with the numeric point ID.
 
     Returns:
         A ``(text, metadata)`` tuple where ``text`` is the document body
-        and ``metadata`` contains every payload field except ``"text"``.
+        and ``metadata`` contains every payload field except ``"text"``,
+        plus ``"_int_id"`` when the numeric ID is available.
     """
     payload = result.get("payload", {})
     text = payload.get("text", "")
     metadata = {k: v for k, v in payload.items() if k != "text"}
+    point_id = result.get("id")
+    if isinstance(point_id, int):
+        metadata["_int_id"] = point_id
     return text, metadata
 
 
