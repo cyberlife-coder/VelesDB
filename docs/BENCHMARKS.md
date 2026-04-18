@@ -362,6 +362,77 @@ cargo bench -p velesdb-core --bench hnsw_benchmark --features internal-bench -- 
 
 ---
 
+## 11. SIFT1M — Standard ANN Benchmark
+
+Section 9 reports a pre-tuned, machine-specific head-to-head against Qdrant on SIFT1M. Section 11 is different: a **fully self-reproducible** SIFT1M harness that anyone can rerun on their hardware, with the dataset, parameters, and methodology pinned in source.
+
+### 11.1 Dataset provenance
+
+- **Source**: Jégou, Douze, Schmid — *Product Quantization for Nearest Neighbor Search*, IEEE TPAMI 33(1), 2011.
+- **Host**: INRIA TEXMEX project — [corpus-texmex.irisa.fr](http://corpus-texmex.irisa.fr/).
+- **Composition**: 1,000,000 base vectors + 10,000 queries + 100 groundtruth nearest neighbours per query. 128-dim SIFT descriptors, L2 distance.
+- **Why SIFT1M**: de facto standard in ANN benchmark literature — Faiss, ScaNN, HNSWlib, DiskANN, Qdrant, Weaviate, Milvus all publish SIFT1M numbers. Cross-implementation comparable, unlike synthetic corpora.
+- **NOT committed to git** (≈ 525 MB uncompressed). Downloaded on first bench run into `target/bench-data/sift1m/`, or pre-populate and point `VELESDB_SIFT1M_DIR` at it.
+
+### 11.2 Methodology
+
+- Brute-force groundtruth **provided by the dataset** — no internal computation, no risk of a home-cooked reference drifting over time.
+- Index: native HNSW (`max_connections = 16`, `ef_construction = 200`) — matches the canonical HNSWlib SIFT1M reference methodology.
+- Metric: `DistanceMetric::Euclidean` (L2) — SIFT descriptors are L2.
+- `ef_search` sweep: 64, 128, 256, 512. Values in the `RECALL_REPORT` output lines are **exact** — passed to the graph traversal verbatim.
+- **Search path**: [`HnswIndex::search_raw`] — the raw HNSW graph search, bypassing `SearchQuality` ef scaling and two-stage reranking. This produces numbers directly comparable with HNSWlib / Faiss / ScaNN plain HNSW. VelesDB's production search path (`search_with_quality`) wraps this with quality-aware ef scaling and exact-SIMD reranking and is measured separately by `benches/recall_comprehensive.rs`; the two numbers are intentionally different and cover different questions (apples-to-apples cross-implementation vs. end-to-end product path).
+- **Recall@10** = mean over 10,000 queries of `|retrieved_top10 ∩ groundtruth_top10| / 10`.
+- **Latency** measured by Criterion (20 samples / ef value, mean + 95% CI). Recall measured in a separate pass after the timing pass so the timing loop is not polluted by intersection bookkeeping.
+
+### 11.3 Expected ranges
+
+First-run numbers will be populated in this section after the initial bench run on the reference hardware (i9-14900KF, 64 GB DDR5, rustc 1.94, `target-cpu=native`). Until then, literature reference points (published by the respective libraries on similar hardware — **not VelesDB numbers**):
+
+| Library | Config | Recall@10 | Per-query latency |
+|---------|--------|-----------|-------------------|
+| HNSWlib | M=16, ef=128 | ≈ 0.99 | ≈ 0.1–0.3 ms |
+| Faiss IVF+PQ | nlist=1024, nprobe=16 | 0.85–0.95 | ≈ 0.5–1 ms |
+| ScaNN | default | 0.98–0.99 | ≈ 0.1–0.2 ms |
+
+These are orientation only. VelesDB numbers will replace this table after the first reproducible run.
+
+### 11.4 How to run
+
+```bash
+# One-shot: download + index + measure (first run ≈ 3–5 min)
+cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m
+
+# Using pre-downloaded data (offline / CI runner):
+VELESDB_SIFT1M_DIR=/data/sift1m \
+  cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m
+
+# Smoke run without the full 1M build (agent / CI smoke):
+VELESDB_SIFT1M_SUBSET_BASE=10000 VELESDB_SIFT1M_SUBSET_QUERY=100 \
+  cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m
+
+# Extract the recall numbers:
+cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m 2>&1 \
+  | grep RECALL_REPORT
+```
+
+### 11.5 How to interpret
+
+- **Recall@10 < 0.90 at ef=128** → HNSW quality regression. Block the merge; investigate before accepting.
+- **p50 latency > 1 ms at ef=128 on reference hardware** → performance regression vs v1.11.x baseline.
+- **QPS < 1,000 single-thread** → SIMD dispatch or `target-cpu=native` flag may be disabled on the build host.
+
+### 11.6 CI coverage
+
+The SIFT1M bench is feature-gated behind `bench-sift1m`, so regular workspace `cargo check` / `cargo clippy` runs do NOT discover this code. To prevent silent API drift (e.g., [`HnswIndex::search_raw`] signature changes), CI runs a dedicated `Bench SIFT1M Compile Check` job (see `.github/workflows/ci.yml`) that invokes `cargo check -p velesdb-core --benches --features bench-sift1m` and the same for `--tests ... --test sift1m_loader_unit_tests`. The job only type-checks — it does not download the dataset or run any benchmark.
+
+### 11.7 Known limitations of this harness
+
+- First run downloads from `http://corpus-texmex.irisa.fr/sift.tar.gz`. If the mirror is offline, pre-populate `VELESDB_SIFT1M_DIR` — the bench detects the cache and skips the download.
+- **SHA-256 fingerprints are currently placeholders** (`TODO(US-S4-BENCH-SIFT1M)`). On first run (or any run while the placeholders are in place), `verify_fingerprint` prints the observed SHA-256 to stderr with a `[WARN]` prefix and the exact pinning instructions. Paste those values into the `SHA256_BASE` / `SHA256_QUERY` / `SHA256_GT` constants in `crates/velesdb-core/benches/datasets/sift1m.rs` (around line 96) after verifying against the INRIA distribution. **Until pinned, bit-level corruption inside a valid-shape file is NOT detected** — only row count and dimension are validated by `check_shape`. Pinning closes that gap.
+- No competitor comparison in this section — Section 9 owns that. Re-running Section 9 requires a separate Docker Compose harness (tracked as a follow-up PR).
+
+---
+
 ## Methodology
 
 - **Hardware**: See Test Environment section above

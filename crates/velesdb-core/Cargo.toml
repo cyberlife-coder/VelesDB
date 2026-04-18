@@ -109,6 +109,18 @@ version = "2.7"
 default = ["persistence"]
 gpu = ["wgpu", "pollster", "bytemuck"]
 internal-bench = []
+## Enables the standardized SIFT1M ANN benchmark
+## (`cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m`).
+## Gated because the loader pulls in `flate2`, `tar`, `ureq`, `sha2` as
+## optional [dependencies] — NOT dev-deps. If this feature is activated on a
+## release build (whether on velesdb-core, velesdb-server, or tauri-plugin-velesdb
+## via their forwarding entries), these crates including `ureq` (HTTP client
+## with TLS) ARE linked into the production binary. Only enable for local or
+## dedicated bench-runner use — never in shipping builds.
+## Also downloads a ~168 MB tarball on first run. CI skips this bench (but a
+## lightweight compile-check job runs `cargo check --features bench-sift1m`
+## to catch API drift).
+bench-sift1m = ["dep:flate2", "dep:tar", "dep:ureq", "dep:sha2"]
 openapi = ["dep:utoipa"]
 persistence = ["dep:memmap2", "dep:rayon", "dep:tokio", "dep:ndarray", "dep:fs2"]
 update-check = ["dep:reqwest", "dep:tokio", "dep:sha2", "dep:hex", "dep:hostname", "dep:whoami"]
@@ -341,6 +353,22 @@ optional = true
 version = "5"
 optional = true
 
+# Dataset loader deps (optional, gated behind bench-sift1m feature).
+# These are only pulled in when compiling the SIFT1M benchmark —
+# never in default / WASM / production builds.
+[dependencies.flate2]
+version = "1"
+optional = true
+
+[dependencies.tar]
+version = "0.4"
+optional = true
+
+[dependencies.ureq]
+version = "2"
+features = ["tls"]
+optional = true
+
 [lints]
 workspace = true
 
@@ -384,3 +412,8 @@ harness = false
 [[bench]]
 name = "graph_traversal_v2"
 harness = false
+
+[[bench]]
+name = "sift1m_recall"
+harness = false
+required-features = ["bench-sift1m"]

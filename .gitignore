@@ -68,6 +68,10 @@ lcov-*.info
 /benches/results/
 /benchmarks/phase_results/
 
+# Benchmark datasets (downloaded by bench runners, never committed).
+# SIFT1M in particular extracts to ~525 MB.
+target/bench-data/
+
 # Documentation build
 /docs/build/
 

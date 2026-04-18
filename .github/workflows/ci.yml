@@ -247,6 +247,40 @@ jobs:
         run: cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
 
   # ===========================================================================
+  # Bench-sift1m Compile Check
+  # Compiles (does NOT run) the SIFT1M bench and its unit tests with
+  # `--features bench-sift1m` so API drift vs HnswIndex is caught on every
+  # push instead of surfacing the next time someone tries to run the bench.
+  # No dataset download, no benchmark execution, no test execution.
+  # ===========================================================================
+  bench-sift1m-compile:
+    name: Bench SIFT1M Compile Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
+        with:
+          packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
+
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
+        with:
+          shared-key: "velesdb-ci"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      - name: cargo check (bench + feature)
+        run: cargo check -p velesdb-core --benches --features bench-sift1m
+
+      - name: cargo check (sift1m loader unit tests)
+        run: cargo check --tests -p velesdb-core --features bench-sift1m --test sift1m_loader_unit_tests
+
+  # ===========================================================================
   # Python Integration Tests (uniquement si integrations/ modifié)
   # ===========================================================================
   python-integrations:
@@ -501,7 +535,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, wasm-check, velesql-conformance, perf-smoke, sonarcloud]
+    needs: [lint, test, security, wasm-check, velesql-conformance, perf-smoke, bench-sift1m-compile, sonarcloud]
     if: always()
     steps:
       - name: Check results
@@ -511,5 +545,6 @@ jobs:
           [[ "${{ needs.wasm-check.result }}" == "success" ]] && \
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \
           [[ "${{ needs.perf-smoke.result }}" == "success" ]] && \
+          [[ "${{ needs.bench-sift1m-compile.result }}" == "success" ]] && \
           [[ "${{ needs.security.result }}" == "success" ]] && \
           echo "✅ CI passed" || { echo "❌ CI failed"; exit 1; }

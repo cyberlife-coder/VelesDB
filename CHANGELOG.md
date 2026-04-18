@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Benchmarks
+
+- **Standardized SIFT1M ANN benchmark** (1M × 128D vectors, L2 metric) —
+  closes the pre-seed benchmark credibility gap by replacing the
+  synthetic-only recall reporting with a measurement against the
+  de-facto-standard INRIA TEXMEX dataset used throughout the ANN
+  literature (Faiss, HNSWlib, ScaNN, DiskANN, Qdrant, Weaviate, Milvus).
+  New files:
+  - `crates/velesdb-core/benches/datasets/sift1m.rs` — fvecs/ivecs
+    loader with `VELESDB_SIFT1M_DIR` env override for offline /
+    pre-populated data, streaming SHA-256 fingerprint hook, and
+    INRIA mirror download fallback for first-run machines.
+  - `crates/velesdb-core/benches/sift1m_recall.rs` — Criterion
+    benchmark sweeping `ef_search` ∈ {64, 128, 256, 512} with
+    p50 latency (Criterion) + Recall@10 on the full 10,000-query
+    set (printed as grep-friendly `RECALL_REPORT` lines).
+  - `docs/BENCHMARKS.md § 11` — dataset provenance, methodology,
+    how to run, how to interpret, known limitations.
+  - `docs/reference/promise-contract.json` — new claim
+    `benchmarks_sift1m_recall_at_10`.
+
+  Gated behind `--features bench-sift1m` so CI does not trigger the
+  ≈168 MB download. Dev-deps (`flate2`, `tar`, `ureq`, `sha2`) are
+  optional production deps activated only by the feature — default,
+  WASM, and production builds never pull them in. SHA-256 fingerprints
+  are placeholders until the first manually-verified run; loader
+  prints observed hashes so they can be pinned rather than fabricated.
+
 ### Added — Sprint 2 Wave 4 (TypeScript SDK)
 
 - **12 missing REST endpoint wrappers surfaced on the TS SDK**
