@@ -81,7 +81,7 @@ export async function streamInsert(
     const body: Record<string, any> = {
       id: restId,
       vector,
-      payload: doc.payload,
+      payload: doc.payload ?? null,
     };
 
     if (doc.sparseVector) {
