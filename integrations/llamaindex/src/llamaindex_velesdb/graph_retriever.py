@@ -367,10 +367,21 @@ class GraphRetriever(BaseRetriever):
         """Extract numeric node ID from a LlamaIndex node.
 
         ID convention (llamaindex): node IDs are **hash-based** via
-        ``_stable_hash_id(node_id)``, stored in the point payload under
-        ``"id"`` by ``node_builder.py`` and propagated to
-        ``node.metadata["id"]`` by VelesDB search. Callers adding graph
-        edges must use the SAME ``_stable_hash_id`` as source/target. This
+        ``_stable_hash_id(node.node_id)``. The extraction path in practice
+        is the ``_id_from_node_id`` fallback:
+
+          1. ``_id_from_metadata`` looks for ``id`` / ``doc_id`` /
+             ``node_id`` in ``node.metadata`` — in the default flow NONE
+             of these are present (``node_builder.py`` stores ``id`` at
+             the top level of the point dict, not in the payload; and
+             ``vectorstore._metadata_from_payload`` explicitly excludes
+             ``node_id`` from metadata).
+          2. ``_id_from_node_id`` reads ``node.node_id`` (the UUID string
+             assigned by LlamaIndex) and returns
+             ``stable_hash_id(node.node_id)``.
+
+        Callers adding graph edges MUST use the same ``_stable_hash_id``
+        of the original ``node_id`` as ``source`` / ``target``. This
         differs from the langchain integration, which uses the internal
         VelesDB point ID via ``metadata["_int_id"]`` — see
         ``integrations/langchain/src/langchain_velesdb/graph_retriever.py``
