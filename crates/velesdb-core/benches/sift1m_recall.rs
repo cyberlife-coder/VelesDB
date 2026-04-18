@@ -68,14 +68,31 @@ fn bench_sift1m_recall_at_10(c: &mut Criterion) {
     report_recall(&index, &data);
 }
 
-/// Dispatches to the subset loader when either env var is set (smoke),
-/// otherwise loads the full 1M corpus.
+/// Dispatches to the subset loader when BOTH env vars are set (smoke mode).
+/// If only one of `VELESDB_SIFT1M_SUBSET_BASE` / `VELESDB_SIFT1M_SUBSET_QUERY`
+/// is set, prints a loud warning and falls through to the full 1M corpus
+/// (same behaviour as if neither were set). Loud warning is required because
+/// a silent fallthrough wastes 168 MB of download and ~545 MB of RAM on
+/// users who thought they were running a smoke test.
 fn try_load() -> Result<Sift1M, DatasetError> {
-    if let (Some(nb), Some(nq)) = (env_usize(ENV_SUBSET_BASE), env_usize(ENV_SUBSET_QUERY)) {
-        eprintln!("[sift1m_recall] subset mode: base={nb} query={nq}");
-        return load_sift1m_subset(nb, nq);
+    let nb = env_usize(ENV_SUBSET_BASE);
+    let nq = env_usize(ENV_SUBSET_QUERY);
+    match (nb, nq) {
+        (Some(nb), Some(nq)) => {
+            eprintln!("[sift1m_recall] subset mode: base={nb} query={nq}");
+            load_sift1m_subset(nb, nq)
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            eprintln!(
+                "⚠️  [sift1m_recall] WARNING: only one of {ENV_SUBSET_BASE} and \
+                 {ENV_SUBSET_QUERY} is set — BOTH are required for subset mode. \
+                 Falling through to the FULL 1M corpus (168 MB download, ~545 MB \
+                 RAM). Set both env vars to activate smoke mode."
+            );
+            load_sift1m()
+        }
+        (None, None) => load_sift1m(),
     }
-    load_sift1m()
 }
 
 fn env_usize(name: &str) -> Option<usize> {
