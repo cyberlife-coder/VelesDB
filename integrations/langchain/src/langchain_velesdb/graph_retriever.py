@@ -266,7 +266,7 @@ class GraphRetriever(BaseRetriever):
         graph_available = True
 
         for doc, score in seeds:
-            doc_id = doc.metadata.get("id") or doc.metadata.get("doc_id")
+            doc_id = doc.metadata.get("_int_id")
             if doc_id is None:
                 continue
             seed_docs[doc_id] = (doc, score)
