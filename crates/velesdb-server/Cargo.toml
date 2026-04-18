@@ -53,11 +53,6 @@ utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 
 [features]
 default = ["velesdb-core/default", "persistence", "update-check"]
-## Forwards `velesdb-core/bench-sift1m`. Bench-only; pulls in the
-## SIFT1M loader + download deps (flate2, tar, ureq, sha2). Never
-## enable for a production server build — the loader is intended
-## for the core crate's Criterion harness.
-bench-sift1m = ["velesdb-core/bench-sift1m"]
 gpu = ["velesdb-core/gpu"]
 internal-bench = ["velesdb-core/internal-bench"]
 loom = ["velesdb-core/loom"]
