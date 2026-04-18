@@ -13,7 +13,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { trainPq } from '../src/backends/streaming-backend';
 import type { TransportResponse } from '../src/backends/shared';
-import { CollectionNotFoundError } from '../src/errors';
+import {
+  CollectionNotFoundError,
+  InvalidCollectionNameError,
+} from '../src/errors';
 import { buildTransport } from './helpers/build-streaming-transport';
 
 describe('trainPq', () => {
@@ -97,22 +100,61 @@ describe('trainPq', () => {
     );
   });
 
-  // NOTE: trainPq interpolates collection name without escaping — tracked in
-  // TODO(US-S4-07): trainPq escape — follow-up source-level fix. This
-  // test pins the current behavior so future escaping is caught as a
-  // breaking change.
-  it('interpolates collection name raw into the VelesQL query (pre-existing limitation)', async () => {
-    const transport = buildTransport();
-    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      data: { message: 'ok' },
-    });
+  // Issue #597 (closed): trainPq now validates the collection name before
+  // interpolating it into the VelesQL query, preventing VelesQL injection
+  // via crafted names. Rules mirror the core Rust validator.
+  describe('collection name validation (#597)', () => {
+    const validNames = [
+      'docs',
+      'docs_v2',
+      'docs-v2',
+      'A1_b2-C3',
+      'collection',
+      'x',
+      'x'.repeat(128), // max length
+    ];
 
-    await trainPq(transport, 'my collection');
+    for (const name of validNames) {
+      it(`accepts valid collection name: ${name.length > 20 ? `${name.slice(0, 8)}... (len=${name.length})` : name}`, async () => {
+        const transport = buildTransport();
+        (
+          transport.requestJson as ReturnType<typeof vi.fn>
+        ).mockResolvedValueOnce({
+          data: { message: 'ok' },
+        });
 
-    expect(transport.requestJson).toHaveBeenCalledWith(
-      'POST',
-      '/query',
-      { query: 'TRAIN QUANTIZER ON my collection WITH (m=8, k=256)' }
-    );
+        await expect(trainPq(transport, name)).resolves.toBe('ok');
+        expect(transport.requestJson).toHaveBeenCalledTimes(1);
+      });
+    }
+
+    const invalidNames: Array<[string, string]> = [
+      ['my collection', 'contains space'],
+      ["a'; DROP TABLE users;--", 'contains SQL injection characters'],
+      ['docs"', 'contains double quote'],
+      ['docs;', 'contains semicolon'],
+      ['docs*', 'contains asterisk'],
+      ['docs.bak', 'contains dot'],
+      ['docs/evil', 'contains forward slash'],
+      ['docs\\evil', 'contains backslash'],
+      ['-leading-hyphen', 'starts with hyphen'],
+      ['', 'is empty'],
+      ['.', 'is dot (path traversal)'],
+      ['..', 'is dotdot (path traversal)'],
+      ['café', 'contains non-ASCII character'],
+      ['CON', 'is Windows reserved name'],
+      ['x'.repeat(129), 'exceeds max length'],
+    ];
+
+    for (const [name, reason] of invalidNames) {
+      it(`rejects invalid collection name (${reason})`, async () => {
+        const transport = buildTransport();
+        // requestJson must NOT be called — validation happens first.
+        await expect(trainPq(transport, name)).rejects.toThrow(
+          InvalidCollectionNameError
+        );
+        expect(transport.requestJson).not.toHaveBeenCalled();
+      });
+    }
   });
 });

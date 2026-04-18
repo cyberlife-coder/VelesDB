@@ -125,11 +125,10 @@ describe('streamInsert', () => {
     expect(body.vector).toEqual([1.0, 2.0, 3.0]);
   });
 
-  // NOTE: streamInsert omits payload from JSON body when undefined, unlike
-  // streamUpsertPoints which serializes it as null. Tracked in
-  // TODO(US-S4-07): streamInsert payload alignment — follow-up source-level
-  // fix. This test pins the current behavior.
-  it('omits payload key from JSON body when doc.payload is undefined (pre-existing limitation)', async () => {
+  // Issue #596 (closed): streamInsert now serializes payload as null when
+  // doc.payload is undefined, aligning with streamUpsertPoints for a
+  // consistent API contract across both streaming endpoints.
+  it('serializes payload as null when doc.payload is undefined (aligned with streamUpsertPoints)', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -141,10 +140,30 @@ describe('streamInsert', () => {
 
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
     const rawBody = opts.body as string;
-    expect(rawBody).not.toContain('"payload"');
+    expect(rawBody).toContain('"payload":null');
 
     const body = JSON.parse(rawBody) as Record<string, unknown>;
-    expect('payload' in body).toBe(false);
+    expect('payload' in body).toBe(true);
+    expect(body.payload).toBeNull();
+  });
+
+  it('serializes payload when doc.payload is a value (non-null, non-undefined)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    });
+
+    const transport = buildTransport();
+    await streamInsert(transport, 'docs', [
+      { id: 1, vector: [0.1], payload: { title: 'Hello', count: 42 } },
+    ]);
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string) as {
+      payload: Record<string, unknown>;
+    };
+    expect(body.payload).toEqual({ title: 'Hello', count: 42 });
   });
 
   it('does not throw on HTTP 202 Accepted', async () => {

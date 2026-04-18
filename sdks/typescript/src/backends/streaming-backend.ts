@@ -14,7 +14,12 @@ import type {
 } from '../types';
 import { BackpressureError, ConnectionError, VelesDBError } from '../types';
 import type { BaseTransport } from './shared';
-import { throwOnError, collectionPath, toNumberArray } from './shared';
+import {
+  throwOnError,
+  collectionPath,
+  toNumberArray,
+  validateCollectionName,
+} from './shared';
 
 /** Minimal transport interface for streaming operations. */
 export interface StreamingTransport extends BaseTransport {
@@ -33,6 +38,13 @@ export async function trainPq(
   collection: string,
   options?: PqTrainOptions
 ): Promise<string> {
+  // Defence-in-depth: the collection name is interpolated into the
+  // VelesQL query below (the grammar does not bind identifiers as
+  // parameters at this position), so we validate client-side with the
+  // exact same rules as the core Rust validator to prevent injection.
+  // Fixes #597.
+  validateCollectionName(collection);
+
   const m = options?.m ?? 8;
   const k = options?.k ?? 256;
   const withClause = options?.opq
@@ -81,7 +93,7 @@ export async function streamInsert(
     const body: Record<string, any> = {
       id: restId,
       vector,
-      payload: doc.payload,
+      payload: doc.payload ?? null,
     };
 
     if (doc.sparseVector) {
