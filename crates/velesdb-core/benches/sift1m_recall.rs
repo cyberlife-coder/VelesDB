@@ -10,8 +10,8 @@
 //! **Search path**: uses [`HnswIndex::search_raw`] — the raw HNSW graph
 //! traversal that honours the supplied `ef_search` verbatim, with no
 //! quality-aware ef scaling and no two-stage reranking. This is the
-//! apples-to-apples plain-HNSW path, directly comparable to HNSWlib /
-//! Faiss / ScaNN published SIFT1M numbers. VelesDB's production search
+//! apples-to-apples plain-HNSW path, directly comparable to `HNSWlib` /
+//! `Faiss` / `ScaNN` published SIFT1M numbers. `VelesDB`'s production search
 //! path ([`HnswIndex::search_with_quality`]) wraps this with ef scaling +
 //! exact-SIMD reranking and is measured separately by
 //! `benches/recall_comprehensive.rs`.

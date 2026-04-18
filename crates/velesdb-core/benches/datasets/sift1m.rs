@@ -82,7 +82,7 @@ pub enum DatasetError {
 /// HTTP/HTTPS, so the INRIA FTP endpoint cannot be used here — the HTTP
 /// mirror served by `corpus-texmex.irisa.fr` is the canonical fetch
 /// target for this loader.
-const HTTPS_MIRROR: &str = "http://corpus-texmex.irisa.fr/sift.tar.gz";
+const DOWNLOAD_MIRROR: &str = "http://corpus-texmex.irisa.fr/sift.tar.gz";
 
 /// Base vectors: 1M × 128D.
 const BASE_FILE: &str = "sift_base.fvecs";
@@ -220,7 +220,7 @@ fn download_allowed() -> bool {
 }
 
 fn download_and_extract(cache_dir: &Path) -> Result<(), DatasetError> {
-    let url = std::env::var(ENV_URL).unwrap_or_else(|_| HTTPS_MIRROR.to_string());
+    let url = std::env::var(ENV_URL).unwrap_or_else(|_| DOWNLOAD_MIRROR.to_string());
     let tarball = cache_dir.join("sift.tar.gz");
     eprintln!("[sift1m] downloading {url} -> {}", tarball.display());
     download_tarball(&url, &tarball)?;

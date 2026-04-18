@@ -112,8 +112,14 @@ internal-bench = []
 ## Enables the standardized SIFT1M ANN benchmark
 ## (`cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m`).
 ## Gated because the loader pulls in `flate2`, `tar`, `ureq`, `sha2` as
-## dev-deps and downloads a ~168 MB tarball on first run. CI skips this
-## bench — it is meant for local / dedicated bench-runner use.
+## optional [dependencies] — NOT dev-deps. If this feature is activated on a
+## release build (whether on velesdb-core, velesdb-server, or tauri-plugin-velesdb
+## via their forwarding entries), these crates including `ureq` (HTTP client
+## with TLS) ARE linked into the production binary. Only enable for local or
+## dedicated bench-runner use — never in shipping builds.
+## Also downloads a ~168 MB tarball on first run. CI skips this bench (but a
+## lightweight compile-check job runs `cargo check --features bench-sift1m`
+## to catch API drift).
 bench-sift1m = ["dep:flate2", "dep:tar", "dep:ureq", "dep:sha2"]
 openapi = ["dep:utoipa"]
 persistence = ["dep:memmap2", "dep:rayon", "dep:tokio", "dep:ndarray", "dep:fs2"]
