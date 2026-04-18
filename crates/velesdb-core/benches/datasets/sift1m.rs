@@ -14,17 +14,24 @@
 //! File format: `.fvecs` / `.ivecs` — records of `[dim:u32 LE][dim × f32 LE]`
 //! (or `u32` for the ivecs variant), concatenated with no header.
 //!
-//! # SHA-256 fingerprints
+//! # SHA-256 fingerprints — KNOWN LIMITATION (placeholder mode)
 //!
 //! The constants `SHA256_*` below are placeholders until the first
 //! download is manually verified against an authoritative source.
 //! SHA-256 is computed on every `load_sift1m*` call (post-download or
 //! when reading the cached files). When the pinned constants are still
 //! `TODO_` placeholders, [`verify_fingerprint`] prints the observed
-//! hashes (to stderr) and returns `Ok(())` so the user can capture and
-//! pin them. Once real fingerprints are pinned, a mismatch surfaces as
-//! [`DatasetError::Parse`]. This is by design — fabricated fingerprints
-//! are worse than no fingerprints. See `TODO(US-S4-BENCH-SIFT1M)` below.
+//! hashes (to stderr with a `[WARN]` prefix) and returns `Ok(())` so
+//! the user can capture and pin them. Once real fingerprints are
+//! pinned, a mismatch surfaces as [`DatasetError::Parse`]. This is by
+//! design — fabricated fingerprints are worse than no fingerprints.
+//!
+//! **Until the placeholders are pinned, bit-level corruption in a
+//! valid-shape file is NOT detected.** The only safeguard is
+//! [`check_shape`] which validates row count and dimension. Pinning the
+//! hashes into the `SHA256_*` constants (see `TODO(US-S4-BENCH-SIFT1M)`
+//! below) closes that gap. First-run output prints the observed values
+//! so a maintainer can paste them in after manual verification.
 
 #![allow(dead_code)]
 #![allow(clippy::cast_precision_loss)]
@@ -413,9 +420,17 @@ fn hex_encode(bytes: &[u8]) -> String {
 pub(crate) fn verify_fingerprint(path: &Path, expected_sha256: &str) -> Result<(), DatasetError> {
     let actual = hash_file(path)?;
     if expected_sha256.starts_with("TODO_") {
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("<unknown>");
         eprintln!(
-            "[sift1m] observed SHA-256 of {}: {actual} (pin this in the const)",
-            path.display()
+            "\n[WARN] [sift1m] verify_fingerprint: {filename} — placeholder fingerprint detected.\n\
+             [WARN] Observed SHA-256: {actual}\n\
+             [WARN] Pin this value into the SHA256_* constant at sift1m.rs:96-98 after manual\n\
+             [WARN] verification. Until pinned, bit-level corruption is NOT detected (only\n\
+             [WARN] dimension and row count are validated via check_shape).\n\
+             [WARN] See TODO(US-S4-BENCH-SIFT1M) at sift1m.rs (module rustdoc + SHA256_* consts).\n"
         );
         return Ok(());
     }
