@@ -6,9 +6,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { streamUpsertPoints } from '../src/backends/streaming-backend';
+import {
+  streamUpsertPoints,
+  trainPq,
+  streamInsert,
+} from '../src/backends/streaming-backend';
 import type { StreamingTransport } from '../src/backends/streaming-backend';
+import type { TransportResponse } from '../src/backends/shared';
 import { BackpressureError, ConnectionError, VelesDBError } from '../src/types';
+import { CollectionNotFoundError } from '../src/errors';
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -254,5 +260,257 @@ describe('streamUpsertPoints', () => {
     const body = (mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string;
     const parsed = JSON.parse(body);
     expect(parsed.payload).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// trainPq — POST /query with a VelesQL TRAIN QUANTIZER statement
+// ---------------------------------------------------------------------------
+
+describe('trainPq', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses defaults m=8, k=256 without opq', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { message: 'PQ training initiated' },
+    } satisfies TransportResponse<{ message: string }>);
+
+    await trainPq(transport, 'docs');
+
+    expect(transport.requestJson).toHaveBeenCalledWith(
+      'POST',
+      '/query',
+      { query: 'TRAIN QUANTIZER ON docs WITH (m=8, k=256)' }
+    );
+  });
+
+  it('reflects explicit m=16, k=512 in the query', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { message: 'ok' },
+    });
+
+    await trainPq(transport, 'docs', { m: 16, k: 512 });
+
+    expect(transport.requestJson).toHaveBeenCalledWith(
+      'POST',
+      '/query',
+      { query: 'TRAIN QUANTIZER ON docs WITH (m=16, k=512)' }
+    );
+  });
+
+  it('appends opq=true when options.opq is set', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { message: 'ok' },
+    });
+
+    await trainPq(transport, 'docs', { m: 8, k: 256, opq: true });
+
+    expect(transport.requestJson).toHaveBeenCalledWith(
+      'POST',
+      '/query',
+      { query: 'TRAIN QUANTIZER ON docs WITH (m=8, k=256, opq=true)' }
+    );
+  });
+
+  it('returns the server-provided message', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { message: 'Training started for docs (PQ m=8 k=256)' },
+    });
+
+    const result = await trainPq(transport, 'docs');
+    expect(result).toBe('Training started for docs (PQ m=8 k=256)');
+  });
+
+  it('falls back to "PQ training initiated" when data.message is missing', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {} as { message: string },
+    });
+
+    const result = await trainPq(transport, 'docs');
+    expect(result).toBe('PQ training initiated');
+  });
+
+  it('throws a typed VelesError on error payload', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      error: { code: 'VELES-002', message: "Collection 'missing' not found" },
+    });
+
+    await expect(trainPq(transport, 'missing')).rejects.toThrow(
+      CollectionNotFoundError
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// streamInsert — one HTTP POST per document (bounded ingestion channel)
+// ---------------------------------------------------------------------------
+
+describe('streamInsert', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('POSTs one document to /collections/{name}/stream/insert with JSON body', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    });
+
+    const transport = buildTransport();
+    await streamInsert(transport, 'docs', [
+      { id: 1, vector: [0.1, 0.2], payload: { title: 'A' } },
+    ]);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://localhost:8080/collections/docs/stream/insert');
+    expect(opts.method).toBe('POST');
+    expect((opts.headers as Record<string, string>)['Content-Type']).toBe(
+      'application/json'
+    );
+    const body = JSON.parse(opts.body as string) as {
+      id: number;
+      vector: number[];
+      payload: Record<string, unknown>;
+    };
+    expect(body.id).toBe(1);
+    expect(body.vector).toEqual([0.1, 0.2]);
+    expect(body.payload).toEqual({ title: 'A' });
+  });
+
+  it('omits Authorization header when apiKey is undefined', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    });
+
+    const transport = buildTransport({ apiKey: undefined });
+    await streamInsert(transport, 'docs', [{ id: 1, vector: [0.1] }]);
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(
+      (opts.headers as Record<string, string>)['Authorization']
+    ).toBeUndefined();
+  });
+
+  it('sets Authorization: Bearer <key> when apiKey is set', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    });
+
+    const transport = buildTransport({ apiKey: 'secret-42' });
+    await streamInsert(transport, 'docs', [{ id: 1, vector: [0.1] }]);
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect((opts.headers as Record<string, string>)['Authorization']).toBe(
+      'Bearer secret-42'
+    );
+  });
+
+  it('includes sparse_vector in body when doc.sparseVector is provided', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    });
+
+    const transport = buildTransport();
+    await streamInsert(transport, 'docs', [
+      { id: 1, vector: [0.1], sparseVector: { 5: 0.8, 10: 0.3 } },
+    ]);
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string) as {
+      sparse_vector: Record<number, number>;
+    };
+    expect(body.sparse_vector).toEqual({ 5: 0.8, 10: 0.3 });
+  });
+
+  it('converts Float32Array input to a plain number array', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    });
+
+    const transport = buildTransport();
+    await streamInsert(transport, 'docs', [
+      { id: 1, vector: new Float32Array([1.0, 2.0, 3.0]) },
+    ]);
+
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string) as { vector: number[] };
+    expect(Array.isArray(body.vector)).toBe(true);
+    expect(body.vector).toEqual([1.0, 2.0, 3.0]);
+  });
+
+  it('does not throw on HTTP 202 Accepted', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 202,
+      json: () => Promise.resolve({}),
+    });
+
+    const transport = buildTransport();
+    await expect(
+      streamInsert(transport, 'docs', [{ id: 1, vector: [0.1] }])
+    ).resolves.toBeUndefined();
+  });
+
+  it('throws BackpressureError on HTTP 429', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 429,
+      json: () => Promise.resolve({}),
+    });
+
+    const transport = buildTransport();
+    await expect(
+      streamInsert(transport, 'docs', [{ id: 1, vector: [0.1] }])
+    ).rejects.toThrow(BackpressureError);
+  });
+
+  it('calls fetch once per document for multi-doc input', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({}),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({}),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({}),
+      });
+
+    const transport = buildTransport();
+    await streamInsert(transport, 'docs', [
+      { id: 1, vector: [0.1] },
+      { id: 2, vector: [0.2] },
+      { id: 3, vector: [0.3] },
+    ]);
+
+    expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 });
