@@ -3,9 +3,9 @@
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-1.12.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
+[![Version](https://img.shields.io/badge/version-1.13.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
-Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.12.0 - a high-performance vector database for AI applications.
+Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.13.0 - a high-performance vector database for AI applications.
 
 ## Features
 

@@ -2,9 +2,17 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.12.0** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.13.0** | Node.js >= 18 | Browser (WASM) | MIT License
 
-## What's New in v1.12.0
+## What's New in v1.13.0
+
+- **WASM VelesQL executor** -- full browser-side VelesQL execution: SELECT/INSERT/UPDATE/DELETE/DDL + aggregations (COUNT/SUM/AVG/MIN/MAX) + GROUP BY/HAVING/UNION/INTERSECT/EXCEPT/JOIN/FUSION/MATCH 1-2 hops + NOT De Morgan distribution
+- **TS SDK coverage raised to 94%** -- 423 tests, per-file thresholds codified in `vitest.config.ts`
+- **SIFT1M standardized ANN benchmark** -- fvecs/ivecs loader + Criterion ef sweep on the INRIA TEXMEX dataset, feature-gated behind `--features bench-sift1m`
+- **Security hardening** -- `validateCollectionName()` helper on TS SDK prevents VelesQL injection in `trainPq`
+- **API consistency** -- `streamInsert` now serializes `payload: null` explicitly (matches `streamUpsertPoints`)
+
+### Previous (v1.12.0)
 
 - **Cross-collection MATCH queries** -- `@collection` annotation on MATCH node patterns enables cross-collection graph queries
 - **MATCH via `/query` endpoint** -- MATCH queries can now be executed via `Database::execute_query`

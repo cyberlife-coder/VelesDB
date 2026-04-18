@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-04-18
+
+### Summary
+
+Sprint 4 Phase C wraps up the VelesQL WASM executor, raises the TypeScript
+SDK test coverage to 94% (from the 80% threshold), lands the SIFT1M
+standardized ANN benchmark (the de-facto cross-implementation recall
+number used by every major ANN paper), and closes three ts-sdk
+follow-ups (`prefer-const`, `streamInsert` payload parity, `trainPq`
+validation). Pre-seed credibility audit: the README now carries
+reproducer commands next to every performance claim, a dedicated
+"Known Limitations" section for scope transparency, and a refreshed
+test-count badge (7634 tests across Rust, TypeScript, Python).
+
 ### Added — Benchmarks
 
 - **Standardized SIFT1M ANN benchmark** (1M × 128D vectors, L2 metric) —

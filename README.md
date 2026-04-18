@@ -19,23 +19,17 @@
   <a href="https://pypi.org/project/velesdb/"><img src="https://img.shields.io/pypi/v/velesdb.svg" alt="PyPI"></a>
   <a href="https://www.npmjs.com/package/@wiscale/velesdb-sdk"><img src="https://img.shields.io/npm/v/@wiscale/velesdb-sdk.svg" alt="npm"></a>
   <a href="https://app.codacy.com/gh/cyberlife-coder/VelesDB/dashboard"><img src="https://app.codacy.com/project/badge/Coverage/58c73832dd294ba38144856ae69e9cf2" alt="Coverage"></a>
-  <img src="https://img.shields.io/badge/tests-6562_(incl._606_BDD)-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-7634_(Rust%2BTS%2BPy)-brightgreen" alt="Tests">
   <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-VelesDB_Core_1.0-blue" alt="License"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="Stars"></a>
   <a href="https://img.shields.io/badge/contributors-welcome-brightgreen"><img src="https://img.shields.io/badge/contributors-welcome-brightgreen" alt="Contributors Welcome"></a>
 </p>
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.12.0">Download v1.12.0</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/latest">Download latest release</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
 </p>
-
-<!-- TODO: Uncomment when GIF demo is ready
-<p align="center">
-  <img src="docs/assets/velesdb-demo.gif" alt="VelesDB Demo" width="700"/>
-</p>
--->
 
 ---
 
@@ -63,7 +57,7 @@ VelesDB removes the US provider from the chain entirely. One Rust binary, local-
 
 | Today (3 systems to maintain) | With VelesDB (1 binary) |
 |-------------------------------|------------------------|
-| pgvector for embeddings | **Vector Engine** — 47us HNSW search (768D) |
+| pgvector for embeddings | **Vector Engine** — ~55us HNSW search (5K/768D, k=10) |
 | Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
 | PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows |
 | Custom glue code + 3 query languages | **VelesQL** — one language for everything |
@@ -76,9 +70,12 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 
 | Engine | What it does | Performance |
 |--------|-------------|-------------|
-| **Vector** | Semantic similarity search (HNSW + AVX2/NEON SIMD) | **450us** p50 end-to-end (384D, WAL ON, recall>=96%) |
+| **Vector** | Semantic similarity search (HNSW + AVX2/NEON SIMD) | **450us** p50 end-to-end (384D, WAL ON, recall>=96%) [1] |
 | **Graph** | Knowledge relationships (BFS/DFS, edge properties) | Native **MATCH** clause |
-| **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning |
+| **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning [2] |
+
+> [1] Reproduce: `python benchmarks/velesdb_benchmark.py --recall` (Python SDK path, 10K/384D, WAL fsync on, i9-14900KF reference machine). See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [CHANGELOG v1.11.1](CHANGELOG.md).
+> [2] Reproduce: `cargo bench -p velesdb-core --bench filter_benchmark`. See [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md) — at 100K rows: ColumnStore 29.5 us vs JSON scan 3.84 ms (integer equality filter).
 
 All three are queried through **VelesQL** — a single SQL-like language with vector, graph, and columnar extensions:
 
@@ -141,6 +138,23 @@ memory.procedural.learn(1, "answer_geography", steps, embedding, confidence=0.8)
 > **VelesDB's sweet spot:** When you need vector + graph + structured filtering in a single engine, local-first deployment, or a lightweight binary that runs anywhere.
 >
 > **Not the best fit (yet):** If you need a managed cloud service with a multi-node distributed cluster.
+
+---
+
+## Known Limitations
+
+VelesDB is honest about its boundaries. The following are current scope limits of the open-source Community Edition — each is either a deliberate design trade-off or a feature tracked for a separate Enterprise edition. We list them here so you can make an informed technical choice.
+
+| # | Limitation | Scope | Tracked |
+|---|------------|-------|---------|
+| 1 | **Single writer per collection** — WAL is serialized; concurrent writers contend on the same fsync lock. | Design trade-off (local-first, crash-safe by default). Read throughput is unaffected. | Concurrent WAL writer is planned for the Enterprise edition (separate product, not yet public). See [docs/CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md). |
+| 2 | **No distributed replication** — VelesDB is single-node. No Raft, no sharding, no automatic failover in Core. | Deliberate: the sweet spot is local-first / embedded. | Raft-based replication is tracked internally for the Enterprise edition. Contact us for timeline. |
+| 3 | **No advanced RBAC / multi-tenant isolation** — The `DatabaseObserver` hook is shipped (Core) and can be wired to a homegrown RBAC layer, but a production-grade RBAC/audit implementation is not in Core. | Core ships the hook, not the policy engine. | Enterprise feature. |
+| 4 | **WASM MATCH limited to 2 hops** — The browser build of `velesdb-wasm` supports 1- and 2-hop graph `MATCH` patterns today. 3+ hop `MATCH` works fully in native builds (server / Python / mobile / CLI) via `velesdb-core`. | Scope of Sprint 4 item S4-13. | Tracked, not a correctness issue — native path already supports full traversal. |
+| 5 | **SIFT1M benchmark fingerprints not yet pinned** — The standardized SIFT1M loader (`--features bench-sift1m`) currently runs in placeholder-hash mode: on first download it prints the observed SHA-256 for the four `.fvecs`/`.ivecs` files so they can be manually pinned into the loader. | Not a correctness issue — the benchmark runs and reports Recall@10 correctly. Integrity pinning is a one-time bootstrap step. | Tracked; fingerprints will be committed after first verified run on a reference machine. |
+| 6 | **No head-to-head Docker Compose benchmark vs Qdrant / Chroma / FAISS yet** — The SIFT1M benchmark (new in v1.13.0) is the standardized cross-implementation comparable number and matches the dataset used by every major ANN paper. A one-shot Docker Compose harness that runs all four systems on the same machine is deferred until the benchmark infrastructure stabilizes. | Transparency: side-by-side numbers require infrastructure we have not frozen yet. | Tracked; SIFT1M already gives comparable recall@10 numbers against the literature. |
+
+None of the above is a correctness gap — the Community Edition is production-ready for single-node, local-first deployments. The items above are feature-scope boundaries, not bugs.
 
 ---
 
@@ -246,17 +260,19 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 <details>
 <summary>Detailed benchmarks and search modes</summary>
 
-| Benchmark | Result |
-|-----------|--------|
-| HNSW Search (5K/768D, k=10) | **55 us** |
-| SIMD Dot Product (768D, AVX2) | **21.7 ns** |
-| Recall@10 (Accurate) | **100%** |
+| Benchmark | Result | How to reproduce |
+|-----------|--------|------------------|
+| HNSW Search (5K/768D, k=10) | **55 us** | `cargo bench -p velesdb-core --bench hnsw_benchmark -- hnsw_search_latency` |
+| SIMD Dot Product (768D, AVX2) | **21.7 ns** | `cargo bench -p velesdb-core --bench simd_benchmark` |
+| Recall@10 (Accurate) | **100%** | `cargo bench -p velesdb-core --bench recall_benchmark` |
 
 | Mode | ef_search | Recall@10 | Use case |
 |------|-----------|-----------|----------|
 | Fast | 64 | 92.2% | Real-time suggestions, typeahead |
 | Balanced (default) | 128 | 98.8% | Production search, RAG pipelines |
 | Accurate | 512 | 100% | Evaluation, ground truth comparison |
+
+*Measurements sourced from `benchmarks/results/pr363_365_comparison.md` (i9-14900KF, 64 GB DDR5, Windows 11, `--release`, `target-cpu=native`). Windows micro-benchmarks carry 5-10% noise — expect a range, not a single point.*
 
 </details>
 
