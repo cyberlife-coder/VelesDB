@@ -1,44 +1,22 @@
 /**
- * Streaming Backend Tests (S4-02)
+ * Streaming Backend Tests — streamUpsertPoints (S4-02)
  *
  * Tests for the streamUpsertPoints batch wrapper that sends NDJSON to
  * POST /collections/{name}/points/stream.
+ *
+ * Split from the original streaming-backend.test.ts to keep each test
+ * file under the 500-line file-size limit. Sibling files:
+ *   - streaming-backend-train-pq.test.ts (trainPq)
+ *   - streaming-backend-insert.test.ts (streamInsert)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { streamUpsertPoints } from '../src/backends/streaming-backend';
-import type { StreamingTransport } from '../src/backends/streaming-backend';
 import { BackpressureError, ConnectionError, VelesDBError } from '../src/types';
+import { buildTransport } from './helpers/build-streaming-transport';
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
-
-function buildTransport(overrides: Partial<StreamingTransport> = {}): StreamingTransport {
-  return {
-    requestJson: vi.fn(),
-    baseUrl: 'http://localhost:8080',
-    apiKey: 'test-key',
-    timeout: 5000,
-    parseRestPointId: (id: string | number) => {
-      if (typeof id === 'string') return Number(id);
-      return id;
-    },
-    sparseVectorToRestFormat: (sv: Record<number, number>) => sv,
-    mapStatusToErrorCode: (status: number) => {
-      const map: Record<number, string> = { 400: 'BAD_REQUEST', 404: 'NOT_FOUND', 500: 'INTERNAL_ERROR' };
-      return map[status] ?? 'UNKNOWN_ERROR';
-    },
-    extractErrorPayload: (data: unknown) => {
-      if (!data || typeof data !== 'object') return {};
-      const d = data as Record<string, unknown>;
-      return {
-        code: typeof d.code === 'string' ? d.code : undefined,
-        message: typeof d.message === 'string' ? d.message : typeof d.error === 'string' ? d.error : undefined,
-      };
-    },
-    ...overrides,
-  };
-}
 
 describe('streamUpsertPoints', () => {
   beforeEach(() => {
