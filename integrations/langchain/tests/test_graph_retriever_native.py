@@ -76,6 +76,20 @@ def vector_store(db_dir: str):
     return store
 
 
+def _ensure_graph_collection(
+    store: VelesDBVectorStore, name: str
+) -> None:
+    """Pre-create a graph collection on the shared Database.
+
+    GraphRetriever does NOT auto-create the graph collection — callers
+    must ensure it exists before instantiating the retriever. This helper
+    centralises the create-if-missing logic for the tests.
+    """
+    db = store._get_db()
+    if db.get_graph_collection(name) is None:
+        db.create_graph_collection(name)
+
+
 # ---------------------------------------------------------------------------
 # Bug 2 regression: double-open must not raise VELES-031
 # ---------------------------------------------------------------------------
@@ -91,6 +105,7 @@ class TestBug2NoDoubleOpen:
         Before the fix, open_native_graph() opened a *second* velesdb.Database
         on the same path, which hit the exclusive write-lock (VELES-031).
         """
+        _ensure_graph_collection(vector_store, "test_graph")
         # This must not raise RuntimeError/DatabaseLockedError.
         retriever = GraphRetriever(
             vector_store=vector_store,
@@ -104,6 +119,7 @@ class TestBug2NoDoubleOpen:
         self, vector_store: VelesDBVectorStore, db_dir: str
     ) -> None:
         """The graph collection must come from the shared _db, not a new Database."""
+        _ensure_graph_collection(vector_store, "test_graph")
         retriever = GraphRetriever(
             vector_store=vector_store,
             mode="native",
@@ -137,10 +153,9 @@ class TestBug5SeedExpansion:
             raise RuntimeError("vector_store._db not yet initialised")
         graph = db.get_graph_collection(graph_collection_name)
         if graph is None:
-            # Create graph collection (it may not exist yet)
             raise RuntimeError(
                 f"Graph collection '{graph_collection_name}' not found. "
-                "Ensure GraphRetriever was instantiated first (it creates it)."
+                "The test must create it explicitly before populating."
             )
         # Add edges: seed[0] → seed[1], seed[1] → seed[0]
         if len(seed_ids) >= 2:
@@ -183,7 +198,9 @@ class TestBug5SeedExpansion:
         THEN at least one result must be annotated as 'graph_expanded' (not
         'vector_only'), proving that seed expansion actually ran.
         """
-        # Step 1: instantiate retriever (also creates graph collection)
+        # Step 0: pre-create graph collection (retriever does not auto-create)
+        _ensure_graph_collection(vector_store, "test_graph")
+        # Step 1: instantiate retriever
         retriever = GraphRetriever(
             vector_store=vector_store,
             mode="native",
@@ -229,6 +246,7 @@ class TestBug5SeedExpansion:
         WHEN _build_expanded_results is called,
         THEN seed_docs must be non-empty (seeds were NOT silently skipped).
         """
+        _ensure_graph_collection(vector_store, "test_graph2")
         retriever = GraphRetriever(
             vector_store=vector_store,
             mode="native",
