@@ -421,7 +421,11 @@ cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m 2>&1 \
 - **p50 latency > 1 ms at ef=128 on reference hardware** → performance regression vs v1.11.x baseline.
 - **QPS < 1,000 single-thread** → SIMD dispatch or `target-cpu=native` flag may be disabled on the build host.
 
-### 11.6 Known limitations of this harness
+### 11.6 CI coverage
+
+The SIFT1M bench is feature-gated behind `bench-sift1m`, so regular workspace `cargo check` / `cargo clippy` runs do NOT discover this code. To prevent silent API drift (e.g., [`HnswIndex::search_raw`] signature changes), CI runs a dedicated `Bench SIFT1M Compile Check` job (see `.github/workflows/ci.yml`) that invokes `cargo check -p velesdb-core --benches --features bench-sift1m` and the same for `--tests ... --test sift1m_loader_unit_tests`. The job only type-checks — it does not download the dataset or run any benchmark.
+
+### 11.7 Known limitations of this harness
 
 - First run downloads from `http://corpus-texmex.irisa.fr/sift.tar.gz`. If the mirror is offline, pre-populate `VELESDB_SIFT1M_DIR` — the bench detects the cache and skips the download.
 - **SHA-256 fingerprints are currently placeholders** (`TODO(US-S4-BENCH-SIFT1M)`). On first run (or any run while the placeholders are in place), `verify_fingerprint` prints the observed SHA-256 to stderr with a `[WARN]` prefix and the exact pinning instructions. Paste those values into the `SHA256_BASE` / `SHA256_QUERY` / `SHA256_GT` constants in `crates/velesdb-core/benches/datasets/sift1m.rs` (around line 96) after verifying against the INRIA distribution. **Until pinned, bit-level corruption inside a valid-shape file is NOT detected** — only row count and dimension are validated by `check_shape`. Pinning closes that gap.
