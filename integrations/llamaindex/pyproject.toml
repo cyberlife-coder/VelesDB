@@ -27,8 +27,8 @@ classifiers = [
 
 dependencies = [
     "llama-index-core>=0.10.0,<1.0.0",
-    "velesdb>=1.13.0",
-    "velesdb-common>=1.13.0",
+    "velesdb>=1.12.0",
+    "velesdb-common>=1.12.0",
 ]
 
 [project.optional-dependencies]
