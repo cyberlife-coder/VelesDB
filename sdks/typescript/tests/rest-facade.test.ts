@@ -461,3 +461,46 @@ describe('RestBackend — agent memory facade delegation', () => {
     expect(mockFetch).toHaveBeenCalled();
   });
 });
+
+describe('RestBackend — agent memory read methods require init', () => {
+  // Regression for Devin finding on PR #603: the 3 read-path agent
+  // memory methods (searchSemanticMemory, recallEpisodicEvents,
+  // matchProceduralPatterns) previously skipped `ensureInitialized()`,
+  // so calling them before `init()` produced a generic HTTP-layer
+  // failure instead of a clear ConnectionError. Their write
+  // counterparts already called `ensureInitialized()`; the fix makes
+  // the read path symmetric.
+
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it('searchSemanticMemory throws ConnectionError when called before init', async () => {
+    const backend = new RestBackend('http://localhost:8080');
+    await expect(
+      backend.searchSemanticMemory('docs', [0.1], 3)
+    ).rejects.toBeInstanceOf(ConnectionError);
+    await expect(
+      backend.searchSemanticMemory('docs', [0.1], 3)
+    ).rejects.toThrow(/REST backend not initialized/);
+  });
+
+  it('recallEpisodicEvents throws ConnectionError when called before init', async () => {
+    const backend = new RestBackend('http://localhost:8080');
+    await expect(
+      backend.recallEpisodicEvents('docs', [0.1], 3)
+    ).rejects.toBeInstanceOf(ConnectionError);
+    await expect(
+      backend.recallEpisodicEvents('docs', [0.1], 3)
+    ).rejects.toThrow(/REST backend not initialized/);
+  });
+
+  it('matchProceduralPatterns throws ConnectionError when called before init', async () => {
+    const backend = new RestBackend('http://localhost:8080');
+    await expect(
+      backend.matchProceduralPatterns('docs', [0.1], 3)
+    ).rejects.toBeInstanceOf(ConnectionError);
+    await expect(
+      backend.matchProceduralPatterns('docs', [0.1], 3)
+    ).rejects.toThrow(/REST backend not initialized/);
+  });
+});
