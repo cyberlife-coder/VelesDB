@@ -1,4 +1,4 @@
-# VelesDB Architecture Diagrams — v1.12.0
+# VelesDB Architecture Diagrams — v1.13.0
 
 ## 1. Workspace Dependency Graph
 
@@ -239,7 +239,7 @@ graph LR
     style C_MOBILE fill:#6e4a2d,stroke:#d35400,color:#fff
 ```
 
-## 6. Feature Propagation Matrix (v1.12.0)
+## 6. Feature Propagation Matrix (v1.13.0)
 
 ```mermaid
 graph TD
@@ -287,7 +287,7 @@ graph TD
     style P_WASM fill:#6e4a2d,stroke:#d35400,color:#fff
 ```
 
-## 7. NLOC Health Map (v1.12.0 — Post-Refactoring)
+## 7. NLOC Health Map (v1.13.0 — Post-Refactoring)
 
 | Severity | Count | Files |
 |----------|-------|-------|

@@ -880,7 +880,7 @@ class TestV15Features:
         """Test that package version matches workspace version."""
         from langchain_velesdb import __version__
 
-        assert __version__ == "1.12.0"
+        assert __version__ == "1.13.0"
 
 
 class TestServerUrlValidation:

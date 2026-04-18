@@ -795,7 +795,7 @@ class TestV15Features:
         """Test that __version__ matches workspace version."""
         from llamaindex_velesdb import __version__
 
-        assert __version__ == "1.12.0"
+        assert __version__ == "1.13.0"
 
 
 class TestServerUrlValidation:
