@@ -18,10 +18,13 @@
 //!
 //! The constants `SHA256_*` below are placeholders until the first
 //! download is manually verified against an authoritative source.
-//! Until then, the loader will print the observed SHA-256 values and
-//! return [`DatasetError::Parse`] asking the user to update the
-//! constants. This is by design — fabricated fingerprints are worse
-//! than no fingerprints. See `TODO(US-S4-BENCH-SIFT1M)` below.
+//! SHA-256 is computed on every `load_sift1m*` call (post-download or
+//! when reading the cached files). When the pinned constants are still
+//! `TODO_` placeholders, [`verify_fingerprint`] prints the observed
+//! hashes (to stderr) and returns `Ok(())` so the user can capture and
+//! pin them. Once real fingerprints are pinned, a mismatch surfaces as
+//! [`DatasetError::Parse`]. This is by design — fabricated fingerprints
+//! are worse than no fingerprints. See `TODO(US-S4-BENCH-SIFT1M)` below.
 
 #![allow(dead_code)]
 #![allow(clippy::cast_precision_loss)]
@@ -173,14 +176,27 @@ fn default_cache_dir() -> PathBuf {
 }
 
 fn ensure_cached(cache_dir: &Path) -> Result<(), DatasetError> {
-    if is_fully_cached(cache_dir) {
-        return Ok(());
+    if !is_fully_cached(cache_dir) {
+        if !download_allowed() {
+            return Err(DatasetError::NotCached);
+        }
+        fs::create_dir_all(cache_dir)?;
+        download_and_extract(cache_dir)?;
     }
-    if !download_allowed() {
-        return Err(DatasetError::NotCached);
-    }
-    fs::create_dir_all(cache_dir)?;
-    download_and_extract(cache_dir)
+    verify_all_fingerprints(cache_dir)
+}
+
+/// Verifies SHA-256 fingerprints of the three cached SIFT1M files.
+///
+/// When the pinned constants are still `TODO_` placeholders, observed
+/// hashes are printed to stderr and `Ok(())` is returned (first-run
+/// capture path). When real fingerprints are pinned, a mismatch surfaces
+/// as [`DatasetError::Parse`].
+fn verify_all_fingerprints(cache_dir: &Path) -> Result<(), DatasetError> {
+    verify_fingerprint(&cache_dir.join(BASE_FILE), SHA256_BASE)?;
+    verify_fingerprint(&cache_dir.join(QUERY_FILE), SHA256_QUERY)?;
+    verify_fingerprint(&cache_dir.join(GT_FILE), SHA256_GT)?;
+    Ok(())
 }
 
 fn is_fully_cached(cache_dir: &Path) -> bool {
@@ -393,7 +409,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// Verifies `path` against `expected_sha256`. When the expected value
 /// is a `TODO_` placeholder, prints the observed hash and returns Ok.
 /// Callers opt into strict verification by passing a non-placeholder.
-fn verify_fingerprint(path: &Path, expected_sha256: &str) -> Result<(), DatasetError> {
+pub(crate) fn verify_fingerprint(path: &Path, expected_sha256: &str) -> Result<(), DatasetError> {
     let actual = hash_file(path)?;
     if expected_sha256.starts_with("TODO_") {
         eprintln!(
@@ -411,9 +427,10 @@ fn verify_fingerprint(path: &Path, expected_sha256: &str) -> Result<(), DatasetE
     Ok(())
 }
 
-// Unit tests for fvecs/ivecs parsing live alongside the loader in an
-// integration-style bench harness: the dataset module is included via
-// `#[path]` in `sift1m_recall.rs` only, so a `#[cfg(test)]` mod tests
-// block here would never be compiled by `cargo test`. If future work
-// needs parser coverage, lift the parse helpers into
-// `crates/velesdb-core/src/` behind a `bench-utils` module.
+// Unit tests for the pure helpers (`filter_groundtruth`, `verify_fingerprint`)
+// live at `tests/sift1m_loader_unit_tests.rs` — the dataset module is included
+// there via `#[path]`. A `#[cfg(test)] mod tests` block here would never be
+// compiled by `cargo test` because the bench binary `sift1m_recall.rs` uses
+// `criterion_main!`, which replaces the default test harness. If future work
+// needs parser coverage on the full 168 MB corpus, lift the parse helpers
+// into `crates/velesdb-core/src/` behind a `bench-utils` module.

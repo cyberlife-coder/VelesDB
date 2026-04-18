@@ -185,3 +185,8 @@ fn intersection_ratio(results: &[ScoredResult], groundtruth: &[u32], k: usize) -
 
 criterion_group!(benches, bench_sift1m_recall_at_10);
 criterion_main!(benches);
+
+// Unit tests for helpers that don't need the 168 MB corpus live in
+// `tests/sift1m_loader_unit_tests.rs` (gated by `--features bench-sift1m`).
+// Criterion replaces the test harness in this bench binary, so a local
+// `#[cfg(test)] mod tests` block would never be discovered by `cargo test`.
