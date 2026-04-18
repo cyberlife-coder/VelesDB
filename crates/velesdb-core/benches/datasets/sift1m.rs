@@ -170,7 +170,7 @@ fn is_fully_cached(cache_dir: &Path) -> bool {
 
 fn download_allowed() -> bool {
     std::env::var(ENV_ALLOW_DOWNLOAD)
-        .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
         .unwrap_or(true)
 }
 
@@ -346,7 +346,9 @@ fn bytes_to_u32_vec(buf: &[u8]) -> Vec<u32> {
 fn hash_file(path: &Path) -> Result<String, DatasetError> {
     let mut reader = BufReader::new(File::open(path)?);
     let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
+    // Heap-allocated scratch buffer: 64 KiB stack arrays trigger
+    // `clippy::large_stack_arrays` (limit 16 KiB).
+    let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = reader.read(&mut buf)?;
         if n == 0 {
@@ -388,28 +390,9 @@ fn verify_fingerprint(path: &Path, expected_sha256: &str) -> Result<(), DatasetE
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bytes_roundtrip_f32() {
-        let src = [1.0_f32, -2.5, 3.25];
-        let bytes: Vec<u8> = src.iter().flat_map(|x| x.to_le_bytes()).collect();
-        let parsed = bytes_to_f32_vec(&bytes);
-        assert_eq!(parsed, src);
-    }
-
-    #[test]
-    fn bytes_roundtrip_u32() {
-        let src = [1_u32, 42, 999_999];
-        let bytes: Vec<u8> = src.iter().flat_map(|x| x.to_le_bytes()).collect();
-        let parsed = bytes_to_u32_vec(&bytes);
-        assert_eq!(parsed, src);
-    }
-
-    #[test]
-    fn hex_encode_example() {
-        assert_eq!(hex_encode(&[0x00, 0x0f, 0xff]), "000fff");
-    }
-}
+// Unit tests for fvecs/ivecs parsing live alongside the loader in an
+// integration-style bench harness: the dataset module is included via
+// `#[path]` in `sift1m_recall.rs` only, so a `#[cfg(test)]` mod tests
+// block here would never be compiled by `cargo test`. If future work
+// needs parser coverage, lift the parse helpers into
+// `crates/velesdb-core/src/` behind a `bench-utils` module.

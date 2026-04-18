@@ -406,3 +406,8 @@ harness = false
 [[bench]]
 name = "graph_traversal_v2"
 harness = false
+
+[[bench]]
+name = "sift1m_recall"
+harness = false
+required-features = ["bench-sift1m"]
