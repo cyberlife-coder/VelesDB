@@ -174,16 +174,44 @@ class GraphRetriever(BaseRetriever):
             )
 
     def _init_native_graph(self) -> Any:
-        """Resolve db_path and open the native graph collection."""
+        """Resolve the shared Database and open the native graph collection.
+
+        Reuses the vector store's lazy Database instance (via ``_get_db()``)
+        instead of opening a second ``velesdb.Database`` on the same path,
+        which would trigger VELES-031 (exclusive write-lock error).
+
+        If the vector store does not expose ``_get_db``, falls back to the
+        shared ``open_native_graph`` helper which opens its own Database.
+        In that case the caller must ensure the vector store's Database is
+        not already open on the same path.
+        """
+        if not self.graph_collection_name:
+            raise ValueError(
+                "Native mode requires 'graph_collection_name'."
+            )
+        get_db = getattr(self.vector_store, "_get_db", None)
+        if get_db is not None:
+            return self._open_graph_from_shared_db(get_db)
+        return self._open_graph_from_path()
+
+    def _open_graph_from_shared_db(self, get_db: Any) -> Any:
+        """Open graph collection from the vector store's shared Database."""
+        db = get_db()
+        graph = db.get_graph_collection(self.graph_collection_name)
+        if graph is None:
+            raise ValueError(
+                f"Graph collection '{self.graph_collection_name}' not found "
+                "in the shared database."
+            )
+        return graph
+
+    def _open_graph_from_path(self) -> Any:
+        """Open graph collection by resolving db_path (fallback path)."""
         resolved_path = self.db_path or _infer_db_path(self.vector_store)
         if resolved_path is None:
             raise ValueError(
                 "Native mode requires 'db_path' or a vector store with a "
                 "'_db_path' / '_path' attribute."
-            )
-        if not self.graph_collection_name:
-            raise ValueError(
-                "Native mode requires 'graph_collection_name'."
             )
         return open_native_graph(resolved_path, self.graph_collection_name)
 

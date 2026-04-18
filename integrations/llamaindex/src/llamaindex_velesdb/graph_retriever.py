@@ -190,16 +190,51 @@ class GraphRetriever(BaseRetriever):
     def _init_native_graph(
         self, db_path: Optional[str], collection_name: Optional[str]
     ) -> Any:
-        """Resolve db_path and open the native graph collection."""
+        """Resolve the shared Database and open the native graph collection.
+
+        Reuses the index's vector store lazy Database instance (via
+        ``_get_db()``) instead of opening a second ``velesdb.Database`` on
+        the same path, which would trigger VELES-031 (exclusive write-lock).
+
+        Falls back to path-based open when the vector store does not expose
+        ``_get_db`` (e.g. REST-only stores or custom implementations).
+        """
+        if not collection_name:
+            raise ValueError(
+                "Native mode requires 'graph_collection_name'."
+            )
+        try:
+            vs = self._index._vector_store
+            get_db = getattr(vs, "_get_db", None)
+        except AttributeError:
+            get_db = None
+
+        if get_db is not None:
+            return self._open_graph_from_shared_db(get_db, collection_name)
+        return self._open_graph_from_path(db_path, collection_name)
+
+    def _open_graph_from_shared_db(
+        self, get_db: Any, collection_name: str
+    ) -> Any:
+        """Open graph collection from the vector store's shared Database."""
+        db = get_db()
+        graph = db.get_graph_collection(collection_name)
+        if graph is None:
+            raise ValueError(
+                f"Graph collection '{collection_name}' not found "
+                "in the shared database."
+            )
+        return graph
+
+    def _open_graph_from_path(
+        self, db_path: Optional[str], collection_name: str
+    ) -> Any:
+        """Open graph collection by resolving db_path (fallback path)."""
         resolved_path = db_path or _infer_db_path(self._index)
         if resolved_path is None:
             raise ValueError(
                 "Native mode requires 'db_path' or an index whose vector store "
                 "exposes a '_db_path' / '_path' attribute."
-            )
-        if not collection_name:
-            raise ValueError(
-                "Native mode requires 'graph_collection_name'."
             )
         return open_native_graph(resolved_path, collection_name)
 
