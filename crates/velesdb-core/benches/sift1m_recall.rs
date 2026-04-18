@@ -7,6 +7,15 @@
 //!   - Recall@10 measured across the full 10,000-query set (printed to
 //!     stdout as `RECALL_REPORT\tef=<E>\trecall@10=<R>` — grep-friendly)
 //!
+//! **Search path**: uses [`HnswIndex::search_raw`] — the raw HNSW graph
+//! traversal that honours the supplied `ef_search` verbatim, with no
+//! quality-aware ef scaling and no two-stage reranking. This is the
+//! apples-to-apples plain-HNSW path, directly comparable to HNSWlib /
+//! Faiss / ScaNN published SIFT1M numbers. VelesDB's production search
+//! path ([`HnswIndex::search_with_quality`]) wraps this with ef scaling +
+//! exact-SIMD reranking and is measured separately by
+//! `benches/recall_comprehensive.rs`.
+//!
 //! Build with the gating feature, otherwise the bench is not discovered:
 //! ```text
 //! cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m
@@ -22,7 +31,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use velesdb_core::distance::DistanceMetric;
-use velesdb_core::{HnswIndex, HnswParams, ScoredResult, SearchQuality, VectorIndex};
+use velesdb_core::{HnswIndex, HnswParams, ScoredResult, VectorIndex};
 
 #[path = "datasets/mod.rs"]
 mod datasets;
@@ -110,13 +119,18 @@ fn run_latency_sweep(c: &mut Criterion, index: &HnswIndex, data: &Sift1M) {
 
     for &ef in EF_VALUES {
         group.bench_with_input(BenchmarkId::from_parameter(ef), &ef, |b, &ef| {
-            let quality = SearchQuality::Custom(ef);
             let mut cursor = 0_usize;
             b.iter(|| {
                 let q = &data.query[cursor % data.query.len()];
                 cursor = cursor.wrapping_add(1);
+                // `search_raw` passes `ef` to the graph traversal verbatim —
+                // no `SearchQuality::Custom` ef scaling (would silently
+                // double ef at 1M scale via `ef_search_for_scale`) and no
+                // two-stage reranking (would rescan top-`k*4` candidates).
+                // This is the apples-to-apples plain-HNSW path that
+                // matches HNSWlib/Faiss SIFT1M methodology.
                 index
-                    .search_with_quality(q, K, quality)
+                    .search_raw(q, K, ef)
                     .expect("sift1m: search must succeed for valid query")
             });
         });
@@ -141,7 +155,6 @@ fn measure_recall_at_10(
     groundtruth: &[Vec<u32>],
     ef: usize,
 ) -> f64 {
-    let quality = SearchQuality::Custom(ef);
     let mut sum = 0.0_f64;
     let mut counted = 0_usize;
     for (q, gt) in queries.iter().zip(groundtruth.iter()) {
@@ -150,7 +163,11 @@ fn measure_recall_at_10(
         if gt.is_empty() {
             continue;
         }
-        let Ok(results) = index.search_with_quality(q, K, quality) else {
+        // `search_raw` honours `ef` literally — critical for recall numbers
+        // to match the reported `ef` in `RECALL_REPORT` lines. See the
+        // comment in `run_latency_sweep` for the reason we bypass
+        // `SearchQuality::Custom` here.
+        let Ok(results) = index.search_raw(q, K, ef) else {
             continue;
         };
         sum += intersection_ratio(&results, gt, K);

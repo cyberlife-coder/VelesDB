@@ -88,6 +88,36 @@ impl HnswIndex {
         results
     }
 
+    /// Raw HNSW graph search with a literal `ef_search` budget.
+    ///
+    /// Bypasses both [`SearchQuality`] ef scaling (`ef_search_for_scale`) and
+    /// two-stage reranking. The `ef_search` value is passed verbatim to the
+    /// graph traversal — useful for reproducible ANN benchmarks (e.g. SIFT1M)
+    /// that need to compare plain-HNSW numbers across implementations
+    /// (HNSWlib, Faiss, etc.) without VelesDB's production quality-adapter
+    /// layering the ef budget or over-fetching candidates.
+    ///
+    /// This method is intentionally feature-gated (`bench-sift1m`) and is
+    /// **not** part of the stable public API — it is a benchmark-only seam.
+    /// Application code should use [`Self::search_with_quality`] or
+    /// [`Self::search_with_rerank_quality`] which honour the configured
+    /// quality/latency trade-offs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::DimensionMismatch`] if `query.len()`
+    /// does not equal the index dimension.
+    #[cfg(feature = "bench-sift1m")]
+    pub fn search_raw(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
+        Ok(self.search_hnsw_only(query, k, ef_search))
+    }
+
     /// Performs HNSW search with a pre-filter bitmap.
     ///
     /// Over-fetches candidates from the HNSW graph (using `ef_search` as the

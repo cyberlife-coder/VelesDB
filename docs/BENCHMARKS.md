@@ -379,7 +379,8 @@ Section 9 reports a pre-tuned, machine-specific head-to-head against Qdrant on S
 - Brute-force groundtruth **provided by the dataset** — no internal computation, no risk of a home-cooked reference drifting over time.
 - Index: native HNSW (`max_connections = 16`, `ef_construction = 200`) — matches the canonical HNSWlib SIFT1M reference methodology.
 - Metric: `DistanceMetric::Euclidean` (L2) — SIFT descriptors are L2.
-- `ef_search` sweep: 64, 128, 256, 512.
+- `ef_search` sweep: 64, 128, 256, 512. Values in the `RECALL_REPORT` output lines are **exact** — passed to the graph traversal verbatim.
+- **Search path**: [`HnswIndex::search_raw`] — the raw HNSW graph search, bypassing `SearchQuality` ef scaling and two-stage reranking. This produces numbers directly comparable with HNSWlib / Faiss / ScaNN plain HNSW. VelesDB's production search path (`search_with_quality`) wraps this with quality-aware ef scaling and exact-SIMD reranking and is measured separately by `benches/recall_comprehensive.rs`; the two numbers are intentionally different and cover different questions (apples-to-apples cross-implementation vs. end-to-end product path).
 - **Recall@10** = mean over 10,000 queries of `|retrieved_top10 ∩ groundtruth_top10| / 10`.
 - **Latency** measured by Criterion (20 samples / ef value, mean + 95% CI). Recall measured in a separate pass after the timing pass so the timing loop is not polluted by intersection bookkeeping.
 

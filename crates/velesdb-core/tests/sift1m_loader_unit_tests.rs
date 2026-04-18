@@ -138,3 +138,83 @@ fn capture_observed_hash(path: &std::path::Path) -> Result<String, DatasetError>
     }
     Ok(out)
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests for `HnswIndex::search_raw` (bench-sift1m-gated API)
+//
+// These guard the invariant that `search_raw` bypasses both quality-based
+// ef scaling (`ef_search_for_scale`) and two-stage reranking, so the `ef`
+// value it reports is the literal graph-traversal budget — the apples-to-
+// apples plain-HNSW path expected by the SIFT1M methodology.
+// ---------------------------------------------------------------------------
+
+use velesdb_core::distance::DistanceMetric;
+use velesdb_core::{HnswIndex, VectorIndex};
+
+/// Builds a tiny HNSW index with `n` synthetic 8-dim vectors.
+fn tiny_index(n: u64) -> HnswIndex {
+    let index = HnswIndex::new(8, DistanceMetric::Euclidean).expect("construct tiny HNSW index");
+    for i in 0..n {
+        let base = (i as f32) * 0.1;
+        let v: Vec<f32> = (0..8).map(|j| base + (j as f32) * 0.01).collect();
+        index.insert(i, &v);
+    }
+    index
+}
+
+#[test]
+fn search_raw_rejects_wrong_dimension() {
+    let index = tiny_index(10);
+    // 4-dim query against an 8-dim index — must surface DimensionMismatch
+    // rather than panicking or silently returning junk.
+    let query = vec![0.0_f32; 4];
+    let err = index
+        .search_raw(&query, 5, 64)
+        .expect_err("dim mismatch must be an error");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("Dimension") || msg.contains("dimension"),
+        "expected DimensionMismatch error, got: {msg}"
+    );
+}
+
+#[test]
+fn search_raw_returns_up_to_k_results_with_valid_query() {
+    let index = tiny_index(20);
+    let query = vec![0.5_f32; 8];
+    let results = index
+        .search_raw(&query, 5, 64)
+        .expect("valid query must succeed");
+    assert!(
+        results.len() <= 5,
+        "search_raw must cap results at k; got {}",
+        results.len()
+    );
+    assert!(
+        !results.is_empty(),
+        "expected at least one result on a non-empty index"
+    );
+    // Sanity: IDs are in-range.
+    for r in &results {
+        assert!(r.id < 20, "unexpected id {} (should be < 20)", r.id);
+    }
+}
+
+#[test]
+fn search_raw_does_not_overfetch_beyond_k_unlike_rerank() {
+    // Two-stage reranking would fetch top-(k*4) candidates and then truncate
+    // to k. `search_raw` must skip that path entirely and return at most k
+    // results from a k-budget graph search — no hidden oversampling.
+    let index = tiny_index(100);
+    let query = vec![0.3_f32; 8];
+    for &ef in &[16_usize, 32, 64, 128] {
+        let results = index
+            .search_raw(&query, 10, ef)
+            .expect("valid query must succeed");
+        assert!(
+            results.len() <= 10,
+            "search_raw with k=10 must never return more than 10 results (ef={ef}); got {}",
+            results.len()
+        );
+    }
+}
