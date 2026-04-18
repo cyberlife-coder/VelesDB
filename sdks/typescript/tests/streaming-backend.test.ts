@@ -349,7 +349,7 @@ describe('trainPq', () => {
   });
 
   // NOTE: trainPq interpolates collection name without escaping — tracked in
-  // TODO(S4-FOLLOWUP-TRAINPQ-ESCAPE) for a separate source-level fix. This
+  // TODO(US-S4-07): trainPq escape — follow-up source-level fix. This
   // test pins the current behavior so future escaping is caught as a
   // breaking change.
   it('interpolates collection name raw into the VelesQL query (pre-existing limitation)', async () => {
@@ -481,8 +481,8 @@ describe('streamInsert', () => {
 
   // NOTE: streamInsert omits payload from JSON body when undefined, unlike
   // streamUpsertPoints which serializes it as null. Tracked in
-  // TODO(S4-FOLLOWUP-STREAMINSERT-PAYLOAD) for a separate source-level
-  // alignment. This test pins the current behavior.
+  // TODO(US-S4-07): streamInsert payload alignment — follow-up source-level
+  // fix. This test pins the current behavior.
   it('omits payload key from JSON body when doc.payload is undefined (pre-existing limitation)', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

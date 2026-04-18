@@ -22,7 +22,7 @@ export default defineConfig({
         'src/client/index.ts',
         'src/backends/wasm-types.ts',
 
-        // TODO(S4-07-followup): raise coverage of the modules below and
+        // TODO(US-S4-07): raise coverage of the modules below and
         // remove them from this exclusion list. Current per-file coverage
         // is materially below the 80% bar; excluding them lets the S4-07
         // threshold gate run without gold-plating unrelated surface areas.
