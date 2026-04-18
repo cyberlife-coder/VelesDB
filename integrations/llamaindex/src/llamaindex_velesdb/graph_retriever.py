@@ -364,7 +364,18 @@ class GraphRetriever(BaseRetriever):
                 logger.debug("Failed to fetch neighbour node %s: %s", neighbor_id, exc)
 
     def _extract_node_id(self, node: Any) -> Optional[int]:
-        """Extract numeric node ID from a LlamaIndex node."""
+        """Extract numeric node ID from a LlamaIndex node.
+
+        ID convention (llamaindex): node IDs are **hash-based** via
+        ``_stable_hash_id(node_id)``, stored in the point payload under
+        ``"id"`` by ``node_builder.py`` and propagated to
+        ``node.metadata["id"]`` by VelesDB search. Callers adding graph
+        edges must use the SAME ``_stable_hash_id`` as source/target. This
+        differs from the langchain integration, which uses the internal
+        VelesDB point ID via ``metadata["_int_id"]`` — see
+        ``integrations/langchain/src/langchain_velesdb/graph_retriever.py``
+        ``_build_expanded_results``.
+        """
         try:
             found, from_meta = self._id_from_metadata(node)
             if found:

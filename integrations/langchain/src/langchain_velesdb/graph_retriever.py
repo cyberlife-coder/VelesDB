@@ -260,7 +260,17 @@ class GraphRetriever(BaseRetriever):
         return result_docs
 
     def _build_expanded_results(self, seeds: List[Any]) -> List[Document]:
-        """Run graph expansion and return combined document list."""
+        """Run graph expansion and return combined document list.
+
+        ID convention (langchain): seed IDs are the **internal VelesDB
+        point IDs** injected by ``payload_to_doc_parts`` as
+        ``metadata["_int_id"]``. Graph edges must therefore be inserted
+        with ``source`` / ``target`` matching those internal IDs. This
+        differs from the llamaindex integration, which uses hash-based
+        IDs via ``_stable_hash_id(node_id)`` — see
+        ``integrations/llamaindex/src/llamaindex_velesdb/graph_retriever.py``
+        ``_extract_node_id``.
+        """
         expanded_ids: set = set()
         seed_docs: dict = {}
         graph_available = True
