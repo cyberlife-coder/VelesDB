@@ -160,7 +160,7 @@ results = collection.search(vector=query_vector, top_k=10)
 ```toml
 # Cargo.toml
 [dependencies]
-velesdb-core = "1.11"
+velesdb-core = "1.13"
 ```
 
 ### As CLI Tools
