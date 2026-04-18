@@ -160,10 +160,26 @@ impl Database {
             return Ok(plan);
         }
 
-        let mut plan = crate::velesql::QueryPlan::from_query(query);
+        let mut plan = self.build_plan_with_stats(query);
         plan.cache_hit = Some(false);
         plan.plan_reuse_count = Some(0);
         Ok(plan)
+    }
+
+    /// Builds a query plan, resolving calibrated collection statistics from
+    /// the registry when available (#471 — EXPLAIN real costs).
+    ///
+    /// The returned plan's `estimated_cost_ms` and `filter_strategy` are
+    /// calibrated via `CostEstimator` when stats exist for the query's
+    /// primary collection. Falls back to heuristics otherwise.
+    fn build_plan_with_stats(
+        &self,
+        query: &crate::velesql::Query,
+    ) -> crate::velesql::QueryPlan {
+        let primary = &query.select.from;
+        let core_stats = self.get_collection_stats(primary).ok().flatten();
+        let indexed = std::collections::HashSet::new();
+        crate::velesql::QueryPlan::from_query_with_stats(query, &indexed, core_stats.as_ref())
     }
 
     /// Executes a query with instrumentation and returns both plan and actual stats.
@@ -466,7 +482,7 @@ impl Database {
     /// Inserts a compiled plan into the cache after a cache miss (CACHE-02).
     fn populate_plan_cache(&self, query: &crate::velesql::Query) {
         let compiled = std::sync::Arc::new(crate::cache::CompiledPlan {
-            plan: crate::velesql::QueryPlan::from_query(query),
+            plan: self.build_plan_with_stats(query),
             referenced_collections: Self::referenced_collection_names(query),
             compiled_at: std::time::Instant::now(),
             reuse_count: std::sync::atomic::AtomicU64::new(0),
