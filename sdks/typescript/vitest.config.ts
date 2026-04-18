@@ -22,23 +22,10 @@ export default defineConfig({
         'src/client/index.ts',
         'src/backends/wasm-types.ts',
 
-        // TODO(US-S4-07): raise coverage of the modules below and
-        // remove them from this exclusion list. Current per-file coverage
-        // is materially below the 80% bar; excluding them lets the S4-07
-        // threshold gate run without gold-plating unrelated surface areas.
+        // TODO(US-S4-07): agent-memory.ts is the last module pending
+        // dedicated tests — out of scope for #598 which targeted the
+        // 12 backend + client modules.
         'src/agent-memory.ts',
-        'src/client.ts',
-        'src/client/graph-methods.ts',
-        'src/client/search-methods.ts',
-        'src/backends/admin-backend.ts',
-        'src/backends/graph-backend.ts',
-        'src/backends/rest.ts',
-        'src/backends/rest-http.ts',
-        'src/backends/search-backend.ts',
-        'src/backends/wasm.ts',
-        'src/backends/wasm-helpers.ts',
-        'src/backends/wasm-search.ts',
-        'src/backends/wasm-stubs.ts',
       ],
       thresholds: {
         // Global floor — conservative baseline while the modules listed
