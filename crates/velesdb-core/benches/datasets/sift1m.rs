@@ -141,8 +141,7 @@ fn resolve_cache_dir() -> PathBuf {
 
 fn default_cache_dir() -> PathBuf {
     // `CARGO_MANIFEST_DIR` points to `crates/velesdb-core` during bench runs.
-    let manifest = std::env::var("CARGO_MANIFEST_DIR")
-        .unwrap_or_else(|_| ".".to_string());
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(manifest)
         .join("..")
         .join("..")
