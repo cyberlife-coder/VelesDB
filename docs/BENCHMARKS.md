@@ -362,6 +362,72 @@ cargo bench -p velesdb-core --bench hnsw_benchmark --features internal-bench -- 
 
 ---
 
+## 11. SIFT1M — Standard ANN Benchmark
+
+Section 9 reports a pre-tuned, machine-specific head-to-head against Qdrant on SIFT1M. Section 11 is different: a **fully self-reproducible** SIFT1M harness that anyone can rerun on their hardware, with the dataset, parameters, and methodology pinned in source.
+
+### 11.1 Dataset provenance
+
+- **Source**: Jégou, Douze, Schmid — *Product Quantization for Nearest Neighbor Search*, IEEE TPAMI 33(1), 2011.
+- **Host**: INRIA TEXMEX project — [corpus-texmex.irisa.fr](http://corpus-texmex.irisa.fr/).
+- **Composition**: 1,000,000 base vectors + 10,000 queries + 100 groundtruth nearest neighbours per query. 128-dim SIFT descriptors, L2 distance.
+- **Why SIFT1M**: de facto standard in ANN benchmark literature — Faiss, ScaNN, HNSWlib, DiskANN, Qdrant, Weaviate, Milvus all publish SIFT1M numbers. Cross-implementation comparable, unlike synthetic corpora.
+- **NOT committed to git** (≈ 525 MB uncompressed). Downloaded on first bench run into `target/bench-data/sift1m/`, or pre-populate and point `VELESDB_SIFT1M_DIR` at it.
+
+### 11.2 Methodology
+
+- Brute-force groundtruth **provided by the dataset** — no internal computation, no risk of a home-cooked reference drifting over time.
+- Index: native HNSW (`max_connections = 16`, `ef_construction = 200`) — matches the canonical HNSWlib SIFT1M reference methodology.
+- Metric: `DistanceMetric::Euclidean` (L2) — SIFT descriptors are L2.
+- `ef_search` sweep: 64, 128, 256, 512.
+- **Recall@10** = mean over 10,000 queries of `|retrieved_top10 ∩ groundtruth_top10| / 10`.
+- **Latency** measured by Criterion (20 samples / ef value, mean + 95% CI). Recall measured in a separate pass after the timing pass so the timing loop is not polluted by intersection bookkeeping.
+
+### 11.3 Expected ranges
+
+First-run numbers will be populated in this section after the initial bench run on the reference hardware (i9-14900KF, 64 GB DDR5, rustc 1.94, `target-cpu=native`). Until then, literature reference points (published by the respective libraries on similar hardware — **not VelesDB numbers**):
+
+| Library | Config | Recall@10 | Per-query latency |
+|---------|--------|-----------|-------------------|
+| HNSWlib | M=16, ef=128 | ≈ 0.99 | ≈ 0.1–0.3 ms |
+| Faiss IVF+PQ | nlist=1024, nprobe=16 | 0.85–0.95 | ≈ 0.5–1 ms |
+| ScaNN | default | 0.98–0.99 | ≈ 0.1–0.2 ms |
+
+These are orientation only. VelesDB numbers will replace this table after the first reproducible run.
+
+### 11.4 How to run
+
+```bash
+# One-shot: download + index + measure (first run ≈ 3–5 min)
+cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m
+
+# Using pre-downloaded data (offline / CI runner):
+VELESDB_SIFT1M_DIR=/data/sift1m \
+  cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m
+
+# Smoke run without the full 1M build (agent / CI smoke):
+VELESDB_SIFT1M_SUBSET_BASE=10000 VELESDB_SIFT1M_SUBSET_QUERY=100 \
+  cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m
+
+# Extract the recall numbers:
+cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m 2>&1 \
+  | grep RECALL_REPORT
+```
+
+### 11.5 How to interpret
+
+- **Recall@10 < 0.90 at ef=128** → HNSW quality regression. Block the merge; investigate before accepting.
+- **p50 latency > 1 ms at ef=128 on reference hardware** → performance regression vs v1.11.x baseline.
+- **QPS < 1,000 single-thread** → SIMD dispatch or `target-cpu=native` flag may be disabled on the build host.
+
+### 11.6 Known limitations of this harness
+
+- First run downloads from `http://corpus-texmex.irisa.fr/sift.tar.gz`. If the mirror is offline, pre-populate `VELESDB_SIFT1M_DIR` — the bench detects the cache and skips the download.
+- SHA-256 fingerprints for the extracted files are currently placeholders (`TODO(US-SIFT1M-FINGERPRINT)`). The loader prints observed hashes on first download so they can be pinned; until then corruption is only detected by shape validation (row count + dimension).
+- No competitor comparison in this section — Section 9 owns that. Re-running Section 9 requires a separate Docker Compose harness (tracked as a follow-up PR).
+
+---
+
 ## Methodology
 
 - **Hardware**: See Test Environment section above
