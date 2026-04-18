@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-04-05",
+  "last_updated": "2026-04-18",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
@@ -96,6 +96,15 @@
       "validation_command": "cargo bench -p velesdb-core --bench filter_benchmark",
       "source": "README.md: JSON scan 3.84ms vs ColumnStore 29.5us at 100K rows",
       "last_updated": "2026-04-13"
+    },
+    {
+      "id": "benchmarks_sift1m_recall_at_10",
+      "file": "docs/BENCHMARKS.md",
+      "must_contain": "SIFT1M",
+      "validation_command": "cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m",
+      "source": "docs/BENCHMARKS.md section 11 (SIFT1M — Standard ANN Benchmark)",
+      "last_updated": "2026-04-18",
+      "notes": "Gated by --features bench-sift1m + cached download or VELESDB_SIFT1M_DIR. CI skips (feature off); run locally or on a dedicated bench runner. The `must_contain` is intentionally loose (dataset name only) until numeric ranges are populated in section 11.3 from a first stable run on reference hardware — tightening it prematurely would lock the contract around literature reference points that are not VelesDB measurements."
     }
   ]
 }
