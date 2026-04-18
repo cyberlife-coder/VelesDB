@@ -353,12 +353,12 @@ impl QueryPlan {
 
     /// Estimates selectivity (placeholder - would need statistics in production).
     pub(crate) fn estimate_selectivity(conditions: &[String]) -> f64 {
-        node_stats::estimate_selectivity(conditions)
+        node_stats::estimate_selectivity(conditions, None)
     }
 
     /// Estimates execution cost in milliseconds.
     fn estimate_cost(root: &PlanNode, has_vector_search: bool) -> f64 {
-        node_stats::estimate_cost(root, has_vector_search)
+        node_stats::estimate_cost(root, has_vector_search, None)
     }
 
     /// Returns the heuristic cost for a single plan node.
