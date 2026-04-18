@@ -423,7 +423,7 @@ cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m 2>&1 \
 ### 11.6 Known limitations of this harness
 
 - First run downloads from `http://corpus-texmex.irisa.fr/sift.tar.gz`. If the mirror is offline, pre-populate `VELESDB_SIFT1M_DIR` — the bench detects the cache and skips the download.
-- SHA-256 fingerprints for the extracted files are currently placeholders (`TODO(US-SIFT1M-FINGERPRINT)`). The loader prints observed hashes on first download so they can be pinned; until then corruption is only detected by shape validation (row count + dimension).
+- SHA-256 fingerprints for the extracted files are currently placeholders (`TODO(US-S4-BENCH-SIFT1M)`). The loader prints observed hashes on first download so they can be pinned; until then corruption is only detected by shape validation (row count + dimension).
 - No competitor comparison in this section — Section 9 owns that. Re-running Section 9 requires a separate Docker Compose harness (tracked as a follow-up PR).
 
 ---

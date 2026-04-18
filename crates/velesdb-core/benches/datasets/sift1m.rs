@@ -21,7 +21,7 @@
 //! Until then, the loader will print the observed SHA-256 values and
 //! return [`DatasetError::Parse`] asking the user to update the
 //! constants. This is by design — fabricated fingerprints are worse
-//! than no fingerprints. See `TODO(US-SIFT1M-FINGERPRINT)` below.
+//! than no fingerprints. See `TODO(US-S4-BENCH-SIFT1M)` below.
 
 #![allow(dead_code)]
 #![allow(clippy::cast_precision_loss)]
@@ -85,7 +85,7 @@ const GT_K: u32 = 100;
 const BASE_COUNT: usize = 1_000_000;
 const QUERY_COUNT: usize = 10_000;
 
-// TODO(US-SIFT1M-FINGERPRINT): confirm these SHA-256 values against
+// TODO(US-S4-BENCH-SIFT1M): confirm these SHA-256 values against
 // an authoritative source and uncomment the `verify_fingerprint`
 // calls in `ensure_cached`. The official INRIA distribution does
 // not publish checksums for the uncompressed files; we must run one
