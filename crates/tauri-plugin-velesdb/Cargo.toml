@@ -32,6 +32,7 @@ toml = "0.8"
 
 [features]
 default = ["velesdb-core/default"]
+bench-sift1m = ["velesdb-core/bench-sift1m"]
 gpu = ["velesdb-core/gpu"]
 internal-bench = ["velesdb-core/internal-bench"]
 loom = ["velesdb-core/loom"]
