@@ -283,6 +283,8 @@ CREATE COLLECTION fingerprints (dimension = 256, metric = 'hamming');
 SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 5
 ```
 
+- **SIFT1M standardized ANN benchmark** — measured on the de-facto-standard INRIA TEXMEX dataset (1M × 128D vectors, L2 metric). See [docs/BENCHMARKS.md § 11](docs/BENCHMARKS.md#11-sift1m--standard-ann-benchmark) for methodology, dataset provenance, and how to reproduce.
+
 > **Full benchmarks and methodology:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | [velesdb-benchmarks repo](https://github.com/cyberlife-coder/velesdb-benchmarks) | **Quantization guide:** [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md)
 
 ---
