@@ -26,17 +26,16 @@
 //! `scan(total) + hnsw(total * sel)`, where `scan(total)` is linear in the
 //! full row count. For collections where `total > 10 K`, the scan term
 //! dominates almost any HNSW cost unless `selectivity < 1e-4`, which is
-//! exceedingly rare in practice. The post-filter cost stays `hnsw(total) +
-//! k * cpu_tuple_cost`, so PostFilter wins whenever the full-pass HNSW is
-//! cheaper than scanning every row.
+//! exceedingly rare in practice. The post-filter cost is
+//! `hnsw(total) + max(k, ef_search) * cpu_tuple_cost`, so PostFilter wins
+//! whenever the full-pass HNSW is cheaper than scanning every row.
 //!
-//! Follow-up issue [#609](https://github.com/cyberlife-coder/velesdb/issues/609)
-//! tracks a refinement: replace the rough `POSTFILTER_TOPK_COST_FRACTION`
-//! approximation with a proper `k * cpu_tuple_cost` model that uses the real
-//! `candidates` value and the calibrated `cpu_tuple_cost`. That refinement
-//! will make the comparison tighter for intermediate collections
-//! (10K – 1M rows) where the current model slightly overestimates post-filter
-//! cost.
+//! The post-filter cardinality uses `max(k, ef_search)` — not `k` alone —
+//! because VelesDB's execution (`search_post_filter` -> `filter_and_hydrate`)
+//! evaluates the predicate on the oversampled HNSW candidate set before
+//! truncating to k (see `CostEstimator::estimate_post_filter_topk_cost`
+//! for the full rationale). Issue [#609](https://github.com/cyberlife-coder/velesdb/issues/609)
+//! closed this modelling gap in PR #612.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -114,12 +113,12 @@ pub fn set_fallback_selectivity_threshold(value: f64) -> Result<f64> {
 pub(super) const PREFILTER_RECALL_GUARD: f64 = 0.5;
 
 // POSTFILTER_TOPK_COST_FRACTION was removed in favour of
-// `CostEstimator::estimate_post_filter_topk_cost(k)` (issue #609). The
-// previous `filter_scan_cost × 0.01` approximation was off by up to 5× for
-// large collections with selectivity near the recall guardrail. The
-// calibrated formula `k × cpu_tuple_cost × cpu_ratio` models the physical
-// reality of evaluating the predicate on the HNSW top-k tuples only,
-// independent of collection size and selectivity.
+// `CostEstimator::estimate_post_filter_topk_cost(k, ef_search)` (issue #609).
+// The previous `filter_scan_cost × 0.01` approximation was off by up to 5× for
+// large collections with selectivity near the recall guardrail. The calibrated
+// formula `max(k, ef_search) × cpu_tuple_cost × cpu_ratio` models the physical
+// reality of evaluating the predicate on the HNSW candidate set before top-k
+// truncation — independent of collection size and selectivity.
 
 /// Computes `(selectivity, estimation_method, estimated_rows)` for the
 /// filter block. When `stats` is `Some` and the WHERE clause tree is
