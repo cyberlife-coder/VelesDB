@@ -28,33 +28,7 @@ The ratio (~22×) is **not** a regression; it reflects that the calibrated path 
 
 **Resolution path**: pin `COST_UNIT_TO_MS` empirically via a micro-benchmark that times a known plan shape on reference hardware, then rescale the constant so pre/post-`ANALYZE` costs align at the same operating point. Not blocker for correctness — both paths rank the same plan shape consistently within their own range.
 
-### 2. Plan cache is not invalidated by `ANALYZE`
-
-**Status**: pre-existing. Tracked by [issue #608](https://github.com/cyberlife-coder/VelesDB/issues/608). Source: `crates/velesdb-core/src/database/query_engine.rs` (plan cache key uses `write_generation`).
-
-Running `ANALYZE` on a collection updates `CollectionStats` (histograms, calibrated factors) but does **not** bump `write_generation`. Cached plans built by `populate_plan_cache` therefore continue to be served with their pre-`ANALYZE` cost estimates until the next data modification.
-
-**User impact**: `EXPLAIN` on a query that was cached before `ANALYZE` will report stale `estimated_cost_ms` and potentially a stale `filter_strategy`. The execution result itself is unchanged — the cache stores plan shape, not cost.
-
-**Workaround**: force a cache bump by performing any write to the collection (e.g. an idempotent `UPSERT` of an existing point) after `ANALYZE`. The proper fix is tracked as an `analyze_generation` counter in the cache key.
-
-### 3. `build_plan_with_stats` does not thread indexed-field set
-
-**Status**: pre-existing. Tracked by [issue #607](https://github.com/cyberlife-coder/VelesDB/issues/607). Source: `crates/velesdb-core/src/database/query_engine.rs` (`HashSet::new()` passed unconditionally).
-
-`Database::build_plan_with_stats` constructs an empty `HashSet` for the `indexed_fields` argument of `QueryPlan::from_select_with_stats`. As a consequence, `IndexLookup` plan nodes are never generated through this code path — only `VectorSearch`, `TableScan`, and `Filter` nodes appear in the plan tree, and the cost estimator cannot apply the `IndexLookup` cost discount.
-
-**User impact**: `EXPLAIN` for queries that should benefit from a secondary index on a metadata column shows a `TableScan` in the plan tree instead of an `IndexLookup`. Execution behaviour is unaffected (the executor consults the index registry directly); only the plan shape visible in `EXPLAIN` is impacted.
-
-### 4. Post-filter cost uses a fixed-fraction approximation
-
-**Status**: documented approximation. Tracked by [issue #609](https://github.com/cyberlife-coder/VelesDB/issues/609). Source: `crates/velesdb-core/src/velesql/explain/filter_strategy.rs` (`POSTFILTER_TOPK_COST_FRACTION = 0.01`).
-
-In `resolve_filter_strategy`, the post-filter cost is modelled as `estimate_filter_cost_from_selectivity(selectivity).total() * 0.01`. The real cost is proportional to `k` (top-k HNSW results) rather than to `total * selectivity * 0.01`. The approximation overestimates the post-filter cost by up to ~5× for very large collections with high selectivity (e.g. `total = 10_000`, `sel = 0.5`, `k = 10` → model 50·C, real 10·C).
-
-**User impact**: the CBO's post-filter cost number is directionally correct (cheaper than pre-filter when HNSW dominates) but not physically meaningful. In all tested regimes the HNSW term dominates so strategy decisions are unaffected, but a future replacement with a proper `k * cpu_tuple_cost` model would remove the approximation. Covered by `test_filter_strategy_switches_on_selectivity` and `test_prefilter_accounts_for_full_table_scan` BDD tests.
-
-### 5. CBO `choose_hybrid_strategy` not integrated for pure-`SELECT` hybrid queries
+### 2. CBO `choose_hybrid_strategy` not integrated for pure-`SELECT` hybrid queries
 
 **Status**: partial integration. Tracked by [issue #467](https://github.com/cyberlife-coder/VelesDB/issues/467) (scope-reduced). Source: `crates/velesdb-core/src/collection/search/query/mod.rs:16` (TODO comment).
 
@@ -62,7 +36,7 @@ The calibrated CBO is fully wired for `MATCH` queries (via `MatchQueryPlanner::p
 
 **User impact**: `MATCH` queries benefit from the full CBO; pure-`SELECT` hybrid queries benefit from calibrated filter-strategy selection but not from multi-candidate plan enumeration. Covered by `test_filter_strategy_switches_on_selectivity` + `test_prefilter_accounts_for_full_table_scan`.
 
-### 6. Filter-strategy fallback threshold is runtime-tunable (default 0.1)
+### 3. Filter-strategy fallback threshold is runtime-tunable (default 0.1)
 
 **Status**: resolved (configurable). Source: `crates/velesdb-core/src/velesql/explain/filter_strategy.rs` (`DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD = 0.1`, `AtomicU64` runtime state).
 
@@ -74,7 +48,7 @@ When no calibrated `CollectionStats` is available (collection never analyzed, SD
 
 ## Full-text search
 
-### 7. BM25 cold-start triggers an O(N) rebuild
+### 4. BM25 cold-start triggers an O(N) rebuild
 
 **Status**: open. Tracked by [issue #389](https://github.com/cyberlife-coder/VelesDB/issues/389). Source: `crates/velesdb-core/src/collection/core/lifecycle.rs:189-244` (`rebuild_bm25_index()` invoked on every `Database::open`).
 
