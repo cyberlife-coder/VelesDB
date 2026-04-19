@@ -387,6 +387,28 @@ impl<'a> CostEstimator<'a> {
         }
     }
 
+    /// Returns `true` when `column` has usable cardinality data in either
+    /// `field_stats` (`distinct_values > 0`) or `column_stats`
+    /// (`distinct_count > 0`) — i.e. when [`CollectionStats::estimate_selectivity`]
+    /// would NOT fall back to its hard-coded `0.1` heuristic.
+    ///
+    /// Used by method-aware selectivity helpers to distinguish a genuine
+    /// `Cardinality` estimate from a `Heuristic` default so EXPLAIN never
+    /// overstates its confidence on unknown columns.
+    fn has_cardinality_data(&self, column: &str) -> bool {
+        let field_has = self
+            .stats
+            .field_stats
+            .get(column)
+            .is_some_and(|s| s.distinct_values > 0);
+        let column_has = self
+            .stats
+            .column_stats
+            .get(column)
+            .is_some_and(|s| s.distinct_count > 0);
+        field_has || column_has
+    }
+
     /// Method-aware variant of [`Self::estimate_comparison_selectivity_with_histogram`].
     fn comparison_selectivity_with_method(
         &self,
@@ -399,8 +421,10 @@ impl<'a> CostEstimator<'a> {
             SelectivityMethod::Heuristic
         } else if value_to_f64(value).is_some() && self.get_histogram(column).is_some() {
             SelectivityMethod::Histogram
-        } else {
+        } else if self.has_cardinality_data(column) {
             SelectivityMethod::Cardinality
+        } else {
+            SelectivityMethod::Heuristic
         };
         (sel, method)
     }
@@ -416,8 +440,10 @@ impl<'a> CostEstimator<'a> {
         let has_numeric = values.iter().any(|v| value_to_f64(v).is_some());
         let method = if has_numeric && self.get_histogram(column).is_some() {
             SelectivityMethod::Histogram
-        } else {
+        } else if self.has_cardinality_data(column) {
             SelectivityMethod::Cardinality
+        } else {
+            SelectivityMethod::Heuristic
         };
         (sel, method)
     }
@@ -951,6 +977,53 @@ mod selectivity_method_tests {
         let est = CostEstimator::new(&stats);
         let (_sel, method) = est.estimate_condition_selectivity_with_method(&cmp_eq("price", 42));
         assert_eq!(method, SelectivityMethod::Cardinality);
+    }
+
+    #[test]
+    fn method_heuristic_when_column_unknown() {
+        // `price` has no entry in field_stats nor column_stats — the underlying
+        // CollectionStats::estimate_selectivity falls back to the 0.1 heuristic.
+        // The method must be Heuristic, not Cardinality (Devin finding B, #606).
+        let mut stats = CollectionStats::new();
+        stats.total_points = 1_000;
+        stats.row_count = 1_000;
+        let est = CostEstimator::new(&stats);
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&cmp_eq("price", 42));
+        assert_eq!(
+            method,
+            SelectivityMethod::Heuristic,
+            "Unknown columns must report Heuristic, not Cardinality"
+        );
+    }
+
+    #[test]
+    fn method_heuristic_when_cardinality_data_is_empty() {
+        // Column exists in field_stats but with distinct_values == 0
+        // (e.g. stats object initialised but never populated).
+        let mut stats = CollectionStats::new();
+        stats.total_points = 1_000;
+        stats.row_count = 1_000;
+        let empty = ColumnStats::new("price"); // distinct_values defaults to 0
+        stats.field_stats.insert("price".into(), empty);
+        let est = CostEstimator::new(&stats);
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&cmp_eq("price", 42));
+        assert_eq!(method, SelectivityMethod::Heuristic);
+    }
+
+    #[test]
+    fn method_in_heuristic_when_column_unknown() {
+        // IN predicate on unknown column must also classify as Heuristic.
+        let mut stats = CollectionStats::new();
+        stats.total_points = 1_000;
+        stats.row_count = 1_000;
+        let est = CostEstimator::new(&stats);
+        let cond = Condition::In(crate::velesql::ast::InCondition {
+            column: "tag".into(),
+            values: vec![Value::String("a".into()), Value::String("b".into())],
+            negated: false,
+        });
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&cond);
+        assert_eq!(method, SelectivityMethod::Heuristic);
     }
 
     #[test]
