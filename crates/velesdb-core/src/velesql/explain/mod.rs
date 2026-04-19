@@ -12,6 +12,7 @@
 //! println!("{}", plan.to_tree());
 //! ```
 
+mod filter_strategy;
 mod formatter;
 mod node_stats;
 mod plan_builder;
