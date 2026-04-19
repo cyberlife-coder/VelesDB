@@ -467,15 +467,20 @@ impl QueryPlan {
         let hnsw_cost = est
             .estimate_hnsw_search_cost_with_ef(ef_search, candidates)
             .total();
-        // Pre-filter: full scan + filter evaluation, then HNSW on the
-        // reduced set.
-        let pre_filter = est
-            .estimate_filter_cost_from_selectivity(selectivity)
-            .total()
+        // Pre-filter: evaluate the predicate on **every** row of the
+        // collection (scan proportional to `total`, not `total*sel`), then
+        // run HNSW on the `sel*total` surviving candidates.
+        //
+        // Using `estimate_filter_cost_from_selectivity(1.0)` forces the
+        // scan-cost to cover the full table — without this, the CBO
+        // under-estimates pre-filter cost by a factor of `1/selectivity`
+        // and wrongly prefers PreFilter for tight filters when
+        // PostFilter is cheaper (Devin finding A on #606).
+        let pre_filter = est.estimate_filter_cost_from_selectivity(1.0).total()
             + hnsw_cost * selectivity;
         // Post-filter: full HNSW pass, then filter evaluation on the
         // top-k results (small constant cost, approximated by selectivity
-        // weight applied to the filter cost).
+        // weight applied to the filter cost on the reduced row-set).
         let post_filter = hnsw_cost
             + est
                 .estimate_filter_cost_from_selectivity(selectivity)

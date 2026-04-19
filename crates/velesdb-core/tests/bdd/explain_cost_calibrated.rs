@@ -305,3 +305,49 @@ fn test_explain_cost_on_unknown_column_does_not_panic() {
         plan.estimated_cost_ms
     );
 }
+
+// =========================================================================
+// Nominal BDD — pre-filter scans FULL table (Devin finding A, #606)
+// =========================================================================
+
+/// GIVEN a large analyzed collection (10 000 points)
+/// AND   a filter with ~1 % selectivity (`price < 10` on a uniform [0,1000))
+/// AND   a query with NEAR + LIMIT 10 (default ef_search=100)
+/// WHEN EXPLAIN is called
+/// THEN filter_strategy must be PostFilter, because evaluating the predicate
+///      on ALL 10 000 rows (pre-filter scan = full table) costs more than
+///      running HNSW first and filtering the top-k afterwards.
+///
+/// This mirrors the concrete example in the Devin-finding-A report on
+/// #606: with `total=10_000`, `sel=0.01`, `ef=100`, `k=10` and
+/// `hnsw_cost≈2000`, the correct (post-fix) cost model yields
+/// `pre_filter ≈ 10_000 + 2000*0.01 ≈ 10_020` vs
+/// `post_filter ≈ 2000 + 10_000*0.01*0.01 ≈ 2001` — PostFilter wins by ~5×.
+///
+/// Before the fix, `resolve_filter_strategy` priced the pre-filter scan as
+/// `total * sel` (matching rows only), under-estimating the true cost by
+/// a factor of `1 / selectivity`. That shortcut made PreFilter look
+/// artificially cheap and the CBO would (incorrectly) pick PreFilter
+/// here (`pre_filter_bug ≈ 100 + 20 = 120`).
+#[test]
+fn test_prefilter_accounts_for_full_table_scan() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 10_000);
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE");
+
+    let plan = explain(
+        &db,
+        "SELECT * FROM docs WHERE price < 10 AND vector NEAR $v LIMIT 10",
+    )
+    .expect("test: explain tight filter on large collection");
+
+    assert_eq!(
+        plan.filter_strategy,
+        FilterStrategy::PostFilter,
+        "tight filter (~1 %) on 10K-row collection: scanning the full \
+         table for the predicate must cost more than HNSW + top-k filter, \
+         so the CBO should pick PostFilter. If this asserts PreFilter, \
+         resolve_filter_strategy is under-pricing the pre-filter scan \
+         (Devin finding A regression)."
+    );
+}
