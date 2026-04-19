@@ -161,7 +161,12 @@ pub(super) fn estimate_filter_stats(
 /// what drives the pre/post-filter decision.
 ///
 /// Returns `None` when every branch is vector-related (selectivity = 1.0).
-pub(super) fn strip_vector_predicates(condition: &Condition) -> Option<Condition> {
+///
+/// Exposed to `pub(crate)` so the CBO router in
+/// `collection/search/query/select_dispatch.rs` can reuse the same
+/// "meaningful filter" test when classifying a residual condition left
+/// behind by `extract_vector_search` (Devin PR #613 finding).
+pub(crate) fn strip_vector_predicates(condition: &Condition) -> Option<Condition> {
     match condition {
         Condition::VectorSearch(_)
         | Condition::VectorFusedSearch(_)

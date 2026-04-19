@@ -250,6 +250,8 @@ pub use graph_pattern::*;
 pub use cache::{CacheStats, QueryCache};
 pub use error::{ParseError, ParseErrorKind};
 #[cfg(feature = "persistence")]
+pub(crate) use explain::strip_vector_predicates;
+#[cfg(feature = "persistence")]
 pub use explain::{
     build_leaf_node_stats, fallback_selectivity_threshold, set_fallback_selectivity_threshold,
     ActualStats, ExplainOutput, FilterPlan, FilterStrategy, FusionInfo, IndexLookupPlan, IndexType,

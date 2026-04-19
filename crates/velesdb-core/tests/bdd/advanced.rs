@@ -347,6 +347,42 @@ fn test_cbo_forces_vector_first_for_order_by_similarity_with_selective_filter() 
     }
 }
 
+/// GIVEN a docs collection + a selective metadata filter,
+/// WHEN  the query carries `ORDER BY 2.0 * similarity() DESC` (pure
+///       monotonic arithmetic transform of similarity — no other variable),
+/// THEN  result scores must still be in non-increasing order. The CBO
+///       router detects similarity nested inside the arithmetic expression
+///       (as long as no other Variable is present) and forces VectorFirst
+///       to preserve HNSW natural ordering (Devin PR #613 finding 1).
+#[test]
+fn test_cbo_forces_vector_first_for_monotonic_arithmetic_similarity() {
+    let (_dir, db) = create_test_db();
+    setup_similarity_collection(&db);
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE docs");
+
+    let sql = "SELECT * FROM docs WHERE vector NEAR $v AND category = 'science' \
+               ORDER BY 2.0 * similarity() DESC LIMIT 3";
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+    let results =
+        execute_sql_with_params(&db, sql, &params).expect("test: monotonic arithmetic ORDER BY");
+
+    assert!(
+        !results.is_empty(),
+        "monotonic transform should still yield results"
+    );
+    for w in results.windows(2) {
+        assert!(
+            w[0].score >= w[1].score,
+            "ORDER BY 2.0 * similarity() DESC must stay monotone: \
+             {} (id={}) should be >= {} (id={})",
+            w[0].score,
+            w[0].point.id,
+            w[1].score,
+            w[1].point.id
+        );
+    }
+}
+
 /// GIVEN a docs collection WITHOUT `ORDER BY similarity()` in the query,
 /// WHEN  a query with a metadata filter runs through the CBO,
 /// THEN  results are still returned correctly — verifying the calibrated

@@ -35,13 +35,21 @@ impl Collection {
         filter_condition: Option<&crate::velesql::Condition>,
         limit: usize,
     ) -> (crate::velesql::ExecutionStrategy, usize) {
+        // `filter_condition` is the WHERE clause AFTER `extract_vector_search`
+        // and similarity extraction — for pure `vector NEAR $v` queries the
+        // residual is a vector-only node that carries no selectivity signal.
+        // Strip the vector-family subtree so the CBO does not compute a
+        // spurious over-fetch (Devin PR #613 finding 3).
+        let meaningful_filter = filter_condition.and_then(crate::velesql::strip_vector_predicates);
+        let effective_filter = meaningful_filter.as_ref();
+
         if Self::has_order_by_similarity(stmt) {
-            return self.cbo_strategy_for_order_by_similarity(filter_condition, limit);
+            return self.cbo_strategy_for_order_by_similarity(effective_filter, limit);
         }
         let col_stats = self.get_stats();
         let result = self.query_planner.choose_strategy_with_cbo_and_overfetch(
             &col_stats,
-            filter_condition,
+            effective_filter,
             limit,
         );
         tracing::debug!(
@@ -52,20 +60,70 @@ impl Collection {
     }
 
     /// Returns `true` when the ORDER BY clause contains at least one
-    /// `similarity(...)` (or bare `similarity()`) expression. Detection is
-    /// purely syntactic — the planner uses this signal to preserve HNSW
-    /// natural ordering regardless of cost estimates.
+    /// expression whose final ordering reduces to `similarity()` under a
+    /// monotonic transform. This routes the query through
+    /// `choose_hybrid_strategy` so HNSW's natural similarity ordering is
+    /// preserved by the executor.
+    ///
+    /// Detected shapes:
+    /// - Top-level `OrderByExpr::Similarity(_)` / `OrderByExpr::SimilarityBare`.
+    /// - `OrderByExpr::Arithmetic(...)` whose expression tree contains a
+    ///   `Similarity` node and **no other `Variable` reference** — i.e.
+    ///   `similarity() * 2.0`, `0.5 * similarity() + 0.25`,
+    ///   `-similarity() + 1.0` are all monotonic (Devin PR #613 finding 1).
+    ///
+    /// Composite expressions such as `0.7 * similarity() + 0.3 * bm25_score`
+    /// carry a `Variable` node and are deliberately NOT detected — their
+    /// final ordering differs from pure similarity, so forcing VectorFirst
+    /// would trade correctness for an inconsequential optimisation.
     fn has_order_by_similarity(stmt: &crate::velesql::SelectStatement) -> bool {
         let Some(order_by) = stmt.order_by.as_ref() else {
             return false;
         };
-        order_by.iter().any(|item| {
-            matches!(
-                item.expr,
-                crate::velesql::OrderByExpr::Similarity(_)
-                    | crate::velesql::OrderByExpr::SimilarityBare
-            )
-        })
+        order_by
+            .iter()
+            .any(|item| Self::order_by_item_reduces_to_similarity(&item.expr))
+    }
+
+    /// Helper for [`has_order_by_similarity`]. Kept as an associated function
+    /// so the match arm can delegate to the arithmetic-expression walker
+    /// without inflating the outer method's cyclomatic complexity.
+    fn order_by_item_reduces_to_similarity(expr: &crate::velesql::OrderByExpr) -> bool {
+        use crate::velesql::OrderByExpr;
+        match expr {
+            OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => true,
+            OrderByExpr::Arithmetic(arith) => {
+                Self::arith_contains_similarity(arith) && !Self::arith_contains_variable(arith)
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns `true` if any node in the arithmetic expression tree is a
+    /// `Similarity` call.
+    fn arith_contains_similarity(expr: &crate::velesql::ArithmeticExpr) -> bool {
+        use crate::velesql::ArithmeticExpr;
+        match expr {
+            ArithmeticExpr::Similarity(_) => true,
+            ArithmeticExpr::BinaryOp { left, right, .. } => {
+                Self::arith_contains_similarity(left) || Self::arith_contains_similarity(right)
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns `true` if any node in the arithmetic expression tree is a
+    /// `Variable` reference — used to reject composite scoring like
+    /// `similarity() + bm25_score`.
+    fn arith_contains_variable(expr: &crate::velesql::ArithmeticExpr) -> bool {
+        use crate::velesql::ArithmeticExpr;
+        match expr {
+            ArithmeticExpr::Variable(_) => true,
+            ArithmeticExpr::BinaryOp { left, right, .. } => {
+                Self::arith_contains_variable(left) || Self::arith_contains_variable(right)
+            }
+            _ => false,
+        }
     }
 
     /// CBO path for queries that carry `ORDER BY similarity()` in their
@@ -93,9 +151,12 @@ impl Collection {
             Some(limit_u64),
             estimated_selectivity,
         );
-        // Reason: over_fetch_factor is clamped upstream to [1.0, 64.0] so
-        // the ceil-to-usize cast is safe. `.max(1)` guards against a
-        // degenerate planner output (would be a bug, not a truncation).
+        // Reason: `choose_hybrid_strategy` with `has_order_by_similarity = true`
+        // produces `over_fetch_factor` in `[1.0, 10.0]` — either `1.0` when no
+        // filter is present, or `(1.0 / selectivity).clamp(2.0, 10.0)` with a
+        // filter (planner.rs:265-275). Ceil-to-usize is therefore safe and
+        // lossless. `.max(1)` guards against a degenerate planner output
+        // (would be a bug, not a truncation).
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
