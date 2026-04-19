@@ -251,9 +251,10 @@ pub use cache::{CacheStats, QueryCache};
 pub use error::{ParseError, ParseErrorKind};
 #[cfg(feature = "persistence")]
 pub use explain::{
-    build_leaf_node_stats, ActualStats, ExplainOutput, FilterPlan, FilterStrategy, FusionInfo,
-    IndexLookupPlan, IndexType, LimitPlan, MatchTraversalPlan, NodeStats, OffsetPlan, PlanNode,
-    QueryPlan, TableScanPlan, VectorSearchPlan,
+    build_leaf_node_stats, fallback_selectivity_threshold, set_fallback_selectivity_threshold,
+    ActualStats, ExplainOutput, FilterPlan, FilterStrategy, FusionInfo, IndexLookupPlan, IndexType,
+    LimitPlan, MatchTraversalPlan, NodeStats, OffsetPlan, PlanNode, QueryPlan, TableScanPlan,
+    VectorSearchPlan, DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD,
 };
 pub use parser::match_clause;
 pub use parser::Parser;
