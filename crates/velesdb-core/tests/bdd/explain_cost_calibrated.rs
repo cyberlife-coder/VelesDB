@@ -9,10 +9,10 @@
 //! These are nominal + edge + negative tests (§bdd-testing.md coverage rule).
 
 use serde_json::json;
-use velesdb_core::velesql::{FilterStrategy, Parser};
+use velesdb_core::velesql::{FilterStrategy, IndexType, Parser, PlanNode};
 use velesdb_core::{Database, Point};
 
-use super::helpers::{create_test_db, execute_sql, vector_param};
+use super::helpers::{create_test_db, execute_sql, execute_sql_with_params, vector_param};
 
 // =========================================================================
 // Helpers
@@ -349,5 +349,213 @@ fn test_prefilter_accounts_for_full_table_scan() {
          so the CBO should pick PostFilter. If this asserts PreFilter, \
          resolve_filter_strategy is under-pricing the pre-filter scan \
          (Devin finding A regression)."
+    );
+}
+
+// =========================================================================
+// BDD — issue #609: post-filter cost modelled as k * cpu_tuple_cost
+// =========================================================================
+
+/// GIVEN a large analyzed collection (10K rows) and a query whose filter
+///       selectivity sits just below the `PREFILTER_RECALL_GUARD = 0.5`
+///       threshold,
+/// WHEN  EXPLAIN runs a hybrid NEAR + predicate query with the new post-filter
+///       cost model (`k * cpu_tuple_cost * cpu_ratio`),
+/// THEN  the reported `filter_strategy` is `PostFilter` — because the HNSW
+///       term plus the true `k`-scaled post-filter cost beats a full scan
+///       + HNSW-on-reduced-set path. Under the old
+///       `POSTFILTER_TOPK_COST_FRACTION = 0.01` formula the post-filter cost
+///       was inflated by up to ~5× for this regime, which used to flip the
+///       strategy to `PreFilter` incorrectly for selectivities close to but
+///       below the guardrail.
+#[test]
+fn test_postfilter_preferred_on_large_collection_near_guardrail() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 10_000);
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE docs");
+
+    // Selectivity ≈ 0.4 via `price < 400` on values uniformly in [0, 1000).
+    // Below the 0.5 recall guardrail so both branches of resolve_filter_strategy
+    // engage the cost comparison — this is exactly where the #609 fix changes
+    // the decision for large collections.
+    let plan = explain(
+        &db,
+        "SELECT * FROM docs WHERE vector NEAR $v AND price < 400 LIMIT 10",
+    )
+    .expect("test: EXPLAIN hybrid near-guardrail");
+
+    assert_eq!(
+        plan.filter_strategy,
+        FilterStrategy::PostFilter,
+        "large collection + sel ≈ 0.4 must choose PostFilter with the \
+         k*cpu_tuple_cost model (issue #609). Old model inflated post-filter \
+         cost by ~5× and would flip to PreFilter here."
+    );
+}
+
+// =========================================================================
+// BDD — issue #607: IndexLookup plan nodes for indexed columns
+// =========================================================================
+
+/// Walks the plan tree and returns true when any node is an `IndexLookup`.
+/// Recurses into `Sequence` children because the plan root for
+/// `SELECT ... WHERE col = 'x' LIMIT N` is a `Sequence([IndexLookup, Filter,
+/// Limit])` shape, not a bare `IndexLookup` leaf.
+fn plan_contains_index_lookup(node: &PlanNode) -> bool {
+    match node {
+        PlanNode::IndexLookup(_) => true,
+        PlanNode::Sequence(children) => children.iter().any(plan_contains_index_lookup),
+        _ => false,
+    }
+}
+
+/// GIVEN a collection with a registered secondary index on a metadata column,
+/// WHEN  EXPLAIN runs a pure-WHERE equality query targeting that column,
+/// THEN  the plan tree contains an `IndexLookup` node AND `index_used` is
+///       `Some(IndexType::Property)` — proving that `build_plan_with_stats`
+///       now threads the real indexed-field set through
+///       `from_query_with_stats` (issue #607 closure).
+#[test]
+fn test_explain_generates_index_lookup_for_indexed_field() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 500);
+
+    execute_sql(&db, "CREATE INDEX ON docs (cat)").expect("test: CREATE INDEX on cat");
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE so stats path runs");
+
+    let plan = explain(&db, "SELECT * FROM docs WHERE cat = 'rare' LIMIT 10")
+        .expect("test: EXPLAIN indexed equality");
+
+    assert_eq!(
+        plan.index_used,
+        Some(IndexType::Property),
+        "indexed equality query must report Property index use, got {:?}",
+        plan.index_used
+    );
+    assert!(
+        plan_contains_index_lookup(&plan.root),
+        "plan tree must contain an IndexLookup node; tree: {:?}",
+        plan.root
+    );
+}
+
+/// Negative counterpart: when the column is NOT indexed, EXPLAIN must still
+/// fall back to a `TableScan` tree without claiming an `IndexLookup`.
+#[test]
+fn test_explain_falls_back_to_table_scan_when_column_not_indexed() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 500);
+    // No CREATE INDEX on `cat` this time.
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE");
+
+    let plan = explain(&db, "SELECT * FROM docs WHERE cat = 'rare' LIMIT 10")
+        .expect("test: EXPLAIN non-indexed equality");
+
+    assert!(
+        !plan_contains_index_lookup(&plan.root),
+        "no CREATE INDEX should mean no IndexLookup in the plan tree; tree: {:?}",
+        plan.root
+    );
+    assert_ne!(
+        plan.index_used,
+        Some(IndexType::Property),
+        "index_used must not be Property when no secondary index exists"
+    );
+}
+
+// =========================================================================
+// BDD — issue #608: plan cache invalidation on ANALYZE
+// =========================================================================
+
+/// GIVEN a collection with data but no ANALYZE yet, and a cached EXPLAIN
+///       plan built from the pre-ANALYZE heuristic cost estimates,
+/// WHEN  ANALYZE is run on the collection (no intervening write),
+/// THEN  a subsequent EXPLAIN on the identical query returns a plan whose
+///       `estimated_cost_ms` differs from the first one, proving the cache
+///       was invalidated by the analyze_generation bump (issue #608).
+///
+/// The acceptance criterion from the issue is "no intermediate write is
+/// required for c2 to appear" — this test deliberately avoids any upsert
+/// or delete between the two EXPLAIN calls so a pass means the cache key
+/// flip came exclusively from `analyze_generation`, not from an incidental
+/// `write_generation` bump.
+#[test]
+fn test_analyze_invalidates_plan_cache_without_write() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 1_000);
+
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+
+    // Force the plan cache to populate with the pre-ANALYZE heuristic plan.
+    // `execute_query` is the only entry that writes to the plan cache, and
+    // `explain_query` by design does NOT populate it — so a bare SELECT
+    // with bound parameters must run first.
+    execute_sql_with_params(
+        &db,
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+        &params,
+    )
+    .expect("test: prime cache with pre-ANALYZE plan");
+
+    let query = Parser::parse("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10")
+        .expect("test: parse pre-analyze");
+
+    let plan_before = db
+        .explain_analyze_query(&query, &params)
+        .expect("test: explain pre-analyze")
+        .plan;
+    let cost_before = plan_before.estimated_cost_ms;
+
+    // ANALYZE is the ONLY mutation — no upsert/delete in between.
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE docs");
+
+    let plan_after = db
+        .explain_analyze_query(&query, &params)
+        .expect("test: explain post-analyze")
+        .plan;
+    let cost_after = plan_after.estimated_cost_ms;
+
+    assert!(
+        (cost_before - cost_after).abs() > f64::EPSILON,
+        "ANALYZE must flip the plan cache key (issue #608): cost_before={cost_before} cost_after={cost_after} — staleness means analyze_generation is not threaded into the cache key"
+    );
+}
+
+/// GIVEN a collection seeded and analyzed once (c1 recorded),
+/// WHEN  a second ANALYZE is run (no intervening write),
+/// THEN  the analyze_generation bumps again and the plan cache invalidates,
+///       so a third EXPLAIN returns a plan distinct from the c1 cache entry.
+///
+/// This is the "rolling ANALYZE" case — even after stats exist, subsequent
+/// runs must continue to invalidate.
+#[test]
+fn test_repeated_analyze_keeps_invalidating_plan_cache() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 1_000);
+    execute_sql(&db, "ANALYZE docs").expect("test: first ANALYZE");
+
+    // Prime the cache with the post-first-analyze plan.
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+    execute_sql_with_params(
+        &db,
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+        &params,
+    )
+    .expect("test: prime cache post-ANALYZE-1");
+
+    // Capture the analyze_generation so we can assert it bumped.
+    let gen_before = db
+        .collection_analyze_generation("docs")
+        .expect("test: collection exists");
+
+    execute_sql(&db, "ANALYZE docs").expect("test: second ANALYZE");
+
+    let gen_after = db
+        .collection_analyze_generation("docs")
+        .expect("test: collection exists");
+
+    assert!(
+        gen_after > gen_before,
+        "second ANALYZE must bump analyze_generation: {gen_before} -> {gen_after}"
     );
 }

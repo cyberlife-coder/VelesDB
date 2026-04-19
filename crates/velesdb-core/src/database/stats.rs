@@ -28,6 +28,11 @@ impl Database {
         // is held, preventing a race with incremental histogram updates.
         collection.write_stats_guarded(&stats)?;
 
+        // Issue #608: bump analyze_generation after stats are persisted so
+        // the compiled plan cache key changes and stale plans are rebuilt
+        // with the fresh calibrated cost estimates.
+        collection.bump_analyze_generation();
+
         Ok(stats)
     }
 

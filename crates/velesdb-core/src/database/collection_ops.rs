@@ -165,6 +165,49 @@ impl Database {
         None
     }
 
+    /// Returns the set of payload field names covered by a secondary index
+    /// for the named collection (issue #607). Empty set when the collection
+    /// has no indexes or does not exist.
+    ///
+    /// Used by `Database::build_plan_with_stats` to thread the real
+    /// indexed-field set into `QueryPlan::from_query_with_stats` so that
+    /// `IndexLookup` plan nodes are generated in the EXPLAIN tree when a
+    /// WHERE clause targets an indexed column.
+    #[must_use]
+    pub fn indexed_fields_for(&self, name: &str) -> std::collections::HashSet<String> {
+        if let Some(vc) = self.vector_colls.read().get(name) {
+            return vc.inner.indexed_field_names();
+        }
+        if let Some(gc) = self.graph_colls.read().get(name) {
+            return gc.inner.indexed_field_names();
+        }
+        if let Some(mc) = self.metadata_colls.read().get(name) {
+            return mc.inner.indexed_field_names();
+        }
+        std::collections::HashSet::new()
+    }
+
+    /// Returns the analyze generation for a named collection, if it exists
+    /// (issue #608).
+    ///
+    /// Parallel to [`collection_write_generation`], but tracks `ANALYZE`
+    /// invocations instead of data mutations. Threaded into the compiled plan
+    /// cache key so that an `ANALYZE` run alone invalidates cached plans whose
+    /// cost estimates pre-date the fresh calibrated statistics.
+    #[must_use]
+    pub fn collection_analyze_generation(&self, name: &str) -> Option<u64> {
+        if let Some(vc) = self.vector_colls.read().get(name) {
+            return Some(vc.inner.analyze_generation());
+        }
+        if let Some(gc) = self.graph_colls.read().get(name) {
+            return Some(gc.inner.analyze_generation());
+        }
+        if let Some(mc) = self.metadata_colls.read().get(name) {
+            return Some(mc.inner.analyze_generation());
+        }
+        None
+    }
+
     /// Lists all collection names in the database.
     ///
     /// Includes collections created via any typed API (vector, graph, metadata).

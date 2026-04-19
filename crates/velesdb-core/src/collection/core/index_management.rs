@@ -108,6 +108,18 @@ impl Collection {
         self.secondary_indexes.read().contains_key(field_name)
     }
 
+    /// Returns the set of payload field names covered by a secondary index
+    /// (issue #607).
+    ///
+    /// Threaded into `QueryPlan::from_query_with_stats` via
+    /// `Database::build_plan_with_stats` so `IndexLookup` plan nodes are
+    /// generated when an `EXPLAIN` target references an indexed column.
+    /// Returns an empty set for collections with no indexes registered.
+    #[must_use]
+    pub fn indexed_field_names(&self) -> std::collections::HashSet<String> {
+        self.secondary_indexes.read().keys().cloned().collect()
+    }
+
     /// Looks up matching point IDs for an indexed field value.
     #[must_use]
     pub fn secondary_index_lookup(&self, field_name: &str, value: &JsonValue) -> Option<Vec<u64>> {
