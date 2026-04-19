@@ -476,8 +476,8 @@ impl QueryPlan {
         // under-estimates pre-filter cost by a factor of `1/selectivity`
         // and wrongly prefers PreFilter for tight filters when
         // PostFilter is cheaper (Devin finding A on #606).
-        let pre_filter = est.estimate_filter_cost_from_selectivity(1.0).total()
-            + hnsw_cost * selectivity;
+        let pre_filter =
+            est.estimate_filter_cost_from_selectivity(1.0).total() + hnsw_cost * selectivity;
         // Post-filter: full HNSW pass, then filter evaluation on the
         // top-k results (small constant cost, approximated by selectivity
         // weight applied to the filter cost on the reduced row-set).
