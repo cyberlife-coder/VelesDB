@@ -76,7 +76,7 @@ When no calibrated `CollectionStats` is available (collection never analyzed, SD
 
 ### 7. BM25 cold-start triggers an O(N) rebuild
 
-**Status**: open. Tracked by [issue #389](https://github.com/cyberlife-coder/VelesDB/issues/389). Source: `crates/velesdb-core/src/collection/lifecycle.rs:189-244` (`rebuild_bm25_index()` invoked on every `Database::open`).
+**Status**: open. Tracked by [issue #389](https://github.com/cyberlife-coder/VelesDB/issues/389). Source: `crates/velesdb-core/src/collection/core/lifecycle.rs:189-244` (`rebuild_bm25_index()` invoked on every `Database::open`).
 
 The BM25 inverted index is not persisted. On `Database::open` it is rebuilt in-memory by scanning every document in the collection. For a 100 K-document corpus this adds a few hundred milliseconds at startup; for multi-million-document corpora the cold-start penalty is proportionally larger.
 
