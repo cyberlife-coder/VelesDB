@@ -287,11 +287,18 @@ pub(super) fn resolve_filter_strategy(
         .estimate_hnsw_search_cost_with_ef_on_size(ef_search, candidates, reduced_size)
         .total();
     let pre_filter = est.estimate_filter_cost_from_selectivity(1.0).total() + hnsw_on_reduced;
-    // Post-filter: full HNSW pass, then filter evaluation on the top-k
-    // results only. Cost is `k × cpu_tuple_cost × cpu_ratio` — independent
-    // of collection size and selectivity, since the predicate runs on the
-    // k in-memory tuples returned by HNSW (issue #609 closure).
-    let post_filter = hnsw_cost + est.estimate_post_filter_topk_cost(candidates).total();
+    // Post-filter: full HNSW pass, then filter evaluation on the HNSW
+    // candidate set **before** top-k truncation. VelesDB's execution
+    // (`search_post_filter` + `filter_and_hydrate`) runs the predicate on
+    // the oversampled candidates and truncates to k afterwards, so the
+    // cardinality of the filter evaluation is `max(k, ef_search)` — not
+    // `k` alone. Modelling on k alone under-estimates the cost in the
+    // typical `ef_search ≫ k` regime (Devin review on PR #612, issue
+    // #609 closure).
+    let post_filter = hnsw_cost
+        + est
+            .estimate_post_filter_topk_cost(candidates, ef_search)
+            .total();
 
     if pre_filter < post_filter {
         FilterStrategy::PreFilter

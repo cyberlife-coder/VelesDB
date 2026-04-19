@@ -478,30 +478,49 @@ impl<'a> CostEstimator<'a> {
     }
 
     /// Estimates the cost of applying a post-filter predicate to the
-    /// top-`k` results of an HNSW search (issue #609).
+    /// candidate set returned by an HNSW search (issue #609).
     ///
     /// Unlike [`Self::estimate_filter_cost_from_selectivity`] (which scales
-    /// with `total × selectivity`), the post-filter runs **only on the
-    /// `k` tuples returned by HNSW** — the cost is therefore
-    /// `k × cpu_tuple_cost × cpu_ratio`, independent of collection size and
-    /// predicate selectivity. This replaces the previous
-    /// `filter_cost × POSTFILTER_TOPK_COST_FRACTION` approximation in
-    /// `resolve_filter_strategy`, which overestimated post-filter cost by
-    /// up to 5× for large collections with selectivity near the recall
-    /// guardrail (0.5).
+    /// with `total × selectivity`), the post-filter runs only on the set of
+    /// candidates HNSW explored, not on the full collection.
     ///
-    /// Returns a zero-I/O cost: the top-`k` tuples are already in memory
+    /// # Choice of cardinality
+    ///
+    /// VelesDB's actual post-filter execution (`search_post_filter` +
+    /// `filter_and_hydrate` in `collection/search/vector_filter.rs`)
+    /// evaluates the predicate on an *oversampled* candidate set
+    /// (`compute_oversampled_k(k, filter) = clamp(k/selectivity, [k+10,
+    /// 10_000])`) and truncates to `k` **after** the filter. The predicate
+    /// therefore runs on more than `k` tuples in the common case — a
+    /// `k`-only model (naive "top-k post-filter") under-estimates the
+    /// cost for high-recall HNSW regimes (Devin review on PR #612).
+    ///
+    /// The model below uses `max(k, ef_search)` as the effective
+    /// predicate-evaluation cardinality. This is a conservative upper
+    /// bound on the HNSW-returned set size:
+    /// - when `k ≥ ef_search` (unusual), the predicate runs on `k`;
+    /// - when `ef_search > k` (typical: ef≈160, k≈10), it runs on
+    ///   up to `ef_search` candidates before truncation.
+    ///
+    /// The true oversampled count
+    /// (`clamp(k/selectivity, [k+10, 10_000])`) is not passed into the
+    /// planner — the planner does not know the execution-time selectivity
+    /// estimate that `compute_oversampled_k` uses. `max(k, ef_search)` is
+    /// the closest bound available at plan time.
+    ///
+    /// Returns a zero-I/O cost: the candidates are already in memory
     /// after the HNSW pass, so no page reads are charged.
     #[must_use]
-    pub fn estimate_post_filter_topk_cost(&self, k: u32) -> Cost {
-        let k = f64::from(k.max(1));
+    pub fn estimate_post_filter_topk_cost(&self, k: u32, ef_search: u32) -> Cost {
+        let n = f64::from(k.max(ef_search).max(1));
         let f = self.factors.get();
         let d = default_factors();
         let cpu_ratio = f.cpu_tuple_cost / d.cpu_tuple_cost;
-        // Reason: k × default cpu_tuple_cost scaled by ratio to the
-        // calibrated factor — the physical reality of evaluating a
-        // predicate on k in-memory tuples.
-        Cost::new(0.0, k * d.cpu_tuple_cost * cpu_ratio)
+        // Reason: max(k, ef_search) × default cpu_tuple_cost scaled by
+        // ratio to the calibrated factor — the physical reality of
+        // evaluating a predicate on the HNSW candidate set before top-k
+        // truncation (see `search_post_filter` + `filter_and_hydrate`).
+        Cost::new(0.0, n * d.cpu_tuple_cost * cpu_ratio)
     }
 
     /// Estimates filter cost from an already-computed selectivity value.
