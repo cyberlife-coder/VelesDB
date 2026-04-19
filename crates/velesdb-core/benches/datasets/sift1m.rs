@@ -558,10 +558,13 @@ pub(crate) fn verify_fingerprint(path: &Path, expected_sha256: &str) -> Result<(
         eprintln!(
             "\n[WARN] [sift1m] verify_fingerprint: {filename} — placeholder fingerprint detected.\n\
              [WARN] Observed SHA-256: {actual}\n\
-             [WARN] Pin this value into the SHA256_* constant at sift1m.rs:96-98 after manual\n\
-             [WARN] verification. Until pinned, bit-level corruption is NOT detected (only\n\
-             [WARN] dimension and row count are validated via check_shape).\n\
-             [WARN] See TODO(US-S4-BENCH-SIFT1M) at sift1m.rs (module rustdoc + SHA256_* consts).\n"
+             [WARN] Close the integrity gap in one command:\n\
+             [WARN]     cargo bench -p velesdb-core --features bench-sift1m \\\n\
+             [WARN]         --bench capture_sift1m_fingerprints\n\
+             [WARN] The capture bench writes benches/datasets/sift1m_fingerprints.json;\n\
+             [WARN] commit it to promote verification from TOFU to strict mode.\n\
+             [WARN] Until committed, bit-level corruption is NOT detected\n\
+             [WARN] (only dimension and row count are validated via check_shape).\n"
         );
         return Ok(());
     }
