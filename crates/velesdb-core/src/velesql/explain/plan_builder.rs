@@ -324,9 +324,10 @@ impl QueryPlan {
 
     /// Computes `(selectivity, estimation_method, estimated_rows)` for the
     /// filter block. When `stats` is `Some` and the WHERE clause tree is
-    /// available, uses `CostEstimator::estimate_condition_selectivity` on
-    /// the non-vector subtree; otherwise falls back to the string-count
-    /// heuristic.
+    /// available, uses `CostEstimator::estimate_condition_selectivity_with_method`
+    /// on the non-vector subtree and reports the actual method that produced
+    /// the estimate (histogram / cardinality / heuristic — issue #471, Devin
+    /// finding 2). Otherwise falls back to the string-count heuristic.
     fn estimate_filter_stats(
         stmt: &SelectStatement,
         filter_conditions: &[String],
@@ -336,9 +337,13 @@ impl QueryPlan {
             (Some(s), Some(where_cond)) => {
                 let est = CostEstimator::new(s);
                 let non_vector = Self::strip_vector_predicates(where_cond);
-                let sel = non_vector
-                    .as_ref()
-                    .map_or(1.0, |c| est.estimate_condition_selectivity(c));
+                let (sel, method) = non_vector.as_ref().map_or(
+                    (
+                        1.0,
+                        crate::velesql::cost_estimator::SelectivityMethod::Heuristic,
+                    ),
+                    |c| est.estimate_condition_selectivity_with_method(c),
+                );
                 let total = s.total_points.max(s.row_count);
                 // Reason: total*sel is a cardinality estimate; small fractional
                 // losses after ceil are acceptable for EXPLAIN display.
@@ -348,7 +353,7 @@ impl QueryPlan {
                     clippy::cast_sign_loss
                 )]
                 let rows = ((total as f64) * sel).ceil() as u64;
-                (sel, Some("histogram".to_string()), Some(rows))
+                (sel, Some(method.as_str().to_string()), Some(rows))
             }
             _ => (Self::estimate_selectivity(filter_conditions), None, None),
         }

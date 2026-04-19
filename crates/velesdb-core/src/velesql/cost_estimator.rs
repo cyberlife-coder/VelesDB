@@ -53,6 +53,61 @@ pub struct Cost {
     pub cpu_cost: f64,
 }
 
+/// Source of a selectivity estimate, used by EXPLAIN to report how a
+/// predicate's selectivity was computed (issue #471, Devin finding 2).
+///
+/// Ordered by increasing noise / decreasing confidence:
+/// 1. `Histogram` — derived from calibrated histogram buckets (most accurate).
+/// 2. `Cardinality` — derived from `distinct_count` only (no distribution).
+/// 3. `Heuristic` — hard-coded constant (e.g. 0.1 for `Match`, 0.05 for
+///    `ContainsText`) because the predicate type has no stats path at all.
+///
+/// For compound predicates (`And`/`Or`/`Not`/`Group`), the reported method is
+/// the **worst case** among children in the order above, so EXPLAIN never
+/// overstates its confidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SelectivityMethod {
+    /// Selectivity computed from histogram bucket data.
+    Histogram,
+    /// Selectivity computed from `distinct_count` cardinality (no histogram).
+    Cardinality,
+    /// Selectivity computed from a heuristic constant.
+    Heuristic,
+}
+
+impl SelectivityMethod {
+    /// Returns the EXPLAIN display label for this method.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Histogram => "histogram",
+            Self::Cardinality => "cardinality",
+            Self::Heuristic => "heuristic",
+        }
+    }
+
+    /// Returns the worst (least confident) of two methods.
+    ///
+    /// Ordering: `Heuristic > Cardinality > Histogram`. Used to combine the
+    /// methods of sub-predicates under `And`/`Or`/`Not`/`Group` so the
+    /// reported method reflects the loosest child.
+    #[must_use]
+    pub const fn worst(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Heuristic, _) | (_, Self::Heuristic) => Self::Heuristic,
+            (Self::Cardinality, _) | (_, Self::Cardinality) => Self::Cardinality,
+            _ => Self::Histogram,
+        }
+    }
+}
+
+impl std::fmt::Display for SelectivityMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl Cost {
     #[must_use]
     /// Creates a new cost value from I/O and CPU components.
@@ -251,6 +306,139 @@ impl<'a> CostEstimator<'a> {
             | Condition::SparseVectorSearch(_)
             | Condition::Similarity(_) => 1.0,
         }
+    }
+
+    /// Same as [`Self::estimate_condition_selectivity`] but also returns the
+    /// [`SelectivityMethod`] that produced the estimate (issue #471, Devin
+    /// finding 2). For compound predicates, returns the worst-case method
+    /// among children so EXPLAIN never overstates confidence.
+    #[must_use]
+    pub fn estimate_condition_selectivity_with_method(
+        &self,
+        condition: &Condition,
+    ) -> (f64, SelectivityMethod) {
+        match condition {
+            Condition::Comparison(cmp) => {
+                self.comparison_selectivity_with_method(&cmp.column, cmp.operator, &cmp.value)
+            }
+            Condition::In(cond) => {
+                self.in_selectivity_with_method(&cond.column, &cond.values, cond.negated)
+            }
+            Condition::Between(cond) => {
+                self.between_selectivity_with_method(&cond.column, &cond.low, &cond.high)
+            }
+            Condition::Like(cond) => self.like_selectivity_with_method(&cond.column, &cond.pattern),
+            Condition::IsNull(cond) => self.is_null_selectivity_with_method(&cond.column),
+            Condition::Match(_)
+            | Condition::Contains(_)
+            | Condition::GeoDistance(_)
+            | Condition::ContainsText(_)
+            | Condition::GeoBbox(_)
+            | Condition::GraphMatch(_) => (
+                self.estimate_condition_selectivity(condition),
+                SelectivityMethod::Heuristic,
+            ),
+            Condition::And(left, right) => {
+                let (l, ml) = self.estimate_condition_selectivity_with_method(left);
+                let (r, mr) = self.estimate_condition_selectivity_with_method(right);
+                (l * r, ml.worst(mr))
+            }
+            Condition::Or(left, right) => {
+                let (l, ml) = self.estimate_condition_selectivity_with_method(left);
+                let (r, mr) = self.estimate_condition_selectivity_with_method(right);
+                ((l + r - (l * r)).clamp(0.0, 1.0), ml.worst(mr))
+            }
+            Condition::Not(inner) => {
+                let (s, m) = self.estimate_condition_selectivity_with_method(inner);
+                (1.0 - s, m)
+            }
+            Condition::Group(inner) => self.estimate_condition_selectivity_with_method(inner),
+            Condition::VectorSearch(_)
+            | Condition::VectorFusedSearch(_)
+            | Condition::SparseVectorSearch(_)
+            | Condition::Similarity(_) => (1.0, SelectivityMethod::Heuristic),
+        }
+    }
+
+    /// Method-aware variant of [`Self::estimate_comparison_selectivity_with_histogram`].
+    fn comparison_selectivity_with_method(
+        &self,
+        column: &str,
+        op: CompareOp,
+        value: &Value,
+    ) -> (f64, SelectivityMethod) {
+        let sel = self.estimate_comparison_selectivity_with_histogram(column, op, value);
+        let method = if matches!(value, Value::Parameter(_)) {
+            SelectivityMethod::Heuristic
+        } else if value_to_f64(value).is_some() && self.get_histogram(column).is_some() {
+            SelectivityMethod::Histogram
+        } else {
+            SelectivityMethod::Cardinality
+        };
+        (sel, method)
+    }
+
+    /// Method-aware variant of [`Self::estimate_in_selectivity`].
+    fn in_selectivity_with_method(
+        &self,
+        column: &str,
+        values: &[Value],
+        negated: bool,
+    ) -> (f64, SelectivityMethod) {
+        let sel = self.estimate_in_selectivity(column, values, negated);
+        let has_numeric = values.iter().any(|v| value_to_f64(v).is_some());
+        let method = if has_numeric && self.get_histogram(column).is_some() {
+            SelectivityMethod::Histogram
+        } else {
+            SelectivityMethod::Cardinality
+        };
+        (sel, method)
+    }
+
+    /// Method-aware variant of [`Self::estimate_between_selectivity`].
+    fn between_selectivity_with_method(
+        &self,
+        column: &str,
+        low: &Value,
+        high: &Value,
+    ) -> (f64, SelectivityMethod) {
+        let sel = self.estimate_between_selectivity(column, low, high);
+        let numeric = value_to_f64(low).is_some() && value_to_f64(high).is_some();
+        let method = if numeric && self.get_histogram(column).is_some() {
+            SelectivityMethod::Histogram
+        } else {
+            SelectivityMethod::Heuristic
+        };
+        (sel, method)
+    }
+
+    /// Method-aware variant of [`Self::estimate_like_selectivity`].
+    fn like_selectivity_with_method(
+        &self,
+        column: &str,
+        pattern: &str,
+    ) -> (f64, SelectivityMethod) {
+        let sel = self.estimate_like_selectivity(column, pattern);
+        let is_prefix = pattern.ends_with('%') && !pattern.starts_with('%');
+        let method = if is_prefix && self.get_histogram(column).is_some() {
+            SelectivityMethod::Cardinality
+        } else {
+            SelectivityMethod::Heuristic
+        };
+        (sel, method)
+    }
+
+    /// Method-aware variant for `IsNull`.
+    fn is_null_selectivity_with_method(&self, column: &str) -> (f64, SelectivityMethod) {
+        let sel = self.stats.field_stats.get(column).map_or(0.1, |s| {
+            s.null_count as f64 / self.stats.total_points.max(1) as f64
+        });
+        let method = if self.stats.field_stats.contains_key(column) {
+            SelectivityMethod::Cardinality
+        } else {
+            SelectivityMethod::Heuristic
+        };
+        (sel, method)
     }
 
     /// Estimates selectivity for a `Comparison` condition using histogram data.
@@ -666,5 +854,186 @@ mod plan_cost_tests {
         });
         let cost = est.estimate_plan_cost(&plan).total();
         assert!(cost.is_finite() && cost > 0.0);
+    }
+}
+
+#[cfg(test)]
+mod selectivity_method_tests {
+    //! Tests for [`SelectivityMethod`] propagation (issue #471, Devin finding 2).
+    //!
+    //! Verifies that `estimate_condition_selectivity_with_method` returns the
+    //! actual method used (histogram / cardinality / heuristic), and that
+    //! compound predicates report the worst-case method among their children.
+
+    use super::*;
+    use crate::collection::stats::{ColumnStats, Histogram, HistogramBucket};
+    use crate::velesql::ast::{Comparison, Condition, MatchCondition, Value};
+
+    /// Builds a `CollectionStats` with `total` rows and an optional histogram
+    /// on column `col`.
+    fn stats_with_col(total: u64, col: &str, with_hist: bool) -> CollectionStats {
+        let mut s = CollectionStats::new();
+        s.total_points = total;
+        s.row_count = total;
+        let mut cs = ColumnStats::new(col).with_distinct_count(100);
+        if with_hist {
+            cs.histogram = Some(Histogram {
+                buckets: vec![HistogramBucket {
+                    lower_bound: 0.0,
+                    upper_bound: 1000.0,
+                    count: total,
+                    distinct_count: 100,
+                }],
+                total_count: total,
+                incremental_updates: 0,
+                stale: false,
+            });
+        }
+        s.column_stats.insert(col.to_string(), cs.clone());
+        s.field_stats.insert(col.to_string(), cs);
+        s
+    }
+
+    fn cmp_eq(col: &str, v: i64) -> Condition {
+        Condition::Comparison(Comparison {
+            column: col.to_string(),
+            operator: CompareOp::Eq,
+            value: Value::Integer(v),
+        })
+    }
+
+    fn cmp_param(col: &str) -> Condition {
+        Condition::Comparison(Comparison {
+            column: col.to_string(),
+            operator: CompareOp::Eq,
+            value: Value::Parameter("v".into()),
+        })
+    }
+
+    #[test]
+    fn method_histogram_when_numeric_value_and_histogram_present() {
+        let stats = stats_with_col(1_000, "price", true);
+        let est = CostEstimator::new(&stats);
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&cmp_eq("price", 42));
+        assert_eq!(method, SelectivityMethod::Histogram);
+    }
+
+    #[test]
+    fn method_cardinality_when_no_histogram() {
+        let stats = stats_with_col(1_000, "price", false);
+        let est = CostEstimator::new(&stats);
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&cmp_eq("price", 42));
+        assert_eq!(method, SelectivityMethod::Cardinality);
+    }
+
+    #[test]
+    fn method_heuristic_when_parameter_value() {
+        let stats = stats_with_col(1_000, "price", true);
+        let est = CostEstimator::new(&stats);
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&cmp_param("price"));
+        assert_eq!(
+            method,
+            SelectivityMethod::Heuristic,
+            "Parameter values are unknown at plan time → Heuristic"
+        );
+    }
+
+    #[test]
+    fn method_heuristic_for_match_predicate() {
+        let stats = stats_with_col(1_000, "body", true);
+        let est = CostEstimator::new(&stats);
+        let cond = Condition::Match(MatchCondition {
+            column: "body".into(),
+            query: "hello".into(),
+        });
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&cond);
+        assert_eq!(method, SelectivityMethod::Heuristic);
+    }
+
+    #[test]
+    fn method_compound_and_takes_worst_case() {
+        // AND(histogram_cond, heuristic_cond) → Heuristic (worst case).
+        let stats = stats_with_col(1_000, "price", true);
+        let est = CostEstimator::new(&stats);
+
+        let histogram_cond = cmp_eq("price", 42);
+        let heuristic_cond = Condition::Match(MatchCondition {
+            column: "body".into(),
+            query: "x".into(),
+        });
+        let compound = Condition::And(Box::new(histogram_cond), Box::new(heuristic_cond));
+
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&compound);
+        assert_eq!(
+            method,
+            SelectivityMethod::Heuristic,
+            "AND of (Histogram, Heuristic) must report Heuristic (worst case)"
+        );
+    }
+
+    #[test]
+    fn method_compound_or_takes_worst_case() {
+        let stats = stats_with_col(1_000, "price", true);
+        let est = CostEstimator::new(&stats);
+
+        let histogram_cond = cmp_eq("price", 42);
+        let cardinality_cond = cmp_param("price"); // Parameter → heuristic, actually
+
+        // To get pure cardinality: drop histogram, keep column_stats.
+        let stats_card = stats_with_col(1_000, "other", false);
+        let est_card = CostEstimator::new(&stats_card);
+        let card_cond = cmp_eq("other", 10);
+
+        // Assert cardinality path is detected on its own.
+        let (_, m1) = est_card.estimate_condition_selectivity_with_method(&card_cond);
+        assert_eq!(m1, SelectivityMethod::Cardinality);
+
+        // Now verify OR(histogram, heuristic) = heuristic.
+        let compound = Condition::Or(Box::new(histogram_cond), Box::new(cardinality_cond));
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&compound);
+        assert_eq!(method, SelectivityMethod::Heuristic);
+    }
+
+    #[test]
+    fn method_not_preserves_child_method() {
+        let stats = stats_with_col(1_000, "price", true);
+        let est = CostEstimator::new(&stats);
+        let inner = cmp_eq("price", 42);
+        let not_cond = Condition::Not(Box::new(inner));
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&not_cond);
+        assert_eq!(method, SelectivityMethod::Histogram);
+    }
+
+    #[test]
+    fn method_group_preserves_child_method() {
+        let stats = stats_with_col(1_000, "price", true);
+        let est = CostEstimator::new(&stats);
+        let inner = cmp_eq("price", 42);
+        let grouped = Condition::Group(Box::new(inner));
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&grouped);
+        assert_eq!(method, SelectivityMethod::Histogram);
+    }
+
+    #[test]
+    fn method_str_labels_match_explain_display() {
+        assert_eq!(SelectivityMethod::Histogram.as_str(), "histogram");
+        assert_eq!(SelectivityMethod::Cardinality.as_str(), "cardinality");
+        assert_eq!(SelectivityMethod::Heuristic.as_str(), "heuristic");
+    }
+
+    #[test]
+    fn backward_compat_selectivity_value_unchanged() {
+        // The non-method-aware function must return the same selectivity as
+        // the method-aware one; refactor must not alter numeric outputs.
+        let stats = stats_with_col(1_000, "price", true);
+        let est = CostEstimator::new(&stats);
+        let cond = cmp_eq("price", 42);
+
+        let sel_new = est.estimate_condition_selectivity_with_method(&cond).0;
+        let sel_old = est.estimate_condition_selectivity(&cond);
+        assert!(
+            (sel_new - sel_old).abs() < f64::EPSILON,
+            "method-aware and legacy paths must agree: new={sel_new} old={sel_old}"
+        );
     }
 }
