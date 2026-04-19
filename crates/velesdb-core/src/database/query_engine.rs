@@ -175,16 +175,20 @@ impl Database {
         Ok(plan)
     }
 
-    /// Builds a query plan, resolving calibrated collection statistics from
-    /// the registry when available (#471 — EXPLAIN real costs).
+    /// Builds a query plan, resolving calibrated collection statistics AND
+    /// the registered secondary index set from the registry when available
+    /// (#471 — EXPLAIN real costs, #607 — `IndexLookup` wiring).
     ///
     /// The returned plan's `estimated_cost_ms` and `filter_strategy` are
     /// calibrated via `CostEstimator` when stats exist for the query's
-    /// primary collection. Falls back to heuristics otherwise.
+    /// primary collection. Falls back to heuristics otherwise. The
+    /// `indexed_fields` argument is populated from
+    /// `Database::indexed_fields_for` so that `IndexLookup` nodes appear
+    /// in the EXPLAIN tree for WHERE clauses targeting indexed columns.
     fn build_plan_with_stats(&self, query: &crate::velesql::Query) -> crate::velesql::QueryPlan {
         let primary = &query.select.from;
         let core_stats = self.get_collection_stats(primary).ok().flatten();
-        let indexed = std::collections::HashSet::new();
+        let indexed = self.indexed_fields_for(primary);
         crate::velesql::QueryPlan::from_query_with_stats(query, &indexed, core_stats.as_ref())
     }
 

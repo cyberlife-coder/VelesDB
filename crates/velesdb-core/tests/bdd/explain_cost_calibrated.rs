@@ -9,7 +9,7 @@
 //! These are nominal + edge + negative tests (§bdd-testing.md coverage rule).
 
 use serde_json::json;
-use velesdb_core::velesql::{FilterStrategy, Parser};
+use velesdb_core::velesql::{FilterStrategy, IndexType, Parser, PlanNode};
 use velesdb_core::{Database, Point};
 
 use super::helpers::{create_test_db, execute_sql, execute_sql_with_params, vector_param};
@@ -349,6 +349,76 @@ fn test_prefilter_accounts_for_full_table_scan() {
          so the CBO should pick PostFilter. If this asserts PreFilter, \
          resolve_filter_strategy is under-pricing the pre-filter scan \
          (Devin finding A regression)."
+    );
+}
+
+// =========================================================================
+// BDD — issue #607: IndexLookup plan nodes for indexed columns
+// =========================================================================
+
+/// Walks the plan tree and returns true when any node is an `IndexLookup`.
+/// Recurses into `Sequence` children because the plan root for
+/// `SELECT ... WHERE col = 'x' LIMIT N` is a `Sequence([IndexLookup, Filter,
+/// Limit])` shape, not a bare `IndexLookup` leaf.
+fn plan_contains_index_lookup(node: &PlanNode) -> bool {
+    match node {
+        PlanNode::IndexLookup(_) => true,
+        PlanNode::Sequence(children) => children.iter().any(plan_contains_index_lookup),
+        _ => false,
+    }
+}
+
+/// GIVEN a collection with a registered secondary index on a metadata column,
+/// WHEN  EXPLAIN runs a pure-WHERE equality query targeting that column,
+/// THEN  the plan tree contains an `IndexLookup` node AND `index_used` is
+///       `Some(IndexType::Property)` — proving that `build_plan_with_stats`
+///       now threads the real indexed-field set through
+///       `from_query_with_stats` (issue #607 closure).
+#[test]
+fn test_explain_generates_index_lookup_for_indexed_field() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 500);
+
+    execute_sql(&db, "CREATE INDEX ON docs (cat)").expect("test: CREATE INDEX on cat");
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE so stats path runs");
+
+    let plan = explain(&db, "SELECT * FROM docs WHERE cat = 'rare' LIMIT 10")
+        .expect("test: EXPLAIN indexed equality");
+
+    assert_eq!(
+        plan.index_used,
+        Some(IndexType::Property),
+        "indexed equality query must report Property index use, got {:?}",
+        plan.index_used
+    );
+    assert!(
+        plan_contains_index_lookup(&plan.root),
+        "plan tree must contain an IndexLookup node; tree: {:?}",
+        plan.root
+    );
+}
+
+/// Negative counterpart: when the column is NOT indexed, EXPLAIN must still
+/// fall back to a `TableScan` tree without claiming an `IndexLookup`.
+#[test]
+fn test_explain_falls_back_to_table_scan_when_column_not_indexed() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 500);
+    // No CREATE INDEX on `cat` this time.
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE");
+
+    let plan = explain(&db, "SELECT * FROM docs WHERE cat = 'rare' LIMIT 10")
+        .expect("test: EXPLAIN non-indexed equality");
+
+    assert!(
+        !plan_contains_index_lookup(&plan.root),
+        "no CREATE INDEX should mean no IndexLookup in the plan tree; tree: {:?}",
+        plan.root
+    );
+    assert_ne!(
+        plan.index_used,
+        Some(IndexType::Property),
+        "index_used must not be Property when no secondary index exists"
     );
 }
 
