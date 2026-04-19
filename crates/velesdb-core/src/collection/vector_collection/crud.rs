@@ -23,8 +23,8 @@ impl VectorCollection {
     ///
     /// # Errors
     ///
-    /// - Returns [`Error::InvalidVector`] if `vectors.len() != ids.len() * dimension`.
-    /// - Returns [`Error::DimensionMismatch`] if `dimension` mismatches the collection.
+    /// - Returns [`crate::error::Error::InvalidVector`] if `vectors.len() != ids.len() * dimension`.
+    /// - Returns [`crate::error::Error::DimensionMismatch`] if `dimension` mismatches the collection.
     pub fn upsert_bulk_from_raw(
         &self,
         vectors: &[f32],

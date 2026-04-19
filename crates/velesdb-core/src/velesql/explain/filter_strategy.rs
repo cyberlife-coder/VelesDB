@@ -62,9 +62,9 @@ static FALLBACK_SELECTIVITY_THRESHOLD_BITS: AtomicU64 =
 /// Returns the current fallback selectivity threshold (default `0.1`).
 ///
 /// When no calibrated [`CollectionStats`](CoreCollectionStats) is available
-/// (un-analyzed collection, SDK path without collection handle),
-/// [`resolve_filter_strategy`] switches from `PreFilter` to `PostFilter` when
-/// the heuristic selectivity exceeds this threshold. The default value keeps
+/// (un-analyzed collection, SDK path without collection handle), the internal
+/// `resolve_filter_strategy` helper switches from `PreFilter` to `PostFilter`
+/// when the heuristic selectivity exceeds this threshold. The default value keeps
 /// parity with the ~50 pre-existing EXPLAIN tests that predate calibrated
 /// costs; tune for workloads where the calibrated pathway is unavailable.
 #[must_use]
@@ -81,8 +81,22 @@ pub fn fallback_selectivity_threshold() -> f64 {
 /// (threshold < 0) — those regimes are better expressed via the calibrated
 /// pathway.
 ///
+/// # Example
+/// ```
+/// use velesdb_core::velesql::{
+///     fallback_selectivity_threshold,
+///     set_fallback_selectivity_threshold,
+///     DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD,
+/// };
+/// let previous = set_fallback_selectivity_threshold(0.3).expect("0.3 is in range");
+/// assert_eq!(previous, DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD);
+/// assert!((fallback_selectivity_threshold() - 0.3).abs() < 1e-12);
+/// // Restore for any downstream tests.
+/// set_fallback_selectivity_threshold(DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD).unwrap();
+/// ```
+///
 /// # Errors
-/// Returns [`Error::Config`] when `value` is NaN, negative, or greater than
+/// Returns [`crate::error::Error::Config`] when `value` is NaN, negative, or greater than
 /// `1.0`.
 pub fn set_fallback_selectivity_threshold(value: f64) -> Result<f64> {
     if !value.is_finite() || !(0.0..=1.0).contains(&value) {

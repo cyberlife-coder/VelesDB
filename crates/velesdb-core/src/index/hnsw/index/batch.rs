@@ -34,7 +34,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if any vector has a dimension
+    /// Returns [`crate::error::Error::DimensionMismatch`] if any vector has a dimension
     /// different from the index dimension.
     ///
     /// # Performance
@@ -232,7 +232,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if any query dimension does not
+    /// Returns [`crate::error::Error::DimensionMismatch`] if any query dimension does not
     /// match the index dimension.
     pub fn search_batch_parallel(
         &self,
@@ -277,7 +277,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] on the first query whose dimension
+    /// Returns [`crate::error::Error::DimensionMismatch`] on the first query whose dimension
     /// does not match the index dimension.
     fn validate_batch_dimensions(&self, queries: &[&[f32]]) -> crate::error::Result<()> {
         for query in queries {
@@ -343,7 +343,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// Returns [`crate::error::Error::DimensionMismatch`] if the query dimension does not
     /// match the index dimension.
     pub fn brute_force_search_parallel(
         &self,

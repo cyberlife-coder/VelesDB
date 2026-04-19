@@ -259,7 +259,7 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if any query vector has a dimension
+    /// Returns [`crate::error::Error::DimensionMismatch`] if any query vector has a dimension
     /// different from the index dimension.
     fn search_and_merge_delta(
         &self,

@@ -443,10 +443,10 @@ impl NativeHnswInner {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Internal`] if vector storage is not initialized.
+    /// Returns [`crate::error::Error::Internal`] if vector storage is not initialized.
     /// Propagates any error returned by the closure.
     ///
-    /// [`Error::Internal`]: crate::error::Error::Internal
+    /// [`crate::error::Error::Internal`]: crate::error::Error::Internal
     pub fn with_contiguous_vectors_mut<R>(
         &self,
         f: impl FnOnce(&mut crate::perf_optimizations::ContiguousVectors) -> crate::error::Result<R>,

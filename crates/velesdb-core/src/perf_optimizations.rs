@@ -236,10 +236,10 @@ impl ContiguousVectors {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if `vector.len() != self.dimension`.
+    /// Returns [`crate::error::Error::DimensionMismatch`] if `vector.len() != self.dimension`.
     /// Returns [`Error::AllocationFailed`] if capacity growth fails.
     ///
-    /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
+    /// [`crate::error::Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub fn insert_at(&mut self, index: usize, vector: &[f32]) -> crate::error::Result<()> {
         validate_dimension_match(self.dimension, vector.len())?;
@@ -270,10 +270,10 @@ impl ContiguousVectors {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if `vector.len() != self.dimension`.
+    /// Returns [`crate::error::Error::DimensionMismatch`] if `vector.len() != self.dimension`.
     /// Returns [`Error::AllocationFailed`] if capacity growth fails.
     ///
-    /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
+    /// [`crate::error::Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub fn push(&mut self, vector: &[f32]) -> crate::error::Result<()> {
         self.insert_at(self.count, vector)
@@ -291,10 +291,10 @@ impl ContiguousVectors {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] or [`Error::AllocationFailed`] on the
+    /// Returns [`crate::error::Error::DimensionMismatch`] or [`Error::AllocationFailed`] on the
     /// first vector that fails. Vectors added before the failure remain in storage.
     ///
-    /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
+    /// [`crate::error::Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub fn push_batch(&mut self, vectors: &[&[f32]]) -> crate::error::Result<usize> {
         if vectors.is_empty() {
