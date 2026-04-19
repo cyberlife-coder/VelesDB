@@ -30,6 +30,19 @@ const FALLBACK_SELECTIVITY_THRESHOLD: f64 = 0.1;
 /// candidates survive). Forces PostFilter in that case.
 const PREFILTER_RECALL_GUARD: f64 = 0.5;
 
+/// Approximate fraction of the filter-scan cost attributed to the
+/// post-filter step. Post-filter only evaluates the predicate on the
+/// top-k HNSW results (typically k = 10) while the filter-scan formula
+/// scales with `total * selectivity`. Using a fixed `0.01` multiplier is
+/// a rough but conservative approximation — it slightly overestimates
+/// the post-filter cost for very large collections with high selectivity
+/// (Devin finding on PR #606), yet the HNSW term dominates in those
+/// regimes so it does not flip strategy decisions in practice. A future
+/// refinement could replace this with a proper `k * cpu_tuple_cost`
+/// model once `k` and the calibrated `cpu_tuple_cost` are threaded
+/// through to `resolve_filter_strategy`.
+const POSTFILTER_TOPK_COST_FRACTION: f64 = 0.01;
+
 impl QueryPlan {
     /// Creates a new query plan from a SELECT statement.
     #[must_use]
@@ -449,6 +462,19 @@ impl QueryPlan {
             // No vector search → the notion of pre/post-filter doesn't apply
             // the same way; preserve the historical threshold for parity with
             // the non-vector plan shape.
+            //
+            // Observation (Devin finding on PR #606): for non-vector queries,
+            // the threshold is applied to a calibrated histogram-based
+            // selectivity once `stats` are present, but to the
+            // `0.5^n`-style heuristic when `stats` is `None`. A highly
+            // selective predicate such as `price < 10` (sel ≈ 0.01 after
+            // ANALYZE vs. 0.5 without) therefore flips the reported
+            // `filter_strategy` from PostFilter (heuristic) to PreFilter
+            // (calibrated). This is purely informational for non-vector
+            // plans — the execution engine does not dispatch on this
+            // field when there is no HNSW stage — but is visible in
+            // EXPLAIN output. Kept intentionally: the calibrated answer
+            // is the semantically correct one.
             return if selectivity > FALLBACK_SELECTIVITY_THRESHOLD {
                 FilterStrategy::PostFilter
             } else {
@@ -491,13 +517,15 @@ impl QueryPlan {
             .total();
         let pre_filter = est.estimate_filter_cost_from_selectivity(1.0).total() + hnsw_on_reduced;
         // Post-filter: full HNSW pass, then filter evaluation on the
-        // top-k results (small constant cost, approximated by selectivity
-        // weight applied to the filter cost on the reduced row-set).
+        // top-k results (small constant cost, approximated by
+        // `POSTFILTER_TOPK_COST_FRACTION` applied to the filter cost on
+        // the reduced row-set — see the constant's doc-comment for the
+        // rationale and follow-up plan).
         let post_filter = hnsw_cost
             + est
                 .estimate_filter_cost_from_selectivity(selectivity)
                 .total()
-                * 0.01;
+                * POSTFILTER_TOPK_COST_FRACTION;
 
         if pre_filter < post_filter {
             FilterStrategy::PreFilter

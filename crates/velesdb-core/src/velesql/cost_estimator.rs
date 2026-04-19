@@ -647,6 +647,11 @@ impl<'a> CostEstimator<'a> {
     }
 
     /// Cost of a vector search node, scaling with `ef_search` and candidates.
+    ///
+    /// Uses the same `(ef + k) * log2(total)` probe formula as the public
+    /// HNSW cost helpers and delegates the probe → Cost conversion to
+    /// [`Self::hnsw_cost_from_probe`], so a future change to the HNSW
+    /// factor-ratio model updates all three call sites at once.
     fn estimate_vector_search_node_cost(&self, vs: &VectorSearchPlan) -> Cost {
         let total = self.stats.total_points.max(self.stats.row_count).max(1) as f64;
         let ef = f64::from(vs.ef_search.max(1));
@@ -654,16 +659,7 @@ impl<'a> CostEstimator<'a> {
         // HNSW probe count scales with ef_search (frontier size) and k (results).
         // log2(total) captures the graph-height component.
         let probe = (ef + k) * total.log2().max(1.0);
-
-        let f = self.factors.get();
-        let d = default_factors();
-        let io_ratio = f.random_page_cost / d.random_page_cost;
-        let cpu_ratio = f.cpu_distance_cost / d.cpu_distance_cost;
-
-        Cost::new(
-            probe * COMPAT_HNSW_IO * io_ratio,
-            probe * COMPAT_HNSW_CPU * cpu_ratio,
-        )
+        self.hnsw_cost_from_probe(probe)
     }
 
     /// Cost of a full table scan, proportional to row count.
