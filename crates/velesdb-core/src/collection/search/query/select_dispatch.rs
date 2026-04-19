@@ -14,11 +14,30 @@ use super::{distinct, pushdown, ExtractedComponents, MAX_LIMIT};
 
 impl Collection {
     /// Computes the CBO execution strategy and over-fetch factor for the query.
+    ///
+    /// Routes between two planner entry points depending on query shape
+    /// (issue #467 closure):
+    ///
+    /// - **Queries with `ORDER BY similarity()`** must preserve HNSW's natural
+    ///   similarity ordering, so the planner forces `VectorFirst` via
+    ///   [`QueryPlanner::choose_hybrid_strategy`], which additionally computes
+    ///   a selectivity-aware over-fetch factor clamped to `[2.0, 10.0]` when
+    ///   a filter is present. A pure-cost comparison would occasionally pick
+    ///   `GraphFirst`/`Parallel` and lose the natural ordering — observable
+    ///   as scrambled top-k for `ORDER BY similarity() DESC LIMIT k` queries.
+    /// - **All other queries** use the calibrated
+    ///   [`QueryPlanner::choose_strategy_with_cbo_and_overfetch`] path, which
+    ///   derives I/O / CPU weights from `OperationCostFactors` (or defaults
+    ///   when the collection was never analyzed).
     pub(super) fn compute_cbo_strategy(
         &self,
+        stmt: &crate::velesql::SelectStatement,
         filter_condition: Option<&crate::velesql::Condition>,
         limit: usize,
     ) -> (crate::velesql::ExecutionStrategy, usize) {
+        if Self::has_order_by_similarity(stmt) {
+            return self.cbo_strategy_for_order_by_similarity(filter_condition, limit);
+        }
         let col_stats = self.get_stats();
         let result = self.query_planner.choose_strategy_with_cbo_and_overfetch(
             &col_stats,
@@ -27,9 +46,70 @@ impl Collection {
         );
         tracing::debug!(
             strategy = ?result.0, over_fetch = result.1,
-            "CBO selected execution strategy"
+            "CBO selected execution strategy (calibrated cost path)"
         );
         result
+    }
+
+    /// Returns `true` when the ORDER BY clause contains at least one
+    /// `similarity(...)` (or bare `similarity()`) expression. Detection is
+    /// purely syntactic — the planner uses this signal to preserve HNSW
+    /// natural ordering regardless of cost estimates.
+    fn has_order_by_similarity(stmt: &crate::velesql::SelectStatement) -> bool {
+        let Some(order_by) = stmt.order_by.as_ref() else {
+            return false;
+        };
+        order_by.iter().any(|item| {
+            matches!(
+                item.expr,
+                crate::velesql::OrderByExpr::Similarity(_)
+                    | crate::velesql::OrderByExpr::SimilarityBare
+            )
+        })
+    }
+
+    /// CBO path for queries that carry `ORDER BY similarity()` in their
+    /// projection. Delegates to [`QueryPlanner::choose_hybrid_strategy`] so
+    /// the returned `HybridExecutionPlan.strategy` is always `VectorFirst`
+    /// and the over-fetch factor reflects the calibrated selectivity.
+    fn cbo_strategy_for_order_by_similarity(
+        &self,
+        filter_condition: Option<&crate::velesql::Condition>,
+        limit: usize,
+    ) -> (crate::velesql::ExecutionStrategy, usize) {
+        let col_stats = self.get_stats();
+        let estimated_selectivity = filter_condition.map(|cond| {
+            crate::velesql::CostEstimator::new(&col_stats)
+                .estimate_condition_selectivity(cond)
+                .clamp(0.001, 1.0)
+        });
+        // Reason: execution limit already clamped upstream to `usize::MAX`
+        // equivalent values; `u64::try_from(usize)` never fails on 64-bit
+        // targets and saturates on 32-bit.
+        let limit_u64 = u64::try_from(limit).unwrap_or(u64::MAX);
+        let plan = self.query_planner.choose_hybrid_strategy(
+            true, // has_order_by_similarity
+            filter_condition.is_some(),
+            Some(limit_u64),
+            estimated_selectivity,
+        );
+        // Reason: over_fetch_factor is clamped upstream to [1.0, 64.0] so
+        // the ceil-to-usize cast is safe. `.max(1)` guards against a
+        // degenerate planner output (would be a bug, not a truncation).
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let over_fetch = (plan.over_fetch_factor.ceil() as usize).max(1);
+        tracing::debug!(
+            strategy = ?plan.strategy,
+            over_fetch,
+            use_early_termination = plan.use_early_termination,
+            recompute_scores = plan.recompute_scores,
+            "CBO selected execution strategy (ORDER BY similarity() path)"
+        );
+        (plan.strategy, over_fetch)
     }
 
     /// Dispatches the main SELECT query path (vector, similarity, metadata).
@@ -56,7 +136,7 @@ impl Collection {
             .with_fusion(stmt.fusion_clause.clone());
         let first_similarity = extracted.similarity_conditions.first().cloned();
         let (cbo_strategy, cbo_over_fetch) =
-            self.compute_cbo_strategy(extracted.filter_condition.as_ref(), limit);
+            self.compute_cbo_strategy(stmt, extracted.filter_condition.as_ref(), limit);
 
         let mut results = self
             .dispatch_vector_query(

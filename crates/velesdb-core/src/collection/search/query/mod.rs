@@ -5,16 +5,27 @@
 //! - Condition extraction (`extraction.rs`)
 //! - ORDER BY processing (`ordering.rs`)
 //!
-//! # Future Enhancement: HybridExecutionPlan Integration
+//! # Cost-based optimization wiring (issue #467)
 //!
-//! The `HybridExecutionPlan` and `choose_hybrid_strategy()` in `planner.rs`
-//! are ready for integration to optimize query execution based on:
-//! - Query pattern (ORDER BY similarity, filters, etc.)
-//! - Runtime statistics (latency, selectivity)
-//! - Over-fetch factor for filtered queries
+//! `compute_cbo_strategy` in `select_dispatch.rs` routes between two planner
+//! entry points depending on query shape:
 //!
-//! Future: Integrate `QueryPlanner::choose_hybrid_strategy()` into `execute_query()`
-//! to leverage cost-based optimization for complex queries.
+//! - Queries carrying `ORDER BY similarity()` go through
+//!   [`QueryPlanner::choose_hybrid_strategy`], which forces `VectorFirst`
+//!   to preserve HNSW's natural similarity ordering and applies a
+//!   selectivity-aware over-fetch factor.
+//! - All other SELECT queries go through
+//!   [`QueryPlanner::choose_strategy_with_cbo_and_overfetch`], which
+//!   derives I/O / CPU weights from calibrated `OperationCostFactors`
+//!   (or defaults when the collection was never analyzed).
+//!
+//! Both entry points share the same return shape
+//! `(ExecutionStrategy, over_fetch: usize)` consumed by
+//! `dispatch_vector_query` in `execution_paths.rs`. The deeper
+//! multi-candidate `PlanGenerator` enumeration remains open
+//! (see `collection/query_cost/plan_generator.rs`); it is reserved for
+//! a future expansion that would supersede the current two-path routing
+//! with full cost-based enumeration.
 
 #![allow(clippy::uninlined_format_args)] // Prefer readability in query error paths.
 #![allow(clippy::implicit_hasher)] // HashSet hasher genericity adds noise for internal APIs.

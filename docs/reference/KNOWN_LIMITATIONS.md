@@ -28,13 +28,20 @@ The ratio (~22×) is **not** a regression; it reflects that the calibrated path 
 
 **Resolution path**: pin `COST_UNIT_TO_MS` empirically via a micro-benchmark that times a known plan shape on reference hardware, then rescale the constant so pre/post-`ANALYZE` costs align at the same operating point. Not blocker for correctness — both paths rank the same plan shape consistently within their own range.
 
-### 2. CBO `choose_hybrid_strategy` not integrated for pure-`SELECT` hybrid queries
+### 2. Multi-candidate `PlanGenerator` enumeration not wired into `execute_query`
 
-**Status**: partial integration. Tracked by [issue #467](https://github.com/cyberlife-coder/VelesDB/issues/467) (scope-reduced). Source: `crates/velesdb-core/src/collection/search/query/mod.rs:16` (TODO comment).
+**Status**: partial integration (scope-reduced). Tracked by [issue #467](https://github.com/cyberlife-coder/VelesDB/issues/467). Source: `crates/velesdb-core/src/collection/query_cost/plan_generator.rs` (`PlanGenerator::CandidatePlan`).
 
-The calibrated CBO is fully wired for `MATCH` queries (via `MatchQueryPlanner::plan`). For pure-`SELECT` hybrid queries (vector + WHERE + optional text), `QueryPlanner::choose_hybrid_strategy` and `PlanGenerator` are defined but not called by `execute_query`. The `filter_strategy` reported in `EXPLAIN` is still driven by `resolve_filter_strategy` (the pipeline used by this PR series) and remains accurate; the missing piece is the deeper strategy-enumeration layer that compares multiple candidate plans (`PlanGenerator::CandidatePlan`).
+`compute_cbo_strategy` in `collection/search/query/select_dispatch.rs` now routes SELECT queries through two calibrated planner entry points:
 
-**User impact**: `MATCH` queries benefit from the full CBO; pure-`SELECT` hybrid queries benefit from calibrated filter-strategy selection but not from multi-candidate plan enumeration. Covered by `test_filter_strategy_switches_on_selectivity` + `test_prefilter_accounts_for_full_table_scan`.
+- `QueryPlanner::choose_hybrid_strategy` for queries carrying `ORDER BY similarity()` — forces `VectorFirst` to preserve HNSW natural ordering regardless of cost estimates.
+- `QueryPlanner::choose_strategy_with_cbo_and_overfetch` for all other SELECT queries — calibrated I/O / CPU cost comparison across `VectorFirst` / `GraphFirst` / `Parallel`.
+
+Both branches feed into the same `dispatch_vector_query` executor through the `(ExecutionStrategy, over_fetch: usize)` tuple.
+
+**What remains open**: the deeper `PlanGenerator::CandidatePlan` enumeration (SeqScan, IndexScan, VectorSearch, GraphTraversal, hybrid combinations) is still not consumed by `execute_query`. The current two-path routing covers the operationally common cases — full multi-candidate enumeration would only change the decision when the cost landscape is non-trivially multimodal.
+
+**User impact**: `MATCH` queries use the full CBO via `MatchQueryPlanner::plan`. SELECT queries (including ORDER BY similarity + filter) now use calibrated strategy and over-fetch selection. Covered by `test_cbo_forces_vector_first_for_order_by_similarity_with_selective_filter` + `test_cbo_calibrated_path_still_works_without_order_by_similarity` + `test_filter_strategy_switches_on_selectivity`.
 
 ### 3. Filter-strategy fallback threshold is runtime-tunable (default 0.1)
 
