@@ -246,16 +246,7 @@ impl<'a> CostEstimator<'a> {
     pub fn estimate_hnsw_search_cost(&self, k: usize) -> Cost {
         let total = self.stats.total_points.max(self.stats.row_count).max(1) as f64;
         let probe = (k.max(1) as f64) * total.log2().max(1.0);
-
-        let f = self.factors.get();
-        let d = default_factors();
-        let io_ratio = f.random_page_cost / d.random_page_cost;
-        let cpu_ratio = f.cpu_distance_cost / d.cpu_distance_cost;
-
-        Cost::new(
-            probe * COMPAT_HNSW_IO * io_ratio,
-            probe * COMPAT_HNSW_CPU * cpu_ratio,
-        )
+        self.hnsw_cost_from_probe(probe)
     }
 
     /// Estimates HNSW search cost parametrized by the actual `ef_search`
@@ -269,16 +260,43 @@ impl<'a> CostEstimator<'a> {
     /// instead of a fixed `k = 10`.
     #[must_use]
     pub fn estimate_hnsw_search_cost_with_ef(&self, ef_search: u32, candidates: u32) -> Cost {
-        let total = self.stats.total_points.max(self.stats.row_count).max(1) as f64;
+        let total = self.stats.total_points.max(self.stats.row_count).max(1);
+        self.estimate_hnsw_search_cost_with_ef_on_size(ef_search, candidates, total)
+    }
+
+    /// Variant of [`Self::estimate_hnsw_search_cost_with_ef`] that takes the
+    /// effective collection size explicitly.
+    ///
+    /// Callers use this when the HNSW pass runs over a **subset** of the
+    /// collection — typically the surviving rows after a pre-filter. Modeling
+    /// the cost as `(ef + k) * log2(collection_size)` preserves the
+    /// logarithmic scaling HNSW actually exhibits, whereas multiplying the
+    /// full-collection cost by the filter selectivity would imply linear
+    /// scaling in the reduced size (Devin finding E on PR #606).
+    #[must_use]
+    pub fn estimate_hnsw_search_cost_with_ef_on_size(
+        &self,
+        ef_search: u32,
+        candidates: u32,
+        collection_size: u64,
+    ) -> Cost {
+        let total = collection_size.max(1) as f64;
         let ef = f64::from(ef_search.max(1));
         let k = f64::from(candidates.max(1));
         let probe = (ef + k) * total.log2().max(1.0);
+        self.hnsw_cost_from_probe(probe)
+    }
 
+    /// Applies calibrated I/O and CPU weights to a raw HNSW probe count.
+    ///
+    /// Single source of truth for the `Cost::new(probe * io_w, probe * cpu_w)`
+    /// formula used by every HNSW cost helper — avoids duplicating the
+    /// factor-ratio resolution in three places.
+    fn hnsw_cost_from_probe(&self, probe: f64) -> Cost {
         let f = self.factors.get();
         let d = default_factors();
         let io_ratio = f.random_page_cost / d.random_page_cost;
         let cpu_ratio = f.cpu_distance_cost / d.cpu_distance_cost;
-
         Cost::new(
             probe * COMPAT_HNSW_IO * io_ratio,
             probe * COMPAT_HNSW_CPU * cpu_ratio,
@@ -907,6 +925,55 @@ mod plan_cost_tests {
         });
         let cost = est.estimate_plan_cost(&plan).total();
         assert!(cost.is_finite() && cost > 0.0);
+    }
+
+    #[test]
+    fn hnsw_cost_on_size_scales_logarithmically() {
+        // Devin finding E on #606: the reduced-set HNSW cost must scale with
+        // log2(size), not linearly. Doubling the size increases the cost by
+        // exactly one probe "step" of (ef + k).
+        let stats = stats_with_points(100_000);
+        let est = CostEstimator::new(&stats);
+
+        let small = est
+            .estimate_hnsw_search_cost_with_ef_on_size(100, 10, 1_000)
+            .total();
+        let big = est
+            .estimate_hnsw_search_cost_with_ef_on_size(100, 10, 1_000_000)
+            .total();
+
+        assert!(
+            big > small,
+            "cost must grow with collection size: small={small} big={big}"
+        );
+        // Logarithmic (not linear) scaling: going from 1K to 1M rows
+        // multiplies log2 by 2.0 (from ~10 to ~20), so the ratio must stay
+        // well below 1000× (= the linear scaling result).
+        assert!(
+            big / small < 5.0,
+            "HNSW cost must scale logarithmically (ratio < 5), got {}",
+            big / small
+        );
+    }
+
+    #[test]
+    fn hnsw_cost_on_full_size_matches_default_variant() {
+        // Backward-compat: `estimate_hnsw_search_cost_with_ef` must return
+        // exactly the same cost as
+        // `estimate_hnsw_search_cost_with_ef_on_size(stats.total_points)`.
+        let stats = stats_with_points(42_000);
+        let est = CostEstimator::new(&stats);
+
+        let implicit = est.estimate_hnsw_search_cost_with_ef(100, 10).total();
+        let explicit = est
+            .estimate_hnsw_search_cost_with_ef_on_size(100, 10, 42_000)
+            .total();
+
+        assert!(
+            (implicit - explicit).abs() < f64::EPSILON,
+            "the two variants must produce identical costs when called with \
+             the full collection size: implicit={implicit} explicit={explicit}"
+        );
     }
 }
 

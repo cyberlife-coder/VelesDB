@@ -468,16 +468,28 @@ impl QueryPlan {
             .estimate_hnsw_search_cost_with_ef(ef_search, candidates)
             .total();
         // Pre-filter: evaluate the predicate on **every** row of the
-        // collection (scan proportional to `total`, not `total*sel`), then
-        // run HNSW on the `sel*total` surviving candidates.
-        //
-        // Using `estimate_filter_cost_from_selectivity(1.0)` forces the
-        // scan-cost to cover the full table — without this, the CBO
-        // under-estimates pre-filter cost by a factor of `1/selectivity`
-        // and wrongly prefers PreFilter for tight filters when
-        // PostFilter is cheaper (Devin finding A on #606).
-        let pre_filter =
-            est.estimate_filter_cost_from_selectivity(1.0).total() + hnsw_cost * selectivity;
+        // collection (scan proportional to `total`, not `total*sel`) — then
+        // run HNSW on the `sel*total` surviving candidates. HNSW on a
+        // reduced set scales as `(ef + k) * log2(total*sel)`, not linearly
+        // in the reduction factor, hence the dedicated
+        // `estimate_hnsw_search_cost_with_ef_on_size` call (Devin finding E
+        // on #606). The filter-scan component uses selectivity=1.0 so the
+        // CBO does not under-estimate pre-filter cost by `1/selectivity`
+        // (Devin finding A on #606).
+        let total_points = s.total_points.max(s.row_count).max(1);
+        // Reason: `total_points * selectivity` is a cardinality estimate;
+        // floor to u64 is acceptable for a reduced-set size used in
+        // `log2(size)` probe counting.
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let reduced_size = ((total_points as f64) * selectivity).max(1.0) as u64;
+        let hnsw_on_reduced = est
+            .estimate_hnsw_search_cost_with_ef_on_size(ef_search, candidates, reduced_size)
+            .total();
+        let pre_filter = est.estimate_filter_cost_from_selectivity(1.0).total() + hnsw_on_reduced;
         // Post-filter: full HNSW pass, then filter evaluation on the
         // top-k results (small constant cost, approximated by selectivity
         // weight applied to the filter cost on the reduced row-set).
