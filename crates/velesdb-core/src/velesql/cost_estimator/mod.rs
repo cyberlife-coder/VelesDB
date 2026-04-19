@@ -15,10 +15,33 @@
 //! etc.) ensure that **default factors produce identical costs** to the old
 //! hard-coded constants. When calibrated factors differ from defaults, costs
 //! scale proportionally via `(calibrated / default)` ratios.
+//!
+//! # Module layout (Devin Finding F on PR #606)
+//!
+//! The estimator was split across three files to respect the 500 NLOC file
+//! limit:
+//!
+//! - `mod.rs` (this file) — public types (`Cost`, `SelectivityMethod`,
+//!   `CostEstimator`), internal `CostFactorsRef`, base selectivity helpers
+//!   (`estimate_condition_selectivity`, comparison/in/between/like),
+//!   filter-cost + HNSW-cost helpers.
+//! - `selectivity_method.rs` — method-aware variants
+//!   (`estimate_condition_selectivity_with_method` + `_with_method` helpers
+//!   per predicate kind) + the `has_cardinality_data` guard.
+//! - `plan_cost.rs` — `estimate_plan_cost` + per-node cost functions
+//!   (vector search, table scan, limit/offset, index lookup, match
+//!   traversal).
+//!
+//! All three files contribute `impl CostEstimator<'_>` blocks — Rust allows
+//! multiple impl blocks across files for the same type, so there is no
+//! public API change and no cross-module trait indirection.
 
 // Reason: usize/u64 → f64 for selectivity ratios and log2 inputs; these are
 // cardinalities where ±1 ULP has no operational impact on query planning.
 #![allow(clippy::cast_precision_loss)]
+
+mod plan_cost;
+mod selectivity_method;
 
 use crate::collection::query_cost::cost_model::OperationCostFactors;
 use crate::collection::stats::next_after;
@@ -35,13 +58,13 @@ use crate::velesql::ast::{CompareOp, Condition, Value};
 // yield the exact same costs as the old hard-coded constants.
 
 /// Historical I/O ratio for filter scan cost.
-const COMPAT_FILTER_IO: f64 = 0.2;
+pub(super) const COMPAT_FILTER_IO: f64 = 0.2;
 /// Historical CPU ratio for filter scan cost.
-const COMPAT_FILTER_CPU: f64 = 0.8;
+pub(super) const COMPAT_FILTER_CPU: f64 = 0.8;
 /// Historical I/O ratio for HNSW search cost.
-const COMPAT_HNSW_IO: f64 = 0.5;
+pub(super) const COMPAT_HNSW_IO: f64 = 0.5;
 /// Historical CPU ratio for HNSW search cost.
-const COMPAT_HNSW_CPU: f64 = 1.0;
+pub(super) const COMPAT_HNSW_CPU: f64 = 1.0;
 
 /// Composite cost estimate.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -50,6 +73,61 @@ pub struct Cost {
     pub io_cost: f64,
     /// Estimated CPU component (arbitrary units).
     pub cpu_cost: f64,
+}
+
+/// Source of a selectivity estimate, used by EXPLAIN to report how a
+/// predicate's selectivity was computed (issue #471, Devin finding 2).
+///
+/// Ordered by increasing noise / decreasing confidence:
+/// 1. `Histogram` — derived from calibrated histogram buckets (most accurate).
+/// 2. `Cardinality` — derived from `distinct_count` only (no distribution).
+/// 3. `Heuristic` — hard-coded constant (e.g. 0.1 for `Match`, 0.05 for
+///    `ContainsText`) because the predicate type has no stats path at all.
+///
+/// For compound predicates (`And`/`Or`/`Not`/`Group`), the reported method is
+/// the **worst case** among children in the order above, so EXPLAIN never
+/// overstates its confidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SelectivityMethod {
+    /// Selectivity computed from histogram bucket data.
+    Histogram,
+    /// Selectivity computed from `distinct_count` cardinality (no histogram).
+    Cardinality,
+    /// Selectivity computed from a heuristic constant.
+    Heuristic,
+}
+
+impl SelectivityMethod {
+    /// Returns the EXPLAIN display label for this method.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Histogram => "histogram",
+            Self::Cardinality => "cardinality",
+            Self::Heuristic => "heuristic",
+        }
+    }
+
+    /// Returns the worst (least confident) of two methods.
+    ///
+    /// Ordering: `Heuristic > Cardinality > Histogram`. Used to combine the
+    /// methods of sub-predicates under `And`/`Or`/`Not`/`Group` so the
+    /// reported method reflects the loosest child.
+    #[must_use]
+    pub const fn worst(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Heuristic, _) | (_, Self::Heuristic) => Self::Heuristic,
+            (Self::Cardinality, _) | (_, Self::Cardinality) => Self::Cardinality,
+            _ => Self::Histogram,
+        }
+    }
+}
+
+impl std::fmt::Display for SelectivityMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl Cost {
@@ -102,7 +180,7 @@ impl CostFactorsRef<'_> {
 /// CPU costs. Zero-allocation on cache-hit path via `CostFactorsRef`.
 #[derive(Debug)]
 pub struct CostEstimator<'a> {
-    stats: &'a CollectionStats,
+    pub(super) stats: &'a CollectionStats,
     factors: CostFactorsRef<'a>,
 }
 
@@ -110,7 +188,7 @@ pub struct CostEstimator<'a> {
 ///
 /// Returns `Some(f64)` for Integer, `UnsignedInteger`, Float, and Boolean.
 /// Returns `None` for Parameter, Null, String, Temporal, and Subquery.
-fn value_to_f64(value: &Value) -> Option<f64> {
+pub(super) fn value_to_f64(value: &Value) -> Option<f64> {
     match value {
         Value::Integer(i) => Some(*i as f64),
         Value::UnsignedInteger(u) => Some(*u as f64),
@@ -121,7 +199,7 @@ fn value_to_f64(value: &Value) -> Option<f64> {
 }
 
 /// Lazily-initialized default factors for ratio computation.
-fn default_factors() -> &'static OperationCostFactors {
+pub(super) fn default_factors() -> &'static OperationCostFactors {
     use std::sync::LazyLock;
     static DEFAULT: LazyLock<OperationCostFactors> = LazyLock::new(OperationCostFactors::default);
     &DEFAULT
@@ -150,8 +228,13 @@ impl<'a> CostEstimator<'a> {
         }
     }
 
+    /// Returns the active `OperationCostFactors` for use in sibling modules.
+    pub(super) fn factors(&self) -> &OperationCostFactors {
+        self.factors.get()
+    }
+
     /// Returns the histogram for a column, delegating to `CollectionStats`.
-    fn get_histogram(&self, column: &str) -> Option<&Histogram> {
+    pub(super) fn get_histogram(&self, column: &str) -> Option<&Histogram> {
         self.stats.get_column_histogram(column)
     }
 
@@ -190,12 +273,57 @@ impl<'a> CostEstimator<'a> {
     pub fn estimate_hnsw_search_cost(&self, k: usize) -> Cost {
         let total = self.stats.total_points.max(self.stats.row_count).max(1) as f64;
         let probe = (k.max(1) as f64) * total.log2().max(1.0);
+        self.hnsw_cost_from_probe(probe)
+    }
 
+    /// Estimates HNSW search cost parametrized by the actual `ef_search`
+    /// (frontier size) and `candidates` (top-k request) — issue #471, Devin
+    /// finding 4.
+    ///
+    /// Uses the same `(ef + k) * log2(total)` probe formula as
+    /// [`Self::estimate_vector_search_node_cost`], so callers that have
+    /// `ef_search` / `candidates` available (e.g. pre/post-filter strategy
+    /// comparison in `plan_builder`) get a cost that reflects the real query
+    /// instead of a fixed `k = 10`.
+    #[must_use]
+    pub fn estimate_hnsw_search_cost_with_ef(&self, ef_search: u32, candidates: u32) -> Cost {
+        let total = self.stats.total_points.max(self.stats.row_count).max(1);
+        self.estimate_hnsw_search_cost_with_ef_on_size(ef_search, candidates, total)
+    }
+
+    /// Variant of [`Self::estimate_hnsw_search_cost_with_ef`] that takes the
+    /// effective collection size explicitly.
+    ///
+    /// Callers use this when the HNSW pass runs over a **subset** of the
+    /// collection — typically the surviving rows after a pre-filter. Modeling
+    /// the cost as `(ef + k) * log2(collection_size)` preserves the
+    /// logarithmic scaling HNSW actually exhibits, whereas multiplying the
+    /// full-collection cost by the filter selectivity would imply linear
+    /// scaling in the reduced size (Devin finding E on PR #606).
+    #[must_use]
+    pub fn estimate_hnsw_search_cost_with_ef_on_size(
+        &self,
+        ef_search: u32,
+        candidates: u32,
+        collection_size: u64,
+    ) -> Cost {
+        let total = collection_size.max(1) as f64;
+        let ef = f64::from(ef_search.max(1));
+        let k = f64::from(candidates.max(1));
+        let probe = (ef + k) * total.log2().max(1.0);
+        self.hnsw_cost_from_probe(probe)
+    }
+
+    /// Applies calibrated I/O and CPU weights to a raw HNSW probe count.
+    ///
+    /// Single source of truth for the `Cost::new(probe * io_w, probe * cpu_w)`
+    /// formula used by every HNSW cost helper — avoids duplicating the
+    /// factor-ratio resolution in three places.
+    pub(super) fn hnsw_cost_from_probe(&self, probe: f64) -> Cost {
         let f = self.factors.get();
         let d = default_factors();
         let io_ratio = f.random_page_cost / d.random_page_cost;
         let cpu_ratio = f.cpu_distance_cost / d.cpu_distance_cost;
-
         Cost::new(
             probe * COMPAT_HNSW_IO * io_ratio,
             probe * COMPAT_HNSW_CPU * cpu_ratio,
@@ -258,7 +386,7 @@ impl<'a> CostEstimator<'a> {
     /// Lt/Lte/Gt/Gte → histogram less-than with appropriate adjustments.
     /// Falls back to `CollectionStats::estimate_selectivity()` when no histogram
     /// is available or the value cannot be converted to `f64`.
-    fn estimate_comparison_selectivity_with_histogram(
+    pub(super) fn estimate_comparison_selectivity_with_histogram(
         &self,
         column: &str,
         op: CompareOp,
@@ -292,7 +420,12 @@ impl<'a> CostEstimator<'a> {
     ///
     /// Converts low/high to `f64` and delegates to `Histogram::estimate_range_selectivity`.
     /// Falls back to `0.3` when no histogram is available or conversion fails.
-    fn estimate_between_selectivity(&self, column: &str, low: &Value, high: &Value) -> f64 {
+    pub(super) fn estimate_between_selectivity(
+        &self,
+        column: &str,
+        low: &Value,
+        high: &Value,
+    ) -> f64 {
         let (Some(low_f), Some(high_f)) = (value_to_f64(low), value_to_f64(high)) else {
             return 0.3;
         };
@@ -311,7 +444,12 @@ impl<'a> CostEstimator<'a> {
     /// Sums per-value equality selectivities via histogram lookups when available.
     /// Falls back to `base_selectivity × list_size` without a histogram.
     /// If negated (NOT IN), returns `1.0 - sel`.
-    fn estimate_in_selectivity(&self, column: &str, values: &[Value], negated: bool) -> f64 {
+    pub(super) fn estimate_in_selectivity(
+        &self,
+        column: &str,
+        values: &[Value],
+        negated: bool,
+    ) -> f64 {
         let sel = if let Some(h) = self.get_histogram(column) {
             let numeric_sels: Vec<f64> = values
                 .iter()
@@ -339,12 +477,36 @@ impl<'a> CostEstimator<'a> {
         }
     }
 
+    /// Estimates filter cost from an already-computed selectivity value.
+    ///
+    /// Useful when the caller has a pre-computed selectivity (e.g. from
+    /// `estimate_condition_selectivity` or a heuristic) and wants to translate
+    /// it into a calibrated cost without building a `Condition` AST.
+    ///
+    /// Uses the same backward-compatible formula as `estimate_filter_cost`.
+    #[must_use]
+    pub fn estimate_filter_cost_from_selectivity(&self, selectivity: f64) -> Cost {
+        let sel = selectivity.clamp(0.0, 1.0);
+        let total = self.stats.total_points.max(self.stats.row_count) as f64;
+        let scan_rows = (total * sel).max(1.0);
+
+        let f = self.factors.get();
+        let d = default_factors();
+        let io_ratio = f.seq_page_cost / d.seq_page_cost;
+        let cpu_ratio = f.cpu_tuple_cost / d.cpu_tuple_cost;
+
+        Cost::new(
+            scan_rows * COMPAT_FILTER_IO * io_ratio,
+            scan_rows * COMPAT_FILTER_CPU * cpu_ratio,
+        )
+    }
+
     /// Estimates selectivity for a `Like` condition.
     ///
     /// Prefix patterns (ending with `%`, not starting with `%`) use histogram
     /// range estimation on the ordinal prefix range when available.
     /// Non-prefix patterns return `0.05`.
-    fn estimate_like_selectivity(&self, column: &str, pattern: &str) -> f64 {
+    pub(super) fn estimate_like_selectivity(&self, column: &str, pattern: &str) -> f64 {
         let is_prefix = pattern.ends_with('%') && !pattern.starts_with('%');
         if !is_prefix {
             return 0.05;

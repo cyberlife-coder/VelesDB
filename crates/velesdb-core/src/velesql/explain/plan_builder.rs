@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 
+use super::filter_strategy::{estimate_filter_stats, resolve_filter_strategy};
 use super::formatter;
 use super::node_stats;
 use super::types::{
@@ -14,6 +15,7 @@ use super::types::{
 use crate::collection::search::query::match_planner::{
     CollectionStats, MatchExecutionStrategy, MatchQueryPlanner,
 };
+use crate::collection::stats::CollectionStats as CoreCollectionStats;
 use crate::velesql::ast::{Condition, LetBinding, SelectStatement};
 use crate::velesql::MatchClause;
 
@@ -21,7 +23,7 @@ impl QueryPlan {
     /// Creates a new query plan from a SELECT statement.
     #[must_use]
     pub fn from_select(stmt: &SelectStatement) -> Self {
-        Self::from_select_with_indexed_fields(stmt, &HashSet::new())
+        Self::from_select_with_stats(stmt, &HashSet::new(), None)
     }
 
     /// Creates a new query plan from SELECT with known indexed metadata fields.
@@ -29,6 +31,21 @@ impl QueryPlan {
     pub fn from_select_with_indexed_fields(
         stmt: &SelectStatement,
         indexed_fields: &HashSet<String>,
+    ) -> Self {
+        Self::from_select_with_stats(stmt, indexed_fields, None)
+    }
+
+    /// Creates a query plan with access to calibrated collection statistics.
+    ///
+    /// When `stats` is `Some`, cost and filter-strategy decisions use the
+    /// calibrated `CostEstimator` pipeline (issue #471). When `None`, falls
+    /// back bit-for-bit to the heuristic path so legacy tests and callers
+    /// without a resolved collection keep working.
+    #[must_use]
+    pub fn from_select_with_stats(
+        stmt: &SelectStatement,
+        indexed_fields: &HashSet<String>,
+        stats: Option<&CoreCollectionStats>,
     ) -> Self {
         let mut has_vector_search = false;
         let mut filter_conditions = Vec::new();
@@ -40,9 +57,21 @@ impl QueryPlan {
         }
 
         let (mut nodes, index_used) = Self::build_scan_node(stmt, has_vector_search, index_lookup);
-        let filter_strategy = Self::append_filter_nodes(&mut nodes, &filter_conditions, stmt);
+        let filter_strategy = Self::append_filter_nodes_with_stats(
+            &mut nodes,
+            &filter_conditions,
+            stmt,
+            has_vector_search,
+            stats,
+        );
 
-        let mut plan = Self::assemble_plan(nodes, index_used, filter_strategy, has_vector_search);
+        let mut plan = Self::assemble_plan_with_stats(
+            nodes,
+            index_used,
+            filter_strategy,
+            has_vector_search,
+            stats,
+        );
         plan.with_options = Self::extract_with_options(stmt);
         plan.fusion_info = Self::extract_fusion_info(stmt);
         plan
@@ -51,7 +80,18 @@ impl QueryPlan {
     /// Creates a full query plan from a `Query`, including LET bindings (issue #471).
     #[must_use]
     pub fn from_query(query: &crate::velesql::ast::Query) -> Self {
-        let mut plan = Self::from_select(&query.select);
+        Self::from_query_with_stats(query, &HashSet::new(), None)
+    }
+
+    /// Creates a full query plan from a `Query`, with optional collection stats
+    /// for calibrated cost estimation (issue #471).
+    #[must_use]
+    pub fn from_query_with_stats(
+        query: &crate::velesql::ast::Query,
+        indexed_fields: &HashSet<String>,
+        stats: Option<&CoreCollectionStats>,
+    ) -> Self {
+        let mut plan = Self::from_select_with_stats(&query.select, indexed_fields, stats);
         plan.let_bindings = Self::format_let_bindings(&query.let_bindings);
         plan
     }
@@ -90,22 +130,29 @@ impl QueryPlan {
             None
         };
 
-        Self::assemble_plan(nodes, index_used, FilterStrategy::None, has_similarity)
+        Self::assemble_plan_with_stats(
+            nodes,
+            index_used,
+            FilterStrategy::None,
+            has_similarity,
+            None,
+        )
     }
 
-    /// Collapses a `Vec<PlanNode>` into a single root, estimates cost, and builds the plan.
-    fn assemble_plan(
+    /// Variant of `assemble_plan` with optional calibrated `CollectionStats`.
+    fn assemble_plan_with_stats(
         mut nodes: Vec<PlanNode>,
         index_used: Option<IndexType>,
         filter_strategy: FilterStrategy,
         has_vector_search: bool,
+        stats: Option<&CoreCollectionStats>,
     ) -> Self {
         let root = if nodes.len() == 1 {
             nodes.swap_remove(0)
         } else {
             PlanNode::Sequence(nodes)
         };
-        let estimated_cost_ms = Self::estimate_cost(&root, has_vector_search);
+        let estimated_cost_ms = node_stats::estimate_cost(&root, has_vector_search, stats);
         Self {
             root,
             estimated_cost_ms,
@@ -225,26 +272,47 @@ impl QueryPlan {
             .collect()
     }
 
-    /// Appends filter, offset, and limit nodes; returns the filter strategy.
-    fn append_filter_nodes(
+    /// Variant of `append_filter_nodes` with access to the calibrated
+    /// `CostEstimator` (issue #471).
+    ///
+    /// Selectivity and filter strategy use histogram data when `stats` is
+    /// `Some`. When `None`, the historical heuristic (selectivity from
+    /// condition count, 0.1 threshold) is preserved bit-for-bit.
+    fn append_filter_nodes_with_stats(
         nodes: &mut Vec<PlanNode>,
         filter_conditions: &[String],
         stmt: &SelectStatement,
+        has_vector_search: bool,
+        stats: Option<&CoreCollectionStats>,
     ) -> FilterStrategy {
         let mut filter_strategy = FilterStrategy::None;
 
         if !filter_conditions.is_empty() {
-            let selectivity = Self::estimate_selectivity(filter_conditions);
-            filter_strategy = if selectivity > 0.1 {
-                FilterStrategy::PostFilter
-            } else {
-                FilterStrategy::PreFilter
-            };
+            let heuristic_fallback = Self::estimate_selectivity(filter_conditions);
+            let (selectivity, estimation_method, estimated_rows) =
+                estimate_filter_stats(stmt, heuristic_fallback, stats);
+
+            // Reason: plan_builder owns stmt so the real ef_search/candidates
+            // are the same values used in `build_scan_node` above
+            // (Devin finding 4). These values drive the pre/post-filter cost
+            // comparison so it reflects the user's actual WITH clause instead
+            // of a fixed k = 10.
+            let ef_search = Self::resolve_ef_search(stmt);
+            let candidates = u32::try_from(stmt.limit.unwrap_or(50)).unwrap_or(u32::MAX);
+
+            filter_strategy = resolve_filter_strategy(
+                selectivity,
+                has_vector_search,
+                ef_search,
+                candidates,
+                stats,
+            );
+
             nodes.push(PlanNode::Filter(FilterPlan {
                 conditions: filter_conditions.join(" AND "),
                 selectivity,
-                estimated_rows: None,
-                estimation_method: None,
+                estimated_rows,
+                estimation_method,
             }));
         }
 
@@ -353,12 +421,7 @@ impl QueryPlan {
 
     /// Estimates selectivity (placeholder - would need statistics in production).
     pub(crate) fn estimate_selectivity(conditions: &[String]) -> f64 {
-        node_stats::estimate_selectivity(conditions)
-    }
-
-    /// Estimates execution cost in milliseconds.
-    fn estimate_cost(root: &PlanNode, has_vector_search: bool) -> f64 {
-        node_stats::estimate_cost(root, has_vector_search)
+        node_stats::estimate_selectivity(conditions, None)
     }
 
     /// Returns the heuristic cost for a single plan node.

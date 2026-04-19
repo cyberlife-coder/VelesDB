@@ -31,7 +31,7 @@
 use crate::collection::query_cost::cost_model::OperationCostFactors;
 use crate::collection::stats::CollectionStats;
 use crate::velesql::ast::Condition;
-pub use crate::velesql::cost_estimator::{Cost, CostEstimator};
+pub use crate::velesql::cost_estimator::{Cost, CostEstimator, SelectivityMethod};
 pub use crate::velesql::query_stats::QueryStats;
 
 /// Execution strategy for hybrid queries.

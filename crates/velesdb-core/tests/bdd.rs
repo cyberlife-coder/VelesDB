@@ -31,6 +31,8 @@ mod ddl_lifecycle;
 mod dml_enhanced;
 #[path = "bdd/explain_analyze.rs"]
 mod explain_analyze;
+#[path = "bdd/explain_cost_calibrated.rs"]
+mod explain_cost_calibrated;
 #[path = "bdd/flush_operations.rs"]
 mod flush_operations;
 #[path = "bdd/geo_distance.rs"]

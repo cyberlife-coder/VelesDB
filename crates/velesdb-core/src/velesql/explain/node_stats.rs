@@ -5,16 +5,63 @@
 //! across leaf nodes using normalized weights.
 
 use super::{NodeStats, PlanNode};
+use crate::collection::stats::CollectionStats as CoreCollectionStats;
+use crate::velesql::cost_estimator::CostEstimator;
+
+/// Scaling factor converting `CostEstimator` arbitrary units to milliseconds.
+///
+/// Picked so that a default-factored plan on a 1K-row collection produces a
+/// cost in the same order of magnitude as the legacy heuristic. The constant
+/// is calibratable via a future micro-bench (TODO(EPIC-046): measure and pin
+/// this empirically).
+const COST_UNIT_TO_MS: f64 = 0.001;
 
 /// Estimates selectivity (placeholder - would need statistics in production).
-pub(super) fn estimate_selectivity(conditions: &[String]) -> f64 {
-    // Heuristic: more conditions = lower selectivity
+pub(super) fn estimate_selectivity(
+    conditions: &[String],
+    _stats: Option<&CoreCollectionStats>,
+) -> f64 {
+    // For now `stats` is ignored — the plan-builder passes raw condition
+    // strings, so histogram-based selectivity is computed upstream in
+    // `plan_builder::append_filter_nodes` when stats are available. This
+    // function remains a string-level fallback.
+    estimate_selectivity_heuristic(conditions)
+}
+
+/// Heuristic fallback: more conditions = lower selectivity.
+pub(super) fn estimate_selectivity_heuristic(conditions: &[String]) -> f64 {
     let base = 0.5_f64;
     base.powi(i32::try_from(conditions.len()).unwrap_or(i32::MAX))
 }
 
 /// Estimates execution cost in milliseconds for the entire plan.
-pub(super) fn estimate_cost(root: &PlanNode, has_vector_search: bool) -> f64 {
+///
+/// When `stats` is `Some`, uses the calibrated `CostEstimator` pipeline.
+/// When `stats` is `None`, falls back to the historical heuristic formula
+/// bit-for-bit (backward compatibility with ~50 existing EXPLAIN tests).
+pub(super) fn estimate_cost(
+    root: &PlanNode,
+    has_vector_search: bool,
+    stats: Option<&CoreCollectionStats>,
+) -> f64 {
+    match stats {
+        Some(s) => {
+            let cost = CostEstimator::new(s).estimate_plan_cost(root);
+            let ms = cost.total() * COST_UNIT_TO_MS;
+            // Guard against pathological zero costs for empty plans — keep a
+            // small positive floor so downstream asserts (> 0.0) still hold.
+            if ms > 0.0 {
+                ms
+            } else {
+                estimate_cost_heuristic(root, has_vector_search)
+            }
+        }
+        None => estimate_cost_heuristic(root, has_vector_search),
+    }
+}
+
+/// Historical heuristic cost formula — kept unchanged for backward compat.
+pub(super) fn estimate_cost_heuristic(root: &PlanNode, has_vector_search: bool) -> f64 {
     let base_cost = if has_vector_search { 0.05 } else { 1.0 };
 
     match root {

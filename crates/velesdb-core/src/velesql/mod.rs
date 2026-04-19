@@ -258,5 +258,7 @@ pub use explain::{
 pub use parser::match_clause;
 pub use parser::Parser;
 #[cfg(feature = "persistence")]
-pub use planner::{Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats};
+pub use planner::{
+    Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats, SelectivityMethod,
+};
 pub use validation::{QueryValidator, ValidationConfig, ValidationError, ValidationErrorKind};
