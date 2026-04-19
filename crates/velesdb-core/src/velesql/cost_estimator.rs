@@ -405,25 +405,32 @@ impl<'a> CostEstimator<'a> {
         }
     }
 
-    /// Returns `true` when `column` has usable cardinality data in either
-    /// `field_stats` (`distinct_values > 0`) or `column_stats`
-    /// (`distinct_count > 0`) — i.e. when [`CollectionStats::estimate_selectivity`]
-    /// would NOT fall back to its hard-coded `0.1` heuristic.
+    /// Returns `true` when `column` has usable cardinality data that would
+    /// actually be used by [`CollectionStats::estimate_selectivity`] — i.e.
+    /// when the selectivity estimate would NOT fall back to the hard-coded
+    /// `0.1` heuristic.
     ///
-    /// Used by method-aware selectivity helpers to distinguish a genuine
-    /// `Cardinality` estimate from a `Heuristic` default so EXPLAIN never
-    /// overstates its confidence on unknown columns.
+    /// Mirrors the exact preconditions of `estimate_selectivity`
+    /// (`collection/stats/mod.rs`): the column must have a non-zero
+    /// distinct count AND the collection must have a non-zero total
+    /// (`total_points` for `field_stats`, `row_count` for `column_stats`).
+    /// Without the total check, an empty or corrupted collection with
+    /// `total_points == 0` but `distinct_values > 0` would be misclassified
+    /// as `SelectivityMethod::Cardinality` even though the underlying
+    /// estimator returned the heuristic 0.1 (Devin finding H on PR #606).
     fn has_cardinality_data(&self, column: &str) -> bool {
         let field_has = self
             .stats
             .field_stats
             .get(column)
-            .is_some_and(|s| s.distinct_values > 0);
+            .is_some_and(|s| s.distinct_values > 0)
+            && self.stats.total_points > 0;
         let column_has = self
             .stats
             .column_stats
             .get(column)
-            .is_some_and(|s| s.distinct_count > 0);
+            .is_some_and(|s| s.distinct_count > 0)
+            && self.stats.row_count > 0;
         field_has || column_has
     }
 
@@ -1087,6 +1094,29 @@ mod selectivity_method_tests {
         });
         let (_sel, method) = est.estimate_condition_selectivity_with_method(&cond);
         assert_eq!(method, SelectivityMethod::Heuristic);
+    }
+
+    #[test]
+    fn method_heuristic_when_column_has_distinct_but_collection_is_empty() {
+        // Edge case (Devin finding H on #606): the column has distinct data
+        // in field_stats but the collection itself has total_points == 0
+        // (e.g. corrupted or manually-constructed stats). The underlying
+        // `CollectionStats::estimate_selectivity` falls back to 0.1 in
+        // this case, so `has_cardinality_data` must return false and the
+        // method must be `Heuristic`, not `Cardinality`.
+        let mut stats = CollectionStats::new();
+        stats.total_points = 0; // empty / corrupted
+        stats.row_count = 0;
+        let stale = ColumnStats::new("price").with_distinct_count(100);
+        stats.field_stats.insert("price".into(), stale.clone());
+        stats.column_stats.insert("price".into(), stale);
+        let est = CostEstimator::new(&stats);
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&cmp_eq("price", 42));
+        assert_eq!(
+            method,
+            SelectivityMethod::Heuristic,
+            "empty collection with stale cardinality must degrade to Heuristic"
+        );
     }
 
     #[test]
