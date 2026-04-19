@@ -221,6 +221,63 @@ fn test_explain_cost_without_stats_is_size_independent() {
 }
 
 // =========================================================================
+// Nominal BDD — filter strategy respects ef_search (Devin finding 4, #471)
+// =========================================================================
+
+/// GIVEN a collection with a price histogram tuned to ~2 % selectivity
+///   (`price < 20` over the [0, 1000) domain)
+/// AND   default `ef_search = 100` is used
+/// WHEN EXPLAIN is called
+/// THEN the cost-based comparison is free to pick PreFilter.
+/// AND  WHEN the same query is run with `WITH (ef_search = 2000)` — a value
+///      large enough that the `hnsw_cost * selectivity` term dominates the
+///      filter scan cost
+/// THEN the strategy stays valid (one of PreFilter / PostFilter) and the
+///      cost reported in estimated_cost_ms scales up with ef_search, proving
+///      resolve_filter_strategy no longer hard-codes k = 10.
+#[test]
+fn test_filter_strategy_respects_ef_search() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 1_000);
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE");
+
+    let default_ef = explain(
+        &db,
+        "SELECT * FROM docs WHERE price < 20 AND vector NEAR $v LIMIT 10",
+    )
+    .expect("test: explain default ef_search");
+    let high_ef = explain(
+        &db,
+        "SELECT * FROM docs WHERE price < 20 AND vector NEAR $v LIMIT 10 \
+         WITH (ef_search = 2000)",
+    )
+    .expect("test: explain high ef_search");
+
+    // Both plans must exist with a sensible strategy (non-None).
+    assert_ne!(
+        default_ef.filter_strategy,
+        FilterStrategy::None,
+        "default ef_search plan must select a strategy"
+    );
+    assert_ne!(
+        high_ef.filter_strategy,
+        FilterStrategy::None,
+        "ef_search=2000 plan must select a strategy"
+    );
+
+    // Critical: the HNSW cost reflected in estimated_cost_ms must scale with
+    // ef_search. If resolve_filter_strategy still hard-coded k=10, this
+    // invariant would fail because the cost model would ignore ef_search.
+    assert!(
+        high_ef.estimated_cost_ms > default_ef.estimated_cost_ms,
+        "ef_search=2000 must yield higher cost than default ef_search=100: \
+         default={} high={}",
+        default_ef.estimated_cost_ms,
+        high_ef.estimated_cost_ms
+    );
+}
+
+// =========================================================================
 // Negative BDD — pathological stats do not panic
 // =========================================================================
 

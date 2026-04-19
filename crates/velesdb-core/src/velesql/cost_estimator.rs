@@ -258,6 +258,33 @@ impl<'a> CostEstimator<'a> {
         )
     }
 
+    /// Estimates HNSW search cost parametrized by the actual `ef_search`
+    /// (frontier size) and `candidates` (top-k request) — issue #471, Devin
+    /// finding 4.
+    ///
+    /// Uses the same `(ef + k) * log2(total)` probe formula as
+    /// [`Self::estimate_vector_search_node_cost`], so callers that have
+    /// `ef_search` / `candidates` available (e.g. pre/post-filter strategy
+    /// comparison in `plan_builder`) get a cost that reflects the real query
+    /// instead of a fixed `k = 10`.
+    #[must_use]
+    pub fn estimate_hnsw_search_cost_with_ef(&self, ef_search: u32, candidates: u32) -> Cost {
+        let total = self.stats.total_points.max(self.stats.row_count).max(1) as f64;
+        let ef = f64::from(ef_search.max(1));
+        let k = f64::from(candidates.max(1));
+        let probe = (ef + k) * total.log2().max(1.0);
+
+        let f = self.factors.get();
+        let d = default_factors();
+        let io_ratio = f.random_page_cost / d.random_page_cost;
+        let cpu_ratio = f.cpu_distance_cost / d.cpu_distance_cost;
+
+        Cost::new(
+            probe * COMPAT_HNSW_IO * io_ratio,
+            probe * COMPAT_HNSW_CPU * cpu_ratio,
+        )
+    }
+
     #[must_use]
     /// Estimates predicate selectivity in the `[0.0, 1.0]` range.
     ///

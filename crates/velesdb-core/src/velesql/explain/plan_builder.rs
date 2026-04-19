@@ -302,7 +302,21 @@ impl QueryPlan {
             let (selectivity, estimation_method, estimated_rows) =
                 Self::estimate_filter_stats(stmt, filter_conditions, stats);
 
-            filter_strategy = Self::resolve_filter_strategy(selectivity, has_vector_search, stats);
+            // Reason: plan_builder owns stmt so the real ef_search/candidates
+            // are the same values used in `build_scan_node` above
+            // (Devin finding 4). These values drive the pre/post-filter cost
+            // comparison so it reflects the user's actual WITH clause instead
+            // of a fixed k = 10.
+            let ef_search = Self::resolve_ef_search(stmt);
+            let candidates = u32::try_from(stmt.limit.unwrap_or(50)).unwrap_or(u32::MAX);
+
+            filter_strategy = Self::resolve_filter_strategy(
+                selectivity,
+                has_vector_search,
+                ef_search,
+                candidates,
+                stats,
+            );
 
             nodes.push(PlanNode::Filter(FilterPlan {
                 conditions: filter_conditions.join(" AND "),
@@ -402,12 +416,16 @@ impl QueryPlan {
         }
     }
 
-    /// Picks `PreFilter` vs `PostFilter` given a pre-computed selectivity
-    /// and optional calibrated stats.
+    /// Picks `PreFilter` vs `PostFilter` given a pre-computed selectivity,
+    /// the real `ef_search` / `candidates` from the query, and optional
+    /// calibrated stats.
     ///
     /// When `stats` is `Some` and there's a vector search in the plan, runs
     /// a cost comparison: pre-filter cost (scan + filter then HNSW on the
     /// reduced set) vs post-filter cost (HNSW then filter on k results).
+    /// The HNSW cost uses `estimate_hnsw_search_cost_with_ef(ef_search,
+    /// candidates)` so the comparison reflects the user's actual WITH clause
+    /// (issue #471, Devin finding 4) instead of a hard-coded `k = 10`.
     /// A recall guardrail forces `PostFilter` when selectivity is too loose
     /// (>=0.5) so the pre-scan does not starve HNSW of good candidates.
     ///
@@ -415,6 +433,8 @@ impl QueryPlan {
     fn resolve_filter_strategy(
         selectivity: f64,
         has_vector_search: bool,
+        ef_search: u32,
+        candidates: u32,
         stats: Option<&CoreCollectionStats>,
     ) -> FilterStrategy {
         let Some(s) = stats else {
@@ -444,16 +464,19 @@ impl QueryPlan {
         }
 
         let est = CostEstimator::new(s);
+        let hnsw_cost = est
+            .estimate_hnsw_search_cost_with_ef(ef_search, candidates)
+            .total();
         // Pre-filter: full scan + filter evaluation, then HNSW on the
         // reduced set.
         let pre_filter = est
             .estimate_filter_cost_from_selectivity(selectivity)
             .total()
-            + est.estimate_hnsw_search_cost(10).total() * selectivity;
+            + hnsw_cost * selectivity;
         // Post-filter: full HNSW pass, then filter evaluation on the
         // top-k results (small constant cost, approximated by selectivity
         // weight applied to the filter cost).
-        let post_filter = est.estimate_hnsw_search_cost(10).total()
+        let post_filter = hnsw_cost
             + est
                 .estimate_filter_cost_from_selectivity(selectivity)
                 .total()
