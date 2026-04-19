@@ -34,7 +34,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if `data.len() != self.dimension`.
+    /// Returns [`crate::error::Error::DimensionMismatch`] if `data.len() != self.dimension`.
     #[inline]
     pub(crate) fn validate_dimension(&self, data: &[f32]) -> crate::error::Result<()> {
         validate_dimension_match(self.dimension, data.len())
@@ -167,7 +167,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if query dimension is wrong.
+    /// Returns [`crate::error::Error::DimensionMismatch`] if query dimension is wrong.
     pub fn search_with_quality_and_bitmap(
         &self,
         query: &[f32],
@@ -337,7 +337,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// Returns [`crate::error::Error::DimensionMismatch`] if the query dimension does not
     /// match the index dimension.
     pub fn search_with_quality(
         &self,

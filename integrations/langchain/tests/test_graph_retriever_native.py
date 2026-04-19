@@ -17,7 +17,7 @@ import hashlib
 import math
 import shutil
 import tempfile
-from typing import Any, List, Optional
+from typing import List
 
 import pytest
 
@@ -32,11 +32,16 @@ from langchain_velesdb.graph_retriever import GraphRetriever  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Deterministic 4-dimensional fake embeddings (MD5-based, normalised)
+# Deterministic 4-dimensional fake embeddings (SHA-256-based, normalised)
 # ---------------------------------------------------------------------------
 
 class FakeEmbeddings:
-    """Deterministic 4-dim embeddings — no network calls, fully reproducible."""
+    """Deterministic 4-dim embeddings — no network calls, fully reproducible.
+
+    Hash choice is cosmetic — we only need a stable byte sequence to project
+    into a unit-length 4-vector. SHA-256 is used (not MD5) to keep the repo's
+    Codacy security rules green.
+    """
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         return [self._vec(t) for t in texts]
@@ -45,7 +50,7 @@ class FakeEmbeddings:
         return self._vec(text)
 
     def _vec(self, text: str) -> List[float]:
-        digest = hashlib.md5(text.encode()).digest()
+        digest = hashlib.sha256(text.encode()).digest()
         raw = [int(b) / 255.0 for b in digest[:4]]
         norm = math.sqrt(sum(v * v for v in raw)) or 1.0
         return [v / norm for v in raw]
@@ -247,7 +252,11 @@ class TestBug5SeedExpansion:
         THEN seed_docs must be non-empty (seeds were NOT silently skipped).
         """
         _ensure_graph_collection(vector_store, "test_graph2")
-        retriever = GraphRetriever(
+        # GraphRetriever is instantiated-then-discarded only to assert that
+        # configuration validation does not throw for this seed setup. The
+        # actual seed-skipping regression is observable via the vector-store
+        # metadata below, so the retriever itself is not exercised here.
+        GraphRetriever(
             vector_store=vector_store,
             mode="native",
             graph_collection_name="test_graph2",

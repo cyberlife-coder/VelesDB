@@ -417,3 +417,8 @@ harness = false
 name = "sift1m_recall"
 harness = false
 required-features = ["bench-sift1m"]
+
+[[bench]]
+name = "capture_sift1m_fingerprints"
+harness = false
+required-features = ["bench-sift1m"]

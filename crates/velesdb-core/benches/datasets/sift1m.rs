@@ -14,24 +14,39 @@
 //! File format: `.fvecs` / `.ivecs` — records of `[dim:u32 LE][dim × f32 LE]`
 //! (or `u32` for the ivecs variant), concatenated with no header.
 //!
-//! # SHA-256 fingerprints — KNOWN LIMITATION (placeholder mode)
+//! # SHA-256 fingerprints — two-tier verification
 //!
-//! The constants `SHA256_*` below are placeholders until the first
-//! download is manually verified against an authoritative source.
-//! SHA-256 is computed on every `load_sift1m*` call (post-download or
-//! when reading the cached files). When the pinned constants are still
-//! `TODO_` placeholders, [`verify_fingerprint`] prints the observed
-//! hashes (to stderr with a `[WARN]` prefix) and returns `Ok(())` so
-//! the user can capture and pin them. Once real fingerprints are
-//! pinned, a mismatch surfaces as [`DatasetError::Parse`]. This is by
-//! design — fabricated fingerprints are worse than no fingerprints.
+//! Two sources of truth, checked in order:
 //!
-//! **Until the placeholders are pinned, bit-level corruption in a
-//! valid-shape file is NOT detected.** The only safeguard is
-//! [`check_shape`] which validates row count and dimension. Pinning the
-//! hashes into the `SHA256_*` constants (see `TODO(US-S4-BENCH-SIFT1M)`
-//! below) closes that gap. First-run output prints the observed values
-//! so a maintainer can paste them in after manual verification.
+//! 1. **JSON sidecar** `benches/datasets/sift1m_fingerprints.json`
+//!    (committed once after the capture workflow below). When present
+//!    and well-formed, its hashes are used in **strict mode**: any
+//!    mismatch surfaces as [`DatasetError::Parse`]. This is the pinned
+//!    path used by CI and reproducible benchmarks.
+//! 2. **Fallback constants** `SHA256_*` below. When the sidecar is
+//!    absent (fresh clone before bootstrap, local tinkering), the
+//!    loader falls back to these constants. They remain `TODO_`
+//!    placeholders: [`verify_fingerprint`] then prints the observed
+//!    hash to stderr with a `[WARN]` prefix and returns `Ok(())` so
+//!    the maintainer can capture and commit them.
+//!
+//! # One-command bootstrap
+//!
+//! Run once on the reference machine (first-run downloads ~168 MB):
+//!
+//! ```text
+//! cargo bench -p velesdb-core --features bench-sift1m \
+//!     --bench capture_sift1m_fingerprints
+//! ```
+//!
+//! The bench writes `benches/datasets/sift1m_fingerprints.json` ready
+//! to commit. Subsequent runs of any SIFT1M bench then enjoy strict
+//! verification automatically.
+//!
+//! Until the sidecar is committed, bit-level corruption in a
+//! valid-shape file is NOT detected — [`check_shape`] only validates
+//! row count and dimension. Committing the sidecar closes that gap
+//! without requiring a source-code edit for every hash change.
 
 #![allow(dead_code)]
 #![allow(clippy::cast_precision_loss)]
@@ -96,14 +111,22 @@ const GT_K: u32 = 100;
 const BASE_COUNT: usize = 1_000_000;
 const QUERY_COUNT: usize = 10_000;
 
-// TODO(US-S4-BENCH-SIFT1M): confirm these SHA-256 values against
-// an authoritative source and uncomment the `verify_fingerprint`
-// calls in `ensure_cached`. The official INRIA distribution does
-// not publish checksums for the uncompressed files; we must run one
-// successful download, capture the hashes, and pin them here.
+// Fallback fingerprints used when the JSON sidecar is absent. The
+// official INRIA distribution does not publish checksums for the
+// uncompressed files; the recommended workflow is to run the
+// `capture_sift1m_fingerprints` bench once on a trusted machine,
+// which writes the sidecar JSON ready to commit. These constants stay
+// as `TODO_` placeholders on purpose: a fresh clone without the JSON
+// still loads the dataset in TOFU mode (prints observed, returns Ok)
+// so developers are never blocked, while CI uses the pinned sidecar
+// for strict verification.
 const SHA256_BASE: &str = "TODO_FINGERPRINT_sift_base_fvecs";
 const SHA256_QUERY: &str = "TODO_FINGERPRINT_sift_query_fvecs";
 const SHA256_GT: &str = "TODO_FINGERPRINT_sift_groundtruth_ivecs";
+
+/// Sidecar filename (sibling of this source file) carrying the pinned
+/// SHA-256 hashes. Committed after one successful capture run.
+pub(crate) const FINGERPRINTS_JSON_NAME: &str = "sift1m_fingerprints.json";
 
 /// Env var for overriding the cache directory (pre-populated data).
 const ENV_CACHE_DIR: &str = "VELESDB_SIFT1M_DIR";
@@ -194,16 +217,124 @@ fn ensure_cached(cache_dir: &Path) -> Result<(), DatasetError> {
     verify_all_fingerprints(cache_dir)
 }
 
+/// Pinned SHA-256 fingerprints loaded from the JSON sidecar or inlined
+/// by [`compute_fingerprints`] at capture time. Hex-encoded SHA-256 over
+/// the uncompressed files.
+///
+/// JSON key names match the `.fvecs` / `.ivecs` filenames exactly so the
+/// committed sidecar is self-documenting for maintainers reading it
+/// without source context.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PinnedFingerprints {
+    /// SHA-256 of `sift_base.fvecs` (1M × 128D base vectors).
+    #[serde(rename = "sift_base_fvecs_sha256")]
+    pub base: String,
+    /// SHA-256 of `sift_query.fvecs` (10K × 128D query vectors).
+    #[serde(rename = "sift_query_fvecs_sha256")]
+    pub query: String,
+    /// SHA-256 of `sift_groundtruth.ivecs` (10K × 100 nearest IDs).
+    #[serde(rename = "sift_groundtruth_ivecs_sha256")]
+    pub groundtruth: String,
+}
+
+/// Loads pinned fingerprints from the JSON sidecar co-located with this
+/// source file. Returns `None` when the sidecar is absent or malformed
+/// (loader then falls back to the `SHA256_*` constants).
+pub(crate) fn load_pinned_fingerprints() -> Option<PinnedFingerprints> {
+    let path = sidecar_path()?;
+    let raw = fs::read_to_string(&path).ok()?;
+    serde_json::from_str::<PinnedFingerprints>(&raw).ok()
+}
+
+/// Resolves the on-disk path of the JSON sidecar. Uses `CARGO_MANIFEST_DIR`
+/// to locate `benches/datasets/sift1m_fingerprints.json` relative to this
+/// crate. Returns `None` when the env var is missing (non-cargo runtime).
+fn sidecar_path() -> Option<PathBuf> {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    Some(
+        PathBuf::from(manifest)
+            .join("benches")
+            .join("datasets")
+            .join(FINGERPRINTS_JSON_NAME),
+    )
+}
+
+/// Computes SHA-256 fingerprints for the three SIFT1M files in `cache_dir`.
+/// Ensures the dataset is present (triggers download if allowed) before
+/// hashing. Used by the `capture_sift1m_fingerprints` bench to regenerate
+/// the JSON sidecar.
+///
+/// # Errors
+/// Same envelope as [`load_sift1m`]: `NotCached` when the dataset is missing
+/// and download is disabled, `Download` on network failure, `Parse` on a
+/// structurally invalid file, `Io` on I/O errors.
+pub fn compute_fingerprints(cache_dir: &Path) -> Result<PinnedFingerprints, DatasetError> {
+    if !is_fully_cached(cache_dir) {
+        if !download_allowed() {
+            return Err(DatasetError::NotCached);
+        }
+        fs::create_dir_all(cache_dir)?;
+        download_and_extract(cache_dir)?;
+    }
+    Ok(PinnedFingerprints {
+        base: hash_file(&cache_dir.join(BASE_FILE))?,
+        query: hash_file(&cache_dir.join(QUERY_FILE))?,
+        groundtruth: hash_file(&cache_dir.join(GT_FILE))?,
+    })
+}
+
+/// Returns the default cache directory (same policy as the loader): honors
+/// `VELESDB_SIFT1M_DIR` first, otherwise `target/bench-data/sift1m/`.
+pub fn default_cache_directory() -> PathBuf {
+    resolve_cache_dir()
+}
+
+/// Writes `fingerprints` to the JSON sidecar (`benches/datasets/
+/// sift1m_fingerprints.json`). Returns the path written.
+///
+/// # Errors
+/// Returns [`DatasetError::Io`] when the file cannot be written, or
+/// [`DatasetError::Parse`] when `CARGO_MANIFEST_DIR` is unavailable (the
+/// capture bench runs via cargo so this should never happen in practice).
+pub fn write_pinned_fingerprints_json(
+    fingerprints: &PinnedFingerprints,
+) -> Result<PathBuf, DatasetError> {
+    let path = sidecar_path().ok_or_else(|| {
+        DatasetError::Parse(
+            "CARGO_MANIFEST_DIR not set; run via cargo so the sidecar path resolves".into(),
+        )
+    })?;
+    // Reason: ancestor exists (crate root) but `benches/datasets` may be
+    // fresh — create_dir_all is a no-op if already present.
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(fingerprints)
+        .map_err(|e| DatasetError::Parse(format!("serialize fingerprints: {e}")))?;
+    fs::write(&path, json)?;
+    Ok(path)
+}
+
 /// Verifies SHA-256 fingerprints of the three cached SIFT1M files.
 ///
-/// When the pinned constants are still `TODO_` placeholders, observed
-/// hashes are printed to stderr and `Ok(())` is returned (first-run
-/// capture path). When real fingerprints are pinned, a mismatch surfaces
-/// as [`DatasetError::Parse`].
+/// Preference order:
+/// 1. If the JSON sidecar is present and parseable, uses its pinned hashes
+///    in **strict mode** — any mismatch surfaces as [`DatasetError::Parse`].
+/// 2. Otherwise falls back to the `SHA256_*` constants. When those are
+///    still `TODO_` placeholders, [`verify_fingerprint`] prints the observed
+///    hashes to stderr and returns `Ok(())` (first-run capture path).
 fn verify_all_fingerprints(cache_dir: &Path) -> Result<(), DatasetError> {
-    verify_fingerprint(&cache_dir.join(BASE_FILE), SHA256_BASE)?;
-    verify_fingerprint(&cache_dir.join(QUERY_FILE), SHA256_QUERY)?;
-    verify_fingerprint(&cache_dir.join(GT_FILE), SHA256_GT)?;
+    let (base_expected, query_expected, gt_expected) = match load_pinned_fingerprints() {
+        Some(p) => (p.base, p.query, p.groundtruth),
+        None => (
+            SHA256_BASE.to_string(),
+            SHA256_QUERY.to_string(),
+            SHA256_GT.to_string(),
+        ),
+    };
+    verify_fingerprint(&cache_dir.join(BASE_FILE), &base_expected)?;
+    verify_fingerprint(&cache_dir.join(QUERY_FILE), &query_expected)?;
+    verify_fingerprint(&cache_dir.join(GT_FILE), &gt_expected)?;
     Ok(())
 }
 
@@ -427,10 +558,13 @@ pub(crate) fn verify_fingerprint(path: &Path, expected_sha256: &str) -> Result<(
         eprintln!(
             "\n[WARN] [sift1m] verify_fingerprint: {filename} — placeholder fingerprint detected.\n\
              [WARN] Observed SHA-256: {actual}\n\
-             [WARN] Pin this value into the SHA256_* constant at sift1m.rs:96-98 after manual\n\
-             [WARN] verification. Until pinned, bit-level corruption is NOT detected (only\n\
-             [WARN] dimension and row count are validated via check_shape).\n\
-             [WARN] See TODO(US-S4-BENCH-SIFT1M) at sift1m.rs (module rustdoc + SHA256_* consts).\n"
+             [WARN] Close the integrity gap in one command:\n\
+             [WARN]     cargo bench -p velesdb-core --features bench-sift1m \\\n\
+             [WARN]         --bench capture_sift1m_fingerprints\n\
+             [WARN] The capture bench writes benches/datasets/sift1m_fingerprints.json;\n\
+             [WARN] commit it to promote verification from TOFU to strict mode.\n\
+             [WARN] Until committed, bit-level corruption is NOT detected\n\
+             [WARN] (only dimension and row count are validated via check_shape).\n"
         );
         return Ok(());
     }

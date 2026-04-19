@@ -62,13 +62,13 @@ The calibrated CBO is fully wired for `MATCH` queries (via `MatchQueryPlanner::p
 
 **User impact**: `MATCH` queries benefit from the full CBO; pure-`SELECT` hybrid queries benefit from calibrated filter-strategy selection but not from multi-candidate plan enumeration. Covered by `test_filter_strategy_switches_on_selectivity` + `test_prefilter_accounts_for_full_table_scan`.
 
-### 6. Filter-strategy fallback threshold is hardcoded at 0.1
+### 6. Filter-strategy fallback threshold is runtime-tunable (default 0.1)
 
-**Status**: documented design, backward-compat anchor. Source: `crates/velesdb-core/src/velesql/explain/filter_strategy.rs` (`FALLBACK_SELECTIVITY_THRESHOLD = 0.1`).
+**Status**: resolved (configurable). Source: `crates/velesdb-core/src/velesql/explain/filter_strategy.rs` (`DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD = 0.1`, `AtomicU64` runtime state).
 
-When no calibrated `CollectionStats` is available (collection never analyzed, SDK path without collection handle), `resolve_filter_strategy` falls back to `selectivity > 0.1 → PostFilter`. The `0.1` constant is preserved bit-for-bit to keep the ~50 pre-existing `EXPLAIN` tests green. Once stats are present, the cost-based comparison (pre-filter vs post-filter with recall guardrail at `selectivity >= 0.5`) takes over.
+When no calibrated `CollectionStats` is available (collection never analyzed, SDK path without collection handle), `resolve_filter_strategy` falls back to `selectivity > threshold → PostFilter`. The threshold defaults to `0.1` to keep the ~50 pre-existing `EXPLAIN` tests green (backward-compat anchor), but is tunable at runtime via `velesdb_core::velesql::set_fallback_selectivity_threshold(value)` (lock-free `AtomicU64`, validates `[0.0, 1.0]`). Once stats are present, the cost-based comparison (pre-filter vs post-filter with recall guardrail at `selectivity >= 0.5`) takes over.
 
-**User impact**: for unanalyzed collections, the filter-strategy decision is still heuristic — it does not use the real predicate selectivity. Running `ANALYZE` on the collection switches the decision to the calibrated pathway documented by BDD tests `test_filter_strategy_switches_on_selectivity` and `test_filter_strategy_respects_ef_search`.
+**User impact**: for unanalyzed collections, operators can tune the fallback threshold for workloads where the calibrated pathway is unavailable without recompiling. Running `ANALYZE` on the collection still switches the decision to the calibrated pathway documented by BDD tests `test_filter_strategy_switches_on_selectivity` and `test_filter_strategy_respects_ef_search`.
 
 ---
 

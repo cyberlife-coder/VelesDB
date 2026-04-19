@@ -18,5 +18,9 @@ mod node_stats;
 mod plan_builder;
 mod types;
 
+pub use filter_strategy::{
+    fallback_selectivity_threshold, set_fallback_selectivity_threshold,
+    DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD,
+};
 pub use node_stats::build_leaf_node_stats;
 pub use types::*;

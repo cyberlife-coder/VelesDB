@@ -38,16 +38,75 @@
 //! (10K – 1M rows) where the current model slightly overestimates post-filter
 //! cost.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use super::types::FilterStrategy;
 use crate::collection::stats::CollectionStats as CoreCollectionStats;
+use crate::error::{Error, Result};
 use crate::velesql::ast::{Condition, SelectStatement};
 use crate::velesql::cost_estimator::{CostEstimator, SelectivityMethod};
 
-/// Threshold (selectivity) above which the fallback heuristic switches from
-/// PreFilter to PostFilter. Preserved unchanged for backward compatibility
-/// with tests that predate calibrated costs (see
-/// `test_filter_strategy_post_filter_default`).
-pub(super) const FALLBACK_SELECTIVITY_THRESHOLD: f64 = 0.1;
+/// Default selectivity threshold: `selectivity > 0.1 → PostFilter` when no
+/// calibrated stats are available. Preserved bit-for-bit as a
+/// backward-compatibility anchor for the ~50 pre-existing `EXPLAIN` tests
+/// that predate calibrated costs (see `test_filter_strategy_post_filter_default`).
+pub const DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD: f64 = 0.1;
+
+/// Runtime-tunable fallback threshold. Bit-encoded `f64` so reads on the
+/// hot path (inside `resolve_filter_strategy`) are lock-free. Tune via
+/// [`set_fallback_selectivity_threshold`]; read via
+/// [`fallback_selectivity_threshold`].
+static FALLBACK_SELECTIVITY_THRESHOLD_BITS: AtomicU64 =
+    AtomicU64::new(DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD.to_bits());
+
+/// Returns the current fallback selectivity threshold (default `0.1`).
+///
+/// When no calibrated [`CollectionStats`](CoreCollectionStats) is available
+/// (un-analyzed collection, SDK path without collection handle), the internal
+/// `resolve_filter_strategy` helper switches from `PreFilter` to `PostFilter`
+/// when the heuristic selectivity exceeds this threshold. The default value keeps
+/// parity with the ~50 pre-existing EXPLAIN tests that predate calibrated
+/// costs; tune for workloads where the calibrated pathway is unavailable.
+#[must_use]
+pub fn fallback_selectivity_threshold() -> f64 {
+    f64::from_bits(FALLBACK_SELECTIVITY_THRESHOLD_BITS.load(Ordering::Relaxed))
+}
+
+/// Updates the fallback selectivity threshold at runtime. Returns the
+/// previous value so the caller can restore it (useful in tests).
+///
+/// Accepts any finite value in `[0.0, 1.0]`. Reject path ensures the
+/// threshold remains a valid probability so the caller cannot silently turn
+/// the fallback into "always PreFilter" (threshold = +∞) or "always PostFilter"
+/// (threshold < 0) — those regimes are better expressed via the calibrated
+/// pathway.
+///
+/// # Example
+/// ```
+/// use velesdb_core::velesql::{
+///     fallback_selectivity_threshold,
+///     set_fallback_selectivity_threshold,
+///     DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD,
+/// };
+/// let previous = set_fallback_selectivity_threshold(0.3).expect("0.3 is in range");
+/// assert_eq!(previous, DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD);
+/// assert!((fallback_selectivity_threshold() - 0.3).abs() < 1e-12);
+/// // Restore for any downstream tests.
+/// set_fallback_selectivity_threshold(DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD).unwrap();
+/// ```
+///
+/// # Errors
+/// Returns [`crate::error::Error::Config`] when `value` is NaN, negative, or greater than
+/// `1.0`.
+pub fn set_fallback_selectivity_threshold(value: f64) -> Result<f64> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(Error::Config(format!(
+            "fallback_selectivity_threshold must be a finite value in [0.0, 1.0], got {value}"
+        )));
+    }
+    let previous = FALLBACK_SELECTIVITY_THRESHOLD_BITS.swap(value.to_bits(), Ordering::Relaxed);
+    Ok(f64::from_bits(previous))
+}
 
 /// Guardrail: if a predicate filters out less than this fraction of rows,
 /// running the pre-filter before HNSW is likely to hurt recall (too many
@@ -168,7 +227,7 @@ pub(super) fn resolve_filter_strategy(
     stats: Option<&CoreCollectionStats>,
 ) -> FilterStrategy {
     let Some(s) = stats else {
-        return if selectivity > FALLBACK_SELECTIVITY_THRESHOLD {
+        return if selectivity > fallback_selectivity_threshold() {
             FilterStrategy::PostFilter
         } else {
             FilterStrategy::PreFilter
@@ -192,7 +251,7 @@ pub(super) fn resolve_filter_strategy(
         // field when there is no HNSW stage — but is visible in
         // EXPLAIN output. Kept intentionally: the calibrated answer
         // is the semantically correct one.
-        return if selectivity > FALLBACK_SELECTIVITY_THRESHOLD {
+        return if selectivity > fallback_selectivity_threshold() {
             FilterStrategy::PostFilter
         } else {
             FilterStrategy::PreFilter

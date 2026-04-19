@@ -17,7 +17,10 @@
 #[path = "../benches/datasets/mod.rs"]
 mod datasets;
 
-use datasets::sift1m::{filter_groundtruth, verify_fingerprint, DatasetError};
+use datasets::sift1m::{
+    filter_groundtruth, load_pinned_fingerprints, verify_fingerprint, DatasetError,
+    PinnedFingerprints,
+};
 
 #[test]
 fn filter_groundtruth_keeps_in_range_ids_and_drops_out_of_range() {
@@ -71,6 +74,35 @@ fn filter_groundtruth_preserves_order_within_rows() {
     let gt = vec![vec![8, 20, 3, 42, 1, 99]];
     let out = filter_groundtruth(gt, 10, 1);
     assert_eq!(out[0], vec![8, 3, 1]);
+}
+
+#[test]
+fn pinned_fingerprints_roundtrip_through_serde() {
+    let fingerprints = PinnedFingerprints {
+        base: "a".repeat(64),
+        query: "b".repeat(64),
+        groundtruth: "c".repeat(64),
+    };
+    let json = serde_json::to_string(&fingerprints).expect("serialize");
+    let back: PinnedFingerprints = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(fingerprints, back);
+    // JSON keys must match the on-disk filenames for sidecar self-documentation.
+    assert!(json.contains("\"sift_base_fvecs_sha256\":"));
+    assert!(json.contains("\"sift_query_fvecs_sha256\":"));
+    assert!(json.contains("\"sift_groundtruth_ivecs_sha256\":"));
+}
+
+#[test]
+fn load_pinned_fingerprints_returns_none_when_sidecar_absent() {
+    // In the test environment, `benches/datasets/sift1m_fingerprints.json` is
+    // deliberately not checked in (example file uses `.example.json` suffix),
+    // so the loader must gracefully return None and let the caller fall back
+    // to the `SHA256_*` constants or TOFU behavior.
+    let got = load_pinned_fingerprints();
+    assert!(
+        got.is_none(),
+        "expected None when sidecar absent, got: {got:?}"
+    );
 }
 
 #[test]

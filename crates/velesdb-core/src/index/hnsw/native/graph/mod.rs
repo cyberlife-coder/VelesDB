@@ -293,10 +293,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Internal`] if vector storage is not initialized.
+    /// Returns [`crate::error::Error::Internal`] if vector storage is not initialized.
     /// Propagates any error returned by the closure.
     ///
-    /// [`Error::Internal`]: crate::error::Error::Internal
+    /// [`crate::error::Error::Internal`]: crate::error::Error::Internal
     pub(in crate::index::hnsw) fn with_vectors_write<R>(
         &self,
         f: impl FnOnce(&mut ContiguousVectors) -> crate::error::Result<R>,
