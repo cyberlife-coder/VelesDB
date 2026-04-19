@@ -165,11 +165,17 @@ impl CostEstimator<'_> {
     }
 
     /// Method-aware variant for `IsNull`.
+    ///
+    /// Mirrors the `total_points > 0` guard used by `has_cardinality_data`:
+    /// when the collection is empty (or stats are corrupted with
+    /// `total_points == 0`), the computed `null_count / 1` selectivity does
+    /// not reflect real data, so the method must be `Heuristic` rather than
+    /// `Cardinality` — Devin finding J on PR #606.
     fn is_null_selectivity_with_method(&self, column: &str) -> (f64, SelectivityMethod) {
         let sel = self.stats.field_stats.get(column).map_or(0.1, |s| {
             s.null_count as f64 / self.stats.total_points.max(1) as f64
         });
-        let method = if self.stats.field_stats.contains_key(column) {
+        let method = if self.stats.field_stats.contains_key(column) && self.stats.total_points > 0 {
             SelectivityMethod::Cardinality
         } else {
             SelectivityMethod::Heuristic
@@ -315,6 +321,51 @@ mod tests {
             SelectivityMethod::Heuristic,
             "empty collection with stale cardinality must degrade to Heuristic"
         );
+    }
+
+    #[test]
+    fn method_isnull_heuristic_when_collection_is_empty() {
+        // Devin finding J on PR #606: `is_null_selectivity_with_method` must
+        // apply the same `total_points > 0` guard as `has_cardinality_data`.
+        // When the collection is empty, `null_count / 1` does not reflect
+        // real data and the method must be Heuristic, not Cardinality.
+        let mut stats = CollectionStats::new();
+        stats.total_points = 0;
+        stats.row_count = 0;
+        let mut cs = ColumnStats::new("optional_field");
+        cs.null_count = 5; // stale value on an empty collection
+        stats.field_stats.insert("optional_field".into(), cs);
+        let est = CostEstimator::new(&stats);
+        let cond = Condition::IsNull(crate::velesql::ast::IsNullCondition {
+            column: "optional_field".into(),
+            is_null: true,
+        });
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&cond);
+        assert_eq!(
+            method,
+            SelectivityMethod::Heuristic,
+            "IsNull on empty collection must classify as Heuristic"
+        );
+    }
+
+    #[test]
+    fn method_isnull_cardinality_when_column_tracked() {
+        // Companion to `method_isnull_heuristic_when_collection_is_empty`:
+        // a populated collection with a tracked column must still classify
+        // IsNull as Cardinality (guard-rail regression check).
+        let mut stats = CollectionStats::new();
+        stats.total_points = 1_000;
+        stats.row_count = 1_000;
+        let mut cs = ColumnStats::new("optional_field");
+        cs.null_count = 12;
+        stats.field_stats.insert("optional_field".into(), cs);
+        let est = CostEstimator::new(&stats);
+        let cond = Condition::IsNull(crate::velesql::ast::IsNullCondition {
+            column: "optional_field".into(),
+            is_null: true,
+        });
+        let (_sel, method) = est.estimate_condition_selectivity_with_method(&cond);
+        assert_eq!(method, SelectivityMethod::Cardinality);
     }
 
     #[test]
