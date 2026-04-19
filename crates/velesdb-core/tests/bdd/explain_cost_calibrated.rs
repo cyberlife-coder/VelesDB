@@ -353,6 +353,47 @@ fn test_prefilter_accounts_for_full_table_scan() {
 }
 
 // =========================================================================
+// BDD — issue #609: post-filter cost modelled as k * cpu_tuple_cost
+// =========================================================================
+
+/// GIVEN a large analyzed collection (10K rows) and a query whose filter
+///       selectivity sits just below the `PREFILTER_RECALL_GUARD = 0.5`
+///       threshold,
+/// WHEN  EXPLAIN runs a hybrid NEAR + predicate query with the new post-filter
+///       cost model (`k * cpu_tuple_cost * cpu_ratio`),
+/// THEN  the reported `filter_strategy` is `PostFilter` — because the HNSW
+///       term plus the true `k`-scaled post-filter cost beats a full scan
+///       + HNSW-on-reduced-set path. Under the old
+///       `POSTFILTER_TOPK_COST_FRACTION = 0.01` formula the post-filter cost
+///       was inflated by up to ~5× for this regime, which used to flip the
+///       strategy to `PreFilter` incorrectly for selectivities close to but
+///       below the guardrail.
+#[test]
+fn test_postfilter_preferred_on_large_collection_near_guardrail() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 10_000);
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE docs");
+
+    // Selectivity ≈ 0.4 via `price < 400` on values uniformly in [0, 1000).
+    // Below the 0.5 recall guardrail so both branches of resolve_filter_strategy
+    // engage the cost comparison — this is exactly where the #609 fix changes
+    // the decision for large collections.
+    let plan = explain(
+        &db,
+        "SELECT * FROM docs WHERE vector NEAR $v AND price < 400 LIMIT 10",
+    )
+    .expect("test: EXPLAIN hybrid near-guardrail");
+
+    assert_eq!(
+        plan.filter_strategy,
+        FilterStrategy::PostFilter,
+        "large collection + sel ≈ 0.4 must choose PostFilter with the \
+         k*cpu_tuple_cost model (issue #609). Old model inflated post-filter \
+         cost by ~5× and would flip to PreFilter here."
+    );
+}
+
+// =========================================================================
 // BDD — issue #607: IndexLookup plan nodes for indexed columns
 // =========================================================================
 

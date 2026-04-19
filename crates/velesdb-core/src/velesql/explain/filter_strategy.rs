@@ -113,18 +113,13 @@ pub fn set_fallback_selectivity_threshold(value: f64) -> Result<f64> {
 /// candidates survive). Forces PostFilter in that case.
 pub(super) const PREFILTER_RECALL_GUARD: f64 = 0.5;
 
-/// Approximate fraction of the filter-scan cost attributed to the
-/// post-filter step. Post-filter only evaluates the predicate on the
-/// top-k HNSW results (typically k = 10) while the filter-scan formula
-/// scales with `total * selectivity`. Using a fixed `0.01` multiplier is
-/// a rough but conservative approximation — it slightly overestimates
-/// the post-filter cost for very large collections with high selectivity
-/// (Devin finding on PR #606), yet the HNSW term dominates in those
-/// regimes so it does not flip strategy decisions in practice. A future
-/// refinement could replace this with a proper `k * cpu_tuple_cost`
-/// model once `k` and the calibrated `cpu_tuple_cost` are threaded
-/// through to `resolve_filter_strategy`.
-pub(super) const POSTFILTER_TOPK_COST_FRACTION: f64 = 0.01;
+// POSTFILTER_TOPK_COST_FRACTION was removed in favour of
+// `CostEstimator::estimate_post_filter_topk_cost(k)` (issue #609). The
+// previous `filter_scan_cost × 0.01` approximation was off by up to 5× for
+// large collections with selectivity near the recall guardrail. The
+// calibrated formula `k × cpu_tuple_cost × cpu_ratio` models the physical
+// reality of evaluating the predicate on the HNSW top-k tuples only,
+// independent of collection size and selectivity.
 
 /// Computes `(selectivity, estimation_method, estimated_rows)` for the
 /// filter block. When `stats` is `Some` and the WHERE clause tree is
@@ -292,16 +287,11 @@ pub(super) fn resolve_filter_strategy(
         .estimate_hnsw_search_cost_with_ef_on_size(ef_search, candidates, reduced_size)
         .total();
     let pre_filter = est.estimate_filter_cost_from_selectivity(1.0).total() + hnsw_on_reduced;
-    // Post-filter: full HNSW pass, then filter evaluation on the
-    // top-k results (small constant cost, approximated by
-    // `POSTFILTER_TOPK_COST_FRACTION` applied to the filter cost on
-    // the reduced row-set — see the constant's doc-comment for the
-    // rationale and follow-up plan).
-    let post_filter = hnsw_cost
-        + est
-            .estimate_filter_cost_from_selectivity(selectivity)
-            .total()
-            * POSTFILTER_TOPK_COST_FRACTION;
+    // Post-filter: full HNSW pass, then filter evaluation on the top-k
+    // results only. Cost is `k × cpu_tuple_cost × cpu_ratio` — independent
+    // of collection size and selectivity, since the predicate runs on the
+    // k in-memory tuples returned by HNSW (issue #609 closure).
+    let post_filter = hnsw_cost + est.estimate_post_filter_topk_cost(candidates).total();
 
     if pre_filter < post_filter {
         FilterStrategy::PreFilter
