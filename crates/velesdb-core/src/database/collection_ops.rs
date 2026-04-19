@@ -165,6 +165,27 @@ impl Database {
         None
     }
 
+    /// Returns the analyze generation for a named collection, if it exists
+    /// (issue #608).
+    ///
+    /// Parallel to [`collection_write_generation`], but tracks `ANALYZE`
+    /// invocations instead of data mutations. Threaded into the compiled plan
+    /// cache key so that an `ANALYZE` run alone invalidates cached plans whose
+    /// cost estimates pre-date the fresh calibrated statistics.
+    #[must_use]
+    pub fn collection_analyze_generation(&self, name: &str) -> Option<u64> {
+        if let Some(vc) = self.vector_colls.read().get(name) {
+            return Some(vc.inner.analyze_generation());
+        }
+        if let Some(gc) = self.graph_colls.read().get(name) {
+            return Some(gc.inner.analyze_generation());
+        }
+        if let Some(mc) = self.metadata_colls.read().get(name) {
+            return Some(mc.inner.analyze_generation());
+        }
+        None
+    }
+
     /// Lists all collection names in the database.
     ///
     /// Includes collections created via any typed API (vector, graph, metadata).

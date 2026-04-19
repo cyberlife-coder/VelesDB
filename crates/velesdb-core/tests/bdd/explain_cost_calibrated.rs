@@ -12,7 +12,7 @@ use serde_json::json;
 use velesdb_core::velesql::{FilterStrategy, Parser};
 use velesdb_core::{Database, Point};
 
-use super::helpers::{create_test_db, execute_sql, vector_param};
+use super::helpers::{create_test_db, execute_sql, execute_sql_with_params, vector_param};
 
 // =========================================================================
 // Helpers
@@ -349,5 +349,102 @@ fn test_prefilter_accounts_for_full_table_scan() {
          so the CBO should pick PostFilter. If this asserts PreFilter, \
          resolve_filter_strategy is under-pricing the pre-filter scan \
          (Devin finding A regression)."
+    );
+}
+
+// =========================================================================
+// BDD — issue #608: plan cache invalidation on ANALYZE
+// =========================================================================
+
+/// GIVEN a collection with data but no ANALYZE yet, and a cached EXPLAIN
+///       plan built from the pre-ANALYZE heuristic cost estimates,
+/// WHEN  ANALYZE is run on the collection (no intervening write),
+/// THEN  a subsequent EXPLAIN on the identical query returns a plan whose
+///       `estimated_cost_ms` differs from the first one, proving the cache
+///       was invalidated by the analyze_generation bump (issue #608).
+///
+/// The acceptance criterion from the issue is "no intermediate write is
+/// required for c2 to appear" — this test deliberately avoids any upsert
+/// or delete between the two EXPLAIN calls so a pass means the cache key
+/// flip came exclusively from `analyze_generation`, not from an incidental
+/// `write_generation` bump.
+#[test]
+fn test_analyze_invalidates_plan_cache_without_write() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 1_000);
+
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+
+    // Force the plan cache to populate with the pre-ANALYZE heuristic plan.
+    // `execute_query` is the only entry that writes to the plan cache, and
+    // `explain_query` by design does NOT populate it — so a bare SELECT
+    // with bound parameters must run first.
+    execute_sql_with_params(
+        &db,
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+        &params,
+    )
+    .expect("test: prime cache with pre-ANALYZE plan");
+
+    let query = Parser::parse("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10")
+        .expect("test: parse pre-analyze");
+
+    let plan_before = db
+        .explain_analyze_query(&query, &params)
+        .expect("test: explain pre-analyze")
+        .plan;
+    let cost_before = plan_before.estimated_cost_ms;
+
+    // ANALYZE is the ONLY mutation — no upsert/delete in between.
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE docs");
+
+    let plan_after = db
+        .explain_analyze_query(&query, &params)
+        .expect("test: explain post-analyze")
+        .plan;
+    let cost_after = plan_after.estimated_cost_ms;
+
+    assert!(
+        (cost_before - cost_after).abs() > f64::EPSILON,
+        "ANALYZE must flip the plan cache key (issue #608): cost_before={cost_before} cost_after={cost_after} — staleness means analyze_generation is not threaded into the cache key"
+    );
+}
+
+/// GIVEN a collection seeded and analyzed once (c1 recorded),
+/// WHEN  a second ANALYZE is run (no intervening write),
+/// THEN  the analyze_generation bumps again and the plan cache invalidates,
+///       so a third EXPLAIN returns a plan distinct from the c1 cache entry.
+///
+/// This is the "rolling ANALYZE" case — even after stats exist, subsequent
+/// runs must continue to invalidate.
+#[test]
+fn test_repeated_analyze_keeps_invalidating_plan_cache() {
+    let (_dir, db) = create_test_db();
+    seed_collection(&db, "docs", 1_000);
+    execute_sql(&db, "ANALYZE docs").expect("test: first ANALYZE");
+
+    // Prime the cache with the post-first-analyze plan.
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+    execute_sql_with_params(
+        &db,
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+        &params,
+    )
+    .expect("test: prime cache post-ANALYZE-1");
+
+    // Capture the analyze_generation so we can assert it bumped.
+    let gen_before = db
+        .collection_analyze_generation("docs")
+        .expect("test: collection exists");
+
+    execute_sql(&db, "ANALYZE docs").expect("test: second ANALYZE");
+
+    let gen_after = db
+        .collection_analyze_generation("docs")
+        .expect("test: collection exists");
+
+    assert!(
+        gen_after > gen_before,
+        "second ANALYZE must bump analyze_generation: {gen_before} -> {gen_after}"
     );
 }

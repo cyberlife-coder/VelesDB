@@ -116,10 +116,19 @@ impl Database {
             .map(|name| self.collection_write_generation(name).unwrap_or(0))
             .collect();
 
+        // Issue #608: parallel vector of analyze generations so that running
+        // ANALYZE alone (no data mutation) still flips the cache key and
+        // rebuilds plans with the fresh calibrated cost estimates.
+        let analyze_generations: smallvec::SmallVec<[u64; 4]> = collection_names
+            .iter()
+            .map(|name| self.collection_analyze_generation(name).unwrap_or(0))
+            .collect();
+
         crate::cache::PlanKey {
             query_hash,
             schema_version,
             collection_generations,
+            analyze_generations,
         }
     }
 

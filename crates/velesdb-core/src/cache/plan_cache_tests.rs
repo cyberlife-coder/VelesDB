@@ -52,11 +52,13 @@ fn plan_key_equal_fields_are_equal() {
         query_hash: 42,
         schema_version: 1,
         collection_generations: smallvec![10, 20],
+        analyze_generations: smallvec::SmallVec::new(),
     };
     let b = PlanKey {
         query_hash: 42,
         schema_version: 1,
         collection_generations: smallvec![10, 20],
+        analyze_generations: smallvec::SmallVec::new(),
     };
     assert_eq!(a, b);
 }
@@ -72,11 +74,13 @@ fn plan_key_different_generations_are_not_equal() {
         query_hash: 42,
         schema_version: 1,
         collection_generations: smallvec![10, 20],
+        analyze_generations: smallvec::SmallVec::new(),
     };
     let b = PlanKey {
         query_hash: 42,
         schema_version: 1,
         collection_generations: smallvec![10, 21],
+        analyze_generations: smallvec::SmallVec::new(),
     };
     assert_ne!(a, b);
 }
@@ -90,6 +94,7 @@ fn plan_cache_insert_and_get() {
         query_hash: 1,
         schema_version: 0,
         collection_generations: smallvec![0],
+        analyze_generations: smallvec::SmallVec::new(),
     };
     let plan = dummy_compiled_plan();
 
@@ -106,6 +111,7 @@ fn plan_cache_miss_on_different_key() {
         query_hash: 1,
         schema_version: 0,
         collection_generations: smallvec![0],
+        analyze_generations: smallvec::SmallVec::new(),
     };
     cache.insert(key, dummy_compiled_plan());
 
@@ -113,6 +119,7 @@ fn plan_cache_miss_on_different_key() {
         query_hash: 2,
         schema_version: 0,
         collection_generations: smallvec![0],
+        analyze_generations: smallvec::SmallVec::new(),
     };
     assert!(cache.get(&other).is_none(), "different key should miss");
 }
@@ -194,6 +201,72 @@ fn schema_version_increments_on_ddl() {
     assert_eq!(db.schema_version(), 2, "should be 2 after delete");
 }
 
+// ---- analyze_generation on Collection (issue #608) ----
+
+#[cfg(feature = "persistence")]
+#[test]
+fn analyze_generation_starts_at_zero_and_increments_on_bump() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = crate::collection::Collection::create(
+        dir.path().to_path_buf(),
+        4,
+        crate::DistanceMetric::Cosine,
+    )
+    .unwrap();
+
+    assert_eq!(coll.analyze_generation(), 0, "should start at 0");
+    coll.bump_analyze_generation();
+    assert_eq!(coll.analyze_generation(), 1, "should be 1 after one bump");
+    coll.bump_analyze_generation();
+    assert_eq!(coll.analyze_generation(), 2, "should be 2 after two bumps");
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn analyze_generation_bumped_by_database_analyze() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::Database::open(dir.path()).unwrap();
+    db.create_collection("ag_test", 4, crate::DistanceMetric::Cosine)
+        .unwrap();
+    // Seed at least one point so ANALYZE has something to compute stats on.
+    let coll = db.get_vector_collection("ag_test").unwrap();
+    coll.upsert(vec![crate::Point {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: None,
+        sparse_vectors: None,
+    }])
+    .unwrap();
+
+    assert_eq!(
+        db.collection_analyze_generation("ag_test"),
+        Some(0),
+        "starts at 0 before ANALYZE"
+    );
+
+    db.analyze_collection("ag_test")
+        .expect("ANALYZE must succeed on a seeded collection");
+
+    assert_eq!(
+        db.collection_analyze_generation("ag_test"),
+        Some(1),
+        "should be 1 after first ANALYZE"
+    );
+
+    db.analyze_collection("ag_test").unwrap();
+    assert_eq!(
+        db.collection_analyze_generation("ag_test"),
+        Some(2),
+        "should be 2 after second ANALYZE"
+    );
+
+    assert_eq!(
+        db.collection_analyze_generation("nonexistent"),
+        None,
+        "missing collection returns None"
+    );
+}
+
 // ---- collection_write_generation on Database ----
 
 #[cfg(feature = "persistence")]
@@ -240,6 +313,7 @@ fn plan_cache_reuse_count_increments() {
         query_hash: 99,
         schema_version: 0,
         collection_generations: smallvec![0],
+        analyze_generations: smallvec::SmallVec::new(),
     };
     let plan = dummy_compiled_plan();
     assert_eq!(plan.reuse_count.load(Ordering::Relaxed), 0);

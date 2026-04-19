@@ -109,6 +109,7 @@ impl Collection {
             cached_stats: Arc::new(Mutex::new(None)),
             stats_io_mutex: Arc::new(Mutex::new(())),
             write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            analyze_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             inserts_since_last_hnsw_save: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             #[cfg(feature = "persistence")]
             stream_ingester: Arc::new(RwLock::new(None)),

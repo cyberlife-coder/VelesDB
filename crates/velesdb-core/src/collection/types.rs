@@ -269,6 +269,16 @@ pub(crate) struct Collection {
     /// `Arc` because `Collection` is `Clone` and all clones must share the same counter.
     pub(crate) write_generation: Arc<std::sync::atomic::AtomicU64>,
 
+    /// Monotonic analyze generation counter (issue #608).
+    ///
+    /// Incremented every time `ANALYZE` produces fresh `CollectionStats`.
+    /// Threaded into the compiled plan cache key so that running `ANALYZE`
+    /// alone (without any subsequent mutation) invalidates plans whose cost
+    /// estimates were derived from pre-analyze heuristics.
+    ///
+    /// Stored behind `Arc` for the same reason as `write_generation`.
+    pub(crate) analyze_generation: Arc<std::sync::atomic::AtomicU64>,
+
     /// Tracks inserts since the last HNSW index save (Issue #423 Component 3).
     ///
     /// When this counter exceeds `HNSW_SAVE_THRESHOLD`, `flush()` saves the
@@ -346,6 +356,29 @@ impl Collection {
     pub(crate) fn write_generation(&self) -> u64 {
         self.write_generation
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Returns the current analyze generation counter (issue #608).
+    ///
+    /// Starts at 0 and increments each time `ANALYZE` is run against the
+    /// collection. Threaded through the compiled plan cache key so that the
+    /// cache invalidates when calibrated stats change, even when no data
+    /// mutation has bumped `write_generation`.
+    #[must_use]
+    pub(crate) fn analyze_generation(&self) -> u64 {
+        self.analyze_generation
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Bumps the analyze generation counter (issue #608).
+    ///
+    /// Called by `Database::analyze_collection` after fresh stats are
+    /// persisted. Uses `Relaxed` ordering because the cache key is rebuilt
+    /// on every query dispatch; observing a slightly stale counter on a
+    /// concurrent reader at most causes one extra cache miss (self-healing).
+    pub(crate) fn bump_analyze_generation(&self) {
+        self.analyze_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Extracts all string values from a JSON payload for text indexing.

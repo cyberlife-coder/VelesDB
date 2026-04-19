@@ -39,6 +39,14 @@ pub struct PlanKey {
     pub schema_version: u64,
     /// Per-collection write generation, sorted by collection name.
     pub collection_generations: SmallVec<[u64; 4]>,
+    /// Per-collection analyze generation, sorted by collection name (issue #608).
+    ///
+    /// Parallel to `collection_generations` but tracks `ANALYZE` invocations
+    /// rather than data mutations. Including this in the cache key ensures
+    /// that running `ANALYZE` alone — with no intermediate write to bump
+    /// `write_generation` — still invalidates plans whose cost estimates
+    /// were derived from pre-analyze heuristics.
+    pub analyze_generations: SmallVec<[u64; 4]>,
 }
 
 /// A compiled (cached) query execution plan.
