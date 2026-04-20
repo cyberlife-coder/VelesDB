@@ -336,12 +336,44 @@ fn test_metadata_only_collection_search_errors() {
         .expect("metadata-only");
     let query = vec![0.1_f32; DIM];
 
+    // Every vector-search entry point must reject metadata-only collections
+    // with a clean Error::SearchNotSupported (Devin #616 feedback —
+    // consistency across all dispatch paths after centralising the check in
+    // validate_query_and_read_metric).
     assert!(
         matches!(
             collection.search(&query, 5),
             Err(crate::error::Error::SearchNotSupported(_))
         ),
-        "metadata-only collections must reject vector search"
+        "search: metadata-only must return SearchNotSupported"
+    );
+    assert!(
+        matches!(
+            collection.search_with_ef(&query, 5, 64),
+            Err(crate::error::Error::SearchNotSupported(_))
+        ),
+        "search_with_ef: metadata-only must return SearchNotSupported"
+    );
+    assert!(
+        matches!(
+            collection.search_with_quality(&query, 5, crate::SearchQuality::Balanced),
+            Err(crate::error::Error::SearchNotSupported(_))
+        ),
+        "search_with_quality: metadata-only must return SearchNotSupported"
+    );
+    assert!(
+        matches!(
+            collection.search_with_opts(&query, 5, &opts_with_rerank(Some(true))),
+            Err(crate::error::Error::SearchNotSupported(_))
+        ),
+        "search_with_opts(force_rerank=true): metadata-only must return SearchNotSupported"
+    );
+    assert!(
+        matches!(
+            collection.search_with_opts(&query, 5, &opts_with_rerank(Some(false))),
+            Err(crate::error::Error::SearchNotSupported(_))
+        ),
+        "search_with_opts(force_rerank=false): metadata-only must return SearchNotSupported"
     );
 }
 

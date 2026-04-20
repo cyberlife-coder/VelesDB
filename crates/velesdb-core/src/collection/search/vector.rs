@@ -252,16 +252,23 @@ fn rescore_per_item(
 }
 
 impl Collection {
-    /// Shared search-pipeline prologue: validates the query dimension against
-    /// the collection config and reads the configured distance metric in a
-    /// single lock scope.
+    /// Shared search-pipeline prologue: rejects metadata-only collections,
+    /// validates the query dimension against the collection config, and reads
+    /// the configured distance metric in a single lock scope.
     ///
     /// Factored from `search_with_ef` / `search_with_quality` /
     /// `search_with_forced_rerank` / `search_with_quality_no_rerank` for #452.
+    /// Centralising the `metadata_only` check here (Devin #616 feedback)
+    /// makes the 4 methods return a clean `Error::SearchNotSupported` instead
+    /// of failing deeper inside the HNSW index on metadata-only collections —
+    /// matching the behaviour of the inherent `search()` method.
     /// `#[inline]` preserves pre-refactor inlining (Phase 3.2 learning).
     #[inline]
     pub(super) fn validate_query_and_read_metric(&self, query: &[f32]) -> Result<DistanceMetric> {
         let config = self.config.read();
+        if config.metadata_only {
+            return Err(Error::SearchNotSupported(config.name.clone()));
+        }
         validate_dimension_match(config.dimension, query.len())?;
         Ok(config.metric)
     }
