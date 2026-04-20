@@ -299,6 +299,8 @@ fn test_remove_via_trait_matches_direct_path() {
     }
 
     // Remove odd IDs via the trait method on `a`, via the inherent method on `b`.
+    // Rust method resolution picks the inherent method over the trait method when
+    // called as `index_b.remove(i)` — this is what the test claims to exercise.
     for i in (1..n).step_by(2) {
         assert!(
             <HnswIndex as VectorIndex>::remove(&index_a, i),
@@ -306,7 +308,7 @@ fn test_remove_via_trait_matches_direct_path() {
         );
     }
     for i in (1..n).step_by(2) {
-        let removed_again = index_b.remove_as_vector_index(i);
+        let removed_again = index_b.remove(i);
         assert!(
             removed_again,
             "inherent remove must report true for existing id {i}"
@@ -344,20 +346,3 @@ fn test_remove_via_trait_matches_direct_path() {
     assert_eq!(a.len(), b.len(), "trait and inherent remove must agree");
 }
 
-// ---------------------------------------------------------------------------
-// Small local extension trait: `HnswIndex::remove_as_vector_index`.
-//
-// Rationale: `HnswIndex::remove` is not exposed as inherent (there is only the
-// `VectorIndex::remove` trait method plus internal helpers). We dispatch
-// through the trait explicitly for the "inherent path" comparison. This trait
-// is purely a test-side renaming, not a production API addition.
-// ---------------------------------------------------------------------------
-trait HnswRemoveExt {
-    fn remove_as_vector_index(&self, id: u64) -> bool;
-}
-
-impl HnswRemoveExt for HnswIndex {
-    fn remove_as_vector_index(&self, id: u64) -> bool {
-        <HnswIndex as VectorIndex>::remove(self, id)
-    }
-}
