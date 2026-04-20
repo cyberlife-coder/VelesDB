@@ -21,12 +21,24 @@ impl NativeHnswIndex {
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
 
+        // #617: stamp every on-disk artefact with the same monotonic generation
+        // so that a crash between any two renames (graph, mappings, vectors,
+        // meta) is detectable on reload. Errors are propagated rather than
+        // silently resetting to generation 1 on corrupted meta (Devin #618
+        // follow-up).
+        let new_gen = persistence::next_generation(path)?;
+
         // Dump the HNSW graph itself (caller-specific — see persistence::save_sidecars).
         let storage_mode = {
             let inner = self.inner.read();
             inner.file_dump(path, "native_hnsw")?;
             inner.storage_mode()
         };
+
+        // Graph-generation marker is written IMMEDIATELY after the graph dump
+        // and BEFORE the sidecars — see comment in `HnswIndex::save` for the
+        // full rationale (#617 Devin follow-up).
+        persistence::save_graph_generation(path, new_gen)?;
 
         // Mappings + vectors + meta in one shared call (RF-DEDUP #448 Group C).
         persistence::save_sidecars(
@@ -38,7 +50,10 @@ impl NativeHnswIndex {
                 metric: self.metric,
                 enable_vector_storage: self.enable_vector_storage,
                 storage_mode,
+                // `save_sidecars` overwrites this with `new_gen` (#617).
+                generation: 0,
             },
+            new_gen,
         )
     }
 

@@ -47,6 +47,8 @@ mod index_tests;
 #[cfg(test)]
 mod params_tests;
 #[cfg(test)]
+mod persistence_atomicity_tests;
+#[cfg(test)]
 mod sharded_mappings_tests;
 #[cfg(test)]
 mod sharded_vectors_tests;
