@@ -345,4 +345,3 @@ fn test_remove_via_trait_matches_direct_path() {
     }
     assert_eq!(a.len(), b.len(), "trait and inherent remove must agree");
 }
-
