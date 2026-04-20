@@ -468,10 +468,11 @@ impl Collection {
     ///
     /// Returns an error if the query vector dimension doesn't match the collection.
     pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<ScoredResult>> {
-        let config = self.config.read();
-
-        validate_dimension_match(config.dimension, query.len())?;
-        drop(config);
+        // Rejects metadata-only + validates dimension in one lock scope.
+        // Metric is unused here (search_ids_with_adc_if_pq re-reads config)
+        // but reusing the helper keeps the metadata_only guard consistent
+        // with the 4 other dispatch paths (#452 Devin #616 feedback).
+        let _metric = self.validate_query_and_read_metric(query)?;
 
         // Perf: Direct HNSW search without vector/payload retrieval
         let results = self.search_ids_with_adc_if_pq(query, k);
@@ -498,11 +499,8 @@ impl Collection {
         k: usize,
         filter: &crate::filter::Filter,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
-        validate_dimension_match(config.dimension, query.len())?;
-        let higher_is_better = config.metric.higher_is_better();
-        let metric = config.metric;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
+        let higher_is_better = metric.higher_is_better();
 
         let candidates_k = super::vector_filter::compute_oversampled_k(k, filter);
 

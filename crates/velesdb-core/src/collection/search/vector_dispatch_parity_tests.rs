@@ -375,6 +375,24 @@ fn test_metadata_only_collection_search_errors() {
         ),
         "search_with_opts(force_rerank=false): metadata-only must return SearchNotSupported"
     );
+    assert!(
+        matches!(
+            collection.search_ids(&query, 5),
+            Err(crate::error::Error::SearchNotSupported(_))
+        ),
+        "search_ids: metadata-only must return SearchNotSupported"
+    );
+    let trivial_filter = crate::filter::Filter::new(crate::filter::Condition::Eq {
+        field: "dummy".into(),
+        value: serde_json::Value::Null,
+    });
+    assert!(
+        matches!(
+            collection.search_with_filter(&query, 5, &trivial_filter),
+            Err(crate::error::Error::SearchNotSupported(_))
+        ),
+        "search_with_filter: metadata-only must return SearchNotSupported"
+    );
 }
 
 // ---------------------------------------------------------------------------
