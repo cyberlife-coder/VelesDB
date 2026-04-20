@@ -38,6 +38,8 @@ impl NativeHnswIndex {
                 metric: self.metric,
                 enable_vector_storage: self.enable_vector_storage,
                 storage_mode,
+                // `save_sidecars` overwrites this with the bumped generation (#617).
+                generation: 0,
             },
         )
     }

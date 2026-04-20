@@ -5,10 +5,22 @@
 //!
 //! # On-Disk Format
 //!
-//! Both index types share the same binary format:
-//! - `native_meta.bin`: `(dimension: usize, metric: u8, enable_vector_storage: bool)`
-//! - `native_mappings.bin`: `(id_to_idx: HashMap<u64, usize>, idx_to_id: HashMap<usize, u64>, next_idx: usize)`
-//! - `native_vectors.bin`: `Vec<(internal_idx: usize, vector: Vec<f32>)>`
+//! Both index types share the same binary format. Every sidecar carries a
+//! `generation: u64` stamp so that [`load_sidecars`] can detect a partial
+//! save (see issue #617 — the 3-file sequence is not itself atomic even
+//! though each individual file is written atomically).
+//!
+//! - `native_meta.bin`: 5-tuple `(dimension: usize, metric: u8,
+//!   enable_vector_storage: bool, storage_mode: u8, generation: u64)`.
+//!   Backward-compat: 4-tuple (v1.7.2+, generation=0) and 3-tuple
+//!   (pre-v1.7.2, generation=0, storage_mode=Full) are still accepted on
+//!   load.
+//! - `native_mappings.bin`: 4-tuple `(id_to_idx: HashMap<u64, usize>,
+//!   idx_to_id: HashMap<usize, u64>, next_idx: usize, generation: u64)`.
+//!   Backward-compat: 3-tuple (generation=0) accepted on load.
+//! - `native_vectors.bin`: 2-tuple `(Vec<(internal_idx: usize, vector:
+//!   Vec<f32>)>, generation: u64)`. Backward-compat: plain `Vec`
+//!   (generation=0) accepted on load.
 
 use crate::distance::DistanceMetric;
 use std::collections::HashMap;
@@ -17,12 +29,19 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// HNSW index metadata as stored on disk.
+///
+/// The `generation` field is the authoritative commit stamp used to
+/// detect partial `save_sidecars` writes (see [`save_sidecars`] and
+/// issue #617). `meta` is written last during save, so its generation is
+/// the ground truth that the other two sidecars must match on load.
 pub(crate) struct HnswMeta {
     pub dimension: usize,
     pub metric: DistanceMetric,
     pub enable_vector_storage: bool,
     /// Storage mode for the HNSW backend (defaults to `Full` for backward compat).
     pub storage_mode: crate::StorageMode,
+    /// Monotonic save generation. `0` for DBs written by pre-fix binaries.
+    pub generation: u64,
 }
 
 /// HNSW mappings data as stored on disk.
@@ -30,11 +49,15 @@ pub(crate) struct HnswMappingsData {
     pub id_to_idx: HashMap<u64, usize>,
     pub idx_to_id: HashMap<usize, u64>,
     pub next_idx: usize,
+    /// Must match [`HnswMeta::generation`] on load — mismatch = partial save.
+    pub generation: u64,
 }
 
 /// HNSW vectors payload as stored on disk.
 pub(crate) struct HnswVectorsData {
     pub vectors: Vec<(usize, Vec<f32>)>,
+    /// Must match [`HnswMeta::generation`] on load — mismatch = partial save.
+    pub generation: u64,
 }
 
 /// Saves HNSW metadata to `native_meta.bin` in the given directory.
@@ -51,6 +74,7 @@ pub(crate) fn save_meta(path: &Path, meta: &HnswMeta) -> std::io::Result<()> {
         meta.metric as u8,
         meta.enable_vector_storage,
         storage_mode_to_u8(meta.storage_mode),
+        meta.generation,
     ))
     .map_err(std::io::Error::other)?;
     atomic_write(&meta_path, &bytes)
@@ -66,7 +90,22 @@ pub(crate) fn load_meta(path: &Path) -> std::io::Result<HnswMeta> {
     let meta_path = path.join("native_meta.bin");
     let bytes = std::fs::read(meta_path)?;
 
-    // Try 4-tuple format first (v1.7.2+), fall back to 3-tuple (pre-v1.7.2)
+    // Try 5-tuple (post-#617, with generation) first.
+    if let Ok((dimension, metric_u8, enable_vector_storage, storage_mode_u8, generation)) =
+        postcard::from_bytes::<(usize, u8, bool, u8, u64)>(&bytes)
+    {
+        let metric = metric_from_u8(metric_u8)?;
+        let storage_mode = storage_mode_from_u8(storage_mode_u8);
+        return Ok(HnswMeta {
+            dimension,
+            metric,
+            enable_vector_storage,
+            storage_mode,
+            generation,
+        });
+    }
+
+    // Backward-compat: 4-tuple format (v1.7.2+) — no generation stamp.
     if let Ok((dimension, metric_u8, enable_vector_storage, storage_mode_u8)) =
         postcard::from_bytes::<(usize, u8, bool, u8)>(&bytes)
     {
@@ -77,10 +116,11 @@ pub(crate) fn load_meta(path: &Path) -> std::io::Result<HnswMeta> {
             metric,
             enable_vector_storage,
             storage_mode,
+            generation: 0,
         });
     }
 
-    // Backward-compat: 3-tuple format (pre-v1.7.2) defaults to Full
+    // Backward-compat: 3-tuple format (pre-v1.7.2) defaults to Full.
     let (dimension, metric_u8, enable_vector_storage): (usize, u8, bool) =
         postcard::from_bytes(&bytes).map_err(std::io::Error::other)?;
     let metric = metric_from_u8(metric_u8)?;
@@ -90,6 +130,7 @@ pub(crate) fn load_meta(path: &Path) -> std::io::Result<HnswMeta> {
         metric,
         enable_vector_storage,
         storage_mode: crate::StorageMode::Full,
+        generation: 0,
     })
 }
 
@@ -102,8 +143,13 @@ pub(crate) fn load_meta(path: &Path) -> std::io::Result<HnswMeta> {
 /// Returns `io::Error` if file creation or serialization fails.
 pub(crate) fn save_mappings(path: &Path, data: &HnswMappingsData) -> std::io::Result<()> {
     let mappings_path = path.join("native_mappings.bin");
-    let bytes = postcard::to_allocvec(&(&data.id_to_idx, &data.idx_to_id, data.next_idx))
-        .map_err(std::io::Error::other)?;
+    let bytes = postcard::to_allocvec(&(
+        &data.id_to_idx,
+        &data.idx_to_id,
+        data.next_idx,
+        data.generation,
+    ))
+    .map_err(std::io::Error::other)?;
     atomic_write(&mappings_path, &bytes)
 }
 
@@ -116,6 +162,19 @@ pub(crate) fn load_mappings(path: &Path) -> std::io::Result<HnswMappingsData> {
     let mappings_path = path.join("native_mappings.bin");
     let bytes = std::fs::read(mappings_path)?;
 
+    // Try 4-tuple (post-#617, with generation) first.
+    if let Ok((id_to_idx, idx_to_id, next_idx, generation)) =
+        postcard::from_bytes::<(HashMap<u64, usize>, HashMap<usize, u64>, usize, u64)>(&bytes)
+    {
+        return Ok(HnswMappingsData {
+            id_to_idx,
+            idx_to_id,
+            next_idx,
+            generation,
+        });
+    }
+
+    // Backward-compat: 3-tuple format (pre-#617) — no generation stamp.
     let (id_to_idx, idx_to_id, next_idx): (HashMap<u64, usize>, HashMap<usize, u64>, usize) =
         postcard::from_bytes(&bytes).map_err(std::io::Error::other)?;
 
@@ -123,6 +182,7 @@ pub(crate) fn load_mappings(path: &Path) -> std::io::Result<HnswMappingsData> {
         id_to_idx,
         idx_to_id,
         next_idx,
+        generation: 0,
     })
 }
 
@@ -135,7 +195,8 @@ pub(crate) fn load_mappings(path: &Path) -> std::io::Result<HnswMappingsData> {
 /// Returns `io::Error` if file creation or serialization fails.
 pub(crate) fn save_vectors(path: &Path, data: &HnswVectorsData) -> std::io::Result<()> {
     let vectors_path = path.join("native_vectors.bin");
-    let bytes = postcard::to_allocvec(&data.vectors).map_err(std::io::Error::other)?;
+    let bytes =
+        postcard::to_allocvec(&(&data.vectors, data.generation)).map_err(std::io::Error::other)?;
     atomic_write(&vectors_path, &bytes)
 }
 
@@ -147,9 +208,23 @@ pub(crate) fn save_vectors(path: &Path, data: &HnswVectorsData) -> std::io::Resu
 pub(crate) fn load_vectors(path: &Path) -> std::io::Result<HnswVectorsData> {
     let vectors_path = path.join("native_vectors.bin");
     let bytes = std::fs::read(vectors_path)?;
+
+    // Try 2-tuple (post-#617, with generation) first.
+    if let Ok((vectors, generation)) = postcard::from_bytes::<(Vec<(usize, Vec<f32>)>, u64)>(&bytes)
+    {
+        return Ok(HnswVectorsData {
+            vectors,
+            generation,
+        });
+    }
+
+    // Backward-compat: plain `Vec` payload (pre-#617) — no generation stamp.
     let vectors: Vec<(usize, Vec<f32>)> =
         postcard::from_bytes(&bytes).map_err(std::io::Error::other)?;
-    Ok(HnswVectorsData { vectors })
+    Ok(HnswVectorsData {
+        vectors,
+        generation: 0,
+    })
 }
 
 /// Writes `data` to a unique temp file, fsyncs, then renames to `final_path`.
@@ -238,12 +313,14 @@ pub(crate) fn save_or_cleanup_vectors(
     path: &Path,
     enable_vector_storage: bool,
     vectors: &super::sharded_vectors::ShardedVectors,
+    generation: u64,
 ) -> std::io::Result<()> {
     if enable_vector_storage {
         save_vectors(
             path,
             &HnswVectorsData {
                 vectors: vectors.collect_for_parallel(),
+                generation,
             },
         )
     } else {
@@ -283,9 +360,10 @@ pub(crate) fn save_sidecars(
             id_to_idx,
             idx_to_id,
             next_idx,
+            generation: meta.generation,
         },
     )?;
-    save_or_cleanup_vectors(path, meta.enable_vector_storage, vectors)?;
+    save_or_cleanup_vectors(path, meta.enable_vector_storage, vectors, meta.generation)?;
     save_meta(path, meta)
 }
 
