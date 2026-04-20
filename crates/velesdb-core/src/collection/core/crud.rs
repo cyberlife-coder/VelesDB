@@ -49,24 +49,10 @@ impl Collection {
 
         self.apply_sparse_batch_upsert(&sparse_batch)?;
 
-        // Incremental histogram maintenance: decrement old values and
-        // increment new values in a single atomic read → modify → write
-        // cycle (Bug #49: avoids 2× I/O of separate delete + upsert calls).
-        // Only the last occurrence per ID is counted for new payloads
-        // (Bug #47: dedup to match last-writer-wins storage semantics).
-        let dedup = Self::build_dedup_map(&points);
-        let new_payloads: Vec<Option<serde_json::Value>> = points
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                if dedup.get(&p.id) == Some(&i) {
-                    p.payload.clone()
-                } else {
-                    None
-                }
-            })
-            .collect();
-        self.update_histograms_replace(&old_payloads, &new_payloads);
+        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
+        // so only the final payload counts, then decrement old + increment
+        // new in one atomic cycle. See `apply_histogram_replace_dedup`.
+        self.apply_histogram_replace_dedup(&points, &old_payloads);
 
         self.invalidate_caches_and_bump_generation();
         Ok(())
@@ -457,23 +443,10 @@ impl Collection {
         // config(1) only — payload_storage(3) and label_index(7) both released above.
         self.config.write().point_count = point_count;
 
-        // Incremental histogram maintenance for metadata-only collections:
-        // decrement old values and increment new values in one atomic cycle.
-        // Bug #47: only the last occurrence per ID is counted for new payloads
-        // to match last-writer-wins storage semantics.
-        let dedup = Self::build_dedup_map(&points);
-        let new_payloads: Vec<Option<serde_json::Value>> = points
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                if dedup.get(&p.id) == Some(&i) {
-                    p.payload.clone()
-                } else {
-                    None
-                }
-            })
-            .collect();
-        self.update_histograms_replace(&old_payloads_for_hist, &new_payloads);
+        // Incremental histogram maintenance for metadata-only collections
+        // (Bug #47 + Bug #49): dedup by id and replace histograms in one
+        // atomic cycle. See `apply_histogram_replace_dedup`.
+        self.apply_histogram_replace_dedup(&points, &old_payloads_for_hist);
 
         self.invalidate_caches_and_bump_generation();
         Ok(())

@@ -244,4 +244,39 @@ impl Collection {
             cache.insert(id, bqv);
         }
     }
+
+    /// Replaces persisted histograms for a batch under last-writer-wins dedup.
+    ///
+    /// Builds the dedup map (`point_id -> index_of_last_occurrence`), keeps
+    /// only the payload of the last occurrence for each id (zeroing the rest),
+    /// and feeds the decrement/increment pair to `update_histograms_replace`
+    /// in a single atomic read → modify → write cycle.
+    ///
+    /// Used by all upsert paths (`upsert`, `upsert_metadata`, `upsert_bulk`
+    /// V2 and standard) to ensure:
+    /// - Bug #47 — dedup by `point.id` so only the final payload counts;
+    /// - Bug #49 — one histogram cycle instead of two (decrement then
+    ///   increment happen together under `stats_io_mutex`).
+    ///
+    /// Issue #450 Phase 3.1: factored out of 4 identical call sites to shrink
+    /// the duplicated surface in `collection/core/`.
+    pub(super) fn apply_histogram_replace_dedup(
+        &self,
+        points: &[Point],
+        old_payloads: &[Option<serde_json::Value>],
+    ) {
+        let dedup = Self::build_dedup_map(points);
+        let new_payloads: Vec<Option<serde_json::Value>> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if dedup.get(&p.id) == Some(&i) {
+                    p.payload.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.update_histograms_replace(old_payloads, &new_payloads);
+    }
 }
