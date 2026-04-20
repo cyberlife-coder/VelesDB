@@ -186,16 +186,16 @@ impl HnswIndex {
     /// [`Self::vacuum`] to rebuild the graph and reclaim memory.
     ///
     /// This is the single inherent implementation shared by the
-    /// [`VectorIndex::remove`](crate::index::VectorIndex::remove) trait impl.
+    /// [`VectorIndex::remove`](crate::index::VectorIndex::remove) trait impl
+    /// and delegates to [`upsert::soft_delete`] (also used by
+    /// `NativeHnswIndex::remove`).
     pub fn remove(&self, id: u64) -> bool {
-        if let Some(old_idx) = self.mappings.remove(id) {
-            if self.enable_vector_storage {
-                self.vectors.remove(old_idx);
-            }
-            true
-        } else {
-            false
-        }
+        upsert::soft_delete(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            id,
+        )
     }
 
     /// Reorders graph nodes in BFS traversal order for improved cache locality.

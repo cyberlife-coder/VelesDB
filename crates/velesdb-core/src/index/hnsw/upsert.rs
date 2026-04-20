@@ -6,6 +6,7 @@
 
 use super::sharded_mappings::ShardedMappings;
 use super::sharded_vectors::ShardedVectors;
+use crate::validation::validate_dimension_match;
 
 /// Result of an upsert mapping operation, carrying rollback information.
 ///
@@ -72,6 +73,69 @@ pub(crate) fn upsert_mapping_batch(
         results.push(UpsertResult { idx, old_idx });
     }
     results
+}
+
+/// Validates dimensions for every vector in `items`, then registers the IDs
+/// via [`upsert_mapping_batch`].
+///
+/// # Phase Ordering Invariant
+///
+/// Dimension validation runs to completion **before** any call to
+/// `upsert_mapping_batch` — a mismatch discovered after partial upsert
+/// would leave orphaned mappings. See `docs/SOUNDNESS.md` "HNSW Batch
+/// Insertion Ordering".
+///
+/// Shared by `HnswIndex::prepare_batch_insert` and
+/// `NativeHnswIndex::insert_batch` (#448 Group D). Generic over the vector
+/// slice lifetime so callers can pass either `&Vec<f32>` or `&[f32]`.
+///
+/// # Errors
+///
+/// Returns [`crate::error::Error::DimensionMismatch`] on the first vector
+/// whose dimension differs from `expected_dimension`.
+pub(crate) fn validate_and_register_batch<V: AsRef<[f32]>>(
+    mappings: &ShardedMappings,
+    vectors: &ShardedVectors,
+    enable_vector_storage: bool,
+    expected_dimension: usize,
+    items: &[(u64, V)],
+) -> crate::error::Result<Vec<UpsertResult>> {
+    for (_id, vec) in items {
+        validate_dimension_match(expected_dimension, vec.as_ref().len())?;
+    }
+
+    let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
+    Ok(upsert_mapping_batch(
+        mappings,
+        vectors,
+        enable_vector_storage,
+        &ids,
+    ))
+}
+
+/// Soft-deletes a single ID: removes it from mappings and, when vector
+/// storage is enabled, removes the corresponding sidecar slot.
+///
+/// Returns `true` if the ID existed and was removed, `false` if it was
+/// already absent. The HNSW graph node itself is left in place — it becomes
+/// a tombstone that is filtered out during search via the reverse mapping.
+///
+/// Shared by `HnswIndex::remove` and `NativeHnswIndex::remove` (identical
+/// bodies, #448 Group F consolidation).
+pub(crate) fn soft_delete(
+    mappings: &ShardedMappings,
+    vectors: &ShardedVectors,
+    enable_vector_storage: bool,
+    id: u64,
+) -> bool {
+    if let Some(old_idx) = mappings.remove(id) {
+        if enable_vector_storage {
+            vectors.remove(old_idx);
+        }
+        true
+    } else {
+        false
+    }
 }
 
 /// Reconciles pre-registered mapping indices with graph-assigned node IDs.

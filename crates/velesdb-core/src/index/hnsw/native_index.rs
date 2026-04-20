@@ -233,18 +233,17 @@ impl NativeHnswIndex {
     ///
     /// Returns an error if any insertion fails.
     pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) -> crate::error::Result<()> {
-        // Validate all dimensions upfront before any upsert_mapping side effects.
-        for (_id, vec) in items {
-            validate_dimension_match(self.dimension, vec.len())?;
-        }
-
-        let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
-        let upsert_results = upsert::upsert_mapping_batch(
+        // RF-DEDUP #448 Group D — shared validate + upsert_mapping_batch
+        // pipeline (see `HnswIndex::prepare_batch_insert`). Runs dimension
+        // validation to completion BEFORE any mapping registration so
+        // failures cannot leave orphaned mappings.
+        let upsert_results = upsert::validate_and_register_batch(
             &self.mappings,
             &self.vectors,
             self.enable_vector_storage,
-            &ids,
-        );
+            self.dimension,
+            items,
+        )?;
 
         let mut data: Vec<(&[f32], usize)> = Vec::with_capacity(items.len());
         let mut rollback_info: Vec<(u64, UpsertResult)> = Vec::with_capacity(items.len());
@@ -282,15 +281,16 @@ impl NativeHnswIndex {
     ///
     /// Removes the ID from mappings and cleans up stored vector data.
     /// The HNSW graph node becomes a tombstone, filtered out during search.
+    ///
+    /// Delegates to [`upsert::soft_delete`], shared with `HnswIndex::remove`
+    /// (#448 Group F).
     pub fn remove(&self, id: u64) -> bool {
-        if let Some(old_idx) = self.mappings.remove(id) {
-            if self.enable_vector_storage {
-                self.vectors.remove(old_idx);
-            }
-            true
-        } else {
-            false
-        }
+        upsert::soft_delete(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            id,
+        )
     }
 
     /// Sets searching mode (no-op for native implementation).

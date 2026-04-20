@@ -53,19 +53,17 @@ impl HnswIndex {
     {
         let items: Vec<(u64, &'a [f32])> = vectors.into_iter().collect();
 
-        // Validate ALL dimensions upfront before any destructive upsert_mapping
-        // calls. An error after partial upsert_mapping would leave orphaned mappings.
-        for (_, vector) in &items {
-            validate_dimension_match(self.dimension, vector.len())?;
-        }
-
-        let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
-        let upsert_results = upsert::upsert_mapping_batch(
+        // RF-DEDUP #448 Group D — shared validate + upsert_mapping_batch
+        // pipeline (see `NativeHnswIndex::insert_batch`). Runs dimension
+        // validation to completion BEFORE any mapping registration so
+        // failures cannot leave orphaned mappings.
+        let upsert_results = upsert::validate_and_register_batch(
             &self.mappings,
             &self.vectors,
             self.enable_vector_storage,
-            &ids,
-        );
+            self.dimension,
+            &items,
+        )?;
 
         let mut to_insert = Vec::with_capacity(items.len());
         let mut rollback_info = Vec::with_capacity(items.len());
