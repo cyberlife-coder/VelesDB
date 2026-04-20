@@ -145,22 +145,9 @@ impl Collection {
         self.config.write().point_count = self.vector_storage.read().len();
         self.apply_sparse_batch_bulk(sparse_batch)?;
 
-        // Incremental histogram maintenance: decrement old values, increment new.
-        // Bug #47: only the last occurrence per ID is counted for new payloads
-        // to match last-writer-wins storage semantics.
-        let dedup = Self::build_dedup_map(points);
-        let payloads: Vec<Option<serde_json::Value>> = points
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                if dedup.get(&p.id) == Some(&i) {
-                    p.payload.clone()
-                } else {
-                    None
-                }
-            })
-            .collect();
-        self.update_histograms_replace(&old_payloads, &payloads);
+        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
+        // so only the final payload counts, then atomic decrement + increment.
+        self.apply_histogram_replace_dedup(points, &old_payloads);
 
         self.invalidate_caches_and_bump_generation();
 
@@ -197,22 +184,9 @@ impl Collection {
 
         self.apply_sparse_batch_bulk(sparse_batch)?;
 
-        // Incremental histogram maintenance: decrement old values, increment new.
-        // Bug #47: only the last occurrence per ID is counted for new payloads
-        // to match last-writer-wins storage semantics.
-        let dedup = Self::build_dedup_map(points);
-        let payloads: Vec<Option<serde_json::Value>> = points
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                if dedup.get(&p.id) == Some(&i) {
-                    p.payload.clone()
-                } else {
-                    None
-                }
-            })
-            .collect();
-        self.update_histograms_replace(&old_payloads, &payloads);
+        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
+        // so only the final payload counts, then atomic decrement + increment.
+        self.apply_histogram_replace_dedup(points, &old_payloads);
 
         self.invalidate_caches_and_bump_generation();
 
@@ -360,13 +334,10 @@ impl Collection {
         }
         #[cfg(feature = "persistence")]
         {
-            for (name, docs) in sparse_batch {
-                let wal_path =
-                    crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
-                for (point_id, sv) in docs {
-                    crate::index::sparse::persistence::wal_append_upsert(&wal_path, *point_id, sv)?;
-                }
-            }
+            self.append_sparse_wal_entries(sparse_batch.iter().flat_map(|(name, docs)| {
+                docs.iter()
+                    .map(move |(point_id, sv)| (name.as_str(), *point_id, sv))
+            }))?;
         }
         let mut indexes = self.sparse_indexes.write();
         for (name, docs) in sparse_batch {
