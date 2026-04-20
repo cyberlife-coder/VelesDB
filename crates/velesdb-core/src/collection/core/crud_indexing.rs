@@ -147,6 +147,32 @@ impl Collection {
         }
     }
 
+    /// Appends `(name, point_id, sparse_vector)` triples to the per-index
+    /// sparse WAL under WAL-before-apply semantics.
+    ///
+    /// Centralises the `wal_path_for_name` + `wal_append_upsert` loop that was
+    /// duplicated between `apply_sparse_batch_upsert` (single-point path) and
+    /// `apply_sparse_batch_bulk` (bulk path). Callers keep ownership of their
+    /// input shape (`Vec<(u64, BTreeMap)>` vs `BTreeMap<String, Vec<(u64,
+    /// SparseVector)>>`) and build the iterator of triples themselves, which
+    /// keeps this helper allocation-free.
+    ///
+    /// Feature-gated on `persistence` — on targets without persistence the
+    /// sparse WAL does not exist and the caller short-circuits.
+    ///
+    /// Issue #450 Phase 3.1.
+    #[cfg(feature = "persistence")]
+    pub(super) fn append_sparse_wal_entries<'a, I>(&self, entries: I) -> Result<()>
+    where
+        I: IntoIterator<Item = (&'a str, u64, &'a crate::index::sparse::SparseVector)>,
+    {
+        for (name, point_id, sv) in entries {
+            let wal_path = crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+            crate::index::sparse::persistence::wal_append_upsert(&wal_path, point_id, sv)?;
+        }
+        Ok(())
+    }
+
     /// Applies buffered sparse vector upserts with WAL-before-apply semantics.
     pub(super) fn apply_sparse_batch_upsert(
         &self,
@@ -157,13 +183,11 @@ impl Collection {
         }
         #[cfg(feature = "persistence")]
         {
-            for (point_id, sv_map) in sparse_batch {
-                for (name, sv) in sv_map {
-                    let wal_path =
-                        crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
-                    crate::index::sparse::persistence::wal_append_upsert(&wal_path, *point_id, sv)?;
-                }
-            }
+            self.append_sparse_wal_entries(sparse_batch.iter().flat_map(|(point_id, sv_map)| {
+                sv_map
+                    .iter()
+                    .map(move |(name, sv)| (name.as_str(), *point_id, sv))
+            }))?;
         }
         let mut indexes = self.sparse_indexes.write();
         for (point_id, sv_map) in sparse_batch {

@@ -334,13 +334,10 @@ impl Collection {
         }
         #[cfg(feature = "persistence")]
         {
-            for (name, docs) in sparse_batch {
-                let wal_path =
-                    crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
-                for (point_id, sv) in docs {
-                    crate::index::sparse::persistence::wal_append_upsert(&wal_path, *point_id, sv)?;
-                }
-            }
+            self.append_sparse_wal_entries(sparse_batch.iter().flat_map(|(name, docs)| {
+                docs.iter()
+                    .map(move |(point_id, sv)| (name.as_str(), *point_id, sv))
+            }))?;
         }
         let mut indexes = self.sparse_indexes.write();
         for (name, docs) in sparse_batch {
