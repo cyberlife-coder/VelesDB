@@ -14,22 +14,163 @@ use super::{distinct, pushdown, ExtractedComponents, MAX_LIMIT};
 
 impl Collection {
     /// Computes the CBO execution strategy and over-fetch factor for the query.
+    ///
+    /// Routes between two planner entry points depending on query shape
+    /// (issue #467 closure):
+    ///
+    /// - **Queries with `ORDER BY similarity()`** must preserve HNSW's natural
+    ///   similarity ordering, so the planner forces `VectorFirst` via
+    ///   [`QueryPlanner::choose_hybrid_strategy`], which additionally computes
+    ///   a selectivity-aware over-fetch factor clamped to `[2.0, 10.0]` when
+    ///   a filter is present. A pure-cost comparison would occasionally pick
+    ///   `GraphFirst`/`Parallel` and lose the natural ordering — observable
+    ///   as scrambled top-k for `ORDER BY similarity() DESC LIMIT k` queries.
+    /// - **All other queries** use the calibrated
+    ///   [`QueryPlanner::choose_strategy_with_cbo_and_overfetch`] path, which
+    ///   derives I/O / CPU weights from `OperationCostFactors` (or defaults
+    ///   when the collection was never analyzed).
     pub(super) fn compute_cbo_strategy(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        filter_condition: Option<&crate::velesql::Condition>,
+        limit: usize,
+    ) -> (crate::velesql::ExecutionStrategy, usize) {
+        // `filter_condition` is the WHERE clause AFTER `extract_vector_search`
+        // and similarity extraction — for pure `vector NEAR $v` queries the
+        // residual is a vector-only node that carries no selectivity signal.
+        // Strip the vector-family subtree so the CBO does not compute a
+        // spurious over-fetch (Devin PR #613 finding 3).
+        let meaningful_filter = filter_condition.and_then(crate::velesql::strip_vector_predicates);
+        let effective_filter = meaningful_filter.as_ref();
+
+        if Self::has_order_by_similarity(stmt) {
+            return self.cbo_strategy_for_order_by_similarity(effective_filter, limit);
+        }
+        let col_stats = self.get_stats();
+        let result = self.query_planner.choose_strategy_with_cbo_and_overfetch(
+            &col_stats,
+            effective_filter,
+            limit,
+        );
+        tracing::debug!(
+            strategy = ?result.0, over_fetch = result.1,
+            "CBO selected execution strategy (calibrated cost path)"
+        );
+        result
+    }
+
+    /// Returns `true` when the ORDER BY clause contains at least one
+    /// expression whose final ordering reduces to `similarity()` under a
+    /// monotonic transform. This routes the query through
+    /// `choose_hybrid_strategy` so HNSW's natural similarity ordering is
+    /// preserved by the executor.
+    ///
+    /// Detected shapes:
+    /// - Top-level `OrderByExpr::Similarity(_)` / `OrderByExpr::SimilarityBare`.
+    /// - `OrderByExpr::Arithmetic(...)` whose expression tree contains a
+    ///   `Similarity` node and **no other `Variable` reference** — i.e.
+    ///   `similarity() * 2.0`, `0.5 * similarity() + 0.25`,
+    ///   `-similarity() + 1.0` are all monotonic (Devin PR #613 finding 1).
+    ///
+    /// Composite expressions such as `0.7 * similarity() + 0.3 * bm25_score`
+    /// carry a `Variable` node and are deliberately NOT detected — their
+    /// final ordering differs from pure similarity, so forcing VectorFirst
+    /// would trade correctness for an inconsequential optimisation.
+    fn has_order_by_similarity(stmt: &crate::velesql::SelectStatement) -> bool {
+        let Some(order_by) = stmt.order_by.as_ref() else {
+            return false;
+        };
+        order_by
+            .iter()
+            .any(|item| Self::order_by_item_reduces_to_similarity(&item.expr))
+    }
+
+    /// Helper for [`has_order_by_similarity`]. Kept as an associated function
+    /// so the match arm can delegate to the arithmetic-expression walker
+    /// without inflating the outer method's cyclomatic complexity.
+    fn order_by_item_reduces_to_similarity(expr: &crate::velesql::OrderByExpr) -> bool {
+        use crate::velesql::OrderByExpr;
+        match expr {
+            OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => true,
+            OrderByExpr::Arithmetic(arith) => {
+                Self::arith_contains_similarity(arith) && !Self::arith_contains_variable(arith)
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns `true` if any node in the arithmetic expression tree is a
+    /// `Similarity` call.
+    fn arith_contains_similarity(expr: &crate::velesql::ArithmeticExpr) -> bool {
+        use crate::velesql::ArithmeticExpr;
+        match expr {
+            ArithmeticExpr::Similarity(_) => true,
+            ArithmeticExpr::BinaryOp { left, right, .. } => {
+                Self::arith_contains_similarity(left) || Self::arith_contains_similarity(right)
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns `true` if any node in the arithmetic expression tree is a
+    /// `Variable` reference — used to reject composite scoring like
+    /// `similarity() + bm25_score`.
+    fn arith_contains_variable(expr: &crate::velesql::ArithmeticExpr) -> bool {
+        use crate::velesql::ArithmeticExpr;
+        match expr {
+            ArithmeticExpr::Variable(_) => true,
+            ArithmeticExpr::BinaryOp { left, right, .. } => {
+                Self::arith_contains_variable(left) || Self::arith_contains_variable(right)
+            }
+            _ => false,
+        }
+    }
+
+    /// CBO path for queries that carry `ORDER BY similarity()` in their
+    /// projection. Delegates to [`QueryPlanner::choose_hybrid_strategy`] so
+    /// the returned `HybridExecutionPlan.strategy` is always `VectorFirst`
+    /// and the over-fetch factor reflects the calibrated selectivity.
+    fn cbo_strategy_for_order_by_similarity(
         &self,
         filter_condition: Option<&crate::velesql::Condition>,
         limit: usize,
     ) -> (crate::velesql::ExecutionStrategy, usize) {
         let col_stats = self.get_stats();
-        let result = self.query_planner.choose_strategy_with_cbo_and_overfetch(
-            &col_stats,
-            filter_condition,
-            limit,
+        let estimated_selectivity = filter_condition.map(|cond| {
+            crate::velesql::CostEstimator::new(&col_stats)
+                .estimate_condition_selectivity(cond)
+                .clamp(0.001, 1.0)
+        });
+        // Reason: execution limit already clamped upstream to `usize::MAX`
+        // equivalent values; `u64::try_from(usize)` never fails on 64-bit
+        // targets and saturates on 32-bit.
+        let limit_u64 = u64::try_from(limit).unwrap_or(u64::MAX);
+        let plan = self.query_planner.choose_hybrid_strategy(
+            true, // has_order_by_similarity
+            filter_condition.is_some(),
+            Some(limit_u64),
+            estimated_selectivity,
         );
+        // Reason: `choose_hybrid_strategy` with `has_order_by_similarity = true`
+        // produces `over_fetch_factor` in `[1.0, 10.0]` — either `1.0` when no
+        // filter is present, or `(1.0 / selectivity).clamp(2.0, 10.0)` with a
+        // filter (planner.rs:265-275). Ceil-to-usize is therefore safe and
+        // lossless. `.max(1)` guards against a degenerate planner output
+        // (would be a bug, not a truncation).
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let over_fetch = (plan.over_fetch_factor.ceil() as usize).max(1);
         tracing::debug!(
-            strategy = ?result.0, over_fetch = result.1,
-            "CBO selected execution strategy"
+            strategy = ?plan.strategy,
+            over_fetch,
+            use_early_termination = plan.use_early_termination,
+            recompute_scores = plan.recompute_scores,
+            "CBO selected execution strategy (ORDER BY similarity() path)"
         );
-        result
+        (plan.strategy, over_fetch)
     }
 
     /// Dispatches the main SELECT query path (vector, similarity, metadata).
@@ -56,7 +197,7 @@ impl Collection {
             .with_fusion(stmt.fusion_clause.clone());
         let first_similarity = extracted.similarity_conditions.first().cloned();
         let (cbo_strategy, cbo_over_fetch) =
-            self.compute_cbo_strategy(extracted.filter_condition.as_ref(), limit);
+            self.compute_cbo_strategy(stmt, extracted.filter_condition.as_ref(), limit);
 
         let mut results = self
             .dispatch_vector_query(

@@ -300,6 +300,135 @@ fn test_order_by_similarity_desc() {
     }
 }
 
+/// GIVEN a docs collection + a selective metadata filter that would normally
+///       nudge the CBO towards `GraphFirst`/`Parallel` execution,
+/// WHEN  the query carries `ORDER BY similarity() DESC`,
+/// THEN  result scores must still be in non-increasing order — proving the
+///       CBO forced `VectorFirst` to preserve HNSW natural ordering
+///       (issue #467 closure: `compute_cbo_strategy` routes
+///       `ORDER BY similarity()` queries through `choose_hybrid_strategy`).
+///
+/// Before the routing fix, a highly selective filter could flip the strategy
+/// to `Parallel` or `GraphFirst` and the merge step would break strict
+/// monotonicity of `similarity()` across the top-k.
+#[test]
+fn test_cbo_forces_vector_first_for_order_by_similarity_with_selective_filter() {
+    let (_dir, db) = create_test_db();
+    setup_similarity_collection(&db);
+    // ANALYZE so the calibrated CBO path has real statistics to work with
+    // — the regression would be invisible without it because the fallback
+    // path already prefers VectorFirst for non-selective predicates.
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE docs");
+
+    // category = 'science' matches 3 of 8 seeded points (~37% selectivity)
+    // plus the vector query targets science-cluster vectors — a naive
+    // cost-only CBO could pick Parallel/GraphFirst and lose the natural
+    // ordering. The routing fix must force VectorFirst here.
+    let sql = "SELECT * FROM docs WHERE vector NEAR $v AND category = 'science' \
+               ORDER BY similarity() DESC LIMIT 3";
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+    let results =
+        execute_sql_with_params(&db, sql, &params).expect("test: selective filter + ORDER BY sim");
+
+    assert!(
+        !results.is_empty(),
+        "filtered query must still yield results; collection seeded with 3 science rows"
+    );
+    for w in results.windows(2) {
+        assert!(
+            w[0].score >= w[1].score,
+            "ORDER BY similarity() DESC must stay monotone even with a selective filter: \
+             {} (id={}) should be >= {} (id={})",
+            w[0].score,
+            w[0].point.id,
+            w[1].score,
+            w[1].point.id
+        );
+    }
+}
+
+/// GIVEN a docs collection + a selective metadata filter,
+/// WHEN  the query carries `ORDER BY 2.0 * similarity() DESC` (pure
+///       monotonic arithmetic transform of similarity — no other variable),
+/// THEN  result scores must still be in non-increasing order. The CBO
+///       router detects similarity nested inside the arithmetic expression
+///       (as long as no other Variable is present) and forces VectorFirst
+///       to preserve HNSW natural ordering (Devin PR #613 finding 1).
+#[test]
+fn test_cbo_forces_vector_first_for_monotonic_arithmetic_similarity() {
+    let (_dir, db) = create_test_db();
+    setup_similarity_collection(&db);
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE docs");
+
+    let sql = "SELECT * FROM docs WHERE vector NEAR $v AND category = 'science' \
+               ORDER BY 2.0 * similarity() DESC LIMIT 3";
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+    let results =
+        execute_sql_with_params(&db, sql, &params).expect("test: monotonic arithmetic ORDER BY");
+
+    assert!(
+        !results.is_empty(),
+        "monotonic transform should still yield results"
+    );
+    for w in results.windows(2) {
+        assert!(
+            w[0].score >= w[1].score,
+            "ORDER BY 2.0 * similarity() DESC must stay monotone: \
+             {} (id={}) should be >= {} (id={})",
+            w[0].score,
+            w[0].point.id,
+            w[1].score,
+            w[1].point.id
+        );
+    }
+}
+
+/// GIVEN a docs collection WITHOUT `ORDER BY similarity()` in the query,
+/// WHEN  a query with a metadata filter runs through the CBO,
+/// THEN  results are still returned correctly — verifying the calibrated
+///       (`choose_strategy_with_cbo_and_overfetch`) branch remains intact
+///       when the ORDER BY similarity routing does NOT kick in.
+///
+/// This is the negative counterpart to the ORDER BY similarity test above:
+/// the two branches of `compute_cbo_strategy` must both produce valid
+/// results; a regression that accidentally short-circuited the calibrated
+/// path would be caught here.
+#[test]
+fn test_cbo_calibrated_path_still_works_without_order_by_similarity() {
+    let (_dir, db) = create_test_db();
+    setup_similarity_collection(&db);
+    execute_sql(&db, "ANALYZE docs").expect("test: ANALYZE docs");
+
+    // NO ORDER BY similarity — routes through the calibrated CBO branch.
+    let sql = "SELECT * FROM docs WHERE vector NEAR $v AND category = 'science' LIMIT 3";
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+    let results = execute_sql_with_params(&db, sql, &params).expect("test: calibrated CBO path");
+
+    assert!(
+        !results.is_empty(),
+        "calibrated CBO path must still yield results"
+    );
+    assert!(
+        results.len() <= 3,
+        "LIMIT 3 must be honoured by the calibrated path too, got {} results",
+        results.len()
+    );
+    // Every surviving row must pass the predicate — proves the calibrated
+    // path wires the filter correctly even when it does not force
+    // VectorFirst via the ORDER BY similarity branch.
+    for r in &results {
+        let payload = r.point.payload.as_ref().expect("payload present");
+        let cat = payload.get("category").and_then(|v| v.as_str());
+        assert_eq!(
+            cat,
+            Some("science"),
+            "filter `category = 'science'` must survive the calibrated CBO path, \
+             got {cat:?} for id={}",
+            r.point.id
+        );
+    }
+}
+
 /// GIVEN a docs collection
 /// WHEN `ORDER BY similarity() ASC LIMIT 5`
 /// THEN scores are in non-decreasing order.

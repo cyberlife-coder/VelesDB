@@ -18,6 +18,7 @@ mod node_stats;
 mod plan_builder;
 mod types;
 
+pub(crate) use filter_strategy::strip_vector_predicates;
 pub use filter_strategy::{
     fallback_selectivity_threshold, set_fallback_selectivity_threshold,
     DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD,
