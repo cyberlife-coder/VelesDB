@@ -347,6 +347,54 @@ fn read_current_generation(path: &Path) -> Option<u64> {
     load_meta(path).ok().map(|meta| meta.generation)
 }
 
+/// Returns the generation number to stamp on the next save at `path`.
+///
+/// Callers that write artefacts outside the sidecar trio (e.g. the HNSW
+/// graph file via `file_dump`) must call this once, then pass the returned
+/// value to both [`save_graph_generation`] and [`save_sidecars`] so every
+/// artefact is stamped with the same monotonic counter.
+pub(crate) fn next_generation(path: &Path) -> u64 {
+    read_current_generation(path).unwrap_or(0).saturating_add(1)
+}
+
+/// Writes the HNSW graph generation marker (`native_hnsw.gen`) atomically.
+///
+/// Complements the graph file (`native_hnsw`) dumped by the caller before
+/// invoking [`save_sidecars`]. Closes the atomicity gap between graph dump
+/// and sidecar writes (issue #617 Devin follow-up): any crash after graph
+/// dump but before sidecar writes leaves `native_hnsw.gen` at the new
+/// generation while the sidecars remain at the old one, so [`load_sidecars`]
+/// detects the mismatch.
+///
+/// # Errors
+///
+/// Returns `io::Error` if serialization or the atomic write fails.
+pub(crate) fn save_graph_generation(path: &Path, generation: u64) -> std::io::Result<()> {
+    let marker_path = path.join("native_hnsw.gen");
+    let bytes = postcard::to_allocvec(&generation).map_err(std::io::Error::other)?;
+    atomic_write(&marker_path, &bytes)
+}
+
+/// Reads the HNSW graph generation marker, returning `0` when the file is
+/// missing for backward compatibility with pre-#617 databases.
+///
+/// Pre-#617 saves did not write `native_hnsw.gen`, so legacy DBs carry gen 0
+/// everywhere — the consistency check in [`load_sidecars`] passes trivially
+/// (0 == 0 == 0 == 0).
+///
+/// # Errors
+///
+/// Returns `io::Error` only when the file exists but is unreadable /
+/// corrupt. A missing file is not an error (returns `Ok(0)`).
+pub(crate) fn load_graph_generation(path: &Path) -> std::io::Result<u64> {
+    let marker_path = path.join("native_hnsw.gen");
+    match std::fs::read(&marker_path) {
+        Ok(bytes) => postcard::from_bytes::<u64>(&bytes).map_err(std::io::Error::other),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(err),
+    }
+}
+
 /// Persists every non-graph sidecar (mappings, vectors, meta) for an HNSW
 /// index in one call.
 ///
@@ -364,14 +412,19 @@ fn read_current_generation(path: &Path) -> Option<u64> {
 /// Individual file writes are atomic (via [`atomic_write`]), but the 3-file
 /// sequence is not — a crash between two renames leaves the on-disk state
 /// inconsistent. To detect such a crash on reload, every sidecar is stamped
-/// with the same monotonic `generation: u64`, computed as
-/// `current_on_disk_generation + 1` at the start of this call. `meta` is
-/// written LAST: its generation is the authoritative commit point. On load,
-/// [`load_sidecars`] verifies that mappings and vectors carry the same
-/// generation as meta — any mismatch is reported as `InvalidData`.
+/// with the same monotonic `new_gen: u64`, computed by the caller via
+/// [`next_generation`] BEFORE dumping the HNSW graph. `meta` is written
+/// LAST: its generation is the authoritative commit point. On load,
+/// [`load_sidecars`] verifies that mappings, vectors, and the graph marker
+/// all carry the same generation as meta — any mismatch is reported as
+/// `InvalidData`.
+///
+/// The caller must pre-compute `new_gen = next_generation(path)` once and
+/// pass the same value to [`save_graph_generation`] and this function, so
+/// the graph file and the sidecars land on the same generation stamp.
 ///
 /// The caller-provided [`HnswMeta::generation`] is ignored; this function
-/// overwrites it with the freshly bumped value.
+/// overwrites it with `new_gen`.
 ///
 /// # Errors
 ///
@@ -381,12 +434,8 @@ pub(crate) fn save_sidecars(
     mappings: &super::sharded_mappings::ShardedMappings,
     vectors: &super::sharded_vectors::ShardedVectors,
     meta: &HnswMeta,
+    new_gen: u64,
 ) -> std::io::Result<()> {
-    // Bump off the current on-disk generation (not the caller-supplied one)
-    // so that repeated saves keep the counter strictly monotonic even when
-    // the in-memory `HnswMeta` is freshly constructed each time.
-    let new_gen = read_current_generation(path).unwrap_or(0).saturating_add(1);
-
     let (id_to_idx, idx_to_id, next_idx) = mappings.as_parts();
     save_mappings(
         path,
@@ -400,7 +449,7 @@ pub(crate) fn save_sidecars(
     save_or_cleanup_vectors(path, meta.enable_vector_storage, vectors, new_gen)?;
 
     // `meta` is written LAST — its generation is the authoritative commit
-    // point that `load_sidecars` checks the two other sidecars against.
+    // point that `load_sidecars` checks the other artefacts against.
     let stamped_meta = HnswMeta {
         generation: new_gen,
         ..*meta
@@ -416,15 +465,18 @@ pub(crate) fn save_sidecars(
 ///
 /// # Atomicity check (issue #617)
 ///
-/// Every sidecar carries a `generation: u64` stamp written by
-/// [`save_sidecars`]. `meta.generation` is the authoritative commit
-/// point. If mappings or vectors carry a stale or mismatched generation,
-/// the database is proven to be in an inconsistent state (crash between
-/// two file renames during the previous save) and this function returns
-/// `InvalidData` rather than silently loading a torn state.
+/// Every persisted artefact (graph marker, mappings, vectors) carries a
+/// `generation: u64` stamp written by the pair
+/// [`save_graph_generation`] + [`save_sidecars`]. `meta.generation` is the
+/// authoritative commit point. If any artefact carries a stale or
+/// mismatched generation, the database is proven to be in an inconsistent
+/// state (crash between file renames during the previous save) and this
+/// function returns `InvalidData` rather than silently loading a torn
+/// state.
 ///
-/// Legacy DBs written by pre-#617 binaries have generation=0 everywhere,
-/// so the consistency check passes trivially (0 == 0 == 0).
+/// Legacy DBs written by pre-#617 binaries have generation=0 everywhere
+/// and no `native_hnsw.gen` marker — [`load_graph_generation`] returns 0
+/// for missing markers, so the consistency check passes trivially.
 ///
 /// # Errors
 ///
@@ -440,6 +492,18 @@ pub(crate) fn load_sidecars(
     super::sharded_vectors::ShardedVectors,
     bool,
 )> {
+    let graph_generation = load_graph_generation(path)?;
+    if graph_generation != meta.generation {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "incomplete save detected: graph generation {} but meta generation {} \
+                 (crash between graph dump and sidecar writes, database state inconsistent)",
+                graph_generation, meta.generation,
+            ),
+        ));
+    }
+
     let mappings_data = load_mappings(path)?;
     if mappings_data.generation != meta.generation {
         return Err(std::io::Error::new(

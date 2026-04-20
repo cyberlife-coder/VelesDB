@@ -145,9 +145,30 @@ fn test_save_sidecars_stamps_monotonic_generation() {
     let vectors = build_vectors();
     let meta = build_meta(0);
 
-    save_sidecars(path, &mappings, &vectors, &meta).expect("test: first save");
-    save_sidecars(path, &mappings, &vectors, &meta).expect("test: second save");
-    save_sidecars(path, &mappings, &vectors, &meta).expect("test: third save");
+    save_sidecars(
+        path,
+        &mappings,
+        &vectors,
+        &meta,
+        persistence::next_generation(path),
+    )
+    .expect("test: first save");
+    save_sidecars(
+        path,
+        &mappings,
+        &vectors,
+        &meta,
+        persistence::next_generation(path),
+    )
+    .expect("test: second save");
+    save_sidecars(
+        path,
+        &mappings,
+        &vectors,
+        &meta,
+        persistence::next_generation(path),
+    )
+    .expect("test: third save");
 
     let loaded_meta = persistence::load_meta(path).expect("test: load meta");
     assert_eq!(
@@ -179,8 +200,10 @@ fn test_load_sidecars_detects_stale_mappings() {
     let mappings = build_mappings();
     let vectors = build_vectors();
 
-    // Simulate a save at generation 4 (all three files consistent).
+    // Simulate a save at generation 4 (all four artefacts consistent:
+    // graph marker, mappings, vectors, meta).
     let meta_4 = build_meta(4);
+    persistence::save_graph_generation(path, 4).expect("test: graph gen 4");
     persistence::save_mappings(path, &mappings_data(&mappings, 4)).expect("test: save mappings 4");
     persistence::save_vectors(path, &vectors_data(&vectors, 4)).expect("test: save vectors 4");
     persistence::save_meta(path, &meta_4).expect("test: save meta 4");
@@ -209,13 +232,15 @@ fn test_load_sidecars_detects_stale_vectors() {
     let mappings = build_mappings();
     let vectors = build_vectors();
 
-    // Consistent state at generation 4.
+    // Consistent state at generation 4 (graph + mappings + vectors + meta).
+    persistence::save_graph_generation(path, 4).expect("test: graph gen 4");
     persistence::save_mappings(path, &mappings_data(&mappings, 4)).expect("test: save mappings 4");
     persistence::save_vectors(path, &vectors_data(&vectors, 4)).expect("test: save vectors 4");
     persistence::save_meta(path, &build_meta(4)).expect("test: save meta 4");
 
-    // Simulate a crash at generation 5 that only rewrote mappings + meta,
+    // Simulate a crash at generation 5 that rewrote graph + mappings + meta,
     // leaving vectors at gen 4.
+    persistence::save_graph_generation(path, 5).expect("test: graph gen 5");
     persistence::save_mappings(path, &mappings_data(&mappings, 5)).expect("test: save mappings 5");
     persistence::save_meta(path, &build_meta(5)).expect("test: save meta 5");
 
@@ -241,6 +266,8 @@ fn test_load_sidecars_detects_newer_mappings_than_meta() {
     let vectors = build_vectors();
 
     // Meta is older (gen 5) than mappings (gen 10) — `meta` is authoritative.
+    // Graph marker aligned with meta to isolate the mappings check.
+    persistence::save_graph_generation(path, 5).expect("test: graph gen 5");
     persistence::save_mappings(path, &mappings_data(&mappings, 10))
         .expect("test: save mappings 10");
     persistence::save_vectors(path, &vectors_data(&vectors, 5)).expect("test: save vectors 5");
@@ -336,10 +363,12 @@ fn test_save_then_load_roundtrip_gen_bumped() {
     persistence::save_vectors(path, &vectors_data(&vectors, 7)).expect("test: seed vectors");
     persistence::save_meta(path, &build_meta(7)).expect("test: seed meta");
 
-    // `save_sidecars` must read the current on-disk generation and bump
-    // to 8, regardless of what the caller put in the `HnswMeta` struct.
+    // Callers are expected to compute `next_generation(path)` and pass it
+    // explicitly; this must read the current on-disk generation and bump to 8.
     let meta_in = build_meta(0); // caller-provided generation ignored
-    save_sidecars(path, &mappings, &vectors, &meta_in).expect("test: save bumps gen");
+    let new_gen = persistence::next_generation(path);
+    assert_eq!(new_gen, 8, "next_generation must bump from 7 to 8");
+    save_sidecars(path, &mappings, &vectors, &meta_in, new_gen).expect("test: save bumps gen");
 
     let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
     assert_eq!(
@@ -361,11 +390,89 @@ fn test_save_when_no_prior_state_starts_at_gen_1() {
 
     // Fresh directory, no prior meta. Caller passes generation=0 (ignored).
     let meta_in = build_meta(0);
-    save_sidecars(path, &mappings, &vectors, &meta_in).expect("test: first save");
+    let new_gen = persistence::next_generation(path);
+    assert_eq!(
+        new_gen, 1,
+        "next_generation on a fresh directory must return 1"
+    );
+    save_sidecars(path, &mappings, &vectors, &meta_in, new_gen).expect("test: first save");
 
     let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
     assert_eq!(
         loaded_meta.generation, 1,
         "first save on a fresh directory must land at generation 1"
     );
+}
+
+// -----------------------------------------------------------------------
+// Test 9 (Devin follow-up) — load_sidecars detects stale HNSW graph
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_load_sidecars_detects_stale_graph_generation() {
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+    let mappings = build_mappings();
+    let vectors = build_vectors();
+
+    // Consistent state at generation 4 across all four artefacts.
+    persistence::save_graph_generation(path, 4).expect("test: graph gen 4");
+    persistence::save_mappings(path, &mappings_data(&mappings, 4)).expect("test: save mappings 4");
+    persistence::save_vectors(path, &vectors_data(&vectors, 4)).expect("test: save vectors 4");
+    persistence::save_meta(path, &build_meta(4)).expect("test: save meta 4");
+
+    // Simulate a crash after the graph dump (new graph + new marker at gen=5)
+    // but BEFORE any sidecar was rewritten — mappings / vectors / meta still
+    // at gen=4.
+    persistence::save_graph_generation(path, 5).expect("test: graph gen 5 only");
+
+    let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
+    let err =
+        load_sidecars(path, &loaded_meta).expect_err("test: stale graph must trigger InvalidData");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("graph generation"),
+        "error should mention graph generation, got: {err}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Test 10 (Devin follow-up) — backward compat without graph marker
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_backward_compat_no_graph_generation_marker_loads_as_zero() {
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+
+    // Fresh directory: no native_hnsw.gen exists → must read as 0 rather
+    // than surfacing a NotFound error. This is what makes legacy DBs (all
+    // sidecars at gen=0 by backward-compat default) pass the atomicity
+    // check trivially.
+    let observed = persistence::load_graph_generation(path)
+        .expect("test: missing graph marker must not be an error");
+    assert_eq!(
+        observed, 0,
+        "missing native_hnsw.gen must be treated as generation 0"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Test 11 (Devin follow-up) — save_graph_generation round-trip
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_save_graph_generation_roundtrip() {
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+
+    persistence::save_graph_generation(path, 42).expect("test: save marker");
+    let observed = persistence::load_graph_generation(path).expect("test: reload marker");
+    assert_eq!(observed, 42, "graph generation marker must round-trip");
+
+    // Overwriting with a larger generation also round-trips (atomic_write
+    // handles replacement).
+    persistence::save_graph_generation(path, 9999).expect("test: overwrite marker");
+    let observed = persistence::load_graph_generation(path).expect("test: reload marker 2");
+    assert_eq!(observed, 9999, "overwritten marker must round-trip");
 }
