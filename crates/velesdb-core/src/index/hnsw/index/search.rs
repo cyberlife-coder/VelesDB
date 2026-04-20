@@ -182,14 +182,14 @@ impl HnswIndex {
         let candidates_k = k.saturating_mul(4).max(ef_search);
 
         let mut results =
-            self.search_bitmap_filtered_inner(query, candidates_k, ef_search, allowed_ids);
+            self.search_hnsw_only_filtered(query, candidates_k, ef_search, allowed_ids);
 
         // Adaptive retry: if too few results survived the bitmap filter,
         // double the candidate pool and retry once to find more matches.
         if results.len() < k && candidates_k < 10_000 {
             let retry_k = (candidates_k.saturating_mul(2)).min(10_000);
             let retry_results =
-                self.search_bitmap_filtered_inner(query, retry_k, ef_search, allowed_ids);
+                self.search_hnsw_only_filtered(query, retry_k, ef_search, allowed_ids);
             // Merge retry results, deduplicating by ID
             let existing_ids: rustc_hash::FxHashSet<u64> = results.iter().map(|r| r.id).collect();
             for r in retry_results {
@@ -202,31 +202,6 @@ impl HnswIndex {
         self.metric.sort_scored_results(&mut results);
         results.truncate(k);
         Ok(results)
-    }
-
-    /// Inner bitmap-filtered HNSW search (shared by initial + retry paths).
-    fn search_bitmap_filtered_inner(
-        &self,
-        query: &[f32],
-        candidates_k: usize,
-        ef_search: usize,
-        allowed_ids: &roaring::RoaringBitmap,
-    ) -> Vec<ScoredResult> {
-        let inner = self.inner.read();
-        let neighbours = inner.search(query, candidates_k, ef_search);
-
-        let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
-        for &(node_id, raw_dist) in &neighbours {
-            if let Some(id) = self.mappings.get_id(node_id) {
-                let in_bitmap = u32::try_from(id).is_ok_and(|id32| allowed_ids.contains(id32));
-                let exceeds_bitmap_range = u32::try_from(id).is_err();
-                if in_bitmap || exceeds_bitmap_range {
-                    let score = inner.transform_score(raw_dist);
-                    results.push(ScoredResult::new(id, score));
-                }
-            }
-        }
-        results
     }
 
     /// Determines whether two-stage reranking should be used.
