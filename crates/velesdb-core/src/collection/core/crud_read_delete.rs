@@ -7,7 +7,6 @@
 
 use crate::collection::types::Collection;
 use crate::error::Result;
-use crate::index::VectorIndex;
 use crate::point::Point;
 use crate::storage::{PayloadStorage, VectorStorage};
 

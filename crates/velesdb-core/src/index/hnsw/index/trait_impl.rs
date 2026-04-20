@@ -38,20 +38,11 @@ impl VectorIndex for HnswIndex {
 
     /// Performs a **soft delete** of the vector.
     ///
-    /// Removes the ID from mappings and cleans up stored vector data.
-    /// The HNSW graph node becomes a tombstone, filtered out during search.
-    ///
-    /// For workloads with many deletions, consider periodic `vacuum()` to
-    /// rebuild the graph and reclaim memory.
+    /// Delegates to the inherent [`HnswIndex::remove`] — see that method's
+    /// rustdoc for semantics (tombstoning, sidecar cleanup, vacuum guidance).
+    #[inline]
     fn remove(&self, id: u64) -> bool {
-        if let Some(old_idx) = self.mappings.remove(id) {
-            if self.enable_vector_storage {
-                self.vectors.remove(old_idx);
-            }
-            true
-        } else {
-            false
-        }
+        HnswIndex::remove(self, id)
     }
 
     fn len(&self) -> usize {
