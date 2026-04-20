@@ -252,6 +252,53 @@ fn rescore_per_item(
 }
 
 impl Collection {
+    /// Shared search-pipeline prologue: rejects metadata-only collections,
+    /// validates the query dimension against the collection config, and reads
+    /// the configured distance metric in a single lock scope.
+    ///
+    /// Factored from `search_with_ef` / `search_with_quality` /
+    /// `search_with_forced_rerank` / `search_with_quality_no_rerank` for #452.
+    /// Centralising the `metadata_only` check here (Devin #616 feedback)
+    /// makes the 4 methods return a clean `Error::SearchNotSupported` instead
+    /// of failing deeper inside the HNSW index on metadata-only collections —
+    /// matching the behaviour of the inherent `search()` method.
+    /// `#[inline]` preserves pre-refactor inlining (Phase 3.2 learning).
+    #[inline]
+    pub(super) fn validate_query_and_read_metric(&self, query: &[f32]) -> Result<DistanceMetric> {
+        let config = self.config.read();
+        if config.metadata_only {
+            return Err(Error::SearchNotSupported(config.name.clone()));
+        }
+        validate_dimension_match(config.dimension, query.len())?;
+        Ok(config.metric)
+    }
+
+    /// Shared search-pipeline epilogue: merges delta buffer, hydrates points and
+    /// payloads, then tags each result with its `vector_score` component.
+    ///
+    /// Factored from `search_with_ef` / `search_with_quality` /
+    /// `search_with_forced_rerank` / `search_with_quality_no_rerank` for #452.
+    /// Marked `#[inline]` so rustc preserves the pre-refactor inlining decisions
+    /// across the now-extracted call boundary (Phase 3.2 learning).
+    #[inline]
+    pub(super) fn finalize_search_results(
+        &self,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+        index_results: Vec<ScoredResult>,
+    ) -> Vec<SearchResult> {
+        let index_results = self.merge_delta(index_results, query, k, metric);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        results
+    }
+
     /// Searches for the k nearest neighbors of the query vector.
     ///
     /// Uses HNSW index for fast approximate nearest neighbor search.
@@ -297,10 +344,7 @@ impl Collection {
         k: usize,
         ef_search: usize,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
-
-        validate_dimension_match(config.dimension, query.len())?;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
 
         // Convert ef_search to SearchQuality
         let quality = match ef_search {
@@ -310,17 +354,8 @@ impl Collection {
             _ => crate::SearchQuality::Perfect,
         };
 
-        let metric = self.config.read().metric;
         let index_results = self.index.search_with_quality(query, k, quality)?;
-        let index_results = self.merge_delta(index_results, query, k, metric);
-
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
-
-        let mut results =
-            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
-        tag_vector_component_scores(&mut results);
-        Ok(results)
+        Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
     /// Performs vector similarity search with a specific [`SearchQuality`] profile.
@@ -337,21 +372,10 @@ impl Collection {
         k: usize,
         quality: crate::SearchQuality,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
-        validate_dimension_match(config.dimension, query.len())?;
-        let metric = config.metric;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
 
         let index_results = self.index.search_with_quality(query, k, quality)?;
-        let index_results = self.merge_delta(index_results, query, k, metric);
-
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
-
-        let mut results =
-            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
-        tag_vector_component_scores(&mut results);
-        Ok(results)
+        Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
     /// Routes vector search through `QuerySearchOptions` from a WITH clause.
@@ -400,24 +424,13 @@ impl Collection {
         k: usize,
         quality: crate::SearchQuality,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
-        validate_dimension_match(config.dimension, query.len())?;
-        let metric = config.metric;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
 
         let rerank_k = k.saturating_mul(4).max(k + 32);
         let index_results = self
             .index
             .search_with_rerank_quality(query, k, rerank_k, quality)?;
-        let index_results = self.merge_delta(index_results, query, k, metric);
-
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
-
-        let mut results =
-            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
-        tag_vector_component_scores(&mut results);
-        Ok(results)
+        Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
     /// Searches with a quality profile but suppresses two-stage reranking.
@@ -430,22 +443,11 @@ impl Collection {
         k: usize,
         quality: crate::SearchQuality,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
-        validate_dimension_match(config.dimension, query.len())?;
-        let metric = config.metric;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
 
         let ef_search = quality.ef_search(k);
         let index_results = self.index.search_hnsw_only(query, k, ef_search);
-        let index_results = self.merge_delta(index_results, query, k, metric);
-
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
-
-        let mut results =
-            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
-        tag_vector_component_scores(&mut results);
-        Ok(results)
+        Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
     /// Performs fast vector similarity search returning only IDs and scores.
@@ -466,10 +468,11 @@ impl Collection {
     ///
     /// Returns an error if the query vector dimension doesn't match the collection.
     pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<ScoredResult>> {
-        let config = self.config.read();
-
-        validate_dimension_match(config.dimension, query.len())?;
-        drop(config);
+        // Rejects metadata-only + validates dimension in one lock scope.
+        // Metric is unused here (search_ids_with_adc_if_pq re-reads config)
+        // but reusing the helper keeps the metadata_only guard consistent
+        // with the 4 other dispatch paths (#452 Devin #616 feedback).
+        let _metric = self.validate_query_and_read_metric(query)?;
 
         // Perf: Direct HNSW search without vector/payload retrieval
         let results = self.search_ids_with_adc_if_pq(query, k);
@@ -496,11 +499,8 @@ impl Collection {
         k: usize,
         filter: &crate::filter::Filter,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
-        validate_dimension_match(config.dimension, query.len())?;
-        let higher_is_better = config.metric.higher_is_better();
-        let metric = config.metric;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
+        let higher_is_better = metric.higher_is_better();
 
         let candidates_k = super::vector_filter::compute_oversampled_k(k, filter);
 
