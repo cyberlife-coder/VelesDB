@@ -20,6 +20,25 @@
 
 use super::columnar_vectors::PDX_BLOCK_SIZE;
 
+/// Validates PDX block kernel inputs at runtime in debug builds.
+///
+/// Every public kernel in this module shares the same three preconditions
+/// on its inputs (`query`, `block`, `dimension`, `block_size`). Centralising
+/// them in a macro keeps the call-site bodies focused on the accumulation
+/// pattern that is actually unique to each kernel, without introducing any
+/// runtime cost in release builds (`debug_assert*!` compiles to nothing).
+///
+/// Using a macro — rather than a `#[inline] fn` — preserves the original
+/// expression spans inside the `debug_assert*!` panic messages, so
+/// diagnostic output is identical to the hand-written asserts.
+macro_rules! debug_assert_pdx_inputs {
+    ($query:expr, $block:expr, $dimension:expr, $block_size:expr $(,)?) => {{
+        debug_assert_eq!($query.len(), $dimension);
+        debug_assert_eq!($block.len(), PDX_BLOCK_SIZE * $dimension);
+        debug_assert!($block_size <= PDX_BLOCK_SIZE);
+    }};
+}
+
 /// Computes squared L2 distances from `query` to all vectors in a PDX block.
 ///
 /// # Arguments
@@ -50,9 +69,7 @@ pub(crate) fn block_squared_l2(
     dimension: usize,
     block_size: usize,
 ) -> [f32; PDX_BLOCK_SIZE] {
-    debug_assert_eq!(query.len(), dimension);
-    debug_assert_eq!(block.len(), PDX_BLOCK_SIZE * dimension);
-    debug_assert!(block_size <= PDX_BLOCK_SIZE);
+    debug_assert_pdx_inputs!(query, block, dimension, block_size);
 
     let mut acc = [0.0_f32; PDX_BLOCK_SIZE];
     accumulate_squared_diff(&mut acc, query, block, dimension);
@@ -82,9 +99,7 @@ pub(crate) fn block_dot_product(
     dimension: usize,
     block_size: usize,
 ) -> [f32; PDX_BLOCK_SIZE] {
-    debug_assert_eq!(query.len(), dimension);
-    debug_assert_eq!(block.len(), PDX_BLOCK_SIZE * dimension);
-    debug_assert!(block_size <= PDX_BLOCK_SIZE);
+    debug_assert_pdx_inputs!(query, block, dimension, block_size);
 
     let mut acc = [0.0_f32; PDX_BLOCK_SIZE];
     accumulate_products(&mut acc, query, block, dimension);
@@ -114,9 +129,7 @@ pub(crate) fn block_cosine_distance(
     dimension: usize,
     block_size: usize,
 ) -> [f32; PDX_BLOCK_SIZE] {
-    debug_assert_eq!(query.len(), dimension);
-    debug_assert_eq!(block.len(), PDX_BLOCK_SIZE * dimension);
-    debug_assert!(block_size <= PDX_BLOCK_SIZE);
+    debug_assert_pdx_inputs!(query, block, dimension, block_size);
 
     let (dot, norm_b_sq) = accumulate_dot_and_norm(query, block, dimension);
     let query_norm_sq = query_norm_squared(query);
