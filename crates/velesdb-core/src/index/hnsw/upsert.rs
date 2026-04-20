@@ -93,6 +93,7 @@ pub(crate) fn upsert_mapping_batch(
 ///
 /// Returns [`crate::error::Error::DimensionMismatch`] on the first vector
 /// whose dimension differs from `expected_dimension`.
+#[inline]
 pub(crate) fn validate_and_register_batch<V: AsRef<[f32]>>(
     mappings: &ShardedMappings,
     vectors: &ShardedVectors,
@@ -122,6 +123,7 @@ pub(crate) fn validate_and_register_batch<V: AsRef<[f32]>>(
 ///
 /// Shared by `HnswIndex::remove` and `NativeHnswIndex::remove` (identical
 /// bodies, #448 Group F consolidation).
+#[inline]
 pub(crate) fn soft_delete(
     mappings: &ShardedMappings,
     vectors: &ShardedVectors,
@@ -155,6 +157,7 @@ pub(crate) fn soft_delete(
 /// Both `HnswIndex::insert_batch_parallel` and `NativeHnswIndex::insert_batch`
 /// used to duplicate this logic — consolidated here for #448 Group D.
 #[must_use]
+#[inline]
 pub(crate) fn reconcile_batch_mappings(
     mappings: &ShardedMappings,
     rollback_info: &[(u64, UpsertResult)],
@@ -185,6 +188,7 @@ pub(crate) fn reconcile_batch_mappings(
 ///
 /// Both `HnswIndex::insert_batch_parallel` and `NativeHnswIndex::insert_batch`
 /// used to duplicate this loop — consolidated here for #448 Group D.
+#[inline]
 pub(crate) fn rollback_batch(mappings: &ShardedMappings, rollback_info: &[(u64, UpsertResult)]) {
     for (id, result) in rollback_info.iter().rev() {
         rollback_upsert(mappings, *id, result);
