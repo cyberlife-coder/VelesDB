@@ -166,9 +166,23 @@ impl Collection {
     where
         I: IntoIterator<Item = (&'a str, u64, &'a crate::index::sparse::SparseVector)>,
     {
+        // Cache wal_path across consecutive entries sharing the same index name
+        // so callers that yield entries grouped by name (e.g. apply_sparse_batch_bulk)
+        // retain the O(N_NAMES) path-resolution cost of the pre-refactor code
+        // rather than paying O(N_ENTRIES). Mixed-name callers degrade gracefully
+        // to one resolution per entry, matching the original per-triple cost.
+        let mut cached: Option<(&'a str, std::path::PathBuf)> = None;
         for (name, point_id, sv) in entries {
-            let wal_path = crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
-            crate::index::sparse::persistence::wal_append_upsert(&wal_path, point_id, sv)?;
+            if cached.as_ref().map(|(cached_name, _)| *cached_name) != Some(name) {
+                let wal_path =
+                    crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                cached = Some((name, wal_path));
+            }
+            let wal_path = &cached
+                .as_ref()
+                .expect("cache populated on first iteration")
+                .1;
+            crate::index::sparse::persistence::wal_append_upsert(wal_path, point_id, sv)?;
         }
         Ok(())
     }
