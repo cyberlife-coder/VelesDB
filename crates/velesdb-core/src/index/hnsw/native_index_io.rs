@@ -23,8 +23,10 @@ impl NativeHnswIndex {
 
         // #617: stamp every on-disk artefact with the same monotonic generation
         // so that a crash between any two renames (graph, mappings, vectors,
-        // meta) is detectable on reload.
-        let new_gen = persistence::next_generation(path);
+        // meta) is detectable on reload. Errors are propagated rather than
+        // silently resetting to generation 1 on corrupted meta (Devin #618
+        // follow-up).
+        let new_gen = persistence::next_generation(path)?;
 
         // Dump the HNSW graph itself (caller-specific — see persistence::save_sidecars).
         let storage_mode = {

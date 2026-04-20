@@ -150,7 +150,7 @@ fn test_save_sidecars_stamps_monotonic_generation() {
         &mappings,
         &vectors,
         &meta,
-        persistence::next_generation(path),
+        persistence::next_generation(path).expect("test: next_generation"),
     )
     .expect("test: first save");
     save_sidecars(
@@ -158,7 +158,7 @@ fn test_save_sidecars_stamps_monotonic_generation() {
         &mappings,
         &vectors,
         &meta,
-        persistence::next_generation(path),
+        persistence::next_generation(path).expect("test: next_generation"),
     )
     .expect("test: second save");
     save_sidecars(
@@ -166,7 +166,7 @@ fn test_save_sidecars_stamps_monotonic_generation() {
         &mappings,
         &vectors,
         &meta,
-        persistence::next_generation(path),
+        persistence::next_generation(path).expect("test: next_generation"),
     )
     .expect("test: third save");
 
@@ -366,7 +366,7 @@ fn test_save_then_load_roundtrip_gen_bumped() {
     // Callers are expected to compute `next_generation(path)` and pass it
     // explicitly; this must read the current on-disk generation and bump to 8.
     let meta_in = build_meta(0); // caller-provided generation ignored
-    let new_gen = persistence::next_generation(path);
+    let new_gen = persistence::next_generation(path).expect("test: next_generation");
     assert_eq!(new_gen, 8, "next_generation must bump from 7 to 8");
     save_sidecars(path, &mappings, &vectors, &meta_in, new_gen).expect("test: save bumps gen");
 
@@ -390,7 +390,7 @@ fn test_save_when_no_prior_state_starts_at_gen_1() {
 
     // Fresh directory, no prior meta. Caller passes generation=0 (ignored).
     let meta_in = build_meta(0);
-    let new_gen = persistence::next_generation(path);
+    let new_gen = persistence::next_generation(path).expect("test: next_generation");
     assert_eq!(
         new_gen, 1,
         "next_generation on a fresh directory must return 1"
@@ -475,4 +475,35 @@ fn test_save_graph_generation_roundtrip() {
     persistence::save_graph_generation(path, 9999).expect("test: overwrite marker");
     let observed = persistence::load_graph_generation(path).expect("test: reload marker 2");
     assert_eq!(observed, 9999, "overwritten marker must round-trip");
+}
+
+// -----------------------------------------------------------------------
+// Test 12 (Devin follow-up #2) — corrupted meta must abort next save,
+// not silently reset generation to 1
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_next_generation_propagates_corrupted_meta_error() {
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+
+    // Write garbage bytes that postcard cannot parse as any of the 3/4/5
+    // tuple shapes accepted by `load_meta`.
+    std::fs::write(path.join("native_meta.bin"), [0xFF_u8; 32]).expect("test: seed corrupted meta");
+
+    let result = persistence::next_generation(path);
+    assert!(
+        result.is_err(),
+        "corrupted meta must propagate, not silently reset to gen 1 (got {result:?})"
+    );
+
+    // Missing meta (fresh directory) must NOT be an error — it is the
+    // legitimate "start at generation 1" case.
+    let fresh = TempDir::new().expect("test: fresh dir");
+    let gen =
+        persistence::next_generation(fresh.path()).expect("test: missing meta is not an error");
+    assert_eq!(
+        gen, 1,
+        "missing meta must yield generation 1, not propagate NotFound"
+    );
 }

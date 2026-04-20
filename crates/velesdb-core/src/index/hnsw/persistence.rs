@@ -337,14 +337,24 @@ pub(crate) fn save_or_cleanup_vectors(
     }
 }
 
-/// Reads the current on-disk generation from `native_meta.bin`, if any.
+/// Reads the current on-disk generation from `native_meta.bin` with
+/// fail-fast semantics on real I/O or corruption errors.
 ///
-/// Returns `None` when meta is missing or unreadable — the caller then
-/// treats the directory as fresh and starts at generation 0. Legacy DBs
-/// (pre-#617 format) return `Some(0)` via [`load_meta`]'s backward-compat
-/// fallback, so the next save lands at generation 1 regardless.
-fn read_current_generation(path: &Path) -> Option<u64> {
-    load_meta(path).ok().map(|meta| meta.generation)
+/// Returns:
+/// - `Ok(Some(gen))` when meta exists and was parseable (incl. legacy
+///   backward-compat fallbacks, which yield `gen=0`).
+/// - `Ok(None)` only when meta does NOT exist — the caller then treats
+///   the directory as fresh and starts at generation 1.
+/// - `Err(err)` on any other I/O or deserialization failure (corrupted
+///   meta, permission denied, etc.). Callers MUST NOT paper over this —
+///   proceeding with a fresh generation=1 save would overwrite potentially
+///   recoverable corrupted state (Devin #618 follow-up).
+fn read_current_generation(path: &Path) -> std::io::Result<Option<u64>> {
+    match load_meta(path) {
+        Ok(meta) => Ok(Some(meta.generation)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
 }
 
 /// Returns the generation number to stamp on the next save at `path`.
@@ -353,8 +363,18 @@ fn read_current_generation(path: &Path) -> Option<u64> {
 /// graph file via `file_dump`) must call this once, then pass the returned
 /// value to both [`save_graph_generation`] and [`save_sidecars`] so every
 /// artefact is stamped with the same monotonic counter.
-pub(crate) fn next_generation(path: &Path) -> u64 {
-    read_current_generation(path).unwrap_or(0).saturating_add(1)
+///
+/// # Errors
+///
+/// Returns `io::Error` when meta exists but is unreadable or corrupted —
+/// the caller must propagate rather than silently starting at generation
+/// 1, which would overwrite potentially recoverable state (Devin #618
+/// follow-up). A missing meta is not an error (returns `Ok(1)` for fresh
+/// directories).
+pub(crate) fn next_generation(path: &Path) -> std::io::Result<u64> {
+    Ok(read_current_generation(path)?
+        .unwrap_or(0)
+        .saturating_add(1))
 }
 
 /// Writes the HNSW graph generation marker (`native_hnsw.gen`) atomically.
