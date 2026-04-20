@@ -53,19 +53,17 @@ impl HnswIndex {
     {
         let items: Vec<(u64, &'a [f32])> = vectors.into_iter().collect();
 
-        // Validate ALL dimensions upfront before any destructive upsert_mapping
-        // calls. An error after partial upsert_mapping would leave orphaned mappings.
-        for (_, vector) in &items {
-            validate_dimension_match(self.dimension, vector.len())?;
-        }
-
-        let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
-        let upsert_results = upsert::upsert_mapping_batch(
+        // RF-DEDUP #448 Group D — shared validate + upsert_mapping_batch
+        // pipeline (see `NativeHnswIndex::insert_batch`). Runs dimension
+        // validation to completion BEFORE any mapping registration so
+        // failures cannot leave orphaned mappings.
+        let upsert_results = upsert::validate_and_register_batch(
             &self.mappings,
             &self.vectors,
             self.enable_vector_storage,
-            &ids,
-        );
+            self.dimension,
+            &items,
+        )?;
 
         let mut to_insert = Vec::with_capacity(items.len());
         let mut rollback_info = Vec::with_capacity(items.len());
@@ -153,20 +151,17 @@ impl HnswIndex {
             Ok(ids) => ids,
             Err(e) => {
                 tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
-                // Reverse order: undo last upsert first so duplicate-ID chains
-                // restore correctly (each rollback depends on the previous state).
-                for (id, result) in batch.rollback_info.iter().rev() {
-                    self.rollback_upsert(*id, result);
-                }
+                // RF-DEDUP #448 Group D — reverse-order rollback shared with
+                // NativeHnswIndex::insert_batch.
+                upsert::rollback_batch(&self.mappings, &batch.rollback_info);
                 return 0;
             }
         };
 
-        // Reconcile mappings: the graph may have assigned different node IDs
-        // than the indices pre-registered by upsert_mapping_batch. Fix any
-        // mismatches following the same pattern as insert_and_correct_mapping.
+        // RF-DEDUP #448 Group D — mapping reconciliation shared with
+        // NativeHnswIndex::insert_batch.
         let storage_ids =
-            Self::reconcile_batch_mappings(&self.mappings, &batch.rollback_info, &assigned_ids);
+            upsert::reconcile_batch_mappings(&self.mappings, &batch.rollback_info, &assigned_ids);
 
         if self.enable_vector_storage {
             batch
@@ -179,32 +174,6 @@ impl HnswIndex {
         }
 
         count
-    }
-
-    /// Reconciles pre-registered mapping indices with graph-assigned node IDs.
-    ///
-    /// For each item, if the graph-assigned ID differs from the pre-registered
-    /// index, removes the stale reverse mapping and restores the correct one.
-    /// Returns the authoritative storage index for each item.
-    fn reconcile_batch_mappings(
-        mappings: &crate::index::hnsw::sharded_mappings::ShardedMappings,
-        rollback_info: &[(u64, UpsertResult)],
-        assigned_ids: &[usize],
-    ) -> Vec<usize> {
-        let mut storage_ids = Vec::with_capacity(assigned_ids.len());
-        for (assigned_id, (ext_id, result)) in assigned_ids.iter().zip(rollback_info) {
-            if *assigned_id == result.idx {
-                storage_ids.push(result.idx);
-            } else {
-                // Graph assigned a different node ID than upsert_mapping expected.
-                // Remove the stale reverse mapping (result.idx -> ext_id) and
-                // establish the correct mapping (ext_id <-> assigned_id).
-                mappings.remove_reverse(result.idx);
-                mappings.restore(*ext_id, *assigned_id);
-                storage_ids.push(*assigned_id);
-            }
-        }
-        storage_ids
     }
 
     /// Performs batch search for multiple queries in parallel.

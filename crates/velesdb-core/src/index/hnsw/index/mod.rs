@@ -174,6 +174,30 @@ impl HnswIndex {
         upsert::rollback_upsert(&self.mappings, id, result);
     }
 
+    /// Removes a vector by ID (soft delete).
+    ///
+    /// Returns `true` if the ID existed and was removed from the mappings,
+    /// `false` if the ID was absent. The HNSW graph node is not physically
+    /// deleted — it becomes a tombstone, filtered out on search via the
+    /// reverse mapping. Sidecar vectors in `ShardedVectors` are purged when
+    /// vector storage is enabled.
+    ///
+    /// For workloads with many deletions, consider periodic
+    /// [`Self::vacuum`] to rebuild the graph and reclaim memory.
+    ///
+    /// This is the single inherent implementation shared by the
+    /// [`VectorIndex::remove`](crate::index::VectorIndex::remove) trait impl
+    /// and delegates to [`upsert::soft_delete`] (also used by
+    /// `NativeHnswIndex::remove`).
+    pub fn remove(&self, id: u64) -> bool {
+        upsert::soft_delete(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            id,
+        )
+    }
+
     /// Reorders graph nodes in BFS traversal order for improved cache locality.
     ///
     /// After reordering, vectors that are close in the graph are also close

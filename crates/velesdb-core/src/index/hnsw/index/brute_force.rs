@@ -19,7 +19,7 @@ impl HnswIndex {
     ///
     /// IDs exceeding `u32::MAX` are not representable in `RoaringBitmap`
     /// and are unconditionally included (consistent with the HNSW+bitmap
-    /// path in `search_bitmap_filtered_inner`).
+    /// path in `search_hnsw_only_filtered`).
     ///
     /// # Errors
     ///
@@ -78,7 +78,7 @@ impl HnswIndex {
     /// Scores vectors whose IDs exceed `u32::MAX` (not representable in `RoaringBitmap`).
     ///
     /// These are unconditionally included, consistent with the HNSW+bitmap
-    /// path in `search_bitmap_filtered_inner`.
+    /// path in `search_hnsw_only_filtered`.
     fn score_overflow_ids(
         &self,
         query: &[f32],

@@ -255,6 +255,69 @@ pub(crate) fn save_or_cleanup_vectors(
     }
 }
 
+/// Persists every non-graph sidecar (mappings, vectors, meta) for an HNSW
+/// index in one call.
+///
+/// Both `HnswIndex::save` and `NativeHnswIndex::save` need the same 3-step
+/// sidecar sequence after they dump the graph. Consolidating it here removes
+/// format drift risk (the two call sites previously had identical code but
+/// could silently diverge on the next field addition to `HnswMeta`).
+///
+/// The HNSW graph itself is dumped by the caller, because the two index
+/// types use different inner types (`NativeHnswInner` directly vs
+/// `ManuallyDrop<HnswInner>`) that would otherwise require a trait object.
+///
+/// # Errors
+///
+/// Returns `io::Error` if any of the three file operations fail.
+pub(crate) fn save_sidecars(
+    path: &Path,
+    mappings: &super::sharded_mappings::ShardedMappings,
+    vectors: &super::sharded_vectors::ShardedVectors,
+    meta: &HnswMeta,
+) -> std::io::Result<()> {
+    let (id_to_idx, idx_to_id, next_idx) = mappings.as_parts();
+    save_mappings(
+        path,
+        &HnswMappingsData {
+            id_to_idx,
+            idx_to_id,
+            next_idx,
+        },
+    )?;
+    save_or_cleanup_vectors(path, meta.enable_vector_storage, vectors)?;
+    save_meta(path, meta)
+}
+
+/// Loads non-graph sidecars (mappings + vectors) for an HNSW index given a
+/// previously loaded [`HnswMeta`].
+///
+/// Complements [`save_sidecars`]. The HNSW graph itself is loaded by the
+/// caller (different inner types, see [`save_sidecars`]).
+///
+/// # Errors
+///
+/// Returns `io::Error` if the mappings file is missing or corrupt. Missing
+/// vectors files are tolerated and gracefully disable vector storage — see
+/// [`load_vectors_or_disable`].
+pub(crate) fn load_sidecars(
+    path: &Path,
+    meta: &HnswMeta,
+) -> std::io::Result<(
+    super::sharded_mappings::ShardedMappings,
+    super::sharded_vectors::ShardedVectors,
+    bool,
+)> {
+    let mappings_data = load_mappings(path)?;
+    let mappings = super::sharded_mappings::ShardedMappings::from_parts(
+        mappings_data.id_to_idx,
+        mappings_data.idx_to_id,
+        mappings_data.next_idx,
+    );
+    let (vectors, enable_vector_storage) = load_vectors_or_disable(path, meta)?;
+    Ok((mappings, vectors, enable_vector_storage))
+}
+
 /// Converts a u8 discriminant to a `DistanceMetric`.
 ///
 /// # Errors

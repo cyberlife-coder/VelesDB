@@ -113,12 +113,8 @@ impl ShardedMappings {
         use dashmap::mapref::entry::Entry;
 
         match self.id_to_idx.entry(id) {
-            Entry::Occupied(mut entry) => {
-                let old_idx = *entry.get();
-                let new_idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
-                entry.insert(new_idx);
-                self.idx_to_id.remove(&old_idx);
-                self.idx_to_id.insert(new_idx, id);
+            Entry::Occupied(entry) => {
+                let (new_idx, old_idx) = self.replace_occupied_mapping(entry, id);
                 (new_idx, Some(old_idx))
             }
             Entry::Vacant(entry) => (self.allocate_and_map(entry, id), None),
@@ -137,6 +133,30 @@ impl ShardedMappings {
         entry.insert(idx);
         self.idx_to_id.insert(idx, id);
         idx
+    }
+
+    /// Replaces the internal index of an already-registered external `id`,
+    /// returning `(new_idx, old_idx)`.
+    ///
+    /// Allocates a fresh monotonic index via `next_idx.fetch_add(1)`, swaps it
+    /// into the forward map, removes the stale reverse entry, and writes the
+    /// new reverse entry. Shared by `register_or_replace` and both batch
+    /// paths (`batch_insert_fast_path` race-recovery, `batch_replace_slow_path`).
+    ///
+    /// The caller is responsible for any path-specific side effects (for
+    /// example `batch_insert_fast_path` also bumps `tombstone_slots` when it
+    /// reaches this path because its optimistic range slot is orphaned).
+    fn replace_occupied_mapping(
+        &self,
+        mut entry: dashmap::mapref::entry::OccupiedEntry<'_, u64, usize>,
+        id: u64,
+    ) -> (usize, usize) {
+        let old_idx = *entry.get();
+        let new_idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
+        entry.insert(new_idx);
+        self.idx_to_id.remove(&old_idx);
+        self.idx_to_id.insert(new_idx, id);
+        (new_idx, old_idx)
     }
 
     /// Batch version of `register_or_replace` with a fast path for pure inserts.
@@ -182,16 +202,12 @@ impl ShardedMappings {
                     self.idx_to_id.insert(idx, id);
                     (idx, None)
                 }
-                Entry::Occupied(mut entry) => {
+                Entry::Occupied(entry) => {
                     // Race: another thread inserted this ID after our vacancy check.
-                    // Use individual allocation (the range slot `start+i` becomes a
-                    // tombstone — harmless, as next_idx is monotonic and never reused).
+                    // The range slot `start+i` becomes a tombstone — harmless, as
+                    // next_idx is monotonic and never reused.
                     self.tombstone_slots.fetch_add(1, Ordering::Relaxed);
-                    let old_idx = *entry.get();
-                    let new_idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
-                    entry.insert(new_idx);
-                    self.idx_to_id.remove(&old_idx);
-                    self.idx_to_id.insert(new_idx, id);
+                    let (new_idx, old_idx) = self.replace_occupied_mapping(entry, id);
                     (new_idx, Some(old_idx))
                 }
             };
@@ -208,12 +224,8 @@ impl ShardedMappings {
         for &id in ids {
             let result = match self.id_to_idx.entry(id) {
                 Entry::Vacant(entry) => (self.allocate_and_map(entry, id), None),
-                Entry::Occupied(mut entry) => {
-                    let old_idx = *entry.get();
-                    let new_idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
-                    entry.insert(new_idx);
-                    self.idx_to_id.remove(&old_idx);
-                    self.idx_to_id.insert(new_idx, id);
+                Entry::Occupied(entry) => {
+                    let (new_idx, old_idx) = self.replace_occupied_mapping(entry, id);
                     (new_idx, Some(old_idx))
                 }
             };

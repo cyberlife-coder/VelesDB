@@ -6,8 +6,7 @@
 use super::native_index::NativeHnswIndex;
 use super::native_inner::NativeHnswInner;
 use super::params::HnswParams;
-use super::persistence::{self, HnswMappingsData, HnswMeta};
-use super::sharded_mappings::ShardedMappings;
+use super::persistence::{self, HnswMeta};
 use crate::distance::DistanceMetric;
 use parking_lot::RwLock;
 use std::path::Path;
@@ -22,36 +21,25 @@ impl NativeHnswIndex {
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
 
-        // Save HNSW graph
-        let inner = self.inner.read();
-        inner.file_dump(path, "native_hnsw")?;
+        // Dump the HNSW graph itself (caller-specific — see persistence::save_sidecars).
+        let storage_mode = {
+            let inner = self.inner.read();
+            inner.file_dump(path, "native_hnsw")?;
+            inner.storage_mode()
+        };
 
-        // Save mappings
-        let (id_to_idx, idx_to_id, next_idx) = self.mappings.as_parts();
-        persistence::save_mappings(
+        // Mappings + vectors + meta in one shared call (RF-DEDUP #448 Group C).
+        persistence::save_sidecars(
             path,
-            &HnswMappingsData {
-                id_to_idx,
-                idx_to_id,
-                next_idx,
-            },
-        )?;
-
-        // Save or clean up vectors (shared helper)
-        persistence::save_or_cleanup_vectors(path, self.enable_vector_storage, &self.vectors)?;
-
-        // Save metadata
-        persistence::save_meta(
-            path,
+            &self.mappings,
+            &self.vectors,
             &HnswMeta {
                 dimension: self.dimension,
                 metric: self.metric,
                 enable_vector_storage: self.enable_vector_storage,
-                storage_mode: self.inner.read().storage_mode(),
+                storage_mode,
             },
-        )?;
-
-        Ok(())
+        )
     }
 
     /// Loads the index from disk.
@@ -74,7 +62,7 @@ impl NativeHnswIndex {
 
         let meta = persistence::load_meta(path)?;
 
-        // Load HNSW graph (with storage mode for RaBitQ backend support)
+        // Load HNSW graph (with storage mode for RaBitQ backend support).
         let inner = NativeHnswInner::file_load_with_storage_mode(
             path,
             "native_hnsw",
@@ -83,16 +71,8 @@ impl NativeHnswIndex {
             meta.storage_mode,
         )?;
 
-        // Load mappings
-        let mappings_data = persistence::load_mappings(path)?;
-        let mappings = ShardedMappings::from_parts(
-            mappings_data.id_to_idx,
-            mappings_data.idx_to_id,
-            mappings_data.next_idx,
-        );
-
-        // Load vectors (gracefully disables if file missing)
-        let (vectors, enable_vector_storage) = persistence::load_vectors_or_disable(path, &meta)?;
+        // Mappings + vectors in one shared call (RF-DEDUP #448 Group C).
+        let (mappings, vectors, enable_vector_storage) = persistence::load_sidecars(path, &meta)?;
 
         Ok(Self {
             dimension: meta.dimension,

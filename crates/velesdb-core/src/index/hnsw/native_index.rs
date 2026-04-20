@@ -233,18 +233,17 @@ impl NativeHnswIndex {
     ///
     /// Returns an error if any insertion fails.
     pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) -> crate::error::Result<()> {
-        // Validate all dimensions upfront before any upsert_mapping side effects.
-        for (_id, vec) in items {
-            validate_dimension_match(self.dimension, vec.len())?;
-        }
-
-        let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
-        let upsert_results = upsert::upsert_mapping_batch(
+        // RF-DEDUP #448 Group D — shared validate + upsert_mapping_batch
+        // pipeline (see `HnswIndex::prepare_batch_insert`). Runs dimension
+        // validation to completion BEFORE any mapping registration so
+        // failures cannot leave orphaned mappings.
+        let upsert_results = upsert::validate_and_register_batch(
             &self.mappings,
             &self.vectors,
             self.enable_vector_storage,
-            &ids,
-        );
+            self.dimension,
+            items,
+        )?;
 
         let mut data: Vec<(&[f32], usize)> = Vec::with_capacity(items.len());
         let mut rollback_info: Vec<(u64, UpsertResult)> = Vec::with_capacity(items.len());
@@ -257,18 +256,17 @@ impl NativeHnswIndex {
         let assigned_ids = match self.inner.read().parallel_insert(&data) {
             Ok(ids) => ids,
             Err(e) => {
-                // Reverse order: undo last upsert first so duplicate-ID chains
-                // restore correctly (each rollback depends on the previous state).
-                for (id, result) in rollback_info.iter().rev() {
-                    self.rollback_upsert(*id, result);
-                }
+                // RF-DEDUP #448 Group D — reverse-order rollback shared with
+                // HnswIndex::insert_batch_parallel.
+                upsert::rollback_batch(&self.mappings, &rollback_info);
                 return Err(e);
             }
         };
 
-        // Reconcile mappings: the graph may assign different node IDs than
-        // upsert_mapping_batch pre-registered. Fix mismatches.
-        let storage_ids = self.reconcile_batch_mappings(&rollback_info, &assigned_ids);
+        // RF-DEDUP #448 Group D — mapping reconciliation shared with
+        // HnswIndex::insert_batch_parallel.
+        let storage_ids =
+            upsert::reconcile_batch_mappings(&self.mappings, &rollback_info, &assigned_ids);
 
         if self.enable_vector_storage {
             for (vec_slice, idx) in data.iter().map(|(v, _)| *v).zip(storage_ids) {
@@ -279,42 +277,20 @@ impl NativeHnswIndex {
         Ok(())
     }
 
-    /// Reconciles pre-registered mapping indices with graph-assigned node IDs.
-    ///
-    /// For each item, if the graph-assigned ID differs from the pre-registered
-    /// index, removes the stale reverse mapping and restores the correct one.
-    /// Returns the authoritative storage index for each item.
-    fn reconcile_batch_mappings(
-        &self,
-        rollback_info: &[(u64, UpsertResult)],
-        assigned_ids: &[usize],
-    ) -> Vec<usize> {
-        let mut storage_ids = Vec::with_capacity(assigned_ids.len());
-        for (assigned_id, (ext_id, result)) in assigned_ids.iter().zip(rollback_info) {
-            if *assigned_id == result.idx {
-                storage_ids.push(result.idx);
-            } else {
-                self.mappings.remove_reverse(result.idx);
-                self.mappings.restore(*ext_id, *assigned_id);
-                storage_ids.push(*assigned_id);
-            }
-        }
-        storage_ids
-    }
-
     /// Removes a vector by ID (soft delete).
     ///
     /// Removes the ID from mappings and cleans up stored vector data.
     /// The HNSW graph node becomes a tombstone, filtered out during search.
+    ///
+    /// Delegates to [`upsert::soft_delete`], shared with `HnswIndex::remove`
+    /// (#448 Group F).
     pub fn remove(&self, id: u64) -> bool {
-        if let Some(old_idx) = self.mappings.remove(id) {
-            if self.enable_vector_storage {
-                self.vectors.remove(old_idx);
-            }
-            true
-        } else {
-            false
-        }
+        upsert::soft_delete(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            id,
+        )
     }
 
     /// Sets searching mode (no-op for native implementation).
