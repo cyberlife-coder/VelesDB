@@ -252,6 +252,20 @@ fn rescore_per_item(
 }
 
 impl Collection {
+    /// Shared search-pipeline prologue: validates the query dimension against
+    /// the collection config and reads the configured distance metric in a
+    /// single lock scope.
+    ///
+    /// Factored from `search_with_ef` / `search_with_quality` /
+    /// `search_with_forced_rerank` / `search_with_quality_no_rerank` for #452.
+    /// `#[inline]` preserves pre-refactor inlining (Phase 3.2 learning).
+    #[inline]
+    pub(super) fn validate_query_and_read_metric(&self, query: &[f32]) -> Result<DistanceMetric> {
+        let config = self.config.read();
+        validate_dimension_match(config.dimension, query.len())?;
+        Ok(config.metric)
+    }
+
     /// Shared search-pipeline epilogue: merges delta buffer, hydrates points and
     /// payloads, then tags each result with its `vector_score` component.
     ///
@@ -323,10 +337,7 @@ impl Collection {
         k: usize,
         ef_search: usize,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
-
-        validate_dimension_match(config.dimension, query.len())?;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
 
         // Convert ef_search to SearchQuality
         let quality = match ef_search {
@@ -336,7 +347,6 @@ impl Collection {
             _ => crate::SearchQuality::Perfect,
         };
 
-        let metric = self.config.read().metric;
         let index_results = self.index.search_with_quality(query, k, quality)?;
         Ok(self.finalize_search_results(query, k, metric, index_results))
     }
@@ -355,10 +365,7 @@ impl Collection {
         k: usize,
         quality: crate::SearchQuality,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
-        validate_dimension_match(config.dimension, query.len())?;
-        let metric = config.metric;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
 
         let index_results = self.index.search_with_quality(query, k, quality)?;
         Ok(self.finalize_search_results(query, k, metric, index_results))
@@ -410,10 +417,7 @@ impl Collection {
         k: usize,
         quality: crate::SearchQuality,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
-        validate_dimension_match(config.dimension, query.len())?;
-        let metric = config.metric;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
 
         let rerank_k = k.saturating_mul(4).max(k + 32);
         let index_results = self
@@ -432,10 +436,7 @@ impl Collection {
         k: usize,
         quality: crate::SearchQuality,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
-        validate_dimension_match(config.dimension, query.len())?;
-        let metric = config.metric;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
 
         let ef_search = quality.ef_search(k);
         let index_results = self.index.search_hnsw_only(query, k, ef_search);
