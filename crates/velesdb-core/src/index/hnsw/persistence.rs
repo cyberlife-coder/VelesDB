@@ -13,7 +13,7 @@
 //! - `native_meta.bin`: 5-tuple `(dimension: usize, metric: u8,
 //!   enable_vector_storage: bool, storage_mode: u8, generation: u64)`.
 //!   Backward-compat: 4-tuple (v1.7.2+, generation=0) and 3-tuple
-//!   (pre-v1.7.2, generation=0, storage_mode=Full) are still accepted on
+//!   (pre-v1.7.2, generation=0, `storage_mode=Full`) are still accepted on
 //!   load.
 //! - `native_mappings.bin`: 4-tuple `(id_to_idx: HashMap<u64, usize>,
 //!   idx_to_id: HashMap<usize, u64>, next_idx: usize, generation: u64)`.
@@ -272,30 +272,35 @@ fn atomic_write_inner(tmp_path: &Path, final_path: &Path, data: &[u8]) -> std::i
 /// RF-DEDUP: This pattern was duplicated in `HnswIndex::load` and
 /// `NativeHnswIndex::load`. Now both delegate here.
 ///
+/// Returns `(vectors, enable_vector_storage, vectors_generation)`. The
+/// third element is the on-disk generation stamp (see #617); it is only
+/// meaningful when `enable_vector_storage` is `true`. When vectors are
+/// disabled or the file is absent, the returned generation is `0`.
+///
 /// # Errors
 ///
 /// Returns `io::Error` if the vectors file exists but cannot be read/deserialized.
 pub(crate) fn load_vectors_or_disable(
     path: &Path,
     meta: &HnswMeta,
-) -> std::io::Result<(super::sharded_vectors::ShardedVectors, bool)> {
+) -> std::io::Result<(super::sharded_vectors::ShardedVectors, bool, u64)> {
     use super::sharded_vectors::ShardedVectors;
 
     if !meta.enable_vector_storage {
-        return Ok((ShardedVectors::new(meta.dimension), false));
+        return Ok((ShardedVectors::new(meta.dimension), false, 0));
     }
 
     match load_vectors(path) {
         Ok(vectors_data) => {
             let vectors = ShardedVectors::new(meta.dimension);
             vectors.insert_batch(vectors_data.vectors);
-            Ok((vectors, true))
+            Ok((vectors, true, vectors_data.generation))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             tracing::debug!(
                 "native_vectors.bin missing during HNSW load; disabling vector storage for safety"
             );
-            Ok((ShardedVectors::new(meta.dimension), false))
+            Ok((ShardedVectors::new(meta.dimension), false, 0))
         }
         Err(err) => Err(err),
     }
@@ -332,6 +337,16 @@ pub(crate) fn save_or_cleanup_vectors(
     }
 }
 
+/// Reads the current on-disk generation from `native_meta.bin`, if any.
+///
+/// Returns `None` when meta is missing or unreadable — the caller then
+/// treats the directory as fresh and starts at generation 0. Legacy DBs
+/// (pre-#617 format) return `Some(0)` via [`load_meta`]'s backward-compat
+/// fallback, so the next save lands at generation 1 regardless.
+fn read_current_generation(path: &Path) -> Option<u64> {
+    load_meta(path).ok().map(|meta| meta.generation)
+}
+
 /// Persists every non-graph sidecar (mappings, vectors, meta) for an HNSW
 /// index in one call.
 ///
@@ -344,6 +359,20 @@ pub(crate) fn save_or_cleanup_vectors(
 /// types use different inner types (`NativeHnswInner` directly vs
 /// `ManuallyDrop<HnswInner>`) that would otherwise require a trait object.
 ///
+/// # Atomicity (issue #617)
+///
+/// Individual file writes are atomic (via [`atomic_write`]), but the 3-file
+/// sequence is not — a crash between two renames leaves the on-disk state
+/// inconsistent. To detect such a crash on reload, every sidecar is stamped
+/// with the same monotonic `generation: u64`, computed as
+/// `current_on_disk_generation + 1` at the start of this call. `meta` is
+/// written LAST: its generation is the authoritative commit point. On load,
+/// [`load_sidecars`] verifies that mappings and vectors carry the same
+/// generation as meta — any mismatch is reported as `InvalidData`.
+///
+/// The caller-provided [`HnswMeta::generation`] is ignored; this function
+/// overwrites it with the freshly bumped value.
+///
 /// # Errors
 ///
 /// Returns `io::Error` if any of the three file operations fail.
@@ -353,6 +382,11 @@ pub(crate) fn save_sidecars(
     vectors: &super::sharded_vectors::ShardedVectors,
     meta: &HnswMeta,
 ) -> std::io::Result<()> {
+    // Bump off the current on-disk generation (not the caller-supplied one)
+    // so that repeated saves keep the counter strictly monotonic even when
+    // the in-memory `HnswMeta` is freshly constructed each time.
+    let new_gen = read_current_generation(path).unwrap_or(0).saturating_add(1);
+
     let (id_to_idx, idx_to_id, next_idx) = mappings.as_parts();
     save_mappings(
         path,
@@ -360,11 +394,18 @@ pub(crate) fn save_sidecars(
             id_to_idx,
             idx_to_id,
             next_idx,
-            generation: meta.generation,
+            generation: new_gen,
         },
     )?;
-    save_or_cleanup_vectors(path, meta.enable_vector_storage, vectors, meta.generation)?;
-    save_meta(path, meta)
+    save_or_cleanup_vectors(path, meta.enable_vector_storage, vectors, new_gen)?;
+
+    // `meta` is written LAST — its generation is the authoritative commit
+    // point that `load_sidecars` checks the two other sidecars against.
+    let stamped_meta = HnswMeta {
+        generation: new_gen,
+        ..*meta
+    };
+    save_meta(path, &stamped_meta)
 }
 
 /// Loads non-graph sidecars (mappings + vectors) for an HNSW index given a
@@ -373,11 +414,24 @@ pub(crate) fn save_sidecars(
 /// Complements [`save_sidecars`]. The HNSW graph itself is loaded by the
 /// caller (different inner types, see [`save_sidecars`]).
 ///
+/// # Atomicity check (issue #617)
+///
+/// Every sidecar carries a `generation: u64` stamp written by
+/// [`save_sidecars`]. `meta.generation` is the authoritative commit
+/// point. If mappings or vectors carry a stale or mismatched generation,
+/// the database is proven to be in an inconsistent state (crash between
+/// two file renames during the previous save) and this function returns
+/// `InvalidData` rather than silently loading a torn state.
+///
+/// Legacy DBs written by pre-#617 binaries have generation=0 everywhere,
+/// so the consistency check passes trivially (0 == 0 == 0).
+///
 /// # Errors
 ///
-/// Returns `io::Error` if the mappings file is missing or corrupt. Missing
-/// vectors files are tolerated and gracefully disable vector storage — see
-/// [`load_vectors_or_disable`].
+/// Returns `io::Error::InvalidData` if the on-disk generations disagree
+/// with `meta.generation`. Also returns `io::Error` if the mappings file
+/// is missing or corrupt. Missing vectors files are tolerated and
+/// gracefully disable vector storage — see [`load_vectors_or_disable`].
 pub(crate) fn load_sidecars(
     path: &Path,
     meta: &HnswMeta,
@@ -387,12 +441,34 @@ pub(crate) fn load_sidecars(
     bool,
 )> {
     let mappings_data = load_mappings(path)?;
+    if mappings_data.generation != meta.generation {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "incomplete save detected: mappings generation {} but meta generation {} \
+                 (crash between sidecar writes, database state inconsistent)",
+                mappings_data.generation, meta.generation,
+            ),
+        ));
+    }
+
+    let (vectors, enable_vector_storage, vectors_generation) = load_vectors_or_disable(path, meta)?;
+    if enable_vector_storage && vectors_generation != meta.generation {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "incomplete save detected: vectors generation {} but meta generation {} \
+                 (crash between sidecar writes, database state inconsistent)",
+                vectors_generation, meta.generation,
+            ),
+        ));
+    }
+
     let mappings = super::sharded_mappings::ShardedMappings::from_parts(
         mappings_data.id_to_idx,
         mappings_data.idx_to_id,
         mappings_data.next_idx,
     );
-    let (vectors, enable_vector_storage) = load_vectors_or_disable(path, meta)?;
     Ok((mappings, vectors, enable_vector_storage))
 }
 
