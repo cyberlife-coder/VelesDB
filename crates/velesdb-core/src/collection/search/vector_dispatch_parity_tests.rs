@@ -1,4 +1,10 @@
 #![cfg(all(test, feature = "persistence"))]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::float_cmp,
+    clippy::uninlined_format_args
+)]
 //! Parity tests locking the invariant behaviour of the 5 vector-search dispatch
 //! methods on `Collection` across the refactoring for issue #452 (Phase 3.4).
 //!

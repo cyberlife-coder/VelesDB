@@ -252,6 +252,32 @@ fn rescore_per_item(
 }
 
 impl Collection {
+    /// Shared search-pipeline epilogue: merges delta buffer, hydrates points and
+    /// payloads, then tags each result with its `vector_score` component.
+    ///
+    /// Factored from `search_with_ef` / `search_with_quality` /
+    /// `search_with_forced_rerank` / `search_with_quality_no_rerank` for #452.
+    /// Marked `#[inline]` so rustc preserves the pre-refactor inlining decisions
+    /// across the now-extracted call boundary (Phase 3.2 learning).
+    #[inline]
+    pub(super) fn finalize_search_results(
+        &self,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+        index_results: Vec<ScoredResult>,
+    ) -> Vec<SearchResult> {
+        let index_results = self.merge_delta(index_results, query, k, metric);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        results
+    }
+
     /// Searches for the k nearest neighbors of the query vector.
     ///
     /// Uses HNSW index for fast approximate nearest neighbor search.
@@ -312,15 +338,7 @@ impl Collection {
 
         let metric = self.config.read().metric;
         let index_results = self.index.search_with_quality(query, k, quality)?;
-        let index_results = self.merge_delta(index_results, query, k, metric);
-
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
-
-        let mut results =
-            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
-        tag_vector_component_scores(&mut results);
-        Ok(results)
+        Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
     /// Performs vector similarity search with a specific [`SearchQuality`] profile.
@@ -343,15 +361,7 @@ impl Collection {
         drop(config);
 
         let index_results = self.index.search_with_quality(query, k, quality)?;
-        let index_results = self.merge_delta(index_results, query, k, metric);
-
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
-
-        let mut results =
-            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
-        tag_vector_component_scores(&mut results);
-        Ok(results)
+        Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
     /// Routes vector search through `QuerySearchOptions` from a WITH clause.
@@ -409,15 +419,7 @@ impl Collection {
         let index_results = self
             .index
             .search_with_rerank_quality(query, k, rerank_k, quality)?;
-        let index_results = self.merge_delta(index_results, query, k, metric);
-
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
-
-        let mut results =
-            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
-        tag_vector_component_scores(&mut results);
-        Ok(results)
+        Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
     /// Searches with a quality profile but suppresses two-stage reranking.
@@ -437,15 +439,7 @@ impl Collection {
 
         let ef_search = quality.ef_search(k);
         let index_results = self.index.search_hnsw_only(query, k, ef_search);
-        let index_results = self.merge_delta(index_results, query, k, metric);
-
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
-
-        let mut results =
-            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
-        tag_vector_component_scores(&mut results);
-        Ok(results)
+        Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
     /// Performs fast vector similarity search returning only IDs and scores.
