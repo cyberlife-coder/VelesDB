@@ -156,7 +156,7 @@ VelesDB is honest about its boundaries. The following are current scope limits o
 
 None of the above is a correctness gap — the Community Edition is production-ready for single-node, local-first deployments. The items above are feature-scope boundaries, not bugs.
 
-For **internal technical limitations** (query-planner approximations, plan cache semantics around `ANALYZE`, BM25 cold-start, CBO integration status), see [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md) — each entry is tracked by a GitHub issue or documented as an explicit approximation with regression tests.
+For **internal technical limitations** (query-planner approximations, plan cache semantics around `ANALYZE`, CBO integration status), see [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md) — each entry is tracked by a GitHub issue or documented as an explicit approximation with regression tests.
 
 ---
 
