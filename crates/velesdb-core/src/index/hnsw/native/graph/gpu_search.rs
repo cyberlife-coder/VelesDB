@@ -47,8 +47,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             return None;
         }
 
-        // Build GPU traversal context (compiles pipelines on first call)
-        let ctx = GpuTraversalContext::new()?;
+        // Use cached GPU traversal context (compiles pipelines once, reused across queries)
+        let ctx = GpuTraversalContext::global()?;
 
         // Prepare query (normalize for cosine)
         let prepared = self.prepare_query(query);

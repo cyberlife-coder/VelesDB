@@ -16,7 +16,7 @@
 //! Below this, the fixed GPU dispatch overhead (~900μs × iterations)
 //! exceeds the CPU SIMD search time. Use [`should_traverse_gpu`] to check.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use wgpu::util::DeviceExt;
@@ -103,7 +103,23 @@ pub struct GpuTraversalContext {
 }
 
 impl GpuTraversalContext {
+    /// Returns the global singleton `GpuTraversalContext`, creating it on
+    /// first call. Pipelines are compiled once and reused across all queries.
+    ///
+    /// Returns `None` if no GPU is available.
+    #[must_use]
+    pub fn global() -> Option<Arc<Self>> {
+        static INSTANCE: OnceLock<Option<Arc<GpuTraversalContext>>> = OnceLock::new();
+        INSTANCE
+            .get_or_init(|| GpuTraversalContext::new().map(Arc::new))
+            .clone()
+    }
+
     /// Creates a new GPU traversal context, compiling all required pipelines.
+    ///
+    /// Prefer [`global()`](Self::global) for production use to avoid
+    /// recompiling pipelines per query. Use `new()` only in benchmarks
+    /// or tests that need isolated contexts.
     ///
     /// Returns `None` if no GPU is available.
     #[must_use]
@@ -468,8 +484,22 @@ impl GpuTraversalContext {
         buffers: &TraversalBuffers,
     ) {
         // Reset candidate counter to 0 before expansion
-        // We write a zero to the counter buffer via a clear
         encoder.clear_buffer(&buffers.counters, 0, None);
+
+        // Fill candidates buffer with sentinels (u32::MAX = 0xFFFFFFFF).
+        // WebGPU zero-initializes buffers, so without this, unused slots
+        // contain 0 (a valid node ID), causing the distance shader to
+        // compute distances against node 0 for all ~8000 unused slots.
+        // The sentinels are detected by the TRAVERSAL_*_SHADER's
+        // `if (node_id == 0xFFFFFFFFu)` guard and assigned f32::MAX.
+        encoder.clear_buffer(&buffers.candidates_sentinel, 0, None);
+        encoder.copy_buffer_to_buffer(
+            &buffers.candidates_sentinel,
+            0,
+            &buffers.candidates,
+            0,
+            buffers.candidates_byte_size as u64,
+        );
 
         let bind_group = buffers.create_expand_bind_group(
             self.gpu.device(),
@@ -514,6 +544,26 @@ impl GpuTraversalContext {
     ) {
         // Reset frontier counter before selection
         encoder.clear_buffer(&buffers.select_counters, 0, None);
+
+        // Initialize frontier_b with sentinels so slots not filled by
+        // the select shader remain as "empty" (u32::MAX / f32::MAX).
+        // This prevents stale frontier entries from previous iterations
+        // contaminating the next expand pass.
+        let frontier_bytes = (ef * std::mem::size_of::<u32>()) as u64;
+        encoder.copy_buffer_to_buffer(
+            &buffers.frontier_ids_sentinel,
+            0,
+            &buffers.frontier_b_ids,
+            0,
+            frontier_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            &buffers.frontier_dists_sentinel,
+            0,
+            &buffers.frontier_b_dists,
+            0,
+            frontier_bytes, // same size: ef × f32
+        );
 
         let bind_group = buffers.create_select_bind_group(
             self.gpu.device(),
@@ -580,6 +630,12 @@ struct TraversalBuffers {
     // Readback staging
     staging_ids: wgpu::Buffer,
     staging_dists: wgpu::Buffer,
+    // Sentinel buffer for clearing candidates to u32::MAX each iteration
+    candidates_sentinel: wgpu::Buffer,
+    candidates_byte_size: usize,
+    // Sentinel buffers for frontier_b initialization
+    frontier_ids_sentinel: wgpu::Buffer,
+    frontier_dists_sentinel: wgpu::Buffer,
 
     // Metadata
     ef: usize,
@@ -685,11 +741,22 @@ impl TraversalBuffers {
 
         // --- Candidates ---
         let max_cand = MAX_CANDIDATES_PER_ITER as usize;
+        let candidates_byte_size = max_cand * std::mem::size_of::<u32>();
         let candidates = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Candidates"),
-            size: (max_cand * std::mem::size_of::<u32>()) as u64,
+            size: candidates_byte_size as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        });
+
+        // Sentinel buffer: pre-filled with u32::MAX (0xFFFFFFFF).
+        // Copied into candidates buffer before each expand pass to ensure
+        // unused slots are sentinels, not node 0 (WebGPU zero-init default).
+        let sentinel_data = vec![u32::MAX; max_cand];
+        let candidates_sentinel = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Candidates Sentinel"),
+            contents: bytemuck::cast_slice(&sentinel_data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         });
 
         let candidate_dists = device.create_buffer(&wgpu::BufferDescriptor {
@@ -765,6 +832,23 @@ impl TraversalBuffers {
             mapped_at_creation: false,
         });
 
+        // --- Frontier sentinel buffers ---
+        // Pre-filled with sentinels and used to re-initialize frontier_b
+        // before each select pass (prevents stale entries from prior iterations).
+        let frontier_ids_sentinel_data = vec![u32::MAX; ef];
+        let frontier_ids_sentinel = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Frontier IDs Sentinel"),
+            contents: bytemuck::cast_slice(&frontier_ids_sentinel_data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        });
+        let frontier_dists_sentinel_data = vec![f32::MAX; ef];
+        let frontier_dists_sentinel =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Frontier Dists Sentinel"),
+                contents: bytemuck::cast_slice(&frontier_dists_sentinel_data),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            });
+
         Self {
             csr_offsets,
             csr_neighbors,
@@ -783,6 +867,10 @@ impl TraversalBuffers {
             distance_params,
             staging_ids,
             staging_dists,
+            candidates_sentinel,
+            candidates_byte_size,
+            frontier_ids_sentinel,
+            frontier_dists_sentinel,
             ef,
         }
     }

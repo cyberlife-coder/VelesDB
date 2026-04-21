@@ -282,7 +282,17 @@ impl CsrCache {
             let mut guard = self.csr.write();
             *guard = Some(new_csr.clone());
         }
-        self.dirty.store(false, Ordering::Release);
+        // CAS: only clear dirty if no concurrent invalidate() occurred
+        // during the rebuild. If another thread called invalidate() between
+        // our dirty.load(true) and now, the CAS fails (dirty is already
+        // true from the new invalidation) and the flag stays dirty,
+        // preventing stale data from being served.
+        let _ = self.dirty.compare_exchange(
+            true,
+            false,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        );
         self.version.fetch_add(1, Ordering::AcqRel);
 
         new_csr
