@@ -83,9 +83,8 @@ impl ThreadConfig {
         match self {
             ThreadConfig::Auto => {
                 // Use std::thread::available_parallelism (same as rayon default)
-                let cpus = std::thread::available_parallelism()
-                    .map(std::num::NonZeroUsize::get)
-                    .unwrap_or(1);
+                let cpus =
+                    std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
                 // Leave 1 core for other work, minimum 1 thread
                 (cpus.saturating_sub(1)).max(1)
             }

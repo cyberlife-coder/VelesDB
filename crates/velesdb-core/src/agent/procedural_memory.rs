@@ -150,8 +150,7 @@ impl ProceduralMemory {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
 
         let point = Point::new(
             procedure_id,
@@ -257,8 +256,7 @@ impl ProceduralMemory {
         let state = Self::extract_procedure_state(&point)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
 
         let context = state.build_reinforcement_context(now);
         let new_confidence = strategy.update_confidence(state.confidence, success, &context);
