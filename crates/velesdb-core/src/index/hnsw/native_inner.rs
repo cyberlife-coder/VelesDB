@@ -184,6 +184,50 @@ impl NativeHnswInner {
         }
     }
 
+    /// Searches the HNSW graph, automatically choosing GPU or CPU path.
+    ///
+    /// When the GPU feature is enabled and the index exceeds the traversal
+    /// threshold (500K vectors), attempts GPU-accelerated layer-0 search.
+    /// Falls back to CPU on any GPU error or if GPU is unavailable.
+    ///
+    /// For `RaBitQ` backend, always uses CPU (binary distance GPU shader
+    /// is not yet implemented).
+    #[must_use]
+    pub fn search_auto(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
+        #[cfg(feature = "gpu")]
+        {
+            if let HnswBackend::Standard(hnsw) = &self.backend {
+                if crate::gpu::should_traverse_gpu(hnsw.len()) {
+                    if let Some(results) = self.search_gpu(query, k, ef_search) {
+                        return results;
+                    }
+                    // GPU failed — fall through to CPU
+                }
+            }
+        }
+
+        self.search(query, k, ef_search)
+    }
+
+    /// Attempts GPU-accelerated search on the Standard backend.
+    ///
+    /// Returns `None` if GPU is unavailable, the metric is unsupported,
+    /// or any GPU operation fails. The caller should fall back to CPU search.
+    #[cfg(feature = "gpu")]
+    fn search_gpu(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Option<Vec<(usize, f32)>> {
+        let hnsw = match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw,
+            _ => return None,
+        };
+
+        hnsw.search_gpu(query, k, ef_search, self.metric)
+    }
+
     /// Searches the HNSW graph and returns results as `NativeNeighbour` structs.
     #[allow(dead_code)] // Reason: API surface — used by callers needing typed neighbour results
     #[inline]
