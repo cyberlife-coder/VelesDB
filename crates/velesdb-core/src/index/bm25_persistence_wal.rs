@@ -1,8 +1,3 @@
-// TODO(US-389): remove the `dead_code` allow after commit 4 wires the
-// lifecycle integration. Until then these helpers are used only by the
-// persistence tests, which do not count as lib-side references.
-#![allow(dead_code)]
-
 //! BM25 index WAL: append + replay for incremental persistence.
 //!
 //! The WAL captures `add_document` / `remove_document` mutations applied

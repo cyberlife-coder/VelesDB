@@ -1,8 +1,3 @@
-// TODO(US-389): remove `dead_code` allow after commit 4 wires the
-// lifecycle integration. Until then these helpers are used only by the
-// persistence tests, which do not count as lib-side references.
-#![allow(dead_code)]
-
 //! BM25 index persistence: atomic snapshot save/load.
 //!
 //! All types and functions in this module are gated behind

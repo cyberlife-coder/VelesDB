@@ -74,7 +74,6 @@ pub(crate) struct Document {
 /// rebuilt from `documents` + `point_to_doc` on
 /// [`Bm25Index::from_snapshot`], which keeps the wire format compact
 /// and avoids adding `Serialize` to the adaptive `PostingList` enum.
-#[allow(dead_code)] // TODO(US-389): commit 4 wires this into Collection::flush.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Bm25Snapshot {
     /// Schema version for forward-compat (bump on breaking changes).
@@ -475,7 +474,6 @@ impl Default for Bm25Index {
 // Snapshot serialization (for `bm25_persistence` module)
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // TODO(US-389): commit 4 wires these into Collection::flush.
 impl Bm25Index {
     /// Captures the current index state as a [`Bm25Snapshot`].
     ///

@@ -86,7 +86,7 @@ impl Collection {
 
         self.store_vectors_and_payload_entries(&vector_refs, &payload_entries)?;
 
-        self.update_text_index_from_raw(ids, payloads);
+        self.update_text_index_from_raw(ids, payloads)?;
         self.update_label_index_from_raw(ids, payloads);
         self.update_secondary_indexes_from_raw(ids, payloads);
 
@@ -242,27 +242,38 @@ impl Collection {
         }
     }
 
-    /// Updates BM25 text index from raw payload slices.
+    /// Updates BM25 text index from raw payload slices (WAL-then-apply).
     ///
-    /// Points with `Some(payload)` get their text indexed.
-    /// Points with `None` payload get their stale BM25 entry removed
-    /// (consistent with `update_text_index` in `crud.rs`).
+    /// Points with `Some(payload)` get their text indexed; points with
+    /// `None` payload get their stale BM25 entry removed. Mirrors the
+    /// contract of `update_text_index` in `crud.rs`.
+    ///
+    /// Issue #389: each mutation is appended to the BM25 WAL BEFORE it
+    /// is applied in-memory so that a crash between the two replays
+    /// the mutation on next open. WAL append errors propagate and the
+    /// in-memory mutation is skipped, so in-memory and WAL state never
+    /// diverge.
     fn update_text_index_from_raw(
         &self,
         ids: &[u64],
         payloads: Option<&[Option<serde_json::Value>]>,
-    ) {
-        let Some(ps) = payloads else { return };
+    ) -> Result<()> {
+        let Some(ps) = payloads else { return Ok(()) };
         for (i, opt) in ps.iter().enumerate() {
             if let Some(payload) = opt {
                 let text = Self::extract_text_from_payload(payload);
                 if !text.is_empty() {
+                    #[cfg(feature = "persistence")]
+                    self.append_bm25_wal_add(ids[i], &text)?;
                     self.text_index.add_document(ids[i], &text);
                 }
             } else {
+                #[cfg(feature = "persistence")]
+                self.append_bm25_wal_remove(ids[i])?;
                 self.text_index.remove_document(ids[i]);
             }
         }
+        Ok(())
     }
 
     /// Batch-updates the label index from raw payload slices.

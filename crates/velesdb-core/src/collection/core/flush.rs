@@ -75,8 +75,29 @@ impl Collection {
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.flush_secondary_indexes()?;
         self.flush_sparse_indexes()?;
+        // Issue #389: persist BM25 index as a snapshot + truncate WAL.
+        // Ordered AFTER sparse indexes so the collection-level flush
+        // semantics remain "durable → truncate WAL" for both BM25 and
+        // sparse.
+        self.flush_bm25_index()?;
         // Write the deferred vectors.idx after all other flush steps.
         self.vector_storage.read().flush_index()?;
+        Ok(())
+    }
+
+    /// Persists the BM25 index as an atomic snapshot and truncates its
+    /// WAL on success (issue #389).
+    ///
+    /// Skipped entirely when the index is empty: no snapshot file is
+    /// created, so a pre-existing (non-BM25) collection reopened by
+    /// newer code does not gain a spurious empty snapshot.
+    fn flush_bm25_index(&self) -> Result<()> {
+        if self.text_index.is_empty() {
+            return Ok(());
+        }
+        crate::index::bm25_persistence::save_snapshot(&self.path, &self.text_index)?;
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.path);
+        crate::index::bm25_persistence_wal::wal_truncate(&wal_path)?;
         Ok(())
     }
 

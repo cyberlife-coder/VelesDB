@@ -289,7 +289,7 @@ impl Collection {
         // body would be a no-op for every point.
         if !entries.is_empty() || !self.text_index.is_empty() {
             for point in points {
-                Self::update_text_index(&self.text_index, point);
+                self.update_text_index(point)?;
             }
         }
 

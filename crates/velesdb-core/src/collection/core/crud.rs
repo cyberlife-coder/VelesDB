@@ -86,7 +86,7 @@ impl Collection {
         let old_payloads = self.batch_store_all(points)?;
 
         // Phase 2: Per-point updates (no storage locks held)
-        let sparse_batch = self.per_point_updates(points, &old_payloads, storage_mode);
+        let sparse_batch = self.per_point_updates(points, &old_payloads, storage_mode)?;
 
         // Phase 3: Batch HNSW insert
         let vector_refs: Vec<(u64, &[f32])> =
@@ -318,12 +318,12 @@ impl Collection {
         points: &[Point],
         old_payloads: &[Option<serde_json::Value>],
         storage_mode: StorageMode,
-    ) -> Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> {
+    ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
         // Issue #425: Fast-path — skip Phase 2 entirely when no secondary
         // processing is needed. Avoids lock acquisition, HashMap allocation,
         // and the per-point loop for the common StorageMode::Full case.
         if self.can_skip_phase2(points, storage_mode) {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // Issue #486: Parallel quantization for SQ8/Binary — compute all
@@ -358,7 +358,7 @@ impl Collection {
         storage_mode: StorageMode,
         quant_guards: &mut QuantizationGuards<'_>,
         quant_done: bool,
-    ) -> Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> {
+    ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
         let mut sparse_batch = Vec::new();
         let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::new();
         let skip_bm25 = self.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
@@ -375,7 +375,9 @@ impl Collection {
                 point.payload.as_ref(),
             );
             if !skip_bm25 {
-                Self::update_text_index(&self.text_index, point);
+                // Issue #389: WAL-before-apply — failure propagates so
+                // in-memory BM25 and on-disk WAL never diverge.
+                self.update_text_index(point)?;
             }
             Self::collect_sparse_vectors(point, &mut sparse_batch);
             if needs_label_updates {
@@ -385,7 +387,7 @@ impl Collection {
         }
 
         Self::apply_label_updates(&self.label_index, &label_updates);
-        sparse_batch
+        Ok(sparse_batch)
     }
 
     /// Inserts or updates metadata-only points (no vectors).
@@ -416,7 +418,7 @@ impl Collection {
             } else {
                 let _ = payload_storage.delete(point.id);
             }
-            Self::update_text_index(&self.text_index, point);
+            self.update_text_index(point)?;
             self.update_secondary_indexes_on_upsert(
                 point.id,
                 old_payload.as_ref(),
