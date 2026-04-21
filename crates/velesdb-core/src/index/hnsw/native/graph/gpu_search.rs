@@ -81,20 +81,46 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             Some(self.gpu_csr_cache.get_or_rebuild(&layers[0], count))
         })?;
 
-        // Phase 3: Extract flat vectors for GPU upload.
+        // Phase 3: Get flat vectors for GPU upload via cached snapshot.
         //
-        // Holds the vectors lock only during the slice copy. The copy is
-        // necessary because the RwLock guard cannot be held across async
-        // GPU submission. For 500K+ vectors at 768-dim this is ~1.5GB.
-        let (dimension, vectors_flat) = self.with_vectors_read(|vectors| {
-            let dim = vectors.dimension();
-            let flat = vectors.as_flat_slice().to_vec();
-            (dim, flat)
-        });
+        // The snapshot is an `Arc<[f32]>` cached on the NativeHnsw instance.
+        // Only refreshed when the vector count changes (insert/delete).
+        // Subsequent queries clone the Arc (O(1) pointer bump) instead of
+        // copying ~1.5GB of vector data per query.
+        let (dimension, vectors_arc) = {
+            let mut snapshot = self.gpu_vectors_snapshot.lock();
+            if let Some((cached_count, cached_dim, ref cached_vecs)) = *snapshot {
+                if cached_count == count {
+                    (cached_dim, cached_vecs.clone())
+                } else {
+                    // Count changed — refresh snapshot
+                    let (dim, arc) = self.with_vectors_read(|vectors| {
+                        let d = vectors.dimension();
+                        let arc: std::sync::Arc<[f32]> =
+                            vectors.as_flat_slice().to_vec().into();
+                        (d, arc)
+                    });
+                    *snapshot = Some((count, dim, arc.clone()));
+                    (dim, arc)
+                }
+            } else {
+                // First call — create snapshot
+                let (dim, arc) = self.with_vectors_read(|vectors| {
+                    let d = vectors.dimension();
+                    let arc: std::sync::Arc<[f32]> =
+                        vectors.as_flat_slice().to_vec().into();
+                    (d, arc)
+                });
+                *snapshot = Some((count, dim, arc.clone()));
+                (dim, arc)
+            }
+        };
 
-        if dimension == 0 || vectors_flat.is_empty() {
+        if dimension == 0 || vectors_arc.is_empty() {
             return None;
         }
+
+        let vectors_flat: &[f32] = &vectors_arc;
 
         // Phase 4: Determine multi-entry probing strategy.
         //
@@ -115,7 +141,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // Single-entry GPU search
             let results = ctx.search_layer0(
                 &csr,
-                &vectors_flat,
+                vectors_flat,
                 &prepared,
                 current_ep,
                 k,
@@ -135,7 +161,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             for &ep_node in &entry_points {
                 let results = ctx.search_layer0(
                     &csr,
-                    &vectors_flat,
+                    vectors_flat,
                     &prepared,
                     ep_node,
                     k,
