@@ -24,7 +24,6 @@ use std::time::Instant;
 use wgpu::util::DeviceExt;
 
 use super::gpu_backend::GpuAccelerator;
-use super::gpu_buffer_cache::GpuBufferCache;
 use super::gpu_csr::CsrGraph;
 
 /// Maximum number of candidates that can be generated per iteration.
@@ -89,9 +88,9 @@ impl std::fmt::Display for GpuTraversalStats {
 
 /// GPU traversal context holding compiled pipelines and the wgpu device.
 ///
-/// Created once per `GpuAccelerator` lifetime. Holds the three traversal
-/// pipelines (expand, distance, select) and references to the shared device.
-/// Includes a [`GpuBufferCache`] that persists graph buffers across queries.
+/// Created once via [`global()`](Self::global) and shared across all queries.
+/// Holds the three traversal pipelines (expand, distance, select)
+/// and references to the shared GPU device.
 pub struct GpuTraversalContext {
     gpu: Arc<GpuAccelerator>,
     expand_pipeline: wgpu::ComputePipeline,
@@ -99,9 +98,6 @@ pub struct GpuTraversalContext {
     distance_euclidean_sq_pipeline: wgpu::ComputePipeline,
     distance_dot_pipeline: wgpu::ComputePipeline,
     select_pipeline: wgpu::ComputePipeline,
-    /// Persistent GPU buffer cache — survives across queries.
-    #[allow(dead_code)]
-    buffer_cache: GpuBufferCache,
 }
 
 impl GpuTraversalContext {
@@ -157,7 +153,6 @@ impl GpuTraversalContext {
             distance_euclidean_sq_pipeline,
             distance_dot_pipeline,
             select_pipeline,
-            buffer_cache: GpuBufferCache::new(),
         })
     }
 

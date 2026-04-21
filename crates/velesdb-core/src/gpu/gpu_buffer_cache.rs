@@ -4,6 +4,15 @@
 //! to eliminate redundant PCIe uploads. Without caching, a 1M×768 index
 //! re-uploads ~3GB per query — completely negating GPU speedup.
 //!
+//! ## Status
+//!
+//! This module provides the complete caching infrastructure (versioned
+//! invalidation, hit/miss tracking, VRAM statistics). It is not yet wired
+//! into the traversal hot path because `wgpu::Buffer` has move-only semantics
+//! (no Clone), requiring an `Arc<Buffer>` wrapping refactor. The CSR-level
+//! caching is handled by [`CsrCache`](super::gpu_csr::CsrCache) on the CPU
+//! side; this module will handle the GPU-side buffer persistence in Phase 2.
+//!
 //! ## Versioned Invalidation
 //!
 //! The cache tracks [`CsrCache::version()`] to detect stale buffers.
@@ -15,6 +24,10 @@
 //! The cache is behind a [`parking_lot::RwLock`] for multi-query access.
 //! Read lock (fast path): cache hit check + buffer reference.
 //! Write lock (slow path): upload new buffers.
+
+// Module is staged infrastructure — API is complete but not yet called
+// from the traversal hot path. See module doc for rationale.
+#![allow(dead_code)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
