@@ -577,31 +577,44 @@ fn k_way_merge(runs: &[Vec<PostingEntry>]) -> Vec<PostingEntry> {
     let total_len: usize = runs.iter().map(Vec::len).sum();
     let mut result: Vec<PostingEntry> = Vec::with_capacity(total_len);
     let mut cursors: Vec<usize> = vec![0; runs.len()];
-    loop {
-        let mut min_doc_id: u64 = u64::MAX;
-        for (i, run) in runs.iter().enumerate() {
-            if cursors[i] < run.len() {
-                let did = run[cursors[i]].doc_id;
-                if did < min_doc_id {
-                    min_doc_id = did;
-                }
-            }
-        }
-        if min_doc_id == u64::MAX {
-            break;
-        }
-        let mut picked: Option<PostingEntry> = None;
-        for (i, run) in runs.iter().enumerate() {
-            if cursors[i] < run.len() && run[cursors[i]].doc_id == min_doc_id {
-                picked = Some(run[cursors[i]]);
-                cursors[i] += 1;
-            }
-        }
-        if let Some(entry) = picked {
+    while let Some(min_doc_id) = find_min_head_doc_id(runs, &cursors) {
+        if let Some(entry) = advance_matching_runs(runs, &mut cursors, min_doc_id) {
             result.push(entry);
         }
     }
     result
+}
+
+/// Returns the smallest `doc_id` among the current heads of `runs`,
+/// or `None` when every cursor has exhausted its run.
+#[inline]
+fn find_min_head_doc_id(runs: &[Vec<PostingEntry>], cursors: &[usize]) -> Option<u64> {
+    runs.iter()
+        .enumerate()
+        .filter_map(|(i, run)| run.get(cursors[i]).map(|entry| entry.doc_id))
+        .min()
+}
+
+/// Advances every cursor whose run-head matches `target_doc_id`, returning
+/// the entry from the **last** such run for the last-write-wins dedup
+/// documented on [`merge_sorted_runs`].
+#[inline]
+fn advance_matching_runs(
+    runs: &[Vec<PostingEntry>],
+    cursors: &mut [usize],
+    target_doc_id: u64,
+) -> Option<PostingEntry> {
+    let mut picked: Option<PostingEntry> = None;
+    for (i, run) in runs.iter().enumerate() {
+        if run
+            .get(cursors[i])
+            .is_some_and(|entry| entry.doc_id == target_doc_id)
+        {
+            picked = Some(run[cursors[i]]);
+            cursors[i] += 1;
+        }
+    }
+    picked
 }
 
 #[cfg(test)]
