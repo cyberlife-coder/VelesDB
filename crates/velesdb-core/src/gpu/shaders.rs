@@ -233,6 +233,13 @@ fn expand_frontier(@builtin(global_invocation_id) id: vec3<u32>) {
 ///
 /// Output matches CPU `CachedSimdDistance::distance()`: squared L2 (lower = closer).
 ///
+/// # u32 offset limit
+///
+/// The expression `node_id * dim` is computed in `u32` (WGSL has no u64
+/// scalar). Callers must ensure `num_vectors * dim <= u32::MAX` — this is
+/// enforced by [`crate::gpu::should_traverse_gpu`]. A `10M × 768` index
+/// would overflow (~7.68B > 4.29B) and silently return wrong distances.
+///
 /// Bind group layout (5 bindings — uses custom traversal distance layout):
 /// - binding 0: `storage(read)` — query vector
 /// - binding 1: `storage(read)` — all vectors (N × dim flat array)
@@ -282,6 +289,10 @@ fn traversal_euclidean_sq(@builtin(global_invocation_id) id: vec3<u32>) {
 /// Uses candidate ID indirection (same as `TRAVERSAL_EUCLIDEAN_SQ_SHADER`).
 /// Output: `1.0 - cosine_similarity` (lower = closer), matching CPU
 /// `CachedSimdDistance::distance()` for Cosine metric.
+///
+/// Same u32 offset limit as `TRAVERSAL_EUCLIDEAN_SQ_SHADER`: callers must
+/// ensure `num_vectors * dim <= u32::MAX` (gated by
+/// [`crate::gpu::should_traverse_gpu`]).
 pub(crate) const TRAVERSAL_COSINE_SHADER: &str = r"
 struct Params {
     dimension: u32,
@@ -334,6 +345,10 @@ fn traversal_cosine(@builtin(global_invocation_id) id: vec3<u32>) {
 /// Uses candidate ID indirection (same pattern).
 /// Output: `-dot_product` (lower = closer), matching CPU
 /// `CachedSimdDistance::distance()` for DotProduct metric.
+///
+/// Same u32 offset limit as `TRAVERSAL_EUCLIDEAN_SQ_SHADER`: callers must
+/// ensure `num_vectors * dim <= u32::MAX` (gated by
+/// [`crate::gpu::should_traverse_gpu`]).
 pub(crate) const TRAVERSAL_DOT_PRODUCT_SHADER: &str = r"
 struct Params {
     dimension: u32,
