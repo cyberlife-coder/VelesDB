@@ -424,6 +424,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 ef,
                 layer,
                 stagnation_limit,
+                use_prefetch,
             );
         } else {
             Self::search_loop_sequential(
