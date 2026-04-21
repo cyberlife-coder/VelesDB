@@ -190,6 +190,11 @@ impl NativeHnswInner {
     /// threshold (500K vectors), attempts GPU-accelerated layer-0 search.
     /// Falls back to CPU on any GPU error or if GPU is unavailable.
     ///
+    /// Returns raw distances in the same format as [`search`](Self::search) —
+    /// the caller **must** call [`transform_score`](Self::transform_score)
+    /// regardless of which path was taken. GPU shaders output HNSW-compatible
+    /// distances (1-cosine, squared L2, -dot) matching CPU semantics.
+    ///
     /// For `RaBitQ` backend, always uses CPU (binary distance GPU shader
     /// is not yet implemented).
     #[must_use]
