@@ -273,6 +273,43 @@ fn test_sparse_search_all_zero_query_returns_empty() {
     assert!(result.is_empty(), "empty query must yield empty results");
 }
 
+// ---------- DIRECT MAXSCORE COVERAGE ----------
+//
+// `sparse_search` now routes every corpus ≤ SMALL_CORPUS_LINEAR_THRESHOLD
+// to linear_scan, so the existing router-level tests no longer exercise
+// `maxscore_search`. These tests call the DAAT path directly to keep it
+// under parity coverage — the fast path in production is for > 100K docs.
+
+#[test]
+fn test_maxscore_search_direct_matches_brute_force_1k_corpus() {
+    let corpus = gen_positive_corpus(1_000, 2026);
+    let queries = gen_queries(20, 2027);
+    let index = build_index(&corpus);
+
+    for (qi, query) in queries.iter().enumerate() {
+        let bf = brute_force_search(&index, query, 10);
+        let ms = super::strategy::maxscore_search(&index, query, 10);
+        assert_eq!(
+            doc_ids(&bf),
+            doc_ids(&ms),
+            "Query {qi}: direct maxscore_search IDs diverge from brute-force"
+        );
+    }
+}
+
+#[test]
+fn test_maxscore_search_direct_scores_match_brute_force() {
+    let corpus = gen_positive_corpus(1_000, 3033);
+    let queries = gen_queries(10, 3034);
+    let index = build_index(&corpus);
+
+    for (qi, query) in queries.iter().enumerate() {
+        let bf = brute_force_search(&index, query, 10);
+        let ms = super::strategy::maxscore_search(&index, query, 10);
+        assert_scores_close(&bf, &ms, &format!("direct maxscore query {qi}"));
+    }
+}
+
 // ---------- REGRESSION: upsert across segment freeze must not double-count ----------
 //
 // Before the dedup fix in `k_way_merge`, re-inserting a doc after its
