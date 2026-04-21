@@ -9,6 +9,8 @@
 //!   when the graph topology changes (insert/delete).
 //! - **Multi-entry probing**: Mirrors CPU `adaptive_num_probes` for high-ef
 //!   searches, launching GPU traversal from multiple entry points.
+//! - **Arc vector snapshot**: Eliminates ~1.5GB per-query memcpy by caching
+//!   flat vectors in an `Arc<[f32]>`, refreshed only on count changes.
 
 use crate::distance::DistanceMetric;
 use super::super::distance::DistanceEngine;
@@ -70,12 +72,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             if layers.is_empty() {
                 return None;
             }
-            // Check if cached CSR is still valid for this graph
             if let Some(existing) = self.gpu_csr_cache.get_if_clean() {
                 if existing.num_nodes as usize == count {
                     return Some(existing);
                 }
-                // Node count changed — invalidate and rebuild
                 self.gpu_csr_cache.invalidate();
             }
             Some(self.gpu_csr_cache.get_or_rebuild(&layers[0], count))
@@ -87,34 +87,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // Only refreshed when the vector count changes (insert/delete).
         // Subsequent queries clone the Arc (O(1) pointer bump) instead of
         // copying ~1.5GB of vector data per query.
-        let (dimension, vectors_arc) = {
-            let mut snapshot = self.gpu_vectors_snapshot.lock();
-            if let Some((cached_count, cached_dim, ref cached_vecs)) = *snapshot {
-                if cached_count == count {
-                    (cached_dim, cached_vecs.clone())
-                } else {
-                    // Count changed — refresh snapshot
-                    let (dim, arc) = self.with_vectors_read(|vectors| {
-                        let d = vectors.dimension();
-                        let arc: std::sync::Arc<[f32]> =
-                            vectors.as_flat_slice().to_vec().into();
-                        (d, arc)
-                    });
-                    *snapshot = Some((count, dim, arc.clone()));
-                    (dim, arc)
-                }
-            } else {
-                // First call — create snapshot
-                let (dim, arc) = self.with_vectors_read(|vectors| {
-                    let d = vectors.dimension();
-                    let arc: std::sync::Arc<[f32]> =
-                        vectors.as_flat_slice().to_vec().into();
-                    (d, arc)
-                });
-                *snapshot = Some((count, dim, arc.clone()));
-                (dim, arc)
-            }
-        };
+        let (dimension, vectors_arc) = self.get_or_refresh_vector_snapshot(count);
 
         if dimension == 0 || vectors_arc.is_empty() {
             return None;
@@ -154,7 +127,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // Multi-entry GPU search: launch from diversified entry points
             // and merge results (matching CPU search_multi_entry pattern).
             let entry_points = self.diversified_entry_points(
-                &prepared, current_ep, num_probes, count,
+                current_ep,
+                num_probes,
+                count,
             );
 
             let mut all_results: Vec<(usize, f32)> = Vec::with_capacity(k * num_probes);
@@ -176,12 +151,44 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 return None;
             }
 
-            // Deduplicate and sort by distance
-            all_results.sort_by(|a, b| a.1.total_cmp(&b.1));
+            // Deduplicate by node ID, then sort by distance.
+            //
+            // Must sort by node ID first because dedup_by_key only removes
+            // *consecutive* duplicates. Sorting by distance first would leave
+            // non-adjacent duplicates (same node from different probes)
+            // interleaved with other nodes at similar distances.
+            all_results.sort_unstable_by_key(|r| r.0);
             all_results.dedup_by_key(|r| r.0);
+            all_results.sort_by(|a, b| a.1.total_cmp(&b.1));
             all_results.truncate(k);
             Some(all_results)
         }
+    }
+
+    /// Returns cached vector snapshot or refreshes it if the count changed.
+    ///
+    /// Returns `(dimension, Arc<[f32]>)`. The Arc clone is O(1) on cache hit.
+    fn get_or_refresh_vector_snapshot(
+        &self,
+        current_count: usize,
+    ) -> (usize, std::sync::Arc<[f32]>) {
+        let mut snapshot = self.gpu_vectors_snapshot.lock();
+
+        // Check if cached snapshot is still valid
+        if let Some((cached_count, cached_dim, ref cached_vecs)) = *snapshot {
+            if cached_count == current_count {
+                return (cached_dim, cached_vecs.clone());
+            }
+        }
+
+        // Cache miss or stale — refresh
+        let (dim, arc) = self.with_vectors_read(|vectors| {
+            let d = vectors.dimension();
+            let arc: std::sync::Arc<[f32]> = vectors.as_flat_slice().to_vec().into();
+            (d, arc)
+        });
+        *snapshot = Some((current_count, dim, arc.clone()));
+        (dim, arc)
     }
 
     /// Adaptive number of GPU entry-point probes.
@@ -208,7 +215,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// deterministic stride-based points for spatial coverage.
     fn diversified_entry_points(
         &self,
-        _query: &[f32],
         primary_ep: usize,
         num_probes: usize,
         count: usize,
