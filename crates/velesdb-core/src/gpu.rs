@@ -44,9 +44,7 @@ pub mod pq_gpu;
 #[path = "gpu/gpu_csr.rs"]
 pub mod gpu_csr;
 
-#[cfg(feature = "gpu")]
-#[path = "gpu/gpu_buffer_cache.rs"]
-pub mod gpu_buffer_cache;
+
 
 #[cfg(feature = "gpu")]
 #[path = "gpu/gpu_traversal.rs"]
@@ -58,8 +56,7 @@ pub use gpu_backend::GpuAccelerator;
 pub use pq_gpu::{gpu_kmeans_assign, should_use_gpu, PqGpuContext};
 #[cfg(feature = "gpu")]
 pub use gpu_traversal::{should_traverse_gpu, GpuTraversalContext, GpuTraversalStats};
-#[cfg(feature = "gpu")]
-pub use gpu_buffer_cache::GpuBufferCacheStats;
+
 
 /// Check if GPU dispatch is worthwhile (always false without gpu feature).
 #[cfg(not(feature = "gpu"))]
