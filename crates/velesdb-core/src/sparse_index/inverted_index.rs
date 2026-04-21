@@ -18,6 +18,19 @@ pub const FREEZE_THRESHOLD: usize = 10_000;
 
 /// A frozen (read-optimized) segment. The `f32` in the tuple is `max_weight`.
 ///
+/// # Invariants
+///
+/// Every posting list in `postings` is sorted ascending by `doc_id`. This
+/// is required by [`SparseInvertedIndex::get_all_postings`] (which feeds
+/// a k-way merge over the per-segment runs) and by
+/// [`super::search::strategy::linear_scan_search`] and
+/// `maxscore_search` (which assume sorted cursors). [`MutableSegment`]
+/// enforces the invariant via binary-search insert in `insert` and the
+/// merge-join in `merge_batch_postings`; `freeze_inner` moves the
+/// already-sorted posting lists into the frozen segment as-is. The
+/// persistence layer must preserve it when loading from disk — see the
+/// debug assertion in [`Self::new`].
+///
 /// `pub(crate)` fields are consumed exclusively by `index::sparse::persistence`,
 /// which is gated behind `feature = "persistence"`. Without that feature the
 /// compiler cannot see those usages, so the lint is suppressed here rather than
@@ -34,11 +47,24 @@ pub(crate) struct FrozenSegment {
 
 impl FrozenSegment {
     /// Creates a new frozen segment from postings and a document count.
+    ///
+    /// In debug builds, asserts the "sorted ascending by `doc_id`" invariant
+    /// documented on the struct. The check runs only under
+    /// `debug_assertions`, so release builds pay no cost. Persistence
+    /// layers that synthesise `FrozenSegment` values therefore exercise
+    /// the assertion during local / CI test runs before shipping a release
+    /// binary that relies on the invariant.
     #[allow(dead_code)] // Reason: Used by sparse::persistence behind `feature = "persistence"`
     pub(crate) fn new(
         postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
         doc_count: usize,
     ) -> Self {
+        debug_assert!(
+            postings
+                .iter()
+                .all(|(_, (entries, _))| entries.windows(2).all(|w| w[0].doc_id < w[1].doc_id)),
+            "FrozenSegment posting lists must be sorted ascending and deduplicated by doc_id"
+        );
         Self {
             postings,
             tombstones: FxHashSet::default(),
