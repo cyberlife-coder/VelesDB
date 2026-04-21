@@ -63,6 +63,18 @@ impl Collection {
     ///
     /// Returns an error if storage operations fail.
     pub fn flush_full(&self) -> Result<()> {
+        self.flush_core_storage()?;
+        self.flush_derived_indexes()?;
+        // Write the deferred vectors.idx AFTER all other flush steps.
+        self.vector_storage.read().flush_index()?;
+        Ok(())
+    }
+
+    /// Flushes config + vector/payload storage + drains + HNSW save.
+    ///
+    /// Extracted from `flush_full` to keep its CC under the Codacy limit
+    /// after adding the BM25 snapshot/WAL step (#389).
+    fn flush_core_storage(&self) -> Result<()> {
         self.save_config()?;
         self.vector_storage.write().flush()?;
         self.payload_storage.write().flush()?;
@@ -73,10 +85,33 @@ impl Collection {
         self.index.save(&self.path)?;
         self.inserts_since_last_hnsw_save
             .store(0, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Persists all derived indexes (secondary, sparse, BM25) in order.
+    ///
+    /// BM25 (issue #389) is ordered AFTER sparse so the collection-level
+    /// flush semantics remain "durable → truncate WAL" uniformly for both.
+    fn flush_derived_indexes(&self) -> Result<()> {
         self.flush_secondary_indexes()?;
         self.flush_sparse_indexes()?;
-        // Write the deferred vectors.idx after all other flush steps.
-        self.vector_storage.read().flush_index()?;
+        self.flush_bm25_index()?;
+        Ok(())
+    }
+
+    /// Persists the BM25 index as an atomic snapshot and truncates its
+    /// WAL on success (issue #389).
+    ///
+    /// Skipped entirely when the index is empty: no snapshot file is
+    /// created, so a pre-existing (non-BM25) collection reopened by
+    /// newer code does not gain a spurious empty snapshot.
+    fn flush_bm25_index(&self) -> Result<()> {
+        if self.text_index.is_empty() {
+            return Ok(());
+        }
+        crate::index::bm25_persistence::save_snapshot(&self.path, &self.text_index)?;
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.path);
+        crate::index::bm25_persistence_wal::wal_truncate(&wal_path)?;
         Ok(())
     }
 

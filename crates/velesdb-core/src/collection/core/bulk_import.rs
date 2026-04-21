@@ -86,38 +86,52 @@ impl Collection {
 
         self.store_vectors_and_payload_entries(&vector_refs, &payload_entries)?;
 
-        self.update_text_index_from_raw(ids, payloads);
+        self.update_text_index_from_raw(ids, payloads)?;
         self.update_label_index_from_raw(ids, payloads);
         self.update_secondary_indexes_from_raw(ids, payloads);
 
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
 
-        // Incremental histogram maintenance: decrement old values, increment new.
-        // Bug #47: only the last occurrence per ID is counted for new payloads
-        // to match last-writer-wins storage semantics.
-        if let Some(ps) = payloads {
-            let mut dedup_map: HashMap<u64, usize> = HashMap::with_capacity(ids.len());
-            for (i, &id) in ids.iter().enumerate() {
-                dedup_map.insert(id, i);
-            }
-            let owned: Vec<Option<serde_json::Value>> = ps
-                .iter()
-                .enumerate()
-                .map(|(i, opt)| {
-                    if dedup_map.get(&ids[i]) == Some(&i) {
-                        opt.clone()
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            self.update_histograms_replace(&old_payloads, &owned);
-        }
+        self.maintain_histograms_for_raw(ids, payloads, &old_payloads);
 
         self.invalidate_caches_and_bump_generation();
 
         Ok(inserted)
+    }
+
+    /// Incremental histogram maintenance for a raw-slices bulk upsert.
+    ///
+    /// Decrements old values and increments new values in a single atomic
+    /// read/modify/write cycle (Bug #49). Bug #47: only the last occurrence
+    /// per ID is counted for new payloads to match last-writer-wins storage
+    /// semantics.
+    ///
+    /// Extracted from `upsert_bulk_from_raw` to keep its CC under the
+    /// Codacy limit after adding the BM25 WAL propagation (#389).
+    fn maintain_histograms_for_raw(
+        &self,
+        ids: &[u64],
+        payloads: Option<&[Option<serde_json::Value>]>,
+        old_payloads: &[Option<serde_json::Value>],
+    ) {
+        let Some(ps) = payloads else { return };
+        let mut dedup_map: HashMap<u64, usize> = HashMap::with_capacity(ids.len());
+        for (i, &id) in ids.iter().enumerate() {
+            dedup_map.insert(id, i);
+        }
+        let owned: Vec<Option<serde_json::Value>> = ps
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                if dedup_map.get(&ids[i]) == Some(&i) {
+                    opt.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.update_histograms_replace(old_payloads, &owned);
     }
 
     /// Validates raw bulk-insert inputs before any state mutation.
@@ -242,27 +256,38 @@ impl Collection {
         }
     }
 
-    /// Updates BM25 text index from raw payload slices.
+    /// Updates BM25 text index from raw payload slices (WAL-then-apply).
     ///
-    /// Points with `Some(payload)` get their text indexed.
-    /// Points with `None` payload get their stale BM25 entry removed
-    /// (consistent with `update_text_index` in `crud.rs`).
+    /// Points with `Some(payload)` get their text indexed; points with
+    /// `None` payload get their stale BM25 entry removed. Mirrors the
+    /// contract of `update_text_index` in `crud.rs`.
+    ///
+    /// Issue #389: each mutation is appended to the BM25 WAL BEFORE it
+    /// is applied in-memory so that a crash between the two replays
+    /// the mutation on next open. WAL append errors propagate and the
+    /// in-memory mutation is skipped, so in-memory and WAL state never
+    /// diverge.
     fn update_text_index_from_raw(
         &self,
         ids: &[u64],
         payloads: Option<&[Option<serde_json::Value>]>,
-    ) {
-        let Some(ps) = payloads else { return };
+    ) -> Result<()> {
+        let Some(ps) = payloads else { return Ok(()) };
         for (i, opt) in ps.iter().enumerate() {
             if let Some(payload) = opt {
                 let text = Self::extract_text_from_payload(payload);
                 if !text.is_empty() {
+                    #[cfg(feature = "persistence")]
+                    self.append_bm25_wal_add(ids[i], &text)?;
                     self.text_index.add_document(ids[i], &text);
                 }
             } else {
+                #[cfg(feature = "persistence")]
+                self.append_bm25_wal_remove(ids[i])?;
                 self.text_index.remove_document(ids[i]);
             }
         }
+        Ok(())
     }
 
     /// Batch-updates the label index from raw payload slices.

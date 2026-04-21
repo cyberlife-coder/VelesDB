@@ -41,9 +41,10 @@
 use super::posting_list::PostingList;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 
 /// BM25 tuning parameters.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Bm25Params {
     /// Term frequency saturation parameter (default: 1.2)
     pub k1: f32,
@@ -58,13 +59,37 @@ impl Default for Bm25Params {
 }
 
 /// A document stored in the BM25 index.
-#[derive(Debug, Clone)]
-struct Document {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct Document {
     /// Term frequencies in this document
-    term_freqs: FxHashMap<String, u32>,
+    pub(crate) term_freqs: FxHashMap<String, u32>,
     /// Total number of terms in the document
-    length: u32,
+    pub(crate) length: u32,
 }
+
+/// Serializable full-state snapshot of a [`Bm25Index`].
+///
+/// Captures the in-memory state in a form that round-trips through
+/// postcard. The `inverted_index` is not stored explicitly — it is
+/// rebuilt from `documents` + `point_to_doc` on
+/// [`Bm25Index::from_snapshot`], which keeps the wire format compact
+/// and avoids adding `Serialize` to the adaptive `PostingList` enum.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct Bm25Snapshot {
+    /// Schema version for forward-compat (bump on breaking changes).
+    pub(crate) version: u32,
+    pub(crate) params: Bm25Params,
+    pub(crate) documents: FxHashMap<u64, Document>,
+    pub(crate) point_to_doc: FxHashMap<u64, u32>,
+    pub(crate) doc_to_point: FxHashMap<u32, u64>,
+    pub(crate) free_doc_ids: Vec<u32>,
+    pub(crate) next_doc_id: u32,
+    pub(crate) doc_count: usize,
+    pub(crate) total_doc_length: u64,
+}
+
+/// Current [`Bm25Snapshot`] schema version. Bump on breaking changes.
+pub(crate) const BM25_SNAPSHOT_VERSION: u32 = 1;
 
 /// BM25 full-text search index.
 ///
@@ -442,5 +467,108 @@ impl Bm25Index {
 impl Default for Bm25Index {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot serialization (for `bm25_persistence` module)
+// ---------------------------------------------------------------------------
+
+impl Bm25Index {
+    /// Captures the current index state as a [`Bm25Snapshot`].
+    ///
+    /// Takes a snapshot under read locks — callers that need a
+    /// coherent picture across mutations must serialise writes
+    /// externally (the intended caller is `Collection::flush_full`,
+    /// which already holds the collection-level write lock when it
+    /// snapshots the BM25 index).
+    ///
+    /// ## Wire format
+    ///
+    /// Only the primary state (documents, mapping tables, counters)
+    /// is serialised. The `inverted_index` is rebuilt from
+    /// `documents` on [`Self::from_snapshot`]. This keeps the wire
+    /// format compact and avoids adding `Serialize` to the adaptive
+    /// `PostingList` enum (which would fix its internal representation
+    /// and block future tuning).
+    #[must_use]
+    pub(crate) fn to_snapshot(&self) -> Bm25Snapshot {
+        // Lock acquisition order (stable across to_snapshot / load paths):
+        //   documents → point_to_doc → doc_to_point → free_doc_ids
+        //   → next_doc_id → doc_count → total_doc_length.
+        // Holding multiple read locks simultaneously is safe: parking_lot
+        // RwLock reads never block each other, and no code path takes a
+        // write lock *after* a read lock on a lower-positioned field.
+        let documents = self.documents.read();
+        let point_to_doc = self.point_to_doc.read();
+        let doc_to_point = self.doc_to_point.read();
+        let free_doc_ids = self.free_doc_ids.read();
+        let next_doc_id = *self.next_doc_id.read();
+        let doc_count = *self.doc_count.read();
+        let total_doc_length = *self.total_doc_length.read();
+        Bm25Snapshot {
+            version: BM25_SNAPSHOT_VERSION,
+            params: self.params,
+            documents: documents.clone(),
+            point_to_doc: point_to_doc.clone(),
+            doc_to_point: doc_to_point.clone(),
+            free_doc_ids: free_doc_ids.clone(),
+            next_doc_id,
+            doc_count,
+            total_doc_length,
+        }
+    }
+
+    /// Rebuilds an index from a [`Bm25Snapshot`].
+    ///
+    /// The inverted index is reconstructed from `snapshot.documents`
+    /// and `snapshot.point_to_doc` — iterating each document's
+    /// `term_freqs` keys and inserting the internal doc-id into the
+    /// corresponding posting list. This mirrors exactly what
+    /// `add_document` does for the inverted-index update, so the
+    /// rebuilt postings are bitwise-identical to the original for
+    /// any fixed insertion order.
+    ///
+    /// # Errors
+    ///
+    /// Silently skips documents missing from `point_to_doc`. Such a
+    /// mismatch would indicate a corrupt snapshot and is logged
+    /// rather than raised, matching the existing BM25
+    /// `remove_document_internal` tolerance for unknown ids.
+    #[must_use]
+    pub(crate) fn from_snapshot(snapshot: Bm25Snapshot) -> Self {
+        let index = Self::with_params(snapshot.params);
+
+        // Rebuild inverted index from `documents` + `point_to_doc`.
+        // We use a single write-lock scope on `inverted_index` for
+        // efficiency — there is no other reader during construction.
+        {
+            let mut inv_idx = index.inverted_index.write();
+            for (point_id, doc) in &snapshot.documents {
+                let Some(&doc_id_u32) = snapshot.point_to_doc.get(point_id) else {
+                    tracing::warn!(
+                        "BM25 snapshot: document for point_id {point_id} missing from point_to_doc — skipping inverted-index reconstruction for this doc"
+                    );
+                    continue;
+                };
+                for term in doc.term_freqs.keys() {
+                    inv_idx
+                        .entry(term.clone())
+                        .or_insert_with(PostingList::new)
+                        .insert(doc_id_u32);
+                }
+            }
+        }
+
+        // Install primary state under the same lock order as to_snapshot.
+        *index.documents.write() = snapshot.documents;
+        *index.point_to_doc.write() = snapshot.point_to_doc;
+        *index.doc_to_point.write() = snapshot.doc_to_point;
+        *index.free_doc_ids.write() = snapshot.free_doc_ids;
+        *index.next_doc_id.write() = snapshot.next_doc_id;
+        *index.doc_count.write() = snapshot.doc_count;
+        *index.total_doc_length.write() = snapshot.total_doc_length;
+
+        index
     }
 }

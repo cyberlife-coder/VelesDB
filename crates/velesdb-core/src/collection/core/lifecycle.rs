@@ -1,19 +1,17 @@
 //! Collection lifecycle methods (create, open, flush).
 
+use crate::collection::graph::property_index::{
+    CompositeIndexManager, IndexAdvisor, QueryPatternTracker,
+};
 use crate::collection::graph::{ConcurrentEdgeStore, LabelIndex, PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig};
 use crate::error::Result;
 use crate::guardrails::GuardRails;
+use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex};
 use crate::sparse_index::DEFAULT_SPARSE_INDEX_NAME;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
-
-use crate::index::sparse::SparseInvertedIndex;
-
-use crate::collection::graph::property_index::{
-    CompositeIndexManager, IndexAdvisor, QueryPatternTracker,
-};
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -203,6 +201,43 @@ impl Collection {
         }
     }
 
+    /// Loads the BM25 index from its snapshot + WAL if present, falling
+    /// back to the payload-scan rebuild otherwise.
+    ///
+    /// Issue #389: O(N) cold-start rebuild → O(1) snapshot load + O(WAL
+    /// delta) replay.
+    ///
+    /// # Contract
+    ///
+    /// - Snapshot present → load + replay WAL on top.
+    /// - Snapshot absent → fall back to the legacy payload rebuild
+    ///   (backward-compat for DBs written before this feature).
+    /// - Snapshot corrupt → propagate the error (fail-fast, per #618
+    ///   learning: silent fallback masks data loss).
+    fn load_bm25_index(
+        path: &std::path::Path,
+        payload_storage: &Arc<RwLock<LogPayloadStorage>>,
+    ) -> Result<Arc<Bm25Index>> {
+        if let Some(loaded) = crate::index::bm25_persistence::load_snapshot(path)? {
+            let index = Arc::new(loaded);
+            let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(path);
+            let replayed = crate::index::bm25_persistence_wal::wal_replay(&wal_path, &index)?;
+            tracing::debug!(
+                "BM25 restored from snapshot + {replayed} WAL entries ({} docs)",
+                index.len()
+            );
+            Ok(index)
+        } else {
+            let index = Arc::new(Bm25Index::new());
+            Self::rebuild_bm25_index(payload_storage, &index);
+            tracing::debug!(
+                "BM25 snapshot absent; rebuilt from payload storage ({} docs)",
+                index.len()
+            );
+            Ok(index)
+        }
+    }
+
     // Create constructors are in lifecycle_create.rs
 
     /// Returns true if this is a metadata-only collection.
@@ -240,9 +275,9 @@ impl Collection {
         let vector_storage = Arc::new(RwLock::new(MmapStorage::new(&path, config.dimension)?));
         let payload_storage = Arc::new(RwLock::new(LogPayloadStorage::new(&path)?));
         let index = Self::load_or_create_hnsw(&path, &config)?;
-        let text_index = Arc::new(Bm25Index::new());
-
-        Self::rebuild_bm25_index(&payload_storage, &text_index);
+        // Issue #389: try snapshot + WAL first, fall back to payload
+        // rebuild if no snapshot exists (backward-compat).
+        let text_index = Self::load_bm25_index(&path, &payload_storage)?;
 
         let property_index = Self::load_property_index(&path);
         let label_index = Self::rebuild_label_index(&payload_storage);

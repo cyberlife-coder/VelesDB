@@ -89,6 +89,10 @@ impl Collection {
         for &id in ids {
             let old_payload = payload_storage.retrieve(id).ok().flatten();
             payload_storage.delete(id)?;
+            // Issue #389: WAL-before-apply for BM25 removes so crash
+            // recovery replays the remove.
+            #[cfg(feature = "persistence")]
+            self.append_bm25_wal_remove(id)?;
             self.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             if let Some(ref old) = old_payload {
@@ -128,6 +132,10 @@ impl Collection {
             sq8_cache.remove(&id);
             binary_cache.remove(&id);
             pq_cache.remove(&id);
+            // Issue #389: WAL-before-apply for BM25 removes so crash
+            // recovery replays the remove.
+            #[cfg(feature = "persistence")]
+            self.append_bm25_wal_remove(id)?;
             self.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             if let Some(ref old) = old_payload {

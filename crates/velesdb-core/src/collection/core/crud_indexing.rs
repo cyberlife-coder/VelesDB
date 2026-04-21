@@ -135,16 +135,47 @@ impl Collection {
         }
     }
 
-    /// Updates the BM25 text index for a single point.
-    pub(super) fn update_text_index(text_index: &crate::index::Bm25Index, point: &Point) {
+    /// Updates the BM25 text index for a single point (WAL-then-apply).
+    ///
+    /// Issue #389: appends the mutation to `bm25.wal` BEFORE calling
+    /// `add_document` / `remove_document` on the in-memory index so
+    /// that a crash between the two replays the mutation on next
+    /// open. WAL append errors propagate; the in-memory mutation is
+    /// skipped so in-memory and WAL state never diverge.
+    pub(super) fn update_text_index(&self, point: &Point) -> Result<()> {
         if let Some(payload) = &point.payload {
             let text = Self::extract_text_from_payload(payload);
             if !text.is_empty() {
-                text_index.add_document(point.id, &text);
+                #[cfg(feature = "persistence")]
+                self.append_bm25_wal_add(point.id, &text)?;
+                self.text_index.add_document(point.id, &text);
             }
         } else {
-            text_index.remove_document(point.id);
+            #[cfg(feature = "persistence")]
+            self.append_bm25_wal_remove(point.id)?;
+            self.text_index.remove_document(point.id);
         }
+        Ok(())
+    }
+
+    /// Appends an `add_document` mutation to the BM25 WAL.
+    ///
+    /// Feature-gated — non-persistence builds have no on-disk WAL.
+    /// Callers already gate on `feature = "persistence"` when they
+    /// need crash-safety ordering.
+    #[cfg(feature = "persistence")]
+    #[inline]
+    pub(super) fn append_bm25_wal_add(&self, id: u64, text: &str) -> Result<()> {
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.path);
+        crate::index::bm25_persistence_wal::wal_append_add_document(&wal_path, id, text)
+    }
+
+    /// Appends a `remove_document` mutation to the BM25 WAL.
+    #[cfg(feature = "persistence")]
+    #[inline]
+    pub(super) fn append_bm25_wal_remove(&self, id: u64) -> Result<()> {
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.path);
+        crate::index::bm25_persistence_wal::wal_append_remove_document(&wal_path, id)
     }
 
     /// Appends `(name, point_id, sparse_vector)` triples to the per-index
