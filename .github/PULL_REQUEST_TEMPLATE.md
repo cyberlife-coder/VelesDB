@@ -1,3 +1,11 @@
+## ⚠️ Target branch (Git Flow)
+
+> Enforced by the `PR Governance` workflow — the PR will be rejected if these rules are not respected.
+
+- `feat/*`, `feature/*`, `fix/*`, `bugfix/*`, `chore/*`, `docs/*`, `perf/*`, `refactor/*`, `test/*`, `ci/*`, `build/*`, `style/*` → **target `develop`**
+- `release/*`, `hotfix/*`, `support/*`, or `develop` itself → **target `main`**
+- Any other combination is rejected. See [CONTRIBUTING.md](../CONTRIBUTING.md) for the full Git Flow model.
+
 ## Description
 
 Please include a summary of the changes and the related issue. Include relevant motivation and context.
