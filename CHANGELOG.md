@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.13.0] — 2026-04-18
+## [1.13.0] — 2026-04-22
 
 ### Summary
 
@@ -20,6 +20,71 @@ validation). Pre-seed credibility audit: the README now carries
 reproducer commands next to every performance claim, a dedicated
 "Known Limitations" section for scope transparency, and a refreshed
 test-count badge (7634 tests across Rust, TypeScript, Python).
+
+**Pre-seed remediation (Option D)** — 10 phases merged across
+`#611`–`#623`: BM25 persistence cold-start dropped from O(N) to O(1),
+sparse search speed-up of 16× on 10K-doc corpora via k-way merge +
+corpus-size-aware routing, HNSW search reduced by 12–22 % on the
+sequential (< 10K) path through software prefetch plumbing, plus
+significant duplication cleanup in the collection, HNSW, and vector
+search layers (jscpd `collection/` 84→75 clones, `hnsw/` 19→9,
+`search/vector.rs` 14.31 %→2.47 %). Zero regression cumulatively —
+recall gate (Fast 0.90 / Balanced 0.95 / Accurate 0.99 / Perfect 1.00)
+passes on every phase.
+
+### Added — Pre-seed remediation
+
+- **Phase 4.3 — HNSW sequential loop prefetch** (`#623`, progresses
+  `#377`): `search_loop_sequential` now honours `use_prefetch` so
+  datasets below the 10K pipeline threshold also benefit from
+  intra-gather software prefetch. `NativeHnsw::search_layer` refactored
+  via Fowler extract-function to `dispatch_layer_search` for clarity
+  and NLOC compliance. Measured gains (i9-14900KF, criterion): 
+  `search_layer/768d/ef50` −12.2 %, `ef128` −16.4 %, `ef256` −14.3 %;
+  `search_layer/128d/ef50` −21.7 %. Prefetch is a CPU hint only — recall
+  unchanged by construction (22/22 recall tests pass).
+
+- **Phase 4.2 — Sparse search 16× speedup** (`#621`, closes `#378`):
+  k-way merge in `get_all_postings` + `get_merged_postings_for_compaction`
+  eliminates O(N log N) sort, and corpus-size-aware routing adds a
+  `linear_scan_dense` fast path for corpora ≤ 100K (accumulator stays
+  L2-resident). `sparse_search(top-10, 10K docs, SPLADE)` drops from
+  ≈956 µs to ≈57.6 µs; top-100 drops 927 µs → 75.1 µs. Block-Max WAND
+  was implemented and passed parity (10/10 vs brute-force) but regressed
+  +65 % on this workload; kept in git history for reference but routed
+  out — a lesson on "profile before implementing a complex structure".
+
+- **Phase 4.1 — BM25 persistence cold-start** (`#619`, `#620` docs,
+  closes `#389`): BM25 index now persists via snapshot + WAL with a
+  generation counter committing `meta` last as the authoritative point.
+  Cold-start dropped from O(N) rebuild (re-tokenize every document) to
+  O(1) snapshot load. `KNOWN_LIMITATIONS.md` entry for BM25 cold-start
+  removed by `#620`.
+
+- **Phase 3 refactor wave — duplication cleanup**:
+  - `#614` (closes `#450`): WAL/crud dedup — extract histogram + sparse
+    WAL helpers. `Collection::upsert` CC 9→8. jscpd 84→82 clones on
+    `collection/`.
+  - `#615` (closes `#448`): HNSW distance/batch/persistence/search
+    dedup. jscpd `hnsw/` 19→9 clones (−53 %). `#[inline]` restored on
+    helpers extracted from hot paths (lesson from Devin on PR #615).
+  - `#616` (closes `#452`): vector search dispatch dedup — extract
+    finalize + validate helpers. jscpd `search/vector.rs` 14.31 %→2.47 %.
+  - `#618` (closes `#617`): HNSW `save_sidecars` atomicity fix via
+    generation counter; corruption fail-fast instead of silent reset.
+
+- **Phase 2B — CBO ORDER BY similarity routing** (`#613`, scope-reduced
+  `#467`): the cost-based optimiser now routes `ORDER BY similarity()`
+  queries through the native HNSW path when applicable.
+
+- **Phase 2A — EXPLAIN follow-ups** (`#612`, closes `#607` `#608`
+  `#609`): minor EXPLAIN readability and plan-cost consistency fixes.
+
+- **Phase 1 — SIFT1M pin + tunable fallback** (`#611`): JSON fingerprint
+  pinning for the SIFT1M fvecs/ivecs payload, filter-strategy fallback
+  threshold runtime-tunable via a dedicated knob.
+
+### Added — Benchmarks
 
 ### Added — Benchmarks
 
