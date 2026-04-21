@@ -518,10 +518,12 @@ impl SparseInvertedIndex {
 /// [`SparseInvertedIndex::collect_frozen_runs`] and
 /// [`SparseInvertedIndex::collect_mutable_run`] first.
 ///
-/// Preserves the historical behaviour of the pre-refactor `get_all_postings`:
-/// if a `doc_id` appears in more than one run (an upsert that crossed a
-/// segment freeze), all occurrences are emitted adjacent in the output.
-/// Dedup semantics for that case are handled in a dedicated follow-up.
+/// Applies **last-write-wins** semantics when a `doc_id` appears in more
+/// than one run: callers place mutable data after frozen data, so an
+/// upsert that crossed a segment freeze contributes its mutable weight
+/// exactly once instead of double-counting the stale frozen entry when
+/// downstream consumers (e.g. `linear_scan_search`, `brute_force_search`)
+/// sum posting weights into an accumulator map.
 #[inline]
 fn merge_sorted_runs(
     frozen_runs: Vec<Vec<PostingEntry>>,
@@ -538,30 +540,40 @@ fn merge_sorted_runs(
     }
 }
 
-/// k-way merge of sorted runs. Picks the smallest `doc_id` per iteration
-/// from the first run containing it, advancing only that cursor. When
-/// several runs share the current minimum, successive iterations emit
-/// each of them in run order — preserving the output shape of the old
-/// `result.sort_by_key(|e| e.doc_id)` path.
+/// k-way merge of sorted runs with last-write-wins dedup.
+///
+/// On each iteration picks the smallest `doc_id` across all run heads,
+/// then advances **every** cursor whose head matches that `doc_id`,
+/// keeping the entry from the last such run. This coalesces
+/// duplicate-`doc_id` entries produced by an upsert crossing a segment
+/// freeze into a single output entry with the newest weight.
 fn k_way_merge(runs: &[Vec<PostingEntry>]) -> Vec<PostingEntry> {
     let total_len: usize = runs.iter().map(Vec::len).sum();
     let mut result: Vec<PostingEntry> = Vec::with_capacity(total_len);
     let mut cursors: Vec<usize> = vec![0; runs.len()];
     loop {
-        let mut min_idx: Option<usize> = None;
         let mut min_doc_id: u64 = u64::MAX;
         for (i, run) in runs.iter().enumerate() {
             if cursors[i] < run.len() {
                 let did = run[cursors[i]].doc_id;
                 if did < min_doc_id {
                     min_doc_id = did;
-                    min_idx = Some(i);
                 }
             }
         }
-        let Some(i) = min_idx else { break };
-        result.push(runs[i][cursors[i]]);
-        cursors[i] += 1;
+        if min_doc_id == u64::MAX {
+            break;
+        }
+        let mut picked: Option<PostingEntry> = None;
+        for (i, run) in runs.iter().enumerate() {
+            if cursors[i] < run.len() && run[cursors[i]].doc_id == min_doc_id {
+                picked = Some(run[cursors[i]]);
+                cursors[i] += 1;
+            }
+        }
+        if let Some(entry) = picked {
+            result.push(entry);
+        }
     }
     result
 }

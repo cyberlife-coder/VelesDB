@@ -273,6 +273,44 @@ fn test_sparse_search_all_zero_query_returns_empty() {
     assert!(result.is_empty(), "empty query must yield empty results");
 }
 
+// ---------- REGRESSION: upsert across segment freeze must not double-count ----------
+//
+// Before the dedup fix in `k_way_merge`, re-inserting a doc after its
+// frozen copy was sealed produced two posting entries for the same
+// `doc_id`. `linear_scan_search` and `brute_force_search` both accumulate
+// `qw * weight` per entry into a hash map, so the stale frozen weight was
+// silently added to the fresh mutable weight — the returned score could
+// exceed the true inner product by the size of the frozen weight.
+
+#[test]
+fn test_sparse_search_upsert_across_segments_uses_latest_weight() {
+    let index = SparseInvertedIndex::new();
+    // Fill mutable up to FREEZE_THRESHOLD — insertion #FREEZE_THRESHOLD
+    // triggers the freeze internally, so every doc ends up in the frozen
+    // segment with baseline weight 0.1.
+    for i in 0..FREEZE_THRESHOLD {
+        #[allow(clippy::cast_possible_truncation)]
+        index.insert(i as u64, &SparseVector::new(vec![(1, 0.1)]));
+    }
+    // Post-freeze: re-insert doc 0 with a much higher weight. The new
+    // entry lands in the fresh (empty) mutable segment.
+    index.insert(0, &SparseVector::new(vec![(1, 10.0)]));
+
+    let query = SparseVector::new(vec![(1, 1.0)]);
+    let results = sparse_search(&index, &query, 5);
+
+    assert!(!results.is_empty(), "expected at least one result");
+    assert_eq!(
+        results[0].doc_id, 0,
+        "doc 0 should be the top match after the upsert"
+    );
+    assert!(
+        (results[0].score - 10.0).abs() < 1e-5,
+        "upsert across segments must replace, not add: expected 10.0, got {}",
+        results[0].score
+    );
+}
+
 #[test]
 fn test_sparse_search_deterministic_across_invocations() {
     let corpus = gen_positive_corpus(500, 11);
