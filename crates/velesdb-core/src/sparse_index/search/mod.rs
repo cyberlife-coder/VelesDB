@@ -21,6 +21,22 @@ use strategy::{linear_scan_search, maxscore_search};
 /// `doc_count * num_query_terms`, the linear scan fallback is used.
 const FULL_SCAN_THRESHOLD: f32 = 0.3;
 
+/// Doc-count threshold below which the linear scan path is preferred
+/// unconditionally.
+///
+/// At this size the dense accumulator (`4 * doc_count` bytes) fits in L2
+/// cache (`<= 400 KB` for 100K docs on typical x86-64 CPUs), so a single
+/// cache-hot pass over the posting entries beats the cursor / heap /
+/// binary-search overhead of `MaxScore` DAAT. Above this threshold the
+/// existing coverage-based heuristic chooses between DAAT and linear scan.
+///
+/// Empirical basis: on 10K SPLADE-like corpus, forcing linear scan dropped
+/// `sparse_search top10` latency from ~956 µs to ~60 µs — a 15x speedup
+/// that stems from the dense-accumulator path being cache-friendly for
+/// moderate corpora. Reassess this constant once a million-doc sparse
+/// benchmark is added.
+const SMALL_CORPUS_LINEAR_THRESHOLD: u64 = 100_000;
+
 /// Maximum doc ID for which we use a dense accumulator array.
 /// Above this threshold we fall back to a hash map.
 ///
@@ -31,8 +47,17 @@ const MAX_DENSE_ACCUMULATOR: u64 = 1_000_000;
 
 /// Searches the sparse inverted index for the top-k documents by inner product.
 ///
-/// Automatically selects between `MaxScore` DAAT and linear scan based on a
-/// coverage heuristic.
+/// Routing strategy (in order):
+/// 1. Small corpora (`doc_count <= SMALL_CORPUS_LINEAR_THRESHOLD`) always use
+///    linear scan — the dense accumulator stays L2-resident and the tight
+///    loop beats DAAT overhead.
+/// 2. Queries with any negative weight use linear scan (the `MaxScore` upper
+///    bound is only valid for non-negative query / document weights — see
+///    CRITICAL-1 below).
+/// 3. Queries whose coverage (`total_postings / (doc_count * nnz)`) exceeds
+///    `FULL_SCAN_THRESHOLD` use linear scan because DAAT pruning would
+///    contribute little.
+/// 4. Otherwise, `MaxScore` DAAT with early termination.
 #[must_use]
 pub fn sparse_search(
     index: &SparseInvertedIndex,
@@ -43,15 +68,7 @@ pub fn sparse_search(
         return Vec::new();
     }
 
-    // Decide search strategy based on coverage heuristic.
     let doc_count = index.doc_count();
-    let mut total_postings: usize = 0;
-    for &term_id in &query.indices {
-        total_postings += index.posting_count(term_id);
-    }
-
-    let threshold = FULL_SCAN_THRESHOLD * doc_count as f32 * query.nnz() as f32;
-    let use_linear = (total_postings as f32) > threshold;
 
     // CRITICAL-1: MaxScore DAAT computes upper bounds as
     // `query_weight.abs() * max_doc_weight`, which is incorrect when query
@@ -59,7 +76,21 @@ pub fn sparse_search(
     // product can be positive but the bound treats it as zero-or-negative
     // contribution). Fall back to linear scan for any query with negative weights.
     let has_negative_weight = query.values.iter().any(|&w| w < 0.0);
-    if use_linear || has_negative_weight {
+
+    // Small corpus fast path: dense linear scan keeps the entire accumulator
+    // in L2 cache and avoids DAAT's cursor/heap overhead.
+    if doc_count <= SMALL_CORPUS_LINEAR_THRESHOLD || has_negative_weight {
+        return linear_scan_search(index, query, k);
+    }
+
+    // Coverage heuristic for large corpora: linear scan still wins when the
+    // query terms cover a large slice of the index.
+    let mut total_postings: usize = 0;
+    for &term_id in &query.indices {
+        total_postings += index.posting_count(term_id);
+    }
+    let coverage_threshold = FULL_SCAN_THRESHOLD * doc_count as f32 * query.nnz() as f32;
+    if (total_postings as f32) > coverage_threshold {
         linear_scan_search(index, query, k)
     } else {
         maxscore_search(index, query, k)
