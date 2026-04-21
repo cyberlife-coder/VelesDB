@@ -295,8 +295,7 @@ fn test_thread_config_auto() {
     // Should be at least 1 thread
     assert!(threads >= 1);
     // Should be less than or equal to CPU count
-    let cpu_count =
-        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    let cpu_count = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
     assert!(threads <= cpu_count);
 }
 
