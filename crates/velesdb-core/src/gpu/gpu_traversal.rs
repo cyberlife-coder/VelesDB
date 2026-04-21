@@ -112,22 +112,22 @@ impl GpuTraversalContext {
         let device = gpu.device();
 
         let expand_pipeline = Self::compile_expand_pipeline(device);
-        let distance_cosine_pipeline = Self::compile_distance_pipeline(
+        let distance_cosine_pipeline = Self::compile_traversal_distance_pipeline(
             device,
-            super::gpu_backend::shaders::COSINE_SHADER,
-            "batch_cosine",
+            super::gpu_backend::shaders::TRAVERSAL_COSINE_SHADER,
+            "traversal_cosine",
             "Traversal Cosine",
         );
-        let distance_euclidean_sq_pipeline = Self::compile_distance_pipeline(
+        let distance_euclidean_sq_pipeline = Self::compile_traversal_distance_pipeline(
             device,
-            super::gpu_backend::shaders::BATCH_EUCLIDEAN_SQ_SHADER,
-            "batch_euclidean_sq",
+            super::gpu_backend::shaders::TRAVERSAL_EUCLIDEAN_SQ_SHADER,
+            "traversal_euclidean_sq",
             "Traversal Euclidean Sq",
         );
-        let distance_dot_pipeline = Self::compile_distance_pipeline(
+        let distance_dot_pipeline = Self::compile_traversal_distance_pipeline(
             device,
-            super::gpu_backend::shaders::DOT_PRODUCT_SHADER,
-            "batch_dot",
+            super::gpu_backend::shaders::TRAVERSAL_DOT_PRODUCT_SHADER,
+            "traversal_dot",
             "Traversal Dot Product",
         );
         let select_pipeline = Self::compile_select_pipeline(device);
@@ -347,7 +347,9 @@ impl GpuTraversalContext {
         })
     }
 
-    fn compile_distance_pipeline(
+    /// Compiles a traversal-specific distance pipeline with 5 bindings
+    /// (query, vectors, candidate_ids, results, params).
+    fn compile_traversal_distance_pipeline(
         device: &wgpu::Device,
         shader_source: &str,
         entry_point: &str,
@@ -358,8 +360,10 @@ impl GpuTraversalContext {
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        let layout =
-            super::helpers::create_quad_bind_group_layout(device, &format!("{label} BGL"));
+        let layout = Self::create_traversal_distance_bind_group_layout(
+            device,
+            &format!("{label} BGL"),
+        );
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&format!("{label} PL")),
             bind_group_layouts: &[&layout],
@@ -434,6 +438,26 @@ impl GpuTraversalContext {
         })
     }
 
+    /// Creates a bind group layout for traversal distance shaders.
+    ///
+    /// 5 bindings: query(read), vectors(read), candidate_ids(read),
+    /// results(read_write), params(uniform).
+    fn create_traversal_distance_bind_group_layout(
+        device: &wgpu::Device,
+        label: &str,
+    ) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(label),
+            entries: &[
+                storage_entry(0, true),  // query
+                storage_entry(1, true),  // vectors
+                storage_entry(2, true),  // candidate_ids (from expand pass)
+                storage_entry(3, false), // results (distances)
+                uniform_entry(4),        // params
+            ],
+        })
+    }
+
     // =========================================================================
     // Pass encoding
     // =========================================================================
@@ -458,7 +482,9 @@ impl GpuTraversalContext {
         });
         pass.set_pipeline(&self.expand_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        let workgroups = buffers.frontier_size.div_ceil(256) as u32;
+        // Fix: dispatch based on ef (full beam width), not frontier_size.
+        // When ef > 256, we need multiple workgroups to expand all frontier nodes.
+        let workgroups = buffers.ef.div_ceil(256) as u32;
         pass.dispatch_workgroups(workgroups.max(1), 1, 1);
     }
 
@@ -556,8 +582,6 @@ struct TraversalBuffers {
     staging_dists: wgpu::Buffer,
 
     // Metadata
-    frontier_size: usize,
-    #[allow(dead_code)]
     ef: usize,
 }
 
@@ -596,6 +620,20 @@ impl TraversalBuffers {
             contents: bytemuck::cast_slice(query),
             usage: wgpu::BufferUsages::STORAGE,
         });
+
+        // --- Visited bitset: zero-initialize and pre-mark entry node ---
+        let visited_words = (csr.num_nodes as usize).div_ceil(32);
+        let mut visited_data = vec![0u32; visited_words.max(1)];
+        // Pre-mark entry node as visited to avoid redundant re-expansion
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            let entry_u32 = entry_node as u32;
+            if (entry_u32 as usize) < csr.num_nodes as usize {
+                let word_idx = (entry_u32 / 32) as usize;
+                let bit_idx = entry_u32 % 32;
+                visited_data[word_idx] |= 1u32 << bit_idx;
+            }
+        }
 
         // --- Frontier (double-buffered) ---
         let frontier_buf_size = (ef * std::mem::size_of::<u32>()) as u64;
@@ -661,13 +699,11 @@ impl TraversalBuffers {
             mapped_at_creation: false,
         });
 
-        // --- Visited bitset (u32 words, one bit per node) ---
-        let visited_words = (csr.num_nodes as usize).div_ceil(32);
-        let visited = device.create_buffer(&wgpu::BufferDescriptor {
+        // --- Visited bitset: upload pre-initialized data (entry node pre-marked) ---
+        let visited = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Visited Bitset"),
-            size: (visited_words * std::mem::size_of::<u32>()).max(4) as u64,
+            contents: bytemuck::cast_slice(&visited_data),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
         });
 
         // --- Counters ---
@@ -747,7 +783,6 @@ impl TraversalBuffers {
             distance_params,
             staging_ids,
             staging_dists,
-            frontier_size: 1, // Start with entry point only
             ef,
         }
     }
@@ -773,6 +808,11 @@ impl TraversalBuffers {
         })
     }
 
+    /// Creates bind group for traversal distance pass.
+    ///
+    /// 5 bindings: query, vectors, candidate_ids, results, params.
+    /// The candidate_ids buffer provides indirection from the expand pass —
+    /// each thread uses candidate_ids[idx] to look up the actual vector.
     fn create_distance_bind_group(
         &self,
         device: &wgpu::Device,
@@ -785,8 +825,9 @@ impl TraversalBuffers {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: self.query.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: self.vectors.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: self.candidate_dists.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: self.distance_params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.candidates.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: self.candidate_dists.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: self.distance_params.as_entire_binding() },
             ],
         })
     }

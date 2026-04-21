@@ -221,31 +221,50 @@ fn expand_frontier(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 ";
 
-/// WGSL compute shader for batch squared Euclidean distance (no sqrt).
+/// WGSL compute shader for traversal-specific batch squared Euclidean distance.
 ///
-/// Matches `CachedSimdDistance::distance()` for Euclidean metric, which
-/// returns squared L2 (no sqrt) in the HNSW traversal hot loop. The sqrt
-/// is deferred to `transform_score()` applied only to the final k results.
+/// Unlike the generic `BATCH_EUCLIDEAN_SQ_SHADER`, this shader uses **candidate
+/// ID indirection**: each thread reads `candidate_ids[idx]` to get the actual
+/// node ID, then looks up `vectors[node_id * dim .. (node_id+1) * dim]`.
 ///
-/// Uses the standard quad bind-group layout (same as cosine/euclidean/dot).
-pub(crate) const BATCH_EUCLIDEAN_SQ_SHADER: &str = r"
+/// This is critical because the expand pass writes arbitrary node IDs (e.g.,
+/// 42, 1337, 50000) into the candidates buffer — computing distance for
+/// sequential indices 0..N would produce completely wrong results.
+///
+/// Output matches CPU `CachedSimdDistance::distance()`: squared L2 (lower = closer).
+///
+/// Bind group layout (5 bindings — uses custom traversal distance layout):
+/// - binding 0: `storage(read)` — query vector
+/// - binding 1: `storage(read)` — all vectors (N × dim flat array)
+/// - binding 2: `storage(read)` — candidate_ids (node IDs from expand pass)
+/// - binding 3: `storage(read_write)` — results (distances, one per candidate)
+/// - binding 4: `uniform` — params (dimension, max_candidates)
+pub(crate) const TRAVERSAL_EUCLIDEAN_SQ_SHADER: &str = r"
 struct Params {
     dimension: u32,
-    num_vectors: u32,
+    max_candidates: u32,
 }
 
 @group(0) @binding(0) var<storage, read> query: array<f32>;
 @group(0) @binding(1) var<storage, read> vectors: array<f32>;
-@group(0) @binding(2) var<storage, read_write> results: array<f32>;
-@group(0) @binding(3) var<uniform> params: Params;
+@group(0) @binding(2) var<storage, read> candidate_ids: array<u32>;
+@group(0) @binding(3) var<storage, read_write> results: array<f32>;
+@group(0) @binding(4) var<uniform> params: Params;
 
 @compute @workgroup_size(256)
-fn batch_euclidean_sq(@builtin(global_invocation_id) id: vec3<u32>) {
+fn traversal_euclidean_sq(@builtin(global_invocation_id) id: vec3<u32>) {
     let idx = id.x;
-    if (idx >= params.num_vectors) { return; }
+    if (idx >= params.max_candidates) { return; }
+
+    let node_id = candidate_ids[idx];
+    // Sentinel check: unexpanded slots have u32::MAX
+    if (node_id == 0xFFFFFFFFu) {
+        results[idx] = 3.4028235e+38;
+        return;
+    }
 
     let dim = params.dimension;
-    let offset = idx * dim;
+    let offset = node_id * dim;
     var sum_sq: f32 = 0.0;
 
     for (var i: u32 = 0u; i < dim; i = i + 1u) {
@@ -253,7 +272,101 @@ fn batch_euclidean_sq(@builtin(global_invocation_id) id: vec3<u32>) {
         sum_sq = sum_sq + diff * diff;
     }
 
+    // Squared L2: lower = closer (matches CPU CachedSimdDistance)
     results[idx] = sum_sq;
+}
+";
+
+/// WGSL compute shader for traversal-specific batch cosine distance.
+///
+/// Uses candidate ID indirection (same as `TRAVERSAL_EUCLIDEAN_SQ_SHADER`).
+/// Output: `1.0 - cosine_similarity` (lower = closer), matching CPU
+/// `CachedSimdDistance::distance()` for Cosine metric.
+pub(crate) const TRAVERSAL_COSINE_SHADER: &str = r"
+struct Params {
+    dimension: u32,
+    max_candidates: u32,
+}
+
+@group(0) @binding(0) var<storage, read> query: array<f32>;
+@group(0) @binding(1) var<storage, read> vectors: array<f32>;
+@group(0) @binding(2) var<storage, read> candidate_ids: array<u32>;
+@group(0) @binding(3) var<storage, read_write> results: array<f32>;
+@group(0) @binding(4) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn traversal_cosine(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if (idx >= params.max_candidates) { return; }
+
+    let node_id = candidate_ids[idx];
+    if (node_id == 0xFFFFFFFFu) {
+        results[idx] = 3.4028235e+38;
+        return;
+    }
+
+    let dim = params.dimension;
+    let offset = node_id * dim;
+    var dot: f32 = 0.0;
+    var norm_q: f32 = 0.0;
+    var norm_v: f32 = 0.0;
+
+    for (var i: u32 = 0u; i < dim; i = i + 1u) {
+        let q = query[i];
+        let v = vectors[offset + i];
+        dot = dot + q * v;
+        norm_q = norm_q + q * q;
+        norm_v = norm_v + v * v;
+    }
+
+    let denom = sqrt(norm_q) * sqrt(norm_v);
+    if (denom > 0.0) {
+        // 1 - similarity: lower = closer (matches CPU CachedSimdDistance)
+        results[idx] = 1.0 - (dot / denom);
+    } else {
+        results[idx] = 1.0;
+    }
+}
+";
+
+/// WGSL compute shader for traversal-specific batch dot-product distance.
+///
+/// Uses candidate ID indirection (same pattern).
+/// Output: `-dot_product` (lower = closer), matching CPU
+/// `CachedSimdDistance::distance()` for DotProduct metric.
+pub(crate) const TRAVERSAL_DOT_PRODUCT_SHADER: &str = r"
+struct Params {
+    dimension: u32,
+    max_candidates: u32,
+}
+
+@group(0) @binding(0) var<storage, read> query: array<f32>;
+@group(0) @binding(1) var<storage, read> vectors: array<f32>;
+@group(0) @binding(2) var<storage, read> candidate_ids: array<u32>;
+@group(0) @binding(3) var<storage, read_write> results: array<f32>;
+@group(0) @binding(4) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn traversal_dot(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if (idx >= params.max_candidates) { return; }
+
+    let node_id = candidate_ids[idx];
+    if (node_id == 0xFFFFFFFFu) {
+        results[idx] = 3.4028235e+38;
+        return;
+    }
+
+    let dim = params.dimension;
+    let offset = node_id * dim;
+    var dot: f32 = 0.0;
+
+    for (var i: u32 = 0u; i < dim; i = i + 1u) {
+        dot = dot + query[i] * vectors[offset + i];
+    }
+
+    // Negate: lower = closer (matches CPU CachedSimdDistance)
+    results[idx] = -dot;
 }
 ";
 

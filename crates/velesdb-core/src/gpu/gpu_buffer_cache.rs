@@ -95,8 +95,6 @@ impl GpuBufferCache {
         guard.is_some()
     }
 
-    /// Uploads new graph buffers to GPU and caches them.
-    ///
     /// Replaces any previously cached buffers. The old buffers are
     /// dropped (GPU memory freed by wgpu when the `Buffer` is dropped).
     #[allow(dead_code)]
@@ -107,7 +105,7 @@ impl GpuBufferCache {
         vectors_flat: &[f32],
         dimension: usize,
         csr_version: u64,
-    ) -> CachedGraphBuffers {
+    ) {
         use wgpu::util::DeviceExt;
 
         let csr_offsets = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -134,43 +132,18 @@ impl GpuBufferCache {
             0
         };
 
-        // Calculate VRAM usage
         #[allow(clippy::cast_possible_truncation)]
         let vram_bytes = (csr.offsets_byte_size()
             + csr.neighbors_byte_size()
             + vectors_flat.len() * std::mem::size_of::<f32>()) as u64;
 
-        let cached = CachedGraphBuffers {
-            csr_offsets,
-            csr_neighbors,
-            vectors,
-            csr_version,
-            num_nodes: csr.num_nodes,
-            dimension,
-            num_vectors,
-            last_accessed: Instant::now(),
-            vram_bytes,
-        };
-
-        // Update cache
+        // Store in cache — single allocation, no duplicate buffers
         {
             let mut guard = self.buffers.write();
             *guard = Some(CachedGraphBuffers {
-                csr_offsets: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Cached CSR Offsets"),
-                    contents: bytemuck::cast_slice(&csr.offsets),
-                    usage: wgpu::BufferUsages::STORAGE,
-                }),
-                csr_neighbors: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Cached CSR Neighbors"),
-                    contents: bytemuck::cast_slice(&csr.neighbors),
-                    usage: wgpu::BufferUsages::STORAGE,
-                }),
-                vectors: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Cached Vectors"),
-                    contents: bytemuck::cast_slice(vectors_flat),
-                    usage: wgpu::BufferUsages::STORAGE,
-                }),
+                csr_offsets,
+                csr_neighbors,
+                vectors,
                 csr_version,
                 num_nodes: csr.num_nodes,
                 dimension,
@@ -188,8 +161,6 @@ impl GpuBufferCache {
             vram_mb = vram_bytes / (1024 * 1024),
             "GPU buffer cache: uploaded new graph buffers"
         );
-
-        cached
     }
 
     /// Records a cache hit and updates the last-accessed timestamp.
