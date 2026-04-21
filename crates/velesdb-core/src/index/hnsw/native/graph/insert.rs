@@ -105,6 +105,14 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
         self.promote_entry_point(node_id, node_layer);
         self.count.fetch_add(1, Ordering::Relaxed);
+
+        // Invalidate GPU caches — topology and vectors both changed.
+        #[cfg(feature = "gpu")]
+        {
+            self.gpu_csr_cache.invalidate();
+            *self.gpu_vectors_snapshot.lock() = None;
+        }
+
         Ok(node_id)
     }
 
