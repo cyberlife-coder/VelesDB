@@ -10,6 +10,9 @@
 mod scoring;
 mod strategy;
 
+#[cfg(test)]
+mod bmw_parity_tests;
+
 use super::inverted_index::SparseInvertedIndex;
 use super::types::{ScoredDoc, SparseVector};
 use strategy::{linear_scan_search, maxscore_search};
