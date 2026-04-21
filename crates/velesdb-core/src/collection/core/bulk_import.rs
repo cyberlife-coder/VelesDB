@@ -93,31 +93,45 @@ impl Collection {
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
 
-        // Incremental histogram maintenance: decrement old values, increment new.
-        // Bug #47: only the last occurrence per ID is counted for new payloads
-        // to match last-writer-wins storage semantics.
-        if let Some(ps) = payloads {
-            let mut dedup_map: HashMap<u64, usize> = HashMap::with_capacity(ids.len());
-            for (i, &id) in ids.iter().enumerate() {
-                dedup_map.insert(id, i);
-            }
-            let owned: Vec<Option<serde_json::Value>> = ps
-                .iter()
-                .enumerate()
-                .map(|(i, opt)| {
-                    if dedup_map.get(&ids[i]) == Some(&i) {
-                        opt.clone()
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            self.update_histograms_replace(&old_payloads, &owned);
-        }
+        self.maintain_histograms_for_raw(ids, payloads, &old_payloads);
 
         self.invalidate_caches_and_bump_generation();
 
         Ok(inserted)
+    }
+
+    /// Incremental histogram maintenance for a raw-slices bulk upsert.
+    ///
+    /// Decrements old values and increments new values in a single atomic
+    /// read/modify/write cycle (Bug #49). Bug #47: only the last occurrence
+    /// per ID is counted for new payloads to match last-writer-wins storage
+    /// semantics.
+    ///
+    /// Extracted from `upsert_bulk_from_raw` to keep its CC under the
+    /// Codacy limit after adding the BM25 WAL propagation (#389).
+    fn maintain_histograms_for_raw(
+        &self,
+        ids: &[u64],
+        payloads: Option<&[Option<serde_json::Value>]>,
+        old_payloads: &[Option<serde_json::Value>],
+    ) {
+        let Some(ps) = payloads else { return };
+        let mut dedup_map: HashMap<u64, usize> = HashMap::with_capacity(ids.len());
+        for (i, &id) in ids.iter().enumerate() {
+            dedup_map.insert(id, i);
+        }
+        let owned: Vec<Option<serde_json::Value>> = ps
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                if dedup_map.get(&ids[i]) == Some(&i) {
+                    opt.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.update_histograms_replace(old_payloads, &owned);
     }
 
     /// Validates raw bulk-insert inputs before any state mutation.

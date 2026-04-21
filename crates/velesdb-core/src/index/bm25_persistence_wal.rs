@@ -68,30 +68,56 @@ pub(crate) fn wal_path_for_bm25(dir: &Path) -> PathBuf {
 #[inline]
 pub(crate) fn wal_append_add_document(wal_path: &Path, id: u64, text: &str) -> Result<()> {
     let text_bytes = text.as_bytes();
-    let text_len = u32::try_from(text_bytes.len()).map_err(|_| {
+    let text_len = encode_text_len(text_bytes)?;
+    let body_len = add_entry_body_len(text_len)?;
+
+    let mut w = open_wal_writer(wal_path)?;
+    wal_write(&mut w, &body_len.to_le_bytes())?;
+    write_add_entry_body(&mut w, id, text_len, text_bytes)?;
+    flush_wal(&mut w)
+}
+
+/// Validates that `text_bytes.len()` fits in a `u32` and returns the cast.
+///
+/// Extracted from [`wal_append_add_document`] to keep its CC under the
+/// Codacy limit (#389).
+#[inline]
+fn encode_text_len(text_bytes: &[u8]) -> Result<u32> {
+    u32::try_from(text_bytes.len()).map_err(|_| {
         Error::Index(format!(
             "BM25 WAL: text too large ({} bytes) to encode",
             text_bytes.len()
         ))
-    })?;
+    })
+}
 
-    // body = op(1) + point_id(8) + text_len(4) + text_bytes
-    let body_len = u32::try_from(ADD_ENTRY_HEADER)
-        .ok()
-        .and_then(|h| h.checked_add(text_len))
-        .ok_or_else(|| {
-            Error::Index(format!(
-                "BM25 WAL: entry too large (text_len={text_len}) to fit in u32 prefix"
-            ))
-        })?;
+/// Computes the `u32` body length for an `Add` entry = `op(1)` +
+/// `point_id(8)` + `text_len(4)` + `text_bytes`. Fails if the sum
+/// overflows `u32`.
+#[inline]
+fn add_entry_body_len(text_len: u32) -> Result<u32> {
+    let header =
+        u32::try_from(ADD_ENTRY_HEADER).expect("ADD_ENTRY_HEADER fits in u32 (compile-time)");
+    header.checked_add(text_len).ok_or_else(|| {
+        Error::Index(format!(
+            "BM25 WAL: entry too large (text_len={text_len}) to fit in u32 prefix"
+        ))
+    })
+}
 
-    let mut w = open_wal_writer(wal_path)?;
-    wal_write(&mut w, &body_len.to_le_bytes())?;
-    wal_write(&mut w, &[WAL_OP_ADD])?;
-    wal_write(&mut w, &id.to_le_bytes())?;
-    wal_write(&mut w, &text_len.to_le_bytes())?;
-    wal_write(&mut w, text_bytes)?;
-    flush_wal(&mut w)
+/// Writes the body of an `Add` entry (op byte + `point_id` + `text_len`
+/// + text) into an already-prefixed WAL writer.
+#[inline]
+fn write_add_entry_body(
+    w: &mut std::io::BufWriter<std::fs::File>,
+    id: u64,
+    text_len: u32,
+    text_bytes: &[u8],
+) -> Result<()> {
+    wal_write(w, &[WAL_OP_ADD])?;
+    wal_write(w, &id.to_le_bytes())?;
+    wal_write(w, &text_len.to_le_bytes())?;
+    wal_write(w, text_bytes)
 }
 
 /// Appends a `remove_document(id)` mutation to the BM25 WAL.

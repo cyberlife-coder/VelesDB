@@ -63,6 +63,18 @@ impl Collection {
     ///
     /// Returns an error if storage operations fail.
     pub fn flush_full(&self) -> Result<()> {
+        self.flush_core_storage()?;
+        self.flush_derived_indexes()?;
+        // Write the deferred vectors.idx AFTER all other flush steps.
+        self.vector_storage.read().flush_index()?;
+        Ok(())
+    }
+
+    /// Flushes config + vector/payload storage + drains + HNSW save.
+    ///
+    /// Extracted from `flush_full` to keep its CC under the Codacy limit
+    /// after adding the BM25 snapshot/WAL step (#389).
+    fn flush_core_storage(&self) -> Result<()> {
         self.save_config()?;
         self.vector_storage.write().flush()?;
         self.payload_storage.write().flush()?;
@@ -73,15 +85,17 @@ impl Collection {
         self.index.save(&self.path)?;
         self.inserts_since_last_hnsw_save
             .store(0, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Persists all derived indexes (secondary, sparse, BM25) in order.
+    ///
+    /// BM25 (issue #389) is ordered AFTER sparse so the collection-level
+    /// flush semantics remain "durable → truncate WAL" uniformly for both.
+    fn flush_derived_indexes(&self) -> Result<()> {
         self.flush_secondary_indexes()?;
         self.flush_sparse_indexes()?;
-        // Issue #389: persist BM25 index as a snapshot + truncate WAL.
-        // Ordered AFTER sparse indexes so the collection-level flush
-        // semantics remain "durable → truncate WAL" for both BM25 and
-        // sparse.
         self.flush_bm25_index()?;
-        // Write the deferred vectors.idx after all other flush steps.
-        self.vector_storage.read().flush_index()?;
         Ok(())
     }
 
