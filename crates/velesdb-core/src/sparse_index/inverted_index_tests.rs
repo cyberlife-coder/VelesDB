@@ -296,3 +296,46 @@ fn test_dedup_last_write_wins_across_segments() {
         entry.weight
     );
 }
+
+#[test]
+fn test_dedup_last_write_wins_across_multiple_frozen_segments() {
+    // Force doc 0 into TWO frozen segments with different weights, with no
+    // mutable entry for it at compaction time. The newer frozen segment
+    // must win, mirroring `get_all_postings`' last-write-wins semantics.
+    let index = SparseInvertedIndex::new();
+
+    // Segment 1: doc 0 with weight 1.0.
+    for i in 0..FREEZE_THRESHOLD {
+        index.insert(i as u64, &make_vector(vec![(7, 1.0)]));
+    }
+    assert_eq!(index.frozen_count(), 1);
+
+    // Upsert doc 0 with weight 5.0 — lands in the fresh post-freeze
+    // mutable segment.
+    index.insert(0, &make_vector(vec![(7, 5.0)]));
+
+    // Add FREEZE_THRESHOLD - 1 more distinct docs so the mutable reaches
+    // the threshold on its final insert and freezes. After this,
+    // frozen[0] holds doc 0 @ 1.0 and frozen[1] holds doc 0 @ 5.0,
+    // and the mutable is empty — no mutable entry for doc 0.
+    for i in FREEZE_THRESHOLD..(2 * FREEZE_THRESHOLD - 1) {
+        index.insert(i as u64, &make_vector(vec![(7, 1.0)]));
+    }
+    assert_eq!(
+        index.frozen_count(),
+        2,
+        "second freeze must have happened before compaction"
+    );
+
+    let compacted = index.get_merged_postings_for_compaction();
+    let (entries, _) = compacted.get(&7).expect("term 7 must be present");
+    let entry = entries
+        .iter()
+        .find(|e| e.doc_id == 0)
+        .expect("doc 0 must be present");
+    assert!(
+        (entry.weight - 5.0).abs() < 1e-5,
+        "newer frozen (weight 5.0) must win over older frozen (1.0); got {}",
+        entry.weight
+    );
+}

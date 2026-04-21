@@ -474,12 +474,20 @@ impl SparseInvertedIndex {
     ///
     /// ## Last-write-wins semantics
     ///
-    /// The mutable segment holds the newest writes; frozen segments are older.
-    /// To preserve newest-wins when the same `doc_id` appears in both, mutable
-    /// entries are inserted **first** into the per-term buffer. After a stable
-    /// sort by `doc_id`, each mutable entry precedes any same-id frozen entry,
-    /// so `dedup_by_key` (which retains the first occurrence) keeps the mutable
-    /// (newer) weight.
+    /// The mutable segment holds the newest writes; frozen segments sit
+    /// in `self.frozen` with the **oldest** at index 0 and the **newest**
+    /// at the tail (push-append at freeze time). To preserve newest-wins
+    /// across every pair of sources — mutable vs frozen, and frozen-N vs
+    /// frozen-M — entries are appended to the per-term buffer in this
+    /// order: mutable first, then frozen segments **newest-first** (via
+    /// `frozen_vec.iter().rev()`). A stable `sort_by_key` preserves the
+    /// relative order of equal-`doc_id` entries, so `dedup_by_key` (which
+    /// retains the first occurrence) keeps the mutable entry when present,
+    /// otherwise the newest frozen entry.
+    ///
+    /// Matches the dedup contract of
+    /// [`Self::get_all_postings`] — both paths select the latest weight
+    /// for a `doc_id` that appears in multiple segments.
     #[must_use]
     pub fn get_merged_postings_for_compaction(&self) -> FxHashMap<u32, (Vec<PostingEntry>, f32)> {
         let mut merged: FxHashMap<u32, Vec<PostingEntry>> = FxHashMap::default();
@@ -493,10 +501,13 @@ impl SparseInvertedIndex {
             }
         }
 
-        // Append frozen entries (older), filtering tombstones.
+        // Append frozen entries newest-first (reverse iteration) and
+        // filter tombstones. Newer frozen segments therefore precede older
+        // ones for any shared `doc_id`, which the stable sort preserves
+        // and `dedup_by_key` converts into last-write-wins.
         {
             let frozen_vec = self.frozen.read();
-            for frozen_seg in frozen_vec.iter() {
+            for frozen_seg in frozen_vec.iter().rev() {
                 for (&term_id, (entries, _)) in &frozen_seg.postings {
                     let dest = merged.entry(term_id).or_default();
                     for entry in entries {
@@ -509,9 +520,9 @@ impl SparseInvertedIndex {
         }
 
         // Sort by doc_id then dedup, keeping the first occurrence per doc_id.
-        // Because mutable entries were inserted before frozen entries, the first
-        // occurrence of any doc_id that appears in both segments is the mutable
-        // (newer) one — last-write-wins is correctly enforced.
+        // Because entries were appended mutable-first then frozen newest-first,
+        // the first occurrence of any shared doc_id after the stable sort is
+        // the newest source — full last-write-wins across all segment pairs.
         let mut result: FxHashMap<u32, (Vec<PostingEntry>, f32)> = FxHashMap::default();
         for (term_id, mut entries) in merged {
             entries.sort_by_key(|e| e.doc_id);
