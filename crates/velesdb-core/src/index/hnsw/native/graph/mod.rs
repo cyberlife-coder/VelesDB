@@ -111,7 +111,23 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// Invalidated automatically on insert/delete via `CsrCache::invalidate()`.
     #[cfg(feature = "gpu")]
     pub(in crate::index::hnsw::native) gpu_csr_cache: crate::gpu::gpu_csr::CsrCache,
+    /// Cached flat vector snapshot for GPU upload.
+    ///
+    /// Stores `(count_at_snapshot, dimension, Arc<[f32]>)`. Only refreshed
+    /// when the vector count changes, eliminating the ~1.5GB per-query copy
+    /// at the 500K+ GPU activation threshold.
+    #[cfg(feature = "gpu")]
+    pub(in crate::index::hnsw::native) gpu_vectors_snapshot:
+        parking_lot::Mutex<Option<GpuVectorsSnapshot>>,
 }
+
+/// Cached GPU vector snapshot: `(count, dimension, flat_vectors)`.
+///
+/// Only refreshed when the vector count changes. Subsequent queries
+/// clone the `Arc` (O(1) pointer bump) instead of copying ~1.5GB.
+#[cfg(feature = "gpu")]
+pub(in crate::index::hnsw::native) type GpuVectorsSnapshot =
+    (usize, usize, std::sync::Arc<[f32]>);
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Creates a new native HNSW index with VAMANA diversification (`alpha = 1.2`).
@@ -240,6 +256,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             columnar: RwLock::new(None),
             #[cfg(feature = "gpu")]
             gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),
+            #[cfg(feature = "gpu")]
+            gpu_vectors_snapshot: parking_lot::Mutex::new(None),
         }
     }
 
