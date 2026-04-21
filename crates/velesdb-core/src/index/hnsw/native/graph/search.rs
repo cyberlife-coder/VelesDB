@@ -228,7 +228,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 "entry {entry} out of bounds (len {})",
                 vectors.len()
             );
-            // SAFETY: entry < vectors.len() — verified by debug_assert above.
+            // SAFETY: `get_unchecked` dereferences `entry` without bounds checks.
+            // - Condition 1: `entry < vectors.len()` verified by `debug_assert!` above.
+            // SAFETY: Skipping the bounds check avoids a branch in the HNSW hot path.
             let entry_vec = unsafe { vectors.get_unchecked(entry) };
             let mut best_dist = self.distance.distance(query, entry_vec);
 
@@ -305,7 +307,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 "neighbor {neighbor} out of bounds (len {})",
                 vectors.len()
             );
-            // SAFETY: neighbor < vectors.len() — verified by debug_assert above.
+            // SAFETY: `get_unchecked` dereferences `neighbor` without bounds checks.
+            // - Condition 1: `neighbor < vectors.len()` verified by `debug_assert!` above.
+            // SAFETY: Skipping the bounds check avoids a branch in the HNSW hot path.
             let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
             let dist = self.distance.distance(query, neighbor_vec);
             if dist < *best_dist {
@@ -359,59 +363,93 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                     "ep {ep} out of bounds (len {})",
                     vectors.len()
                 );
-                // SAFETY: ep < vectors.len() — verified by debug_assert above.
+                // SAFETY: `get_unchecked` dereferences `ep` without bounds checks.
+                // - Condition 1: `ep < vectors.len()` verified by `debug_assert!` above.
+                // SAFETY: Skipping the bounds check avoids a branch in the HNSW hot path.
                 let ep_vec = unsafe { vectors.get_unchecked(ep) };
                 let dist = self.distance.distance(query, ep_vec);
                 state.push_candidate(ep, dist);
             }
 
-            // Pipeline only benefits when the dataset is large enough that
-            // neighbor vectors are frequently evicted from L3 cache between
-            // accesses.  For small indices the data stays cache-hot and the
-            // speculative peek overhead dominates.
-            //
-            // Threshold: >= 10 000 vectors.  At 768-dim (3 KB/vec) this
-            // corresponds to ~30 MB — well beyond typical per-core L3
-            // slices.  The constant is platform-agnostic: even CPUs with
-            // large L3 benefit because the HNSW random-access pattern
-            // reduces effective cache residency.
-            let use_pipeline = use_prefetch && vectors.len() >= 10_000;
-
-            if use_pipeline {
-                // Pipelined path: overlap prefetch of batch[i+1] with
-                // distance computation of batch[i].
-                super::search_pipeline::search_layer_pipelined(
-                    &self.distance,
-                    query,
-                    vectors,
-                    layers,
-                    &mut state,
-                    ef,
-                    layer,
-                    stagnation_limit,
-                );
-            } else {
-                // Non-pipelined path: sequential gather → compute → process.
-                Self::search_loop_sequential(
-                    &self.distance,
-                    query,
-                    vectors,
-                    layers,
-                    &mut state,
-                    ef,
-                    layer,
-                    stagnation_limit,
-                );
-            }
+            Self::dispatch_layer_search(
+                &self.distance,
+                query,
+                vectors,
+                layers,
+                &mut state,
+                ef,
+                layer,
+                stagnation_limit,
+                use_prefetch,
+            );
         });
 
         state.into_sorted_results(result_limit)
     }
 
-    /// Non-pipelined search loop (small vectors where prefetch has no benefit).
+    /// Dispatches layer search to the pipelined or sequential path.
+    ///
+    /// Pipeline only benefits when the dataset is large enough that neighbor
+    /// vectors are frequently evicted from L3 cache between accesses. For
+    /// small indices the data stays cache-hot and speculative peek overhead
+    /// dominates. Threshold: `>= 10_000` vectors (~30 MB at 768-dim,
+    /// platform-agnostic because HNSW random access reduces effective
+    /// cache residency).
+    ///
+    /// Phase 4.3 (#377): both branches honor `use_prefetch`, so datasets
+    /// below the pipeline threshold still get intra-gather prefetch when
+    /// vectors exceed cache line size. Prefetch is a CPU hint — heap order
+    /// and result set remain bit-identical.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_layer_search(
+        distance: &D,
+        query: &[f32],
+        vectors: &ContiguousVectors,
+        layers: &[Layer],
+        state: &mut SearchState,
+        ef: usize,
+        layer: usize,
+        stagnation_limit: usize,
+        use_prefetch: bool,
+    ) {
+        let use_pipeline = use_prefetch && vectors.len() >= 10_000;
+        if use_pipeline {
+            super::search_pipeline::search_layer_pipelined(
+                distance,
+                query,
+                vectors,
+                layers,
+                state,
+                ef,
+                layer,
+                stagnation_limit,
+                use_prefetch,
+            );
+        } else {
+            Self::search_loop_sequential(
+                distance,
+                query,
+                vectors,
+                layers,
+                state,
+                ef,
+                layer,
+                stagnation_limit,
+                use_prefetch,
+            );
+        }
+    }
+
+    /// Non-pipelined search loop (dataset size below pipeline threshold).
     ///
     /// Sequentially gathers unvisited neighbors, computes distances, and
     /// processes results for each candidate.
+    ///
+    /// `use_prefetch` enables intra-gather software prefetch of neighbor
+    /// vectors (Issue #377, Phase 4.3). Disabled for low-dimension vectors
+    /// that already fit in cache — controlled by the caller via
+    /// [`should_prefetch`].
     #[inline]
     #[allow(clippy::too_many_arguments)]
     fn search_loop_sequential(
@@ -423,6 +461,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         ef: usize,
         layer: usize,
         stagnation_limit: usize,
+        use_prefetch: bool,
     ) {
         while let Some(Reverse((OrderedFloat(c_dist), c_node))) = state.candidates.pop() {
             if state.should_terminate(c_dist, ef, stagnation_limit) {
@@ -431,8 +470,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
             let improved = layers[layer]
                 .with_neighbors(c_node, |neighbors| {
-                    let batch =
-                        gather_unvisited_neighbors(neighbors, &mut state.visited, vectors, false);
+                    let batch = gather_unvisited_neighbors(
+                        neighbors,
+                        &mut state.visited,
+                        vectors,
+                        use_prefetch,
+                    );
                     if batch.is_empty() {
                         return false;
                     }

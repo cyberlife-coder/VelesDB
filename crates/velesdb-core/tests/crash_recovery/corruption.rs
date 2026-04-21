@@ -240,7 +240,7 @@ fn test_truncation_to_zero() {
         let result = VectorCollection::open(temp.path().to_path_buf());
 
         // Empty file should cause an error
-        assert!(result.is_err() || result.as_ref().map(VectorCollection::len).unwrap_or(0) == 0);
+        assert!(result.is_err() || result.as_ref().map_or(0, VectorCollection::len) == 0);
     }
 }
 

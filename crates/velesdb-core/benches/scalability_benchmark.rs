@@ -375,11 +375,10 @@ fn bench_memory_usage(c: &mut Criterion) {
 
                         // Report memory on first iteration
                         if iter == 0 {
-                            let mem_per_vector = if size > 0 {
-                                (mem_after.saturating_sub(mem_before)) / size
-                            } else {
-                                0
-                            };
+                            let mem_per_vector = mem_after
+                                .saturating_sub(mem_before)
+                                .checked_div(size)
+                                .unwrap_or(0);
                             eprintln!(
                                 "\n[{}k vectors] Total: {}, Per-vector: {} bytes",
                                 size / 1000,
