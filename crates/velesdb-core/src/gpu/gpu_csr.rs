@@ -17,7 +17,7 @@
 //! whenever the underlying Layer is mutated (insert/delete). The CSR is
 //! rebuilt lazily on the next GPU search request.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::RwLock;
 
@@ -223,17 +223,31 @@ impl std::fmt::Display for CsrGraph {
     }
 }
 
-/// Cached CSR graph with dirty-flag invalidation.
+/// Cached CSR graph with generation-based invalidation.
 ///
-/// Thread-safe: the CSR data is behind a [`RwLock`] and the dirty flag
-/// uses atomic operations. The version counter allows consumers to detect
-/// stale GPU buffers without holding the lock.
+/// Thread-safe: the CSR data is behind a [`RwLock`] and invalidation uses
+/// a monotonic generation counter to avoid ABA problems that a simple
+/// dirty boolean would have.
+///
+/// ## Why not `AtomicBool`?
+///
+/// A boolean dirty flag has an ABA problem: if thread A reads `dirty=true`,
+/// starts rebuilding, and thread B calls `invalidate()` during the rebuild,
+/// thread B's `store(true)` is invisible (already true). Thread A's
+/// `compare_exchange(true, false)` succeeds, clearing the flag — but the
+/// cached CSR was built from a pre-mutation snapshot. The generation counter
+/// detects this: A snapshots `gen=5`, B increments to `gen=6`, A's CAS on
+/// `gen` fails because `5 != 6`, so the flag stays dirty.
 pub struct CsrCache {
-    /// The cached CSR graph. `None` if not yet built or invalidated.
+    /// The cached CSR graph. `None` if not yet built.
     csr: RwLock<Option<CsrGraph>>,
-    /// Set to `true` when the underlying Layer is mutated.
-    dirty: AtomicBool,
-    /// Monotonically increasing version counter, incremented on each rebuild.
+    /// Monotonically increasing generation counter.
+    /// Incremented by `invalidate()` on every Layer mutation.
+    generation: AtomicU64,
+    /// Generation at which the cached CSR was built.
+    /// If `built_generation != generation`, the cache is stale.
+    built_generation: AtomicU64,
+    /// Public version counter, incremented on each successful rebuild.
     version: AtomicU64,
 }
 
@@ -243,14 +257,26 @@ impl CsrCache {
     pub fn new() -> Self {
         Self {
             csr: RwLock::new(None),
-            dirty: AtomicBool::new(true), // Start dirty — force first build
+            // Start at gen=1, built_gen=0 → cache starts stale
+            generation: AtomicU64::new(1),
+            built_generation: AtomicU64::new(0),
             version: AtomicU64::new(0),
         }
     }
 
+    /// Returns true if the cache is stale (needs rebuild).
+    #[inline]
+    fn is_stale(&self) -> bool {
+        self.generation.load(Ordering::Acquire)
+            != self.built_generation.load(Ordering::Acquire)
+    }
+
     /// Marks the cache as dirty. Called after any Layer mutation (insert/delete).
+    ///
+    /// Each call increments the generation counter, ensuring that concurrent
+    /// rebuilds can detect the mutation even if it occurs during the rebuild.
     pub fn invalidate(&self) {
-        self.dirty.store(true, Ordering::Release);
+        self.generation.fetch_add(1, Ordering::Release);
     }
 
     /// Returns the current version counter.
@@ -259,23 +285,26 @@ impl CsrCache {
         self.version.load(Ordering::Acquire)
     }
 
-    /// Returns a clone of the cached CSR graph, rebuilding if dirty.
+    /// Returns a clone of the cached CSR graph, rebuilding if stale.
     ///
     /// This method is designed for the GPU dispatch hot path:
-    /// - If the cache is clean, returns the existing CSR (fast path).
-    /// - If dirty, rebuilds from the Layer (slow path, ~50ms for 1M nodes).
+    /// - If the cache is fresh, returns the existing CSR (fast path).
+    /// - If stale, rebuilds from the Layer (slow path, ~50ms for 1M nodes).
     ///
-    /// The rebuild acquires read locks on every node's neighbor list,
-    /// so concurrent readers are not blocked but concurrent writers
-    /// may see slightly stale data (which is acceptable for search).
+    /// The rebuild is generation-safe: if a concurrent `invalidate()` occurs
+    /// during the rebuild, the stale CSR is still stored but the generation
+    /// check ensures the *next* query will re-trigger a rebuild.
     pub fn get_or_rebuild(&self, layer: &Layer, num_nodes: usize) -> CsrGraph {
-        // Fast path: check dirty flag without lock
-        if !self.dirty.load(Ordering::Acquire) {
+        // Fast path: check if cache is fresh
+        if !self.is_stale() {
             let guard = self.csr.read();
             if let Some(ref csr) = *guard {
                 return csr.clone();
             }
         }
+
+        // Snapshot generation before rebuild
+        let gen_before = self.generation.load(Ordering::Acquire);
 
         // Slow path: rebuild
         let new_csr = CsrGraph::from_layer(layer, num_nodes);
@@ -285,29 +314,28 @@ impl CsrCache {
             let mut guard = self.csr.write();
             *guard = Some(new_csr.clone());
         }
-        // CAS: only clear dirty if no concurrent invalidate() occurred
-        // during the rebuild. If another thread called invalidate() between
-        // our dirty.load(true) and now, the CAS fails (dirty is already
-        // true from the new invalidation) and the flag stays dirty,
-        // preventing stale data from being served.
-        let _ = self.dirty.compare_exchange(
-            true,
-            false,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-        );
-        self.version.fetch_add(1, Ordering::AcqRel);
+
+        // Only mark as fresh if no concurrent invalidation occurred.
+        // CAS on generation: if gen is still what we saw before rebuild,
+        // no mutation happened and we can mark built_generation = gen.
+        // If gen changed, skip — the cache stays stale and the next
+        // query will trigger another rebuild.
+        let gen_after = self.generation.load(Ordering::Acquire);
+        if gen_after == gen_before {
+            self.built_generation.store(gen_before, Ordering::Release);
+            self.version.fetch_add(1, Ordering::AcqRel);
+        }
 
         new_csr
     }
 
-    /// Returns a clone of the cached CSR if available and clean.
+    /// Returns a clone of the cached CSR if available and fresh.
     ///
-    /// Returns `None` if the cache is dirty or not yet built.
+    /// Returns `None` if the cache is stale or not yet built.
     /// Used by non-critical paths that don't want to pay the rebuild cost.
     #[must_use]
     pub fn get_if_clean(&self) -> Option<CsrGraph> {
-        if self.dirty.load(Ordering::Acquire) {
+        if self.is_stale() {
             return None;
         }
         self.csr.read().clone()
