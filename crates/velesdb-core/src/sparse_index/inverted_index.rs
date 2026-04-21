@@ -244,11 +244,10 @@ impl SparseInvertedIndex {
             frozen_postings.insert(term_id, (entries, max_w));
         }
 
-        let frozen_seg = FrozenSegment {
-            postings: frozen_postings,
-            tombstones: FxHashSet::default(),
-            doc_count: old.doc_count,
-        };
+        // Route through `FrozenSegment::new` so the debug_assert on the
+        // sorted-by-doc_id invariant fires for freeze-path segments too,
+        // not only for those synthesised by the persistence layer.
+        let frozen_seg = FrozenSegment::new(frozen_postings, old.doc_count);
 
         let mut frozen_vec = self.frozen.write();
         frozen_vec.push(frozen_seg);
@@ -332,7 +331,14 @@ impl SparseInvertedIndex {
     }
 
     /// Returns all posting entries for a term across all segments,
-    /// filtering tombstoned entries. Result is sorted by `doc_id`.
+    /// filtering tombstoned entries. Result is sorted ascending by `doc_id`
+    /// and **deduplicated**: when the same `doc_id` appears in both a
+    /// frozen segment (stale) and the mutable segment (fresh, from an
+    /// upsert that crossed a freeze boundary) only the mutable entry is
+    /// returned — last-write-wins. This matches the dedup semantics of
+    /// `get_merged_postings_for_compaction` and prevents downstream
+    /// accumulators (`linear_scan_search`, `brute_force_search`,
+    /// `prepare_term_data`) from double-counting the stale weight.
     ///
     /// Exploits the per-segment invariant (`postings[term_id]` is already
     /// sorted by `doc_id` in both mutable and frozen segments) to perform a
