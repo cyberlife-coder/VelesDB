@@ -34,11 +34,7 @@ pub(crate) fn maxscore_search(
     let mut split = find_split(&upper_bound, threshold);
     let mut cursors: Vec<usize> = vec![0; term_data.len()];
 
-    loop {
-        let Some(doc_id) = find_min_essential_doc_id(&term_data, &cursors, split) else {
-            break;
-        };
-
+    while let Some(doc_id) = find_min_essential_doc_id(&term_data, &cursors, split) {
         let score = score_document(&term_data, &mut cursors, split, doc_id);
 
         if heap.len() < k || score > threshold {

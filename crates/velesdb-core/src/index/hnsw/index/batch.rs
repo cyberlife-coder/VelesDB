@@ -278,10 +278,8 @@ impl HnswIndex {
             .map(|(query, candidates)| self.rerank_sort_and_truncate_timed(query, candidates, k))
             .collect();
 
-        let n = timed_results.len() as u64;
-        if n > 0 {
-            let total_us: u64 = timed_results.iter().map(|(_, e)| e).sum();
-            let mean_us = total_us / n;
+        let total_us: u64 = timed_results.iter().map(|(_, e)| e).sum();
+        if let Some(mean_us) = total_us.checked_div(timed_results.len() as u64) {
             if mean_us > 0 {
                 self.update_rerank_latency_ema(mean_us);
             }

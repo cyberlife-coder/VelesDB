@@ -131,8 +131,7 @@ impl CollectionStats {
         self.last_analyzed_epoch_ms = Some(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0),
+                .map_or(0, |d| d.as_millis() as u64),
         );
     }
 }
@@ -291,8 +290,12 @@ impl StatsCollector {
     #[must_use]
     pub fn build(mut self) -> CollectionStats {
         // Calculate average row size
-        if self.stats.row_count > 0 {
-            self.stats.avg_row_size_bytes = self.stats.total_size_bytes / self.stats.row_count;
+        if let Some(avg) = self
+            .stats
+            .total_size_bytes
+            .checked_div(self.stats.row_count)
+        {
+            self.stats.avg_row_size_bytes = avg;
         }
 
         self.stats.mark_analyzed();

@@ -82,8 +82,7 @@ impl QueryPatternTracker {
     pub fn record(&mut self, pattern: QueryPattern, execution_time_ms: u64) {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_millis() as u64);
 
         let stats = self.patterns.entry(pattern).or_default();
         stats.count += 1;
@@ -99,7 +98,7 @@ impl QueryPatternTracker {
     #[must_use]
     pub fn expensive_patterns(&self) -> Vec<(&QueryPattern, &PatternStats)> {
         let mut patterns: Vec<_> = self.patterns.iter().collect();
-        patterns.sort_by(|a, b| b.1.total_time_ms.cmp(&a.1.total_time_ms));
+        patterns.sort_by_key(|b| std::cmp::Reverse(b.1.total_time_ms));
         patterns
     }
 
