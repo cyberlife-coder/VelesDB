@@ -153,6 +153,15 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         self.connect_batch_chunked(&assignments[connect_start..], &processed, first_node)?;
         self.finalize_batch(&assignments, connect_start);
 
+        // Invalidate GPU caches — topology and vectors both changed.
+        // Single `insert()` does this per-call; batch path must do it once
+        // after all nodes are connected to avoid stale CSR/vector snapshots.
+        #[cfg(feature = "gpu")]
+        {
+            self.gpu_csr_cache.invalidate();
+            *self.gpu_vectors_snapshot.lock() = None;
+        }
+
         // Return the graph-assigned node IDs in input order
         let assigned_ids: Vec<usize> = assignments.iter().map(|(node_id, _)| *node_id).collect();
         Ok(assigned_ids)
