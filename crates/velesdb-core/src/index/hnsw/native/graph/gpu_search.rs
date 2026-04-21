@@ -17,7 +17,6 @@ use super::super::distance::DistanceEngine;
 use super::{NativeHnsw, NO_ENTRY_POINT};
 use std::sync::atomic::Ordering;
 
-use crate::gpu::gpu_csr::CsrGraph;
 use crate::gpu::gpu_traversal::GpuTraversalContext;
 
 #[cfg(feature = "gpu")]

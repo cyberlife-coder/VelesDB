@@ -198,6 +198,7 @@ impl NativeHnswInner {
     /// For `RaBitQ` backend, always uses CPU (binary distance GPU shader
     /// is not yet implemented).
     #[must_use]
+    #[allow(dead_code)] // Reason: API surface — GPU-accelerated search entry point for callers with gpu feature
     pub fn search_auto(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
         #[cfg(feature = "gpu")]
         {
@@ -221,6 +222,7 @@ impl NativeHnswInner {
     /// Returns `None` if GPU is unavailable, the metric is unsupported,
     /// or any GPU operation fails. The caller should fall back to CPU search.
     #[cfg(feature = "gpu")]
+    #[allow(dead_code)] // Reason: private helper for search_auto — dead when upper layers call search() directly
     fn search_gpu(&self, query: &[f32], k: usize, ef_search: usize) -> Option<Vec<(usize, f32)>> {
         let hnsw = match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw,
