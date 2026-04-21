@@ -41,9 +41,10 @@
 use super::posting_list::PostingList;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 
 /// BM25 tuning parameters.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Bm25Params {
     /// Term frequency saturation parameter (default: 1.2)
     pub k1: f32,
@@ -58,13 +59,38 @@ impl Default for Bm25Params {
 }
 
 /// A document stored in the BM25 index.
-#[derive(Debug, Clone)]
-struct Document {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct Document {
     /// Term frequencies in this document
-    term_freqs: FxHashMap<String, u32>,
+    pub(crate) term_freqs: FxHashMap<String, u32>,
     /// Total number of terms in the document
-    length: u32,
+    pub(crate) length: u32,
 }
+
+/// Serializable full-state snapshot of a [`Bm25Index`].
+///
+/// Captures the in-memory state in a form that round-trips through
+/// postcard. The `inverted_index` is not stored explicitly — it is
+/// rebuilt from `documents` + `point_to_doc` on
+/// [`Bm25Index::from_snapshot`], which keeps the wire format compact
+/// and avoids adding `Serialize` to the adaptive `PostingList` enum.
+#[allow(dead_code)] // TODO(US-389): commit 4 wires this into Collection::flush.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct Bm25Snapshot {
+    /// Schema version for forward-compat (bump on breaking changes).
+    pub(crate) version: u32,
+    pub(crate) params: Bm25Params,
+    pub(crate) documents: FxHashMap<u64, Document>,
+    pub(crate) point_to_doc: FxHashMap<u64, u32>,
+    pub(crate) doc_to_point: FxHashMap<u32, u64>,
+    pub(crate) free_doc_ids: Vec<u32>,
+    pub(crate) next_doc_id: u32,
+    pub(crate) doc_count: usize,
+    pub(crate) total_doc_length: u64,
+}
+
+/// Current [`Bm25Snapshot`] schema version. Bump on breaking changes.
+pub(crate) const BM25_SNAPSHOT_VERSION: u32 = 1;
 
 /// BM25 full-text search index.
 ///
@@ -441,6 +467,46 @@ impl Bm25Index {
 
 impl Default for Bm25Index {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot serialization (for `bm25_persistence` module)
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)] // TODO(US-389): commit 4 wires these into Collection::flush.
+impl Bm25Index {
+    /// Captures the current index state as a [`Bm25Snapshot`].
+    ///
+    /// STUB — returns an empty/default snapshot. The real implementation
+    /// lands in commit 2; this stub exists so the TDD tests (commit 1)
+    /// compile while still failing at runtime.
+    #[must_use]
+    pub(crate) fn to_snapshot(&self) -> Bm25Snapshot {
+        // TODO(US-389): commit 2 will read the actual internal state.
+        Bm25Snapshot {
+            version: BM25_SNAPSHOT_VERSION,
+            params: self.params,
+            documents: FxHashMap::default(),
+            point_to_doc: FxHashMap::default(),
+            doc_to_point: FxHashMap::default(),
+            free_doc_ids: Vec::new(),
+            next_doc_id: 0,
+            doc_count: 0,
+            total_doc_length: 0,
+        }
+    }
+
+    /// Rebuilds an index from a [`Bm25Snapshot`].
+    ///
+    /// STUB — ignores the snapshot contents and returns an empty index.
+    /// The real implementation lands in commit 2.
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)] // TODO(US-389): commit 2 consumes `snapshot`
+    pub(crate) fn from_snapshot(snapshot: Bm25Snapshot) -> Self {
+        // TODO(US-389): commit 2 will restore the full state.
+        let _ = snapshot;
         Self::new()
     }
 }

@@ -4,6 +4,13 @@
 //! nearest neighbor (ANN) search and full-text search.
 
 mod bm25;
+#[cfg(feature = "persistence")]
+pub(crate) mod bm25_persistence;
+#[cfg(feature = "persistence")]
+#[cfg(test)]
+mod bm25_persistence_tests;
+#[cfg(feature = "persistence")]
+pub(crate) mod bm25_persistence_wal;
 #[cfg(test)]
 mod bm25_tests;
 pub mod hnsw;
