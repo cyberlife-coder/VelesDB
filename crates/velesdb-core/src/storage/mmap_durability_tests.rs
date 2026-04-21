@@ -40,7 +40,7 @@ fn test_durability_none_skips_wal_writes() {
 
     // Record WAL size before store
     let wal_path = temp.path().join("vectors.wal");
-    let wal_size_before = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_before = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
 
     // Store a vector
     storage
@@ -51,7 +51,7 @@ fn test_durability_none_skips_wal_writes() {
     storage.flush().expect("flush");
 
     // WAL should NOT have grown (no WAL writes in None mode)
-    let wal_size_after = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_after = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
     assert_eq!(
         wal_size_before, wal_size_after,
         "WAL should not grow in DurabilityMode::None"
@@ -65,7 +65,7 @@ fn test_durability_none_store_batch_skips_wal() {
         MmapStorage::new_with_durability(temp.path(), 4, DurabilityMode::None).expect("create");
 
     let wal_path = temp.path().join("vectors.wal");
-    let wal_size_before = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_before = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
 
     // Store a batch
     let vectors: Vec<(u64, &[f32])> = vec![
@@ -78,7 +78,7 @@ fn test_durability_none_store_batch_skips_wal() {
 
     storage.flush().expect("flush");
 
-    let wal_size_after = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_after = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
     assert_eq!(
         wal_size_before, wal_size_after,
         "WAL should not grow in DurabilityMode::None for store_batch"
@@ -121,12 +121,12 @@ fn test_fsync_mode_writes_to_wal() {
         MmapStorage::new_with_durability(temp.path(), 4, DurabilityMode::Fsync).expect("create");
 
     let wal_path = temp.path().join("vectors.wal");
-    let wal_size_before = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_before = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
 
     storage.store(1, &[1.0, 2.0, 3.0, 4.0]).expect("store");
     storage.flush().expect("flush");
 
-    let wal_size_after = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_after = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
     assert!(
         wal_size_after > wal_size_before,
         "WAL should grow in Fsync mode (before={wal_size_before}, after={wal_size_after})"
@@ -149,12 +149,12 @@ fn test_set_durability_mode_runtime_switch() {
 
     // Store in None mode — no WAL growth
     let wal_path = temp.path().join("vectors.wal");
-    let wal_size_before = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_before = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
 
     storage.store(1, &[1.0, 2.0, 3.0, 4.0]).expect("store");
     storage.flush().expect("flush");
 
-    let wal_size_after = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_after = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
     assert_eq!(
         wal_size_before, wal_size_after,
         "WAL should not grow after switching to None mode"
@@ -172,12 +172,12 @@ fn test_flush_only_mode_writes_to_wal() {
         .expect("create");
 
     let wal_path = temp.path().join("vectors.wal");
-    let wal_size_before = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_before = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
 
     storage.store(1, &[1.0, 2.0, 3.0, 4.0]).expect("store");
     storage.flush().expect("flush");
 
-    let wal_size_after = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    let wal_size_after = std::fs::metadata(&wal_path).map_or(0, |m| m.len());
     assert!(
         wal_size_after > wal_size_before,
         "WAL should grow in FlushOnly mode"

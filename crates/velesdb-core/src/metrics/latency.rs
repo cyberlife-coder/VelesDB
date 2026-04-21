@@ -137,7 +137,7 @@ mod tests {
         let samples: Vec<Duration> = (1..=100).map(|i| Duration::from_micros(i * 10)).collect();
         let stats = compute_latency_percentiles(&samples);
         assert_eq!(stats.min, Duration::from_micros(10));
-        assert_eq!(stats.max, Duration::from_micros(1000));
+        assert_eq!(stats.max, Duration::from_millis(1));
         assert!(stats.p50 > Duration::ZERO);
         assert!(stats.p99 > stats.p50);
     }
