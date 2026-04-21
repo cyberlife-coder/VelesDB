@@ -32,19 +32,46 @@ mod gpu_backend;
 #[path = "gpu/gpu_backend_tests.rs"]
 mod gpu_backend_tests;
 
+#[cfg(all(test, feature = "gpu"))]
+#[path = "gpu/gpu_csr_tests.rs"]
+mod gpu_csr_extended_tests;
+
 #[cfg(feature = "gpu")]
 #[path = "gpu/pq_gpu.rs"]
 pub mod pq_gpu;
 
 #[cfg(feature = "gpu")]
+#[path = "gpu/gpu_csr.rs"]
+pub mod gpu_csr;
+
+#[cfg(feature = "gpu")]
+#[path = "gpu/gpu_buffer_cache.rs"]
+pub mod gpu_buffer_cache;
+
+#[cfg(feature = "gpu")]
+#[path = "gpu/gpu_traversal.rs"]
+pub mod gpu_traversal;
+
+#[cfg(feature = "gpu")]
 pub use gpu_backend::GpuAccelerator;
 #[cfg(feature = "gpu")]
 pub use pq_gpu::{gpu_kmeans_assign, should_use_gpu, PqGpuContext};
+#[cfg(feature = "gpu")]
+pub use gpu_traversal::{should_traverse_gpu, GpuTraversalContext, GpuTraversalStats};
+#[cfg(feature = "gpu")]
+pub use gpu_buffer_cache::GpuBufferCacheStats;
 
 /// Check if GPU dispatch is worthwhile (always false without gpu feature).
 #[cfg(not(feature = "gpu"))]
 #[must_use]
 pub fn should_use_gpu(_n: usize, _k: usize, _subspace_dim: usize) -> bool {
+    false
+}
+
+/// Check if GPU traversal is worthwhile (always false without gpu feature).
+#[cfg(not(feature = "gpu"))]
+#[must_use]
+pub fn should_traverse_gpu(_num_vectors: usize) -> bool {
     false
 }
 

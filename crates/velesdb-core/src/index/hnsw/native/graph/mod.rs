@@ -21,6 +21,9 @@ mod search_state;
 #[cfg(test)]
 mod search_tests;
 
+#[cfg(feature = "gpu")]
+mod gpu_search;
+
 use super::columnar_vectors::ColumnarVectors;
 use super::distance::DistanceEngine;
 use super::layer::{Layer, NodeId};

@@ -203,6 +203,11 @@ harness = false
 required-features = ["gpu"]
 
 [[bench]]
+name = "gpu_traversal_benchmark"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
 name = "recall_comprehensive"
 harness = false
 
