@@ -315,98 +315,52 @@ impl SparseInvertedIndex {
     /// `M ∈ {1, 2}` (the common case for a single-freeze corpus).
     #[must_use]
     pub fn get_all_postings(&self, term_id: u32) -> Vec<PostingEntry> {
-        // Lock ordering: frozen then mutable in the read path (documented on
-        // `posting_count`). Holding both simultaneously is safe with
-        // parking_lot read locks (non-exclusive, no deadlock cycle).
+        let frozen_runs = self.collect_frozen_runs(term_id);
+        let mutable_run = self.collect_mutable_run(term_id);
+        merge_sorted_runs(frozen_runs, mutable_run)
+    }
+
+    /// Snapshots each frozen segment's tombstone-filtered posting list for
+    /// `term_id`, cloning owned data so the `frozen` read lock is released
+    /// before this function returns.
+    ///
+    /// Entries are cloned out of the lock scope so the subsequent merge
+    /// runs without any lock held — this prevents the ABBA deadlock that
+    /// would otherwise occur if the reader held both `frozen.read()` and
+    /// `mutable.read()` simultaneously while a concurrent writer held
+    /// `mutable.write()` and blocked on `frozen.write()`.
+    #[inline]
+    fn collect_frozen_runs(&self, term_id: u32) -> Vec<Vec<PostingEntry>> {
         let frozen_vec = self.frozen.read();
-        let mutable_seg = self.mutable.read();
-
-        let mutable_slice: &[PostingEntry] = mutable_seg
-            .postings
-            .get(&term_id)
-            .map_or(&[], Vec::as_slice);
-
-        // Fast path: no frozen segments → mutable slice is already sorted.
-        if frozen_vec.is_empty() {
-            return mutable_slice.to_vec();
-        }
-
-        // Fast path: exactly one frozen segment with no tombstones AND an
-        // empty mutable side → clone the frozen slice directly.
-        if frozen_vec.len() == 1 && mutable_slice.is_empty() {
-            let only = &frozen_vec[0];
-            if only.tombstones.is_empty() {
-                return only
-                    .postings
-                    .get(&term_id)
-                    .map(|(entries, _)| entries.clone())
-                    .unwrap_or_default();
-            }
-        }
-
-        // General path: k-way merge over already-sorted runs.
-        let mut runs: Vec<&[PostingEntry]> = Vec::with_capacity(frozen_vec.len() + 1);
-        let mut tombstones: Vec<Option<&FxHashSet<u64>>> = Vec::with_capacity(frozen_vec.len() + 1);
-        let mut total_len: usize = 0;
-
-        for frozen_seg in frozen_vec.iter() {
-            if let Some((entries, _)) = frozen_seg.postings.get(&term_id) {
+        frozen_vec
+            .iter()
+            .filter_map(|seg| {
+                let (entries, _) = seg.postings.get(&term_id)?;
                 if entries.is_empty() {
-                    continue;
+                    return None;
                 }
-                total_len += entries.len();
-                runs.push(entries.as_slice());
-                tombstones.push(if frozen_seg.tombstones.is_empty() {
-                    None
+                let owned: Vec<PostingEntry> = if seg.tombstones.is_empty() {
+                    entries.clone()
                 } else {
-                    Some(&frozen_seg.tombstones)
-                });
-            }
-        }
-        if !mutable_slice.is_empty() {
-            total_len += mutable_slice.len();
-            runs.push(mutable_slice);
-            tombstones.push(None);
-        }
+                    entries
+                        .iter()
+                        .copied()
+                        .filter(|e| !seg.tombstones.contains(&e.doc_id))
+                        .collect()
+                };
+                (!owned.is_empty()).then_some(owned)
+            })
+            .collect()
+    }
 
-        if runs.is_empty() {
-            return Vec::new();
-        }
-
-        let mut cursors: Vec<usize> = vec![0; runs.len()];
-        // Skip leading tombstoned entries per run.
-        for (i, run) in runs.iter().enumerate() {
-            if let Some(ts) = tombstones[i] {
-                while cursors[i] < run.len() && ts.contains(&run[cursors[i]].doc_id) {
-                    cursors[i] += 1;
-                }
-            }
-        }
-
-        let mut result: Vec<PostingEntry> = Vec::with_capacity(total_len);
-        loop {
-            let mut min_idx: Option<usize> = None;
-            let mut min_doc_id: u64 = u64::MAX;
-            for (i, run) in runs.iter().enumerate() {
-                if cursors[i] < run.len() {
-                    let did = run[cursors[i]].doc_id;
-                    if did < min_doc_id {
-                        min_doc_id = did;
-                        min_idx = Some(i);
-                    }
-                }
-            }
-            let Some(i) = min_idx else { break };
-            result.push(runs[i][cursors[i]]);
-            cursors[i] += 1;
-            if let Some(ts) = tombstones[i] {
-                while cursors[i] < runs[i].len() && ts.contains(&runs[i][cursors[i]].doc_id) {
-                    cursors[i] += 1;
-                }
-            }
-        }
-
-        result
+    /// Snapshots the mutable segment's posting list for `term_id`, cloning
+    /// owned data so the `mutable` read lock is released before this
+    /// function returns. See [`Self::collect_frozen_runs`] for the
+    /// lock-ordering rationale.
+    #[inline]
+    fn collect_mutable_run(&self, term_id: u32) -> Vec<PostingEntry> {
+        let seg = self.mutable.read();
+        seg.postings.get(&term_id).cloned().unwrap_or_default()
     }
 
     /// Returns the maximum absolute weight for a term across all segments.
@@ -555,6 +509,61 @@ impl SparseInvertedIndex {
     fn mutable_doc_count(&self) -> usize {
         self.mutable.read().doc_count
     }
+}
+
+/// Merges several `doc_id`-sorted posting runs into a single sorted vector.
+///
+/// Consumes its inputs and runs without holding any index lock — callers
+/// are expected to snapshot the per-segment data via
+/// [`SparseInvertedIndex::collect_frozen_runs`] and
+/// [`SparseInvertedIndex::collect_mutable_run`] first.
+///
+/// Preserves the historical behaviour of the pre-refactor `get_all_postings`:
+/// if a `doc_id` appears in more than one run (an upsert that crossed a
+/// segment freeze), all occurrences are emitted adjacent in the output.
+/// Dedup semantics for that case are handled in a dedicated follow-up.
+#[inline]
+fn merge_sorted_runs(
+    frozen_runs: Vec<Vec<PostingEntry>>,
+    mutable_run: Vec<PostingEntry>,
+) -> Vec<PostingEntry> {
+    let mut runs: Vec<Vec<PostingEntry>> = frozen_runs;
+    if !mutable_run.is_empty() {
+        runs.push(mutable_run);
+    }
+    match runs.len() {
+        0 => Vec::new(),
+        1 => runs.into_iter().next().unwrap_or_default(),
+        _ => k_way_merge(&runs),
+    }
+}
+
+/// k-way merge of sorted runs. Picks the smallest `doc_id` per iteration
+/// from the first run containing it, advancing only that cursor. When
+/// several runs share the current minimum, successive iterations emit
+/// each of them in run order — preserving the output shape of the old
+/// `result.sort_by_key(|e| e.doc_id)` path.
+fn k_way_merge(runs: &[Vec<PostingEntry>]) -> Vec<PostingEntry> {
+    let total_len: usize = runs.iter().map(Vec::len).sum();
+    let mut result: Vec<PostingEntry> = Vec::with_capacity(total_len);
+    let mut cursors: Vec<usize> = vec![0; runs.len()];
+    loop {
+        let mut min_idx: Option<usize> = None;
+        let mut min_doc_id: u64 = u64::MAX;
+        for (i, run) in runs.iter().enumerate() {
+            if cursors[i] < run.len() {
+                let did = run[cursors[i]].doc_id;
+                if did < min_doc_id {
+                    min_doc_id = did;
+                    min_idx = Some(i);
+                }
+            }
+        }
+        let Some(i) = min_idx else { break };
+        result.push(runs[i][cursors[i]]);
+        cursors[i] += 1;
+    }
+    result
 }
 
 #[cfg(test)]
