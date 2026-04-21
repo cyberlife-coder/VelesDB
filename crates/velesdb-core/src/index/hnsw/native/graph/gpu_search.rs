@@ -3,9 +3,10 @@
 //! Adds `search_gpu()` to `NativeHnsw<D>` which offloads layer-0 BFS
 //! expansion to the GPU while keeping upper-layer greedy descent on CPU.
 //!
-//! Optimizations:
-//! - **CsrCache**: CSR graph is cached across queries and only rebuilt when
-//!   the node count changes (O(1) fast path vs O(N) rebuild).
+//! Key design properties:
+//! - **Per-instance CsrCache**: Each `NativeHnsw` owns its own `gpu_csr_cache`
+//!   field, preventing cross-collection contamination. CSR is only rebuilt
+//!   when the graph topology changes (insert/delete).
 //! - **Multi-entry probing**: Mirrors CPU `adaptive_num_probes` for high-ef
 //!   searches, launching GPU traversal from multiple entry points.
 
@@ -13,16 +14,9 @@ use crate::distance::DistanceMetric;
 use super::super::distance::DistanceEngine;
 use super::{NativeHnsw, NO_ENTRY_POINT};
 use std::sync::atomic::Ordering;
-use std::sync::OnceLock;
 
-use crate::gpu::gpu_csr::{CsrCache, CsrGraph};
+use crate::gpu::gpu_csr::CsrGraph;
 use crate::gpu::gpu_traversal::GpuTraversalContext;
-
-/// Global CSR cache — persists across queries, invalidated when node count changes.
-fn global_csr_cache() -> &'static CsrCache {
-    static CACHE: OnceLock<CsrCache> = OnceLock::new();
-    CACHE.get_or_init(CsrCache::new)
-}
 
 #[cfg(feature = "gpu")]
 impl<D: DistanceEngine> NativeHnsw<D> {
@@ -31,9 +25,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Performs upper-layer greedy descent on CPU (layers 1..max are tiny),
     /// then offloads layer-0 BFS expansion to GPU via the SONG 3-stage pipeline.
     ///
-    /// Matches CPU search behavior:
-    /// - Uses `adaptive_num_probes` for multi-entry-point probing at high ef_search
-    /// - Caches CSR graph across queries (only rebuilds on graph mutations)
+    /// Uses the per-instance `gpu_csr_cache` field for O(1) amortized CSR
+    /// access, and multi-entry probing for high-ef recall parity with CPU.
     ///
     /// Returns `None` if GPU is unavailable, the metric is unsupported,
     /// or any GPU error occurs. The caller should fall back to CPU search.
@@ -69,38 +62,30 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
         // Phase 2: Build or reuse cached CSR from layer 0.
         //
-        // The CsrCache invalidates when we detect the node count has changed
-        // since the last rebuild. This avoids the O(N) per-query rebuild cost
-        // that Devin flagged — only the first query (or after inserts/deletes)
-        // pays the rebuild cost.
-        let csr_cache = global_csr_cache();
-        let cached_version = csr_cache.version();
-
+        // Uses the per-instance `gpu_csr_cache` field — each NativeHnsw
+        // owns its own cache, preventing cross-collection contamination.
+        // The CsrCache only rebuilds when invalidated (insert/delete) or
+        // when the node count changes.
         let csr = self.with_layers_read(|layers| {
             if layers.is_empty() {
                 return None;
             }
-            // Check if count changed since last CSR build; if so, invalidate
-            let expected_nodes = count;
-            if let Some(existing) = csr_cache.get_if_clean() {
-                if existing.num_nodes as usize == expected_nodes {
+            // Check if cached CSR is still valid for this graph
+            if let Some(existing) = self.gpu_csr_cache.get_if_clean() {
+                if existing.num_nodes as usize == count {
                     return Some(existing);
                 }
                 // Node count changed — invalidate and rebuild
-                csr_cache.invalidate();
+                self.gpu_csr_cache.invalidate();
             }
-            Some(csr_cache.get_or_rebuild(&layers[0], expected_nodes))
+            Some(self.gpu_csr_cache.get_or_rebuild(&layers[0], count))
         })?;
 
         // Phase 3: Extract flat vectors for GPU upload.
         //
-        // We hold the vectors lock only during the slice copy. The copy is
-        // necessary because the RwLock guard cannot be held across async GPU
-        // submission. For 500K+ vectors at 768-dim this is ~1.5GB.
-        //
-        // Note: The GpuBufferCache infrastructure exists in GpuTraversalContext
-        // for future optimization — it would cache GPU-side buffers so this
-        // CPU copy only happens on the first query or after data changes.
+        // Holds the vectors lock only during the slice copy. The copy is
+        // necessary because the RwLock guard cannot be held across async
+        // GPU submission. For 500K+ vectors at 768-dim this is ~1.5GB.
         let (dimension, vectors_flat) = self.with_vectors_read(|vectors| {
             let dim = vectors.dimension();
             let flat = vectors.as_flat_slice().to_vec();
@@ -113,9 +98,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
         // Phase 4: Determine multi-entry probing strategy.
         //
-        // Mirrors the CPU adaptive_num_probes pattern: for high ef_search,
-        // launch GPU traversal from multiple diversified entry points to
-        // improve recall on hard queries. For low ef, single probe is fine.
+        // Mirrors the CPU adaptive_num_probes pattern for recall parity.
         let num_probes = Self::gpu_adaptive_probes(count, ef_search, k);
 
         tracing::debug!(
@@ -125,7 +108,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             csr_max_degree = csr.max_degree,
             entry_point = current_ep,
             num_probes,
-            csr_cache_version = cached_version,
             "GPU search: launching layer-0 traversal"
         );
 
@@ -196,8 +178,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Selects diversified entry points for multi-probe GPU search.
     ///
-    /// Uses the first entry point from greedy descent, then adds random
-    /// nodes that are far from the first entry point to increase coverage.
+    /// Uses the primary entry point from greedy descent, then adds
+    /// deterministic stride-based points for spatial coverage.
     fn diversified_entry_points(
         &self,
         _query: &[f32],
@@ -208,9 +190,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let mut eps = Vec::with_capacity(num_probes);
         eps.push(primary_ep);
 
-        // Add diversified entry points by striding through the node space.
-        // This is a simple deterministic strategy that ensures good coverage
-        // without requiring distance computations for entry selection.
         let stride = count / num_probes;
         for i in 1..num_probes {
             let candidate = (primary_ep + i * stride) % count;

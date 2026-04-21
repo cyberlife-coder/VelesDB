@@ -104,6 +104,13 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// Built automatically after BFS reordering (`reorder_for_locality()`).
     /// Lock rank 15 (between vectors=10 and layers=20).
     pub(in crate::index::hnsw::native) columnar: RwLock<Option<ColumnarVectors>>,
+    /// Per-instance CSR cache for GPU traversal.
+    ///
+    /// Each `NativeHnsw` instance owns its own cache, preventing cross-collection
+    /// contamination when multiple indices exist in the same process.
+    /// Invalidated automatically on insert/delete via `CsrCache::invalidate()`.
+    #[cfg(feature = "gpu")]
+    pub(in crate::index::hnsw::native) gpu_csr_cache: crate::gpu::gpu_csr::CsrCache,
 }
 
 impl<D: DistanceEngine> NativeHnsw<D> {
@@ -231,6 +238,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             stagnation_limit: ef_construction / 2,
             pre_allocated_capacity: AtomicUsize::new(0),
             columnar: RwLock::new(None),
+            #[cfg(feature = "gpu")]
+            gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),
         }
     }
 
