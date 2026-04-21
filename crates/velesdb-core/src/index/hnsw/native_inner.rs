@@ -202,7 +202,9 @@ impl NativeHnswInner {
         #[cfg(feature = "gpu")]
         {
             if let HnswBackend::Standard(hnsw) = &self.backend {
-                if crate::gpu::should_traverse_gpu(hnsw.len()) {
+                // `query.len()` is authoritative for the index dimension: a query
+                // of wrong length would fail distance evaluation anyway.
+                if crate::gpu::should_traverse_gpu(hnsw.len(), query.len()) {
                     if let Some(results) = self.search_gpu(query, k, ef_search) {
                         return results;
                     }
@@ -219,12 +221,7 @@ impl NativeHnswInner {
     /// Returns `None` if GPU is unavailable, the metric is unsupported,
     /// or any GPU operation fails. The caller should fall back to CPU search.
     #[cfg(feature = "gpu")]
-    fn search_gpu(
-        &self,
-        query: &[f32],
-        k: usize,
-        ef_search: usize,
-    ) -> Option<Vec<(usize, f32)>> {
+    fn search_gpu(&self, query: &[f32], k: usize, ef_search: usize) -> Option<Vec<(usize, f32)>> {
         let hnsw = match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw,
             _ => return None,

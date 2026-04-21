@@ -47,14 +47,29 @@ fn adaptive_gpu_iterations(ef_search: usize) -> u32 {
     }
 }
 
-/// Returns `true` if GPU graph traversal is likely faster than CPU for
-/// the given index size.
+/// Returns `true` if GPU graph traversal is safe and likely faster than CPU
+/// for the given index size and dimension.
 ///
-/// Threshold: 500K vectors. Below this, CPU SIMD with prefetch and rayon
-/// parallelism is faster due to GPU dispatch overhead.
+/// Two gates are checked:
+/// * **Performance gate** — `num_vectors > 500_000`. Below this, CPU SIMD with
+///   prefetch and rayon parallelism is faster than GPU due to dispatch overhead.
+/// * **Correctness gate** — `num_vectors * dimension <= u32::MAX`. The distance
+///   shaders (`TRAVERSAL_EUCLIDEAN_SQ_SHADER`, `TRAVERSAL_COSINE_SHADER`,
+///   `TRAVERSAL_DOT_PRODUCT_SHADER`) compute vector offsets as `node_id * dim`
+///   in `u32`; a `10M × 768` index would overflow (~7.68B > 4.29B) and silently
+///   return wrong distances. WGSL has no u64 scalar, so the caller must bail
+///   out to CPU in this regime.
+///
+/// Returns `false` (fall back to CPU) when either gate is not satisfied.
 #[must_use]
-pub fn should_traverse_gpu(num_vectors: usize) -> bool {
-    num_vectors > 500_000
+pub fn should_traverse_gpu(num_vectors: usize, dimension: usize) -> bool {
+    if num_vectors <= 500_000 {
+        return false;
+    }
+    // Correctness gate: keep `node_id * dim` within u32 range.
+    num_vectors
+        .checked_mul(dimension)
+        .is_some_and(|prod| prod <= u32::MAX as usize)
 }
 
 /// Observable statistics from a single GPU traversal execution.
@@ -250,15 +265,8 @@ impl GpuTraversalContext {
         // Create GPU buffers — graph buffers may be cached
         // =====================================================================
         let upload_start = Instant::now();
-        let buffers = TraversalBuffers::new(
-            device,
-            csr,
-            vectors_flat,
-            query,
-            entry_node,
-            ef,
-            dimension,
-        );
+        let buffers =
+            TraversalBuffers::new(device, csr, vectors_flat, query, entry_node, ef, dimension);
         let _upload_ms = upload_start.elapsed().as_secs_f64() * 1000.0;
 
         // =====================================================================
@@ -306,16 +314,10 @@ impl GpuTraversalContext {
         // =====================================================================
         // Read back results
         // =====================================================================
-        let result_ids = super::helpers::readback_buffer::<u32>(
-            device,
-            &buffers.staging_ids,
-            result_count,
-        )?;
-        let result_dists = super::helpers::readback_buffer::<f32>(
-            device,
-            &buffers.staging_dists,
-            result_count,
-        )?;
+        let result_ids =
+            super::helpers::readback_buffer::<u32>(device, &buffers.staging_ids, result_count)?;
+        let result_dists =
+            super::helpers::readback_buffer::<f32>(device, &buffers.staging_dists, result_count)?;
 
         // Combine and sort by distance
         let mut results: Vec<(usize, f32)> = result_ids
@@ -373,10 +375,8 @@ impl GpuTraversalContext {
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        let layout = Self::create_traversal_distance_bind_group_layout(
-            device,
-            &format!("{label} BGL"),
-        );
+        let layout =
+            Self::create_traversal_distance_bind_group_layout(device, &format!("{label} BGL"));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&format!("{label} PL")),
             bind_group_layouts: &[&layout],
@@ -475,11 +475,7 @@ impl GpuTraversalContext {
     // Pass encoding
     // =========================================================================
 
-    fn encode_expand_pass(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        buffers: &TraversalBuffers,
-    ) {
+    fn encode_expand_pass(&self, encoder: &mut wgpu::CommandEncoder, buffers: &TraversalBuffers) {
         // Reset candidate counter to 0 before expansion
         encoder.clear_buffer(&buffers.counters, 0, None);
 
@@ -498,10 +494,7 @@ impl GpuTraversalContext {
             buffers.candidates_byte_size as u64,
         );
 
-        let bind_group = buffers.create_expand_bind_group(
-            self.gpu.device(),
-            &self.expand_pipeline,
-        );
+        let bind_group = buffers.create_expand_bind_group(self.gpu.device(), &self.expand_pipeline);
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Expand Pass"),
@@ -563,11 +556,8 @@ impl GpuTraversalContext {
             frontier_bytes, // same size: ef × f32
         );
 
-        let bind_group = buffers.create_select_bind_group(
-            self.gpu.device(),
-            &self.select_pipeline,
-            ef,
-        );
+        let bind_group =
+            buffers.create_select_bind_group(self.gpu.device(), &self.select_pipeline, ef);
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Select Pass"),
@@ -650,6 +640,21 @@ impl TraversalBuffers {
         ef: usize,
         dimension: usize,
     ) -> Self {
+        // Defense in depth: the traversal distance shaders compute
+        // `node_id * dim` in u32 (WGSL has no u64 scalar). The public
+        // entry point `should_traverse_gpu` already gates this, but assert
+        // it here too so any future caller that bypasses the helper fails
+        // loudly in debug builds instead of silently returning wrong results.
+        debug_assert!(
+            (csr.num_nodes as usize)
+                .checked_mul(dimension)
+                .is_some_and(|p| p <= u32::MAX as usize),
+            "GPU traversal requires num_nodes * dimension <= u32::MAX \
+             (got {} * {}); use should_traverse_gpu() to gate the caller",
+            csr.num_nodes,
+            dimension,
+        );
+
         // --- Graph buffers (could be cached) ---
         let csr_offsets = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("CSR Offsets"),
@@ -796,10 +801,10 @@ impl TraversalBuffers {
         // `if (node >= params.num_nodes) { return; }` guard.
         #[allow(clippy::cast_possible_truncation)]
         let expand_params_data = [
-            ef as u32,                     // num_frontier (full beam width)
-            MAX_CANDIDATES_PER_ITER,       // max_candidates
-            csr.num_nodes,                 // num_nodes
-            0u32,                          // padding
+            ef as u32,               // num_frontier (full beam width)
+            MAX_CANDIDATES_PER_ITER, // max_candidates
+            csr.num_nodes,           // num_nodes
+            0u32,                    // padding
         ];
         let expand_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Expand Params"),
@@ -883,13 +888,34 @@ impl TraversalBuffers {
             label: Some("Expand BG"),
             layout: &layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.csr_offsets.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.csr_neighbors.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: self.frontier_a_ids.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: self.candidates.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: self.visited.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: self.counters.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: self.expand_params.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.csr_offsets.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.csr_neighbors.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.frontier_a_ids.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.candidates.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.visited.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.counters.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.expand_params.as_entire_binding(),
+                },
             ],
         })
     }
@@ -909,11 +935,26 @@ impl TraversalBuffers {
             label: Some("Distance BG"),
             layout: &layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.query.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.vectors.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: self.candidates.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: self.candidate_dists.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: self.distance_params.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.query.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.vectors.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.candidates.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.candidate_dists.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.distance_params.as_entire_binding(),
+                },
             ],
         })
     }
@@ -928,28 +969,45 @@ impl TraversalBuffers {
 
         #[allow(clippy::cast_possible_truncation)]
         let select_params_data = [
-            MAX_CANDIDATES_PER_ITER,  // num_candidates
-            ef as u32,                // k (beam width)
-            0u32,                     // padding
-            0u32,                     // padding
+            MAX_CANDIDATES_PER_ITER, // num_candidates
+            ef as u32,               // k (beam width)
+            0u32,                    // padding
+            0u32,                    // padding
         ];
-        let select_params_buf =
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Select Params"),
-                contents: bytemuck::cast_slice(&select_params_data),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+        let select_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Select Params"),
+            contents: bytemuck::cast_slice(&select_params_data),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Select BG"),
             layout: &layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.candidates.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.candidate_dists.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: self.frontier_b_ids.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: self.frontier_b_dists.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: self.select_counters.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: select_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.candidates.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.candidate_dists.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.frontier_b_ids.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.frontier_b_dists.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.select_counters.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: select_params_buf.as_entire_binding(),
+                },
             ],
         })
     }
@@ -995,11 +1053,24 @@ mod tests {
 
     #[test]
     fn test_should_traverse_gpu_threshold() {
-        assert!(!should_traverse_gpu(0));
-        assert!(!should_traverse_gpu(100_000));
-        assert!(!should_traverse_gpu(500_000));
-        assert!(should_traverse_gpu(500_001));
-        assert!(should_traverse_gpu(1_000_000));
+        // Performance gate (num_vectors > 500_000) — dimension 128 is always safe.
+        assert!(!should_traverse_gpu(0, 128));
+        assert!(!should_traverse_gpu(100_000, 128));
+        assert!(!should_traverse_gpu(500_000, 128));
+        assert!(should_traverse_gpu(500_001, 128));
+        assert!(should_traverse_gpu(1_000_000, 128));
+    }
+
+    #[test]
+    fn test_should_traverse_gpu_u32_offset_correctness_gate() {
+        // 10M * 768 = 7_680_000_000 > u32::MAX (4_294_967_295) — must bail out to CPU.
+        assert!(!should_traverse_gpu(10_000_000, 768));
+        // 5M * 768 = 3_840_000_000 < u32::MAX — safe.
+        assert!(should_traverse_gpu(5_000_000, 768));
+        // Boundary: exactly u32::MAX offsets — safe.
+        assert!(should_traverse_gpu((u32::MAX as usize) / 128, 128));
+        // Overflow even after checked_mul — must bail out.
+        assert!(!should_traverse_gpu(usize::MAX / 2, 4));
     }
 
     #[test]

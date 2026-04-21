@@ -25,7 +25,9 @@ fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
     let mut state = seed;
     (0..dim)
         .map(|_| {
-            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             #[allow(clippy::cast_precision_loss)]
             let val = ((state >> 33) & 0xFFFF) as f32 / 65536.0;
             val * 2.0 - 1.0
@@ -120,9 +122,9 @@ fn bench_gpu_traversal(c: &mut Criterion) {
     };
 
     for (num_vectors, label) in &scales {
-        // Verify GPU should activate at this scale
+        // Verify GPU should activate at this scale (bench dims always fit u32).
         assert!(
-            should_traverse_gpu(*num_vectors),
+            should_traverse_gpu(*num_vectors, dim),
             "GPU should activate at {label} vectors"
         );
 
@@ -228,7 +230,7 @@ fn bench_threshold_check(c: &mut Criterion) {
 
     for size in [100_000, 500_000, 500_001, 1_000_000, 10_000_000] {
         group.bench_function(BenchmarkId::new("should_traverse_gpu", size), |b| {
-            b.iter(|| black_box(should_traverse_gpu(black_box(size))));
+            b.iter(|| black_box(should_traverse_gpu(black_box(size), black_box(128))));
         });
     }
 
