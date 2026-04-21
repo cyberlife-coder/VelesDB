@@ -65,6 +65,7 @@ impl CsrGraph {
         offsets.push(0u32);
         for node_id in 0..n {
             let nbrs = layer.get_neighbors(node_id);
+            #[allow(clippy::cast_possible_truncation)]
             let degree = nbrs.len() as u32;
             max_degree = max_degree.max(degree);
             for &nbr in &nbrs {
@@ -207,6 +208,8 @@ impl CsrGraph {
 
 impl std::fmt::Display for CsrGraph {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[allow(clippy::cast_precision_loss)]
+        let vram_kb = self.total_gpu_bytes() as f64 / 1024.0;
         write!(
             f,
             "CsrGraph(nodes={}, edges={}, max_deg={}, avg_deg={:.1}, density={:.6}, vram={:.1}KB)",
@@ -215,7 +218,7 @@ impl std::fmt::Display for CsrGraph {
             self.max_degree,
             self.avg_degree(),
             self.density(),
-            self.total_gpu_bytes() as f64 / 1024.0,
+            vram_kb,
         )
     }
 }

@@ -126,6 +126,7 @@ impl GpuBufferCache {
             usage: wgpu::BufferUsages::STORAGE,
         });
 
+        #[allow(clippy::manual_checked_ops)]
         let num_vectors = if dimension > 0 {
             vectors_flat.len() / dimension
         } else {
@@ -133,6 +134,7 @@ impl GpuBufferCache {
         };
 
         #[allow(clippy::cast_possible_truncation)]
+        #[allow(clippy::manual_slice_size_calculation)]
         let vram_bytes = (csr.offsets_byte_size()
             + csr.neighbors_byte_size()
             + vectors_flat.len() * std::mem::size_of::<f32>()) as u64;
@@ -242,18 +244,21 @@ pub struct GpuBufferCacheStats {
 
 impl std::fmt::Display for GpuBufferCacheStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[allow(clippy::cast_precision_loss)]
         let hit_rate = if self.hits + self.misses > 0 {
             (self.hits as f64 / (self.hits + self.misses) as f64) * 100.0
         } else {
             0.0
         };
+        #[allow(clippy::cast_precision_loss)]
+        let vram_mb = self.vram_bytes as f64 / (1024.0 * 1024.0);
         write!(
             f,
             "GpuBufferCache(hits={}, misses={}, hit_rate={:.1}%, vram={:.1}MB, populated={})",
             self.hits,
             self.misses,
             hit_rate,
-            self.vram_bytes as f64 / (1024.0 * 1024.0),
+            vram_mb,
             self.is_populated,
         )
     }

@@ -16,6 +16,8 @@
 //! Below this, the fixed GPU dispatch overhead (~900μs × iterations)
 //! exceeds the CPU SIMD search time. Use [`should_traverse_gpu`] to check.
 
+#![allow(clippy::similar_names)]
+
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -514,6 +516,7 @@ impl GpuTraversalContext {
         pass.set_bind_group(0, &bind_group, &[]);
         // Fix: dispatch based on ef (full beam width), not frontier_size.
         // When ef > 256, we need multiple workgroups to expand all frontier nodes.
+        #[allow(clippy::cast_possible_truncation)]
         let workgroups = buffers.ef.div_ceil(256) as u32;
         pass.dispatch_workgroups(workgroups.max(1), 1, 1);
     }
