@@ -86,8 +86,6 @@ passes on every phase.
 
 ### Added — Benchmarks
 
-### Added — Benchmarks
-
 - **Standardized SIFT1M ANN benchmark** (1M × 128D vectors, L2 metric) —
   closes the pre-seed benchmark credibility gap by replacing the
   synthetic-only recall reporting with a measurement against the
