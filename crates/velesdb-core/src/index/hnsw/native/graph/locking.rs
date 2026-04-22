@@ -139,8 +139,15 @@ pub(crate) fn lock_depth() -> usize {
 /// cache rebuild helpers that must run under a parent lock — e.g. a
 /// GPU CSR rebuild is only race-free while the layers read lock is held.
 ///
-/// Returns `false` in release builds (the thread-local stack is not
-/// maintained there, so any runtime assertion is a no-op).
+/// Returns `true` in release builds (the thread-local stack is not
+/// maintained there, so any runtime assertion is a no-op). Callers
+/// should always wrap the invocation in `debug_assert!` so the entire
+/// check compiles out of release binaries.
+// Only reachable via `debug_assert!` in `gpu_csr` (feature-gated) and
+// via the locking test module; outside those contexts rustc treats the
+// function as dead code. Keep it visible at the crate level so future
+// callers can reuse it.
+#[cfg_attr(not(any(feature = "gpu", test)), allow(dead_code))]
 #[cfg(debug_assertions)]
 pub(crate) fn holds_lock(rank: LockRank) -> bool {
     LOCK_RANK_STACK.with(|stack| stack.borrow().contains(&rank))
@@ -148,6 +155,7 @@ pub(crate) fn holds_lock(rank: LockRank) -> bool {
 
 /// Release build stub — never panics, but callers should only invoke this
 /// behind `debug_assert!` so the call is compiled out entirely.
+#[cfg_attr(not(any(feature = "gpu", test)), allow(dead_code))]
 #[cfg(not(debug_assertions))]
 #[inline]
 pub(crate) fn holds_lock(_rank: LockRank) -> bool {
