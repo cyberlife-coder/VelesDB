@@ -17,7 +17,7 @@ def _scroll_one_batch(
     collection: Any,
     cursor: Optional[int],
     batch_size: int,
-    filter: Optional[dict],
+    filter: Optional[dict],  # pylint: disable=redefined-builtin  # public API kwarg name, cannot rename without breaking callers
 ) -> tuple:
     """Pull one batch from a velesdb Collection using its scroll iterator.
 
@@ -76,7 +76,7 @@ class ScrollOpsMixin:
         self,
         cursor: Optional[int] = None,
         batch_size: int = 100,
-        filter: Optional[dict] = None,
+        filter: Optional[dict] = None,  # pylint: disable=redefined-builtin  # public API kwarg name, cannot rename without breaking callers
     ) -> tuple:
         """Return one batch of Documents and the next cursor for pagination.
 

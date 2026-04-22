@@ -245,6 +245,12 @@ engines:
       - "crates/velesdb-server/src/handlers/search/pipeline.rs"
       # collections.rs (560 NLOC): CRUD handler with serde deserialization + validation branches
       - "crates/velesdb-server/src/handlers/collections.rs"
+      # lib.rs (572 NLOC): REST API library root — module declarations + large
+      # #[derive(OpenApi)] macro invocation that utoipa expands into ~300 lines
+      # of generated code, plus a small section of module-level conformance
+      # tests. Splitting would fragment the public API surface with no clarity
+      # gain; utoipa requires the OpenApi derive in the crate root.
+      - "crates/velesdb-server/src/lib.rs"
 
       # --- ORDER BY ordering (Lizard false positive: counts impl block + free fn as one unit) ---
       # ScoreContext::new is 5 lines but Lizard merges the impl block with the
@@ -352,3 +358,9 @@ engines:
       # The resulting VelesQL query cannot be injected. False positive from static taint analysis.
       - "integrations/langchain/src/langchain_velesdb/search_ops.py"
       - "integrations/llamaindex/src/llamaindex_velesdb/search_ops.py"
+      # LangChain integration modules — opengrep's `ai.python.detect-langchain`
+      # rule triggers on any `from langchain_core...` / `from langchain...`
+      # import. These files ARE the LangChain integration; flagging "possible
+      # LangChain usage" is a self-reference false positive.
+      - "integrations/langchain/src/langchain_velesdb/scroll_ops.py"
+      - "integrations/langchain/src/langchain_velesdb/multi_query_ops.py"

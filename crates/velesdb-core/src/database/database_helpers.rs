@@ -176,6 +176,30 @@ impl Database {
     ) -> crate::velesql::Condition {
         use crate::velesql::Condition as C;
         match condition {
+            C::And(l, r) => C::And(
+                Box::new(Self::strip_table_prefix_from_condition(*l)),
+                Box::new(Self::strip_table_prefix_from_condition(*r)),
+            ),
+            C::Or(l, r) => C::Or(
+                Box::new(Self::strip_table_prefix_from_condition(*l)),
+                Box::new(Self::strip_table_prefix_from_condition(*r)),
+            ),
+            C::Not(inner) => C::Not(Box::new(Self::strip_table_prefix_from_condition(*inner))),
+            C::Group(inner) => C::Group(Box::new(Self::strip_table_prefix_from_condition(*inner))),
+            leaf => Self::strip_table_prefix_on_leaf(leaf),
+        }
+    }
+
+    /// Applies [`strip_prefix`] to the `column` field of leaf (non-composite)
+    /// conditions. Engine-handled variants (`VectorSearch`, `GraphMatch`, …)
+    /// pass through unchanged.
+    ///
+    /// [`strip_prefix`]: Self::strip_prefix
+    fn strip_table_prefix_on_leaf(
+        condition: crate::velesql::Condition,
+    ) -> crate::velesql::Condition {
+        use crate::velesql::Condition as C;
+        match condition {
             C::Comparison(mut cmp) => {
                 cmp.column = Self::strip_prefix(&cmp.column);
                 C::Comparison(cmp)
@@ -212,16 +236,6 @@ impl Database {
                 gb.column = Self::strip_prefix(&gb.column);
                 C::GeoBbox(gb)
             }
-            C::And(l, r) => C::And(
-                Box::new(Self::strip_table_prefix_from_condition(*l)),
-                Box::new(Self::strip_table_prefix_from_condition(*r)),
-            ),
-            C::Or(l, r) => C::Or(
-                Box::new(Self::strip_table_prefix_from_condition(*l)),
-                Box::new(Self::strip_table_prefix_from_condition(*r)),
-            ),
-            C::Not(inner) => C::Not(Box::new(Self::strip_table_prefix_from_condition(*inner))),
-            C::Group(inner) => C::Group(Box::new(Self::strip_table_prefix_from_condition(*inner))),
             // Engine-handled conditions pass through unchanged.
             other => other,
         }

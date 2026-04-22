@@ -111,7 +111,7 @@ The Bouncer uses **dHash** (difference hash) to convert each image into a
 256-bit binary vector. Two images that look alike (even after resizing or
 JPEG recompression) produce hashes with a low Hamming distance.
 
-### Python SDK
+### Python SDK (Bouncer)
 
 ```python
 import velesdb
@@ -133,7 +133,7 @@ packs 8 dimensions into 1 byte, reducing memory from 1024 bytes (256 x f32)
 to 32 bytes per vector. Hamming distance on binary storage uses hardware
 POPCNT instructions -- 48x faster than f32 distance.
 
-### VelesQL
+### VelesQL (Bouncer)
 
 ```sql
 CREATE COLLECTION perceptual_hashes (dimension = 256, metric = 'hamming')
@@ -149,7 +149,7 @@ semantic embedding. Two images with similar *meaning* (a beach photo and an
 ocean painting) will have high Cosine similarity, even if their pixels are
 completely different.
 
-### Python SDK
+### Python SDK (Detective)
 
 ```python
 # 512-dim CLIP embeddings (ViT-B-32)
@@ -161,7 +161,7 @@ detective = db.create_collection(
 )
 ```
 
-### VelesQL
+### VelesQL (Detective)
 
 ```sql
 CREATE COLLECTION clip_embeddings (dimension = 512, metric = 'cosine')

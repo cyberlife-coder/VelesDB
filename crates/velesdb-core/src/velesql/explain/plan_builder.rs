@@ -327,7 +327,6 @@ impl QueryPlan {
     }
 
     /// Analyzes a condition to extract vector search and filter info.
-    #[allow(clippy::too_many_lines)]
     fn analyze_condition(
         condition: &Condition,
         has_vector_search: &mut bool,
@@ -340,56 +339,6 @@ impl QueryPlan {
             | Condition::Similarity(_) => {
                 *has_vector_search = true;
             }
-            Condition::Comparison(cmp) => {
-                filter_conditions.push(format!("{} {} ?", cmp.column, cmp.operator.as_str()));
-            }
-            Condition::In(inc) => {
-                let op = if inc.negated { "NOT IN" } else { "IN" };
-                filter_conditions.push(format!("{} {op} (...)", inc.column));
-            }
-            Condition::Between(btw) => {
-                filter_conditions.push(format!("{} BETWEEN ? AND ?", btw.column));
-            }
-            Condition::Like(lk) => {
-                filter_conditions.push(format!("{} LIKE ?", lk.column));
-            }
-            Condition::IsNull(isn) => {
-                let op = if isn.is_null {
-                    "IS NULL"
-                } else {
-                    "IS NOT NULL"
-                };
-                filter_conditions.push(format!("{} {op}", isn.column));
-            }
-            Condition::Match(m) => {
-                filter_conditions.push(format!("{} MATCH ?", m.column));
-            }
-            Condition::ContainsText(ct) => {
-                filter_conditions.push(format!("{} CONTAINS_TEXT ?", ct.column));
-            }
-            Condition::GraphMatch(_) => {
-                filter_conditions.push("MATCH (...)".to_string());
-            }
-            Condition::Contains(cc) => {
-                let mode_str = match cc.mode {
-                    crate::velesql::ContainsMode::Single => "CONTAINS",
-                    crate::velesql::ContainsMode::Any => "CONTAINS ANY",
-                    crate::velesql::ContainsMode::All => "CONTAINS ALL",
-                };
-                filter_conditions.push(format!("{} {mode_str} ?", cc.column));
-            }
-            Condition::GeoDistance(gd) => {
-                filter_conditions.push(format!(
-                    "GEO_DISTANCE({}, {}, {}) {} ?",
-                    gd.column,
-                    gd.lat,
-                    gd.lng,
-                    gd.operator.as_str()
-                ));
-            }
-            Condition::GeoBbox(gb) => {
-                filter_conditions.push(format!("GEO_BBOX({}, ...)", gb.column));
-            }
             Condition::And(left, right) | Condition::Or(left, right) => {
                 Self::analyze_condition(left, has_vector_search, filter_conditions);
                 Self::analyze_condition(right, has_vector_search, filter_conditions);
@@ -397,7 +346,58 @@ impl QueryPlan {
             Condition::Not(inner) | Condition::Group(inner) => {
                 Self::analyze_condition(inner, has_vector_search, filter_conditions);
             }
+            leaf => {
+                if let Some(desc) = Self::describe_leaf_condition(leaf) {
+                    filter_conditions.push(desc);
+                }
+            }
         }
+    }
+
+    /// Renders a non-composite condition as a short human-readable string for
+    /// the EXPLAIN plan filter list. Returns `None` for vector/composite
+    /// variants — those are handled in [`analyze_condition`] itself.
+    fn describe_leaf_condition(condition: &Condition) -> Option<String> {
+        let desc = match condition {
+            Condition::Comparison(cmp) => {
+                format!("{} {} ?", cmp.column, cmp.operator.as_str())
+            }
+            Condition::In(inc) => {
+                let op = if inc.negated { "NOT IN" } else { "IN" };
+                format!("{} {op} (...)", inc.column)
+            }
+            Condition::Between(btw) => format!("{} BETWEEN ? AND ?", btw.column),
+            Condition::Like(lk) => format!("{} LIKE ?", lk.column),
+            Condition::IsNull(isn) => {
+                let op = if isn.is_null {
+                    "IS NULL"
+                } else {
+                    "IS NOT NULL"
+                };
+                format!("{} {op}", isn.column)
+            }
+            Condition::Match(m) => format!("{} MATCH ?", m.column),
+            Condition::ContainsText(ct) => format!("{} CONTAINS_TEXT ?", ct.column),
+            Condition::GraphMatch(_) => "MATCH (...)".to_string(),
+            Condition::Contains(cc) => {
+                let mode_str = match cc.mode {
+                    crate::velesql::ContainsMode::Single => "CONTAINS",
+                    crate::velesql::ContainsMode::Any => "CONTAINS ANY",
+                    crate::velesql::ContainsMode::All => "CONTAINS ALL",
+                };
+                format!("{} {mode_str} ?", cc.column)
+            }
+            Condition::GeoDistance(gd) => format!(
+                "GEO_DISTANCE({}, {}, {}) {} ?",
+                gd.column,
+                gd.lat,
+                gd.lng,
+                gd.operator.as_str()
+            ),
+            Condition::GeoBbox(gb) => format!("GEO_BBOX({}, ...)", gb.column),
+            _ => return None,
+        };
+        Some(desc)
     }
 
     fn extract_index_lookup(

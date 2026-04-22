@@ -5,7 +5,7 @@ re-exports every public name so that existing ``from llamaindex_velesdb.security
 import ...`` call-sites continue to work without modification.
 """
 
-from velesdb_common.security import (
+from velesdb_common.security import (  # pylint: disable=unused-import  # public re-exports declared in __all__ below
     ALLOWED_STORAGE_MODES,
     STORAGE_MODE_ALIASES,
     DEFAULT_TIMEOUT_MS,
