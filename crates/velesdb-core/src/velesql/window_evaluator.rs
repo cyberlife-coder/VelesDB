@@ -196,23 +196,19 @@ fn assign_rankings(
     let mut dense_rank: u64 = 1;
 
     for (position, &idx) in sorted_indices.iter().enumerate() {
+        let is_new_group = is_new_ranking_group(results, sorted_indices, position, order_by);
+
         let value = match fn_type {
             WindowFunctionType::RowNumber => (position + 1) as u64,
             WindowFunctionType::Rank => {
-                if position > 0 {
-                    let prev_idx = sorted_indices[position - 1];
-                    if !rows_tied(results, idx, prev_idx, order_by) {
-                        rank = (position + 1) as u64;
-                    }
+                if is_new_group {
+                    rank = (position + 1) as u64;
                 }
                 rank
             }
             WindowFunctionType::DenseRank => {
-                if position > 0 {
-                    let prev_idx = sorted_indices[position - 1];
-                    if !rows_tied(results, idx, prev_idx, order_by) {
-                        dense_rank += 1;
-                    }
+                if is_new_group {
+                    dense_rank += 1;
                 }
                 dense_rank
             }
@@ -220,6 +216,23 @@ fn assign_rankings(
 
         inject_ranking(&mut results[idx], alias, value);
     }
+}
+
+/// Returns `true` if this position starts a new ranking group (not tied with predecessor).
+///
+/// The first position (0) is never a "new group" — it starts at rank 1 by default.
+fn is_new_ranking_group(
+    results: &[SearchResult],
+    sorted_indices: &[usize],
+    position: usize,
+    order_by: &[WindowOrderBy],
+) -> bool {
+    if position == 0 {
+        return false;
+    }
+    let idx = sorted_indices[position];
+    let prev_idx = sorted_indices[position - 1];
+    !rows_tied(results, idx, prev_idx, order_by)
 }
 
 /// Returns `true` if two rows have identical values for all ORDER BY columns.
