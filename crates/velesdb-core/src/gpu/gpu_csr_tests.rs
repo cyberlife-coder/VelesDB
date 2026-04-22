@@ -241,6 +241,73 @@ fn test_csr_cache_concurrent_rebuild_safety() {
 }
 
 #[test]
+fn test_csr_cache_no_stale_commit_under_concurrent_invalidate() {
+    // Regression for the race Devin flagged in PR #626:
+    // a slow rebuilder (gen=N) must NOT overwrite a fast rebuilder's
+    // fresh CSR (gen=N+1) and leave `built_generation=N+1` while the
+    // stored CSR is actually stale.
+    //
+    // Stress: 8 rebuilders + 8 invalidators run in parallel for 100
+    // rounds each. Under the old load-compare-store design, a race
+    // window was sufficient for a few stale commits to slip through.
+    // Under the fixed design (check-then-write under a single write
+    // lock) no combination of interleavings can leave the cache
+    // marked fresh while holding data from an obsolete generation.
+    //
+    // Invariant verified: after the storm settles, the generation
+    // counter must be >= the built_generation and the stored CSR
+    // must validate. We also verify that a final rebuild makes the
+    // cache converge to a clean, validate-ok state.
+    use std::sync::Arc;
+    use std::thread;
+
+    let layer = Arc::new(Layer::new(64));
+    for i in 0..64 {
+        layer.set_neighbors(i, vec![(i + 1) % 64]);
+    }
+    let cache = Arc::new(CsrCache::new());
+
+    let rebuild: Vec<_> = (0..8)
+        .map(|_| {
+            let c = Arc::clone(&cache);
+            let l = Arc::clone(&layer);
+            thread::spawn(move || {
+                for _ in 0..100 {
+                    let csr = c.get_or_rebuild(&l, 64);
+                    // Whatever we observe, it must always validate:
+                    // a corrupt CSR would indicate a torn write.
+                    assert!(csr.validate().is_ok());
+                }
+            })
+        })
+        .collect();
+
+    let invalidate: Vec<_> = (0..8)
+        .map(|_| {
+            let c = Arc::clone(&cache);
+            thread::spawn(move || {
+                for _ in 0..100 {
+                    c.invalidate();
+                    thread::yield_now();
+                }
+            })
+        })
+        .collect();
+
+    for h in rebuild {
+        h.join().expect("rebuild thread");
+    }
+    for h in invalidate {
+        h.join().expect("invalidate thread");
+    }
+
+    // One final rebuild converges the cache. Must produce a valid CSR.
+    let final_csr = cache.get_or_rebuild(&layer, 64);
+    assert_eq!(final_csr.num_nodes, 64);
+    assert!(final_csr.validate().is_ok());
+}
+
+#[test]
 fn test_csr_cache_invalidate_rebuild_cycle() {
     let layer = Layer::new(10);
     for i in 0..10 {

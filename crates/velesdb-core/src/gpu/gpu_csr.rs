@@ -313,24 +313,30 @@ impl CsrCache {
         // Snapshot generation before rebuild
         let gen_before = self.generation.load(Ordering::Acquire);
 
-        // Slow path: rebuild
+        // Slow path: rebuild outside of any lock.
         let new_csr = CsrGraph::from_layer(layer, num_nodes);
 
-        // Update cache
+        // Commit is atomic under the write lock: we only store our CSR
+        // and bump built_generation if no concurrent invalidation has
+        // happened since `gen_before`.
+        //
+        // Without this single critical section, a slow rebuilder (gen=N)
+        // could overwrite a fast rebuilder's fresh CSR (gen=N+1) AFTER
+        // it has written: the slow rebuilder's post-write gen check
+        // would fail, so `built_generation` stays N+1 while the cached
+        // CSR is now stale → `is_stale()` returns false, and the stale
+        // CSR is served as if it were fresh.
         {
             let mut guard = self.csr.write();
-            *guard = Some(new_csr.clone());
-        }
-
-        // Only mark as fresh if no concurrent invalidation occurred.
-        // CAS on generation: if gen is still what we saw before rebuild,
-        // no mutation happened and we can mark built_generation = gen.
-        // If gen changed, skip — the cache stays stale and the next
-        // query will trigger another rebuild.
-        let gen_after = self.generation.load(Ordering::Acquire);
-        if gen_after == gen_before {
-            self.built_generation.store(gen_before, Ordering::Release);
-            self.version.fetch_add(1, Ordering::AcqRel);
+            let gen_after = self.generation.load(Ordering::Acquire);
+            if gen_after == gen_before {
+                *guard = Some(new_csr.clone());
+                self.built_generation.store(gen_before, Ordering::Release);
+                self.version.fetch_add(1, Ordering::AcqRel);
+            }
+            // else: someone invalidated during our rebuild. Discard
+            // our (now-stale) CSR — the next query will trigger another
+            // rebuild from the fresh layer state.
         }
 
         new_csr

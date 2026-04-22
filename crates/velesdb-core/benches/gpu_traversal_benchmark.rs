@@ -105,14 +105,17 @@ fn bench_gpu_traversal(c: &mut Criterion) {
     let k = 10;
     let ef_search = 128;
 
-    // 1M benchmark (always run); 5M/10M only with internal-bench feature
-    // (requires ~30GB RAM). `mut` is unused when the feature is off.
+    // 1M benchmark (always run); 5M only with internal-bench feature.
+    // 10M × 768 would overflow the u32 offset in the distance shaders
+    // (7.68B > u32::MAX ≈ 4.29B), so `should_traverse_gpu` correctly
+    // returns false for 10M and the benchmark would panic on the
+    // activation-gate assertion below. The advertised GPU range is
+    // 500K–5M vectors; 10M must use the CPU path.
     #[allow(unused_mut)]
     let mut scales: Vec<(usize, &str)> = vec![(1_000_000, "1M")];
     #[cfg(feature = "internal-bench")]
     {
         scales.push((5_000_000, "5M"));
-        scales.push((10_000_000, "10M"));
     }
 
     // Check GPU availability
