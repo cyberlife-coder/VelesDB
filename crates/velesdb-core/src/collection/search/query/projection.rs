@@ -37,8 +37,8 @@ fn project_single(result: &SearchResult, select_exprs: &SelectColumns) -> serde_
             aggregations: _,
             similarity_scores,
             qualified_wildcards,
-            ..
-        } => project_mixed(result, columns, similarity_scores, qualified_wildcards),
+            window_functions,
+        } => project_mixed(result, columns, similarity_scores, qualified_wildcards, window_functions),
     }
 }
 
@@ -85,12 +85,13 @@ fn project_similarity_only(result: &SearchResult, expr: &SimilarityScoreExpr) ->
     serde_json::Value::Object(map)
 }
 
-/// Mixed projection: columns + similarity scores + qualified wildcards.
+/// Mixed projection: columns + similarity scores + qualified wildcards + window functions.
 fn project_mixed(
     result: &SearchResult,
     columns: &[crate::velesql::Column],
     similarity_scores: &[SimilarityScoreExpr],
     qualified_wildcards: &[String],
+    window_functions: &[crate::velesql::WindowFunction],
 ) -> serde_json::Value {
     let mut map = serde_json::Map::new();
 
@@ -120,6 +121,22 @@ fn project_mixed(
             key.to_string(),
             serde_json::Value::from(f64::from(result.score)),
         );
+    }
+
+    // Window function values (injected into payload by window_evaluator)
+    for wf in window_functions {
+        let alias = wf
+            .alias
+            .as_deref()
+            .unwrap_or(wf.function_type.default_alias());
+        let value = result
+            .point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(alias))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        map.insert(alias.to_string(), value);
     }
 
     serde_json::Value::Object(map)

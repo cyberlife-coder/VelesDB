@@ -38,6 +38,14 @@ fn apply_single_window(
         .as_deref()
         .unwrap_or(wf.function_type.default_alias());
 
+    // Warn when ORDER BY is empty — ranking is non-deterministic without it.
+    if wf.over_clause.order_by.is_empty() {
+        tracing::warn!(
+            function = alias,
+            "Window function OVER clause has no ORDER BY; ranking order is non-deterministic"
+        );
+    }
+
     // Step 1: Build partition groups (row indices grouped by partition key).
     let partitions = build_partitions(results, &wf.over_clause);
 
@@ -67,7 +75,8 @@ fn build_partitions(
 /// Computes a partition key from the result's payload fields.
 ///
 /// Empty `columns` → single partition key (`""`).
-/// Multiple columns are joined with `|` as separator.
+/// Multiple columns are joined with `\x1F` (ASCII Unit Separator) to avoid
+/// collisions when values contain common delimiters.
 fn partition_key(result: &SearchResult, columns: &[String]) -> String {
     if columns.is_empty() {
         return String::new();
@@ -76,7 +85,7 @@ fn partition_key(result: &SearchResult, columns: &[String]) -> String {
         .iter()
         .map(|col| extract_payload_value(result, col))
         .collect::<Vec<_>>()
-        .join("|")
+        .join("\x1F")
 }
 
 /// Sorts indices within a partition according to the window `ORDER BY` spec.
