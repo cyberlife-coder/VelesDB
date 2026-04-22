@@ -69,7 +69,7 @@ pub fn should_traverse_gpu(num_vectors: usize, dimension: usize) -> bool {
     // Correctness gate: keep `node_id * dim` within u32 range.
     num_vectors
         .checked_mul(dimension)
-        .is_some_and(|prod| prod <= u32::MAX as usize)
+        .is_some_and(|prod| u32::try_from(prod).is_ok())
 }
 
 /// Observable statistics from a single GPU traversal execution.
@@ -654,7 +654,7 @@ impl TraversalBuffers {
         debug_assert!(
             (csr.num_nodes as usize)
                 .checked_mul(dimension)
-                .is_some_and(|p| p <= u32::MAX as usize),
+                .is_some_and(|p| u32::try_from(p).is_ok()),
             "GPU traversal requires num_nodes * dimension <= u32::MAX \
              (got {} * {}); use should_traverse_gpu() to gate the caller",
             csr.num_nodes,

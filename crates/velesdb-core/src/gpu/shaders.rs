@@ -2,6 +2,13 @@
 //!
 //! Each shader operates on a flat array of vectors and a single query vector,
 //! computing distances/similarities in parallel across workgroups of 256 threads.
+//!
+//! Doc comments in this file describe WGSL bindings, uniforms, buffer layouts
+//! and shader-internal variables that deliberately aren't Rust items. Allowing
+//! `clippy::doc_markdown` here avoids having to backtick every binding name
+//! and WGSL identifier — they're not linkable Rust paths anyway.
+
+#![allow(clippy::doc_markdown)]
 
 /// WGSL compute shader for batch cosine similarity.
 pub(crate) const COSINE_SHADER: &str = r"
@@ -385,24 +392,17 @@ fn traversal_dot(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 ";
 
-/// WGSL compute shader for parallel top-k selection (SONG Stage 3).
+/// WGSL compute shader for global top-k selection (SONG Stage 3).
 ///
-/// Reads candidate node IDs and their precomputed distances, selects
-/// the best `k` candidates by distance, and outputs them as the new
-/// frontier for the next iteration.
-///
-/// Uses a simple serial scan per workgroup — sufficient because the
-/// candidate count per iteration is bounded by ef_search * max_degree
-/// which is typically < 10K elements.
-///
-/// Bind group layout (5 bindings — uses custom layout):
+/// Bind group layout (6 bindings — uses custom layout):
 /// - binding 0: `storage(read)` — candidate IDs
 /// - binding 1: `storage(read)` — candidate distances
 /// - binding 2: `storage(read_write)` — frontier output (top-k node IDs)
 /// - binding 3: `storage(read_write)` — frontier distances output
-/// - binding 4: `storage(read_write)` — counters (atomic: [0]=frontier_size)
+/// - binding 4: `storage(read_write)` — counters (kept for layout compatibility)
 /// - binding 5: `uniform` — params
-/// Global top-k selection via serial insertion sort.
+///
+/// # Algorithm — serial insertion sort
 ///
 /// Invoked once per HNSW traversal iteration. Dispatch is **a single
 /// workgroup of a single thread** (host side uses `dispatch_workgroups(1,1,1)`).
@@ -424,7 +424,8 @@ fn traversal_dot(@builtin(global_invocation_id) id: vec3<u32>) {
 /// Cost: O(`num_candidates` × log `k` + `num_candidates` × `k` in the worst
 /// case when every candidate is closer than the current best) ≈ 1.1M ops per
 /// iteration at `num_candidates` = 8192 / `k` = 128. Acceptable for the
-/// advertised 500K–5M-vector GPU range; a parallel merge is a TODO perf win.
+/// advertised 500K–5M-vector GPU range; a parallel reduction is a future
+/// perf win (tracked separately).
 pub(crate) const SELECT_TOPK_SHADER: &str = r"
 struct SelectParams {
     num_candidates: u32,

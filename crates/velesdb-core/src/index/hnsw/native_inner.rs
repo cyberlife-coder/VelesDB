@@ -226,7 +226,7 @@ impl NativeHnswInner {
     fn search_gpu(&self, query: &[f32], k: usize, ef_search: usize) -> Option<Vec<(usize, f32)>> {
         let hnsw = match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw,
-            _ => return None,
+            HnswBackend::RaBitQ(_) => return None,
         };
 
         hnsw.search_gpu(query, k, ef_search, self.metric)
