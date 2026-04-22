@@ -42,6 +42,8 @@ mod database_helpers;
 #[cfg(all(test, feature = "persistence"))]
 mod collection_ops_tests;
 #[cfg(all(test, feature = "persistence"))]
+mod database_helpers_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod database_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod ddl_executor_tests;

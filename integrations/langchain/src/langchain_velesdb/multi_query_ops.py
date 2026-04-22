@@ -166,7 +166,7 @@ class MultiQueryOpsMixin:
         k: int = 4,
         fusion: str = "rrf",
         fusion_params: Optional[dict] = None,
-        filter: Optional[dict] = None,
+        filter: Optional[dict] = None,  # pylint: disable=redefined-builtin  # public API kwarg name, cannot rename without breaking callers
         **kwargs: Any,
     ) -> List[Document]:
         """Multi-query search with result fusion.
@@ -203,7 +203,7 @@ class MultiQueryOpsMixin:
         k: int = 4,
         fusion: str = "rrf",
         fusion_params: Optional[dict] = None,
-        filter: Optional[dict] = None,
+        filter: Optional[dict] = None,  # pylint: disable=redefined-builtin  # public API kwarg name, cannot rename without breaking callers
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Multi-query search with fused scores.

@@ -113,40 +113,15 @@ fn explain_with_analyze(
         "SELECT"
     };
 
-    let output = match state.db.explain_analyze_query(parsed, &req.params) {
+    let output = match run_analyze_query(state, parsed, &req.params) {
         Ok(o) => o,
-        Err(CoreError::CollectionNotFound(name)) => {
-            return velesql_collection_not_found(&name);
-        }
-        Err(e) => {
-            return velesql_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "VELESQL_EXPLAIN_ANALYZE_ERROR",
-                &e.to_string(),
-                "Validate query semantics and parameter types against the target collection",
-                None,
-            );
-        }
+        Err(resp) => return *resp,
     };
 
     // Merge core estimation metadata into server plan (graceful: already have output).
     merge_core_estimation(&mut plan, &output.plan);
 
-    let (actual_stats_resp, actual_time, node_stats_resp) =
-        if let Some(ref stats) = output.actual_stats {
-            let ns: Vec<NodeStatsResponse> = output
-                .node_stats
-                .iter()
-                .map(NodeStatsResponse::from)
-                .collect();
-            (
-                Some(ActualStatsResponse::from(stats)),
-                Some(stats.actual_time_ms),
-                Some(ns),
-            )
-        } else {
-            (None, None, None)
-        };
+    let (actual_stats_resp, actual_time, node_stats_resp) = extract_analyze_stats(&output);
 
     Json(ExplainResponse {
         query: req.query.clone(),
@@ -163,6 +138,54 @@ fn explain_with_analyze(
         node_stats: node_stats_resp,
     })
     .into_response()
+}
+
+/// Runs the core `explain_analyze_query` call, mapping core errors to the
+/// matching HTTP responses. Returns `Ok(output)` on success or `Err(response)`
+/// with the error already rendered.
+fn run_analyze_query(
+    state: &AppState,
+    parsed: &velesdb_core::velesql::Query,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+) -> std::result::Result<velesdb_core::velesql::ExplainOutput, Box<axum::response::Response>> {
+    match state.db.explain_analyze_query(parsed, params) {
+        Ok(o) => Ok(o),
+        Err(CoreError::CollectionNotFound(name)) => {
+            Err(Box::new(velesql_collection_not_found(&name)))
+        }
+        Err(e) => Err(Box::new(velesql_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "VELESQL_EXPLAIN_ANALYZE_ERROR",
+            &e.to_string(),
+            "Validate query semantics and parameter types against the target collection",
+            None,
+        ))),
+    }
+}
+
+/// Splits the optional `actual_stats` + `node_stats` of an EXPLAIN ANALYZE
+/// output into the three response-side options consumed by
+/// [`ExplainResponse`].
+fn extract_analyze_stats(
+    output: &velesdb_core::velesql::ExplainOutput,
+) -> (
+    Option<ActualStatsResponse>,
+    Option<f64>,
+    Option<Vec<NodeStatsResponse>>,
+) {
+    let Some(ref stats) = output.actual_stats else {
+        return (None, None, None);
+    };
+    let ns: Vec<NodeStatsResponse> = output
+        .node_stats
+        .iter()
+        .map(NodeStatsResponse::from)
+        .collect();
+    (
+        Some(ActualStatsResponse::from(stats)),
+        Some(stats.actual_time_ms),
+        Some(ns),
+    )
 }
 
 /// Detect query features from a SELECT statement for EXPLAIN output.
@@ -344,6 +367,7 @@ pub(super) fn condition_has_vector_search(cond: &Condition) -> bool {
     match cond {
         Condition::VectorSearch(_)
         | Condition::VectorFusedSearch { .. }
+        | Condition::SparseVectorSearch(_)
         | Condition::Similarity(_) => true,
         Condition::And(left, right) | Condition::Or(left, right) => {
             condition_has_vector_search(left) || condition_has_vector_search(right)

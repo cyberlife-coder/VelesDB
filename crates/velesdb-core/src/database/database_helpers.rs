@@ -86,6 +86,7 @@ impl Database {
             crate::velesql::Condition::Similarity(_)
             | crate::velesql::Condition::VectorSearch(_)
             | crate::velesql::Condition::VectorFusedSearch(_)
+            | crate::velesql::Condition::SparseVectorSearch(_)
             | crate::velesql::Condition::GraphMatch(_) => true,
             crate::velesql::Condition::And(left, right)
             | crate::velesql::Condition::Or(left, right) => {
@@ -171,7 +172,31 @@ impl Database {
     ///
     /// Converts qualified names like `inventory.price` to `price` so that
     /// `Filter::matches` can evaluate them against unqualified payload keys.
-    fn strip_table_prefix_from_condition(
+    pub(super) fn strip_table_prefix_from_condition(
+        condition: crate::velesql::Condition,
+    ) -> crate::velesql::Condition {
+        use crate::velesql::Condition as C;
+        match condition {
+            C::And(l, r) => C::And(
+                Box::new(Self::strip_table_prefix_from_condition(*l)),
+                Box::new(Self::strip_table_prefix_from_condition(*r)),
+            ),
+            C::Or(l, r) => C::Or(
+                Box::new(Self::strip_table_prefix_from_condition(*l)),
+                Box::new(Self::strip_table_prefix_from_condition(*r)),
+            ),
+            C::Not(inner) => C::Not(Box::new(Self::strip_table_prefix_from_condition(*inner))),
+            C::Group(inner) => C::Group(Box::new(Self::strip_table_prefix_from_condition(*inner))),
+            leaf => Self::strip_table_prefix_on_leaf(leaf),
+        }
+    }
+
+    /// Applies [`strip_prefix`] to the `column` field of leaf (non-composite)
+    /// conditions. Engine-handled variants (`VectorSearch`, `GraphMatch`, …)
+    /// pass through unchanged.
+    ///
+    /// [`strip_prefix`]: Self::strip_prefix
+    fn strip_table_prefix_on_leaf(
         condition: crate::velesql::Condition,
     ) -> crate::velesql::Condition {
         use crate::velesql::Condition as C;
@@ -204,6 +229,10 @@ impl Database {
                 cc.column = Self::strip_prefix(&cc.column);
                 C::Contains(cc)
             }
+            C::ContainsText(mut ct) => {
+                ct.column = Self::strip_prefix(&ct.column);
+                C::ContainsText(ct)
+            }
             C::GeoDistance(mut gd) => {
                 gd.column = Self::strip_prefix(&gd.column);
                 C::GeoDistance(gd)
@@ -212,16 +241,6 @@ impl Database {
                 gb.column = Self::strip_prefix(&gb.column);
                 C::GeoBbox(gb)
             }
-            C::And(l, r) => C::And(
-                Box::new(Self::strip_table_prefix_from_condition(*l)),
-                Box::new(Self::strip_table_prefix_from_condition(*r)),
-            ),
-            C::Or(l, r) => C::Or(
-                Box::new(Self::strip_table_prefix_from_condition(*l)),
-                Box::new(Self::strip_table_prefix_from_condition(*r)),
-            ),
-            C::Not(inner) => C::Not(Box::new(Self::strip_table_prefix_from_condition(*inner))),
-            C::Group(inner) => C::Group(Box::new(Self::strip_table_prefix_from_condition(*inner))),
             // Engine-handled conditions pass through unchanged.
             other => other,
         }
