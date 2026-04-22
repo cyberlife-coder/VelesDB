@@ -85,6 +85,9 @@ mod validation_parity_tests;
 #[cfg(test)]
 mod validation_tests;
 mod validation_types;
+pub mod window_evaluator;
+#[cfg(test)]
+mod window_function_tests;
 
 #[cfg(test)]
 mod aggregation_params_tests;
@@ -244,6 +247,11 @@ pub use ast::{
     WithClause,
     WithOption,
     WithValue,
+    // Window functions (Issue #386)
+    OverClause,
+    WindowFunction,
+    WindowFunctionType,
+    WindowOrderBy,
 };
 pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks

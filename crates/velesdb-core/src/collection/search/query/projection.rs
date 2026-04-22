@@ -37,6 +37,7 @@ fn project_single(result: &SearchResult, select_exprs: &SelectColumns) -> serde_
             aggregations: _,
             similarity_scores,
             qualified_wildcards,
+            ..
         } => project_mixed(result, columns, similarity_scores, qualified_wildcards),
     }
 }
@@ -268,6 +269,7 @@ mod tests {
                 alias: Some("score".to_string()),
             }],
             qualified_wildcards: vec![],
+            window_functions: vec![],
         };
         let projected = project_single(&result, &columns);
         let obj = projected.as_object().unwrap();
@@ -291,6 +293,7 @@ mod tests {
                 alias: Some("relevance".to_string()),
             }],
             qualified_wildcards: vec!["ctx".to_string()],
+            window_functions: vec![],
         };
         let projected = project_single(&result, &columns);
         let obj = projected.as_object().unwrap();

@@ -1,0 +1,593 @@
+//! Tests for window functions (Issue #386 Phase 1).
+//!
+//! Covers: grammar parsing, AST construction, evaluator logic,
+//! edge cases (ties, empty partitions, NULL values, no PARTITION BY).
+
+#[cfg(test)]
+mod tests {
+    use crate::point::{Point, SearchResult};
+    use crate::velesql::{
+        window_evaluator, OverClause, Parser, SelectColumns, WindowFunction, WindowFunctionType,
+        WindowOrderBy,
+    };
+
+    // ================================================================
+    // Helper functions
+    // ================================================================
+
+    fn make_result(id: u64, payload: serde_json::Value, score: f32) -> SearchResult {
+        SearchResult::new(
+            Point {
+                id,
+                vector: vec![0.0; 4],
+                payload: Some(payload),
+                sparse_vectors: None,
+            },
+            score,
+        )
+    }
+
+    fn get_payload_u64(result: &SearchResult, field: &str) -> Option<u64> {
+        result
+            .point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(field))
+            .and_then(|v| v.as_u64())
+    }
+
+    // ================================================================
+    // Parser tests — grammar → AST
+    // ================================================================
+
+    #[test]
+    fn test_parse_row_number_with_partition_and_order() {
+        let query = Parser::parse(
+            "SELECT name, ROW_NUMBER() OVER (PARTITION BY category ORDER BY price ASC) AS rn FROM products",
+        )
+        .unwrap();
+
+        match &query.select.columns {
+            SelectColumns::Mixed {
+                columns,
+                window_functions,
+                ..
+            } => {
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0].name, "name");
+
+                assert_eq!(window_functions.len(), 1);
+                let wf = &window_functions[0];
+                assert_eq!(wf.function_type, WindowFunctionType::RowNumber);
+                assert_eq!(wf.alias, Some("rn".to_string()));
+
+                assert_eq!(wf.over_clause.partition_by, vec!["category".to_string()]);
+                assert_eq!(wf.over_clause.order_by.len(), 1);
+                assert_eq!(wf.over_clause.order_by[0].column, "price");
+                assert!(!wf.over_clause.order_by[0].descending);
+            }
+            other => panic!("Expected Mixed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_rank_desc() {
+        let query = Parser::parse(
+            "SELECT RANK() OVER (ORDER BY score DESC) AS rnk FROM docs",
+        )
+        .unwrap();
+
+        match &query.select.columns {
+            SelectColumns::Mixed {
+                window_functions, ..
+            } => {
+                assert_eq!(window_functions.len(), 1);
+                let wf = &window_functions[0];
+                assert_eq!(wf.function_type, WindowFunctionType::Rank);
+                assert_eq!(wf.alias, Some("rnk".to_string()));
+                assert!(wf.over_clause.partition_by.is_empty());
+                assert_eq!(wf.over_clause.order_by[0].column, "score");
+                assert!(wf.over_clause.order_by[0].descending);
+            }
+            other => panic!("Expected Mixed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_dense_rank_no_alias() {
+        let query = Parser::parse(
+            "SELECT DENSE_RANK() OVER (PARTITION BY dept ORDER BY salary DESC) FROM employees",
+        )
+        .unwrap();
+
+        match &query.select.columns {
+            SelectColumns::Mixed {
+                window_functions, ..
+            } => {
+                assert_eq!(window_functions.len(), 1);
+                let wf = &window_functions[0];
+                assert_eq!(wf.function_type, WindowFunctionType::DenseRank);
+                assert!(wf.alias.is_none());
+                assert_eq!(wf.over_clause.partition_by, vec!["dept".to_string()]);
+            }
+            other => panic!("Expected Mixed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_multiple_partition_columns() {
+        let query = Parser::parse(
+            "SELECT ROW_NUMBER() OVER (PARTITION BY region, department ORDER BY hire_date ASC) AS rn FROM emp",
+        )
+        .unwrap();
+
+        match &query.select.columns {
+            SelectColumns::Mixed {
+                window_functions, ..
+            } => {
+                let wf = &window_functions[0];
+                assert_eq!(
+                    wf.over_clause.partition_by,
+                    vec!["region".to_string(), "department".to_string()]
+                );
+            }
+            other => panic!("Expected Mixed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_window_with_similarity_order() {
+        let query = Parser::parse(
+            "SELECT ROW_NUMBER() OVER (PARTITION BY source ORDER BY similarity() DESC) AS rn FROM docs",
+        )
+        .unwrap();
+
+        match &query.select.columns {
+            SelectColumns::Mixed {
+                window_functions, ..
+            } => {
+                let wf = &window_functions[0];
+                assert_eq!(wf.over_clause.order_by[0].column, "similarity");
+                assert!(wf.over_clause.order_by[0].descending);
+            }
+            other => panic!("Expected Mixed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_rank_as_column_name_no_ambiguity() {
+        // "rank" without parens should parse as a regular column, not a window function
+        let query = Parser::parse("SELECT rank FROM docs").unwrap();
+        match &query.select.columns {
+            SelectColumns::Columns(cols) => {
+                assert_eq!(cols.len(), 1);
+                assert_eq!(cols[0].name, "rank");
+            }
+            other => panic!("Expected Columns, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_multiple_order_by_in_over() {
+        let query = Parser::parse(
+            "SELECT ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC, name ASC) AS rn FROM emp",
+        )
+        .unwrap();
+
+        match &query.select.columns {
+            SelectColumns::Mixed {
+                window_functions, ..
+            } => {
+                let wf = &window_functions[0];
+                assert_eq!(wf.over_clause.order_by.len(), 2);
+                assert_eq!(wf.over_clause.order_by[0].column, "salary");
+                assert!(wf.over_clause.order_by[0].descending);
+                assert_eq!(wf.over_clause.order_by[1].column, "name");
+                assert!(!wf.over_clause.order_by[1].descending);
+            }
+            other => panic!("Expected Mixed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_case_insensitive_keywords() {
+        // Verify case-insensitive parsing for all window keywords
+        let query = Parser::parse(
+            "SELECT row_number() over (partition by cat order by val desc) AS rn FROM t",
+        )
+        .unwrap();
+
+        match &query.select.columns {
+            SelectColumns::Mixed {
+                window_functions, ..
+            } => {
+                assert_eq!(window_functions[0].function_type, WindowFunctionType::RowNumber);
+            }
+            other => panic!("Expected Mixed, got: {:?}", other),
+        }
+    }
+
+    // ================================================================
+    // Evaluator tests — window function computation
+    // ================================================================
+
+    #[test]
+    fn test_row_number_single_partition() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"name": "C", "score": 30}), 0.3),
+            make_result(2, serde_json::json!({"name": "A", "score": 10}), 0.1),
+            make_result(3, serde_json::json!({"name": "B", "score": 20}), 0.2),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "score".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+
+        // Sorted by score ASC: A(10)=1, B(20)=2, C(30)=3
+        assert_eq!(get_payload_u64(&results[1], "rn"), Some(1)); // A (id=2)
+        assert_eq!(get_payload_u64(&results[2], "rn"), Some(2)); // B (id=3)
+        assert_eq!(get_payload_u64(&results[0], "rn"), Some(3)); // C (id=1)
+    }
+
+    #[test]
+    fn test_row_number_multiple_partitions() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"cat": "A", "val": 10}), 0.1),
+            make_result(2, serde_json::json!({"cat": "B", "val": 20}), 0.2),
+            make_result(3, serde_json::json!({"cat": "A", "val": 30}), 0.3),
+            make_result(4, serde_json::json!({"cat": "B", "val": 40}), 0.4),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec!["cat".to_string()],
+                order_by: vec![WindowOrderBy {
+                    column: "val".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+
+        // Partition A: id=1(val=10)→1, id=3(val=30)→2
+        assert_eq!(get_payload_u64(&results[0], "rn"), Some(1));
+        assert_eq!(get_payload_u64(&results[2], "rn"), Some(2));
+
+        // Partition B: id=2(val=20)→1, id=4(val=40)→2
+        assert_eq!(get_payload_u64(&results[1], "rn"), Some(1));
+        assert_eq!(get_payload_u64(&results[3], "rn"), Some(2));
+    }
+
+    #[test]
+    fn test_rank_with_ties() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"score": 100}), 1.0),
+            make_result(2, serde_json::json!({"score": 90}), 0.9),
+            make_result(3, serde_json::json!({"score": 90}), 0.9),
+            make_result(4, serde_json::json!({"score": 80}), 0.8),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::Rank,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "score".to_string(),
+                    descending: true,
+                }],
+            },
+            alias: Some("rnk".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+
+        // 100→1, 90→2, 90→2, 80→4 (gap after tie)
+        assert_eq!(get_payload_u64(&results[0], "rnk"), Some(1)); // 100
+        assert_eq!(get_payload_u64(&results[1], "rnk"), Some(2)); // 90
+        assert_eq!(get_payload_u64(&results[2], "rnk"), Some(2)); // 90
+        assert_eq!(get_payload_u64(&results[3], "rnk"), Some(4)); // 80
+    }
+
+    #[test]
+    fn test_dense_rank_with_ties() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"score": 100}), 1.0),
+            make_result(2, serde_json::json!({"score": 90}), 0.9),
+            make_result(3, serde_json::json!({"score": 90}), 0.9),
+            make_result(4, serde_json::json!({"score": 80}), 0.8),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::DenseRank,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "score".to_string(),
+                    descending: true,
+                }],
+            },
+            alias: Some("drnk".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+
+        // 100→1, 90→2, 90→2, 80→3 (no gap)
+        assert_eq!(get_payload_u64(&results[0], "drnk"), Some(1));
+        assert_eq!(get_payload_u64(&results[1], "drnk"), Some(2));
+        assert_eq!(get_payload_u64(&results[2], "drnk"), Some(2));
+        assert_eq!(get_payload_u64(&results[3], "drnk"), Some(3));
+    }
+
+    #[test]
+    fn test_empty_result_set() {
+        let mut results: Vec<SearchResult> = vec![];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "score".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        // Should succeed with no crash
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_single_result() {
+        let mut results = vec![make_result(
+            1,
+            serde_json::json!({"val": 42}),
+            0.5,
+        )];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "val".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+        assert_eq!(get_payload_u64(&results[0], "rn"), Some(1));
+    }
+
+    #[test]
+    fn test_null_partition_values() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"cat": "A", "val": 1}), 0.1),
+            make_result(2, serde_json::json!({"val": 2}), 0.2), // No "cat" field → null partition
+            make_result(3, serde_json::json!({"cat": "A", "val": 3}), 0.3),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec!["cat".to_string()],
+                order_by: vec![WindowOrderBy {
+                    column: "val".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+
+        // Partition A: id=1(val=1)→1, id=3(val=3)→2
+        assert_eq!(get_payload_u64(&results[0], "rn"), Some(1));
+        assert_eq!(get_payload_u64(&results[2], "rn"), Some(2));
+
+        // Null partition: id=2→1
+        assert_eq!(get_payload_u64(&results[1], "rn"), Some(1));
+    }
+
+    #[test]
+    fn test_default_alias() {
+        let mut results = vec![make_result(
+            1,
+            serde_json::json!({"val": 1}),
+            0.5,
+        )];
+
+        // No alias → uses function_type.default_alias()
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "val".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: None,
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+        assert_eq!(get_payload_u64(&results[0], "row_number"), Some(1));
+    }
+
+    #[test]
+    fn test_sort_by_similarity_score() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"source": "web"}), 0.95),
+            make_result(2, serde_json::json!({"source": "web"}), 0.80),
+            make_result(3, serde_json::json!({"source": "web"}), 0.90),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec!["source".to_string()],
+                order_by: vec![WindowOrderBy {
+                    column: "similarity".to_string(),
+                    descending: true,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+
+        // Sorted by similarity DESC: 0.95→1, 0.90→2, 0.80→3
+        assert_eq!(get_payload_u64(&results[0], "rn"), Some(1)); // score=0.95
+        assert_eq!(get_payload_u64(&results[2], "rn"), Some(2)); // score=0.90
+        assert_eq!(get_payload_u64(&results[1], "rn"), Some(3)); // score=0.80
+    }
+
+    #[test]
+    fn test_all_same_values_rank() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"score": 50}), 0.5),
+            make_result(2, serde_json::json!({"score": 50}), 0.5),
+            make_result(3, serde_json::json!({"score": 50}), 0.5),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::Rank,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "score".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("rnk".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+
+        // All tied → all rank 1
+        for r in &results {
+            assert_eq!(get_payload_u64(r, "rnk"), Some(1));
+        }
+    }
+
+    #[test]
+    fn test_all_same_values_dense_rank() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"score": 50}), 0.5),
+            make_result(2, serde_json::json!({"score": 50}), 0.5),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::DenseRank,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "score".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("drnk".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+
+        // All tied → all dense_rank 1
+        for r in &results {
+            assert_eq!(get_payload_u64(r, "drnk"), Some(1));
+        }
+    }
+
+    #[test]
+    fn test_window_function_type_default_alias() {
+        assert_eq!(WindowFunctionType::RowNumber.default_alias(), "row_number");
+        assert_eq!(WindowFunctionType::Rank.default_alias(), "rank");
+        assert_eq!(WindowFunctionType::DenseRank.default_alias(), "dense_rank");
+    }
+
+    #[test]
+    fn test_nested_partition_column() {
+        let mut results = vec![
+            make_result(
+                1,
+                serde_json::json!({"metadata": {"source": "web"}, "val": 10}),
+                0.1,
+            ),
+            make_result(
+                2,
+                serde_json::json!({"metadata": {"source": "api"}, "val": 20}),
+                0.2,
+            ),
+            make_result(
+                3,
+                serde_json::json!({"metadata": {"source": "web"}, "val": 30}),
+                0.3,
+            ),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec!["metadata.source".to_string()],
+                order_by: vec![WindowOrderBy {
+                    column: "val".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+
+        // Web partition: id=1(val=10)→1, id=3(val=30)→2
+        assert_eq!(get_payload_u64(&results[0], "rn"), Some(1));
+        assert_eq!(get_payload_u64(&results[2], "rn"), Some(2));
+
+        // API partition: id=2→1
+        assert_eq!(get_payload_u64(&results[1], "rn"), Some(1));
+    }
+
+    #[test]
+    fn test_desc_order_row_number() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"val": 10}), 0.1),
+            make_result(2, serde_json::json!({"val": 30}), 0.3),
+            make_result(3, serde_json::json!({"val": 20}), 0.2),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "val".to_string(),
+                    descending: true,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).unwrap();
+
+        // DESC: val=30→1, val=20→2, val=10→3
+        assert_eq!(get_payload_u64(&results[1], "rn"), Some(1)); // val=30 (id=2)
+        assert_eq!(get_payload_u64(&results[2], "rn"), Some(2)); // val=20 (id=3)
+        assert_eq!(get_payload_u64(&results[0], "rn"), Some(3)); // val=10 (id=1)
+    }
+}

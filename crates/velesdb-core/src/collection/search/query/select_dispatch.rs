@@ -254,7 +254,7 @@ impl Collection {
         analysis
     }
 
-    /// Applies DISTINCT, ORDER BY (with LET bindings), OFFSET, LIMIT, and
+    /// Applies DISTINCT, window functions, ORDER BY (with LET bindings), OFFSET, LIMIT, and
     /// LET payload injection (Issue #473).
     pub(super) fn apply_select_postprocessing(
         &self,
@@ -264,9 +264,15 @@ impl Collection {
         limit: usize,
         let_bindings: &[crate::velesql::LetBinding],
     ) -> Result<Vec<SearchResult>> {
+        // Step 1: DISTINCT — deduplication before any ranking.
         if stmt.distinct == crate::velesql::DistinctMode::All {
             results = distinct::apply_distinct(results, &stmt.columns);
         }
+        // Step 2: Window functions — after DISTINCT, before ORDER BY/LIMIT.
+        if let Some(wfs) = Self::extract_window_functions(&stmt.columns) {
+            crate::velesql::window_evaluator::evaluate(&mut results, wfs)?;
+        }
+        // Step 3: ORDER BY (with optional LET bindings).
         if let Some(ref order_by) = stmt.order_by {
             if let_bindings.is_empty() {
                 self.apply_order_by(&mut results, order_by, params)?;
@@ -308,6 +314,18 @@ impl Collection {
                 )
             })
             .collect()
+    }
+
+    /// Extracts window functions from `SelectColumns`, if any are present.
+    fn extract_window_functions(
+        columns: &crate::velesql::SelectColumns,
+    ) -> Option<&[crate::velesql::WindowFunction]> {
+        match columns {
+            crate::velesql::SelectColumns::Mixed {
+                window_functions, ..
+            } if !window_functions.is_empty() => Some(window_functions),
+            _ => None,
+        }
     }
 }
 

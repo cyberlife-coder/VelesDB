@@ -198,6 +198,7 @@ mod tests {
                 alias: Some("score".to_string()),
             }],
             qualified_wildcards: vec![],
+            window_functions: vec![],
         };
 
         let distinct = apply_distinct(results, &columns);
@@ -220,6 +221,7 @@ mod tests {
             aggregations: vec![],
             similarity_scores: vec![],
             qualified_wildcards: vec![],
+            window_functions: vec![],
         };
 
         let distinct = apply_distinct(results, &columns);

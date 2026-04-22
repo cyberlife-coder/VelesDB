@@ -70,7 +70,7 @@ pub enum SelectColumns {
     Columns(Vec<Column>),
     /// Select aggregate functions.
     Aggregations(Vec<AggregateFunction>),
-    /// Mixed: columns + aggregations + similarity scores + qualified wildcards.
+    /// Mixed: columns + aggregations + similarity scores + qualified wildcards + window functions.
     Mixed {
         /// Regular columns.
         columns: Vec<Column>,
@@ -82,6 +82,9 @@ pub enum SelectColumns {
         /// Qualified wildcards (e.g., `ctx.*`).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         qualified_wildcards: Vec<String>,
+        /// Window function expressions (Issue #386).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        window_functions: Vec<super::window::WindowFunction>,
     },
     /// Select similarity() score only (zero-arg form).
     SimilarityScore(SimilarityScoreExpr),
@@ -105,6 +108,7 @@ impl SelectColumns {
             Self::Mixed {
                 columns,
                 aggregations,
+                window_functions,
                 ..
             } => {
                 let mut result: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
@@ -113,6 +117,11 @@ impl SelectColumns {
                         .iter()
                         .map(|a| format!("{:?}", a.function_type)),
                 );
+                result.extend(window_functions.iter().map(|wf| {
+                    wf.alias
+                        .clone()
+                        .unwrap_or_else(|| wf.function_type.default_alias().to_string())
+                }));
                 result
             }
             Self::SimilarityScore(expr) => {
