@@ -45,6 +45,14 @@ pub mod pq_gpu;
 pub mod gpu_csr;
 
 #[cfg(feature = "gpu")]
+#[path = "gpu/gpu_traversal_buffers.rs"]
+mod gpu_traversal_buffers;
+
+#[cfg(feature = "gpu")]
+#[path = "gpu/gpu_traversal_pipelines.rs"]
+mod gpu_traversal_pipelines;
+
+#[cfg(feature = "gpu")]
 #[path = "gpu/gpu_traversal.rs"]
 pub mod gpu_traversal;
 
