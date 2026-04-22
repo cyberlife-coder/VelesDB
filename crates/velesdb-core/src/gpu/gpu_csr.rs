@@ -296,12 +296,46 @@ impl CsrCache {
     ///
     /// This method is designed for the GPU dispatch hot path:
     /// - If the cache is fresh, returns the existing CSR (fast path).
-    /// - If stale, rebuilds from the Layer (slow path, ~50ms for 1M nodes).
+    /// - If stale, rebuilds from the `layer` argument (slow path, ~50 ms
+    ///   for 1 M nodes).
     ///
-    /// The rebuild is generation-safe: if a concurrent `invalidate()` occurs
-    /// during the rebuild, the stale CSR is still stored but the generation
-    /// check ensures the *next* query will re-trigger a rebuild.
+    /// # Caller contract — must hold `layers` read lock
+    ///
+    /// **The rebuild from `layer` is only race-free while the caller holds
+    /// the `layers` read lock** (rank 20 in `locking::LockRank`) for the
+    /// entire duration of this call. Layer mutations require the write
+    /// lock, so as long as the read lock is held, every concurrent
+    /// rebuilder sees the same layer topology and produces an identical
+    /// CSR. The `gen_before`/`gen_after` check under `self.csr.write()`
+    /// then discards any rebuild that raced with an `invalidate()`.
+    ///
+    /// If a future caller ever invokes `get_or_rebuild` **without** the
+    /// layers read lock held, two rebuilders could observe different
+    /// layer states, and one might commit a stale CSR while the
+    /// generation counter indicates fresh — a silent correctness bug.
+    /// Debug builds assert the precondition via `holds_lock(Layers)`.
+    ///
+    /// # Generation protocol (NOT a CAS)
+    ///
+    /// The rebuild is **not** a compare-and-swap. It is a
+    /// load-before-rebuild (`gen_before`) / re-check-under-write-lock
+    /// (`gen_after`) sequence: we store the new CSR and bump
+    /// `built_generation` only when the generation has not moved during
+    /// the rebuild. Correctness depends on the caller contract above —
+    /// without the shared layer snapshot, the write would still be
+    /// atomic but the data committed could be stale.
     pub fn get_or_rebuild(&self, layer: &Layer, num_nodes: usize) -> CsrGraph {
+        // Caller contract: the layers read lock must be held so concurrent
+        // rebuilders observe the same layer topology. In release builds
+        // `hnsw_holds_lock` returns `true` unconditionally (thread-local
+        // stack is not maintained), so the assert is a debug-only tripwire.
+        debug_assert!(
+            crate::index::hnsw::native::hnsw_holds_lock(
+                crate::index::hnsw::native::HnswLockRank::Layers
+            ),
+            "CsrCache::get_or_rebuild must be called while holding the layers read lock"
+        );
+
         // Fast path: check if cache is fresh
         if !self.is_stale() {
             let guard = self.csr.read();
@@ -313,7 +347,9 @@ impl CsrCache {
         // Snapshot generation before rebuild
         let gen_before = self.generation.load(Ordering::Acquire);
 
-        // Slow path: rebuild outside of any lock.
+        // Slow path: rebuild outside of any lock on `self.csr`. Safe
+        // against concurrent rebuilders because they all observe the
+        // same layer state (see caller contract above).
         let new_csr = CsrGraph::from_layer(layer, num_nodes);
 
         // Commit is atomic under the write lock: we only store our CSR
@@ -368,7 +404,21 @@ impl Default for CsrCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::hnsw::native::NodeId;
+    use crate::index::hnsw::native::{
+        hnsw_holds_lock, hnsw_record_lock_acquire, hnsw_record_lock_release, HnswLockRank, NodeId,
+    };
+
+    /// Runs `f` with the layers rank recorded as held — the caller contract
+    /// of [`CsrCache::get_or_rebuild`]. Abstracts away the record/release
+    /// dance so tests read linearly and do not accidentally break the
+    /// contract by forgetting the release.
+    fn with_layers_rank<R>(f: impl FnOnce() -> R) -> R {
+        hnsw_record_lock_acquire(HnswLockRank::Layers);
+        debug_assert!(hnsw_holds_lock(HnswLockRank::Layers));
+        let result = f();
+        hnsw_record_lock_release(HnswLockRank::Layers);
+        result
+    }
 
     #[test]
     fn test_csr_from_empty_layer() {
@@ -432,19 +482,20 @@ mod tests {
         layer.set_neighbors(0, vec![1]);
         layer.set_neighbors(1, vec![0]);
 
-        // First build
-        let csr = cache.get_or_rebuild(&layer, 2);
+        // First build — tests model the production caller contract
+        // (`with_layers_read → get_or_rebuild`) via `with_layers_rank`.
+        let csr = with_layers_rank(|| cache.get_or_rebuild(&layer, 2));
         assert_eq!(csr.num_nodes, 2);
         assert_eq!(cache.version(), 1);
 
         // Should return cached (not rebuild)
-        let csr2 = cache.get_or_rebuild(&layer, 2);
+        let csr2 = with_layers_rank(|| cache.get_or_rebuild(&layer, 2));
         assert_eq!(csr2.num_nodes, 2);
         assert_eq!(cache.version(), 1); // Same version
 
         // Invalidate and rebuild
         cache.invalidate();
-        let csr3 = cache.get_or_rebuild(&layer, 2);
+        let csr3 = with_layers_rank(|| cache.get_or_rebuild(&layer, 2));
         assert_eq!(csr3.num_nodes, 2);
         assert_eq!(cache.version(), 2); // Incremented
     }
@@ -484,7 +535,7 @@ mod tests {
         assert!(cache.get_if_clean().is_none()); // Starts dirty
 
         let layer = Layer::new(1);
-        cache.get_or_rebuild(&layer, 1); // Build it
+        with_layers_rank(|| cache.get_or_rebuild(&layer, 1)); // Build it
         assert!(cache.get_if_clean().is_some()); // Now clean
 
         cache.invalidate();
