@@ -151,6 +151,10 @@ impl NativeHnswIndex {
     }
 
     /// Searches with a specific quality profile.
+    ///
+    /// Uses [`NativeHnswInner::search_auto`] so that when the `gpu` feature is
+    /// enabled and the index is large enough (> 500K vectors, Standard backend),
+    /// layer-0 traversal is offloaded to the GPU. Falls back to CPU otherwise.
     #[must_use]
     pub fn search_with_quality(
         &self,
@@ -160,7 +164,7 @@ impl NativeHnswIndex {
     ) -> Vec<ScoredResult> {
         let ef_search = quality.ef_search(k);
         let inner = self.inner.read();
-        let neighbors = inner.search(query, k, ef_search);
+        let neighbors = inner.search_auto(query, k, ef_search);
 
         neighbors
             .into_iter()
