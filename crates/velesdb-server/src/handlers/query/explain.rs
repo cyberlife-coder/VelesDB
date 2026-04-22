@@ -367,6 +367,7 @@ pub(super) fn condition_has_vector_search(cond: &Condition) -> bool {
     match cond {
         Condition::VectorSearch(_)
         | Condition::VectorFusedSearch { .. }
+        | Condition::SparseVectorSearch(_)
         | Condition::Similarity(_) => true,
         Condition::And(left, right) | Condition::Or(left, right) => {
             condition_has_vector_search(left) || condition_has_vector_search(right)
