@@ -1,6 +1,10 @@
 //! Extended CSR tests for validate(), density(), avg_degree(), Display,
 //! high-degree graphs, isolated nodes, large-scale, and concurrent access.
 
+// Test graphs use small controlled sizes (≤ 10K nodes, ≤ 16 degree); the
+// `usize as u32` casts here are by construction within u32 range.
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::gpu::gpu_csr::{CsrCache, CsrGraph};
 use crate::index::hnsw::native::layer::{Layer, NodeId};
 

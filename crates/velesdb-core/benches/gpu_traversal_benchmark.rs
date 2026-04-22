@@ -8,6 +8,14 @@
 //! **Note**: 5M and 10M benchmarks require significant RAM (~30GB for 10M×768).
 //! They are gated behind `internal-bench` feature to avoid accidental CI runs.
 
+// Bench code deliberately uses controlled synthetic inputs; the bounds for
+// `usize as u32` casts (node counts, degrees) are enforced by the benchmark
+// configuration. Too-many-lines on `bench_gpu_traversal` reflects the staged
+// setup ordering (ctx → scales → graph build → dispatch) and is not worth
+// splitting just for the lint.
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::too_many_lines)]
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 
@@ -97,28 +105,21 @@ fn bench_gpu_traversal(c: &mut Criterion) {
     let k = 10;
     let ef_search = 128;
 
-    // 1M benchmark (always run)
-    let scales: Vec<(usize, &str)> = {
-        let mut s = vec![(1_000_000, "1M")];
-
-        // 5M and 10M only with internal-bench feature (requires ~30GB RAM)
-        #[cfg(feature = "internal-bench")]
-        {
-            s.push((5_000_000, "5M"));
-            s.push((10_000_000, "10M"));
-        }
-
-        s
-    };
+    // 1M benchmark (always run); 5M/10M only with internal-bench feature
+    // (requires ~30GB RAM). `mut` is unused when the feature is off.
+    #[allow(unused_mut)]
+    let mut scales: Vec<(usize, &str)> = vec![(1_000_000, "1M")];
+    #[cfg(feature = "internal-bench")]
+    {
+        scales.push((5_000_000, "5M"));
+        scales.push((10_000_000, "10M"));
+    }
 
     // Check GPU availability
-    let ctx = match GpuTraversalContext::new() {
-        Some(ctx) => ctx,
-        None => {
-            eprintln!("⚠ GPU not available — skipping GPU traversal benchmarks");
-            group.finish();
-            return;
-        }
+    let Some(ctx) = GpuTraversalContext::new() else {
+        eprintln!("⚠ GPU not available — skipping GPU traversal benchmarks");
+        group.finish();
+        return;
     };
 
     for (num_vectors, label) in &scales {
