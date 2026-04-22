@@ -267,6 +267,7 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 | HNSW Search (5K/768D, k=10) | **55 us** | `cargo bench -p velesdb-core --bench hnsw_benchmark -- hnsw_search_latency` |
 | SIMD Dot Product (768D, AVX2) | **21.7 ns** | `cargo bench -p velesdb-core --bench simd_benchmark` |
 | Recall@10 (Accurate) | **100%** | `cargo bench -p velesdb-core --bench recall_benchmark` |
+| BM25 Sparse Search (10K docs, top-10) | **57.6 us** (16x from 956 us in v1.12) | `cargo bench -p velesdb-core --bench sparse_benchmark -- top10_10k_corpus` |
 
 | Mode | ef_search | Recall@10 | Use case |
 |------|-----------|-----------|----------|

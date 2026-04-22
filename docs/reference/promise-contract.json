@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-04-18",
+  "last_updated": "2026-04-22",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
@@ -105,6 +105,14 @@
       "source": "docs/BENCHMARKS.md section 11 (SIFT1M — Standard ANN Benchmark)",
       "last_updated": "2026-04-18",
       "notes": "Gated by --features bench-sift1m + cached download or VELESDB_SIFT1M_DIR. CI skips (feature off); run locally or on a dedicated bench runner. The `must_contain` is intentionally loose (dataset name only) until numeric ranges are populated in section 11.3 from a first stable run on reference hardware — tightening it prematurely would lock the contract around literature reference points that are not VelesDB measurements."
+    },
+    {
+      "id": "readme_sparse_search_latency",
+      "file": "README.md",
+      "must_contain": "BM25 Sparse Search (10K docs, top-10)",
+      "validation_command": "cargo bench -p velesdb-core --bench sparse_benchmark -- top10_10k_corpus",
+      "source": "PR #621 (commit f4999a74, Phase 4.2 pre-seed remediation): 956us baseline (v1.12) -> 57.6us after linear_scan_dense + k-way merge dedup for corpus <= 100K",
+      "last_updated": "2026-04-21"
     }
   ]
 }
