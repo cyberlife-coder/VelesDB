@@ -21,6 +21,9 @@ mod search_state;
 #[cfg(test)]
 mod search_tests;
 
+#[cfg(feature = "gpu")]
+mod gpu_search;
+
 use super::columnar_vectors::ColumnarVectors;
 use super::distance::DistanceEngine;
 use super::layer::Layer;
@@ -101,7 +104,29 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// Built automatically after BFS reordering (`reorder_for_locality()`).
     /// Lock rank 15 (between vectors=10 and layers=20).
     pub(in crate::index::hnsw::native) columnar: RwLock<Option<ColumnarVectors>>,
+    /// Per-instance CSR cache for GPU traversal.
+    ///
+    /// Each `NativeHnsw` instance owns its own cache, preventing cross-collection
+    /// contamination when multiple indices exist in the same process.
+    /// Invalidated automatically on insert/delete via `CsrCache::invalidate()`.
+    #[cfg(feature = "gpu")]
+    pub(in crate::index::hnsw::native) gpu_csr_cache: crate::gpu::gpu_csr::CsrCache,
+    /// Cached flat vector snapshot for GPU upload.
+    ///
+    /// Stores `(count_at_snapshot, dimension, Arc<[f32]>)`. Only refreshed
+    /// when the vector count changes, eliminating the ~1.5GB per-query copy
+    /// at the 500K+ GPU activation threshold.
+    #[cfg(feature = "gpu")]
+    pub(in crate::index::hnsw::native) gpu_vectors_snapshot:
+        parking_lot::Mutex<Option<GpuVectorsSnapshot>>,
 }
+
+/// Cached GPU vector snapshot: `(count, dimension, flat_vectors)`.
+///
+/// Only refreshed when the vector count changes. Subsequent queries
+/// clone the `Arc` (O(1) pointer bump) instead of copying ~1.5GB.
+#[cfg(feature = "gpu")]
+pub(in crate::index::hnsw::native) type GpuVectorsSnapshot = (usize, usize, std::sync::Arc<[f32]>);
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Creates a new native HNSW index with VAMANA diversification (`alpha = 1.2`).
@@ -228,6 +253,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             stagnation_limit: ef_construction / 2,
             pre_allocated_capacity: AtomicUsize::new(0),
             columnar: RwLock::new(None),
+            #[cfg(feature = "gpu")]
+            gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),
+            #[cfg(feature = "gpu")]
+            gpu_vectors_snapshot: parking_lot::Mutex::new(None),
         }
     }
 
