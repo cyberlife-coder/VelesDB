@@ -168,26 +168,44 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Returns cached vector snapshot or refreshes it if the count changed.
     ///
     /// Returns `(dimension, Arc<[f32]>)`. The Arc clone is O(1) on cache hit.
+    ///
+    /// # Lock order
+    ///
+    /// Acquires `gpu_vectors_snapshot` (rank 5) first, then nests
+    /// `vectors` (rank 10) via `with_vectors_read` when the cache is stale.
+    /// Instrumented with `record_lock_acquire/release` so the runtime
+    /// lock-rank tracker (debug builds) catches any future caller that
+    /// inverts the order.
     fn get_or_refresh_vector_snapshot(
         &self,
         current_count: usize,
     ) -> (usize, std::sync::Arc<[f32]>) {
+        use super::locking::{record_lock_acquire, record_lock_release, LockRank};
+
+        record_lock_acquire(LockRank::GpuVectorsSnapshot);
         let mut snapshot = self.gpu_vectors_snapshot.lock();
 
         // Check if cached snapshot is still valid
         if let Some((cached_count, cached_dim, ref cached_vecs)) = *snapshot {
             if cached_count == current_count {
-                return (cached_dim, cached_vecs.clone());
+                let hit = (cached_dim, cached_vecs.clone());
+                drop(snapshot);
+                record_lock_release(LockRank::GpuVectorsSnapshot);
+                return hit;
             }
         }
 
-        // Cache miss or stale — refresh
+        // Cache miss or stale — refresh. `with_vectors_read` nests
+        // `Vectors` (rank 10) inside the snapshot mutex (rank 5), which
+        // is the declared lock order.
         let (dim, arc) = self.with_vectors_read(|vectors| {
             let d = vectors.dimension();
             let arc: std::sync::Arc<[f32]> = vectors.as_flat_slice().to_vec().into();
             (d, arc)
         });
         *snapshot = Some((current_count, dim, arc.clone()));
+        drop(snapshot);
+        record_lock_release(LockRank::GpuVectorsSnapshot);
         (dim, arc)
     }
 

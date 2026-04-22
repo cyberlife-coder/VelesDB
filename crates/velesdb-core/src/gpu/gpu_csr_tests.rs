@@ -7,6 +7,19 @@
 
 use crate::gpu::gpu_csr::{CsrCache, CsrGraph};
 use crate::index::hnsw::native::layer::{Layer, NodeId};
+use crate::index::hnsw::native::{
+    hnsw_record_lock_acquire, hnsw_record_lock_release, HnswLockRank,
+};
+
+/// Runs `f` with the layers rank recorded as held — the caller contract
+/// of [`CsrCache::get_or_rebuild`]. Mirrors the helper in `gpu_csr::tests`
+/// so concurrent tests spread across threads keep their rank stack clean.
+fn with_layers_rank<R>(f: impl FnOnce() -> R) -> R {
+    hnsw_record_lock_acquire(HnswLockRank::Layers);
+    let result = f();
+    hnsw_record_lock_release(HnswLockRank::Layers);
+    result
+}
 
 #[test]
 fn test_csr_validate_valid_graph() {
@@ -228,7 +241,7 @@ fn test_csr_cache_concurrent_rebuild_safety() {
             let c = Arc::clone(&cache);
             let l = Arc::clone(&layer);
             thread::spawn(move || {
-                let csr = c.get_or_rebuild(&l, 100);
+                let csr = with_layers_rank(|| c.get_or_rebuild(&l, 100));
                 assert_eq!(csr.num_nodes, 100);
                 assert!(csr.validate().is_ok());
             })
@@ -273,7 +286,7 @@ fn test_csr_cache_no_stale_commit_under_concurrent_invalidate() {
             let l = Arc::clone(&layer);
             thread::spawn(move || {
                 for _ in 0..100 {
-                    let csr = c.get_or_rebuild(&l, 64);
+                    let csr = with_layers_rank(|| c.get_or_rebuild(&l, 64));
                     // Whatever we observe, it must always validate:
                     // a corrupt CSR would indicate a torn write.
                     assert!(csr.validate().is_ok());
@@ -302,7 +315,7 @@ fn test_csr_cache_no_stale_commit_under_concurrent_invalidate() {
     }
 
     // One final rebuild converges the cache. Must produce a valid CSR.
-    let final_csr = cache.get_or_rebuild(&layer, 64);
+    let final_csr = with_layers_rank(|| cache.get_or_rebuild(&layer, 64));
     assert_eq!(final_csr.num_nodes, 64);
     assert!(final_csr.validate().is_ok());
 }
@@ -315,9 +328,33 @@ fn test_csr_cache_invalidate_rebuild_cycle() {
     }
     let cache = CsrCache::new();
     for round in 0..5_u64 {
-        let csr = cache.get_or_rebuild(&layer, 10);
+        let csr = with_layers_rank(|| cache.get_or_rebuild(&layer, 10));
         assert_eq!(csr.num_nodes, 10);
         assert_eq!(cache.version(), round + 1);
         cache.invalidate();
     }
+}
+
+/// Regression for the caller contract documented on
+/// [`CsrCache::get_or_rebuild`]. Debug builds must panic when the
+/// function is invoked without the layers read lock held — see the
+/// race described by Devin on PR #626 where a rebuilder without the
+/// shared layer snapshot can commit stale data under a fresh
+/// generation counter. Release builds compile the assert out and have
+/// to rely on the caller audit; this test guards the invariant at
+/// least during CI / local debug runs.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "layers read lock")]
+fn test_csr_cache_get_or_rebuild_panics_without_layers_lock() {
+    let layer = Layer::new(4);
+    layer.set_neighbors(0, vec![1, 2]);
+    layer.set_neighbors(1, vec![0, 3]);
+    layer.set_neighbors(2, vec![0, 1, 3]);
+    layer.set_neighbors(3, vec![1, 2]);
+
+    let cache = CsrCache::new();
+    // Deliberately DO NOT wrap in `with_layers_rank` — this simulates a
+    // future caller that forgets the contract.
+    let _ = cache.get_or_rebuild(&layer, 4);
 }

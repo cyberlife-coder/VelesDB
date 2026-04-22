@@ -54,6 +54,20 @@ pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
 pub use distance::{CachedSimdDistance, CpuDistance, DistanceEngine};
 pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
 pub use graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
+// Re-exported so sibling modules (notably `crate::gpu::gpu_csr` and its
+// tests) can document and assert the caller contract of rebuilders that
+// depend on a held layers lock, without widening `mod graph` itself to
+// `pub(crate)`.
+#[cfg(feature = "gpu")]
+pub(crate) use graph::locking::{holds_lock as hnsw_holds_lock, LockRank as HnswLockRank};
+// Test-only re-exports: only `gpu_csr` tests need to synthesise a held
+// layers rank. Production code inside `native/` acquires ranks through
+// the `with_*` helpers, never via these symbols directly.
+#[cfg(all(test, feature = "gpu"))]
+pub(crate) use graph::locking::{
+    record_lock_acquire as hnsw_record_lock_acquire,
+    record_lock_release as hnsw_record_lock_release,
+};
 pub use layer::{Layer, NodeId};
 pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};
 pub use rabitq_precision::{RaBitQPrecisionConfig, RaBitQPrecisionHnsw};

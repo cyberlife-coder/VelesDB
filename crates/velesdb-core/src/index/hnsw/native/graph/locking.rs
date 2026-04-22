@@ -4,8 +4,15 @@
 //! checking to prevent deadlocks. The rank system encodes the rule:
 //!
 //! ```text
-//! vectors (rank 10) → columnar (rank 15) → layers (rank 20) → neighbors (rank 30)
+//! gpu_vectors_snapshot (rank 5) → vectors (rank 10) → columnar (rank 15)
+//!     → layers (rank 20) → neighbors (rank 30)
 //! ```
+//!
+//! The `gpu_vectors_snapshot` mutex is acquired before `vectors` in the
+//! GPU path (`get_or_refresh_vector_snapshot` takes the mutex first, then
+//! calls `with_vectors_read` which takes `vectors`). Writers release
+//! `vectors` before reacquiring `gpu_vectors_snapshot` to invalidate, so
+//! both call sites observe the same order.
 //!
 //! Acquiring a lock with lower-or-equal rank than the highest currently
 //! held rank is a violation that gets recorded in safety counters.
@@ -22,13 +29,23 @@ use super::safety_counters::HNSW_COUNTERS;
 
 /// Lock rank values — monotonically increasing acquisition order.
 ///
-/// The global lock order is: vectors → columnar → layers → neighbors.
+/// The global lock order is:
+/// `gpu_vectors_snapshot → vectors → columnar → layers → neighbors`.
 /// Any code path that acquires multiple locks must acquire them
 /// in strictly increasing rank order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub(crate) enum LockRank {
-    /// `vectors` RwLock — rank 10 (acquired first)
+    /// `gpu_vectors_snapshot` Mutex — rank 5 (acquired before `Vectors`).
+    ///
+    /// Caches the flat vector buffer for GPU upload. The snapshot refresh
+    /// path acquires this mutex, then calls `with_vectors_read` which takes
+    /// `Vectors`, so the rank must be strictly lower than `Vectors`.
+    // Only exercised when the `gpu` feature is active; stays in the enum so
+    // lock-ordering logic is the same across feature configurations.
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    GpuVectorsSnapshot = 5,
+    /// `vectors` RwLock — rank 10 (acquired first among the core HNSW locks)
     Vectors = 10,
     /// `columnar` RwLock — rank 15 (PDX block-columnar layout)
     #[allow(dead_code)] // Reason: PDX columnar lock rank — used when PDX search is wired
@@ -113,4 +130,71 @@ pub(crate) fn record_lock_release(rank: LockRank) {
 #[cfg(all(test, debug_assertions))]
 pub(crate) fn lock_depth() -> usize {
     LOCK_RANK_STACK.with(|stack| stack.borrow().len())
+}
+
+/// Returns `true` if the current thread is currently holding a lock at `rank`.
+///
+/// Debug-builds only: callers guarded by `debug_assert!` will compile to
+/// nothing in release builds. Use this to encode caller contracts for
+/// cache rebuild helpers that must run under a parent lock — e.g. a
+/// GPU CSR rebuild is only race-free while the layers read lock is held.
+///
+/// Returns `false` in release builds (the thread-local stack is not
+/// maintained there, so any runtime assertion is a no-op).
+#[cfg(debug_assertions)]
+pub(crate) fn holds_lock(rank: LockRank) -> bool {
+    LOCK_RANK_STACK.with(|stack| stack.borrow().contains(&rank))
+}
+
+/// Release build stub — never panics, but callers should only invoke this
+/// behind `debug_assert!` so the call is compiled out entirely.
+#[cfg(not(debug_assertions))]
+#[inline]
+pub(crate) fn holds_lock(_rank: LockRank) -> bool {
+    true
+}
+
+#[cfg(all(test, debug_assertions))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn holds_lock_reports_currently_held_rank() {
+        // Empty stack — nothing held.
+        assert!(!holds_lock(LockRank::Layers));
+        assert!(!holds_lock(LockRank::Vectors));
+
+        record_lock_acquire(LockRank::Layers);
+        assert!(holds_lock(LockRank::Layers));
+        assert!(!holds_lock(LockRank::Vectors));
+
+        record_lock_release(LockRank::Layers);
+        assert!(!holds_lock(LockRank::Layers));
+    }
+
+    #[test]
+    fn gpu_vectors_snapshot_rank_sorts_before_vectors() {
+        // Monotone rank check — the core invariant of the enum.
+        assert!(LockRank::GpuVectorsSnapshot < LockRank::Vectors);
+        assert!(LockRank::Vectors < LockRank::Columnar);
+        assert!(LockRank::Columnar < LockRank::Layers);
+        assert!(LockRank::Layers < LockRank::Neighbors);
+    }
+
+    #[test]
+    fn nested_acquire_in_declared_order_reports_both_held() {
+        // Simulate `get_or_refresh_vector_snapshot`: snapshot then vectors.
+        record_lock_acquire(LockRank::GpuVectorsSnapshot);
+        record_lock_acquire(LockRank::Vectors);
+
+        assert!(holds_lock(LockRank::GpuVectorsSnapshot));
+        assert!(holds_lock(LockRank::Vectors));
+
+        record_lock_release(LockRank::Vectors);
+        record_lock_release(LockRank::GpuVectorsSnapshot);
+
+        // Stack back to empty.
+        assert!(!holds_lock(LockRank::GpuVectorsSnapshot));
+        assert!(!holds_lock(LockRank::Vectors));
+    }
 }
