@@ -27,8 +27,9 @@ sparse search speed-up of 16× on 10K-doc corpora via k-way merge +
 corpus-size-aware routing, HNSW search reduced by 12–22 % on the
 sequential (< 10K) path through software prefetch plumbing, plus
 significant duplication cleanup in the collection, HNSW, and vector
-search layers (jscpd `collection/` 84→75 clones, `hnsw/` 19→9,
-`search/vector.rs` 14.31 %→2.47 %). Zero regression cumulatively —
+search layers (cumulative across all phases: jscpd `collection/`
+84 → ~75 clones, `hnsw/` 19 → 9, `search/vector.rs` 14.31 % → 2.47 %).
+Zero regression cumulatively —
 recall gate (Fast 0.90 / Balanced 0.95 / Accurate 0.99 / Perfect 1.00)
 passes on every phase.
 
