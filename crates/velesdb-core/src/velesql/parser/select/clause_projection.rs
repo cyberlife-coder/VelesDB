@@ -292,6 +292,21 @@ impl Parser {
     pub(crate) fn parse_window_item(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<WindowFunction, ParseError> {
+        let (function_type, over_clause, alias) = Self::parse_window_item_parts(pair)?;
+
+        Ok(WindowFunction {
+            function_type: function_type
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected window function"))?,
+            over_clause: over_clause
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected OVER clause"))?,
+            alias,
+        })
+    }
+
+    /// Extracts the constituent parts from a `window_item` pair.
+    fn parse_window_item_parts(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(Option<WindowFunctionType>, Option<OverClause>, Option<String>), ParseError> {
         let mut function_type = None;
         let mut over_clause = None;
         let mut alias = None;
@@ -311,13 +326,7 @@ impl Parser {
             }
         }
 
-        Ok(WindowFunction {
-            function_type: function_type
-                .ok_or_else(|| ParseError::syntax(0, "", "Expected window function"))?,
-            over_clause: over_clause
-                .ok_or_else(|| ParseError::syntax(0, "", "Expected OVER clause"))?,
-            alias,
-        })
+        Ok((function_type, over_clause, alias))
     }
 
     /// Parses `window_function_name ~ "(" ~ ")"`.

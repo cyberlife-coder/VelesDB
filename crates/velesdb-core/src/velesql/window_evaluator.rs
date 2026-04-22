@@ -120,9 +120,10 @@ fn compare_rows(
 
 /// Extracts a sortable value from a result for comparison.
 ///
-/// Special-cases `"similarity"` and `"score"` to use the search score.
+/// Special-cases `"similarity"` to use the search score, consistent with
+/// the main ORDER BY system in `ordering.rs`.
 fn extract_sort_value(result: &SearchResult, column: &str) -> serde_json::Value {
-    if column == "similarity" || column == "score" {
+    if column == "similarity" {
         return serde_json::Value::from(f64::from(result.score));
     }
     extract_nested_value(result, column)
