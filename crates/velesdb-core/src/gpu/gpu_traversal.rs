@@ -41,6 +41,56 @@ use super::gpu_csr::CsrGraph;
 /// We allocate for the worst case to avoid dynamic GPU buffer resizing.
 const MAX_CANDIDATES_PER_ITER: u32 = 8192;
 
+/// Computes the distance between `query` and `entry_vec` in the same
+/// "lower = better" space that the traversal shaders produce.
+///
+/// This matches the shader conventions exactly so that an entry-node
+/// distance computed on CPU can be directly merged with GPU-computed
+/// candidate distances during the top-k selection:
+/// * Cosine → `1.0 - cosine_similarity`
+/// * Euclidean → squared L2 (not `sqrt`-reduced), matching
+///   `TRAVERSAL_EUCLIDEAN_SQ_SHADER`
+/// * DotProduct → `-dot_product`
+///
+/// Returns `f32::MAX` for metrics that have no GPU shader (caller must
+/// have already bailed out via `should_traverse_gpu` or metric dispatch).
+#[must_use]
+fn gpu_distance_cpu_fallback(
+    query: &[f32],
+    entry_vec: &[f32],
+    metric: crate::distance::DistanceMetric,
+) -> f32 {
+    use crate::distance::DistanceMetric;
+    debug_assert_eq!(query.len(), entry_vec.len());
+    match metric {
+        DistanceMetric::Cosine => {
+            let (mut dot, mut na, mut nb) = (0.0_f32, 0.0_f32, 0.0_f32);
+            for (x, y) in query.iter().zip(entry_vec.iter()) {
+                dot += x * y;
+                na += x * x;
+                nb += y * y;
+            }
+            let denom = (na * nb).sqrt();
+            if denom == 0.0 {
+                1.0
+            } else {
+                1.0 - (dot / denom)
+            }
+        }
+        DistanceMetric::Euclidean => query
+            .iter()
+            .zip(entry_vec.iter())
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f32>(),
+        DistanceMetric::DotProduct => -query
+            .iter()
+            .zip(entry_vec.iter())
+            .map(|(a, b)| a * b)
+            .sum::<f32>(),
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => f32::MAX,
+    }
+}
+
 /// Returns the adaptive GPU iteration count based on ef_search.
 ///
 /// Larger beam widths converge faster (more candidates explored per step),
@@ -267,12 +317,32 @@ impl GpuTraversalContext {
             _ => return None,
         };
 
+        // Compute the entry node's real query distance in the same space
+        // the GPU shaders use. The SELECT shader seeds its output frontier
+        // from `frontier_a`, and `frontier_a[0]` represents the entry node;
+        // a sentinel/0.0 placeholder here would silently force the entry to
+        // pollute every top-k with an artificial minimum.
+        let entry_offset = entry_node.checked_mul(dimension).filter(|end| {
+            end.checked_add(dimension)
+                .is_some_and(|e| e <= vectors_flat.len())
+        })?;
+        let entry_vec = &vectors_flat[entry_offset..entry_offset + dimension];
+        let entry_distance = gpu_distance_cpu_fallback(query, entry_vec, metric);
+
         // =====================================================================
         // Create GPU buffers — graph buffers may be cached
         // =====================================================================
         let upload_start = Instant::now();
-        let buffers =
-            TraversalBuffers::new(device, csr, vectors_flat, query, entry_node, ef, dimension);
+        let buffers = TraversalBuffers::new(
+            device,
+            csr,
+            vectors_flat,
+            query,
+            entry_node,
+            entry_distance,
+            ef,
+            dimension,
+        );
         let _upload_ms = upload_start.elapsed().as_secs_f64() * 1000.0;
 
         // =====================================================================
@@ -449,10 +519,12 @@ impl GpuTraversalContext {
             entries: &[
                 storage_entry(0, true),  // candidate_ids
                 storage_entry(1, true),  // candidate_dists
-                storage_entry(2, false), // frontier_out
-                storage_entry(3, false), // frontier_dists
+                storage_entry(2, false), // frontier_out (= frontier_b_ids)
+                storage_entry(3, false), // frontier_dists (= frontier_b_dists)
                 storage_entry(4, false), // counters
                 uniform_entry(5),        // params
+                storage_entry(6, true),  // frontier_in_ids (= frontier_a_ids, accumulator seed)
+                storage_entry(7, true),  // frontier_in_dists (= frontier_a_dists)
             ],
         })
     }
@@ -649,6 +721,7 @@ impl TraversalBuffers {
         vectors_flat: &[f32],
         query: &[f32],
         entry_node: usize,
+        entry_distance: f32,
         ef: usize,
         dimension: usize,
     ) -> Self {
@@ -725,8 +798,12 @@ impl TraversalBuffers {
                 | wgpu::BufferUsages::COPY_DST,
         });
 
+        // Seed frontier A with the entry node at its *real* query distance
+        // (computed by the caller in the same space the GPU distance shaders
+        // produce). Remaining slots stay sentinels — the SELECT shader treats
+        // `f32::MAX` as "nothing here, displace me with any real candidate".
         let mut initial_dists = vec![f32::MAX; ef];
-        initial_dists[0] = 0.0; // Entry point distance (will be recomputed)
+        initial_dists[0] = entry_distance;
 
         let frontier_a_dists = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Frontier A Dists"),
@@ -1019,6 +1096,18 @@ impl TraversalBuffers {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: select_params_buf.as_entire_binding(),
+                },
+                // Accumulator seed: previous iteration's frontier. See the
+                // SELECT_TOPK_SHADER doc comment for the HNSW invariant this
+                // preserves. `frontier_a_*` is the input side of the
+                // ping-pong pair; `frontier_b_*` bound at 2/3 is the output.
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.frontier_a_ids.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.frontier_a_dists.as_entire_binding(),
                 },
             ],
         })

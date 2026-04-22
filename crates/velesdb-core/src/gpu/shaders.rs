@@ -394,18 +394,35 @@ fn traversal_dot(@builtin(global_invocation_id) id: vec3<u32>) {
 
 /// WGSL compute shader for global top-k selection (SONG Stage 3).
 ///
-/// Bind group layout (6 bindings — uses custom layout):
+/// Bind group layout (8 bindings — uses custom layout):
 /// - binding 0: `storage(read)` — candidate IDs
 /// - binding 1: `storage(read)` — candidate distances
 /// - binding 2: `storage(read_write)` — frontier output (top-k node IDs)
 /// - binding 3: `storage(read_write)` — frontier distances output
 /// - binding 4: `storage(read_write)` — counters (kept for layout compatibility)
 /// - binding 5: `uniform` — params
+/// - binding 6: `storage(read)` — previous frontier IDs (accumulator seed)
+/// - binding 7: `storage(read)` — previous frontier distances
 ///
-/// # Algorithm — serial insertion sort
+/// # Algorithm — serial insertion sort with frontier accumulation
 ///
 /// Invoked once per HNSW traversal iteration. Dispatch is **a single
 /// workgroup of a single thread** (host side uses `dispatch_workgroups(1,1,1)`).
+///
+/// # Why accumulate the previous frontier
+///
+/// HNSW beam search maintains a working set `W` across iterations:
+/// `W_{n+1} = top-k(W_n ∪ new_candidates)`. If the shader only sorted
+/// `new_candidates`, the best results from earlier iterations — including
+/// 1-hop neighbors of the entry point — would be permanently discarded
+/// when the frontier gets replaced, silently destroying recall.
+///
+/// The fix is to seed the output frontier with the previous frontier's
+/// contents (bindings 6/7, copied from `frontier_a_*` by the host) and
+/// then insertion-sort the new candidates into the seeded top-k. The
+/// caller is responsible for initialising `frontier_a_dists[0]` with the
+/// entry node's real query distance (not a sentinel placeholder), so the
+/// very first iteration starts with a semantically correct top-k of size 1.
 ///
 /// # Why single-threaded
 ///
@@ -440,16 +457,21 @@ struct SelectParams {
 @group(0) @binding(3) var<storage, read_write> frontier_dists: array<f32>;
 @group(0) @binding(4) var<storage, read_write> counters: array<atomic<u32>>;
 @group(0) @binding(5) var<uniform> params: SelectParams;
+@group(0) @binding(6) var<storage, read> frontier_in_ids: array<u32>;
+@group(0) @binding(7) var<storage, read> frontier_in_dists: array<f32>;
 
 @compute @workgroup_size(1)
 fn select_topk() {
     let n = params.num_candidates;
     let k = params.k;
 
-    // Initialize frontier with sentinels (ids = u32::MAX, dists = f32::MAX).
+    // Seed the output frontier with the previous iteration's top-k so that
+    // earlier-seen best results are preserved. Sentinel slots (id == u32::MAX
+    // or dist == f32::MAX) survive the seed untouched; real candidates will
+    // displace them during the scan. See shader doc for the invariant.
     for (var i: u32 = 0u; i < k; i = i + 1u) {
-        frontier_out[i] = 0xFFFFFFFFu;
-        frontier_dists[i] = 3.4028235e+38;
+        frontier_out[i] = frontier_in_ids[i];
+        frontier_dists[i] = frontier_in_dists[i];
     }
 
     // Insertion sort scan: maintain a sorted ascending top-k in the frontier.
@@ -460,6 +482,20 @@ fn select_topk() {
 
         // Worse than the current k-th smallest — nothing to do.
         if (d >= frontier_dists[k - 1u]) { continue; }
+
+        // Skip if this node is already in the seeded frontier (happens when
+        // a previous iteration's top-k node is re-discovered as a candidate).
+        // The visited bitset normally prevents this for nodes seen through
+        // expand, but the entry node in the first iteration lives only in
+        // frontier_a and could re-appear as a neighbour later.
+        var duplicate = false;
+        for (var j: u32 = 0u; j < k; j = j + 1u) {
+            if (frontier_out[j] == id) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) { continue; }
 
         // Binary search for insertion position in the sorted frontier.
         var lo: u32 = 0u;
