@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.13.0] — 2026-04-22
+## [1.13.0] — 2026-04-23
 
 ### Summary
 
@@ -21,6 +21,15 @@ reproducer commands next to every performance claim, a dedicated
 "Known Limitations" section for scope transparency, and a refreshed
 test-count badge (7634 tests across Rust, TypeScript, Python).
 
+**GPU-accelerated HNSW layer-0 traversal** (`#626`, closes `#502`) —
+new SONG 3-stage compute pipeline (Expand → Distance → Select) runs
+layer-0 BFS on the GPU via wgpu compute shaders. CPU still handles
+upper-layer greedy descent; the GPU kicks in only when
+`num_vectors > 500_000` AND `num_vectors * dim ≤ u32::MAX` (WGSL has
+no u64 — correctness gate). Graceful fallback to the CPU SIMD path
+on any GPU error. 77 new GPU tests, zero new dependencies, zero
+`unsafe`. Credit @SBALAVIGNESH123 for the original implementation.
+
 **Pre-seed remediation (Option D)** — 10 phases merged across
 `#611`–`#623`: BM25 persistence cold-start dropped from O(N) to O(1),
 sparse search speed-up of 16× on 10K-doc corpora via k-way merge +
@@ -32,6 +41,31 @@ search layers (cumulative across all phases: jscpd `collection/`
 Zero regression cumulatively —
 recall gate (Fast 0.90 / Balanced 0.95 / Accurate 0.99 / Perfect 1.00)
 passes on every phase.
+
+### Added — GPU acceleration
+
+- **GPU HNSW layer-0 traversal** (`#626`, closes `#502`): SONG paper
+  3-stage pipeline on wgpu. New modules:
+  - `crates/velesdb-core/src/gpu/gpu_traversal.rs` — pipeline
+    orchestration (CSR snapshot cache, generation-based invalidation,
+    double-buffered frontier, adaptive 10–20 iterations based on
+    `ef_search`).
+  - `crates/velesdb-core/src/gpu/gpu_traversal_buffers.rs` — GPU
+    buffer management.
+  - `crates/velesdb-core/src/gpu/gpu_traversal_pipelines.rs` —
+    compute-shader pipeline setup (EXPAND_FRONTIER, TRAVERSAL_*
+    distance kernels for Euclidean-squared / Cosine / DotProduct,
+    SELECT_TOPK with workgroup-local bitonic sort).
+  - `crates/velesdb-core/src/index/hnsw/native/graph/gpu_search.rs`
+    — search entry point with correctness-gate guard
+    (`should_traverse_gpu`) and CPU fallback.
+
+  All iterations dispatched in a single command buffer (no per-iter
+  CPU↔GPU sync), activated behind the existing `--features gpu` flag.
+  Gate: `num_vectors > 500_000` AND `num_vectors * dim ≤ u32::MAX`.
+  Below either threshold, or on any GPU error, returns `None` so the
+  caller falls back to the CPU SIMD path — no behavior change for
+  workloads outside the GPU activation range.
 
 ### Added — Pre-seed remediation
 
