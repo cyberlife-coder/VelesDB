@@ -17,6 +17,15 @@
 //! exceeds the CPU SIMD search time. Use [`should_traverse_gpu`] to check.
 
 #![allow(clippy::similar_names)]
+// Doc comments in this module mix WGSL binding names, shader variables,
+// and HNSW-paper terminology that aren't Rust items; backticking every
+// one would hurt readability without adding linkable references.
+#![allow(clippy::doc_markdown)]
+// The TraversalBuffers::new constructor intentionally inlines every GPU
+// buffer allocation for a single query's lifecycle. Splitting would
+// obscure the ordering relative to the WGSL bind group layout; tracked
+// as a refactor for a follow-up PR.
+#![allow(clippy::too_many_lines)]
 
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -205,7 +214,7 @@ impl GpuTraversalContext {
         }
 
         let total_start = Instant::now();
-        match self.search_layer0_inner(
+        if let Some(results) = self.search_layer0_inner(
             csr,
             vectors_flat,
             query,
@@ -215,21 +224,18 @@ impl GpuTraversalContext {
             dimension,
             metric,
         ) {
-            Some(results) => {
-                let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
-                tracing::debug!(
-                    k,
-                    ef_search,
-                    num_results = results.len(),
-                    total_ms = format!("{total_ms:.2}"),
-                    "GPU traversal completed"
-                );
-                results
-            }
-            None => {
-                tracing::warn!("GPU traversal failed, returning empty results for CPU fallback");
-                Vec::new()
-            }
+            let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+            tracing::debug!(
+                k,
+                ef_search,
+                num_results = results.len(),
+                total_ms = format!("{total_ms:.2}"),
+                "GPU traversal completed"
+            );
+            results
+        } else {
+            tracing::warn!("GPU traversal failed, returning empty results for CPU fallback");
+            Vec::new()
         }
     }
 

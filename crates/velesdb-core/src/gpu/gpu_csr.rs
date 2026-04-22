@@ -133,11 +133,12 @@ impl CsrGraph {
         if self.num_nodes <= 1 {
             return 0.0;
         }
-        let max_edges = self.num_nodes as f64 * (self.num_nodes as f64 - 1.0);
+        let n = f64::from(self.num_nodes);
+        let max_edges = n * (n - 1.0);
         if max_edges == 0.0 {
             return 0.0;
         }
-        self.total_edges as f64 / max_edges
+        f64::from(self.total_edges) / max_edges
     }
 
     /// Returns the average degree of nodes in the graph.
@@ -146,7 +147,7 @@ impl CsrGraph {
         if self.num_nodes == 0 {
             return 0.0;
         }
-        self.total_edges as f64 / self.num_nodes as f64
+        f64::from(self.total_edges) / f64::from(self.num_nodes)
     }
 
     /// Validates CSR invariants in debug mode.
@@ -159,6 +160,13 @@ impl CsrGraph {
     ///
     /// Returns `Ok(())` if all invariants hold, or `Err` with a description
     /// of the first violated invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` describing the first violated invariant
+    /// when `offsets.len()` is wrong, offsets are non-monotonic, the last
+    /// offset disagrees with `total_edges`, or any neighbor ID is out of
+    /// range. The error string is intended for diagnostics, not matching.
     pub fn validate(&self) -> Result<(), String> {
         // Check 1: offsets length
         let expected_len = self.num_nodes as usize + 1;

@@ -31,6 +31,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ///
     /// Returns `None` if GPU is unavailable, the metric is unsupported,
     /// or any GPU error occurs. The caller should fall back to CPU search.
+    #[allow(clippy::too_many_lines)] // orchestrates 4 phases (descent, CSR, snapshot, dispatch) — splitting would fragment the GPU call graph; tracked for a follow-up split
     pub fn search_gpu(
         &self,
         query: &[f32],
@@ -212,6 +213,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ///
     /// Uses the primary entry point from greedy descent, then adds
     /// deterministic stride-based points for spatial coverage.
+    #[allow(clippy::unused_self)] // kept as a method for symmetry with other NativeHnsw helpers; may grow to consult index state in a follow-up
     fn diversified_entry_points(
         &self,
         primary_ep: usize,
