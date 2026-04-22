@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **GPU HNSW traversal now reachable from the query pipeline** (`#634`
+  PR-D). In v1.13.0 the GPU layer-0 traversal shipped as unreachable
+  code: `NativeHnswInner::search_auto` existed but was annotated
+  `#[allow(dead_code)]` with no production caller. The three in-process
+  search entry points (`HnswIndex::search_hnsw_only`,
+  `HnswIndex::search_hnsw_only_filtered`,
+  `NativeHnswIndex::search_with_quality`) now route through
+  `search_auto`, so any build with the `gpu` feature and an index above
+  500K vectors will automatically use the GPU SONG pipeline. Sub-500K
+  indices, RaBitQ backends, and builds without `gpu` continue on the
+  CPU SIMD path with zero overhead (tail-call to the original `search`).
+
 ## [1.13.0] — 2026-04-23
 
 ### Summary
