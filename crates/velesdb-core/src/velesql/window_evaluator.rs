@@ -5,6 +5,19 @@
 //!
 //! Window evaluation happens **after** DISTINCT but **before** ORDER BY/LIMIT
 //! in the query pipeline, matching SQL standard semantics.
+//!
+//! ## Design: Snapshot-based evaluation
+//!
+//! Rankings are computed using a **snapshot** of ORDER BY values taken before
+//! any payload mutation. This prevents two classes of corruption:
+//!
+//! 1. **Intra-function**: If the window alias matches an ORDER BY column
+//!    (e.g., `RANK() OVER (ORDER BY score DESC) AS score`), injecting the
+//!    rank mid-loop would overwrite the original sort value.
+//!
+//! 2. **Inter-function**: When multiple window functions are evaluated
+//!    sequentially, each snapshots independently so a prior function's
+//!    injected values cannot contaminate the next function's comparisons.
 
 use crate::velesql::{OverClause, WindowFunction, WindowFunctionType, WindowOrderBy};
 use crate::SearchResult;
@@ -12,9 +25,8 @@ use std::collections::BTreeMap;
 
 /// Evaluates window functions on a mutable result set.
 ///
-/// For each window function, partitions the results, sorts within each
-/// partition, computes the ranking value, and injects it into the
-/// `SearchResult`'s payload as a new JSON field.
+/// For each window function, snapshots ORDER BY values, computes rankings
+/// from the snapshots, then injects results into payloads in a separate pass.
 ///
 /// Returns `Ok(())` unconditionally; the `Result` signature is kept for
 /// pipeline consistency with the execution engine.
@@ -29,6 +41,11 @@ pub fn evaluate(
 }
 
 /// Applies a single window function across all partitions.
+///
+/// Uses a three-phase approach to prevent payload corruption:
+/// 1. **Snapshot** all ORDER BY values before any mutation.
+/// 2. **Compute** rankings from snapshots (read-only).
+/// 3. **Inject** ranking values into payloads (write-only).
 fn apply_single_window(
     results: &mut [SearchResult],
     wf: &WindowFunction,
@@ -46,13 +63,31 @@ fn apply_single_window(
         );
     }
 
-    // Step 1: Build partition groups (row indices grouped by partition key).
-    let partitions = build_partitions(results, &wf.over_clause);
+    // Phase 1: Snapshot ORDER BY values before any mutation.
+    let sort_snapshots: Vec<Vec<serde_json::Value>> = results
+        .iter()
+        .map(|r| {
+            wf.over_clause
+                .order_by
+                .iter()
+                .map(|ob| extract_sort_value(r, &ob.column))
+                .collect()
+        })
+        .collect();
 
-    // Step 2: For each partition, sort indices and assign rankings.
+    // Phase 2: Build partitions and compute rankings (read-only from snapshots).
+    let partitions = build_partitions(results, &wf.over_clause);
+    let mut all_rankings: Vec<(usize, u64)> = Vec::new();
+
     for indices in partitions.values() {
-        let sorted = sort_partition(results, indices, &wf.over_clause.order_by);
-        assign_rankings(results, &sorted, &wf.over_clause.order_by, wf.function_type, alias);
+        let sorted = sort_partition_from_snapshots(indices, &sort_snapshots, &wf.over_clause.order_by);
+        let rankings = compute_rankings(&sorted, &sort_snapshots, &wf.over_clause.order_by, wf.function_type);
+        all_rankings.extend(rankings);
+    }
+
+    // Phase 3: Inject all rankings (write-only, no more reads).
+    for (idx, value) in all_rankings {
+        inject_ranking(&mut results[idx], alias, value);
     }
 }
 
@@ -88,34 +123,85 @@ fn partition_key(result: &SearchResult, columns: &[String]) -> String {
         .join("\x1F")
 }
 
-/// Sorts indices within a partition according to the window `ORDER BY` spec.
-fn sort_partition(
-    results: &[SearchResult],
+/// Sorts indices within a partition using pre-snapshotted sort values.
+///
+/// This avoids reading from payloads during sorting, preventing any
+/// corruption from prior injections.
+fn sort_partition_from_snapshots(
     indices: &[usize],
+    snapshots: &[Vec<serde_json::Value>],
     order_by: &[WindowOrderBy],
 ) -> Vec<usize> {
     let mut sorted = indices.to_vec();
-    sorted.sort_by(|&a, &b| compare_rows(results, a, b, order_by));
+    sorted.sort_by(|&a, &b| {
+        for (col_idx, ob) in order_by.iter().enumerate() {
+            let cmp = compare_json_values(&snapshots[a][col_idx], &snapshots[b][col_idx]);
+            let cmp = if ob.descending { cmp.reverse() } else { cmp };
+            if cmp != std::cmp::Ordering::Equal {
+                return cmp;
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
     sorted
 }
 
-/// Compares two result rows by the window `ORDER BY` columns.
-fn compare_rows(
-    results: &[SearchResult],
-    a: usize,
-    b: usize,
+/// Computes ranking values from pre-snapshotted sort values.
+///
+/// Returns a list of `(result_index, ranking_value)` pairs.
+/// Uses snapshots for tie detection to prevent payload corruption.
+fn compute_rankings(
+    sorted_indices: &[usize],
+    snapshots: &[Vec<serde_json::Value>],
     order_by: &[WindowOrderBy],
-) -> std::cmp::Ordering {
-    for ob in order_by {
-        let val_a = extract_sort_value(&results[a], &ob.column);
-        let val_b = extract_sort_value(&results[b], &ob.column);
-        let cmp = compare_json_values(&val_a, &val_b);
-        let cmp = if ob.descending { cmp.reverse() } else { cmp };
-        if cmp != std::cmp::Ordering::Equal {
-            return cmp;
+    fn_type: WindowFunctionType,
+) -> Vec<(usize, u64)> {
+    let mut rankings = Vec::with_capacity(sorted_indices.len());
+    let mut rank: u64 = 1;
+    let mut dense_rank: u64 = 1;
+
+    for (position, &idx) in sorted_indices.iter().enumerate() {
+        let is_new_group = if position == 0 {
+            false
+        } else {
+            let prev_idx = sorted_indices[position - 1];
+            !snapshots_tied(&snapshots[idx], &snapshots[prev_idx], order_by)
+        };
+
+        let value = match fn_type {
+            WindowFunctionType::RowNumber => (position + 1) as u64,
+            WindowFunctionType::Rank => {
+                if is_new_group {
+                    rank = (position + 1) as u64;
+                }
+                rank
+            }
+            WindowFunctionType::DenseRank => {
+                if is_new_group {
+                    dense_rank += 1;
+                }
+                dense_rank
+            }
+        };
+
+        rankings.push((idx, value));
+    }
+
+    rankings
+}
+
+/// Returns `true` if two snapshot rows have identical ORDER BY values.
+fn snapshots_tied(
+    snap_a: &[serde_json::Value],
+    snap_b: &[serde_json::Value],
+    order_by: &[WindowOrderBy],
+) -> bool {
+    for (col_idx, _ob) in order_by.iter().enumerate() {
+        if compare_json_values(&snap_a[col_idx], &snap_b[col_idx]) != std::cmp::Ordering::Equal {
+            return false;
         }
     }
-    std::cmp::Ordering::Equal
+    true
 }
 
 /// Extracts a sortable value from a result for comparison.
@@ -179,78 +265,6 @@ fn compare_json_values(a: &serde_json::Value, b: &serde_json::Value) -> std::cmp
             _ => a.to_string().cmp(&b.to_string()),
         },
     }
-}
-
-/// Assigns ranking values to each result in the sorted partition.
-///
-/// - `ROW_NUMBER`: sequential 1..N, no ties.
-/// - `RANK`: same rank for ties, gaps after ties (1, 2, 2, 4).
-/// - `DENSE_RANK`: same rank for ties, no gaps (1, 2, 2, 3).
-fn assign_rankings(
-    results: &mut [SearchResult],
-    sorted_indices: &[usize],
-    order_by: &[WindowOrderBy],
-    fn_type: WindowFunctionType,
-    alias: &str,
-) {
-    let mut rank: u64 = 1;
-    let mut dense_rank: u64 = 1;
-
-    for (position, &idx) in sorted_indices.iter().enumerate() {
-        let is_new_group = is_new_ranking_group(results, sorted_indices, position, order_by);
-
-        let value = match fn_type {
-            WindowFunctionType::RowNumber => (position + 1) as u64,
-            WindowFunctionType::Rank => {
-                if is_new_group {
-                    rank = (position + 1) as u64;
-                }
-                rank
-            }
-            WindowFunctionType::DenseRank => {
-                if is_new_group {
-                    dense_rank += 1;
-                }
-                dense_rank
-            }
-        };
-
-        inject_ranking(&mut results[idx], alias, value);
-    }
-}
-
-/// Returns `true` if this position starts a new ranking group (not tied with predecessor).
-///
-/// The first position (0) is never a "new group" — it starts at rank 1 by default.
-fn is_new_ranking_group(
-    results: &[SearchResult],
-    sorted_indices: &[usize],
-    position: usize,
-    order_by: &[WindowOrderBy],
-) -> bool {
-    if position == 0 {
-        return false;
-    }
-    let idx = sorted_indices[position];
-    let prev_idx = sorted_indices[position - 1];
-    !rows_tied(results, idx, prev_idx, order_by)
-}
-
-/// Returns `true` if two rows have identical values for all ORDER BY columns.
-fn rows_tied(
-    results: &[SearchResult],
-    a: usize,
-    b: usize,
-    order_by: &[WindowOrderBy],
-) -> bool {
-    for ob in order_by {
-        let val_a = extract_sort_value(&results[a], &ob.column);
-        let val_b = extract_sort_value(&results[b], &ob.column);
-        if compare_json_values(&val_a, &val_b) != std::cmp::Ordering::Equal {
-            return false;
-        }
-    }
-    true
 }
 
 /// Injects a ranking value into the result's payload as a new JSON field.
