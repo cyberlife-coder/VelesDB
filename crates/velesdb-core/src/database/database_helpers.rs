@@ -86,6 +86,7 @@ impl Database {
             crate::velesql::Condition::Similarity(_)
             | crate::velesql::Condition::VectorSearch(_)
             | crate::velesql::Condition::VectorFusedSearch(_)
+            | crate::velesql::Condition::SparseVectorSearch(_)
             | crate::velesql::Condition::GraphMatch(_) => true,
             crate::velesql::Condition::And(left, right)
             | crate::velesql::Condition::Or(left, right) => {
