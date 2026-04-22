@@ -69,6 +69,13 @@ impl HnswIndex {
     /// Performs HNSW-only search (no reranking).
     ///
     /// `pub(crate)` to allow reuse in `batch.rs` for `search_batch_parallel`.
+    ///
+    /// Uses [`NativeHnswInner::search_auto`] so that when the `gpu` feature is
+    /// enabled and the index is large enough (> 500K vectors, Standard backend),
+    /// layer-0 traversal is offloaded to the GPU via the SONG 3-stage pipeline.
+    /// Falls through to the CPU SIMD path transparently otherwise — the caller
+    /// sees the same `(node_id, raw_dist)` pairs and must still apply
+    /// [`NativeHnswInner::transform_score`] exactly as before.
     pub(crate) fn search_hnsw_only(
         &self,
         query: &[f32],
@@ -76,7 +83,7 @@ impl HnswIndex {
         ef_search: usize,
     ) -> Vec<ScoredResult> {
         let inner = self.inner.read();
-        let neighbours = inner.search(query, k, ef_search);
+        let neighbours = inner.search_auto(query, k, ef_search);
 
         let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
         for &(node_id, raw_dist) in &neighbours {
@@ -136,7 +143,9 @@ impl HnswIndex {
         allowed_ids: &roaring::RoaringBitmap,
     ) -> Vec<ScoredResult> {
         let inner = self.inner.read();
-        let neighbours = inner.search(query, candidates_k, ef_search);
+        // GPU-aware entry point (falls back to CPU for < 500K vectors, RaBitQ,
+        // or GPU errors). See `search_hnsw_only` for rationale.
+        let neighbours = inner.search_auto(query, candidates_k, ef_search);
 
         let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
         for &(node_id, raw_dist) in &neighbours {

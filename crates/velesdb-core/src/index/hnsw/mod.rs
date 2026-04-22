@@ -43,6 +43,8 @@ mod direct_writer_tests;
 #[cfg(test)]
 mod gpu_rerank_tests;
 #[cfg(test)]
+mod gpu_search_auto_tests;
+#[cfg(test)]
 mod index_tests;
 #[cfg(test)]
 mod params_tests;
