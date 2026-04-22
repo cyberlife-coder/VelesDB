@@ -171,7 +171,7 @@ impl Database {
     ///
     /// Converts qualified names like `inventory.price` to `price` so that
     /// `Filter::matches` can evaluate them against unqualified payload keys.
-    fn strip_table_prefix_from_condition(
+    pub(super) fn strip_table_prefix_from_condition(
         condition: crate::velesql::Condition,
     ) -> crate::velesql::Condition {
         use crate::velesql::Condition as C;
@@ -227,6 +227,10 @@ impl Database {
             C::Contains(mut cc) => {
                 cc.column = Self::strip_prefix(&cc.column);
                 C::Contains(cc)
+            }
+            C::ContainsText(mut ct) => {
+                ct.column = Self::strip_prefix(&ct.column);
+                C::ContainsText(ct)
             }
             C::GeoDistance(mut gd) => {
                 gd.column = Self::strip_prefix(&gd.column);
