@@ -267,8 +267,7 @@ impl CsrCache {
     /// Returns true if the cache is stale (needs rebuild).
     #[inline]
     fn is_stale(&self) -> bool {
-        self.generation.load(Ordering::Acquire)
-            != self.built_generation.load(Ordering::Acquire)
+        self.generation.load(Ordering::Acquire) != self.built_generation.load(Ordering::Acquire)
     }
 
     /// Marks the cache as dirty. Called after any Layer mutation (insert/delete).
@@ -440,9 +439,7 @@ mod tests {
     fn test_csr_byte_sizes() {
         let layer = Layer::new(100);
         for i in 0..100 {
-            let neighbors: Vec<NodeId> = (0..16)
-                .map(|j| (i + j + 1) % 100)
-                .collect();
+            let neighbors: Vec<NodeId> = (0..16).map(|j| (i + j + 1) % 100).collect();
             layer.set_neighbors(i, neighbors);
         }
 

@@ -479,13 +479,17 @@ impl GpuTraversalContext {
         // Reset candidate counter to 0 before expansion
         encoder.clear_buffer(&buffers.counters, 0, None);
 
-        // Fill candidates buffer with sentinels (u32::MAX = 0xFFFFFFFF).
-        // WebGPU zero-initializes buffers, so without this, unused slots
-        // contain 0 (a valid node ID), causing the distance shader to
-        // compute distances against node 0 for all ~8000 unused slots.
+        // Fill candidates buffer with sentinels (u32::MAX = 0xFFFFFFFF) by
+        // copying from `candidates_sentinel` (initialized once at buffer
+        // creation to all u32::MAX). Without this, unused slots contain 0
+        // — a valid node ID — causing the distance shader to compute
+        // distances against node 0 for all ~8000 unused slots.
         // The sentinels are detected by the TRAVERSAL_*_SHADER's
         // `if (node_id == 0xFFFFFFFFu)` guard and assigned f32::MAX.
-        encoder.clear_buffer(&buffers.candidates_sentinel, 0, None);
+        //
+        // Do NOT `clear_buffer(&candidates_sentinel, …)` here: `clear_buffer`
+        // fills with 0x00, which would destroy the u32::MAX pattern in
+        // the read-only source buffer and poison every subsequent copy.
         encoder.copy_buffer_to_buffer(
             &buffers.candidates_sentinel,
             0,
@@ -565,8 +569,10 @@ impl GpuTraversalContext {
         });
         pass.set_pipeline(&self.select_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        let workgroups = MAX_CANDIDATES_PER_ITER.div_ceil(256);
-        pass.dispatch_workgroups(workgroups, 1, 1);
+        // SELECT_TOPK_SHADER is `@workgroup_size(1)` and does a serial
+        // insertion-sort over all candidates. Dispatching >1 workgroup
+        // would race on the frontier writes — see shader doc comment.
+        pass.dispatch_workgroups(1, 1, 1);
 
         // Copy selected frontier back to frontier_a for next iteration
         let frontier_bytes = (ef * std::mem::size_of::<u32>()) as u64;

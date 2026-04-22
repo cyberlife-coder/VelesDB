@@ -402,6 +402,29 @@ fn traversal_dot(@builtin(global_invocation_id) id: vec3<u32>) {
 /// - binding 3: `storage(read_write)` — frontier distances output
 /// - binding 4: `storage(read_write)` — counters (atomic: [0]=frontier_size)
 /// - binding 5: `uniform` — params
+/// Global top-k selection via serial insertion sort.
+///
+/// Invoked once per HNSW traversal iteration. Dispatch is **a single
+/// workgroup of a single thread** (host side uses `dispatch_workgroups(1,1,1)`).
+///
+/// # Why single-threaded
+///
+/// A parallel per-workgroup bitonic sort followed by an `atomicAdd` race to
+/// fill the global frontier — the original design — is **not correct**: the
+/// workgroups that finish first win all `k` frontier slots regardless of
+/// distance, so the global top-k is actually the per-workgroup-racing top-k.
+/// This silently degrades recall.
+///
+/// A correct parallel top-k on GPU requires either a multi-pass reduction
+/// (per-workgroup local sort → merge) or a shared min-heap with proper
+/// serialization. Both are significant additions. For now we choose
+/// correctness over speed: one thread does an insertion-sort scan over all
+/// `num_candidates` (≤ 8192) keeping the sorted top-k in the frontier.
+///
+/// Cost: O(`num_candidates` × log `k` + `num_candidates` × `k` in the worst
+/// case when every candidate is closer than the current best) ≈ 1.1M ops per
+/// iteration at `num_candidates` = 8192 / `k` = 128. Acceptable for the
+/// advertised 500K–5M-vector GPU range; a parallel merge is a TODO perf win.
 pub(crate) const SELECT_TOPK_SHADER: &str = r"
 struct SelectParams {
     num_candidates: u32,
@@ -417,54 +440,48 @@ struct SelectParams {
 @group(0) @binding(4) var<storage, read_write> counters: array<atomic<u32>>;
 @group(0) @binding(5) var<uniform> params: SelectParams;
 
-// Workgroup-local arrays for sorting
-var<workgroup> local_ids: array<u32, 256>;
-var<workgroup> local_dists: array<f32, 256>;
+@compute @workgroup_size(1)
+fn select_topk() {
+    let n = params.num_candidates;
+    let k = params.k;
 
-@compute @workgroup_size(256)
-fn select_topk(@builtin(local_invocation_id) lid: vec3<u32>,
-               @builtin(workgroup_id) wid: vec3<u32>) {
-    let global_idx = wid.x * 256u + lid.x;
-
-    // Load candidates into workgroup-local memory
-    if (global_idx < params.num_candidates) {
-        local_ids[lid.x] = candidate_ids[global_idx];
-        local_dists[lid.x] = candidate_dists[global_idx];
-    } else {
-        local_ids[lid.x] = 0xFFFFFFFFu;
-        local_dists[lid.x] = 3.4028235e+38;
+    // Initialize frontier with sentinels (ids = u32::MAX, dists = f32::MAX).
+    for (var i: u32 = 0u; i < k; i = i + 1u) {
+        frontier_out[i] = 0xFFFFFFFFu;
+        frontier_dists[i] = 3.4028235e+38;
     }
-    workgroupBarrier();
 
-    // Bitonic sort within workgroup
-    for (var size = 2u; size <= 256u; size = size * 2u) {
-        for (var stride = size / 2u; stride > 0u; stride = stride / 2u) {
-            let pos = lid.x;
-            let partner = pos ^ stride;
-            if (partner > pos && partner < 256u) {
-                let ascending = ((pos & size) == 0u);
-                if ((ascending && local_dists[pos] > local_dists[partner]) ||
-                    (!ascending && local_dists[pos] < local_dists[partner])) {
-                    // Swap
-                    let tmp_id = local_ids[pos];
-                    let tmp_d = local_dists[pos];
-                    local_ids[pos] = local_ids[partner];
-                    local_dists[pos] = local_dists[partner];
-                    local_ids[partner] = tmp_id;
-                    local_dists[partner] = tmp_d;
-                }
-            }
-            workgroupBarrier();
+    // Insertion sort scan: maintain a sorted ascending top-k in the frontier.
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let id = candidate_ids[i];
+        if (id == 0xFFFFFFFFu) { continue; }
+        let d = candidate_dists[i];
+
+        // Worse than the current k-th smallest — nothing to do.
+        if (d >= frontier_dists[k - 1u]) { continue; }
+
+        // Binary search for insertion position in the sorted frontier.
+        var lo: u32 = 0u;
+        var hi: u32 = k;
+        while (lo < hi) {
+            let mid = (lo + hi) / 2u;
+            if (frontier_dists[mid] > d) { hi = mid; } else { lo = mid + 1u; }
         }
+        let pos = lo;
+
+        // Shift right [pos, k-1) → [pos+1, k) to make room.
+        var j: u32 = k - 1u;
+        while (j > pos) {
+            frontier_out[j] = frontier_out[j - 1u];
+            frontier_dists[j] = frontier_dists[j - 1u];
+            j = j - 1u;
+        }
+        frontier_out[pos] = id;
+        frontier_dists[pos] = d;
     }
 
-    // Write the top-k results from this workgroup to global frontier
-    if (lid.x < params.k && local_dists[lid.x] < 3.4028235e+38) {
-        let slot = atomicAdd(&counters[0], 1u);
-        if (slot < params.k) {
-            frontier_out[slot] = local_ids[lid.x];
-            frontier_dists[slot] = local_dists[lid.x];
-        }
-    }
+    // Counters unused in this implementation but kept in the layout for
+    // backward compatibility with the existing bind group.
+    atomicStore(&counters[0], k);
 }
 ";

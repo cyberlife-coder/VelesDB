@@ -12,9 +12,9 @@
 //! - **Arc vector snapshot**: Eliminates ~1.5GB per-query memcpy by caching
 //!   flat vectors in an `Arc<[f32]>`, refreshed only on count changes.
 
-use crate::distance::DistanceMetric;
 use super::super::distance::DistanceEngine;
 use super::{NativeHnsw, NO_ENTRY_POINT};
+use crate::distance::DistanceMetric;
 use std::sync::atomic::Ordering;
 
 use crate::gpu::gpu_traversal::GpuTraversalContext;
@@ -121,15 +121,15 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 dimension,
                 metric,
             );
-            if results.is_empty() { None } else { Some(results) }
+            if results.is_empty() {
+                None
+            } else {
+                Some(results)
+            }
         } else {
             // Multi-entry GPU search: launch from diversified entry points
             // and merge results (matching CPU search_multi_entry pattern).
-            let entry_points = self.diversified_entry_points(
-                current_ep,
-                num_probes,
-                count,
-            );
+            let entry_points = self.diversified_entry_points(current_ep, num_probes, count);
 
             let mut all_results: Vec<(usize, f32)> = Vec::with_capacity(k * num_probes);
             for &ep_node in &entry_points {

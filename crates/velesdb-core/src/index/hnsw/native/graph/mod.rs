@@ -126,8 +126,7 @@ pub struct NativeHnsw<D: DistanceEngine> {
 /// Only refreshed when the vector count changes. Subsequent queries
 /// clone the `Arc` (O(1) pointer bump) instead of copying ~1.5GB.
 #[cfg(feature = "gpu")]
-pub(in crate::index::hnsw::native) type GpuVectorsSnapshot =
-    (usize, usize, std::sync::Arc<[f32]>);
+pub(in crate::index::hnsw::native) type GpuVectorsSnapshot = (usize, usize, std::sync::Arc<[f32]>);
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Creates a new native HNSW index with VAMANA diversification (`alpha = 1.2`).

@@ -1,7 +1,7 @@
 //! Extended CSR tests for validate(), density(), avg_degree(), Display,
 //! high-degree graphs, isolated nodes, large-scale, and concurrent access.
 
-use crate::gpu::gpu_csr::{CsrGraph, CsrCache};
+use crate::gpu::gpu_csr::{CsrCache, CsrGraph};
 use crate::index::hnsw::native::layer::{Layer, NodeId};
 
 #[test]
