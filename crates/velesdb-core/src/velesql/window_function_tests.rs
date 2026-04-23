@@ -697,6 +697,182 @@ mod tests {
         );
     }
 
+    /// Bug #4 regression: **inter-function contamination via ORDER BY**.
+    ///
+    /// Before the fix, `evaluate` snapshotted ORDER BY values inside
+    /// `apply_single_window`, so each function's snapshot was taken **after**
+    /// all earlier functions had already injected their rank values into the
+    /// payload. Two window functions with a colliding alias/column pair
+    /// would corrupt each other's inputs.
+    ///
+    /// Scenario: `ROW_NUMBER() OVER (ORDER BY score DESC) AS score,
+    /// RANK()       OVER (ORDER BY score DESC) AS rnk` with payload scores
+    /// `[100, 90, 90, 80]` and similarity `0.5` for every row.
+    ///
+    /// - ROW_NUMBER ranks by original payload `score` DESC → `[1, 2, 3, 4]`
+    ///   and injects those values into `payload["score"]`.
+    /// - RANK must ALSO see the original `[100, 90, 90, 80]` and produce
+    ///   `[1, 2, 2, 4]`. The pre-fix code read the corrupted
+    ///   `payload["score"]` values (now `1,2,3,4`, all distinct) and
+    ///   produced `[1, 2, 3, 4]` with no tie detection.
+    #[test]
+    fn test_inter_function_contamination_via_order_by_column() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"score": 100}), 0.5),
+            make_result(2, serde_json::json!({"score": 90}), 0.5),
+            make_result(3, serde_json::json!({"score": 90}), 0.5),
+            make_result(4, serde_json::json!({"score": 80}), 0.5),
+        ];
+
+        // First window function: ROW_NUMBER aliased to "score" (collides with
+        // the payload column AND with the second function's ORDER BY key).
+        let wf_row_number = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "score".to_string(),
+                    descending: true,
+                }],
+            },
+            alias: Some("score".to_string()),
+        };
+
+        // Second window function: RANK, ORDER BY "score" — which the first
+        // function has just overwritten. If snapshots are not taken up-front,
+        // this reads the injected row-numbers instead of the original scores.
+        let wf_rank = WindowFunction {
+            function_type: WindowFunctionType::Rank,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "score".to_string(),
+                    descending: true,
+                }],
+            },
+            alias: Some("rnk".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf_row_number, wf_rank]).expect("evaluate");
+
+        // ROW_NUMBER on original [100, 90, 90, 80] DESC → [1, 2, 3, 4]
+        // (stable order: ids 1, 2, 3, 4 respectively). The alias "score"
+        // overwrites the payload.
+        assert_eq!(get_payload_u64(&results[0], "score"), Some(1));
+        assert_eq!(get_payload_u64(&results[1], "score"), Some(2));
+        assert_eq!(get_payload_u64(&results[2], "score"), Some(3));
+        assert_eq!(get_payload_u64(&results[3], "score"), Some(4));
+
+        // RANK on the ORIGINAL [100, 90, 90, 80] DESC must be [1, 2, 2, 4].
+        // Pre-fix, RANK saw [1, 2, 3, 4] (all distinct) and produced
+        // [1, 2, 3, 4] — no tie was detected, breaking SQL semantics.
+        assert_eq!(
+            get_payload_u64(&results[0], "rnk"),
+            Some(1),
+            "id 1 (original score=100) must rank 1"
+        );
+        assert_eq!(
+            get_payload_u64(&results[1], "rnk"),
+            Some(2),
+            "id 2 (original score=90) must rank 2 (tie)"
+        );
+        assert_eq!(
+            get_payload_u64(&results[2], "rnk"),
+            Some(2),
+            "id 3 (original score=90) must rank 2 (tie)"
+        );
+        assert_eq!(
+            get_payload_u64(&results[3], "rnk"),
+            Some(4),
+            "id 4 (original score=80) must rank 4 (gap after ties)"
+        );
+    }
+
+    /// Bug #4 regression: **inter-function contamination via PARTITION BY**.
+    ///
+    /// Same contamination mechanism as the ORDER BY variant above, but via
+    /// a partition key. The first window function writes its rank into a
+    /// column that the second function uses as its `PARTITION BY`.
+    ///
+    /// Scenario: four rows split across two original `group` values
+    /// (`"A"` and `"B"`), each row also has its own `val`.
+    /// - First WF: `ROW_NUMBER() OVER (ORDER BY val) AS group` — overwrites
+    ///   `payload["group"]` with `1..4` (all distinct, so every row would
+    ///   become its own partition if the second function reads the injected
+    ///   value).
+    /// - Second WF: `RANK() OVER (PARTITION BY group ORDER BY val) AS rnk`
+    ///   must still see the ORIGINAL `"A"` / `"B"` grouping.
+    ///
+    /// With the fix, `RANK` sees 2 partitions (2 rows each). Pre-fix, it
+    /// would see 4 partitions of 1 row each and every row would rank 1.
+    #[test]
+    fn test_inter_function_contamination_via_partition_by_column() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"group": "A", "val": 10}), 0.5),
+            make_result(2, serde_json::json!({"group": "B", "val": 20}), 0.5),
+            make_result(3, serde_json::json!({"group": "A", "val": 30}), 0.5),
+            make_result(4, serde_json::json!({"group": "B", "val": 40}), 0.5),
+        ];
+
+        let wf_row_number = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "val".to_string(),
+                    descending: false,
+                }],
+            },
+            // Alias collides with the second function's PARTITION BY column.
+            alias: Some("group".to_string()),
+        };
+
+        let wf_rank = WindowFunction {
+            function_type: WindowFunctionType::Rank,
+            over_clause: OverClause {
+                partition_by: vec!["group".to_string()],
+                order_by: vec![WindowOrderBy {
+                    column: "val".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("rnk".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf_row_number, wf_rank]).expect("evaluate");
+
+        // ROW_NUMBER over val ASC → 10→1, 20→2, 30→3, 40→4.
+        assert_eq!(get_payload_u64(&results[0], "group"), Some(1));
+        assert_eq!(get_payload_u64(&results[1], "group"), Some(2));
+        assert_eq!(get_payload_u64(&results[2], "group"), Some(3));
+        assert_eq!(get_payload_u64(&results[3], "group"), Some(4));
+
+        // RANK inside ORIGINAL partition "A" (ids 1, 3) by val ASC → 1, 2.
+        // RANK inside ORIGINAL partition "B" (ids 2, 4) by val ASC → 1, 2.
+        // Pre-fix, each row would be its own partition (because the "group"
+        // column now holds unique values 1..4) and every rnk would be 1.
+        assert_eq!(
+            get_payload_u64(&results[0], "rnk"),
+            Some(1),
+            "id 1 in partition A, val=10 → rank 1"
+        );
+        assert_eq!(
+            get_payload_u64(&results[2], "rnk"),
+            Some(2),
+            "id 3 in partition A, val=30 → rank 2"
+        );
+        assert_eq!(
+            get_payload_u64(&results[1], "rnk"),
+            Some(1),
+            "id 2 in partition B, val=20 → rank 1"
+        );
+        assert_eq!(
+            get_payload_u64(&results[3], "rnk"),
+            Some(2),
+            "id 4 in partition B, val=40 → rank 2"
+        );
+    }
+
     /// Bug #3 regression with the *default* alias. `RANK()` without an
     /// explicit `AS` uses `WindowFunctionType::default_alias() == "rank"`,
     /// and a user who happens to have a `rank` payload field and sorts by

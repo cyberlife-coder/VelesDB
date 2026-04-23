@@ -6,27 +6,77 @@
 //! Window evaluation happens **after** DISTINCT but **before** ORDER BY/LIMIT
 //! in the query pipeline, matching SQL standard semantics.
 //!
-//! ## Design: Snapshot-based evaluation
+//! ## Design: Global snapshot-first evaluation
 //!
-//! Rankings are computed using a **snapshot** of ORDER BY values taken before
-//! any payload mutation. This prevents two classes of corruption:
+//! Rankings are computed from snapshots of ORDER BY values AND PARTITION BY
+//! keys taken **up-front for every window function**, before any single
+//! injection runs. This prevents three classes of corruption:
 //!
 //! 1. **Intra-function**: If the window alias matches an ORDER BY column
 //!    (e.g., `RANK() OVER (ORDER BY score DESC) AS score`), injecting the
-//!    rank mid-loop would overwrite the original sort value.
+//!    rank mid-loop would overwrite the original sort value. Fixed by the
+//!    per-function three-phase (snapshot → compute → inject) path.
 //!
-//! 2. **Inter-function**: When multiple window functions are evaluated
-//!    sequentially, each snapshots independently so a prior function's
-//!    injected values cannot contaminate the next function's comparisons.
+//! 2. **Inter-function on ORDER BY**: When multiple window functions are
+//!    evaluated sequentially and an earlier function's alias collides with
+//!    a later function's ORDER BY column (e.g.
+//!    `ROW_NUMBER() ... AS score, RANK() OVER (ORDER BY score DESC) AS rnk`),
+//!    the later function would read the injected ranks instead of the
+//!    original payload. Fixed by snapshotting ORDER BY values for **every**
+//!    window function before any injection.
+//!
+//! 3. **Inter-function on PARTITION BY**: Same contamination path but via
+//!    a partition key rather than a sort key. Fixed by snapshotting partition
+//!    keys alongside ORDER BY values, up-front.
 
-use crate::velesql::{OverClause, WindowFunction, WindowFunctionType, WindowOrderBy};
+use crate::velesql::{WindowFunction, WindowFunctionType, WindowOrderBy};
 use crate::SearchResult;
 use std::collections::BTreeMap;
 
+/// Pre-computed per-row snapshot of the inputs a single window function
+/// reads from the result set.
+///
+/// Captured in [`evaluate`] **before any window function injects values**
+/// so sequential injection cannot contaminate later functions' inputs.
+struct WindowSnapshot {
+    /// For each row (parallel index to `results`), the value of each
+    /// ORDER BY column in the `OVER` clause, in declaration order.
+    order_by_values: Vec<Vec<serde_json::Value>>,
+    /// For each row, the pre-computed PARTITION BY key string.
+    partition_keys: Vec<String>,
+}
+
+impl WindowSnapshot {
+    fn capture(results: &[SearchResult], wf: &WindowFunction) -> Self {
+        let order_by_values = results
+            .iter()
+            .map(|r| {
+                wf.over_clause
+                    .order_by
+                    .iter()
+                    .map(|ob| extract_sort_value(r, &ob.column))
+                    .collect()
+            })
+            .collect();
+        let partition_keys = results
+            .iter()
+            .map(|r| partition_key(r, &wf.over_clause.partition_by))
+            .collect();
+        Self {
+            order_by_values,
+            partition_keys,
+        }
+    }
+}
+
 /// Evaluates window functions on a mutable result set.
 ///
-/// For each window function, snapshots ORDER BY values, computes rankings
-/// from the snapshots, then injects results into payloads in a separate pass.
+/// Pre-snapshots every window function's ORDER BY values and PARTITION BY
+/// keys **before** any injection, then computes rankings and injects
+/// results one function at a time. This prevents both intra-function
+/// corruption (alias collides with its own ORDER BY column) and
+/// inter-function contamination (an earlier function's alias collides
+/// with a later function's ORDER BY or PARTITION BY column).
 ///
 /// Returns `Ok(())` unconditionally; the `Result` signature is kept for
 /// pipeline consistency with the execution engine.
@@ -41,19 +91,33 @@ pub fn evaluate(
     results: &mut [SearchResult],
     window_functions: &[WindowFunction],
 ) -> crate::Result<()> {
-    for wf in window_functions {
-        apply_single_window(results, wf);
+    // Phase 0: snapshot EVERY window function's inputs before any injection.
+    // This is the fix for inter-function contamination — once any window
+    // function injects values into payloads, later snapshots would read the
+    // injected values instead of the originals.
+    let snapshots: Vec<WindowSnapshot> = window_functions
+        .iter()
+        .map(|wf| WindowSnapshot::capture(results, wf))
+        .collect();
+
+    for (wf, snapshot) in window_functions.iter().zip(snapshots.iter()) {
+        apply_single_window(results, wf, snapshot);
     }
     Ok(())
 }
 
-/// Applies a single window function across all partitions.
+/// Applies a single window function across all partitions, using a
+/// pre-captured snapshot of its inputs.
 ///
 /// Uses a three-phase approach to prevent payload corruption:
-/// 1. **Snapshot** all ORDER BY values before any mutation.
-/// 2. **Compute** rankings from snapshots (read-only).
+/// 1. **Snapshot** captured up-front by [`evaluate`] (read-only from here).
+/// 2. **Compute** rankings from the snapshot.
 /// 3. **Inject** ranking values into payloads (write-only).
-fn apply_single_window(results: &mut [SearchResult], wf: &WindowFunction) {
+fn apply_single_window(
+    results: &mut [SearchResult],
+    wf: &WindowFunction,
+    snapshot: &WindowSnapshot,
+) {
     let alias = wf
         .alias
         .as_deref()
@@ -67,28 +131,20 @@ fn apply_single_window(results: &mut [SearchResult], wf: &WindowFunction) {
         );
     }
 
-    // Phase 1: Snapshot ORDER BY values before any mutation.
-    let sort_snapshots: Vec<Vec<serde_json::Value>> = results
-        .iter()
-        .map(|r| {
-            wf.over_clause
-                .order_by
-                .iter()
-                .map(|ob| extract_sort_value(r, &ob.column))
-                .collect()
-        })
-        .collect();
-
-    // Phase 2: Build partitions and compute rankings (read-only from snapshots).
-    let partitions = build_partitions(results, &wf.over_clause);
+    // Phase 2: Build partitions from the pre-snapshotted partition keys
+    // and compute rankings (read-only from snapshots).
+    let partitions = build_partitions_from_snapshot(&snapshot.partition_keys);
     let mut all_rankings: Vec<(usize, u64)> = Vec::new();
 
     for indices in partitions.values() {
-        let sorted =
-            sort_partition_from_snapshots(indices, &sort_snapshots, &wf.over_clause.order_by);
+        let sorted = sort_partition_from_snapshots(
+            indices,
+            &snapshot.order_by_values,
+            &wf.over_clause.order_by,
+        );
         let rankings = compute_rankings(
             &sorted,
-            &sort_snapshots,
+            &snapshot.order_by_values,
             &wf.over_clause.order_by,
             wf.function_type,
         );
@@ -101,18 +157,15 @@ fn apply_single_window(results: &mut [SearchResult], wf: &WindowFunction) {
     }
 }
 
-/// Groups result indices by their `PARTITION BY` key values.
+/// Groups row indices by their pre-computed `PARTITION BY` key.
 ///
 /// Uses `BTreeMap` for deterministic partition ordering in tests.
-/// Empty `partition_by` → single partition containing all indices.
-fn build_partitions(
-    results: &[SearchResult],
-    over_clause: &OverClause,
-) -> BTreeMap<String, Vec<usize>> {
+/// An empty `PARTITION BY` clause maps every row to the same key (`""`),
+/// producing a single partition that covers the whole result set.
+fn build_partitions_from_snapshot(partition_keys: &[String]) -> BTreeMap<String, Vec<usize>> {
     let mut partitions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (i, result) in results.iter().enumerate() {
-        let key = partition_key(result, &over_clause.partition_by);
-        partitions.entry(key).or_default().push(i);
+    for (i, key) in partition_keys.iter().enumerate() {
+        partitions.entry(key.clone()).or_default().push(i);
     }
     partitions
 }
