@@ -93,9 +93,25 @@ pub enum SelectColumns {
 }
 
 impl SelectColumns {
-    /// Returns human-readable column names for display.
+    /// Returns human-readable column names for display, one per SELECT-list
+    /// item in grammar order.
     ///
-    /// Used by Python/WASM bindings to expose column metadata.
+    /// Used by Python/WASM bindings to expose the column-metadata contract.
+    ///
+    /// # Completeness
+    ///
+    /// Every SELECT-list variant must contribute exactly one entry per item
+    /// it contains. Historically the `Mixed` arm dropped `similarity_scores`
+    /// and `qualified_wildcards` via a `..` pattern, which silently shortened
+    /// the column list for queries that combined them with regular columns —
+    /// a correctness bug that was observable through Python/WASM callers
+    /// reading the column count or iterating the list. That bug is now
+    /// fixed; the returned list reflects the *complete* SELECT projection.
+    ///
+    /// **Compatibility note**: callers that previously relied on the
+    /// incomplete list (e.g. hard-coded `len() == columns.len()`) will now
+    /// see additional entries. The new contract is pinned by
+    /// `ast_tests::test_display_names_mixed_includes_all_variants`.
     #[must_use]
     pub fn to_display_names(&self) -> Vec<String> {
         match self {
