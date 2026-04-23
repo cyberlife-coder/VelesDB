@@ -48,7 +48,21 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             return Ok(());
         }
 
-        self.apply_permutation(&permutation)
+        self.apply_permutation(&permutation)?;
+
+        // Reordering rewrites both the vector buffer AND every neighbour
+        // list, so any cached CSR / flat-vector snapshot built from the
+        // pre-reorder topology is now stale. The contract on
+        // `invalidate_gpu_caches` is "call after every mutation that
+        // changes the set of active nodes or their vector data" — an
+        // in-place permutation qualifies. This was a pre-existing gap
+        // (PR #626 never invalidated here either); folding the fix into
+        // PR-B of #634 since the whole point of the unified version
+        // counter is to close this class of bug.
+        #[cfg(feature = "gpu")]
+        self.invalidate_gpu_caches();
+
+        Ok(())
     }
 
     /// Computes BFS traversal order starting from the entry point on layer 0.

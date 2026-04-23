@@ -84,10 +84,13 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // Phase 3: Get flat vectors for GPU upload via cached snapshot.
         //
         // The snapshot is an `Arc<[f32]>` cached on the NativeHnsw instance.
-        // Only refreshed when the vector count changes (insert/delete).
+        // Only refreshed when `gpu_snapshot_version` moves past the recorded
+        // build version — any mutation (insert/parallel_insert, future
+        // delete) bumps that counter via `invalidate_gpu_caches`, so the
+        // cache self-invalidates without depending on `count` alone.
         // Subsequent queries clone the Arc (O(1) pointer bump) instead of
         // copying ~1.5GB of vector data per query.
-        let (dimension, vectors_arc) = self.get_or_refresh_vector_snapshot(count);
+        let (dimension, vectors_arc) = self.get_or_refresh_vector_snapshot();
 
         if dimension == 0 || vectors_arc.is_empty() {
             return None;
@@ -165,9 +168,22 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         }
     }
 
-    /// Returns cached vector snapshot or refreshes it if the count changed.
+    /// Returns cached vector snapshot or refreshes it if the index version
+    /// moved past the recorded build version.
     ///
     /// Returns `(dimension, Arc<[f32]>)`. The Arc clone is O(1) on cache hit.
+    ///
+    /// # Cache validity
+    ///
+    /// The cache is valid iff the stored `version_at_build` equals
+    /// `gpu_snapshot_version` at read time. Every mutation (insert /
+    /// parallel_insert, future delete) goes through
+    /// [`NativeHnsw::invalidate_gpu_caches`] which bumps the version,
+    /// so the cache self-invalidates without relying on callers to
+    /// remember to clear the snapshot mutex. A delete-then-insert that
+    /// returns to the same count still bumps the version twice and is
+    /// therefore detected as stale — the previous count-keyed design
+    /// would have served the deleted vector.
     ///
     /// # Lock order
     ///
@@ -176,18 +192,20 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Instrumented with `record_lock_acquire/release` so the runtime
     /// lock-rank tracker (debug builds) catches any future caller that
     /// inverts the order.
-    fn get_or_refresh_vector_snapshot(
-        &self,
-        current_count: usize,
-    ) -> (usize, std::sync::Arc<[f32]>) {
+    fn get_or_refresh_vector_snapshot(&self) -> (usize, std::sync::Arc<[f32]>) {
         use super::locking::{record_lock_acquire, record_lock_release, LockRank};
+
+        // Acquire pairs with the Release fetch_add in
+        // `invalidate_gpu_caches` so this read observes every prior
+        // mutation.
+        let current_version = self.gpu_snapshot_version.load(Ordering::Acquire);
 
         record_lock_acquire(LockRank::GpuVectorsSnapshot);
         let mut snapshot = self.gpu_vectors_snapshot.lock();
 
-        // Check if cached snapshot is still valid
-        if let Some((cached_count, cached_dim, ref cached_vecs)) = *snapshot {
-            if cached_count == current_count {
+        // Check if cached snapshot is still valid against the version.
+        if let Some((cached_version, cached_dim, ref cached_vecs)) = *snapshot {
+            if cached_version == current_version {
                 let hit = (cached_dim, cached_vecs.clone());
                 drop(snapshot);
                 record_lock_release(LockRank::GpuVectorsSnapshot);
@@ -203,7 +221,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             let arc: std::sync::Arc<[f32]> = vectors.as_flat_slice().to_vec().into();
             (d, arc)
         });
-        *snapshot = Some((current_count, dim, arc.clone()));
+        *snapshot = Some((current_version, dim, arc.clone()));
         drop(snapshot);
         record_lock_release(LockRank::GpuVectorsSnapshot);
         (dim, arc)

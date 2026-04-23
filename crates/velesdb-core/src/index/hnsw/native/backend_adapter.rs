@@ -156,19 +156,12 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         // Invalidate GPU caches — topology and vectors both changed.
         // Single `insert()` does this per-call; batch path must do it once
         // after all nodes are connected to avoid stale CSR/vector snapshots.
-        //
         // `finalize_batch` has already released every `Vectors` write lock
-        // taken during the insert loop, so the `gpu_vectors_snapshot`
-        // acquisition below is a flat acquire (rank 5) with nothing on the
-        // lock stack — consistent with the declared global order.
+        // taken during the insert loop, so the helper's mutex acquisition
+        // is a flat acquire (rank 5) with nothing on the lock stack —
+        // consistent with the declared global order.
         #[cfg(feature = "gpu")]
-        {
-            use super::graph::locking::{record_lock_acquire, record_lock_release, LockRank};
-            self.gpu_csr_cache.invalidate();
-            record_lock_acquire(LockRank::GpuVectorsSnapshot);
-            *self.gpu_vectors_snapshot.lock() = None;
-            record_lock_release(LockRank::GpuVectorsSnapshot);
-        }
+        self.invalidate_gpu_caches();
 
         // Return the graph-assigned node IDs in input order
         let assigned_ids: Vec<usize> = assignments.iter().map(|(node_id, _)| *node_id).collect();
