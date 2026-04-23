@@ -33,7 +33,7 @@ mod tests {
             .payload
             .as_ref()
             .and_then(|p| p.get(field))
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
     }
 
     // ================================================================
@@ -72,10 +72,8 @@ mod tests {
 
     #[test]
     fn test_parse_rank_desc() {
-        let query = Parser::parse(
-            "SELECT RANK() OVER (ORDER BY score DESC) AS rnk FROM docs",
-        )
-        .unwrap();
+        let query =
+            Parser::parse("SELECT RANK() OVER (ORDER BY score DESC) AS rnk FROM docs").unwrap();
 
         match &query.select.columns {
             SelectColumns::Mixed {
@@ -201,7 +199,10 @@ mod tests {
             SelectColumns::Mixed {
                 window_functions, ..
             } => {
-                assert_eq!(window_functions[0].function_type, WindowFunctionType::RowNumber);
+                assert_eq!(
+                    window_functions[0].function_type,
+                    WindowFunctionType::RowNumber
+                );
             }
             other => panic!("Expected Mixed, got: {:?}", other),
         }
@@ -354,11 +355,7 @@ mod tests {
 
     #[test]
     fn test_single_result() {
-        let mut results = vec![make_result(
-            1,
-            serde_json::json!({"val": 42}),
-            0.5,
-        )];
+        let mut results = vec![make_result(1, serde_json::json!({"val": 42}), 0.5)];
 
         let wf = WindowFunction {
             function_type: WindowFunctionType::RowNumber,
@@ -408,11 +405,7 @@ mod tests {
 
     #[test]
     fn test_default_alias() {
-        let mut results = vec![make_result(
-            1,
-            serde_json::json!({"val": 1}),
-            0.5,
-        )];
+        let mut results = vec![make_result(1, serde_json::json!({"val": 1}), 0.5)];
 
         // No alias → uses function_type.default_alias()
         let wf = WindowFunction {
@@ -589,5 +582,153 @@ mod tests {
         assert_eq!(get_payload_u64(&results[1], "rn"), Some(1)); // val=30 (id=2)
         assert_eq!(get_payload_u64(&results[2], "rn"), Some(2)); // val=20 (id=3)
         assert_eq!(get_payload_u64(&results[0], "rn"), Some(3)); // val=10 (id=1)
+    }
+
+    // =====================================================================
+    // Regression tests — the three 🔴 critical bugs flagged by Devin on
+    // the original #629 and fixed before merge.
+    // =====================================================================
+
+    /// Bug #2 regression: `extract_sort_value` used to special-case the
+    /// column name `"score"` and return `result.score` (the search
+    /// similarity score) instead of the user's payload field. Any payload
+    /// with its own `score` column would silently order by the search
+    /// score instead of the column value — hidden until a user's payload
+    /// score distribution diverges from the similarity ranking.
+    ///
+    /// This test constructs that exact mismatch: similarity scores are in
+    /// `[0.1, 0.3, 0.5, 0.2]` order but payload scores are
+    /// `[100, 50, 75, 200]`. Ordering by payload `score` DESC must yield
+    /// id 4 (200) first, not id 3 (similarity 0.5) first.
+    #[test]
+    fn test_order_by_payload_score_is_not_hijacked_by_similarity() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"score": 100}), 0.1),
+            make_result(2, serde_json::json!({"score": 50}), 0.3),
+            make_result(3, serde_json::json!({"score": 75}), 0.5),
+            make_result(4, serde_json::json!({"score": 200}), 0.2),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "score".to_string(),
+                    descending: true,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).expect("evaluate");
+
+        // Expected order by payload.score DESC: 200, 100, 75, 50 → ids 4, 1, 3, 2.
+        assert_eq!(
+            get_payload_u64(&results[3], "rn"),
+            Some(1),
+            "id 4 payload=200 should rank 1"
+        );
+        assert_eq!(
+            get_payload_u64(&results[0], "rn"),
+            Some(2),
+            "id 1 payload=100 should rank 2"
+        );
+        assert_eq!(
+            get_payload_u64(&results[2], "rn"),
+            Some(3),
+            "id 3 payload=75 should rank 3"
+        );
+        assert_eq!(
+            get_payload_u64(&results[1], "rn"),
+            Some(4),
+            "id 2 payload=50 should rank 4"
+        );
+    }
+
+    /// Bug #3 regression: `RANK() OVER (ORDER BY score DESC) AS score` used
+    /// to corrupt its own input. The old loop wrote the rank value back
+    /// into `payload["score"]` after each iteration; the next iteration's
+    /// tie-detection read this corrupted value instead of the original
+    /// sort key. For input `[100, 90, 90, 80]` it produced `[1, 2, 3, 4]`
+    /// instead of the SQL-correct `[1, 2, 2, 4]`.
+    #[test]
+    fn test_rank_alias_collides_with_order_by_column_preserves_ties() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"score": 100}), 0.5),
+            make_result(2, serde_json::json!({"score": 90}), 0.5),
+            make_result(3, serde_json::json!({"score": 90}), 0.5),
+            make_result(4, serde_json::json!({"score": 80}), 0.5),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::Rank,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "score".to_string(),
+                    descending: true,
+                }],
+            },
+            // Alias deliberately collides with the ORDER BY column.
+            alias: Some("score".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).expect("evaluate");
+
+        // SQL-correct RANK() for [100, 90, 90, 80] DESC is [1, 2, 2, 4].
+        // The pre-fix implementation produced [1, 2, 3, 4] because the
+        // "score" alias overwrote the sort key used by tie detection.
+        assert_eq!(get_payload_u64(&results[0], "score"), Some(1), "100 → 1");
+        assert_eq!(
+            get_payload_u64(&results[1], "score"),
+            Some(2),
+            "90 → 2 (tie)"
+        );
+        assert_eq!(
+            get_payload_u64(&results[2], "score"),
+            Some(2),
+            "90 → 2 (tie)"
+        );
+        assert_eq!(
+            get_payload_u64(&results[3], "score"),
+            Some(4),
+            "80 → 4 (gap after ties)"
+        );
+    }
+
+    /// Bug #3 regression with the *default* alias. `RANK()` without an
+    /// explicit `AS` uses `WindowFunctionType::default_alias() == "rank"`,
+    /// and a user who happens to have a `rank` payload field and sorts by
+    /// it would hit the same corruption path.
+    #[test]
+    fn test_rank_default_alias_collides_with_payload_field_preserves_ties() {
+        let mut results = vec![
+            make_result(1, serde_json::json!({"rank": 10}), 0.5),
+            make_result(2, serde_json::json!({"rank": 5}), 0.5),
+            make_result(3, serde_json::json!({"rank": 5}), 0.5),
+            make_result(4, serde_json::json!({"rank": 1}), 0.5),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::Rank,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "rank".to_string(),
+                    descending: true,
+                }],
+            },
+            // No explicit alias → default_alias() is "rank", collides.
+            alias: None,
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).expect("evaluate");
+
+        // Same pattern as the explicit-alias test: [10, 5, 5, 1] → [1, 2, 2, 4].
+        assert_eq!(get_payload_u64(&results[0], "rank"), Some(1));
+        assert_eq!(get_payload_u64(&results[1], "rank"), Some(2));
+        assert_eq!(get_payload_u64(&results[2], "rank"), Some(2));
+        assert_eq!(get_payload_u64(&results[3], "rank"), Some(4));
     }
 }

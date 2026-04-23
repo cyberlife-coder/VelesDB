@@ -30,6 +30,13 @@ use std::collections::BTreeMap;
 ///
 /// Returns `Ok(())` unconditionally; the `Result` signature is kept for
 /// pipeline consistency with the execution engine.
+///
+/// # Errors
+///
+/// Currently infallible — the signature keeps `Result` so future window
+/// functions that can fail (e.g. numeric overflow in `ROW_NUMBER` past
+/// `u64::MAX`, or a user-provided ORDER BY reference that cannot be
+/// resolved) can propagate errors without rippling through every caller.
 pub fn evaluate(
     results: &mut [SearchResult],
     window_functions: &[WindowFunction],
@@ -46,10 +53,7 @@ pub fn evaluate(
 /// 1. **Snapshot** all ORDER BY values before any mutation.
 /// 2. **Compute** rankings from snapshots (read-only).
 /// 3. **Inject** ranking values into payloads (write-only).
-fn apply_single_window(
-    results: &mut [SearchResult],
-    wf: &WindowFunction,
-) {
+fn apply_single_window(results: &mut [SearchResult], wf: &WindowFunction) {
     let alias = wf
         .alias
         .as_deref()
@@ -80,8 +84,14 @@ fn apply_single_window(
     let mut all_rankings: Vec<(usize, u64)> = Vec::new();
 
     for indices in partitions.values() {
-        let sorted = sort_partition_from_snapshots(indices, &sort_snapshots, &wf.over_clause.order_by);
-        let rankings = compute_rankings(&sorted, &sort_snapshots, &wf.over_clause.order_by, wf.function_type);
+        let sorted =
+            sort_partition_from_snapshots(indices, &sort_snapshots, &wf.over_clause.order_by);
+        let rankings = compute_rankings(
+            &sorted,
+            &sort_snapshots,
+            &wf.over_clause.order_by,
+            wf.function_type,
+        );
         all_rankings.extend(rankings);
     }
 
@@ -217,9 +227,8 @@ fn extract_sort_value(result: &SearchResult, column: &str) -> serde_json::Value 
 
 /// Extracts a potentially nested payload value (e.g., `"metadata.source"`).
 fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Value {
-    let payload = match result.point.payload.as_ref() {
-        Some(p) => p,
-        None => return serde_json::Value::Null,
+    let Some(payload) = result.point.payload.as_ref() else {
+        return serde_json::Value::Null;
     };
 
     if column.contains('.') {

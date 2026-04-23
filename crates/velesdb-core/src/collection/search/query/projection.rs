@@ -38,7 +38,13 @@ fn project_single(result: &SearchResult, select_exprs: &SelectColumns) -> serde_
             similarity_scores,
             qualified_wildcards,
             window_functions,
-        } => project_mixed(result, columns, similarity_scores, qualified_wildcards, window_functions),
+        } => project_mixed(
+            result,
+            columns,
+            similarity_scores,
+            qualified_wildcards,
+            window_functions,
+        ),
     }
 }
 

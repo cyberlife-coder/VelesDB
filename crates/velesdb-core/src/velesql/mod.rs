@@ -218,6 +218,8 @@ pub use ast::{
     LogicalOp,
     MatchCondition,
     OrderByExpr,
+    // Window functions (Issue #386)
+    OverClause,
     // WITH clause
     QuantizationMode,
     Query,
@@ -244,14 +246,12 @@ pub use ast::{
     VectorExpr,
     VectorFusedSearch,
     VectorSearch,
-    WithClause,
-    WithOption,
-    WithValue,
-    // Window functions (Issue #386)
-    OverClause,
     WindowFunction,
     WindowFunctionType,
     WindowOrderBy,
+    WithClause,
+    WithOption,
+    WithValue,
 };
 pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks

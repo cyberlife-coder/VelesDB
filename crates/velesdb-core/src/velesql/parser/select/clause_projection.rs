@@ -3,13 +3,22 @@
 use super::super::helpers::strip_identifier_quotes;
 use super::super::{extract_identifier, Rule};
 use super::validation;
+use crate::velesql::ast::OverClause;
 use crate::velesql::ast::{
     AggregateArg, AggregateFunction, AggregateType, Column, SelectColumns, SimilarityScoreExpr,
     WindowFunction, WindowFunctionType, WindowOrderBy,
 };
-use crate::velesql::ast::OverClause;
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
+
+/// Intermediate tuple returned by `parse_window_item_parts`. Named via a
+/// type alias so the `clippy::type_complexity` lint does not fire on the
+/// bare `Option<...>, Option<...>, Option<String>` trio.
+type WindowItemParts = (
+    Option<WindowFunctionType>,
+    Option<OverClause>,
+    Option<String>,
+);
 
 /// Accumulator for parsed SELECT items before building `SelectColumns`.
 struct SelectItemAccumulator {
@@ -123,8 +132,7 @@ impl Parser {
                                 .push(Self::parse_similarity_select(item));
                         }
                         Rule::window_item => {
-                            acc.window_functions
-                                .push(Self::parse_window_item(item)?);
+                            acc.window_functions.push(Self::parse_window_item(item)?);
                         }
                         Rule::aggregation_item => {
                             acc.aggregations.push(Self::parse_aggregation_item(item)?);
@@ -306,7 +314,7 @@ impl Parser {
     /// Extracts the constituent parts from a `window_item` pair.
     fn parse_window_item_parts(
         pair: pest::iterators::Pair<Rule>,
-    ) -> Result<(Option<WindowFunctionType>, Option<OverClause>, Option<String>), ParseError> {
+    ) -> Result<WindowItemParts, ParseError> {
         let mut function_type = None;
         let mut over_clause = None;
         let mut alias = None;
@@ -339,11 +347,7 @@ impl Parser {
                     "ROW_NUMBER" => Ok(WindowFunctionType::RowNumber),
                     "RANK" => Ok(WindowFunctionType::Rank),
                     "DENSE_RANK" => Ok(WindowFunctionType::DenseRank),
-                    other => Err(ParseError::syntax(
-                        0,
-                        other,
-                        "Unknown window function",
-                    )),
+                    other => Err(ParseError::syntax(0, other, "Unknown window function")),
                 };
             }
         }
@@ -351,9 +355,7 @@ impl Parser {
     }
 
     /// Parses `partition_by_clause? ~ window_order_by_clause?`.
-    fn parse_over_clause(
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<OverClause, ParseError> {
+    fn parse_over_clause(pair: pest::iterators::Pair<Rule>) -> Result<OverClause, ParseError> {
         let mut partition_by = Vec::new();
         let mut order_by = Vec::new();
 

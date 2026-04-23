@@ -51,8 +51,8 @@ pub use train::TrainStatement;
 pub use values::{
     CorrelatedColumn, IntervalUnit, IntervalValue, Subquery, TemporalExpr, Value, VectorExpr,
 };
-pub use with_clause::{QuantizationMode, WithClause, WithOption, WithValue};
 pub use window::{OverClause, WindowFunction, WindowFunctionType, WindowOrderBy};
+pub use with_clause::{QuantizationMode, WithClause, WithOption, WithValue};
 
 /// A complete VelesQL query.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
