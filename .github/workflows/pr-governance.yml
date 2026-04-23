@@ -30,10 +30,13 @@ jobs:
           #
           # → develop : feature/*, feat/*, fix/*, bugfix/*,
           #             refactor/*, chore/*, docs/*, style/*,
-          #             perf/*, test/*, build/*, ci/*
+          #             perf/*, test/*, build/*, ci/*, dependabot/*
           # → main    : develop, release/*, hotfix/*, support/*
           #
           # bugfix/* is the standard Git Flow alias for fix/* (bug fixes in develop).
+          # dependabot/* is created by GitHub's Dependabot bot and always targets
+          # develop per .github/dependabot.yml configuration — the prefix is
+          # controlled by Dependabot itself and is not renameable.
           # support/* maintains older release lines and merges directly to main.
           # Any other target branch is rejected.
 
@@ -42,6 +45,7 @@ jobs:
             case "$src" in
               feature/*|feat/*|fix/*|bugfix/*|refactor/*|chore/*) return 0 ;;
               docs/*|style/*|perf/*|test/*|build/*|ci/*) return 0 ;;
+              dependabot/*) return 0 ;;
               *) return 1 ;;
             esac
           }
@@ -59,7 +63,7 @@ jobs:
               echo "OK: '${SOURCE_REF}' → develop (Git Flow valid)"
             else
               echo "::error::Git Flow violation: '${SOURCE_REF}' cannot target 'develop'."
-              echo "::error::Branches allowed to target 'develop': feature/*, feat/*, fix/*, bugfix/*, refactor/*, chore/*, docs/*, style/*, perf/*, test/*, build/*, ci/*"
+              echo "::error::Branches allowed to target 'develop': feature/*, feat/*, fix/*, bugfix/*, refactor/*, chore/*, docs/*, style/*, perf/*, test/*, build/*, ci/*, dependabot/*"
               exit 1
             fi
           elif [ "$BASE_REF" = "main" ]; then
