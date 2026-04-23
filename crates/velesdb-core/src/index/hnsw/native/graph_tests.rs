@@ -499,6 +499,53 @@ fn test_gpu_snapshot_version_bumps_on_every_mutation() {
     assert!(v2 > v1, "parallel insert path must also bump the version");
 }
 
+/// `reorder_for_locality` rewrites both the vector buffer AND every
+/// neighbour list in place. Devin flagged on PR-B that the pre-existing
+/// reorder path never invalidated GPU caches, so any snapshot / CSR
+/// built from the pre-reorder topology would silently be served after
+/// reorder. This test locks in the contract: the snapshot version must
+/// bump once per reorder pass that actually runs (above the threshold).
+#[cfg(feature = "gpu")]
+#[test]
+fn test_reorder_for_locality_bumps_snapshot_version() {
+    use std::sync::atomic::Ordering;
+
+    // The reorder threshold is 1000 in reorder.rs; we need enough vectors
+    // for the code path to actually execute the permutation.
+    const N: usize = 1024;
+    const DIM: usize = 8;
+
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, DIM);
+    let hnsw = NativeHnsw::new_with_dimension_and_alpha(engine, 16, 100, 2048, DIM, 1.2)
+        .expect("test: index creation");
+
+    let vectors: Vec<Vec<f32>> = (0..N)
+        .map(|i| (0..DIM).map(|j| (i * DIM + j) as f32 / 1000.0).collect())
+        .collect();
+    let refs: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (&v[..], i))
+        .collect();
+    hnsw.parallel_insert(&refs)
+        .expect("test: bulk insert for reorder");
+    let before = hnsw.gpu_snapshot_version.load(Ordering::Acquire);
+
+    hnsw.reorder_for_locality().expect("test: reorder succeeds");
+    let after = hnsw.gpu_snapshot_version.load(Ordering::Acquire);
+
+    assert!(
+        after > before,
+        "reorder_for_locality must bump the snapshot version \
+         (before={before}, after={after})"
+    );
+    // Snapshot mutex must be cleared too (belt-and-suspenders).
+    assert!(
+        hnsw.gpu_vectors_snapshot.lock().is_none(),
+        "reorder_for_locality must clear the snapshot mutex"
+    );
+}
+
 /// Regression for the snapshot-cache-keyed-on-count bug: a hypothetical
 /// delete-then-insert that returns to the same count must still
 /// invalidate the cache. With the version counter introduced by PR-B
