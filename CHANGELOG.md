@@ -7,19 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **GPU HNSW traversal now reachable from the query pipeline** (`#634`
-  PR-D). In v1.13.0 the GPU layer-0 traversal shipped as unreachable
-  code: `NativeHnswInner::search_auto` existed but was annotated
-  `#[allow(dead_code)]` with no production caller. The three in-process
-  search entry points (`HnswIndex::search_hnsw_only`,
-  `HnswIndex::search_hnsw_only_filtered`,
-  `NativeHnswIndex::search_with_quality`) now route through
-  `search_auto`, so any build with the `gpu` feature and an index above
-  500K vectors will automatically use the GPU SONG pipeline. Sub-500K
-  indices, RaBitQ backends, and builds without `gpu` continue on the
-  CPU SIMD path with zero overhead (tail-call to the original `search`).
+_Nothing yet — post-v1.13.0 work lives under feature branches tracked in [#634](https://github.com/cyberlife-coder/VelesDB/issues/634) (GPU hardening PR-C, PR-E) and [#639](https://github.com/cyberlife-coder/VelesDB/issues/639) (ef_search alignment)._
 
 ## [1.13.0] — 2026-04-23
 
@@ -43,6 +31,16 @@ upper-layer greedy descent; the GPU kicks in only when
 no u64 — correctness gate). Graceful fallback to the CPU SIMD path
 on any GPU error. 77 new GPU tests, zero new dependencies, zero
 `unsafe`. Credit @SBALAVIGNESH123 for the original implementation.
+Four same-day hardening PRs (`#637`, `#638`, `#640`, `#641`, tracked
+under `#634`) close the remaining review findings: `search_auto`
+wired into the production query pipeline (the GPU path was dormant
+in the landed state of `#626`), explicit `LockRank` for
+`gpu_vectors_snapshot` + a `debug_assert`-enforced caller contract
+on `CsrCache::get_or_rebuild`, unified version counter for snapshot
++ CSR cache invalidation (closes the delete-then-insert-same-count
+stale-serve class), and a CSR cache count-check cleanup that aligns
+both caches on a single validity signal. Net: production-reachable,
+statically-enforced, no hidden mutator-must-remember contracts.
 
 **Pre-seed remediation (Option D)** — 10 phases merged across
 `#611`–`#623`: BM25 persistence cold-start dropped from O(N) to O(1),
@@ -80,6 +78,65 @@ passes on every phase.
   Below either threshold, or on any GPU error, returns `None` so the
   caller falls back to the CPU SIMD path — no behavior change for
   workloads outside the GPU activation range.
+
+### Added — GPU hardening (post-landing follow-ups to `#626`)
+
+The four PRs below were merged the day v1.13.0 was cut to close the
+`🚩 ANALYSIS` findings Devin raised during the `#626` review. All are
+tracked under `#634` as sub-items PR-A / PR-B / PR-D / PR-F. Net
+effect: the GPU feature is reachable from production code paths,
+invalidation contracts are enforced statically in debug builds, and
+future mutators (e.g. a delete path) cannot accidentally serve
+stale caches.
+
+- **Wire `search_auto` into the production pipeline** (`#638`, PR-D).
+  In the landed state of `#626`, `NativeHnswInner::search_auto` was
+  annotated `#[allow(dead_code)]` with no production caller — the GPU
+  path was reachable only from unit tests and benchmarks. Routes the
+  three in-process search entry points
+  (`HnswIndex::search_hnsw_only`,
+  `HnswIndex::search_hnsw_only_filtered`,
+  `NativeHnswIndex::search_with_quality`) through `search_auto`, so
+  any build with `--features gpu` and an index above 500K vectors
+  automatically uses the GPU SONG pipeline. Sub-500K indices, RaBitQ
+  backends, and builds without `gpu` continue on the CPU SIMD path
+  with zero overhead. 5 new parity / routing tests (GPU ⇔ CPU top-k
+  equivalence on small indices).
+
+- **Explicit lock-ordering + CsrCache caller contract** (`#637`, PR-A).
+  Adds `LockRank::GpuVectorsSnapshot = 5` to the global lock order in
+  `graph/locking.rs` (acquired before `Vectors` = 10) and instruments
+  all three acquisition sites (`gpu_search.rs`, `insert.rs`,
+  `backend_adapter.rs`) so debug builds catch any future caller that
+  inverts the order. Fixes the misleading "CAS on generation" comment
+  on `CsrCache::get_or_rebuild` and adds a
+  `debug_assert!(holds_lock(Layers))` tripwire encoding the caller
+  contract (rebuilders must hold the layers read lock; without it,
+  overlapping rebuilders could silently commit stale CSRs). New
+  `holds_lock` helper + 3 regression tests for rank monotonicity
+  and nested-acquire semantics.
+
+- **Unified version counter for snapshot + CSR cache invalidation**
+  (`#640`, PR-B). Replaces the count-keyed snapshot cache with a
+  monotonic `gpu_snapshot_version: AtomicU64` that every mutation
+  bumps atomically. Consolidates the two scattered invalidation
+  blocks in `insert` and `parallel_insert` into a single
+  `NativeHnsw::invalidate_gpu_caches` helper (version bump → CSR
+  dirty flag → snapshot mutex clear, all in the declared lock order).
+  Prevents the delete-then-insert-back-to-same-count bug class that
+  would silently serve stale vectors to the GPU. Also folds the
+  pre-existing `reorder_for_locality` invalidation gap — reordering
+  rewrites vectors and neighbour lists in place but historically
+  never invalidated the GPU caches.
+
+- **CSR cache count-check cleanup** (`#641`, PR-F). Removes the
+  redundant `existing.num_nodes == count` secondary check in
+  `search_gpu`. Every mutation bumps `gpu_snapshot_version` AND calls
+  `gpu_csr_cache.invalidate()` through the helper, so `get_if_clean`
+  alone is the authoritative validity signal — "cache clean" ⇔
+  "snapshot version unchanged" ⇔ "topology unchanged since last
+  build". Removes the code-smell that kept pattern-matching against
+  the old count-keyed cache bug.
 
 ### Added — Pre-seed remediation
 
