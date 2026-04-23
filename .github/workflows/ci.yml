@@ -171,6 +171,33 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      # Free ~35 GB of disk space by dropping pre-installed tooling we do
+      # not use (Android SDK, .NET, Haskell/GHC, cached Docker images).
+      # Without this the full test matrix link phase runs out of space —
+      # `ld` dies with SIGBUS when it cannot mmap more pages. Observed on
+      # PR #633 (two consecutive runs, warning: "Free space left: 80 MB").
+      #
+      # Flag rationale:
+      # * `tool-cache: false` — keeps rustup + the toolchain restored by
+      #   `Swatinem/rust-cache`.
+      # * `large-packages: false` — intentionally OFF. The action's
+      #   `large-packages` flag runs `apt-get autoremove -y` which
+      #   cascade-removes `libgl1-mesa-dri` and its reverse-dependencies,
+      #   including `glib-2.0-dev` / `gtk-3-dev` that `glib-sys` / Tauri
+      #   transitive deps need. Pulling those back in via
+      #   `awalsh128/cache-apt-pkgs-action` below is unreliable once
+      #   autoremove has touched them, so we simply keep them installed.
+      - name: Free disk space on runner
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
       - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
         with:
           toolchain: ${{ env.RUST_VERSION }}
