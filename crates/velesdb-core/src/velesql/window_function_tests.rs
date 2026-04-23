@@ -873,6 +873,140 @@ mod tests {
         );
     }
 
+    // =====================================================================
+    // Zero-tech-debt pass: regressions for the 🚩 informational findings
+    // that were resolved in the hardening commit.
+    // =====================================================================
+
+    /// Partition-key collision regression: typed JSON values that render to
+    /// the same bytes via naive `to_string()` must still produce distinct
+    /// partition keys.
+    ///
+    /// Before the fix, `extract_payload_value` returned the inner string for
+    /// `Value::String(s)` (stripping the JSON quotes) and `"__null__"` for
+    /// `Value::Null`. Consequences:
+    /// - `Value::Number(1)` and `Value::String("1")` both rendered as `"1"`
+    ///   and collided into the same partition.
+    /// - `Value::Null` and a literal payload string `"__null__"` both rendered
+    ///   as `"__null__"` and collided into the same partition.
+    ///
+    /// The fix uses `serde_json`'s canonical `Display` (`Value::to_string`),
+    /// which preserves the JSON type discriminator (bare `1`, quoted `"1"`,
+    /// literal `null`, quoted `"null"`).
+    #[test]
+    fn test_partition_key_does_not_collide_int_and_string_of_same_digits() {
+        // Two rows with the SAME `val` but DIFFERENT payload types for the
+        // partition column `"cat"`. Before the fix they'd end up in the same
+        // partition and rank 1, 2. After the fix they're in separate
+        // partitions and both rank 1.
+        let mut results = vec![
+            make_result(1, serde_json::json!({"cat": 1, "val": 10}), 0.5),
+            make_result(2, serde_json::json!({"cat": "1", "val": 20}), 0.5),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec!["cat".to_string()],
+                order_by: vec![WindowOrderBy {
+                    column: "val".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).expect("evaluate");
+
+        // Each row is the sole member of its own partition → both rank 1.
+        assert_eq!(get_payload_u64(&results[0], "rn"), Some(1), "cat=int(1)");
+        assert_eq!(
+            get_payload_u64(&results[1], "rn"),
+            Some(1),
+            "cat=str(\"1\")"
+        );
+    }
+
+    /// Partition-key NULL-sentinel regression: a payload string literally
+    /// equal to `"__null__"` must not collide with a missing/Null field.
+    #[test]
+    fn test_partition_key_distinguishes_null_from_literal_sentinel() {
+        let mut results = vec![
+            // Row 1: actual JSON null for "cat".
+            make_result(1, serde_json::json!({"cat": null, "val": 10}), 0.5),
+            // Row 2: literal string "__null__" for "cat".
+            make_result(2, serde_json::json!({"cat": "__null__", "val": 20}), 0.5),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec!["cat".to_string()],
+                order_by: vec![WindowOrderBy {
+                    column: "val".to_string(),
+                    descending: false,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).expect("evaluate");
+
+        // Distinct partitions → both rank 1.
+        assert_eq!(get_payload_u64(&results[0], "rn"), Some(1), "cat=null");
+        assert_eq!(
+            get_payload_u64(&results[1], "rn"),
+            Some(1),
+            "cat=\"__null__\""
+        );
+    }
+
+    /// Design-intent regression: DISTINCT runs BEFORE window functions.
+    ///
+    /// VelesQL deliberately deviates from the SQL-standard logical order
+    /// (which is `SELECT (windows) → DISTINCT`) so that `ROW_NUMBER` /
+    /// `RANK` over a DISTINCT set produces a dense `1..N` without gaps,
+    /// matching the "top-N distinct titles ranked by similarity" vector
+    /// search pattern. This evaluator contract drives that behaviour: when
+    /// evaluate is called, DISTINCT has already reduced the row set.
+    ///
+    /// This test verifies the *evaluator's* invariant: given a row set that
+    /// has already been deduped (as the pipeline would hand it over), the
+    /// window function numbers the survivors contiguously. If the pipeline
+    /// order were ever flipped, this test would still pass (because it
+    /// feeds a pre-deduped slice directly) — its purpose is to pin the
+    /// evaluator semantics, while the pipeline order contract is pinned by
+    /// the doc comment on `apply_select_postprocessing`.
+    #[test]
+    fn test_row_number_numbers_deduped_rows_contiguously() {
+        // Simulate what the pipeline hands to the evaluator after DISTINCT:
+        // three survivors with unique titles, sorted by similarity.
+        let mut results = vec![
+            make_result(10, serde_json::json!({"title": "A"}), 0.9),
+            make_result(20, serde_json::json!({"title": "B"}), 0.7),
+            make_result(30, serde_json::json!({"title": "C"}), 0.5),
+        ];
+
+        let wf = WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: vec![],
+                order_by: vec![WindowOrderBy {
+                    column: "similarity".to_string(),
+                    descending: true,
+                }],
+            },
+            alias: Some("rn".to_string()),
+        };
+
+        window_evaluator::evaluate(&mut results, &[wf]).expect("evaluate");
+
+        // Contiguous 1, 2, 3 — no gaps, matching vector-search expectation.
+        assert_eq!(get_payload_u64(&results[0], "rn"), Some(1));
+        assert_eq!(get_payload_u64(&results[1], "rn"), Some(2));
+        assert_eq!(get_payload_u64(&results[2], "rn"), Some(3));
+    }
+
     /// Bug #3 regression with the *default* alias. `RANK()` without an
     /// explicit `AS` uses `WindowFunctionType::default_alias() == "rank"`,
     /// and a user who happens to have a `rank` payload field and sorts by

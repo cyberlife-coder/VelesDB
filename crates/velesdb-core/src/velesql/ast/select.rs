@@ -108,15 +108,27 @@ impl SelectColumns {
             Self::Mixed {
                 columns,
                 aggregations,
+                similarity_scores,
+                qualified_wildcards,
                 window_functions,
-                ..
             } => {
+                // Order mirrors the SELECT-list grammar: columns, aggregates,
+                // similarity(), qualified wildcards (`alias.*`), window
+                // functions. Python/WASM bindings consume this list to expose
+                // the column metadata contract, so every SELECT-list variant
+                // must contribute a display name.
                 let mut result: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
                 result.extend(
                     aggregations
                         .iter()
                         .map(|a| format!("{:?}", a.function_type)),
                 );
+                result.extend(similarity_scores.iter().map(|expr| {
+                    expr.alias
+                        .clone()
+                        .unwrap_or_else(|| "similarity".to_string())
+                }));
+                result.extend(qualified_wildcards.iter().map(|alias| format!("{alias}.*")));
                 result.extend(window_functions.iter().map(|wf| {
                     wf.alias
                         .clone()

@@ -92,6 +92,14 @@ fn project_similarity_only(result: &SearchResult, expr: &SimilarityScoreExpr) ->
 }
 
 /// Mixed projection: columns + similarity scores + qualified wildcards + window functions.
+///
+/// Window function values were injected into the row's payload by
+/// [`crate::velesql::window_evaluator`]. The wildcard-expansion step below
+/// therefore must skip keys that correspond to window-function aliases —
+/// otherwise those values would be read from the payload twice (once by
+/// wildcard expansion, once by the explicit window-function loop). The final
+/// value would still be correct (the explicit loop wins), but the extra
+/// copy is pointless and mis-signals in reviews as suspicious dedup.
 fn project_mixed(
     result: &SearchResult,
     columns: &[crate::velesql::Column],
@@ -101,26 +109,37 @@ fn project_mixed(
 ) -> serde_json::Value {
     let mut map = serde_json::Map::new();
 
-    // Qualified wildcards expand to all payload fields + id
+    // Pre-compute the set of window-function aliases so wildcard expansion
+    // can skip them in O(1) per payload key.
+    let window_aliases: rustc_hash::FxHashSet<&str> = window_functions
+        .iter()
+        .map(|wf| {
+            wf.alias
+                .as_deref()
+                .unwrap_or(wf.function_type.default_alias())
+        })
+        .collect();
+
+    // Qualified wildcards expand to all payload fields + id.
     if !qualified_wildcards.is_empty() {
         map.insert("id".to_string(), serde_json::Value::from(result.point.id));
         if let Some(serde_json::Value::Object(payload_map)) = result.point.payload.as_ref() {
             for (k, v) in payload_map {
-                if k != "id" {
+                if k != "id" && !window_aliases.contains(k.as_str()) {
                     map.insert(k.clone(), v.clone());
                 }
             }
         }
     }
 
-    // Named columns
+    // Named columns.
     for col in columns {
         let output_key = col.alias.as_deref().unwrap_or(&col.name);
         let value = extract_field_value(result, &col.name);
         map.insert(output_key.to_string(), value);
     }
 
-    // Similarity scores
+    // Similarity scores.
     for expr in similarity_scores {
         let key = expr.alias.as_deref().unwrap_or("similarity");
         map.insert(
@@ -129,7 +148,9 @@ fn project_mixed(
         );
     }
 
-    // Window function values (injected into payload by window_evaluator)
+    // Window function values (injected into payload by window_evaluator).
+    // This is the single source of truth for window aliases — wildcard
+    // expansion above deliberately skipped them.
     for wf in window_functions {
         let alias = wf
             .alias

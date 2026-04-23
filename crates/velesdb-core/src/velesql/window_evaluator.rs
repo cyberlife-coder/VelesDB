@@ -3,8 +3,13 @@
 //! Evaluates window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK`) over
 //! a result set, partitioning and sorting as specified by the `OVER` clause.
 //!
-//! Window evaluation happens **after** DISTINCT but **before** ORDER BY/LIMIT
-//! in the query pipeline, matching SQL standard semantics.
+//! ## Pipeline position
+//!
+//! Window evaluation happens **after** DISTINCT and **before** ORDER BY/LIMIT.
+//! This is an intentional deviation from SQL standard (which runs windows
+//! before DISTINCT) tailored to the vector-search use case; see the design
+//! note on [`crate::collection::search::query::select_dispatch::QueryExecutor::apply_select_postprocessing`]
+//! for the full rationale.
 //!
 //! ## Design: Global snapshot-first evaluation
 //!
@@ -211,46 +216,85 @@ fn sort_partition_from_snapshots(
 
 /// Computes ranking values from pre-snapshotted sort values.
 ///
+/// Dispatches to a variant-specific helper so each helper only maintains
+/// the state its ranking function actually uses (no dead `rank` / `dense_rank`
+/// initialisation when the other variant is selected).
+///
 /// Returns a list of `(result_index, ranking_value)` pairs.
-/// Uses snapshots for tie detection to prevent payload corruption.
 fn compute_rankings(
     sorted_indices: &[usize],
     snapshots: &[Vec<serde_json::Value>],
     order_by: &[WindowOrderBy],
     fn_type: WindowFunctionType,
 ) -> Vec<(usize, u64)> {
+    match fn_type {
+        WindowFunctionType::RowNumber => compute_row_numbers(sorted_indices),
+        WindowFunctionType::Rank => compute_rank(sorted_indices, snapshots, order_by),
+        WindowFunctionType::DenseRank => compute_dense_rank(sorted_indices, snapshots, order_by),
+    }
+}
+
+/// `ROW_NUMBER()`: assign `1..=n` by sort position, ignoring ties.
+fn compute_row_numbers(sorted_indices: &[usize]) -> Vec<(usize, u64)> {
+    sorted_indices
+        .iter()
+        .enumerate()
+        .map(|(position, &idx)| (idx, (position as u64) + 1))
+        .collect()
+}
+
+/// `RANK()`: gaps after ties (1, 2, 2, 4).
+///
+/// When the current row's snapshot ties with the previous row's, the rank
+/// is carried forward; otherwise it jumps to `position + 1`.
+fn compute_rank(
+    sorted_indices: &[usize],
+    snapshots: &[Vec<serde_json::Value>],
+    order_by: &[WindowOrderBy],
+) -> Vec<(usize, u64)> {
     let mut rankings = Vec::with_capacity(sorted_indices.len());
     let mut rank: u64 = 1;
-    let mut dense_rank: u64 = 1;
-
     for (position, &idx) in sorted_indices.iter().enumerate() {
-        let is_new_group = if position == 0 {
-            false
-        } else {
-            let prev_idx = sorted_indices[position - 1];
-            !snapshots_tied(&snapshots[idx], &snapshots[prev_idx], order_by)
-        };
-
-        let value = match fn_type {
-            WindowFunctionType::RowNumber => (position + 1) as u64,
-            WindowFunctionType::Rank => {
-                if is_new_group {
-                    rank = (position + 1) as u64;
-                }
-                rank
-            }
-            WindowFunctionType::DenseRank => {
-                if is_new_group {
-                    dense_rank += 1;
-                }
-                dense_rank
-            }
-        };
-
-        rankings.push((idx, value));
+        if is_new_group(position, sorted_indices, snapshots, order_by, idx) {
+            rank = (position as u64) + 1;
+        }
+        rankings.push((idx, rank));
     }
-
     rankings
+}
+
+/// `DENSE_RANK()`: no gaps after ties (1, 2, 2, 3).
+fn compute_dense_rank(
+    sorted_indices: &[usize],
+    snapshots: &[Vec<serde_json::Value>],
+    order_by: &[WindowOrderBy],
+) -> Vec<(usize, u64)> {
+    let mut rankings = Vec::with_capacity(sorted_indices.len());
+    let mut dense_rank: u64 = 1;
+    for (position, &idx) in sorted_indices.iter().enumerate() {
+        if is_new_group(position, sorted_indices, snapshots, order_by, idx) {
+            dense_rank += 1;
+        }
+        rankings.push((idx, dense_rank));
+    }
+    rankings
+}
+
+/// Returns `true` if the row at `position` starts a new tie group, i.e.
+/// its ORDER BY snapshot differs from the previous row's. The first row
+/// (`position == 0`) is never "new" — it anchors the initial group.
+fn is_new_group(
+    position: usize,
+    sorted_indices: &[usize],
+    snapshots: &[Vec<serde_json::Value>],
+    order_by: &[WindowOrderBy],
+    idx: usize,
+) -> bool {
+    if position == 0 {
+        return false;
+    }
+    let prev_idx = sorted_indices[position - 1];
+    !snapshots_tied(&snapshots[idx], &snapshots[prev_idx], order_by)
 }
 
 /// Returns `true` if two snapshot rows have identical ORDER BY values.
@@ -303,14 +347,24 @@ fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Valu
     }
 }
 
-/// Extracts a string representation of a payload value for partition keys.
+/// Extracts a canonical-JSON string representation of a payload value for
+/// partition keys.
+///
+/// Uses `serde_json`'s `Display` (`value.to_string()`) rather than extracting
+/// the inner string for `Value::String`. This preserves the JSON type
+/// discriminator (quotes around strings, bare digits for numbers, `null`
+/// literal for NULL) so rows with different types cannot collide into the
+/// same partition.
+///
+/// Examples of collisions that this prevents:
+/// - `Value::Null` vs `Value::String("null")` → `null` vs `"null"` (distinct)
+/// - `Value::Number(1)` vs `Value::String("1")` → `1` vs `"1"` (distinct)
+/// - `Value::Bool(true)` vs `Value::String("true")` → `true` vs `"true"`
+///
+/// Consistent with `distinct::canonical_json_string` which applies the same
+/// rule for DISTINCT deduplication keys.
 fn extract_payload_value(result: &SearchResult, column: &str) -> String {
-    let value = extract_nested_value(result, column);
-    match value {
-        serde_json::Value::Null => "__null__".to_string(),
-        serde_json::Value::String(s) => s,
-        other => other.to_string(),
-    }
+    extract_nested_value(result, column).to_string()
 }
 
 /// Compares two JSON values for sorting.

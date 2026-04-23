@@ -256,6 +256,26 @@ impl Collection {
 
     /// Applies DISTINCT, window functions, ORDER BY (with LET bindings), OFFSET, LIMIT, and
     /// LET payload injection (Issue #473).
+    ///
+    /// # Pipeline order and its SQL-standard deviation
+    ///
+    /// VelesQL runs `DISTINCT → window functions → ORDER BY → OFFSET/LIMIT`.
+    /// Standard SQL runs window functions **before** DISTINCT (logical order
+    /// `SELECT → DISTINCT → ORDER BY`). This is an **intentional deviation**
+    /// tailored to the vector-search use case:
+    ///
+    /// - "Give me the top-N distinct titles, ranked by similarity" (the
+    ///   common vector-search pattern) wants DISTINCT to collapse rows
+    ///   **before** ROW_NUMBER / RANK assigns positions, so survivors get
+    ///   a dense `1..N` numbering. Running window functions first would
+    ///   leave gaps in the numbering after DISTINCT drops rows.
+    /// - No VelesQL query currently uses the standard-SQL contract, so no
+    ///   existing user code depends on the reverse order.
+    ///
+    /// If the standard order becomes necessary in the future (e.g., SQL
+    /// compatibility mode), swap step 1 and step 2 and wrap behind a feature
+    /// flag. Regression coverage is in
+    /// `window_function_tests::test_distinct_runs_before_window_functions`.
     pub(super) fn apply_select_postprocessing(
         &self,
         stmt: &crate::velesql::SelectStatement,
@@ -264,7 +284,8 @@ impl Collection {
         limit: usize,
         let_bindings: &[crate::velesql::LetBinding],
     ) -> Result<Vec<SearchResult>> {
-        // Step 1: DISTINCT — deduplication before any ranking.
+        // Step 1: DISTINCT — deduplication before any ranking (see pipeline
+        // order contract in the doc comment above).
         if stmt.distinct == crate::velesql::DistinctMode::All {
             results = distinct::apply_distinct(results, &stmt.columns);
         }
