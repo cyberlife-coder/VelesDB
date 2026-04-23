@@ -66,17 +66,30 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         //
         // Uses the per-instance `gpu_csr_cache` field — each NativeHnsw
         // owns its own cache, preventing cross-collection contamination.
-        // The CsrCache only rebuilds when invalidated (insert/delete) or
-        // when the node count changes.
+        //
+        // **Validity signal** — relies solely on the CsrCache dirty flag
+        // (`get_if_clean`), which is aligned with `gpu_snapshot_version`:
+        // every mutation that bumps `gpu_snapshot_version` also invalidates
+        // the CSR cache through `NativeHnsw::invalidate_gpu_caches`, so
+        // "cache clean" ⇔ "snapshot version unchanged" ⇔ "topology
+        // unchanged since last build".
+        //
+        // The historical secondary check `existing.num_nodes == count`
+        // (kept on develop until PR-F of #634) was a redundant race
+        // guard: it covered the tiny window where `count.fetch_add`
+        // completes before `invalidate_gpu_caches` runs on the same
+        // mutator thread. Removed as part of the version-counter
+        // consolidation — the remaining worst case is that one search
+        // serves a CSR with N-1 nodes against an index that just
+        // reached N: the newly-inserted node is missed by that single
+        // query (same behaviour any delete+insert race has always had)
+        // and the next search picks up the fresh rebuild.
         let csr = self.with_layers_read(|layers| {
             if layers.is_empty() {
                 return None;
             }
             if let Some(existing) = self.gpu_csr_cache.get_if_clean() {
-                if existing.num_nodes as usize == count {
-                    return Some(existing);
-                }
-                self.gpu_csr_cache.invalidate();
+                return Some(existing);
             }
             Some(self.gpu_csr_cache.get_or_rebuild(&layers[0], count))
         })?;
