@@ -107,20 +107,14 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.count.fetch_add(1, Ordering::Relaxed);
 
         // Invalidate GPU caches — topology and vectors both changed.
-        //
         // `vectors.write()` is already released at this point (the caller
         // chain `allocate_and_store_vector → with_vectors_write` drops it
         // before returning), so the `gpu_vectors_snapshot` acquisition
-        // below does not nest inside the vectors lock and respects the
-        // declared order (`GpuVectorsSnapshot` rank 5 → `Vectors` rank 10).
+        // inside the helper does not nest inside the vectors lock and
+        // respects the declared order
+        // (`GpuVectorsSnapshot` rank 5 → `Vectors` rank 10).
         #[cfg(feature = "gpu")]
-        {
-            use super::locking::{record_lock_acquire, record_lock_release, LockRank};
-            self.gpu_csr_cache.invalidate();
-            record_lock_acquire(LockRank::GpuVectorsSnapshot);
-            *self.gpu_vectors_snapshot.lock() = None;
-            record_lock_release(LockRank::GpuVectorsSnapshot);
-        }
+        self.invalidate_gpu_caches();
 
         Ok(node_id)
     }

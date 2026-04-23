@@ -108,25 +108,35 @@ pub struct NativeHnsw<D: DistanceEngine> {
     ///
     /// Each `NativeHnsw` instance owns its own cache, preventing cross-collection
     /// contamination when multiple indices exist in the same process.
-    /// Invalidated automatically on insert/delete via `CsrCache::invalidate()`.
+    /// Invalidated automatically on insert/delete via [`Self::invalidate_gpu_caches`].
     #[cfg(feature = "gpu")]
     pub(in crate::index::hnsw::native) gpu_csr_cache: crate::gpu::gpu_csr::CsrCache,
     /// Cached flat vector snapshot for GPU upload.
     ///
-    /// Stores `(count_at_snapshot, dimension, Arc<[f32]>)`. Only refreshed
-    /// when the vector count changes, eliminating the ~1.5GB per-query copy
-    /// at the 500K+ GPU activation threshold.
+    /// Stores `(version_at_snapshot, dimension, Arc<[f32]>)`. Validity is
+    /// checked against [`Self::gpu_snapshot_version`] rather than `count`
+    /// alone so that a hypothetical future delete+insert that returns to
+    /// the same count cannot silently serve stale vectors.
     #[cfg(feature = "gpu")]
     pub(in crate::index::hnsw::native) gpu_vectors_snapshot:
         parking_lot::Mutex<Option<GpuVectorsSnapshot>>,
+    /// Monotonic version counter bumped on every vectors / topology
+    /// mutation. Anchors GPU cache validity (snapshot + CSR) to a single
+    /// observable value — the snapshot compares its recorded version
+    /// against this counter on read, so the cache remains invalid after
+    /// any mutation even if a future code path forgets to explicitly
+    /// clear the snapshot mutex (belt-and-suspenders).
+    #[cfg(feature = "gpu")]
+    pub(in crate::index::hnsw::native) gpu_snapshot_version: AtomicU64,
 }
 
-/// Cached GPU vector snapshot: `(count, dimension, flat_vectors)`.
+/// Cached GPU vector snapshot: `(version, dimension, flat_vectors)`.
 ///
-/// Only refreshed when the vector count changes. Subsequent queries
-/// clone the `Arc` (O(1) pointer bump) instead of copying ~1.5GB.
+/// Only refreshed when [`NativeHnsw::gpu_snapshot_version`] moves past
+/// the value captured at build time. Subsequent queries clone the `Arc`
+/// (O(1) pointer bump) instead of copying ~1.5GB.
 #[cfg(feature = "gpu")]
-pub(in crate::index::hnsw::native) type GpuVectorsSnapshot = (usize, usize, std::sync::Arc<[f32]>);
+pub(in crate::index::hnsw::native) type GpuVectorsSnapshot = (u64, usize, std::sync::Arc<[f32]>);
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Creates a new native HNSW index with VAMANA diversification (`alpha = 1.2`).
@@ -257,6 +267,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),
             #[cfg(feature = "gpu")]
             gpu_vectors_snapshot: parking_lot::Mutex::new(None),
+            // Starts at 0. Snapshots built before any mutation store
+            // `0` as `version_at_build`; a fresh index therefore hits
+            // the cache on its first read, and any mutation bumps this
+            // counter to invalidate all subsequent reads.
+            #[cfg(feature = "gpu")]
+            gpu_snapshot_version: AtomicU64::new(0),
         }
     }
 
@@ -276,6 +292,34 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Invalidates both GPU caches (CSR topology + vectors snapshot) as a
+    /// single atomic step.
+    ///
+    /// Call this **after every mutation** that changes the set of active
+    /// nodes or their vector data — currently insert and parallel insert;
+    /// a future delete path must call this too.
+    ///
+    /// Bumps [`Self::gpu_snapshot_version`] first (Release), then
+    /// invalidates the CSR cache, then clears the snapshot mutex. The
+    /// version bump is the canonical invalidation signal: even if a
+    /// hypothetical caller forgot the explicit `None`-clear, the next
+    /// snapshot read would still observe `stored_version !=
+    /// current_version` and rebuild from the fresh vectors. The explicit
+    /// clear is kept as belt-and-suspenders (frees the `Arc` promptly so
+    /// the old buffer can drop).
+    #[cfg(feature = "gpu")]
+    pub(in crate::index::hnsw::native) fn invalidate_gpu_caches(&self) {
+        use self::locking::{record_lock_acquire, record_lock_release, LockRank};
+        // Release ordering: any thread that subsequently loads the
+        // version with Acquire will observe every mutation that
+        // happened-before this fetch_add.
+        self.gpu_snapshot_version.fetch_add(1, Ordering::Release);
+        self.gpu_csr_cache.invalidate();
+        record_lock_acquire(LockRank::GpuVectorsSnapshot);
+        *self.gpu_vectors_snapshot.lock() = None;
+        record_lock_release(LockRank::GpuVectorsSnapshot);
     }
 
     /// Computes the raw distance between two vectors using this index's distance engine.
