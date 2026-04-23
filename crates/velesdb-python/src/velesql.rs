@@ -213,15 +213,35 @@ impl ParsedStatement {
         self.inner.select.from_alias.clone()
     }
 
-    /// Get the list of selected columns.
+    /// Get the list of selected columns — one entry per SELECT-list item.
+    ///
+    /// The returned list covers every item in the SELECT list, in grammar
+    /// order: regular columns, aggregate calls, `similarity()` expressions,
+    /// qualified wildcards (`alias.*`), and window functions.
     ///
     /// Returns:
-    ///     list[str] or '*': List of column names, or ['*'] for SELECT *
+    ///     list[str]: Column identifiers, one per SELECT-list item. Use
+    ///     the literal `'*'` for `SELECT *`. Qualified wildcards appear as
+    ///     `'alias.*'`. Aliased expressions use the alias (or the bare
+    ///     default for un-aliased similarity / window calls).
     ///
     /// Example:
     ///     >>> parsed = VelesQL.parse("SELECT id, name FROM users")
-    ///     >>> print(parsed.columns)
+    ///     >>> parsed.columns
     ///     ['id', 'name']
+    ///
+    ///     >>> parsed = VelesQL.parse(
+    ///     ...     "SELECT title, similarity() AS score, "
+    ///     ...     "ROW_NUMBER() OVER (ORDER BY score DESC) AS rn FROM docs"
+    ///     ... )
+    ///     >>> parsed.columns
+    ///     ['title', 'score', 'rn']
+    ///
+    /// Note (v1.13.0 contract completion):
+    ///     Versions prior to v1.13.0 silently omitted `similarity()`
+    ///     expressions and qualified wildcards from this list for mixed
+    ///     SELECT statements. The full list is now returned. Callers that
+    ///     relied on the shorter length must update their expectations.
     #[getter]
     fn columns(&self) -> Vec<String> {
         self.inner.select.columns.to_display_names()
