@@ -46,8 +46,8 @@
       "file": "README.md",
       "must_contain": "**450 us**",
       "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
-      "source": "CHANGELOG.md v1.11.1 (measured 2026-03-27, i9-14900KF, Python SDK, WAL ON)",
-      "last_updated": "2026-03-29"
+      "source": "CHANGELOG.md v1.13.0 (measured 2026-03-27, i9-14900KF, Python SDK, WAL ON; baseline preserved through the pre-seed remediation phases)",
+      "last_updated": "2026-04-23"
     },
     {
       "id": "readme_hnsw_core_search_latency",

@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 1.12.x  | Yes       |
+| 1.13.x  | Yes       |
+| 1.12.x  | Yes (security only) |
 | 1.11.x  | Security fixes only |
 | < 1.11  | No        |
 
