@@ -54,6 +54,73 @@ Zero regression cumulatively —
 recall gate (Fast 0.90 / Balanced 0.95 / Accurate 0.99 / Perfect 1.00)
 passes on every phase.
 
+### Added — VelesQL window functions
+
+- **`ROW_NUMBER()`, `RANK()`, `DENSE_RANK()` with `OVER (PARTITION BY … ORDER BY …)`**
+  (`#629`, closes `#386`). Credit @SBALAVIGNESH123 for the original
+  implementation; the landed form includes a complete zero-tech-debt
+  hardening pass.
+
+  Grammar additions in `velesql/grammar.pest`: `window_item`,
+  `window_function_call`, `over_clause`, `partition_by_clause`,
+  `window_order_by_clause`. The evaluator lives in
+  `velesql/window_evaluator.rs` and runs after DISTINCT and before
+  ORDER BY / LIMIT in the query pipeline (see the design note on
+  `apply_select_postprocessing` for why the order deviates from the SQL
+  standard — vector-search survivors get a dense `1..N` numbering).
+
+  Implementation highlights (all pinned by regression tests):
+
+  - **Global snapshot-first evaluation** prevents three classes of
+    payload corruption — intra-function (alias collides with own
+    ORDER BY column), inter-function via ORDER BY, inter-function via
+    PARTITION BY. `evaluate` pre-captures every window function's
+    ORDER BY values and PARTITION BY keys **before** any injection,
+    so sequential window evaluation cannot read another function's
+    injected ranks.
+  - **Dispatch-by-variant** for rank computation (`compute_row_numbers`,
+    `compute_rank`, `compute_dense_rank`) with a shared `is_new_group`
+    tie-detection predicate — no dead state.
+  - **Canonical-JSON partition keys** preserve JSON type
+    discriminators, eliminating collisions between `Number(1)` and
+    `String("1")` and between `Null` and a literal payload string
+    `"__null__"`.
+
+### Changed — correctness fixes with visible effects
+
+These corrections resolve pre-existing bugs that were silently wrong.
+Each is pinned by regression tests; callers who depended on the buggy
+output must update.
+
+- **`SelectColumns::to_display_names` returns every SELECT-list item.**
+  Previous releases silently dropped `similarity()` expressions and
+  qualified wildcards from the Mixed SELECT variant, shortening the
+  list returned by the Python `VelesQL.parse(...).columns` getter and
+  the WASM `parsed.columns` getter. v1.13.0 returns the complete list
+  in grammar order (columns → aggregations → similarity scores →
+  qualified wildcards → window functions).
+
+  *Migration*: callers that hard-coded an expected list length or
+  `columns[n]` offsets against the buggy output will now see
+  additional entries. Update the expected length / offsets, or
+  switch to dict-style lookup by name. The complete contract is
+  pinned by
+  `velesql::ast_tests::test_display_names_mixed_includes_all_variants`.
+
+- **`DISTINCT` dedup key now includes qualified-wildcard-expanded
+  fields.** `SELECT DISTINCT ctx.*, title FROM docs` previously
+  deduped by `title` only, silently collapsing rows that differed
+  only on a wildcard-expanded field. v1.13.0 deduplicates by the full
+  payload when any qualified wildcard is in the SELECT list, matching
+  SQL's "DISTINCT considers the whole projected row" semantics.
+
+  *Migration*: queries of the shape
+  `SELECT DISTINCT alias.*, col, …` may return more rows than before.
+  If the pre-v1.13.0 behavior is required, replace `alias.*` with the
+  specific columns that should participate in the dedup key. Pinned
+  by
+  `collection::search::query::distinct_tests::tests::test_distinct_mixed_with_qualified_wildcard_dedupes_by_full_payload`.
+
 ### Added — GPU acceleration
 
 - **GPU HNSW layer-0 traversal** (`#626`, closes `#502`): SONG paper

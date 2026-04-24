@@ -295,7 +295,7 @@ select_list = { "*" | select_item_list }
 
 // Mixed select items: columns, aggregations, similarity(), and qualified wildcards
 select_item_list = { select_item ~ ("," ~ select_item)* }
-select_item = { similarity_select | aggregation_item | qualified_wildcard | column }
+select_item = { similarity_select | window_item | aggregation_item | qualified_wildcard | column }
 
 // similarity() zero-arg in SELECT: SELECT similarity() [AS alias]
 similarity_select = { ^"similarity" ~ "(" ~ ")" ~ (^"AS" ~ identifier)? }
@@ -308,6 +308,30 @@ aggregation_item = { aggregate_function ~ (^"AS" ~ identifier)? }
 aggregate_function = { aggregate_type ~ "(" ~ aggregate_arg ~ ")" }
 aggregate_type = { ^"FIRST" | ^"COUNT" | ^"SUM" | ^"AVG" | ^"MIN" | ^"MAX" }
 aggregate_arg = { "*" | ^"score" | column_name }
+
+// ──────────────────────────────────────────────────────────────
+// Window functions (Issue #386 Phase 1)
+// ──────────────────────────────────────────────────────────────
+
+// Window function expression in SELECT list
+// Example: ROW_NUMBER() OVER (PARTITION BY source ORDER BY score DESC) AS rn
+window_item = { window_function_call ~ ^"OVER" ~ "(" ~ over_clause ~ ")" ~ (^"AS" ~ identifier)? }
+
+// Window function call (zero-arg for Phase 1 ranking functions)
+window_function_call = { window_function_name ~ "(" ~ ")" }
+window_function_name = { ^"ROW_NUMBER" | ^"DENSE_RANK" | ^"RANK" }
+
+// OVER clause: optional PARTITION BY + optional ORDER BY
+over_clause = { partition_by_clause? ~ window_order_by_clause? }
+
+// PARTITION BY: one or more columns
+partition_by_clause = { ^"PARTITION" ~ ^"BY" ~ partition_by_list }
+partition_by_list = { column_name ~ ("," ~ column_name)* }
+
+// ORDER BY inside OVER(): separate rule to avoid ambiguity with outer ORDER BY
+window_order_by_clause = { ^"ORDER" ~ ^"BY" ~ window_order_by_item ~ ("," ~ window_order_by_item)* }
+window_order_by_item = { window_order_by_expr ~ sort_direction? }
+window_order_by_expr = { order_by_similarity_bare | column_name }
 
 column = { column_name ~ (^"AS" ~ identifier)? }
 // EPIC-052 US-005: Support nested field paths like metadata.source or profile.address.city

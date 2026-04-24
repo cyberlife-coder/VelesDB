@@ -101,4 +101,86 @@ mod tests {
         // Number 42 vs string "42" should be distinct (different JSON repr).
         assert_eq!(distinct.len(), 2, "number vs string should be distinct");
     }
+
+    // -----------------------------------------------------------------------
+    // Mixed with qualified_wildcards must dedup by FULL payload, not just
+    // the explicit `columns` list. Regression for the Devin finding:
+    // `SELECT DISTINCT ctx.*, title FROM docs` must collapse rows only when
+    // ALL payload fields match, not only when `title` matches.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_distinct_mixed_with_qualified_wildcard_dedupes_by_full_payload() {
+        // Two rows share `title` but differ in a wildcard-expanded field
+        // (`author`). Without the fix, dedup would collapse them (only
+        // `title` considered). With the fix, dedup uses the full payload,
+        // so both survive.
+        let results = vec![
+            make_result(
+                1,
+                Some(serde_json::json!({"title": "T1", "author": "Alice"})),
+            ),
+            make_result(2, Some(serde_json::json!({"title": "T1", "author": "Bob"}))),
+            // Third row is an exact duplicate of row 1 → should collapse.
+            make_result(
+                3,
+                Some(serde_json::json!({"title": "T1", "author": "Alice"})),
+            ),
+        ];
+
+        let columns = SelectColumns::Mixed {
+            columns: vec![Column {
+                name: "title".to_string(),
+                alias: None,
+            }],
+            aggregations: Vec::new(),
+            similarity_scores: Vec::new(),
+            qualified_wildcards: vec!["ctx".to_string()],
+            window_functions: Vec::new(),
+        };
+
+        let distinct = apply_distinct(results, &columns);
+        assert_eq!(
+            distinct.len(),
+            2,
+            "rows 1 and 2 differ (Alice vs Bob) so both survive; row 3 is an \
+             exact duplicate of row 1 and is dropped"
+        );
+        // Preserves insertion order: row 1 and row 2 survive.
+        assert_eq!(distinct[0].point.id, 1);
+        assert_eq!(distinct[1].point.id, 2);
+    }
+
+    /// Control case: same query shape but WITHOUT qualified_wildcards —
+    /// dedup must still use only the explicit `columns` list (current
+    /// behaviour preserved for backward compatibility).
+    #[test]
+    fn test_distinct_mixed_without_qualified_wildcard_dedupes_by_columns_only() {
+        let results = vec![
+            make_result(
+                1,
+                Some(serde_json::json!({"title": "T1", "author": "Alice"})),
+            ),
+            make_result(2, Some(serde_json::json!({"title": "T1", "author": "Bob"}))),
+        ];
+
+        let columns = SelectColumns::Mixed {
+            columns: vec![Column {
+                name: "title".to_string(),
+                alias: None,
+            }],
+            aggregations: Vec::new(),
+            similarity_scores: Vec::new(),
+            qualified_wildcards: Vec::new(),
+            window_functions: Vec::new(),
+        };
+
+        let distinct = apply_distinct(results, &columns);
+        assert_eq!(
+            distinct.len(),
+            1,
+            "no wildcard → dedup by `title` only → both rows collapse"
+        );
+        assert_eq!(distinct[0].point.id, 1);
+    }
 }

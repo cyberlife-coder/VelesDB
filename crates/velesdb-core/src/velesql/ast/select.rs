@@ -70,7 +70,7 @@ pub enum SelectColumns {
     Columns(Vec<Column>),
     /// Select aggregate functions.
     Aggregations(Vec<AggregateFunction>),
-    /// Mixed: columns + aggregations + similarity scores + qualified wildcards.
+    /// Mixed: columns + aggregations + similarity scores + qualified wildcards + window functions.
     Mixed {
         /// Regular columns.
         columns: Vec<Column>,
@@ -82,6 +82,9 @@ pub enum SelectColumns {
         /// Qualified wildcards (e.g., `ctx.*`).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         qualified_wildcards: Vec<String>,
+        /// Window function expressions (Issue #386).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        window_functions: Vec<super::window::WindowFunction>,
     },
     /// Select similarity() score only (zero-arg form).
     SimilarityScore(SimilarityScoreExpr),
@@ -90,9 +93,25 @@ pub enum SelectColumns {
 }
 
 impl SelectColumns {
-    /// Returns human-readable column names for display.
+    /// Returns human-readable column names for display, one per SELECT-list
+    /// item in grammar order.
     ///
-    /// Used by Python/WASM bindings to expose column metadata.
+    /// Used by Python/WASM bindings to expose the column-metadata contract.
+    ///
+    /// # Completeness
+    ///
+    /// Every SELECT-list variant must contribute exactly one entry per item
+    /// it contains. Historically the `Mixed` arm dropped `similarity_scores`
+    /// and `qualified_wildcards` via a `..` pattern, which silently shortened
+    /// the column list for queries that combined them with regular columns —
+    /// a correctness bug that was observable through Python/WASM callers
+    /// reading the column count or iterating the list. That bug is now
+    /// fixed; the returned list reflects the *complete* SELECT projection.
+    ///
+    /// **Compatibility note**: callers that previously relied on the
+    /// incomplete list (e.g. hard-coded `len() == columns.len()`) will now
+    /// see additional entries. The new contract is pinned by
+    /// `ast_tests::test_display_names_mixed_includes_all_variants`.
     #[must_use]
     pub fn to_display_names(&self) -> Vec<String> {
         match self {
@@ -105,14 +124,32 @@ impl SelectColumns {
             Self::Mixed {
                 columns,
                 aggregations,
-                ..
+                similarity_scores,
+                qualified_wildcards,
+                window_functions,
             } => {
+                // Order mirrors the SELECT-list grammar: columns, aggregates,
+                // similarity(), qualified wildcards (`alias.*`), window
+                // functions. Python/WASM bindings consume this list to expose
+                // the column metadata contract, so every SELECT-list variant
+                // must contribute a display name.
                 let mut result: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
                 result.extend(
                     aggregations
                         .iter()
                         .map(|a| format!("{:?}", a.function_type)),
                 );
+                result.extend(similarity_scores.iter().map(|expr| {
+                    expr.alias
+                        .clone()
+                        .unwrap_or_else(|| "similarity".to_string())
+                }));
+                result.extend(qualified_wildcards.iter().map(|alias| format!("{alias}.*")));
+                result.extend(window_functions.iter().map(|wf| {
+                    wf.alias
+                        .clone()
+                        .unwrap_or_else(|| wf.function_type.default_alias().to_string())
+                }));
                 result
             }
             Self::SimilarityScore(expr) => {

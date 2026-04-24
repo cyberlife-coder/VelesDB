@@ -13,6 +13,7 @@ mod join;
 mod select;
 mod train;
 mod values;
+mod window;
 mod with_clause;
 
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,7 @@ pub use train::TrainStatement;
 pub use values::{
     CorrelatedColumn, IntervalUnit, IntervalValue, Subquery, TemporalExpr, Value, VectorExpr,
 };
+pub use window::{OverClause, WindowFunction, WindowFunctionType, WindowOrderBy};
 pub use with_clause::{QuantizationMode, WithClause, WithOption, WithValue};
 
 /// A complete VelesQL query.
