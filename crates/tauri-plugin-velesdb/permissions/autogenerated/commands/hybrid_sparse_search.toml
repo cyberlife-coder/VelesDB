@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-hybrid-sparse-search"
+description = "Enables the hybrid_sparse_search command without any pre-configured scope."
+commands.allow = ["hybrid_sparse_search"]
+
+[[permission]]
+identifier = "deny-hybrid-sparse-search"
+description = "Denies the hybrid_sparse_search command without any pre-configured scope."
+commands.deny = ["hybrid_sparse_search"]

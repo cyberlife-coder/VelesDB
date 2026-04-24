@@ -21,6 +21,7 @@ pub struct JoinClause {
 
 /// Type of SQL JOIN operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum JoinType {
     /// INNER JOIN.
     #[default]

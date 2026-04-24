@@ -42,7 +42,8 @@ CONDITION_BULLET_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# Pattern to match Reason line
+# Pattern to match Reason justification line
+# Only matches `// Reason:` prefix — `// SAFETY:` is matched by the header pattern.
 REASON_PATTERN = re.compile(
     r'//\s*Reason\s*:',
     re.IGNORECASE
@@ -80,7 +81,14 @@ def get_preceding_lines(content: str, line_num: int, max_lines: int = 20) -> Lis
 def check_safety_template(lines: List[str]) -> Tuple[bool, List[str]]:
     """
     Check if the preceding lines contain a complete SAFETY template.
-    
+
+    The canonical template has three parts:
+      1. ``// SAFETY:`` header line (invariant description)
+      2. One or more ``// - condition`` bullet lines
+      3. A reason line — either an explicit ``// Reason:`` **or** a second
+         ``// SAFETY:`` line (the codebase convention uses a second
+         ``// SAFETY:`` to state *why* the unsafe block is needed).
+
     Returns:
         (is_valid, missing_fields)
         - is_valid: True if all required fields are present
@@ -88,11 +96,18 @@ def check_safety_template(lines: List[str]) -> Tuple[bool, List[str]]:
     """
     # Join lines for easier pattern matching
     text = '\n'.join(lines)
-    
-    has_header = SAFETY_HEADER_PATTERN.search(text) is not None
+
+    safety_matches = SAFETY_HEADER_PATTERN.findall(text)
+    has_header = len(safety_matches) >= 1
     has_condition = CONDITION_BULLET_PATTERN.search(text) is not None
-    has_reason = REASON_PATTERN.search(text) is not None
-    
+    # Reason is satisfied by either an explicit `// Reason:` line or by a
+    # second `// SAFETY:` line (which acts as the reason in the canonical
+    # two-SAFETY template).
+    has_reason = (
+        REASON_PATTERN.search(text) is not None
+        or len(safety_matches) >= 2
+    )
+
     missing = []
     if not has_header:
         missing.append("SAFETY header")
@@ -100,7 +115,7 @@ def check_safety_template(lines: List[str]) -> Tuple[bool, List[str]]:
         missing.append("condition bullet(s)")
     if not has_reason:
         missing.append("Reason line")
-    
+
     return len(missing) == 0, missing
 
 

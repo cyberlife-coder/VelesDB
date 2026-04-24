@@ -6,7 +6,7 @@
 //! All functions require runtime AVX-512F detection before calling.
 //! Dispatch is handled by `dispatch.rs` after `simd_level()` confirms support.
 
-// SAFETY: Numeric casts in this file are intentional and safe:
+// Reason: Numeric casts in this file are intentional and safe:
 // - All casts are from well-bounded values (vector dimensions, loop indices)
 // - usize->f64 casts are for statistical calculations where 52-bit mantissa is sufficient
 // - All casts are validated by extensive SIMD tests (simd_native_tests.rs)
@@ -1407,7 +1407,7 @@ pub(crate) unsafe fn hamming_binary_avx512(a: &[u64], b: &[u64]) -> u32 {
         total += u64::from((a[j] ^ b[j]).count_ones());
     }
 
-    // Reason: max total = len * 64; for any practical binary vector dimension
+    // SAFETY: max total = len * 64; for any practical binary vector dimension
     // (len <= 67_108_864 words = 4 billion bits) this fits in u32.
     total as u32
 }
@@ -1462,7 +1462,7 @@ pub(crate) unsafe fn hamming_binary_avx512_vpopcntdq(a: &[u64], b: &[u64]) -> u3
         total += u64::from((a[j] ^ b[j]).count_ones());
     }
 
-    // Reason: max total = len * 64; for any practical binary vector dimension
+    // SAFETY: max total = len * 64; for any practical binary vector dimension
     // (len <= 67_108_864 words = 4 billion bits) this fits in u32.
     total as u32
 }

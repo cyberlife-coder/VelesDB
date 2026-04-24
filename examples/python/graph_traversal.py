@@ -62,7 +62,7 @@ def build_knowledge_graph(db: velesdb.Database, dim: int = 128):
 
     for node_id, name, props in nodes:
         payload = {"name": name, **props}
-        graph.store_node_payload(node_id, payload)
+        graph.upsert_node_payload(node_id, payload)
 
     # Add edges (relationships)
     edges = [

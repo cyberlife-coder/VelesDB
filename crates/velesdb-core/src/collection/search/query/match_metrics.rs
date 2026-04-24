@@ -9,11 +9,11 @@
 //!
 //! Note: These metrics are consumed by velesdb-server, not directly by core.
 
-#![allow(dead_code)] // Metrics are used by velesdb-server, not core
+// remaining items (to_prometheus, QueryTimer, avg_*) are consumed by velesdb-server.
 #![allow(clippy::format_push_string)]
 // Prometheus format is clearer with push_str+format
 
-// SAFETY: Numeric casts in metrics are intentional:
+// Reason: Numeric casts in metrics are intentional:
 // - All casts are for statistical aggregations (histograms, percentiles)
 // - f64->u64 casts are for converting duration to bucket indices
 // - u64->f64 casts are for computing averages and rates

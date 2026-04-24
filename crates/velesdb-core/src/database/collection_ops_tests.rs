@@ -1,5 +1,3 @@
-#![allow(deprecated)] // Tests use legacy Collection via get_collection().
-
 use super::*;
 use crate::point::Point;
 use crate::{CollectionType, DistanceMetric};
@@ -20,14 +18,14 @@ fn test_create_get_delete_lifecycle() {
     assert_eq!(db.list_collections(), vec!["lifecycle"]);
 
     // Get
-    let coll = db.get_collection("lifecycle");
+    let coll = db.get_vector_collection("lifecycle");
     assert!(coll.is_some());
     assert_eq!(coll.unwrap().config().dimension, 128);
 
     // Delete
     db.delete_collection("lifecycle").unwrap();
     assert!(db.list_collections().is_empty());
-    assert!(db.get_collection("lifecycle").is_none());
+    assert!(db.get_vector_collection("lifecycle").is_none());
 }
 
 // =========================================================================
@@ -82,7 +80,7 @@ fn test_get_nonexistent_returns_none() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();
 
-    assert!(db.get_collection("nope").is_none());
+    assert!(db.get_any_collection("nope").is_none());
     assert!(db.get_vector_collection("nope").is_none());
     assert!(db.get_graph_collection("nope").is_none());
     assert!(db.get_metadata_collection("nope").is_none());
@@ -112,7 +110,7 @@ fn test_multi_collection_data_isolation() {
         .unwrap();
 
     // Insert into coll_a only.
-    let coll_a = db.get_collection("coll_a").unwrap();
+    let coll_a = db.get_vector_collection("coll_a").unwrap();
     coll_a
         .upsert(vec![Point::new(
             1,
@@ -122,7 +120,7 @@ fn test_multi_collection_data_isolation() {
         .unwrap();
 
     // coll_b must remain empty.
-    let coll_b = db.get_collection("coll_b").unwrap();
+    let coll_b = db.get_vector_collection("coll_b").unwrap();
     assert!(coll_b.get(&[1]).into_iter().flatten().next().is_none());
 }
 
@@ -435,4 +433,134 @@ fn test_get_metadata_collection_rejects_traversal() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();
     assert!(db.get_metadata_collection("../evil").is_none());
+}
+
+// =========================================================================
+// create_vector_collection_with_params — Wave 3 Commit 5
+//
+// Covers the new full-config constructor introduced to let Python (and
+// any other edge crate) propagate every HnswParams field plus the
+// pq_rescore_oversampling override in a single call, without having to
+// decompose the params into the legacy (m, ef_construction) couple.
+// =========================================================================
+
+#[test]
+fn test_create_with_params_preserves_alpha_and_max_elements() {
+    use crate::index::hnsw::HnswParams;
+    use crate::quantization::StorageMode;
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    // Build a fully explicit params object so every field is traceable.
+    let params = HnswParams::custom(48, 400, 250_000).with_alpha(1.5);
+
+    db.create_vector_collection_with_params(
+        "full_config",
+        128,
+        DistanceMetric::Cosine,
+        StorageMode::Full,
+        params,
+        Some(8),
+    )
+    .unwrap();
+
+    let coll = db
+        .get_vector_collection("full_config")
+        .expect("collection should exist after creation");
+    let cfg = coll.config();
+
+    assert_eq!(cfg.hnsw_params.unwrap().max_connections, 48);
+    assert_eq!(cfg.hnsw_params.unwrap().ef_construction, 400);
+    assert_eq!(cfg.hnsw_params.unwrap().max_elements, 250_000);
+    assert!((cfg.hnsw_params.unwrap().alpha - 1.5).abs() < f32::EPSILON);
+    assert_eq!(cfg.pq_rescore_oversampling, Some(8));
+}
+
+#[test]
+fn test_create_with_params_storage_mode_arg_wins_over_params_field() {
+    use crate::index::hnsw::HnswParams;
+    use crate::quantization::StorageMode;
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    // The params struct encodes StorageMode::Full by default; pass SQ8
+    // as the explicit argument to verify the argument-level value wins.
+    let params = HnswParams::custom(16, 200, 10_000);
+
+    db.create_vector_collection_with_params(
+        "sm_override",
+        64,
+        DistanceMetric::Euclidean,
+        StorageMode::SQ8,
+        params,
+        None,
+    )
+    .unwrap();
+
+    let coll = db.get_vector_collection("sm_override").unwrap();
+    let cfg = coll.config();
+    assert_eq!(cfg.storage_mode, StorageMode::SQ8);
+    assert_eq!(cfg.hnsw_params.unwrap().storage_mode, StorageMode::SQ8);
+}
+
+#[test]
+fn test_create_with_params_none_pq_rescore_is_persisted_as_none() {
+    use crate::index::hnsw::HnswParams;
+    use crate::quantization::StorageMode;
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    let params = HnswParams::custom(16, 200, 10_000);
+
+    db.create_vector_collection_with_params(
+        "pq_none",
+        64,
+        DistanceMetric::Cosine,
+        StorageMode::Full,
+        params,
+        None,
+    )
+    .unwrap();
+
+    let coll = db.get_vector_collection("pq_none").unwrap();
+    // None must round-trip exactly as None, not be silently rewritten to
+    // the engine default Some(4). Migrations rely on this to distinguish
+    // "legacy collection, recompute the factor" from "user explicitly
+    // chose no oversampling".
+    assert_eq!(coll.config().pq_rescore_oversampling, None);
+}
+
+#[test]
+fn test_create_with_params_duplicate_returns_collection_exists() {
+    use crate::index::hnsw::HnswParams;
+    use crate::quantization::StorageMode;
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    let params = HnswParams::custom(16, 200, 10_000);
+    db.create_vector_collection_with_params(
+        "dup_params",
+        64,
+        DistanceMetric::Cosine,
+        StorageMode::Full,
+        params,
+        Some(4),
+    )
+    .unwrap();
+
+    let err = db
+        .create_vector_collection_with_params(
+            "dup_params",
+            64,
+            DistanceMetric::Cosine,
+            StorageMode::Full,
+            params,
+            Some(4),
+        )
+        .unwrap_err();
+    assert!(matches!(err, crate::Error::CollectionExists(_)));
 }

@@ -4,16 +4,15 @@
 //! Verifies that `flush()` skips HNSW `index.save()` by default (fast path),
 //! while `flush_full()` always persists the HNSW graph to disk.
 
-#![allow(deprecated)] // Tests use legacy Collection via field access.
 #![allow(
     clippy::cast_precision_loss,
     clippy::float_cmp,
     clippy::cast_possible_truncation
 )]
 
+use crate::collection::Collection;
 use crate::distance::DistanceMetric;
 use crate::point::Point;
-use crate::Collection;
 use std::path::PathBuf;
 
 /// Returns true if the HNSW graph has been persisted to disk.

@@ -4,8 +4,8 @@ use super::helpers::compare_op_from_str;
 use super::{extract_identifier, Rule};
 use crate::metrics::global_guardrails_metrics;
 use crate::velesql::ast::{
-    BetweenCondition, Comparison, Condition, InCondition, IsNullCondition, LikeCondition,
-    MatchCondition, SimilarityCondition,
+    BetweenCondition, Comparison, Condition, ContainsTextCondition, InCondition, IsNullCondition,
+    LikeCondition, MatchCondition,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -13,7 +13,7 @@ use crate::velesql::Parser;
 impl Parser {
     const MAX_CONDITION_DEPTH: usize = 256;
 
-    fn extract_column_name(pair: &pest::iterators::Pair<'_, Rule>) -> String {
+    pub(super) fn extract_column_name(pair: &pest::iterators::Pair<'_, Rule>) -> String {
         if pair.as_rule() != Rule::column_name && pair.as_rule() != Rule::where_column {
             return extract_identifier(pair);
         }
@@ -148,6 +148,10 @@ impl Parser {
             Rule::between_expr => Self::parse_between_expr(inner),
             Rule::like_expr => Self::parse_like_expr(inner),
             Rule::is_null_expr => Self::parse_is_null_expr(inner),
+            Rule::contains_text_expr => Self::parse_contains_text_expr(inner),
+            Rule::contains_expr => Self::parse_contains_expr(inner),
+            Rule::geo_distance_expr => Self::parse_geo_distance_expr(inner),
+            Rule::geo_bbox_expr => Self::parse_geo_bbox_expr(inner),
             Rule::compare_expr => Self::parse_compare_expr(inner),
             _ => Err(ParseError::syntax(
                 0,
@@ -157,60 +161,11 @@ impl Parser {
         }
     }
 
-    /// Parses a similarity expression: `similarity(field, vector) op threshold`
-    pub(crate) fn parse_similarity_expr(
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<Condition, ParseError> {
-        let mut field = None;
-        let mut vector = None;
-        let mut operator = None;
-        let mut threshold = None;
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::similarity_field => {
-                    field = Some(inner.as_str().to_string());
-                }
-                Rule::vector_value => {
-                    vector = Some(Self::parse_vector_value(inner)?);
-                }
-                Rule::compare_op => {
-                    operator = Some(compare_op_from_str(inner.as_str())?);
-                }
-                Rule::numeric_threshold => {
-                    // numeric_threshold = { float | integer }
-                    let inner_value = inner
-                        .into_inner()
-                        .next()
-                        .ok_or_else(|| ParseError::syntax(0, "", "Expected numeric threshold"))?;
-                    threshold = Some(inner_value.as_str().parse::<f64>().map_err(|_| {
-                        ParseError::syntax(0, inner_value.as_str(), "Invalid threshold")
-                    })?);
-                }
-                _ => {}
-            }
-        }
-
-        let field = field.ok_or_else(|| ParseError::syntax(0, "", "Expected field name"))?;
-        let vector =
-            vector.ok_or_else(|| ParseError::syntax(0, "", "Expected vector expression"))?;
-        let operator = operator.ok_or_else(|| ParseError::syntax(0, "", "Expected operator"))?;
-        let threshold =
-            threshold.ok_or_else(|| ParseError::syntax(0, "", "Expected threshold value"))?;
-
-        Ok(Condition::Similarity(SimilarityCondition {
-            field,
-            vector,
-            operator,
-            threshold,
-        }))
-    }
-
     /// Extracts the leading column name from a pair's inner iterator.
     ///
     /// Many condition parsers start by pulling the first child as a column
     /// name. This helper removes the duplication.
-    fn extract_leading_column(
+    pub(super) fn extract_leading_column(
         inner: &mut pest::iterators::Pairs<Rule>,
     ) -> Result<String, ParseError> {
         let column_pair = inner
@@ -222,17 +177,35 @@ impl Parser {
     pub(crate) fn parse_match_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
+        let (column, query) = Self::parse_column_string_pair(pair, "Expected match query")?;
+        Ok(Condition::Match(MatchCondition { column, query }))
+    }
+
+    /// Parses a `CONTAINS_TEXT` expression: `column CONTAINS_TEXT 'query'`
+    pub(crate) fn parse_contains_text_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let (column, query) = Self::parse_column_string_pair(pair, "Expected CONTAINS_TEXT query")?;
+        Ok(Condition::ContainsText(ContainsTextCondition {
+            column,
+            query,
+        }))
+    }
+
+    /// Shared helper for `column KEYWORD 'string'` patterns (MATCH, CONTAINS_TEXT).
+    fn parse_column_string_pair(
+        pair: pest::iterators::Pair<Rule>,
+        error_msg: &str,
+    ) -> Result<(String, String), ParseError> {
         let mut inner = pair.into_inner();
         let column = Self::extract_leading_column(&mut inner)?;
-
         let query = crate::velesql::parser::helpers::unescape_string_literal(
             inner
                 .next()
-                .ok_or_else(|| ParseError::syntax(0, "", "Expected match query"))?
+                .ok_or_else(|| ParseError::syntax(0, "", error_msg))?
                 .as_str(),
         );
-
-        Ok(Condition::Match(MatchCondition { column, query }))
+        Ok((column, query))
     }
 
     pub(crate) fn parse_graph_match_expr(
@@ -296,7 +269,7 @@ impl Parser {
     }
 
     /// Consumes the next pair from the iterator and parses it as a value.
-    fn next_value(
+    pub(super) fn next_value(
         inner: &mut pest::iterators::Pairs<Rule>,
         error_msg: &str,
     ) -> Result<crate::velesql::ast::Value, ParseError> {

@@ -19,11 +19,11 @@ impl HnswIndex {
     ///
     /// IDs exceeding `u32::MAX` are not representable in `RoaringBitmap`
     /// and are unconditionally included (consistent with the HNSW+bitmap
-    /// path in `search_bitmap_filtered_inner`).
+    /// path in `search_hnsw_only_filtered`).
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if query dimension is wrong.
+    /// Returns [`crate::error::Error::DimensionMismatch`] if query dimension is wrong.
     pub fn full_scan_with_bitmap(
         &self,
         query: &[f32],
@@ -78,7 +78,7 @@ impl HnswIndex {
     /// Scores vectors whose IDs exceed `u32::MAX` (not representable in `RoaringBitmap`).
     ///
     /// These are unconditionally included, consistent with the HNSW+bitmap
-    /// path in `search_bitmap_filtered_inner`.
+    /// path in `search_hnsw_only_filtered`.
     fn score_overflow_ids(
         &self,
         query: &[f32],
@@ -115,7 +115,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// Returns [`crate::error::Error::DimensionMismatch`] if the query dimension does not
     /// match the index dimension.
     pub fn search_brute_force(
         &self,
@@ -145,7 +145,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// Returns [`crate::error::Error::DimensionMismatch`] if the query dimension does not
     /// match the index dimension.
     pub fn search_brute_force_gpu(
         &self,
@@ -258,7 +258,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// Returns [`crate::error::Error::DimensionMismatch`] if the query dimension does not
     /// match the index dimension.
     pub fn search_brute_force_buffered(
         &self,

@@ -122,22 +122,13 @@ impl<'a> BfsIterator<'a> {
     /// Creates a new BFS iterator starting from the given node.
     #[must_use]
     pub fn new(edge_store: &'a EdgeStore, start_id: u64, config: StreamingConfig) -> Self {
-        let mut visited = FxHashSet::default();
-        visited.insert(start_id);
-
-        let mut queue = VecDeque::new();
-        queue.push_back(BfsState {
-            node_id: start_id,
-            depth: 0,
-        });
-
         // Pre-build FxHashSet from Vec<String> once, not per-edge.
         let rel_types_set: FxHashSet<String> = config.rel_types.iter().cloned().collect();
 
-        Self {
+        let mut iter = Self {
             edge_store,
-            queue,
-            visited,
+            queue: VecDeque::new(),
+            visited: FxHashSet::default(),
             config,
             rel_types_set,
             yielded: 0,
@@ -145,7 +136,18 @@ impl<'a> BfsIterator<'a> {
             pending_results: VecDeque::new(),
             parent_map: FxHashMap::default(),
             source_id: start_id,
-        }
+        };
+        iter.init_first_level(start_id);
+        iter
+    }
+
+    /// Seeds the BFS queue and visited set with the start node.
+    fn init_first_level(&mut self, start_id: u64) {
+        self.visited.insert(start_id);
+        self.queue.push_back(BfsState {
+            node_id: start_id,
+            depth: 0,
+        });
     }
 
     /// Returns the number of results yielded so far.

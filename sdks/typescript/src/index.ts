@@ -15,7 +15,7 @@
  * 
  * await db.init();
  * await db.createCollection('docs', { dimension: 768 });
- * await db.insert('docs', { id: '1', vector: [...] });
+ * await db.upsert('docs', { id: '1', vector: [...] });
  * const results = await db.search('docs', queryVector, { k: 10 });
  * ```
  * 
@@ -28,3 +28,51 @@ export { WasmBackend } from './backends/wasm';
 export { RestBackend } from './backends/rest';
 export { VelesQLBuilder, velesql } from './query-builder';
 export type { RelDirection, RelOptions, NearVectorOptions, FusionOptions } from './query-builder';
+export { f, isTypedFilter, normalizeFilter } from './filter';
+export type { Filter, Condition, CompareOp, FilterInput, JsonValue } from './filter';
+export { searchQualityToMode } from './search-quality';
+export type { SearchQualityWire } from './search-quality';
+export { REST_CAPABILITIES, WASM_CAPABILITIES } from './capabilities';
+export type { CapabilityMap } from './capabilities';
+export {
+  VelesError,
+  CollectionExistsError,
+  CollectionNotFoundError,
+  PointNotFoundError,
+  DimensionMismatchError,
+  InvalidVectorError,
+  StorageError,
+  IndexError,
+  IndexCorruptedError,
+  ConfigError,
+  QueryError,
+  IoError,
+  SerializationError,
+  InternalError,
+  VectorNotAllowedError,
+  SearchNotSupportedError,
+  VectorRequiredError,
+  SchemaValidationError,
+  GraphNotSupportedError,
+  EdgeExistsError,
+  EdgeNotFoundError,
+  InvalidEdgeLabelError,
+  NodeNotFoundError,
+  OverflowError,
+  ColumnStoreError,
+  GpuError,
+  EpochMismatchError,
+  GuardRailError,
+  InvalidQuantizerConfigError,
+  TrainingFailedError,
+  SparseIndexError,
+  DatabaseLockedError,
+  InvalidDimensionError,
+  AllocationFailedError,
+  InvalidCollectionNameError,
+  SnapshotBuildFailedError,
+  IncompatibleSchemaVersionError,
+  parseVelesError,
+  VELES_ERROR_CODES,
+} from './errors';
+export type { VelesErrorCode } from './errors';

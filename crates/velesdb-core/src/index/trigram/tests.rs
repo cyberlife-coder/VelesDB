@@ -91,7 +91,7 @@ fn test_trigram_index_new() {
 fn test_trigram_index_insert_single() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello world");
+    index.insert(1, "hello world").expect("test: insert");
 
     assert!(!index.is_empty());
     assert_eq!(index.doc_count(), 1);
@@ -101,9 +101,9 @@ fn test_trigram_index_insert_single() {
 fn test_trigram_index_insert_multiple() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
-    index.insert(2, "world");
-    index.insert(3, "hello world");
+    index.insert(1, "hello").expect("test: insert");
+    index.insert(2, "world").expect("test: insert");
+    index.insert(3, "hello world").expect("test: insert");
 
     assert_eq!(index.doc_count(), 3);
 }
@@ -112,8 +112,8 @@ fn test_trigram_index_insert_multiple() {
 fn test_trigram_index_insert_duplicate_id() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
-    index.insert(1, "world"); // Same ID, should update
+    index.insert(1, "hello").expect("test: insert");
+    index.insert(1, "world").expect("test: insert"); // Same ID, should update
 
     assert_eq!(index.doc_count(), 1);
 }
@@ -122,8 +122,8 @@ fn test_trigram_index_insert_duplicate_id() {
 fn test_trigram_index_remove() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
-    index.insert(2, "world");
+    index.insert(1, "hello").expect("test: insert");
+    index.insert(2, "world").expect("test: insert");
 
     index.remove(1);
 
@@ -134,7 +134,7 @@ fn test_trigram_index_remove() {
 fn test_trigram_index_remove_nonexistent() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
+    index.insert(1, "hello").expect("test: insert");
     index.remove(999); // Should not panic
 
     assert_eq!(index.doc_count(), 1);
@@ -146,9 +146,9 @@ fn test_trigram_index_remove_nonexistent() {
 fn test_trigram_search_exact_match() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello world");
-    index.insert(2, "goodbye world");
-    index.insert(3, "hello there");
+    index.insert(1, "hello world").expect("test: insert");
+    index.insert(2, "goodbye world").expect("test: insert");
+    index.insert(3, "hello there").expect("test: insert");
 
     let results = index.search_like("hello");
 
@@ -161,9 +161,9 @@ fn test_trigram_search_exact_match() {
 fn test_trigram_search_partial_match() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "Paris");
-    index.insert(2, "London");
-    index.insert(3, "Parma");
+    index.insert(1, "Paris").expect("test: insert");
+    index.insert(2, "London").expect("test: insert");
+    index.insert(3, "Parma").expect("test: insert");
 
     // Search for "Par" should match Paris and Parma
     let results = index.search_like("Par");
@@ -177,8 +177,8 @@ fn test_trigram_search_partial_match() {
 fn test_trigram_search_no_match() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
-    index.insert(2, "world");
+    index.insert(1, "hello").expect("test: insert");
+    index.insert(2, "world").expect("test: insert");
 
     let results = index.search_like("xyz");
 
@@ -189,7 +189,7 @@ fn test_trigram_search_no_match() {
 fn test_trigram_search_empty_pattern() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
+    index.insert(1, "hello").expect("test: insert");
 
     let results = index.search_like("");
 
@@ -202,9 +202,9 @@ fn test_trigram_search_empty_pattern() {
 fn test_trigram_search_short_pattern() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "abc");
-    index.insert(2, "abd");
-    index.insert(3, "xyz");
+    index.insert(1, "abc").expect("test: insert");
+    index.insert(2, "abd").expect("test: insert");
+    index.insert(3, "xyz").expect("test: insert");
 
     // Pattern shorter than 3 chars
     let results = index.search_like("ab");
@@ -223,7 +223,7 @@ fn test_trigram_search_performance_10k() {
     // Insert 10K documents
     for i in 0..10_000u64 {
         let text = format!("document number {i} with some content");
-        index.insert(i, &text);
+        index.insert(i, &text).expect("test: insert");
     }
 
     // Search should be fast
@@ -245,7 +245,7 @@ fn test_trigram_search_performance_10k() {
 fn test_trigram_score_jaccard_identical() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
+    index.insert(1, "hello").expect("test: insert");
 
     let query_trigrams = extract_trigrams("hello");
     let score = index.score_jaccard(1, &query_trigrams);
@@ -258,7 +258,7 @@ fn test_trigram_score_jaccard_identical() {
 fn test_trigram_score_jaccard_partial() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello world");
+    index.insert(1, "hello world").expect("test: insert");
 
     let query_trigrams = extract_trigrams("hello");
     let score = index.score_jaccard(1, &query_trigrams);
@@ -274,7 +274,7 @@ fn test_trigram_score_jaccard_partial() {
 fn test_trigram_score_jaccard_no_match() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
+    index.insert(1, "hello").expect("test: insert");
 
     let query_trigrams = extract_trigrams("xyz");
     let score = index.score_jaccard(1, &query_trigrams);
@@ -289,8 +289,8 @@ fn test_trigram_score_jaccard_no_match() {
 fn test_trigram_index_stats() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
-    index.insert(2, "world");
+    index.insert(1, "hello").expect("test: insert");
+    index.insert(2, "world").expect("test: insert");
 
     let stats = index.stats();
 
@@ -305,9 +305,11 @@ fn test_trigram_index_stats() {
 fn test_search_with_threshold_filters_low_scores() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello world");
-    index.insert(2, "hello there");
-    index.insert(3, "completely different text");
+    index.insert(1, "hello world").expect("test: insert");
+    index.insert(2, "hello there").expect("test: insert");
+    index
+        .insert(3, "completely different text")
+        .expect("test: insert");
 
     // Search with threshold should filter out low-scoring docs
     // Use low threshold (0.1) to include partial matches
@@ -324,9 +326,11 @@ fn test_search_with_threshold_filters_low_scores() {
 fn test_search_ranked_returns_sorted_by_score() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello"); // Exact match
-    index.insert(2, "hello world"); // Partial match
-    index.insert(3, "hello there my friend"); // Less similar
+    index.insert(1, "hello").expect("test: insert"); // Exact match
+    index.insert(2, "hello world").expect("test: insert"); // Partial match
+    index
+        .insert(3, "hello there my friend")
+        .expect("test: insert"); // Less similar
 
     let results = index.search_like_ranked("hello", 0.0);
 
@@ -344,8 +348,8 @@ fn test_search_ranked_returns_sorted_by_score() {
 fn test_search_ranked_empty_pattern() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
-    index.insert(2, "world");
+    index.insert(1, "hello").expect("test: insert");
+    index.insert(2, "world").expect("test: insert");
 
     let results = index.search_like_ranked("", 0.0);
 
@@ -357,8 +361,8 @@ fn test_search_ranked_empty_pattern() {
 fn test_search_ranked_no_match() {
     let mut index = TrigramIndex::new();
 
-    index.insert(1, "hello");
-    index.insert(2, "world");
+    index.insert(1, "hello").expect("test: insert");
+    index.insert(2, "world").expect("test: insert");
 
     let results = index.search_like_ranked("xyz", 0.0);
 
@@ -373,9 +377,13 @@ fn test_threshold_pruning_performance() {
     // Insert 1000 documents, only 10% should match
     for i in 0..1000u64 {
         if i % 10 == 0 {
-            index.insert(i, &format!("matching document number {i}"));
+            index
+                .insert(i, &format!("matching document number {i}"))
+                .expect("test: insert");
         } else {
-            index.insert(i, &format!("other content {i}"));
+            index
+                .insert(i, &format!("other content {i}"))
+                .expect("test: insert");
         }
     }
 

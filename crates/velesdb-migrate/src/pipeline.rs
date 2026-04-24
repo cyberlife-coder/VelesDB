@@ -24,6 +24,12 @@ pub struct MigrationStats {
     pub batches: u64,
     /// Duration in seconds.
     pub duration_secs: f64,
+    /// Graph edges created (0 if no graph migration phase ran).
+    pub edges_created: u64,
+    /// Graph edges that failed to create.
+    pub edges_failed: u64,
+    /// FK relations processed during graph migration.
+    pub relations_processed: usize,
 }
 
 impl MigrationStats {
@@ -173,7 +179,7 @@ impl Pipeline {
     /// # Errors
     ///
     /// Returns an error if the migration fails.
-    #[allow(clippy::cognitive_complexity, deprecated)] // Reason: Pipeline orchestration requires sequential steps, refactoring would fragment the migration flow
+    #[allow(clippy::cognitive_complexity)] // Reason: Pipeline orchestration requires sequential steps, refactoring would fragment the migration flow
     pub async fn run(&mut self) -> Result<MigrationStats> {
         let start = std::time::Instant::now();
         let mut stats = MigrationStats::default();
@@ -202,6 +208,12 @@ impl Pipeline {
                 schema.dimension, self.config.destination.dimension
             )));
         }
+
+        check_metric_fidelity(
+            schema.metric.as_deref(),
+            self.config.destination.metric,
+            self.config.options.allow_metric_mismatch,
+        )?;
 
         if let Some(ctx) = &checkpoint_ctx {
             if let Some(state) = ctx.load().await? {
@@ -237,6 +249,8 @@ impl Pipeline {
                 crate::config::DistanceMetric::Cosine => velesdb_core::DistanceMetric::Cosine,
                 crate::config::DistanceMetric::Euclidean => velesdb_core::DistanceMetric::Euclidean,
                 crate::config::DistanceMetric::Dot => velesdb_core::DistanceMetric::DotProduct,
+                crate::config::DistanceMetric::Hamming => velesdb_core::DistanceMetric::Hamming,
+                crate::config::DistanceMetric::Jaccard => velesdb_core::DistanceMetric::Jaccard,
             };
 
             let storage_mode = match self.config.destination.storage_mode {
@@ -248,7 +262,7 @@ impl Pipeline {
             };
 
             if db
-                .get_collection(&self.config.destination.collection)
+                .get_any_collection(&self.config.destination.collection)
                 .is_none()
             {
                 db.create_collection_with_options(
@@ -264,12 +278,14 @@ impl Pipeline {
         };
 
         let batch_size = self.config.options.batch_size;
+        let retry_config = crate::retry::RetryConfig::for_transient_errors();
 
         loop {
-            let batch = self
-                .connector
-                .extract_batch(offset.clone(), batch_size)
-                .await?;
+            let connector = &mut *self.connector;
+            let batch = crate::retry::with_retry(&retry_config, "extract_batch", || {
+                connector.extract_batch(offset.clone(), batch_size)
+            })
+            .await?;
 
             if batch.points.is_empty() {
                 break;
@@ -281,8 +297,9 @@ impl Pipeline {
             let transformed = self.transformer.transform_batch(batch.points);
 
             if let Some(ref db) = db {
+                #[allow(deprecated)] // TODO(MIGRATE-01): migrate to get_vector_collection()
                 let collection = db
-                    .get_collection(&self.config.destination.collection)
+                    .get_vector_collection(&self.config.destination.collection)
                     .ok_or_else(|| {
                         Error::DestinationConnection("Collection not found".to_string())
                     })?;
@@ -347,7 +364,7 @@ impl Pipeline {
                     }
                 }
             } else {
-                stats.loaded += transformed.len() as u64;
+                // dry_run: nothing loaded, stats.loaded stays 0
             }
 
             progress.set_position(stats.loaded.min(total));
@@ -360,6 +377,24 @@ impl Pipeline {
         }
 
         progress.finish_with_message("Migration complete");
+
+        // Graph migration phase: migrate FK relations as graph edges.
+        if let Some(ref db) = db {
+            if self.config.destination.graph_collection.is_some()
+                && !self.config.relations.is_empty()
+            {
+                info!("Starting graph migration phase...");
+                let graph_connector = crate::connectors::create_connector(&self.config.source)?;
+                let mut graph_phase =
+                    crate::pipeline_graph::GraphMigrationPhase::new(&self.config, graph_connector);
+                graph_phase.connect().await?;
+                let graph_stats = graph_phase.run(db).await?;
+                graph_phase.close().await?;
+                stats.edges_created = graph_stats.edges_created;
+                stats.edges_failed = graph_stats.edges_failed;
+                stats.relations_processed = graph_stats.relations_processed;
+            }
+        }
 
         self.connector.close().await?;
 
@@ -393,7 +428,6 @@ fn checkpoint_path(config: &MigrationConfig) -> std::path::PathBuf {
 
 fn source_tag(config: &crate::config::SourceConfig) -> &'static str {
     match config {
-        crate::config::SourceConfig::PgVector(_) => "pgvector",
         crate::config::SourceConfig::Supabase(_) => "supabase",
         crate::config::SourceConfig::Qdrant(_) => "qdrant",
         crate::config::SourceConfig::Pinecone(_) => "pinecone",
@@ -402,7 +436,6 @@ fn source_tag(config: &crate::config::SourceConfig) -> &'static str {
         crate::config::SourceConfig::ChromaDB(_) => "chromadb",
         crate::config::SourceConfig::JsonFile(_) => "json_file",
         crate::config::SourceConfig::CsvFile(_) => "csv_file",
-        crate::config::SourceConfig::MongoDB(_) => "mongodb",
         crate::config::SourceConfig::Elasticsearch(_) => "elasticsearch",
         crate::config::SourceConfig::Redis(_) => "redis",
     }
@@ -456,6 +489,102 @@ pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
+/// Normalises a source-reported metric label into its canonical lowercase
+/// identifier (matches `velesdb_core::DistanceMetric::from_str` aliases).
+///
+/// Returns `None` when the label is empty or unknown — unknown values are
+/// intentionally preserved verbatim to [`check_metric_fidelity`] so the
+/// mismatch error carries the original string for diagnostics.
+fn canonicalise_source_metric(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "cosine" | "cos" | "cosinesimilarity" => Some("cosine"),
+        "euclidean" | "euclid" | "l2" | "l2_distance" => Some("euclidean"),
+        "dot" | "dotproduct" | "ip" | "inner_product" => Some("dot"),
+        "hamming" => Some("hamming"),
+        "jaccard" => Some("jaccard"),
+        _ => None,
+    }
+}
+
+/// Returns the canonical lowercase string for a destination
+/// `DistanceMetric` selected in `MigrationConfig`.
+fn canonicalise_dest_metric(metric: crate::config::DistanceMetric) -> &'static str {
+    match metric {
+        crate::config::DistanceMetric::Cosine => "cosine",
+        crate::config::DistanceMetric::Euclidean => "euclidean",
+        crate::config::DistanceMetric::Dot => "dot",
+        crate::config::DistanceMetric::Hamming => "hamming",
+        crate::config::DistanceMetric::Jaccard => "jaccard",
+    }
+}
+
+/// Verifies that the metric reported by the source (when present)
+/// matches the one configured on the destination. A mismatch returns
+/// [`Error::SchemaMismatch`] with both metrics named, unless the
+/// caller opted into `allow_metric_mismatch` in `MigrationOptions`.
+///
+/// Finding M-P0-3 of the pre-seed audit.
+fn check_metric_fidelity(
+    source_metric: Option<&str>,
+    dest_metric: crate::config::DistanceMetric,
+    allow_mismatch: bool,
+) -> Result<()> {
+    let Some(raw) = source_metric else {
+        // The connector did not introspect a metric. This is
+        // expected for file-backed connectors (JSON, CSV) and for
+        // connectors that have not yet been extended to populate the
+        // field. Nothing to verify.
+        return Ok(());
+    };
+
+    let canonical_dest = canonicalise_dest_metric(dest_metric);
+
+    match canonicalise_source_metric(raw) {
+        Some(canonical_source) if canonical_source == canonical_dest => Ok(()),
+        Some(canonical_source) => {
+            if allow_mismatch {
+                warn!(
+                    source = canonical_source,
+                    destination = canonical_dest,
+                    "metric mismatch allowed by allow_metric_mismatch escape hatch"
+                );
+                Ok(())
+            } else {
+                Err(Error::SchemaMismatch(format!(
+                    "Source metric '{canonical_source}' does not match \
+                     destination metric '{canonical_dest}'. Migration \
+                     aborted to preserve search quality. Set \
+                     `options.allow_metric_mismatch = true` in the \
+                     migration config if the semantic difference is \
+                     acceptable."
+                )))
+            }
+        }
+        None => {
+            // Source reported a label we do not recognise. Preserve
+            // the raw string in the error message so operators can
+            // diagnose the connector output without additional logs.
+            if allow_mismatch {
+                warn!(
+                    source = %raw,
+                    destination = canonical_dest,
+                    "unknown source metric; proceeding because \
+                     allow_metric_mismatch is set"
+                );
+                Ok(())
+            } else {
+                Err(Error::SchemaMismatch(format!(
+                    "Source reported unknown metric '{raw}' which \
+                     cannot be mapped to a core DistanceMetric. \
+                     Expected '{canonical_dest}'. Set \
+                     `options.allow_metric_mismatch = true` to bypass \
+                     this check."
+                )))
+            }
+        }
+    }
+}
+
 fn create_progress_bar(total: u64) -> ProgressBar {
     let pb = if total > 0 {
         ProgressBar::new(total)
@@ -478,6 +607,91 @@ fn create_progress_bar(total: u64) -> ProgressBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DistanceMetric;
+
+    // ─────────────────────────────────────────────────────────────
+    // M-P0-3: metric fidelity check
+    // ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_check_metric_fidelity_passes_when_source_is_none() {
+        // File-backed connectors (JSON/CSV) and legacy connectors
+        // that have not been extended yet report `None`. The check
+        // must never fail in that case.
+        assert!(check_metric_fidelity(None, DistanceMetric::Cosine, false).is_ok());
+    }
+
+    #[test]
+    fn test_check_metric_fidelity_passes_on_exact_match() {
+        assert!(check_metric_fidelity(Some("cosine"), DistanceMetric::Cosine, false).is_ok());
+        assert!(check_metric_fidelity(Some("euclidean"), DistanceMetric::Euclidean, false).is_ok());
+        assert!(check_metric_fidelity(Some("dot"), DistanceMetric::Dot, false).is_ok());
+    }
+
+    #[test]
+    fn test_check_metric_fidelity_passes_on_alias_match() {
+        // Source reports "l2" which canonicalises to "euclidean".
+        assert!(check_metric_fidelity(Some("l2"), DistanceMetric::Euclidean, false).is_ok());
+        // Source reports "ip" (inner product) which canonicalises to "dot".
+        assert!(check_metric_fidelity(Some("ip"), DistanceMetric::Dot, false).is_ok());
+        // Case-insensitive.
+        assert!(check_metric_fidelity(Some("COSINE"), DistanceMetric::Cosine, false).is_ok());
+    }
+
+    #[test]
+    fn test_check_metric_fidelity_rejects_known_mismatch() {
+        let result = check_metric_fidelity(Some("cosine"), DistanceMetric::Euclidean, false);
+        assert!(result.is_err(), "cosine vs euclidean must fail");
+
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("cosine") && err.contains("euclidean"),
+            "error must name both metrics, got: {err}"
+        );
+        assert!(
+            err.contains("allow_metric_mismatch"),
+            "error must point at the escape hatch, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_check_metric_fidelity_rejects_unknown_label() {
+        let result =
+            check_metric_fidelity(Some("some_weird_metric"), DistanceMetric::Cosine, false);
+        assert!(result.is_err(), "unknown metric must fail by default");
+
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("some_weird_metric"),
+            "error must preserve the raw source label for diagnostics, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_check_metric_fidelity_allows_mismatch_when_opted_in() {
+        // Explicit opt-in via allow_metric_mismatch bypasses the
+        // hard error for both recognised-but-mismatching and
+        // unrecognised source labels.
+        assert!(
+            check_metric_fidelity(Some("cosine"), DistanceMetric::Euclidean, true).is_ok(),
+            "allow_metric_mismatch must permit known mismatches"
+        );
+        assert!(
+            check_metric_fidelity(Some("weird"), DistanceMetric::Cosine, true).is_ok(),
+            "allow_metric_mismatch must permit unknown source labels"
+        );
+    }
+
+    #[test]
+    fn test_check_metric_fidelity_hamming_and_jaccard() {
+        assert!(check_metric_fidelity(Some("hamming"), DistanceMetric::Hamming, false).is_ok());
+        assert!(check_metric_fidelity(Some("jaccard"), DistanceMetric::Jaccard, false).is_ok());
+        // Cross-metric mismatch.
+        assert!(
+            check_metric_fidelity(Some("hamming"), DistanceMetric::Jaccard, false).is_err(),
+            "hamming vs jaccard must fail"
+        );
+    }
 
     #[test]
     fn test_migration_stats_throughput() {
@@ -487,6 +701,9 @@ mod tests {
             failed: 0,
             batches: 10,
             duration_secs: 2.0,
+            edges_created: 0,
+            edges_failed: 0,
+            relations_processed: 0,
         };
 
         assert!((stats.throughput() - 500.0).abs() < 0.001);
@@ -508,6 +725,55 @@ mod tests {
         assert_ne!(first, other);
     }
 
+    #[tokio::test]
+    async fn test_pipeline_dry_run_loaded_stays_zero() {
+        use crate::config::{
+            DestinationConfig, DistanceMetric, MigrationConfig, MigrationOptions, SourceConfig,
+            StorageMode,
+        };
+        use crate::connectors::json_file::JsonFileConfig;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("test: create tempdir");
+        let json_path = dir.path().join("test_data.json");
+        // 3 points with 2-dimensional vectors
+        let json_content = serde_json::json!([
+            {"id": "1", "vector": [0.1, 0.2], "payload": {}},
+            {"id": "2", "vector": [0.3, 0.4], "payload": {}},
+            {"id": "3", "vector": [0.5, 0.6], "payload": {}}
+        ]);
+        std::fs::write(&json_path, json_content.to_string()).expect("test: write json");
+
+        let config = MigrationConfig {
+            source: SourceConfig::JsonFile(JsonFileConfig {
+                path: json_path,
+                array_path: String::new(),
+                id_field: "id".to_string(),
+                vector_field: "vector".to_string(),
+                payload_fields: vec![],
+            }),
+            destination: DestinationConfig {
+                path: dir.path().to_path_buf(),
+                collection: "dry_run_test".to_string(),
+                dimension: 2,
+                metric: DistanceMetric::Cosine,
+                storage_mode: StorageMode::Full,
+                graph_collection: None,
+            },
+            options: MigrationOptions {
+                dry_run: true,
+                ..MigrationOptions::default()
+            },
+            relations: vec![],
+        };
+
+        let mut pipeline = crate::Pipeline::new(config).expect("test: create pipeline");
+        let stats = pipeline.run().await.expect("test: run pipeline");
+
+        assert_eq!(stats.extracted, 3, "Should extract 3 points");
+        assert_eq!(stats.loaded, 0, "dry_run must not increment loaded");
+    }
+
     #[test]
     fn test_checkpoint_path_uses_explicit_path_when_present() {
         let config = MigrationConfig {
@@ -523,11 +789,13 @@ mod tests {
                 dimension: 3,
                 metric: crate::config::DistanceMetric::Cosine,
                 storage_mode: crate::config::StorageMode::Full,
+                graph_collection: None,
             },
             options: crate::config::MigrationOptions {
                 checkpoint_path: Some(std::path::PathBuf::from("./custom-checkpoint.json")),
                 ..crate::config::MigrationOptions::default()
             },
+            relations: vec![],
         };
 
         assert_eq!(

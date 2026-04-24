@@ -165,7 +165,6 @@ mod tests {
                 depth: 1,
                 path: vec![100],
             }],
-            next_cursor: None,
             has_more: false,
             stats: TraversalStats {
                 visited: 1,
@@ -214,12 +213,27 @@ mod tests {
     fn test_all_node_ids() {
         let (coll, _dir) = make_graph();
         add_test_edges(&coll);
-        // all_node_ids returns IDs from edge store (source + target)
-        let _ids = coll.all_node_ids();
-        // With edges: 1->2, 2->3, 3->4, 2->5, we should have nodes 1..5
-        // Note: all_node_ids delegates to inner.all_ids() which returns
-        // payload-stored IDs. Nodes referenced only by edges may not appear.
-        // Store payloads to make them visible.
+
+        // Precondition: `all_node_ids` delegates to
+        // `inner.all_ids()` which enumerates payload-stored IDs
+        // only — nodes referenced purely by edges do not appear
+        // in the result. Before any payload is written, the
+        // method must therefore return an empty set even though
+        // `add_test_edges` populated the edge store with nodes
+        // 1..5. The previous version of this test computed and
+        // discarded the pre-payload result (`let _ids = ...`);
+        // asserting the empty invariant turns that scaffold into
+        // a real guard against regressions in the payload-vs-edge
+        // distinction.
+        let pre_payload_ids = coll.all_node_ids();
+        assert!(
+            pre_payload_ids.is_empty(),
+            "all_node_ids must be empty before any payload is stored, got {:?}",
+            pre_payload_ids
+        );
+
+        // Store payloads for nodes 1 and 2 so they become visible
+        // to `all_node_ids`.
         coll.upsert_node_payload(1, &serde_json::json!({})).unwrap();
         coll.upsert_node_payload(2, &serde_json::json!({})).unwrap();
         let ids = coll.all_node_ids();

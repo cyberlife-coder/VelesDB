@@ -5,6 +5,7 @@
 //! - [`graph_ops`] — graph collection create/get
 //! - [`metadata_ops`] — metadata-only collection create/get
 
+use crate::collection::AnyCollection;
 use crate::{CollectionType, DistanceMetric, Error, Result, StorageMode};
 
 use super::Database;
@@ -14,7 +15,10 @@ impl Database {
     ///
     /// Validates the name against path traversal and forbidden characters
     /// **before** any filesystem operation, then checks that no collection
-    /// with the same name already exists in any registry or on disk.
+    /// with the same name already exists in any registry or on disk, and
+    /// finally enforces the `LimitsConfig::max_collections` cap so that
+    /// callers are refused cleanly instead of filling the registry past
+    /// the configured ceiling.
     pub(super) fn ensure_collection_name_available(&self, name: &str) -> Result<()> {
         crate::validation::validate_collection_name(name)?;
 
@@ -27,6 +31,25 @@ impl Database {
             return Err(Error::CollectionExists(name.to_string()));
         }
 
+        // Wave 3 Commit 7 — enforce `LimitsConfig::max_collections`.
+        //
+        // Counted across every typed registry (vector + graph + metadata)
+        // because the limit is tenant-wide, not per-type. Evaluated after
+        // the name validation and duplicate checks so the typed error
+        // precedence stays unchanged: invalid name and duplicate still
+        // win over the cap — callers that want to detect "too many
+        // collections" specifically rely on the `GuardRail` variant.
+        let total_collections = self.vector_colls.read().len()
+            + self.graph_colls.read().len()
+            + self.metadata_colls.read().len();
+        let cap = self.config.limits.max_collections;
+        if total_collections >= cap {
+            return Err(Error::GuardRail(format!(
+                "max_collections limit reached ({total_collections} / {cap}); \
+                 raise `limits.max_collections` in VelesConfig to create more"
+            )));
+        }
+
         Ok(())
     }
 
@@ -35,6 +58,33 @@ impl Database {
         self.vector_colls.read().contains_key(name)
             || self.graph_colls.read().contains_key(name)
             || self.metadata_colls.read().contains_key(name)
+    }
+
+    /// Enforces `LimitsConfig::max_dimensions` on a prospective vector
+    /// collection creation.
+    ///
+    /// Complements [`crate::validation::validate_dimension`] (the static
+    /// `65_536` hard ceiling): the config-driven limit is typically tighter
+    /// — 4096 by default — and is consulted here so the guard-rail can
+    /// be relaxed per tenant via [`Database::open_with_config`] without
+    /// touching the static constant.
+    ///
+    /// Dimension `0` is accepted because it is the sentinel used by
+    /// metadata-only and graph-without-embeddings collections. Callers
+    /// that need to reject zero should do so upstream via
+    /// [`crate::validation::validate_dimension`].
+    pub(super) fn enforce_vector_dimension_limit(&self, dimension: usize) -> Result<()> {
+        if dimension == 0 {
+            return Ok(());
+        }
+        let cap = self.config.limits.max_dimensions;
+        if dimension > cap {
+            return Err(Error::GuardRail(format!(
+                "vector dimension {dimension} exceeds configured max_dimensions cap of {cap}; \
+                 raise `limits.max_dimensions` in VelesConfig to allow larger vectors"
+            )));
+        }
+        Ok(())
     }
 
     /// Creates a new collection with the specified parameters.
@@ -82,18 +132,22 @@ impl Database {
         self.create_vector_collection_with_options(name, dimension, metric, storage_mode)
     }
 
-    /// Gets a reference to a collection by name.
+    /// Returns a type-erased collection handle by name.
     ///
-    /// # Returns
-    ///
-    /// Returns `None` if the collection does not exist.
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use get_vector_collection(), get_graph_collection(), or get_metadata_collection()"
-    )]
-    #[allow(deprecated)]
-    pub fn get_collection(&self, name: &str) -> Option<crate::Collection> {
-        self.collections.read().get(name).cloned()
+    /// Checks vector → graph → metadata registries in order.
+    /// Returns `None` if no collection with the given name exists.
+    #[must_use]
+    pub fn get_any_collection(&self, name: &str) -> Option<AnyCollection> {
+        if let Some(c) = self.get_vector_collection(name) {
+            return Some(AnyCollection::Vector(c));
+        }
+        if let Some(c) = self.get_graph_collection(name) {
+            return Some(AnyCollection::Graph(c));
+        }
+        if let Some(c) = self.get_metadata_collection(name) {
+            return Some(AnyCollection::Metadata(c));
+        }
+        None
     }
 
     /// Returns the write generation for a named collection, if it exists.
@@ -107,6 +161,49 @@ impl Database {
         }
         if let Some(mc) = self.metadata_colls.read().get(name) {
             return Some(mc.inner.write_generation());
+        }
+        None
+    }
+
+    /// Returns the set of payload field names covered by a secondary index
+    /// for the named collection (issue #607). Empty set when the collection
+    /// has no indexes or does not exist.
+    ///
+    /// Used by `Database::build_plan_with_stats` to thread the real
+    /// indexed-field set into `QueryPlan::from_query_with_stats` so that
+    /// `IndexLookup` plan nodes are generated in the EXPLAIN tree when a
+    /// WHERE clause targets an indexed column.
+    #[must_use]
+    pub fn indexed_fields_for(&self, name: &str) -> std::collections::HashSet<String> {
+        if let Some(vc) = self.vector_colls.read().get(name) {
+            return vc.inner.indexed_field_names();
+        }
+        if let Some(gc) = self.graph_colls.read().get(name) {
+            return gc.inner.indexed_field_names();
+        }
+        if let Some(mc) = self.metadata_colls.read().get(name) {
+            return mc.inner.indexed_field_names();
+        }
+        std::collections::HashSet::new()
+    }
+
+    /// Returns the analyze generation for a named collection, if it exists
+    /// (issue #608).
+    ///
+    /// Parallel to [`collection_write_generation`], but tracks `ANALYZE`
+    /// invocations instead of data mutations. Threaded into the compiled plan
+    /// cache key so that an `ANALYZE` run alone invalidates cached plans whose
+    /// cost estimates pre-date the fresh calibrated statistics.
+    #[must_use]
+    pub fn collection_analyze_generation(&self, name: &str) -> Option<u64> {
+        if let Some(vc) = self.vector_colls.read().get(name) {
+            return Some(vc.inner.analyze_generation());
+        }
+        if let Some(gc) = self.graph_colls.read().get(name) {
+            return Some(gc.inner.analyze_generation());
+        }
+        if let Some(mc) = self.metadata_colls.read().get(name) {
+            return Some(mc.inner.analyze_generation());
         }
         None
     }
@@ -162,9 +259,7 @@ impl Database {
     }
 
     /// Removes a collection from all registries and stats cache.
-    #[allow(deprecated)]
     fn remove_from_all_registries(&self, name: &str) {
-        self.collections.write().remove(name);
         self.vector_colls.write().remove(name);
         self.graph_colls.write().remove(name);
         self.metadata_colls.write().remove(name);

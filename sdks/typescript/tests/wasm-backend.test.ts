@@ -118,8 +118,8 @@ describe('WasmBackend', () => {
       await backend.createCollection('vectors', { dimension: 4 });
     });
 
-    it('should insert a vector', async () => {
-      await backend.insert('vectors', {
+    it('should upsert a vector', async () => {
+      await backend.upsert('vectors', {
         id: '1',
         vector: [1.0, 0.0, 0.0, 0.0],
         payload: { title: 'Test' },
@@ -128,7 +128,7 @@ describe('WasmBackend', () => {
     });
 
     it('should get a vector by id', async () => {
-      await backend.insert('vectors', {
+      await backend.upsert('vectors', {
         id: 'abc',
         vector: [1.0, 0.0, 0.0, 0.0],
         payload: { title: 'Stored' },
@@ -139,29 +139,29 @@ describe('WasmBackend', () => {
     });
 
     it('should throw on dimension mismatch', async () => {
-      await expect(backend.insert('vectors', {
+      await expect(backend.upsert('vectors', {
         id: '1',
         vector: [1.0, 0.0], // Wrong dimension
       })).rejects.toThrow('dimension mismatch');
     });
 
     it('should throw on non-existent collection', async () => {
-      await expect(backend.insert('nonexistent', {
+      await expect(backend.upsert('nonexistent', {
         id: '1',
         vector: [1.0, 0.0, 0.0, 0.0],
       })).rejects.toThrow(NotFoundError);
     });
 
-    it('should insert batch', async () => {
-      await backend.insertBatch('vectors', [
+    it('should upsert batch', async () => {
+      await backend.upsertBatch('vectors', [
         { id: '1', vector: [1.0, 0.0, 0.0, 0.0] },
         { id: '2', vector: [0.0, 1.0, 0.0, 0.0] },
       ]);
       // No error means success
     });
 
-    it('should forward payload docs in insertBatch via insert_with_payload', async () => {
-      await backend.insertBatch('vectors', [
+    it('should forward payload docs in upsertBatch via insert_with_payload', async () => {
+      await backend.upsertBatch('vectors', [
         { id: '1', vector: [1.0, 0.0, 0.0, 0.0], payload: { category: 'A' } },
         { id: '2', vector: [0.0, 1.0, 0.0, 0.0] },
       ]);
@@ -193,7 +193,7 @@ describe('WasmBackend', () => {
     });
 
     it('should not use partial numeric parsing for mixed string IDs', async () => {
-      await backend.insert('vectors', {
+      await backend.upsert('vectors', {
         id: '123abc',
         vector: [1.0, 0.0, 0.0, 0.0],
       });
@@ -219,13 +219,12 @@ describe('WasmBackend', () => {
       expect(results[0].score).toBe(0.95);
     });
 
-    it('should reject weighted fusion strategy', async () => {
-      await expect(
-        backend.multiQuerySearch('vectors', [[0.1, 0.2, 0.3, 0.4]], {
-          fusion: 'weighted',
-          fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 },
-        }),
-      ).rejects.toThrow("Fusion strategy 'weighted' is not supported in WASM backend.");
+    it('should accept weighted fusion strategy', async () => {
+      const results = await backend.multiQuerySearch('vectors', [[0.1, 0.2, 0.3, 0.4]], {
+        fusion: 'weighted',
+        fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 },
+      });
+      expect(Array.isArray(results)).toBe(true);
     });
   });
 

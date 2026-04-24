@@ -4,7 +4,7 @@
 //! to the non-pipelined (sequential) path across multiple metrics and
 //! vector dimensions.
 
-use super::distance::{CpuDistance, SimdDistance};
+use super::distance::{CachedSimdDistance, CpuDistance};
 use super::graph::NativeHnsw;
 use super::layer::NodeId;
 use crate::distance::DistanceMetric;
@@ -48,14 +48,14 @@ fn build_index_cpu(
     (hnsw, vectors)
 }
 
-/// Builds an HNSW index with SIMD distance engine.
+/// Builds an HNSW index with CachedSimd distance engine.
 #[allow(clippy::cast_precision_loss)]
 fn build_index_simd(
     metric: DistanceMetric,
     dim: usize,
     num: usize,
-) -> (NativeHnsw<SimdDistance>, Vec<Vec<f32>>) {
-    let engine = SimdDistance::new(metric);
+) -> (NativeHnsw<CachedSimdDistance>, Vec<Vec<f32>>) {
+    let engine = CachedSimdDistance::new(metric, dim);
     let hnsw = NativeHnsw::new(engine, 16, 100, num + 100);
     let mut vectors = Vec::with_capacity(num);
     for i in 0..num {
@@ -91,7 +91,6 @@ fn recall_at_k(predicted: &[NodeId], ground_truth: &[NodeId]) -> f64 {
 
 /// High-dimensional vectors take the pipelined path. Verify results
 /// match brute-force ground truth with the same recall as sequential.
-#[allow(deprecated)] // SimdDistance deprecated
 #[test]
 fn test_pipelined_recall_matches_sequential_euclidean() {
     let (hnsw, vectors) = build_index_simd(DistanceMetric::Euclidean, HIGH_DIM, NUM_VECTORS);
@@ -113,7 +112,6 @@ fn test_pipelined_recall_matches_sequential_euclidean() {
     );
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_pipelined_recall_matches_sequential_cosine() {
     let (hnsw, vectors) = build_index_simd(DistanceMetric::Cosine, HIGH_DIM, NUM_VECTORS);
@@ -132,7 +130,6 @@ fn test_pipelined_recall_matches_sequential_cosine() {
 /// VelesDB uses `1 - dot(a,b)` and unnormalized vectors with larger
 /// magnitude produce larger dot products. Instead, verify results
 /// are non-empty and sorted by ascending distance.
-#[allow(deprecated)]
 #[test]
 fn test_pipelined_recall_matches_sequential_dot_product() {
     let (hnsw, vectors) = build_index_simd(DistanceMetric::DotProduct, HIGH_DIM, NUM_VECTORS);
@@ -167,7 +164,7 @@ fn test_pipelined_recall_matches_sequential_dot_product() {
 /// Compare recall of the same data at low-dim (sequential path) and
 /// high-dim (pipelined path). Both should achieve >= 95% recall
 /// against brute-force ground truth.
-#[allow(deprecated, clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss)]
 #[test]
 fn test_pipelined_recall_above_threshold() {
     let (hnsw, vectors) = build_index_simd(DistanceMetric::Euclidean, HIGH_DIM, NUM_VECTORS);
@@ -226,10 +223,9 @@ fn test_pipelined_cpu_engine_euclidean() {
 // 4. Empty and single-element edge cases
 // =========================================================================
 
-#[allow(deprecated)]
 #[test]
 fn test_pipelined_empty_index() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, HIGH_DIM);
     let hnsw = NativeHnsw::new(engine, 16, 100, 1000);
 
     let query = vec![0.0_f32; HIGH_DIM];
@@ -237,10 +233,9 @@ fn test_pipelined_empty_index() {
     assert!(results.is_empty(), "empty index should return no results");
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_pipelined_single_vector() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, HIGH_DIM);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     let v = vec![1.0_f32; HIGH_DIM];
@@ -255,7 +250,6 @@ fn test_pipelined_single_vector() {
 // 5. Multi-entry point search uses pipelined path
 // =========================================================================
 
-#[allow(deprecated)]
 #[test]
 fn test_pipelined_multi_entry_search() {
     let (hnsw, vectors) = build_index_simd(DistanceMetric::Euclidean, HIGH_DIM, NUM_VECTORS);

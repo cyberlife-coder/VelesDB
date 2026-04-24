@@ -5,7 +5,7 @@
 //! - Consolidation policy: migrate old episodic events to semantic memory
 //! - Confidence-based eviction for procedural memory
 
-// SAFETY: u64 to usize casts are for deserialization counts. Data is created/loaded
+// Reason: u64 to usize casts are for deserialization counts. Data is created/loaded
 // on the same architecture, and counts represent actual serialized entry counts.
 // These values are validated against buffer bounds before use.
 #![allow(clippy::cast_possible_truncation)]
@@ -51,8 +51,7 @@ impl MemoryTtl {
     pub fn now() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
+            .map_or(0, |d| d.as_secs())
     }
 
     /// Sets a TTL on an entry.

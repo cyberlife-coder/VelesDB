@@ -2,6 +2,10 @@
 //!
 //! Provides O(1) hash-based lookups on (label, property1, property2, ...) combinations.
 
+// EPIC-047 US-001 — composite graph indexes for multi-property lookups.
+// Index population is wired via graph_property_index_wiring.rs;
+// query-side lookups are wired but not yet called from MATCH pipeline.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
@@ -9,10 +13,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 /// Index type for composite indexes.
-// Reason: CompositeIndexType part of EPIC-047 composite graph index feature
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CompositeIndexType {
+pub(crate) enum CompositeIndexType {
     /// Hash index for equality lookups (O(1))
     Hash,
     /// Range index for range queries (O(log n))
@@ -23,8 +25,6 @@ pub enum CompositeIndexType {
 ///
 /// Provides O(1) lookups for nodes matching a label and specific property values.
 /// Useful for queries like `MATCH (n:Person {name: 'Alice', city: 'Paris'})`.
-// Reason: CompositeGraphIndex part of EPIC-047 composite graph index feature
-#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CompositeGraphIndex {
     /// Label this index covers
@@ -37,8 +37,7 @@ pub struct CompositeGraphIndex {
     hash_index: HashMap<u64, Vec<u64>>,
 }
 
-// Reason: CompositeGraphIndex impl part of EPIC-047 composite graph index feature
-#[allow(dead_code)]
+#[allow(dead_code)] // Reason: Public API — used by tests and future query planner + index management
 impl CompositeGraphIndex {
     /// Creates a new composite index.
     #[must_use]
@@ -174,16 +173,12 @@ impl CompositeGraphIndex {
 }
 
 /// Manager for multiple composite indexes.
-// Reason: CompositeIndexManager part of EPIC-047 composite graph index feature
-#[allow(dead_code)]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CompositeIndexManager {
     /// All composite indexes, keyed by index name
     indexes: HashMap<String, CompositeGraphIndex>,
 }
 
-// Reason: CompositeIndexManager impl part of EPIC-047 composite graph index feature
-#[allow(dead_code)]
 impl CompositeIndexManager {
     /// Creates a new index manager.
     #[must_use]
@@ -192,6 +187,7 @@ impl CompositeIndexManager {
     }
 
     /// Creates a new composite index.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future DDL CREATE INDEX handler
     pub fn create_index(
         &mut self,
         name: impl Into<String>,
@@ -215,11 +211,13 @@ impl CompositeIndexManager {
     }
 
     /// Gets a mutable index by name.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future DDL index management
     pub fn get_mut(&mut self, name: &str) -> Option<&mut CompositeGraphIndex> {
         self.indexes.get_mut(name)
     }
 
     /// Drops an index by name.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future DDL DROP INDEX handler
     pub fn drop_index(&mut self, name: &str) -> bool {
         self.indexes.remove(name).is_some()
     }
@@ -236,6 +234,7 @@ impl CompositeIndexManager {
 
     /// Lists all index names.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API — used by tests and future DDL SHOW INDEXES handler
     pub fn list_indexes(&self) -> Vec<&str> {
         self.indexes.keys().map(String::as_str).collect()
     }

@@ -1,4 +1,3 @@
-#![allow(deprecated)] // Benches use legacy Collection.
 //! Benchmark suite for BM25 full-text search operations.
 //!
 //! Run with: `cargo bench --bench bm25_benchmark`
@@ -15,7 +14,7 @@ use serde_json::json;
 use tempfile::tempdir;
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::index::Bm25Index;
-use velesdb_core::{Collection, Point};
+use velesdb_core::{Point, VectorCollection};
 
 /// Sample documents for benchmarking
 const SAMPLE_DOCS: &[&str] = &[
@@ -99,7 +98,14 @@ fn bench_collection_text_search(c: &mut Criterion) {
     for doc_count in [100, 1000] {
         let dir = tempdir().unwrap();
         let path = dir.path().join("bench_collection");
-        let collection = Collection::create(path, 128, DistanceMetric::Cosine).unwrap();
+        let collection = VectorCollection::create(
+            path,
+            "bench",
+            128,
+            DistanceMetric::Cosine,
+            velesdb_core::StorageMode::Full,
+        )
+        .unwrap();
 
         // Insert points with text payloads
         let points: Vec<Point> = generate_documents(doc_count)
@@ -130,7 +136,14 @@ fn bench_collection_hybrid_search(c: &mut Criterion) {
     for doc_count in [100, 1000] {
         let dir = tempdir().unwrap();
         let path = dir.path().join("bench_collection");
-        let collection = Collection::create(path, 128, DistanceMetric::Cosine).unwrap();
+        let collection = VectorCollection::create(
+            path,
+            "bench",
+            128,
+            DistanceMetric::Cosine,
+            velesdb_core::StorageMode::Full,
+        )
+        .unwrap();
 
         // Insert points with text payloads and varied vectors
         let points: Vec<Point> = generate_documents(doc_count)
@@ -150,7 +163,7 @@ fn bench_collection_hybrid_search(c: &mut Criterion) {
             b.iter(|| {
                 black_box(
                     collection
-                        .hybrid_search(&query_vector, "rust programming", 10, Some(0.5), None)
+                        .hybrid_search(&query_vector, "rust programming", 10, Some(0.5))
                         .unwrap(),
                 )
             });

@@ -402,6 +402,21 @@ impl VectorCollection {
         self.inner.execute_query(query, params)
     }
 
+    /// Executes a query with instrumentation and returns plan + actual stats.
+    ///
+    /// Delegates to [`Database::explain_analyze_query`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is invalid or execution fails.
+    pub fn explain_analyze_query(
+        &self,
+        query: &crate::velesql::Query,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<crate::velesql::ExplainOutput> {
+        self.inner.explain_analyze_query(query, params)
+    }
+
     /// Sends a point into the streaming ingestion channel.
     ///
     /// Returns `Ok(())` on success (202 semantics). Returns
@@ -453,6 +468,19 @@ impl VectorCollection {
     #[must_use]
     pub fn is_delta_active(&self) -> bool {
         self.inner.delta_buffer.is_active()
+    }
+
+    /// Enables streaming ingestion on this collection.
+    ///
+    /// Creates a [`StreamIngester`](crate::collection::streaming::StreamIngester) with
+    /// the given `config` and stores it internally. Points can then be submitted via
+    /// [`stream_insert`](Self::stream_insert) or [`stream_insert_batch`](Self::stream_insert_batch).
+    ///
+    /// Calling this when streaming is already active replaces the existing
+    /// ingester (the old drain task is aborted via `Drop`).
+    #[cfg(feature = "persistence")]
+    pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
+        self.inner.enable_streaming(config);
     }
 
     /// Executes a raw VelesQL string, parsing it before execution.

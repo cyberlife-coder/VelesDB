@@ -3,6 +3,7 @@
 //! Provides the `analyze()` method for collecting runtime statistics
 //! to support cost-based query planning.
 
+use crate::collection::query_cost::cost_model::{calibrate_cost_factors, OperationCostFactors};
 use crate::collection::stats::{CollectionStats, IndexStats, StatsCollector};
 use crate::collection::Collection;
 use crate::error::Error;
@@ -43,6 +44,7 @@ impl Collection {
     /// # Panics
     ///
     /// Panics if `point_count` exceeds `u64::MAX` (extremely unlikely on 64-bit systems).
+    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn analyze(&self) -> Result<CollectionStats, Error> {
         let mut collector = StatsCollector::new();
 
@@ -66,6 +68,12 @@ impl Collection {
             collector.add_column_stats(col);
         }
 
+        // Histogram construction: separate 10K-row sample for equi-depth histograms
+        let mut column_values = self.sample_column_values_for_histograms(10_000);
+        for (col_name, values) in &mut column_values {
+            collector.build_histogram(col_name, values, 64);
+        }
+
         // HNSW index statistics
         let hnsw_len = self.index.len();
         let hnsw_stats =
@@ -80,7 +88,13 @@ impl Collection {
             collector.add_index_stats(bm25_stats);
         }
 
-        Ok(collector.build())
+        let mut stats = collector.build();
+
+        // Calibrate cost factors from observed collection characteristics
+        let calibrated = calibrate_cost_factors(&stats, &OperationCostFactors::default());
+        stats.calibrated_cost_factors = Some(calibrated);
+
+        Ok(stats)
     }
 
     /// Samples up to 1000 payloads to compute size, distinct values, and null counts.
@@ -116,6 +130,93 @@ impl Collection {
         }
 
         (payload_size_bytes, distinct_values, null_counts)
+    }
+
+    /// Samples up to `max_samples` rows from payload storage for histogram construction.
+    ///
+    /// For each payload field, extracts values and converts them to `f64`:
+    /// - Integer → `i as f64`
+    /// - Float → `f` directly
+    /// - String → ordinal rank (sorted unique index, 0-based)
+    /// - NULL, Bool, Array, and Object values are skipped.
+    ///
+    /// String ordinal ranking is computed per-column: all sampled strings are
+    /// collected, sorted lexicographically, deduplicated, and each string is
+    /// mapped to its 0-based index in the sorted unique list.
+    fn sample_column_values_for_histograms(&self, max_samples: usize) -> HashMap<String, Vec<f64>> {
+        let payload_storage = self.payload_storage.read();
+        let ids = payload_storage.ids();
+
+        // First pass: collect raw values per column
+        let mut numeric_values: HashMap<String, Vec<f64>> = HashMap::new();
+        let mut string_values: HashMap<String, Vec<String>> = HashMap::new();
+
+        for id in ids.into_iter().take(max_samples) {
+            if let Ok(Some(payload)) = payload_storage.retrieve(id) {
+                if let Some(obj) = payload.as_object() {
+                    for (key, value) in obj {
+                        Self::collect_column_value(
+                            key,
+                            value,
+                            &mut numeric_values,
+                            &mut string_values,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Second pass: convert string ordinal ranks and merge into result
+        for (col, strings) in string_values {
+            let ranks = Self::compute_ordinal_ranks(&strings);
+            numeric_values.entry(col).or_default().extend(ranks);
+        }
+
+        numeric_values
+    }
+
+    /// Collects a single payload field value into the appropriate accumulator.
+    ///
+    /// Numeric values go into `numeric_values`; strings go into `string_values`.
+    /// NULL, Bool, Array, and Object values are skipped.
+    fn collect_column_value(
+        key: &str,
+        value: &serde_json::Value,
+        numeric_values: &mut HashMap<String, Vec<f64>>,
+        string_values: &mut HashMap<String, Vec<String>>,
+    ) {
+        match value {
+            serde_json::Value::Number(n) => {
+                if let Some(f) = n.as_f64() {
+                    numeric_values.entry(key.to_owned()).or_default().push(f);
+                }
+            }
+            serde_json::Value::String(s) => {
+                string_values
+                    .entry(key.to_owned())
+                    .or_default()
+                    .push(s.clone());
+            }
+            _ => {} // Skip Null, Bool, Array, Object
+        }
+    }
+
+    /// Computes ordinal ranks for a list of string values.
+    ///
+    /// Sorts unique strings lexicographically and maps each input string
+    /// to its 0-based index in the sorted unique list.
+    // Reason: ordinal rank indices are bounded by sample size (≤10,000);
+    // usize→f64 is exact for values < 2^53.
+    #[allow(clippy::cast_precision_loss)]
+    fn compute_ordinal_ranks(strings: &[String]) -> Vec<f64> {
+        let mut unique: Vec<&str> = strings.iter().map(String::as_str).collect();
+        unique.sort_unstable();
+        unique.dedup();
+
+        strings
+            .iter()
+            .filter_map(|s| unique.binary_search(&s.as_str()).ok().map(|idx| idx as f64))
+            .collect()
     }
 
     /// Returns cached statistics if available and fresh, otherwise recomputes.
@@ -155,6 +256,7 @@ impl Collection {
     /// Selectivity is 1/cardinality, representing the probability
     /// that a random row matches a specific value.
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API for cost model — used by typed wrappers
     pub fn estimate_column_selectivity(&self, column: &str) -> f64 {
         let stats = self.get_stats();
         stats.estimate_selectivity(column)

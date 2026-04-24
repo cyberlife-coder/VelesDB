@@ -4,7 +4,7 @@
 //! Supports pattern matching by similarity and reinforcement learning.
 //! Includes extensible reinforcement strategies for adaptive confidence updates.
 
-// SAFETY: Numeric casts in procedural memory are intentional:
+// Reason: Numeric casts in procedural memory are intentional:
 // - u64->i64 casts for timestamps (SystemTime::elapsed returns u64, DB uses i64)
 // - i64->u64 casts for display purposes (timestamps are always positive)
 // - f64->f32 casts for confidence scores (f32 precision sufficient, values clamped to 0.0-1.0)
@@ -137,7 +137,6 @@ impl ProceduralMemory {
     ///
     /// Returns an error when embedding dimension is invalid, the collection is
     /// unavailable, or persistence fails.
-    #[allow(deprecated)]
     pub fn learn(
         &self,
         procedure_id: u64,
@@ -151,8 +150,7 @@ impl ProceduralMemory {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
 
         let point = Point::new(
             procedure_id,
@@ -240,7 +238,6 @@ impl ProceduralMemory {
     /// # Errors
     ///
     /// Returns an error when procedure retrieval or update fails.
-    #[allow(deprecated)]
     pub fn reinforce_with_strategy(
         &self,
         procedure_id: u64,
@@ -259,8 +256,7 @@ impl ProceduralMemory {
         let state = Self::extract_procedure_state(&point)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
 
         let context = state.build_reinforcement_context(now);
         let new_confidence = strategy.update_confidence(state.confidence, success, &context);
@@ -339,7 +335,6 @@ impl ProceduralMemory {
     /// # Errors
     ///
     /// Returns an error when collection access fails.
-    #[allow(deprecated)]
     pub fn list_all(&self) -> Result<Vec<ProcedureMatch>, AgentMemoryError> {
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 

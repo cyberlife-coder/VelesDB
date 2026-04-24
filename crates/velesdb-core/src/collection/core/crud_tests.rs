@@ -1,7 +1,9 @@
 #![cfg(all(test, feature = "persistence"))]
 
 use crate::storage::PayloadStorage;
-use crate::{distance::DistanceMetric, point::Point, quantization::StorageMode, Collection};
+use crate::{
+    collection::Collection, distance::DistanceMetric, point::Point, quantization::StorageMode,
+};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;

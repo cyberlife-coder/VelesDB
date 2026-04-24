@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "get_collection",
     "is_empty",
     "flush",
+    "scroll_collection",
     // Point operations
     "upsert",
     "upsert_metadata",
@@ -35,15 +36,28 @@ const COMMANDS: &[&str] = &[
     "hybrid_search",
     "multi_query_search",
     "query",
-    // AgentMemory (semantic)
+    // AgentMemory (semantic, episodic, procedural)
     "semantic_store",
     "semantic_query",
+    "episodic_record",
+    "episodic_recent",
+    "procedural_learn",
+    "procedural_recall",
     // Knowledge Graph
+    "create_graph_collection",
     "add_edge",
     "get_edges",
     "traverse_graph",
     "get_node_degree",
     "traverse_graph_parallel",
+    // Sparse vector operations
+    "sparse_search",
+    "hybrid_sparse_search",
+    "sparse_upsert",
+    // PQ training
+    "train_pq",
+    // Streaming insert (persistence only)
+    "stream_insert",
     // Secondary Indexes
     "create_index",
     "drop_index",

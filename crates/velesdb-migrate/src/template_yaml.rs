@@ -12,7 +12,7 @@ destination:
   collection: migrated_docs
   dimension: 768
   metric: cosine  # cosine, euclidean, or dot
-  storage_mode: full  # full, sq8, or binary
+  storage_mode: full  # full, sq8, binary, pq, rabitq
 
 options:
   batch_size: 1000
@@ -85,29 +85,6 @@ source:
   collection: your_collection
   # tenant: default_tenant
   # database: default_database
-
-destination:
-  path: ./velesdb_data
-  collection: migrated_docs
-  dimension: 768
-  metric: cosine
-
-options:
-  batch_size: 1000
-"#;
-
-pub(super) const PGVECTOR_TEMPLATE: &str = r#"# VelesDB Migration Configuration - pgvector Source
-# Requires: velesdb-migrate --features postgres
-source:
-  type: pgvector
-  connection_string: postgres://user:password@localhost:5432/database
-  table: embeddings
-  vector_column: embedding
-  id_column: id
-  payload_columns:
-    - title
-    - content
-  # filter: "created_at > '2024-01-01'"
 
 destination:
   path: ./velesdb_data

@@ -1,18 +1,14 @@
 #![allow(clippy::doc_markdown)]
 //! `VelesDB` Server - REST API for the `VelesDB` vector database.
 
-use axum::{
-    extract::DefaultBodyLimit,
-    routing::{delete, get, post},
-    Router,
-};
+use axum::{middleware::Next, Router};
 use clap::Parser;
 use std::future::IntoFuture;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 use tower::ServiceExt;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -24,18 +20,10 @@ use velesdb_core::Database;
 #[cfg(feature = "swagger-ui")]
 use velesdb_server::ApiDoc;
 use velesdb_server::{
-    add_edge, aggregate, analyze_collection,
     auth::{auth_middleware, AuthState},
-    batch_search, collection_sanity,
-    config::{parse_api_keys_env, CliOverrides, ServerConfig},
-    create_collection, create_index, delete_collection, delete_index, delete_point, explain,
-    flush_collection, get_collection, get_collection_config, get_collection_stats, get_edge_count,
-    get_edges, get_guardrails, get_node_degree, get_node_edges, get_node_payload, get_point,
-    graph_search, health_check, hybrid_search, is_empty, list_collections, list_indexes,
-    list_nodes, match_query, multi_query_search, query, readiness_check, remove_edge, search,
-    search_ids, stream_insert, stream_traverse, stream_upsert_points, text_search, traverse_graph,
-    traverse_parallel, update_guardrails, upsert_node_payload, upsert_points, AppState,
-    OnboardingMetrics,
+    config::{build_cors_layer, parse_api_keys_env, CliOverrides, CorsConfig, ServerConfig},
+    routes::api_routes,
+    AppState, OnboardingMetrics,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -66,6 +54,10 @@ struct Args {
     /// TLS private key file (PEM)
     #[arg(long, env = "VELESDB_TLS_KEY")]
     tls_key: Option<String>,
+
+    /// Rate limit: max requests per second per IP (0 = disabled)
+    #[arg(long, env = "VELESDB_RATE_LIMIT")]
+    rate_limit: Option<u32>,
 }
 
 fn configure_tracing() {
@@ -92,6 +84,26 @@ fn log_startup(cfg: &ServerConfig) {
     if cfg.tls_enabled() {
         tracing::info!("TLS enabled");
     }
+    if cfg.rate_limit_enabled() {
+        tracing::info!("Rate limiting enabled: {} req/s per IP", cfg.rate_limit);
+    } else {
+        tracing::info!("Rate limiting disabled");
+    }
+    log_cors_config(&cfg.cors);
+}
+
+fn log_cors_config(cors: &CorsConfig) {
+    if cors.is_permissive() {
+        tracing::warn!(
+            "CORS is permissive (all origins allowed). \
+             Set [cors] allowed_origins in velesdb.toml for production."
+        );
+    } else {
+        tracing::info!(
+            "CORS restricted to {} origin(s)",
+            cors.allowed_origins.len()
+        );
+    }
 }
 
 fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
@@ -109,110 +121,42 @@ fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
     Ok(state)
 }
 
-fn core_routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/health", get(health_check))
-        .route("/ready", get(readiness_check))
-        .route(
-            "/collections",
-            get(list_collections).post(create_collection),
-        )
-        .route(
-            "/collections/{name}",
-            get(get_collection).delete(delete_collection),
-        )
-        .route("/collections/{name}/empty", get(is_empty))
-        .route("/collections/{name}/config", get(get_collection_config))
-        .route("/collections/{name}/sanity", get(collection_sanity))
-        .route("/collections/{name}/flush", post(flush_collection))
-        .route("/collections/{name}/analyze", post(analyze_collection))
-        .route("/collections/{name}/stats", get(get_collection_stats))
-        .route("/guardrails", get(get_guardrails).put(update_guardrails))
-        // 100MB limit scoped to batch vector upload routes only
-        // (1000 vectors × 768D × 4 bytes = ~3MB typical; 100MB covers extreme cases)
-        .merge(
-            Router::new()
-                .route("/collections/{name}/points", post(upsert_points))
-                .route(
-                    "/collections/{name}/points/stream",
-                    post(stream_upsert_points),
-                )
-                .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
-        )
-        .route("/collections/{name}/stream/insert", post(stream_insert))
-        .route(
-            "/collections/{name}/points/{id}",
-            get(get_point).delete(delete_point),
-        )
+/// Middleware that adds deprecation headers to responses served on
+/// unversioned (legacy) routes. Clients should migrate to `/v1/` prefix.
+async fn deprecation_header(
+    request: axum::extract::Request,
+    next: Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert("deprecation", "true".parse().expect("static header value"));
+    headers.insert(
+        "x-api-deprecated",
+        "Use /v1/ prefix".parse().expect("static header value"),
+    );
+    response
 }
 
-fn search_routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/collections/{name}/search", post(search))
-        .route("/collections/{name}/search/batch", post(batch_search))
-        .route("/collections/{name}/search/multi", post(multi_query_search))
-        .route("/collections/{name}/search/text", post(text_search))
-        .route("/collections/{name}/search/hybrid", post(hybrid_search))
-        .route("/collections/{name}/search/ids", post(search_ids))
-        .route(
-            "/collections/{name}/indexes",
-            get(list_indexes).post(create_index),
-        )
-        .route(
-            "/collections/{name}/indexes/{label}/{property}",
-            delete(delete_index),
-        )
-        .route("/query", post(query))
-        .route("/aggregate", post(aggregate))
-        .route("/query/explain", post(explain))
-        .route("/collections/{name}/match", post(match_query))
-}
+#[allow(clippy::similar_names)] // Reason: `routes` (handler tree) and `router` (final router) are distinct concepts.
+fn build_router(
+    state: Arc<AppState>,
+    auth_state: AuthState,
+    rate_limit: u32,
+    cors: &CorsConfig,
+) -> anyhow::Result<Router> {
+    let routes = api_routes();
 
-fn graph_routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route(
-            "/collections/{name}/graph/edges",
-            get(get_edges).post(add_edge),
-        )
-        .route(
-            "/collections/{name}/graph/edges/{edge_id}",
-            delete(remove_edge),
-        )
-        .route("/collections/{name}/graph/edges/count", get(get_edge_count))
-        .route("/collections/{name}/graph/nodes", get(list_nodes))
-        .route(
-            "/collections/{name}/graph/nodes/{node_id}/edges",
-            get(get_node_edges),
-        )
-        .route(
-            "/collections/{name}/graph/nodes/{node_id}/payload",
-            get(get_node_payload).put(upsert_node_payload),
-        )
-        .route(
-            "/collections/{name}/graph/nodes/{node_id}/degree",
-            get(get_node_degree),
-        )
-        .route("/collections/{name}/graph/traverse", post(traverse_graph))
-        .route(
-            "/collections/{name}/graph/traverse/parallel",
-            post(traverse_parallel),
-        )
-        .route(
-            "/collections/{name}/graph/traverse/stream",
-            get(stream_traverse),
-        )
-        .route("/collections/{name}/graph/search", post(graph_search))
-}
+    // Canonical versioned API under /v1/
+    let versioned = Router::new().nest("/v1", routes.clone());
 
-fn api_routes() -> Router<Arc<AppState>> {
-    core_routes().merge(search_routes()).merge(graph_routes())
-}
+    // Legacy unversioned routes with deprecation headers for backward compat
+    let legacy = routes.layer(axum::middleware::from_fn(deprecation_header));
 
-fn build_router(state: Arc<AppState>, auth_state: AuthState) -> Router {
-    let api_router = api_routes();
+    let api_router = versioned.merge(legacy);
 
     #[cfg(feature = "prometheus")]
     let api_router = {
+        use axum::routing::get;
         use velesdb_server::prometheus_metrics;
         api_router.route("/metrics", get(prometheus_metrics))
     };
@@ -226,13 +170,22 @@ fn build_router(state: Arc<AppState>, auth_state: AuthState) -> Router {
         api_router.merge(Router::<()>::new().merge(swagger_ui))
     };
 
-    api_router
+    let cors_layer = build_cors_layer(cors);
+
+    let router = api_router
         .layer(axum::middleware::from_fn_with_state(
             auth_state,
             auth_middleware,
         ))
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
+        .layer(cors_layer)
+        .layer(TraceLayer::new_for_http());
+
+    if rate_limit > 0 {
+        let config = velesdb_server::rate_limit::build_rate_limit_config(rate_limit)?;
+        Ok(router.layer(velesdb_server::rate_limit::GovernorLayer::new(config)))
+    } else {
+        Ok(router)
+    }
 }
 
 fn warn_if_exposed(host: &str) {
@@ -286,9 +239,14 @@ async fn serve(
         notify_clone.notify_one();
     };
 
-    let server = axum::serve(listener, app)
-        .with_graceful_shutdown(graceful_shutdown)
-        .into_future();
+    // into_make_service_with_connect_info provides peer IP to the
+    // rate limiter's SmartIpKeyExtractor.
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(graceful_shutdown)
+    .into_future();
 
     // Start server in a task so we can apply drain timeout after signal
     let server_handle = tokio::spawn(server);
@@ -449,6 +407,7 @@ fn build_cli_overrides(args: Args) -> CliOverrides {
         api_keys: parse_api_keys_env(),
         tls_cert: args.tls_cert,
         tls_key: args.tls_key,
+        rate_limit: args.rate_limit,
     }
 }
 
@@ -474,7 +433,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = init_app_state(&cfg.data_dir)?;
     let auth_state = AuthState::new(cfg.api_keys.clone());
-    let app = build_router(state.clone(), auth_state);
+    let app = build_router(state.clone(), auth_state, cfg.rate_limit, &cfg.cors)?;
 
     if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
         serve_tls(

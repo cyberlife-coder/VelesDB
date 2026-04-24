@@ -3,9 +3,9 @@
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-1.11.1-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
+[![Version](https://img.shields.io/badge/version-1.13.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
-Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.11.1 - a high-performance vector database for AI applications.
+Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.13.0 - a high-performance vector database for AI applications.
 
 ## Features
 
@@ -123,9 +123,14 @@ db = velesdb.Database("./path/to/data")
 # List collections
 names = db.list_collections()
 
-# Create collection (with optional HNSW tuning)
+# Create collection (with optional HNSW tuning via typed options)
 collection = db.create_collection("name", dimension=768, metric="cosine")
-collection = db.create_collection("tuned", dimension=768, m=48, ef_construction=600)
+from velesdb import HnswOptions
+collection = db.create_collection(
+    "tuned",
+    dimension=768,
+    hnsw=HnswOptions(m=48, ef_construction=600),
+)
 
 # Get existing collection
 collection = db.get_collection("name")
@@ -284,6 +289,12 @@ results = collection.search_with_filter(
 count = collection.stream_insert([
     {"id": 100, "vector": [...], "payload": {"key": "value"}}
 ])
+
+# Scroll through all points in stable batches (no vector required)
+# Useful for export, reindexing, or full-collection inspection.
+for batch in collection.scroll(batch_size=100, filter=None):
+    for point in batch:
+        print(point["id"], point["payload"])
 
 # MATCH graph traversal query (VelesQL)
 results = collection.match_query(
@@ -529,9 +540,9 @@ graph.add_edge({
 })
 
 # Store properties on nodes
-graph.store_node_payload(10, {"name": "Alice", "role": "engineer"})
-graph.store_node_payload(20, {"name": "Bob", "role": "designer"})
-graph.store_node_payload(30, {"name": "Paris", "type": "city"})
+graph.upsert_node_payload(10, {"name": "Alice", "role": "engineer"})
+graph.upsert_node_payload(20, {"name": "Bob", "role": "designer"})
+graph.upsert_node_payload(30, {"name": "Paris", "type": "city"})
 
 # Retrieve node properties
 payload = graph.get_node_payload(10)
@@ -588,9 +599,9 @@ for r in results:
 
 ```python
 # Important: nodes must have _labels in their payload for label-based matching
-graph.store_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
-graph.store_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
-graph.store_node_payload(30, {"_labels": ["City"], "name": "Paris"})
+graph.upsert_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
+graph.upsert_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
+graph.upsert_node_payload(30, {"_labels": ["City"], "name": "Paris"})
 
 # MATCH query: find who Alice knows
 results = graph.match_query(
@@ -633,7 +644,7 @@ from velesdb import VelesQL
 # Parse a query and inspect its structure
 parsed = VelesQL.parse("SELECT id, title FROM documents WHERE category = 'tech' ORDER BY date DESC LIMIT 20")
 
-print(parsed.table_name)       # "documents"
+print(parsed.collection_name)  # "documents"
 print(parsed.columns)          # ["id", "title"]
 print(parsed.limit)            # 20
 print(parsed.offset)           # None
@@ -694,7 +705,7 @@ Key parameters for `ParsedStatement`:
 
 | Property / Method | Returns | Description |
 |-------------------|---------|-------------|
-| `table_name` | `str` or `None` | FROM clause table name |
+| `collection_name` | `str` or `None` | FROM clause collection name |
 | `columns` | `list[str]` | Selected columns (or `["*"]`) |
 | `limit` | `int` or `None` | LIMIT value |
 | `offset` | `int` or `None` | OFFSET value |
@@ -866,7 +877,7 @@ VelesDB is built in Rust with explicit SIMD optimizations:
 |-----------|--------|
 | **HNSW Search (10K/768D)** | **47.0 µs** (k=10, Balanced mode) |
 | **Recall@10 (Accurate)** | **100%** |
-| **Insert throughput vs pgvector** | **3.8-7x faster** (10K-100K vectors) |
+| **Insert throughput vs pgvector** | **3.8-7x faster** (10K-100K vectors, internal benchmarks on i9-14900KF, not independently verified) |
 
 *Measured with Criterion.rs on i9-14900KF. See [benchmarks/](../../benchmarks/) for methodology.*
 

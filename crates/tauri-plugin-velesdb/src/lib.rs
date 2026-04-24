@@ -81,183 +81,6 @@ pub mod types_graph;
 pub use error::{CommandError, Error, Result};
 pub use state::VelesDbState;
 
-// ============================================================================
-// Simple In-Memory Index for Demo (VelesDbExt trait)
-// ============================================================================
-
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use parking_lot::RwLock;
-
-// Use DistanceMetric from velesdb_core
-use velesdb_core::DistanceMetric;
-
-/// Simple in-memory vector index for demo/prototyping purposes.
-///
-/// **WARNING:** O(n) brute-force search — not suitable beyond 10,000 vectors.
-/// No persistence, no HNSW acceleration. For production workloads, use the
-/// full plugin commands backed by `VelesDbState` which provides persistent
-/// HNSW-indexed collections.
-pub(crate) struct SimpleVectorIndex {
-    vectors: HashMap<u64, Vec<f32>>,
-    dimension: usize,
-    metric: DistanceMetric,
-}
-
-impl SimpleVectorIndex {
-    /// Creates a new empty index with the given dimension.
-    #[must_use]
-    pub fn new(dimension: usize) -> Self {
-        Self {
-            vectors: HashMap::new(),
-            dimension,
-            metric: DistanceMetric::Cosine, // Default metric
-        }
-    }
-
-    /// Inserts a vector with the given ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the vector dimension doesn't match the index dimension.
-    pub fn insert(&mut self, id: u64, vector: &[f32]) -> Result<()> {
-        if vector.len() != self.dimension {
-            return Err(Error::InvalidConfig(format!(
-                "Vector dimension mismatch: expected {}, got {}",
-                self.dimension,
-                vector.len()
-            )));
-        }
-        self.vectors.insert(id, vector.to_vec());
-        Ok(())
-    }
-
-    /// Searches for the k most similar vectors.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query dimension doesn't match the index dimension.
-    pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
-        if query.len() != self.dimension {
-            return Err(Error::InvalidConfig(format!(
-                "Query dimension mismatch: expected {}, got {}",
-                self.dimension,
-                query.len()
-            )));
-        }
-
-        let mut scores: Vec<(u64, f32)> = self
-            .vectors
-            .iter()
-            .map(|(id, vec)| {
-                let score = self.metric.calculate(query, vec);
-                (*id, score)
-            })
-            .collect();
-
-        // Sort by score according to metric ordering
-        self.metric.sort_results(&mut scores);
-        scores.truncate(k);
-        Ok(scores)
-    }
-
-    /// Returns the number of vectors in the index.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.vectors.len()
-    }
-
-    /// Returns true if the index is empty.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.vectors.is_empty()
-    }
-
-    /// Returns the dimension of vectors in this index.
-    #[must_use]
-    pub fn dimension(&self) -> usize {
-        self.dimension
-    }
-
-    /// Clears all vectors from the index.
-    pub fn clear(&mut self) {
-        self.vectors.clear();
-    }
-}
-
-/// State for the simple vector index (used by `VelesDbExt`).
-pub(crate) struct SimpleIndexState(pub(crate) Arc<RwLock<SimpleVectorIndex>>);
-
-/// Extension trait for easy access to `VelesDB` from Tauri `AppHandle`.
-pub trait VelesDbExt<R: Runtime> {
-    /// Returns a handle to the simple vector index, or `None` if not initialized.
-    ///
-    /// Returns `None` when `init()` has not been called before this method.
-    fn velesdb(&self) -> Option<SimpleIndexHandle>;
-}
-
-impl<R: Runtime, T: Manager<R>> VelesDbExt<R> for T {
-    fn velesdb(&self) -> Option<SimpleIndexHandle> {
-        self.try_state::<SimpleIndexState>()
-            .map(|state| SimpleIndexHandle(Arc::clone(&state.0)))
-    }
-}
-
-/// Handle to interact with the simple vector index.
-pub struct SimpleIndexHandle(Arc<RwLock<SimpleVectorIndex>>);
-
-impl SimpleIndexHandle {
-    /// Inserts a vector with the given ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the vector dimension doesn't match the index dimension.
-    ///
-    pub fn insert(&self, id: u64, vector: &[f32]) -> Result<()> {
-        self.0.write().insert(id, vector)
-    }
-
-    /// Searches for the k most similar vectors.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query dimension doesn't match the index dimension.
-    ///
-    pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
-        self.0.read().search(query, k)
-    }
-
-    /// Returns the number of vectors in the index.
-    ///
-    /// Returns `0` and logs an error if the index state is unavailable.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.0.read().len()
-    }
-
-    /// Returns true if the index is empty.
-    ///
-    /// Returns `true` and logs an error if the index state is unavailable.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.read().is_empty()
-    }
-
-    /// Returns the dimension of vectors in this index.
-    ///
-    /// Returns `0` and logs an error if the index state is unavailable.
-    #[must_use]
-    pub fn dimension(&self) -> usize {
-        self.0.read().dimension()
-    }
-
-    /// Clears all vectors from the index.
-    pub fn clear(&self) {
-        self.0.write().clear();
-    }
-}
-
 /// Initializes the `VelesDB` plugin with the default settings.
 ///
 /// Uses `./velesdb_data` as the default path for persistence.
@@ -335,6 +158,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands_query::query,
             commands::is_empty,
             commands::flush,
+            commands::scroll_collection,
             // Sparse vector commands
             commands_sparse::sparse_search,
             commands_sparse::hybrid_sparse_search,
@@ -344,7 +168,12 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             // AgentMemory commands (EPIC-016 US-003)
             commands_memory::semantic_store,
             commands_memory::semantic_query,
+            commands_memory::episodic_record,
+            commands_memory::episodic_recent,
+            commands_memory::procedural_learn,
+            commands_memory::procedural_recall,
             // Knowledge Graph commands (EPIC-015 US-001)
+            commands_graph::create_graph_collection,
             commands_graph::add_edge,
             commands_graph::get_edges,
             commands_graph::traverse_graph,
@@ -363,9 +192,6 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
         .setup(move |app, _api| {
             let state = VelesDbState::new(db_path.clone());
             app.manage(state);
-            // Initialize simple in-memory index for VelesDbExt trait (384 dimensions for AllMiniLML6V2)
-            let simple_index = SimpleIndexState(Arc::new(RwLock::new(SimpleVectorIndex::new(384))));
-            app.manage(simple_index);
             tracing::info!("VelesDB plugin initialized with path: {:?}", db_path);
             Ok(())
         })

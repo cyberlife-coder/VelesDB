@@ -212,6 +212,44 @@ impl VectorStore {
         )
     }
 
+    /// k-NN search with a named quality mode (API parity with Server/Python/Mobile).
+    ///
+    /// Accepts the same quality strings as the Python and Server SDKs:
+    /// `"fast"`, `"balanced"`, `"accurate"`, `"perfect"`, `"autotune"`,
+    /// `"custom:<ef>"`, `"adaptive:<min_ef>:<max_ef>"`.
+    ///
+    /// **WASM note**: The current WASM VectorStore uses brute-force O(n)
+    /// search (no HNSW graph), so all quality modes produce identical results.
+    /// The quality parameter is parsed and validated for API parity and
+    /// forward-compatibility with future HNSW-backed WASM stores.
+    ///
+    /// Returns `[[id, score], ...]` sorted by relevance.
+    #[wasm_bindgen]
+    pub fn search_with_quality(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: &str,
+    ) -> Result<JsValue, JsValue> {
+        store_search::validate_dimension(query.len(), self.dimension)?;
+        // Validate the quality string for API parity. The value is unused
+        // because WASM search is brute-force (no HNSW graph).
+        parsing::parse_search_quality(quality)?;
+        store_search::search(
+            query,
+            &self.ids,
+            &self.data,
+            &self.data_sq8,
+            &self.data_binary,
+            &self.sq8_mins,
+            &self.sq8_scales,
+            self.dimension,
+            self.metric,
+            self.storage_mode,
+            k,
+        )
+    }
+
     /// Similarity search with threshold. Operators: >, >=, <, <=, =, !=.
     #[wasm_bindgen]
     pub fn similarity_search(
@@ -444,7 +482,16 @@ impl VectorStore {
         }
     }
 
-    /// Clears all vectors from the store.
+    /// Clears all vectors, payloads, and auxiliary indexes from the
+    /// store in place.
+    ///
+    /// Preserves `dimension`, `metric`, and `storage_mode` so the store
+    /// can be re-populated without reallocation. Any sparse index is
+    /// dropped: it would otherwise reference rows that no longer exist.
+    ///
+    /// Used by `TRUNCATE` (Devin Review Finding F12) so that outstanding
+    /// `WasmCollectionHandle`s holding an `Rc` to this store observe the
+    /// wipe atomically instead of pointing to a stale clone.
     #[wasm_bindgen]
     pub fn clear(&mut self) {
         self.ids.clear();
@@ -454,6 +501,7 @@ impl VectorStore {
         self.sq8_mins.clear();
         self.sq8_scales.clear();
         self.payloads.clear();
+        self.sparse_index = None;
     }
 
     /// Returns memory usage estimate in bytes.

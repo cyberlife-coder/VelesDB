@@ -1,87 +1,281 @@
 # VelesDB Soundness Documentation
 
 > **Purpose**: Enable Rust senior reviewers to audit unsafe code without reading the entire codebase.
-> **Last Updated**: 2026-04-02 (EPIC-022/US-001 + RaBitQ soundness + CAS entry-point)
+> **Last Updated**: 2026-04-09 (full production unsafe audit — 32 source files)
 
 ## Table of Contents
 
 1. [Overview](#overview)
 2. [SIMD Intrinsics](#simd-intrinsics)
 3. [Memory Allocation](#memory-allocation)
-4. [Memory-Mapped I/O](#memory-mapped-io)
-5. [Pointer Operations](#pointer-operations)
-6. [Concurrency](#concurrency)
-7. [FFI Boundaries](#ffi-boundaries)
-8. [Soundness Checklist](#soundness-checklist)
+4. [Memory Pool](#memory-pool)
+5. [Memory-Mapped I/O](#memory-mapped-io)
+6. [Pointer Operations](#pointer-operations)
+7. [HNSW Graph Unsafe Operations](#hnsw-graph-unsafe-operations)
+8. [Concurrency](#concurrency)
+9. [FFI Boundaries](#ffi-boundaries)
+10. [Soundness Checklist](#soundness-checklist)
 
 ---
 
 ## Overview
 
-VelesDB uses `unsafe` code in five categories:
+VelesDB uses `unsafe` code in the following categories:
 
 | Category | Purpose | Files |
 |----------|---------|-------|
-| **SIMD** | AVX-512/AVX2/NEON for vector operations | `simd_native.rs`, `simd.rs`, `trigram/simd.rs` |
+| **SIMD (consolidated)** | AVX-512/AVX2/NEON distance kernels | `simd_native/x86_avx512.rs`, `simd_native/x86_avx2/`, `simd_native/x86_avx2_similarity.rs`, `simd_native/neon.rs`, `simd_neon.rs` |
+| **SIMD (dispatch)** | Runtime feature detection + dispatch to ISA kernels | `simd_native/dispatch/` (`mod.rs`, `dot.rs`, `euclidean.rs`, `cosine.rs`, `hamming.rs`) |
+| **SIMD (reduction)** | Horizontal sum helpers for accumulator registers | `simd_native/reduction.rs` |
+| **SIMD (ADC)** | Asymmetric Distance Computation for PQ search | `simd_native/adc.rs` |
 | **SIMD (RaBitQ)** | AVX-512 VPOPCNTDQ for binary Hamming distance | `quantization/rabitq/` |
-| **Alloc** | Custom aligned allocations | `perf_optimizations.rs`, `alloc_guard.rs` |
-| **Mmap** | Memory-mapped file I/O | `storage/mmap.rs`, `storage/guard.rs` |
+| **SIMD (trigram)** | AVX2/AVX-512 trigram extraction | `index/trigram/simd.rs` |
+| **Prefetch (x86)** | Software prefetch hints (`_mm_prefetch`) | `simd_native/prefetch.rs`, `perf_optimizations.rs` |
+| **Prefetch (ARM64)** | Inline ASM `prfm` instructions | `simd_neon_prefetch.rs` |
+| **Alloc** | Custom aligned allocations + RAII | `perf_optimizations.rs`, `alloc_guard.rs`, `contiguous_ops.rs` |
+| **Memory pool** | `MaybeUninit` object pool for graph edges | `collection/graph/memory_pool/mod.rs` |
+| **Mmap** | Memory-mapped file I/O | `storage/mmap.rs`, `storage/mmap_capacity.rs`, `storage/guard.rs` |
 | **Pointers** | Raw pointer operations for performance | `storage/vector_bytes.rs`, `storage/compaction.rs` |
-| **Prefetch** | Software prefetch hints for HNSW search | `perf_optimizations.rs` |
+| **HNSW unchecked** | `get_unchecked` on hot-path vector access | `index/hnsw/native/graph/neighbors.rs`, `search.rs`, `search_state.rs` |
+| **HNSW drop order** | `ManuallyDrop::drop` for field ordering | `index/hnsw/index/mod.rs`, `index/hnsw/index/vacuum.rs` |
+| **Send/Sync** | Manual `Send`/`Sync` impls | `index/hnsw/native_inner.rs`, `simd_native/dispatch/mod.rs` |
 | **FFI** | Python (PyO3), WASM, Mobile bindings | `velesdb-python/`, `velesdb-wasm/`, `velesdb-mobile/` |
 
 ---
 
 ## SIMD Intrinsics
 
-### Module: `crates/velesdb-core/src/simd_native.rs`
+### Module: `crates/velesdb-core/src/simd_native/x86_avx512.rs`
 
-**Functions**:
-- `dot_product_avx512()` - AVX-512 dot product
-- `squared_l2_avx512()` - AVX-512 L2 distance
-- `dot_product_avx2()` - AVX2 dot product with FMA
-- `squared_l2_avx2()` - AVX2 L2 distance
-- `dot_product_neon()` / `squared_l2_neon()` - ARM NEON
+**Functions** (all `unsafe fn` with `#[target_feature(enable = "avx512f")]`):
+- `dot_product_avx512()` / `dot_product_avx512_4acc()` / `dot_product_avx512_8acc()`
+- `squared_l2_avx512()` / `squared_l2_avx512_4acc()` / `squared_l2_avx512_8acc()`
+- `cosine_fused_avx512()` / `cosine_fused_avx512_4acc()` / `cosine_fused_avx512_8acc()`
+- `hamming_avx512()` / `hamming_avx512_4acc()` - Hamming distance on f32 vectors
+- `jaccard_avx512()` / `jaccard_avx512_4acc()` / `jaccard_avx512_8acc()`
+- `hamming_binary_avx512()` / `hamming_binary_avx512_vpopcntdq()` - Binary Hamming
 
 **Invariants**:
-1. Runtime feature detection ALWAYS precedes unsafe SIMD call
-2. `#[target_feature(enable = "...")]` enforces CPU feature requirement
-3. `a.len() == b.len()` is asserted in public API before any unsafe call
-4. Unaligned loads (`_mm*_loadu_ps`) are used - no alignment requirement
+1. `#[target_feature(enable = "avx512f")]` enforces CPU feature at function level
+2. Runtime feature detection via `simd_level()` ALWAYS precedes the call
+3. `a.len() == b.len()` is asserted in the public dispatch API
+4. Unaligned loads (`_mm512_loadu_ps`) used throughout - no alignment requirement
+5. Masked remainder handling via `_mm512_maskz_loadu_ps` for tail elements
+6. Multi-accumulator variants (4-acc, 8-acc) use ILP to hide FMA latency
+
+### Modules: `crates/velesdb-core/src/simd_native/x86_avx2/dot.rs` and `simd_native/x86_avx2/l2.rs`
+
+**Functions** (all `unsafe fn` with `#[target_feature(enable = "avx2,fma")]`):
+- `dot_product_avx2()` / `dot_product_avx2_1acc()` / `dot_product_avx2_4acc()`
+- `squared_l2_avx2()` / `squared_l2_avx2_1acc()` / `squared_l2_avx2_4acc()`
+- `dot_avx2_remainder()` / `dot_avx2_tail_under16()` - remainder handling
+
+**Invariants**:
+1. `#[target_feature(enable = "avx2,fma")]` enforces CPU features
+2. Pointer arithmetic bounded by `a.len()` (loop end pointer = `a.as_ptr().add(len)`)
+3. Unaligned loads via `_mm256_loadu_ps`
+4. Remainder loops handle `len % (4*8)` or `len % 8` elements safely
+
+### Module: `crates/velesdb-core/src/simd_native/x86_avx2_similarity.rs`
+
+**Functions** (all `unsafe fn` with `#[target_feature(enable = "avx2,fma")]`):
+- `cosine_fused_avx2()` / `cosine_fused_avx2_2acc()` - Fused cosine similarity
+- `hamming_avx2()` - Hamming distance (f32 vectors)
+- `hamming_binary_avx2()` - Binary Hamming distance (u64 vectors)
+- `jaccard_avx2()` - Jaccard similarity
+- Helper functions: `cosine_avx2_remainder()`, `hamming_avx2_fp_acc()`, `jaccard_avx2_remainder()`
+
+**Invariants**: Same as AVX2 dot/L2 above. `hamming_binary_avx2` operates on `&[u64]`
+slices with popcount via `_mm256_set_epi8` LUT.
+
+### Module: `crates/velesdb-core/src/simd_native/neon.rs`
+
+**Functions** (all `unsafe fn` with `#[target_feature(enable = "neon")]`,
+`#[cfg(target_arch = "aarch64")]`):
+- `dot_product_neon()` / `squared_l2_neon()` / `cosine_neon()` / `hamming_neon()`
+- `jaccard_neon()` / `hamming_binary_neon()`
+- Safe wrappers: `dot_product_neon_safe()`, `euclidean_neon_safe()`, etc.
+
+**Invariants**:
+1. `#[cfg(target_arch = "aarch64")]` guarantees NEON availability (mandatory on AArch64)
+2. `debug_assert_eq!(a.len(), b.len())` at function entry
+3. Loop bounds `chunks = len / 4` ensure pointer arithmetic stays in bounds
+4. Unrolled remainder handles `len % 4` elements via scalar indexing
 
 **Why It's Sound**:
+```rust
+// SAFETY: NEON load and FMA require in-bounds pointers.
+// - Condition 1: Loop invariant `offset + 4 <= chunks * 4 <= len`.
+// - Condition 2: `a` and `b` have equal length (debug assertion).
+let va = vld1q_f32(a.as_ptr().add(offset));
+let vb = vld1q_f32(b.as_ptr().add(offset));
+sum = vfmaq_f32(sum, va, vb);
+```
+
+### Module: `crates/velesdb-core/src/simd_neon.rs`
+
+Standalone NEON implementations (same pattern as `simd_native/neon.rs`).
+Contains `dot_product_neon`, `euclidean_squared_neon`, `cosine_neon`,
+`cosine_normalized_neon` with identical invariant structure.
+
+### Module: `crates/velesdb-core/src/simd_native/dispatch/` (5 files)
+
+**Files**:
+- `simd_native/dispatch/mod.rs` — `unsafe impl Send/Sync for DistanceEngine`
+- `simd_native/dispatch/dot.rs` — Dot product dispatch to AVX-512/AVX2/scalar
+- `simd_native/dispatch/euclidean.rs` — Euclidean/L2 dispatch + `scale_inplace_avx2`
+- `simd_native/dispatch/cosine.rs` — Cosine similarity dispatch
+- `simd_native/dispatch/hamming.rs` — Hamming/Jaccard/binary Hamming dispatch
+
+**Pattern**: Each dispatch function checks `simd_level()` (cached runtime detection)
+and calls the appropriate `unsafe` target-featured kernel.
+
+```rust
+pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len());
+    match simd_level() {
+        SimdLevel::Avx512 if a.len() >= 1024 =>
+            // SAFETY: simd_level() confirmed AVX-512F support.
+            unsafe { dot_product_avx512_8acc(a, b) },
+        // ...
+    }
+}
+```
+
+**`dispatch/mod.rs`**: Contains `unsafe impl Send/Sync for DistanceEngine`.
+
+```rust
+// SAFETY: DistanceEngine stores only function pointers and a usize dimension.
+// - Condition 1: Function pointers are Copy + Send + Sync.
+// - Condition 2: usize is a primitive with no interior mutability.
+unsafe impl Send for DistanceEngine {}
+unsafe impl Sync for DistanceEngine {}
+```
+
+**`dispatch/euclidean.rs`**: Contains `unsafe fn scale_inplace_avx2()` for
+in-place vector normalization using `_mm256_mul_ps`.
+
+**Why Dispatch Is Sound**:
+- `simd_level()` caches `OnceLock<SimdLevel>` from `is_x86_feature_detected!`
+- Every `unsafe` call site is preceded by an `simd_level()` match arm
+- Dimension assertions are in the public API before any unsafe call
+
+### Module: `crates/velesdb-core/src/simd_native/reduction.rs`
+
+**Functions**:
+- `hsum_avx256()` - Horizontal sum of AVX2 `__m256` register
+- `hsum_avx512()` - Horizontal sum of AVX-512 `__m512` register
+- `reduce_4acc_avx256()` / `reduce_4acc_avx512()` - 4-accumulator reduction
+
+**Macros** (expand inside `unsafe` contexts at call sites):
+- `simd_4acc_dot_loop!` / `simd_4acc_l2_loop!` - 4-accumulator unrolled loops
+- `simd_8acc_dot_loop!` / `simd_8acc_l2_loop!` - 8-accumulator unrolled loops
+
+**Invariants**:
+1. All functions require CPU features enforced by `#[target_feature]`
+2. No pointer arithmetic or memory access - operate purely on register values
+3. Macros accept only validated pointers from loop-bounded callers
+
+**Why It's Sound**:
+```rust
+// SAFETY: All intrinsics require AVX2 which is guaranteed by #[target_feature].
+// No pointer arithmetic or memory access — operates purely on register values.
+```
+
+### Module: `crates/velesdb-core/src/simd_native/adc.rs`
+
+**Functions**:
+- `adc_distances_batch()` - Public dispatch for PQ ADC distance computation
+- `adc_single_avx2()` - AVX2 gather-based ADC (8 subspaces per iteration)
+- `adc_single_neon()` - NEON ADC (4 subspaces per iteration, `get_unchecked`)
+
+**Invariants**:
+1. Runtime feature detection via `simd_level()` before calling SIMD path
+2. `code.len() == m` asserted via `debug_assert_eq!` in each kernel
+3. `code[i] < k` for all `i` asserted via `debug_assert!` at function entry
+4. AVX2 gather indices computed as `subspace * k + code[subspace]`, bounded by `m * k`
+5. Scalar fallback exists for CPUs without AVX2 or NEON
+
+**Why It's Sound**:
+```rust
+// AVX2: _mm256_i32gather_ps reads f32 at base_ptr + index * 4.
+// Each index = subspace * k + code[subspace] < m * k = lut.len().
+// Scale = 4 = size_of::<f32>(), matching lut element type.
+let gathered = _mm256_i32gather_ps::<4>(lut.as_ptr(), indices);
+
+// NEON: get_unchecked with bounds verified by debug_assert at entry.
+let vals: [f32; 4] = [
+    *lut.get_unchecked(base * k + usize::from(*code.get_unchecked(base))),
+    // ...
+];
+```
+
+### Module: `crates/velesdb-core/src/simd_native/prefetch.rs`
+
+**Functions**:
+- `prefetch_vector()` - Prefetch `&[f32]` into L1 cache (`_mm_prefetch` / NEON)
+- `prefetch_vector_from_u16()` - Prefetch `&[u16]` (PQ code vectors)
+- `prefetch_vector_u64()` - Prefetch `&[u64]` (RaBitQ binary codes)
+- `prefetch_vector_multi_cache_line()` - Multi-level cache prefetch (L1/L2/L3)
+- `prefetch_multi_x86()` / `prefetch_multi_arm64()` - Platform-specific helpers
+
+**Invariants**:
+1. `_mm_prefetch` is a non-faulting hint instruction on x86_64
+2. Pointer offsets are bounded by `vector_bytes` checks before `unsafe { base.add(...) }`
+3. ARM64 `prefetch_multi_arm64()` uses `unsafe { base.add() }` only when
+   `vector_bytes > offset` is verified
+4. Graceful degradation: no-op on unsupported architectures
+
+### Module: `crates/velesdb-core/src/simd_neon_prefetch.rs`
+
+**Functions** (all `#[cfg(target_arch = "aarch64")]`):
+- `prefetch_read_l1()` / `prefetch_read_l2()` / `prefetch_read_l3()` - Read prefetch
+- `prefetch_write_l1()` - Write prefetch
+- `prefetch_vector_neon()` - Multi-line vector prefetch with 128B stride
+
+**Unsafe**: Inline assembly `core::arch::asm!("prfm pldl1keep, [{ptr}]")`
+
+**Invariants**:
+1. ARM `prfm` instructions are non-faulting hints (ARM Architecture Reference Manual)
+2. Invalid or out-of-bounds pointers are tolerated by hardware
+3. `options(nostack, preserves_flags)` ensures no stack or flag side effects
+4. Pointer offsets in `prefetch_vector_neon()` are guarded by `vector_bytes > offset`
+
+**Why It's Sound**:
+```rust
+// SAFETY: `asm!(prfm ...)` emits a prefetch hint only.
+// - Condition 1: `prfm` does not dereference memory architecturally.
+// - Condition 2: Invalid pointers are tolerated by hardware for prefetch hints.
+unsafe {
+    core::arch::asm!(
+        "prfm pldl1keep, [{ptr}]",
+        ptr = in(reg) ptr,
+        options(nostack, preserves_flags)
+    );
+}
+```
+
+**Forbidden Scenarios**:
+- None: all prefetch instructions (x86 `_mm_prefetch`, ARM `prfm`) are
+  architecturally non-faulting hints. Invalid addresses are silently ignored.
+
+**Why It's Sound (shared across all SIMD kernels)**:
 ```rust
 // Public API enforces precondition
 pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
     
     match simd_level() {  // Cached runtime detection
-        SimdLevel::Avx512 if a.len() >= 16 => unsafe { dot_product_avx512(a, b) },
+        SimdLevel::Avx512 => unsafe { dot_product_avx512(a, b) },
         // ...
     }
 }
 ```
 
 **Forbidden Scenarios**:
-- ❌ Calling `dot_product_avx512` without checking `is_x86_feature_detected!("avx512f")`
-- ❌ Passing slices of different lengths
-- ❌ Using aligned load intrinsics on potentially unaligned data
-
-### Module: `crates/velesdb-core/src/simd.rs`
-
-**Function**: `prefetch_vector()`
-
-**Invariants**:
-1. Prefetch is a CPU hint - cannot cause memory faults
-2. Even invalid addresses are safe (prefetch is speculative)
-
-**Why It's Sound**:
-```rust
-// SAFETY: _mm_prefetch is a hint instruction that cannot fault
-unsafe {
-    _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
-}
-```
+- Calling any target-featured function without runtime feature detection
+- Passing slices of different lengths
+- Using aligned load intrinsics on potentially unaligned data
 
 ### Module: `crates/velesdb-core/src/index/trigram/simd.rs`
 
@@ -207,6 +401,39 @@ This is sound because:
 - No interior mutability without `&mut self`
 - Memory is not thread-local
 
+### Module: `crates/velesdb-core/src/contiguous_ops.rs`
+
+**Struct**: `ContiguousVectors` (impl block — extends `perf_optimizations.rs`)
+
+**Critical Operations**:
+1. `reorder_copy()` - Out-of-place vector reordering with `dealloc` + `copy_nonoverlapping`
+2. `Drop for ContiguousVectors` - Deallocates the raw buffer via `dealloc`
+
+**Invariants**:
+1. `old_idx < self.count` is bounds-checked before `copy_nonoverlapping`
+2. `new_idx < new_order.len() == self.count` ensures destination is in bounds
+3. Source and destination buffers are distinct (non-overlapping) allocations
+4. `AllocGuard` provides panic-safety: if `copy_permuted_vectors` panics,
+   the guard deallocates the new buffer; the old buffer remains valid
+5. `Drop::drop` uses `NonNull` invariant (pointer is always non-null)
+
+**Why It's Sound**:
+```rust
+// SAFETY: src is within the current allocation (old_idx < count, count <= capacity).
+// dst is within the new allocation (new_idx < new_order.len() == count).
+// Both buffers are distinct (non-overlapping) allocations.
+unsafe {
+    ptr::copy_nonoverlapping(
+        self.data.as_ptr().add(old_idx * dim),
+        dst.add(new_idx * dim),
+        dim,
+    );
+}
+
+// Drop: SAFETY: data was allocated with this layout, is non-null (NonNull invariant)
+unsafe { dealloc(self.data.as_ptr().cast::<u8>(), layout); }
+```
+
 ### Module: `crates/velesdb-core/src/alloc_guard.rs`
 
 **Struct**: `AllocGuard` - RAII guard for raw allocations
@@ -231,6 +458,57 @@ impl Drop for AllocGuard {
 unsafe impl Send for AllocGuard {}
 // NOT Sync - concurrent access to raw memory is unsafe
 ```
+
+---
+
+## Memory Pool
+
+### Module: `crates/velesdb-core/src/collection/graph/memory_pool/mod.rs`
+
+**Struct**: `MemoryPool<T>` - Free-list based object pool using `MaybeUninit<T>`
+
+**Critical Operations**:
+1. `grow()` / `grow_for_batch()` - `Vec::set_len()` on `MaybeUninit<T>` chunks
+2. `store()` - `drop_in_place` on previously initialized slot, then `MaybeUninit::write`
+3. `get()` - `MaybeUninit::assume_init_ref()` on initialized slots
+4. `deallocate()` - `drop_in_place` to run destructor before slot reuse
+5. `Drop for MemoryPool<T>` - `drop_in_place` on all initialized slots
+6. `prefetch()` - `_mm_prefetch` on slot pointers (x86_64)
+
+**Invariants**:
+1. `set_len(chunk_size)` is valid because `MaybeUninit<T>` has no initialization
+   requirement - capacity was allocated via `Vec::with_capacity`
+2. `assume_init_ref()` is called ONLY when `initialized.contains(&index)` is true,
+   meaning `store()` previously wrote a value at that slot
+3. `drop_in_place` is called ONLY when `initialized.remove(&index)` succeeds,
+   confirming the slot contains a valid `T`
+4. `Drop` iterates only the `initialized` set - never drops uninitialized memory
+5. `free_lookup: FxHashSet` prevents duplicate entries in the free list (idempotent dealloc)
+
+**Why It's Sound**:
+```rust
+// grow: SAFETY: `set_len` is valid because elements are `MaybeUninit<T>`.
+// - Condition 1: Capacity was allocated for `chunk_size` elements.
+// - Condition 2: `MaybeUninit<T>` has no initialization requirement.
+unsafe { chunk.set_len(self.chunk_size); }
+
+// get: SAFETY: `assume_init_ref` requires slot initialization.
+// - Condition 1: `initialized` set confirms `store()` initialized this slot.
+if chunk_idx < self.chunks.len() && self.initialized.contains(&index.0) {
+    Some(unsafe { self.chunks[chunk_idx][slot_idx].assume_init_ref() })
+}
+
+// deallocate: SAFETY: `drop_in_place` requires an initialized value.
+// - Condition 1: `initialized.remove(index)` confirms previous initialization.
+if self.initialized.remove(&index.0) {
+    unsafe { std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr()); }
+}
+```
+
+**Forbidden Scenarios**:
+- Calling `assume_init_ref()` on a slot that was allocated but never `store()`-d
+- Calling `drop_in_place` on an uninitialized slot (would be UB)
+- Double-dropping a slot (prevented by `initialized` set tracking)
 
 ---
 
@@ -263,6 +541,31 @@ self.remap_epoch.fetch_add(1, Ordering::Release);  // Invalidate old guards
 - ❌ Accessing mmap after resize without re-acquiring guard
 - ❌ Creating mapping for file with size 0
 - ❌ Using guard after epoch mismatch
+
+### Module: `crates/velesdb-core/src/storage/mmap_capacity.rs`
+
+**Function**: `MmapStorage::ensure_capacity()`
+
+**Critical Operation**: Remaps the memory-mapped file after resizing via
+`unsafe { MmapMut::map_mut(&self.data_file)? }`.
+
+**Invariants**:
+1. `data_file.set_len(new_len)` is called BEFORE remapping, ensuring the file
+   is large enough for the new mapping
+2. Old mmap is flushed before remap (`mmap.flush()`)
+3. Epoch counter is incremented after remap to invalidate stale guards
+4. Write lock on `self.mmap` is held during the entire resize operation
+
+**Why It's Sound**:
+```rust
+self.data_file.set_len(new_len)?;
+// SAFETY: data_file has been resized with set_len(new_len) above.
+// - Condition 1: File was resized to new_len before remapping.
+// - Condition 2: Old mmap is dropped when we assign the new one.
+// - Condition 3: File remains open with read+write permissions.
+*mmap = unsafe { MmapMut::map_mut(&self.data_file)? };
+self.remap_epoch.fetch_add(1, Ordering::Release);
+```
 
 ### Module: `crates/velesdb-core/src/storage/guard.rs`
 
@@ -340,6 +643,120 @@ pub(super) fn bytes_to_vector(bytes: &[u8], dimension: usize) -> Vec<f32> {
 ```rust
 // SAFETY: fallocate is a valid syscall, fd is a valid file descriptor
 let ret = unsafe { libc::fallocate(fd, mode, offset as libc::off_t, len as libc::off_t) };
+```
+
+---
+
+## HNSW Graph Unsafe Operations
+
+### Unchecked Vector Access: `neighbors.rs`, `search.rs`, `search_state.rs`
+
+**Modules**:
+- `crates/velesdb-core/src/index/hnsw/native/graph/neighbors.rs`
+- `crates/velesdb-core/src/index/hnsw/native/graph/search.rs`
+- `crates/velesdb-core/src/index/hnsw/native/graph/search_state.rs`
+
+**Operation**: `vectors.get_unchecked(node_id)` on `ContiguousVectors`
+
+These three files form the HNSW search and neighbor selection hot path. They
+use `get_unchecked` to eliminate bounds checks on vector access during graph
+traversal, where the node IDs are guaranteed valid by construction.
+
+**Invariants**:
+1. Every `node_id` passed to `get_unchecked` was obtained from the graph's
+   neighbor lists, which only contain IDs of successfully inserted nodes
+2. `ContiguousVectors` stores vectors at indices assigned by the monotonic
+   counter in `NativeHnsw.count` - a node is inserted into vectors BEFORE
+   it appears in any neighbor list
+3. Vectors are never removed from `ContiguousVectors` during the lifetime
+   of a search (vectors outlive graph references)
+
+**Usage in `neighbors.rs`** (neighbor selection with VAMANA diversification):
+```rust
+// SAFETY: candidate_id is a valid node_id from search results,
+// which only contains IDs of successfully inserted nodes.
+let candidate_vec = unsafe { vectors.get_unchecked(candidate_id) };
+```
+
+**Usage in `search.rs`** (greedy descent + layer search):
+```rust
+// SAFETY: entry/neighbor is a valid node_id from entry_point or
+// the graph's neighbor list, always IDs of inserted nodes.
+let entry_vec = unsafe { vectors.get_unchecked(entry) };
+let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
+```
+
+**Usage in `search_state.rs`** (batch neighbor gathering):
+```rust
+// SAFETY: neighbor is a valid node_id from the graph's neighbor list,
+// only containing IDs of successfully inserted nodes.
+let vec = unsafe { vectors.get_unchecked(neighbor) };
+```
+
+**Forbidden Scenarios**:
+- Using `get_unchecked` with user-provided IDs (must go through mappings first)
+- Accessing vectors after a vacuum/rebuild (stale indices)
+- Using `get_unchecked` outside the vectors+layers read lock scope
+
+### Drop Order: `index/mod.rs` and `vacuum.rs`
+
+**Modules**:
+- `crates/velesdb-core/src/index/hnsw/index/mod.rs`
+- `crates/velesdb-core/src/index/hnsw/index/vacuum.rs`
+
+**Operation**: `ManuallyDrop::drop(&mut *inner_guard)`
+
+`HnswIndex` wraps its `HnswInner` in `ManuallyDrop` to enforce a drop-order
+invariant: `inner` (the HNSW graph) must be dropped BEFORE `io_holder` (reserved
+for future disk-backed backends that may own borrowed data).
+
+**Invariants (`Drop for HnswIndex`)**:
+1. `inner` is wrapped in `ManuallyDrop` to suppress automatic drop
+2. Write lock guarantees exclusive access during drop (no concurrent readers)
+3. `Drop::drop` is the only call site for `ManuallyDrop::drop` on `inner`
+4. `io_holder` field is declared AFTER `inner` (enforced by `test_field_order_io_holder_after_inner`)
+
+**Invariants (`vacuum()`)**:
+1. Exclusive write lock is held on `inner_guard` during the swap
+2. `ManuallyDrop::drop` is called exactly once before replacement
+3. The old value is immediately replaced with `ManuallyDrop::new(new_inner)`
+
+**Why It's Sound**:
+```rust
+// Drop impl:
+// SAFETY: ManuallyDrop::drop requires exclusive ownership and a single call.
+// - Condition 1: Write lock guarantees no concurrent access.
+// - Condition 2: This Drop impl is the only site that calls ManuallyDrop::drop.
+unsafe { ManuallyDrop::drop(&mut *self.inner.write()); }
+
+// Vacuum:
+// SAFETY: We hold exclusive write lock. Called exactly once before replacement.
+unsafe { ManuallyDrop::drop(&mut *inner_guard); }
+*inner_guard = ManuallyDrop::new(new_inner);
+```
+
+### Send/Sync: `native_inner.rs`
+
+**Module**: `crates/velesdb-core/src/index/hnsw/native_inner.rs`
+
+**Operations**: `unsafe impl Send for NativeHnswInner` and `unsafe impl Sync for NativeHnswInner`
+
+**Invariants**:
+1. Internal mutability is synchronized via `parking_lot::RwLock` and atomics
+2. No thread-affine resources (thread-local state, file descriptors) are stored
+3. All exposed APIs respect the lock hierarchy (vectors → layers → neighbors)
+
+**Why It's Sound**:
+```rust
+// SAFETY: `NativeHnswInner` is `Send` because ownership transfer preserves invariants.
+// - Condition 1: Internal mutability is synchronized via `parking_lot::RwLock`/atomics.
+// - Condition 2: No thread-affine resources are stored in the wrapper.
+unsafe impl Send for NativeHnswInner {}
+
+// SAFETY: `NativeHnswInner` is `Sync` because shared references are concurrency-safe.
+// - Condition 1: Concurrent access to mutable graph state is lock/atomic protected.
+// - Condition 2: Exposed APIs do not bypass synchronization primitives.
+unsafe impl Sync for NativeHnswInner {}
 ```
 
 ---

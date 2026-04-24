@@ -89,6 +89,8 @@ pub enum StorageMode {
     Sq8,
     /// Binary: 1-bit quantization (1 bit/dimension). 32x compression, ~5-10% recall loss.
     Binary,
+    /// Product Quantization (PQ): aggressive lossy compression (8x-16x typical).
+    ProductQuantization,
     /// `RaBitQ`: 1-bit with rotation + scalar correction. 32x compression, ~1-2% recall loss.
     Rabitq,
 }
@@ -99,7 +101,59 @@ impl From<StorageMode> for velesdb_core::StorageMode {
             StorageMode::Full => velesdb_core::StorageMode::Full,
             StorageMode::Sq8 => velesdb_core::StorageMode::SQ8,
             StorageMode::Binary => velesdb_core::StorageMode::Binary,
+            StorageMode::ProductQuantization => velesdb_core::StorageMode::ProductQuantization,
             StorageMode::Rabitq => velesdb_core::StorageMode::RaBitQ,
+        }
+    }
+}
+
+/// Search quality profile controlling the recall/latency tradeoff.
+///
+/// Maps to core [`velesdb_core::SearchQuality`]. In HNSW-backed collections,
+/// this controls the `ef_search` parameter. Higher quality means better recall
+/// at the cost of increased latency.
+#[derive(Debug, Clone, Default, uniffi::Enum)]
+pub enum SearchQuality {
+    /// Fast search (`ef_search=96`). ~95% recall, lowest latency.
+    Fast,
+    /// Balanced search (`ef_search=160`). ~99.5% recall, production default.
+    #[default]
+    Balanced,
+    /// Accurate search (`ef_search=512`). ~100% recall.
+    Accurate,
+    /// Perfect recall mode (`ef_search=4096`). Guaranteed 100% recall.
+    Perfect,
+    /// Custom `ef_search` value for fine-grained control.
+    Custom {
+        /// The `ef_search` expansion factor.
+        ef: u32,
+    },
+    /// Adaptive two-phase search that starts low and doubles if needed.
+    Adaptive {
+        /// Minimum `ef_search` (starting point).
+        min_ef: u32,
+        /// Maximum `ef_search` (cap).
+        max_ef: u32,
+    },
+    /// Auto-tuned adaptive search based on collection statistics.
+    AutoTune,
+}
+
+impl From<SearchQuality> for velesdb_core::SearchQuality {
+    fn from(quality: SearchQuality) -> Self {
+        match quality {
+            SearchQuality::Fast => velesdb_core::SearchQuality::Fast,
+            SearchQuality::Balanced => velesdb_core::SearchQuality::Balanced,
+            SearchQuality::Accurate => velesdb_core::SearchQuality::Accurate,
+            SearchQuality::Perfect => velesdb_core::SearchQuality::Perfect,
+            SearchQuality::Custom { ef } => {
+                velesdb_core::SearchQuality::Custom(usize::try_from(ef).unwrap_or(usize::MAX))
+            }
+            SearchQuality::Adaptive { min_ef, max_ef } => velesdb_core::SearchQuality::Adaptive {
+                min_ef: usize::try_from(min_ef).unwrap_or(usize::MAX),
+                max_ef: usize::try_from(max_ef).unwrap_or(usize::MAX),
+            },
+            SearchQuality::AutoTune => velesdb_core::SearchQuality::AutoTune,
         }
     }
 }
@@ -125,6 +179,13 @@ pub enum FusionStrategy {
         /// Weight for hit ratio (0.0-1.0).
         hit_weight: f32,
     },
+    /// Relative Score Fusion for dense + sparse hybrid search.
+    RelativeScore {
+        /// Weight for the dense (vector) branch (0.0-1.0).
+        dense_weight: f32,
+        /// Weight for the sparse branch (0.0-1.0).
+        sparse_weight: f32,
+    },
 }
 
 impl From<FusionStrategy> for CoreFusionStrategy {
@@ -141,6 +202,13 @@ impl From<FusionStrategy> for CoreFusionStrategy {
                 avg_weight,
                 max_weight,
                 hit_weight,
+            },
+            FusionStrategy::RelativeScore {
+                dense_weight,
+                sparse_weight,
+            } => CoreFusionStrategy::RelativeScore {
+                dense_weight,
+                sparse_weight,
             },
         }
     }

@@ -92,6 +92,7 @@ impl ParsedQuery {
                 velesdb_core::velesql::DdlStatement::Analyze(s) => s.collection.clone(),
                 velesdb_core::velesql::DdlStatement::Truncate(s) => s.collection.clone(),
                 velesdb_core::velesql::DdlStatement::AlterCollection(s) => s.collection.clone(),
+                _ => return None,
             });
         }
         // DML: collection name is in the DML struct, not in SELECT FROM.
@@ -112,7 +113,17 @@ impl ParsedQuery {
         self.collection_name()
     }
 
-    /// Get the list of selected columns as JSON array.
+    /// Get the list of selected columns — one entry per SELECT-list item.
+    ///
+    /// Returns a JSON array with every item in the SELECT list, in grammar
+    /// order: regular columns, aggregate calls, `similarity()` expressions,
+    /// qualified wildcards (`alias.*`), and window functions. `SELECT *`
+    /// returns `["*"]`.
+    ///
+    /// Note (v1.13.0 contract completion): versions prior to v1.13.0
+    /// silently omitted `similarity()` expressions and qualified wildcards
+    /// from this list for mixed SELECT statements. The full list is now
+    /// returned. Callers that hard-coded the shorter length must update.
     #[wasm_bindgen(getter)]
     pub fn columns(&self) -> JsValue {
         let cols = self.inner.select.columns.to_display_names();

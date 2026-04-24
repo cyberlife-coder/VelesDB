@@ -876,11 +876,219 @@ class TestV15Features:
         with pytest.raises(SecurityError):
             validate_sparse_vector({True: 1.0})
 
-    def test_version_is_1_7_0(self):
-        """Test that package version is 1.7.0."""
+    def test_version_is_current(self):
+        """Test that package version matches workspace version."""
         from langchain_velesdb import __version__
 
-        assert __version__ == "1.7.0"
+        assert __version__ == "1.13.0"
+
+
+class TestServerUrlValidation:
+    """Tests for validate_url() call in server mode (WP-2B)."""
+
+    def test_valid_https_server_url_is_accepted(self, embeddings):
+        """A valid https:// server_url must not raise."""
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="url-test",
+            server_url="https://velesdb.example.com:8080",
+        )
+        assert store.server_url == "https://velesdb.example.com:8080"
+
+    def test_valid_http_server_url_is_accepted(self, embeddings):
+        """A valid http:// server_url must not raise."""
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="url-test-http",
+            server_url="http://localhost:8080",
+        )
+        assert store.server_url == "http://localhost:8080"
+
+    def test_no_server_url_is_accepted(self, embeddings):
+        """Omitting server_url (local mode) must not raise."""
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="url-test-none",
+        )
+        assert store.server_url is None
+
+    def test_invalid_scheme_raises_security_error(self, embeddings):
+        """A server_url without http/https scheme must raise SecurityError."""
+        from langchain_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError, match="http"):
+            VelesDBVectorStore(
+                embedding=embeddings,
+                path="./unused",
+                collection_name="url-test-bad",
+                server_url="ftp://velesdb.example.com",
+            )
+
+    def test_empty_server_url_raises_security_error(self, embeddings):
+        """An empty server_url string must raise SecurityError."""
+        from langchain_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError):
+            VelesDBVectorStore(
+                embedding=embeddings,
+                path="./unused",
+                collection_name="url-test-empty",
+                server_url="",
+            )
+
+    def test_server_url_with_newline_raises_security_error(self, embeddings):
+        """A server_url containing a newline must raise SecurityError."""
+        from langchain_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError):
+            VelesDBVectorStore(
+                embedding=embeddings,
+                path="./unused",
+                collection_name="url-test-injection",
+                server_url="https://ok.example.com\nX-Injected: evil",
+            )
+
+
+class TestSearchQualityLangChain:
+    """Tests for the search_quality parameter (feat/searchquality-propagation)."""
+
+    def test_init_with_valid_quality_preset(self, embeddings):
+        """Constructor accepts known quality presets."""
+        for preset in ("fast", "balanced", "accurate", "perfect", "autotune"):
+            store = VelesDBVectorStore(
+                embedding=embeddings,
+                path="./unused",
+                collection_name="sq-test",
+                search_quality=preset,
+            )
+            assert store._search_quality == preset
+
+    def test_init_with_custom_quality(self, embeddings):
+        """Constructor accepts 'custom:N' format."""
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="sq-custom",
+            search_quality="custom:256",
+        )
+        assert store._search_quality == "custom:256"
+
+    def test_init_with_adaptive_quality(self, embeddings):
+        """Constructor accepts 'adaptive:MIN:MAX' format."""
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="sq-adaptive",
+            search_quality="adaptive:32:512",
+        )
+        assert store._search_quality == "adaptive:32:512"
+
+    def test_init_with_none_quality(self, embeddings):
+        """Constructor with None search_quality stores None."""
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="sq-none",
+        )
+        assert store._search_quality is None
+
+    def test_init_with_invalid_quality_raises(self, embeddings):
+        """Constructor raises SecurityError for unknown quality string."""
+        from langchain_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError, match="search_quality"):
+            VelesDBVectorStore(
+                embedding=embeddings,
+                path="./unused",
+                collection_name="sq-bad",
+                search_quality="turbo",
+            )
+
+    def test_search_with_quality_called_when_set(self, embeddings):
+        """When _search_quality is set, search_with_quality is called."""
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="sq-delegate",
+            search_quality="accurate",
+        )
+
+        calls = []
+
+        class _MockCollection:
+            def search_with_quality(self, vector, quality, top_k):
+                calls.append({"quality": quality, "top_k": top_k})
+                return [{"payload": {"text": "hello"}, "score": 0.9}]
+
+        store._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
+        results = store.similarity_search("test query", k=5)
+
+        assert len(calls) == 1
+        assert calls[0]["quality"] == "accurate"
+        assert calls[0]["top_k"] == 5
+        assert len(results) == 1
+
+    def test_plain_search_called_when_quality_is_none(self, embeddings):
+        """When search_quality is None, collection.search is called (not search_with_quality)."""
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="sq-plain",
+        )
+
+        calls = []
+
+        class _MockCollection:
+            def search(self, vector, top_k):
+                calls.append({"top_k": top_k})
+                return [{"payload": {"text": "world"}, "score": 0.8}]
+
+        store._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
+        results = store.similarity_search("test query", k=3)
+
+        assert len(calls) == 1
+        assert calls[0]["top_k"] == 3
+        assert len(results) == 1
+
+    def test_per_call_quality_override_takes_precedence(self, embeddings):
+        """A per-call search_quality kwarg overrides the instance default."""
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="sq-override",
+            search_quality="fast",
+        )
+
+        calls = []
+
+        class _MockCollection:
+            def search_with_quality(self, vector, quality, top_k):
+                calls.append(quality)
+                return []
+
+        store._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
+        store.similarity_search_with_score("query", k=4, search_quality="perfect")
+
+        assert calls == ["perfect"]
+
+    def test_validate_search_quality_valid_forms(self):
+        """validate_search_quality accepts all documented forms."""
+        from langchain_velesdb.security import validate_search_quality
+
+        for value in ("fast", "balanced", "accurate", "perfect", "autotune",
+                      "custom:128", "custom:1024", "adaptive:16:256", "adaptive:32:512"):
+            assert validate_search_quality(value) == value
+
+    def test_validate_search_quality_rejects_invalid(self):
+        """validate_search_quality raises SecurityError for unknown strings."""
+        from langchain_velesdb.security import validate_search_quality, SecurityError
+
+        for bad in ("turbo", "custom:", "custom:abc", "adaptive:32", "adaptive:a:b", 42):
+            with pytest.raises((SecurityError, AttributeError)):
+                validate_search_quality(bad)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

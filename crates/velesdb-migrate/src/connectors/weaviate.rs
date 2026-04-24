@@ -26,6 +26,64 @@ impl WeaviateConnector {
         }
     }
 
+    /// Normalise a Weaviate distance identifier to the VelesDB core
+    /// vocabulary so `Pipeline::check_metric_fidelity` can compare it
+    /// against a destination collection's metric.
+    ///
+    /// Weaviate exposes `cosine`, `l2-squared`, `dot`, `hamming`,
+    /// and `manhattan`. VelesDB core uses `cosine`, `euclidean`,
+    /// `dot`, `hamming`, `jaccard`. `l2-squared` is mapped to
+    /// `euclidean` (both are L2 distance, VelesDB's `euclidean`
+    /// kernel operates on squared L2 internally). Unknown values are
+    /// lowercased and returned verbatim so mismatch errors stay
+    /// actionable.
+    fn normalise_weaviate_metric(raw: &str) -> String {
+        let lower = raw.to_ascii_lowercase();
+        match lower.as_str() {
+            "l2-squared" | "l2_squared" | "l2" => "euclidean".to_string(),
+            _ => lower,
+        }
+    }
+
+    /// Extract the distance metric from a class schema, preferring
+    /// the 1.24+ named-vector layout (`vectorConfig`) when it is
+    /// present and falling back to the legacy class-level
+    /// `vectorIndexConfig` otherwise.
+    ///
+    /// Policy for 1.24+ named vectors:
+    /// 1. Prefer the entry named `"default"` if present — Weaviate's
+    ///    implicit name for the primary vector.
+    /// 2. Otherwise use the lexicographically first entry by key
+    ///    so the result is deterministic (HashMap iteration order
+    ///    is not).
+    ///
+    /// Returns `None` when neither field carries a distance — for
+    /// example on a 1.24+ class whose operator left every named
+    /// vector at default index config.
+    fn extract_class_distance(class: &ClassSchema) -> Option<String> {
+        if let Some(vc) = class.vector_config.as_ref() {
+            if let Some(distance) = Self::pick_named_vector_distance(vc) {
+                return Some(distance);
+            }
+        }
+        class
+            .vector_index_config
+            .as_ref()
+            .and_then(|cfg| cfg.distance.clone())
+    }
+
+    fn pick_named_vector_distance(vc: &HashMap<String, NamedVectorEntry>) -> Option<String> {
+        let pick_entry = vc.get("default").or_else(|| {
+            let mut keys: Vec<&String> = vc.keys().collect();
+            keys.sort();
+            keys.first().and_then(|k| vc.get(*k))
+        })?;
+        pick_entry
+            .vector_index_config
+            .as_ref()
+            .and_then(|cfg| cfg.distance.clone())
+    }
+
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         let url = format!("{}{}", self.config.url.trim_end_matches('/'), path);
         let mut req = self.client.request(method, &url);
@@ -47,8 +105,27 @@ struct SchemaResponse {
 struct ClassSchema {
     class: String,
     properties: Option<Vec<PropertySchema>>,
+    /// Legacy (pre-1.24) class-level vectorIndexConfig. Still the
+    /// canonical location for single-vector collections.
     #[serde(rename = "vectorIndexConfig")]
-    #[allow(dead_code)] // Parsed from JSON, reserved for distance metric
+    vector_index_config: Option<VectorIndexConfig>,
+    /// Weaviate 1.24+ named vectors. When present, each entry
+    /// owns its own vectorIndexConfig with an independent
+    /// distance metric. The parser prefers `vector_config` over
+    /// the legacy field when both are present (1.24+ classes
+    /// can in theory coexist with legacy fields during a
+    /// migration).
+    #[serde(rename = "vectorConfig")]
+    vector_config: Option<HashMap<String, NamedVectorEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NamedVectorEntry {
+    /// Per-named-vector vectorIndexConfig (1.24+). May be absent
+    /// if the operator only declared a vectorizer and left the
+    /// index config at defaults — in that case the entry
+    /// contributes `None` to the metric extraction.
+    #[serde(rename = "vectorIndexConfig")]
     vector_index_config: Option<VectorIndexConfig>,
 }
 
@@ -61,7 +138,11 @@ struct PropertySchema {
 
 #[derive(Debug, Deserialize)]
 struct VectorIndexConfig {
-    #[allow(dead_code)] // Parsed from JSON, reserved for auto-detecting metric
+    /// Distance metric reported by the Weaviate schema endpoint
+    /// (`cosine`, `l2-squared`, `dot`, `hamming`, `manhattan`).
+    /// Forwarded to `SourceSchema.metric` via `normalise_weaviate_metric`
+    /// so `Pipeline::check_metric_fidelity` can honestly compare it
+    /// against the destination collection's metric.
     distance: Option<String>,
 }
 
@@ -120,6 +201,8 @@ impl SourceConnector for WeaviateConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
+        crate::connectors::common::validate_url(&self.config.url)?;
+
         info!("Connecting to Weaviate at {}", self.config.url);
 
         let resp = self
@@ -220,10 +303,15 @@ impl SourceConnector for WeaviateConnector {
             }
         }
 
+        let metric = Self::extract_class_distance(class)
+            .as_deref()
+            .map(Self::normalise_weaviate_metric);
+
         info!(
-            "Weaviate class '{}': {}D vectors, {:?} objects, {} properties",
+            "Weaviate class '{}': {}D vectors, metric={:?}, {:?} objects, {} properties",
             self.config.class_name,
             dimension,
+            metric,
             total_count,
             fields.len()
         );
@@ -234,6 +322,7 @@ impl SourceConnector for WeaviateConnector {
             dimension,
             total_count,
             fields,
+            metric,
             ..Default::default()
         })
     }
@@ -339,6 +428,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_normalise_weaviate_metric_maps_l2_squared_to_euclidean() {
+        // Weaviate reports 'l2-squared' for L2 distance; VelesDB core
+        // uses 'euclidean'. The mapping is what allows
+        // check_metric_fidelity to honestly compare a Weaviate source
+        // against a core collection created with metric: "euclidean".
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("l2-squared"),
+            "euclidean"
+        );
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("L2-Squared"),
+            "euclidean"
+        );
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("l2_squared"),
+            "euclidean"
+        );
+    }
+
+    #[test]
+    fn test_normalise_weaviate_metric_lowercases_known_values() {
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("Cosine"),
+            "cosine"
+        );
+        assert_eq!(WeaviateConnector::normalise_weaviate_metric("Dot"), "dot");
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("Hamming"),
+            "hamming"
+        );
+    }
+
+    #[test]
+    fn test_normalise_weaviate_metric_preserves_unknown_values() {
+        // Manhattan is a valid Weaviate metric but not supported by
+        // VelesDB core — preserved verbatim so mismatch errors are
+        // actionable rather than masked.
+        assert_eq!(
+            WeaviateConnector::normalise_weaviate_metric("manhattan"),
+            "manhattan"
+        );
+    }
+
+    #[test]
     fn test_weaviate_connector_new() {
         let config = WeaviateConfig {
             url: "http://localhost:8080".to_string(),
@@ -359,5 +492,10 @@ mod tests {
 
         let json = serde_json::to_string(&query).unwrap();
         assert!(json.contains("Get"));
+    }
+
+    #[test]
+    fn test_connect_rejects_file_url() {
+        assert!(crate::connectors::common::validate_url("file:///etc/passwd").is_err());
     }
 }

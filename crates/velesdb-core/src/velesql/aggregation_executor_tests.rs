@@ -1,11 +1,10 @@
 //! Tests for VelesQL aggregation execution (EPIC-017 US-002).
 #![cfg(all(test, feature = "persistence"))]
-#![allow(deprecated)] // Tests use legacy Collection.
 
+use crate::collection::Collection;
 use crate::distance::DistanceMetric;
 use crate::point::Point;
 use crate::velesql::{Aggregator, Parser};
-use crate::Collection;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -221,7 +220,7 @@ fn test_executor_empty_collection() {
     // SUM of empty set should be null or not present
     // SUM of empty set returns null, which is valid JSON null
     let sum_price = result.get("sum_price");
-    assert!(sum_price.is_none() || sum_price.is_some_and(serde_json::Value::is_null));
+    assert!(sum_price.is_none_or(serde_json::Value::is_null));
 }
 
 #[test]

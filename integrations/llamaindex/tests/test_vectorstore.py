@@ -213,6 +213,9 @@ class TestQueryFilterTranslation:
         }
 
     def test_query_with_filters_fails_if_search_with_filter_is_missing(self, temp_dir):
+        """Regression for Sprint 1.5 S1.5-04: typed capability error."""
+        from llamaindex_velesdb.errors import VelesDBCapabilityError
+
         store = VelesDBVectorStore(path=temp_dir, collection_name="filter_missing_method")
         store._db = _RecordingDatabase(_SearchOnlyCollection())
         store._collection = None
@@ -224,8 +227,9 @@ class TestQueryFilterTranslation:
             filters=MetadataFilters(filters=[MetadataFilter(key="language", value="python")]),
         )
 
-        with pytest.raises(NotImplementedError, match="search_with_filter"):
+        with pytest.raises(VelesDBCapabilityError, match="search_with_filter") as excinfo:
             store.query(query)
+        assert excinfo.value.capability == "search_with_filter"
 
 
 class TestVelesDBVectorStoreAdvanced:
@@ -787,11 +791,211 @@ class TestV15Features:
         with pytest.raises(SecurityError):
             validate_sparse_vector({True: 1.0})
 
-    def test_version_is_1_7_0(self):
-        """Test that __version__ is 1.7.0."""
+    def test_version_is_current(self):
+        """Test that __version__ matches workspace version."""
         from llamaindex_velesdb import __version__
 
-        assert __version__ == "1.7.0"
+        assert __version__ == "1.13.0"
+
+
+class TestServerUrlValidation:
+    """Tests for validate_url() call in server mode (WP-2B)."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        """Create a temporary directory for tests."""
+        path = tempfile.mkdtemp()
+        yield path
+        shutil.rmtree(path, ignore_errors=True)
+
+    def test_valid_https_server_url_is_accepted(self, temp_dir):
+        """A valid https:// server_url must not raise."""
+        store = VelesDBVectorStore(
+            path=temp_dir,
+            collection_name="url-test",
+            server_url="https://velesdb.example.com:8080",
+        )
+        assert store.server_url == "https://velesdb.example.com:8080"
+
+    def test_valid_http_server_url_is_accepted(self, temp_dir):
+        """A valid http:// server_url must not raise."""
+        store = VelesDBVectorStore(
+            path=temp_dir,
+            collection_name="url-test-http",
+            server_url="http://localhost:8080",
+        )
+        assert store.server_url == "http://localhost:8080"
+
+    def test_no_server_url_is_accepted(self, temp_dir):
+        """Omitting server_url (local mode) must not raise."""
+        store = VelesDBVectorStore(path=temp_dir, collection_name="url-test-none")
+        assert store.server_url is None
+
+    def test_invalid_scheme_raises_security_error(self, temp_dir):
+        """A server_url without http/https scheme must raise SecurityError."""
+        from llamaindex_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError, match="http"):
+            VelesDBVectorStore(
+                path=temp_dir,
+                collection_name="url-test-bad",
+                server_url="ftp://velesdb.example.com",
+            )
+
+    def test_empty_server_url_raises_security_error(self, temp_dir):
+        """An empty server_url string must raise SecurityError."""
+        from llamaindex_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError):
+            VelesDBVectorStore(
+                path=temp_dir,
+                collection_name="url-test-empty",
+                server_url="",
+            )
+
+    def test_server_url_with_newline_raises_security_error(self, temp_dir):
+        """A server_url containing a newline must raise SecurityError."""
+        from llamaindex_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError):
+            VelesDBVectorStore(
+                path=temp_dir,
+                collection_name="url-test-injection",
+                server_url="https://ok.example.com\nX-Injected: evil",
+            )
+
+
+class TestSearchQualityLlamaIndex:
+    """Tests for the search_quality parameter (feat/searchquality-propagation)."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        """Create a temporary directory for tests."""
+        import tempfile
+        import shutil
+        path = tempfile.mkdtemp()
+        yield path
+        shutil.rmtree(path, ignore_errors=True)
+
+    def test_init_with_valid_quality_preset(self, temp_dir):
+        """Constructor accepts known quality presets."""
+        for preset in ("fast", "balanced", "accurate", "perfect", "autotune"):
+            store = VelesDBVectorStore(path=temp_dir, search_quality=preset)
+            assert store._search_quality == preset
+            assert store.search_quality == preset
+
+    def test_init_with_custom_quality(self, temp_dir):
+        """Constructor accepts 'custom:N' format."""
+        store = VelesDBVectorStore(path=temp_dir, search_quality="custom:256")
+        assert store._search_quality == "custom:256"
+
+    def test_init_with_adaptive_quality(self, temp_dir):
+        """Constructor accepts 'adaptive:MIN:MAX' format."""
+        store = VelesDBVectorStore(path=temp_dir, search_quality="adaptive:32:512")
+        assert store._search_quality == "adaptive:32:512"
+
+    def test_init_with_none_quality(self, temp_dir):
+        """Default search_quality is None."""
+        store = VelesDBVectorStore(path=temp_dir)
+        assert store._search_quality is None
+        assert store.search_quality is None
+
+    def test_init_with_invalid_quality_raises(self, temp_dir):
+        """Constructor raises SecurityError for unknown quality string."""
+        from llamaindex_velesdb.security import SecurityError
+
+        with pytest.raises(SecurityError, match="search_quality"):
+            VelesDBVectorStore(path=temp_dir, search_quality="turbo")
+
+    def test_search_with_quality_called_when_set(self, temp_dir):
+        """When _search_quality is set, search_with_quality is called by query()."""
+        from llama_index.core.vector_stores.types import VectorStoreQuery
+
+        store = VelesDBVectorStore(path=temp_dir, search_quality="accurate")
+
+        calls = []
+
+        class _MockCollection:
+            def search_with_quality(self, vector, quality, top_k):
+                calls.append({"quality": quality, "top_k": top_k})
+                return []
+
+            def info(self):
+                return {"dimension": 4}
+
+        store._collection = _MockCollection()
+        store._dimension = 4
+        store._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
+
+        q = VectorStoreQuery(query_embedding=[0.1, 0.2, 0.3, 0.4], similarity_top_k=5)
+        store.query(q)
+
+        assert len(calls) == 1
+        assert calls[0]["quality"] == "accurate"
+        assert calls[0]["top_k"] == 5
+
+    def test_plain_search_called_when_quality_is_none(self, temp_dir):
+        """When search_quality is None, collection.search is called."""
+        from llama_index.core.vector_stores.types import VectorStoreQuery
+
+        store = VelesDBVectorStore(path=temp_dir)
+
+        calls = []
+
+        class _MockCollection:
+            def search(self, vector, top_k):
+                calls.append({"top_k": top_k})
+                return []
+
+            def info(self):
+                return {"dimension": 4}
+
+        store._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
+
+        q = VectorStoreQuery(query_embedding=[0.1, 0.2, 0.3, 0.4], similarity_top_k=3)
+        store.query(q)
+
+        assert len(calls) == 1
+        assert calls[0]["top_k"] == 3
+
+    def test_per_call_quality_override(self, temp_dir):
+        """A per-call search_quality kwarg overrides the instance default."""
+        from llama_index.core.vector_stores.types import VectorStoreQuery
+
+        store = VelesDBVectorStore(path=temp_dir, search_quality="fast")
+
+        calls = []
+
+        class _MockCollection:
+            def search_with_quality(self, vector, quality, top_k):
+                calls.append(quality)
+                return []
+
+            def info(self):
+                return {"dimension": 4}
+
+        store._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
+
+        q = VectorStoreQuery(query_embedding=[0.1, 0.2, 0.3, 0.4], similarity_top_k=4)
+        store.query(q, search_quality="perfect")
+
+        assert calls == ["perfect"]
+
+    def test_validate_search_quality_valid_forms(self):
+        """validate_search_quality accepts all documented forms."""
+        from llamaindex_velesdb.security import validate_search_quality
+
+        for value in ("fast", "balanced", "accurate", "perfect", "autotune",
+                      "custom:128", "custom:1024", "adaptive:16:256", "adaptive:32:512"):
+            assert validate_search_quality(value) == value
+
+    def test_validate_search_quality_rejects_invalid(self):
+        """validate_search_quality raises SecurityError for unknown strings."""
+        from llamaindex_velesdb.security import validate_search_quality, SecurityError
+
+        for bad in ("turbo", "custom:", "custom:abc", "adaptive:32", "adaptive:a:b"):
+            with pytest.raises(SecurityError):
+                validate_search_quality(bad)
 
 
 if __name__ == "__main__":

@@ -11,21 +11,39 @@ use tauri::{command, AppHandle, Runtime, State};
 use velesdb_core::velesql::SelectColumns;
 
 /// Detects aggregation queries (COUNT, SUM, AVG, etc. in SELECT).
+///
+/// Returns `false` for vector-search GROUP BY queries (NEAR + GROUP BY),
+/// which are handled as post-processing in `execute_query`.
 fn is_aggregation_query(parsed: &velesdb_core::velesql::Query) -> bool {
-    match &parsed.select.columns {
+    let has_aggs = match &parsed.select.columns {
         SelectColumns::Aggregations(_) => true,
         SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
         _ => false,
+    };
+    let is_agg = has_aggs || parsed.select.group_by.is_some();
+
+    // Vector-search GROUP BY is handled inside execute_query, not execute_aggregate.
+    if is_agg {
+        let has_vector_near = parsed
+            .select
+            .where_clause
+            .as_ref()
+            .is_some_and(velesdb_core::velesql::Condition::has_vector_search);
+        if has_vector_near && parsed.select.group_by.is_some() {
+            return false;
+        }
     }
+
+    is_agg
 }
 
 /// Executes a `VelesQL` query (EPIC-031 US-012).
 ///
-/// Supports SELECT-style `VelesQL` queries with vector similarity search.
-/// Aggregation queries (GROUP BY, COUNT, etc.) are auto-detected and routed
-/// to `execute_aggregate()`. DDL/DML/TRAIN queries are dispatched directly
-/// to `Database::execute_query`. MATCH queries are not yet supported through
-/// this endpoint. Returns results in `HybridResult` format.
+/// Supports SELECT-style and MATCH-style `VelesQL` queries with vector
+/// similarity search. Aggregation queries (GROUP BY, COUNT, etc.) are
+/// auto-detected and routed to `execute_aggregate()`. DDL/DML/TRAIN/MATCH
+/// queries are dispatched directly to `Database::execute_query`.
+/// Returns results in `HybridResult` format.
 #[command]
 pub async fn query<R: Runtime>(
     _app: AppHandle<R>,
@@ -37,15 +55,6 @@ pub async fn query<R: Runtime>(
     // Parse the VelesQL query
     let parsed = velesdb_core::velesql::Parser::parse(&request.query)
         .map_err(|e| Error::InvalidConfig(format!("VelesQL parse error: {}", e.message)))?;
-
-    // MATCH queries are not supported through this endpoint.
-    if parsed.is_match_query() {
-        return Err(CommandError::from(Error::InvalidConfig(
-            "MATCH queries are not supported through the query endpoint. \
-             Use graph-specific commands instead."
-                .to_string(),
-        )));
-    }
 
     let results = dispatch_tauri_query(&state, &parsed, &request)?;
 

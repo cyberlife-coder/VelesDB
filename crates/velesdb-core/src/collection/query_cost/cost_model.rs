@@ -2,6 +2,24 @@
 //!
 //! Provides cost estimation for different operation types based on
 //! collection statistics, enabling cost-based query optimization.
+//!
+//! # Calibrated cost factors
+//!
+//! `OperationCostFactors` holds the per-operation weights used by the CBO.
+//! Since Issue #467, these factors are **calibrated dynamically** from
+//! [`CollectionStats`] during `analyze()` via [`calibrate_cost_factors()`],
+//! replacing the former hard-coded constants. The calibration pipeline
+//! adjusts each factor based on observed collection characteristics:
+//!
+//! - **`seq_page_cost`** — scaled by the page ratio (`total_size_bytes / 8 KB`)
+//! - **`cpu_tuple_cost`** — scaled by average row size (`avg_row_size_bytes / 256`)
+//! - **`cpu_index_cost`** — scaled by average column density from histograms
+//! - **`random_page_cost`** — scaled by histogram skew (bucket imbalance)
+//! - **stale penalty** — all factors inflated by 1.2× when any histogram is stale
+//!
+//! All calibrated values are clamped within [`CostFactorBounds`] to prevent
+//! degenerate estimates. Hardware profiles (`ssd_optimized`, `in_memory`,
+//! `hdd_optimized`) serve as the base before calibration adjustments.
 
 // Reason: Numeric casts in cost model are intentional:
 // - All casts are for cost estimation/statistics (not user data)
@@ -17,59 +35,10 @@
 
 use crate::collection::stats::{CollectionStats, IndexStats};
 
-/// Cost factors for different operations (configurable).
-///
-/// These values are calibrated defaults that can be tuned based on
-/// actual hardware characteristics.
-#[derive(Debug, Clone)]
-pub struct OperationCostFactors {
-    /// Cost per sequential page access (8KB page)
-    pub seq_page_cost: f64,
-    /// Cost per random page access
-    pub random_page_cost: f64,
-    /// Cost per tuple/row processed
-    pub cpu_tuple_cost: f64,
-    /// Cost per index entry lookup
-    pub cpu_index_cost: f64,
-    /// Cost per vector distance calculation
-    pub cpu_distance_cost: f64,
-    /// Cost per graph edge traversal
-    pub cpu_edge_cost: f64,
-}
-
-impl Default for OperationCostFactors {
-    fn default() -> Self {
-        Self {
-            seq_page_cost: 1.0,
-            random_page_cost: 4.0,
-            cpu_tuple_cost: 0.01,
-            cpu_index_cost: 0.005,
-            cpu_distance_cost: 0.1,
-            cpu_edge_cost: 0.02,
-        }
-    }
-}
-
-impl OperationCostFactors {
-    /// Creates factors optimized for SSD storage.
-    #[must_use]
-    pub fn ssd_optimized() -> Self {
-        Self {
-            random_page_cost: 1.5, // SSDs have lower random access penalty
-            ..Default::default()
-        }
-    }
-
-    /// Creates factors optimized for in-memory operations.
-    #[must_use]
-    pub fn in_memory() -> Self {
-        Self {
-            seq_page_cost: 0.1,
-            random_page_cost: 0.1,
-            ..Default::default()
-        }
-    }
-}
+// Re-export types that were historically defined here so that existing
+// `use crate::collection::query_cost::cost_model::X` paths keep working.
+pub(crate) use super::calibration::calibrate_cost_factors;
+pub use super::cost_factors::OperationCostFactors;
 
 /// Estimated cost of an operation.
 #[derive(Debug, Clone, Copy, Default)]
@@ -324,11 +293,5 @@ mod tests {
 
         assert!((combined.total - 110.0).abs() < f64::EPSILON);
         assert_eq!(combined.rows, 1_000);
-    }
-
-    #[test]
-    fn test_ssd_optimized_factors() {
-        let factors = OperationCostFactors::ssd_optimized();
-        assert!(factors.random_page_cost < OperationCostFactors::default().random_page_cost);
     }
 }

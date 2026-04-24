@@ -18,6 +18,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the default sparse index does not exist.
+    #[allow(dead_code)] // Reason: Called via Python/SDK bindings inner delegation
     pub fn sparse_search_default(
         &self,
         query: &SparseVector,
@@ -31,6 +32,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the named sparse index does not exist.
+    #[allow(dead_code)] // Reason: Called via Python/SDK bindings inner delegation
     pub fn sparse_search_named(
         &self,
         query: &SparseVector,
@@ -58,6 +60,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the sparse index does not exist or fusion fails.
+    #[allow(dead_code)] // Reason: Called via Python/SDK bindings inner delegation
     pub fn hybrid_sparse_search(
         &self,
         dense_vector: &[f32],
@@ -83,6 +86,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the sparse index does not exist or fusion fails.
+    #[allow(dead_code)] // Reason: Called via Python/SDK bindings inner delegation
     pub fn hybrid_sparse_search_with_filter(
         &self,
         dense_vector: &[f32],
@@ -109,6 +113,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the named sparse index does not exist or fusion fails.
+    #[allow(dead_code)] // Reason: Called via Python/SDK bindings inner delegation
     pub fn hybrid_sparse_search_named(
         &self,
         dense_vector: &[f32],
@@ -128,6 +133,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the named sparse index does not exist or fusion fails.
+    #[allow(dead_code)] // Reason: Called via Python/SDK bindings inner delegation
     pub fn hybrid_sparse_search_named_with_filter(
         &self,
         dense_vector: &[f32],

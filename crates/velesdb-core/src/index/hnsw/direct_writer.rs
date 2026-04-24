@@ -43,11 +43,11 @@ impl<'a> DirectVectorWriter<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if any vector has wrong dimension.
+    /// Returns [`crate::error::Error::DimensionMismatch`] if any vector has wrong dimension.
     /// Returns [`Error::AllocationFailed`] if `ContiguousVectors` cannot grow.
     /// On error, state is unchanged (all-or-nothing validation).
     ///
-    /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
+    /// [`crate::error::Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub(crate) fn write_batch_direct(
         &self,
@@ -110,10 +110,10 @@ impl<'a> DirectVectorWriter<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Internal`] if a vector cannot be read from
+    /// Returns [`crate::error::Error::Internal`] if a vector cannot be read from
     /// `ContiguousVectors` (indicates a bug in the write path).
     ///
-    /// [`Error::Internal`]: crate::error::Error::Internal
+    /// [`crate::error::Error::Internal`]: crate::error::Error::Internal
     #[allow(clippy::unnecessary_wraps)] // Returns Result for API consistency with Task 4
     pub(crate) fn sync_to_sharded(&self, results: &[UpsertResult]) -> crate::error::Result<()> {
         if !self.hnsw_index.enable_vector_storage || results.is_empty() {

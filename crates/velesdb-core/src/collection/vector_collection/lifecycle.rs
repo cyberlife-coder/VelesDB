@@ -33,6 +33,11 @@ impl VectorCollection {
     /// auto-tuned defaults. When both are `None`, this is equivalent to
     /// [`VectorCollection::create`].
     ///
+    /// Shortcut for [`VectorCollection::create_with_params`] that only
+    /// overrides `max_connections` and `ef_construction`; every other
+    /// HNSW field stays at the dimension-based auto-tuned default, and
+    /// `pq_rescore_oversampling` uses the engine default of `Some(4)`.
+    ///
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or storage fails.
@@ -53,13 +58,46 @@ impl VectorCollection {
             params.ef_construction = ef;
         }
         params.storage_mode = storage_mode;
+        Self::create_with_params(path, dimension, metric, storage_mode, params, None)
+    }
+
+    /// Creates a new `VectorCollection` with a fully specified
+    /// [`HnswParams`](crate::index::hnsw::HnswParams) and an explicit
+    /// `pq_rescore_oversampling` override.
+    ///
+    /// This is the most expressive constructor exposed by
+    /// `VectorCollection`: callers pass the full params object directly,
+    /// including `alpha` (VAMANA neighbour diversification),
+    /// `max_elements` (initial HNSW capacity), and any future field added
+    /// to `HnswParams`, without going through the `(m, ef_construction)`
+    /// shortcut. Passing `pq_rescore_oversampling = None` keeps the
+    /// persisted config in "no explicit override" mode so later migrations
+    /// can recompute the factor from dataset shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or storage fails.
+    pub fn create_with_params(
+        path: PathBuf,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+        mut hnsw_params: crate::index::hnsw::HnswParams,
+        pq_rescore_oversampling: Option<u32>,
+    ) -> Result<Self> {
+        // Make sure the storage mode baked into the params matches the
+        // per-collection storage mode argument. If a caller passed
+        // mismatching values we deliberately let the function argument
+        // win — it is the more direct, less ambiguous source.
+        hnsw_params.storage_mode = storage_mode;
         Ok(Self {
-            inner: Collection::create_with_hnsw_params(
+            inner: Collection::create_with_full_config(
                 path,
                 dimension,
                 metric,
                 storage_mode,
-                params,
+                hnsw_params,
+                pq_rescore_oversampling,
             )?,
         })
     }
@@ -72,6 +110,27 @@ impl VectorCollection {
     pub fn open(path: PathBuf) -> Result<Self> {
         Ok(Self {
             inner: Collection::open(path)?,
+        })
+    }
+
+    /// Creates a new `VectorCollection` with an async index builder configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config cannot be saved.
+    pub fn create_with_async_builder(
+        path: PathBuf,
+        dimension: usize,
+        metric: DistanceMetric,
+        async_builder_config: crate::collection::streaming::AsyncIndexBuilderConfig,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: Collection::create_with_async_builder(
+                path,
+                dimension,
+                metric,
+                async_builder_config,
+            )?,
         })
     }
 

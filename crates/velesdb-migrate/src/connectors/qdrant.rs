@@ -26,6 +26,52 @@ impl QdrantConnector {
         }
     }
 
+    /// Normalise a Qdrant distance identifier to the VelesDB core
+    /// vocabulary so `Pipeline::check_metric_fidelity` can compare it
+    /// against a destination collection's metric.
+    ///
+    /// Qdrant exposes `Cosine`, `Euclid`, `Dot`, and `Manhattan`
+    /// (1.8+). VelesDB core uses `cosine`, `euclidean`, `dot`,
+    /// `hamming`, `jaccard`. `Euclid` is mapped to `euclidean`;
+    /// unknown values (e.g. `manhattan`) are lowercased and returned
+    /// verbatim so mismatch errors stay actionable instead of being
+    /// silently dropped.
+    fn normalise_qdrant_metric(raw: &str) -> String {
+        let lower = raw.to_ascii_lowercase();
+        match lower.as_str() {
+            "euclid" => "euclidean".to_string(),
+            _ => lower,
+        }
+    }
+
+    /// Pick the "primary" named vector from a multi-vector Qdrant
+    /// collection. Returns its `(dimension, raw_metric)`.
+    ///
+    /// Qdrant 1.7+ supports multiple named vectors per collection
+    /// (e.g. `default`, `secondary`, `text_embedding`). For
+    /// migration purposes we need to pick exactly one — the rest
+    /// of the pipeline assumes a single primary vector per source.
+    /// Selection policy, in order of preference:
+    /// 1. The entry named `"default"` if present — Qdrant's
+    ///    implicit name when a single unnamed vector is upgraded.
+    /// 2. Otherwise the lexicographically first entry, so the
+    ///    result is deterministic across runs (HashMap iteration
+    ///    order is not).
+    ///
+    /// Returns `(0, None)` only for an empty map, which should
+    /// never happen on a well-formed Qdrant response but is
+    /// handled defensively.
+    fn pick_named_vector(map: &HashMap<String, QdrantNamedVector>) -> (usize, Option<String>) {
+        if let Some(default) = map.get("default") {
+            return (default.size, default.distance.clone());
+        }
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+        keys.first()
+            .and_then(|k| map.get(*k))
+            .map_or((0, None), |v| (v.size, v.distance.clone()))
+    }
+
     /// Build request with optional auth.
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         let url = format!(
@@ -69,13 +115,19 @@ struct QdrantParams {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum QdrantVectorConfig {
-    Single { size: usize },
+    Single {
+        size: usize,
+        #[serde(default)]
+        distance: Option<String>,
+    },
     Named(HashMap<String, QdrantNamedVector>),
 }
 
 #[derive(Debug, Deserialize)]
 struct QdrantNamedVector {
     size: usize,
+    #[serde(default)]
+    distance: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,7 +207,10 @@ impl QdrantVector {
             Self::Named(map) => {
                 for value in map.values() {
                     if let QdrantNamedVectorValue::Sparse(sv) = value {
-                        if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+                        if crate::connectors::common::is_valid_sparse_vector(
+                            &sv.indices,
+                            &sv.values,
+                        ) {
                             return Some(
                                 sv.indices
                                     .iter()
@@ -197,6 +252,8 @@ impl SourceConnector for QdrantConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
+        crate::connectors::common::validate_url(&self.config.url)?;
+
         info!("Connecting to Qdrant at {}", self.config.url);
 
         let resp = self.request(reqwest::Method::GET, "").send().await?;
@@ -212,16 +269,17 @@ impl SourceConnector for QdrantConnector {
 
         let info: QdrantCollectionInfo = checked.json().await?;
 
-        let dimension = match info.result.config.params.vectors {
-            QdrantVectorConfig::Single { size } => size,
-            QdrantVectorConfig::Named(ref map) => map.values().next().map_or(0, |v| v.size),
+        let (dimension, raw_metric) = match info.result.config.params.vectors {
+            QdrantVectorConfig::Single { size, ref distance } => (size, distance.clone()),
+            QdrantVectorConfig::Named(ref map) => Self::pick_named_vector(map),
         };
+        let metric = raw_metric.as_deref().map(Self::normalise_qdrant_metric);
 
         let total_count = info.result.points_count.or(info.result.vectors_count);
 
         info!(
-            "Qdrant schema: {}D vectors, {:?} total points",
-            dimension, total_count
+            "Qdrant schema: {}D vectors, metric={:?}, {:?} total points",
+            dimension, metric, total_count
         );
 
         Ok(SourceSchema {
@@ -230,6 +288,7 @@ impl SourceConnector for QdrantConnector {
             dimension,
             total_count,
             fields: vec![], // Qdrant doesn't expose payload schema easily
+            metric,
             ..Default::default()
         })
     }
@@ -302,6 +361,39 @@ impl SourceConnector for QdrantConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalise_qdrant_metric_maps_euclid_to_euclidean() {
+        // Qdrant reports `Euclid` for L2 distance; VelesDB core uses
+        // `euclidean`. The mapping is what allows check_metric_fidelity
+        // to honestly compare a Qdrant source against a core collection
+        // created with metric: "euclidean".
+        assert_eq!(
+            QdrantConnector::normalise_qdrant_metric("Euclid"),
+            "euclidean"
+        );
+        assert_eq!(
+            QdrantConnector::normalise_qdrant_metric("EUCLID"),
+            "euclidean"
+        );
+    }
+
+    #[test]
+    fn test_normalise_qdrant_metric_lowercases_known_values() {
+        assert_eq!(QdrantConnector::normalise_qdrant_metric("Cosine"), "cosine");
+        assert_eq!(QdrantConnector::normalise_qdrant_metric("Dot"), "dot");
+    }
+
+    #[test]
+    fn test_normalise_qdrant_metric_preserves_unknown_values() {
+        // Manhattan is a valid Qdrant metric (1.8+) but not supported
+        // by VelesDB core — preserved verbatim so mismatch errors are
+        // actionable rather than masked.
+        assert_eq!(
+            QdrantConnector::normalise_qdrant_metric("Manhattan"),
+            "manhattan"
+        );
+    }
 
     #[test]
     fn test_qdrant_point_id_display() {
@@ -403,5 +495,18 @@ mod tests {
             serde_json::from_str(json).expect("valid JSON");
         let v2 = QdrantVector::Named(map2);
         assert!(v2.into_dense().is_empty());
+    }
+
+    #[test]
+    fn test_connect_rejects_file_url() {
+        let config = QdrantConfig {
+            url: "file:///etc/passwd".to_string(),
+            collection: "test".to_string(),
+            api_key: None,
+            payload_fields: vec![],
+        };
+        let connector = QdrantConnector::new(config);
+        // validate_url rejects file:// synchronously at connect time
+        assert!(crate::connectors::common::validate_url(&connector.config.url).is_err());
     }
 }

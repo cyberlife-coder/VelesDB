@@ -7,7 +7,7 @@
 //!
 //! Metrics use atomic operations with relaxed ordering for minimal overhead (~1-5ns per op).
 
-// SAFETY: Numeric casts in metrics are intentional:
+// Reason: Numeric casts in metrics are intentional:
 // - All casts are for histogram bucketing and latency calculations
 // - f64/u64 conversions for computing percentiles and averages
 // - Values bounded by practical limits (bucket counts, durations)

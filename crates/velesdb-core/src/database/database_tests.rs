@@ -1,5 +1,3 @@
-#![allow(deprecated)] // Tests use legacy Collection.
-
 use super::*;
 use crate::collection::graph::GraphEdge;
 use crate::point::Point;
@@ -43,13 +41,13 @@ fn test_get_collection() {
     let db = Database::open(dir.path()).unwrap();
 
     // Non-existent collection returns None
-    assert!(db.get_collection("nonexistent").is_none());
+    assert!(db.get_vector_collection("nonexistent").is_none());
 
     // Create and retrieve collection
     db.create_collection("test", 768, DistanceMetric::Cosine)
         .unwrap();
 
-    let collection = db.get_collection("test");
+    let collection = db.get_vector_collection("test");
     assert!(collection.is_some());
 
     let config = collection.unwrap().config();
@@ -69,7 +67,7 @@ fn test_delete_collection() {
     // Delete the collection
     db.delete_collection("to_delete").unwrap();
     assert!(db.list_collections().is_empty());
-    assert!(db.get_collection("to_delete").is_none());
+    assert!(db.get_vector_collection("to_delete").is_none());
 }
 
 #[test]
@@ -110,8 +108,8 @@ fn test_database_execute_query_join_on_end_to_end() {
     db.create_collection("customers", 2, DistanceMetric::Cosine)
         .unwrap();
 
-    let orders = db.get_collection("orders").unwrap();
-    let customers = db.get_collection("customers").unwrap();
+    let orders = db.get_vector_collection("orders").unwrap();
+    let customers = db.get_vector_collection("customers").unwrap();
 
     orders
         .upsert(vec![
@@ -157,10 +155,10 @@ fn test_database_execute_query_join_using_with_graph_match_filter() {
     db.create_collection("profiles", 2, DistanceMetric::Cosine)
         .unwrap();
 
-    // Use get_collection() here to get the shared instance that supports both
+    // Use get_vector_collection() here to get the shared instance that supports both
     // vector operations and graph operations (add_edge) on the same Collection.
-    let orders = db.get_collection("orders").unwrap();
-    let profiles = db.get_collection("profiles").unwrap();
+    let orders = db.get_vector_collection("orders").unwrap();
+    let profiles = db.get_vector_collection("profiles").unwrap();
 
     orders
         .upsert(vec![
@@ -218,7 +216,7 @@ fn test_database_execute_query_supports_left_join_runtime() {
     db.create_collection("customers", 2, DistanceMetric::Cosine)
         .unwrap();
 
-    let orders = db.get_collection("orders").unwrap();
+    let orders = db.get_vector_collection("orders").unwrap();
     orders
         .upsert(vec![Point::new(
             1,
@@ -353,7 +351,7 @@ fn test_database_execute_query_update_metadata_only_where_id() {
     let db = Database::open(dir.path()).unwrap();
     db.create_collection_typed("products", &CollectionType::MetadataOnly)
         .unwrap();
-    let products = db.get_collection("products").unwrap();
+    let products = db.get_metadata_collection("products").unwrap();
     products
         .upsert_metadata(vec![Point::metadata_only(
             1,
@@ -378,8 +376,8 @@ fn test_database_execute_query_insert_with_params() {
     let db = Database::open(dir.path()).unwrap();
     db.create_collection_typed("profiles", &CollectionType::MetadataOnly)
         .unwrap();
-    // get_collection() returns the shared registry instance for INSERT to be visible
-    let _profiles = db.get_collection("profiles").unwrap();
+    // get_vector_collection() returns the shared registry instance for INSERT to be visible
+    let _profiles = db.get_metadata_collection("profiles").unwrap();
 
     let query =
         Parser::parse("INSERT INTO profiles (id, name, age) VALUES ($id, $name, $age)").unwrap();
@@ -390,7 +388,7 @@ fn test_database_execute_query_insert_with_params() {
 
     db.execute_query(&query, &params).unwrap();
 
-    let profiles = db.get_collection("profiles").unwrap();
+    let profiles = db.get_metadata_collection("profiles").unwrap();
     let point = profiles.get(&[7]).into_iter().flatten().next().unwrap();
     let payload = point.payload.unwrap();
     assert_eq!(payload["name"], serde_json::json!("Alice"));
@@ -416,7 +414,7 @@ fn test_create_collection_rejects_existing_on_disk_dir_not_loaded() {
 
 /// Helper: insert vectors into a collection for training.
 fn seed_training_vectors(db: &Database, name: &str, dim: usize, count: usize) {
-    let coll = db.get_collection(name).unwrap();
+    let coll = db.get_vector_collection(name).unwrap();
     let points: Vec<Point> = (0..count)
         .map(|i| {
             #[allow(clippy::cast_precision_loss)]
@@ -449,7 +447,7 @@ fn test_execute_train_pq_success() {
     assert_eq!(payload["type"], serde_json::json!("pq"));
 
     // Verify storage mode updated
-    let coll = db.get_collection("docs").unwrap();
+    let coll = db.get_vector_collection("docs").unwrap();
     assert_eq!(coll.config().storage_mode, StorageMode::ProductQuantization);
 }
 
@@ -498,7 +496,7 @@ fn test_execute_train_opq_success() {
     assert_eq!(payload["type"], serde_json::json!("opq"));
     assert_eq!(payload["status"], serde_json::json!("trained"));
 
-    let coll = db.get_collection("vecs").unwrap();
+    let coll = db.get_vector_collection("vecs").unwrap();
     assert_eq!(coll.config().storage_mode, StorageMode::ProductQuantization);
 }
 
@@ -519,7 +517,7 @@ fn test_execute_train_rabitq_success() {
     let payload = results[0].point.payload.as_ref().unwrap();
     assert_eq!(payload["type"], serde_json::json!("rabitq"));
 
-    let coll = db.get_collection("rbq").unwrap();
+    let coll = db.get_vector_collection("rbq").unwrap();
     assert_eq!(coll.config().storage_mode, StorageMode::RaBitQ);
 }
 
@@ -532,7 +530,7 @@ fn test_execute_train_updates_storage_mode() {
     seed_training_vectors(&db, "docs", 16, 300);
 
     // Verify initial state
-    let coll = db.get_collection("docs").unwrap();
+    let coll = db.get_vector_collection("docs").unwrap();
     assert_eq!(coll.config().storage_mode, StorageMode::Full);
 
     let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16)").unwrap();
@@ -540,7 +538,7 @@ fn test_execute_train_updates_storage_mode() {
         .unwrap();
 
     // After training
-    let coll = db.get_collection("docs").unwrap();
+    let coll = db.get_vector_collection("docs").unwrap();
     assert_eq!(coll.config().storage_mode, StorageMode::ProductQuantization);
 }
 
@@ -694,8 +692,8 @@ fn test_database_open_loads_sparse_index() {
     // Step 3: Reopen database and verify sparse index is loaded
     {
         let db = Database::open(dir.path()).unwrap();
-        let coll = db.get_collection("sparse_test").unwrap();
-        let guard = coll.sparse_indexes().read();
+        let coll = db.get_vector_collection("sparse_test").unwrap();
+        let guard = coll.inner.sparse_indexes().read();
         assert!(
             guard.contains_key(""),
             "Default sparse index should be loaded from disk on Database::open()"
@@ -721,8 +719,8 @@ fn test_database_open_loads_sparse_index() {
     }
     {
         let db = Database::open(dir2.path()).unwrap();
-        let coll = db.get_collection("wal_only").unwrap();
-        let guard = coll.sparse_indexes().read();
+        let coll = db.get_vector_collection("wal_only").unwrap();
+        let guard = coll.inner.sparse_indexes().read();
         assert!(
             guard.contains_key(""),
             "WAL-only sparse index should be loaded on Database::open()"
@@ -744,8 +742,8 @@ fn test_update_guardrails_propagates_to_collections() {
         .unwrap();
 
     // Default timeout is 30_000 ms.
-    let coll_a = db.get_collection("coll_a").unwrap();
-    assert_eq!(coll_a.guard_rails.limits().timeout_ms, 30_000);
+    let coll_a = db.get_vector_collection("coll_a").unwrap();
+    assert_eq!(coll_a.guard_rails().limits().timeout_ms, 30_000);
 
     // Update guardrails at the database level.
     let new_limits = QueryLimits::default()
@@ -754,12 +752,12 @@ fn test_update_guardrails_propagates_to_collections() {
     db.update_guardrails(&new_limits);
 
     // Both collections should reflect the updated limits.
-    let coll_a = db.get_collection("coll_a").unwrap();
-    let coll_b = db.get_collection("coll_b").unwrap();
-    assert_eq!(coll_a.guard_rails.limits().timeout_ms, 5_000);
-    assert_eq!(coll_a.guard_rails.limits().max_depth, 3);
-    assert_eq!(coll_b.guard_rails.limits().timeout_ms, 5_000);
-    assert_eq!(coll_b.guard_rails.limits().max_depth, 3);
+    let coll_a = db.get_vector_collection("coll_a").unwrap();
+    let coll_b = db.get_vector_collection("coll_b").unwrap();
+    assert_eq!(coll_a.guard_rails().limits().timeout_ms, 5_000);
+    assert_eq!(coll_a.guard_rails().limits().max_depth, 3);
+    assert_eq!(coll_b.guard_rails().limits().timeout_ms, 5_000);
+    assert_eq!(coll_b.guard_rails().limits().max_depth, 3);
 }
 
 #[test]
@@ -776,8 +774,8 @@ fn test_update_guardrails_affects_query_context() {
     db.update_guardrails(&new_limits);
 
     // A query context created after the update should enforce the new limit.
-    let coll = db.get_collection("ctx_test").unwrap();
-    let ctx = coll.guard_rails.create_context();
+    let coll = db.get_vector_collection("ctx_test").unwrap();
+    let ctx = coll.guard_rails().create_context();
     assert!(ctx.check_depth(2).is_ok());
     assert!(ctx.check_depth(3).is_err());
 }
@@ -858,4 +856,263 @@ fn test_diagnostics_not_found() {
     let db = Database::open(dir.path()).unwrap();
     let result = db.collection_diagnostics("nonexistent");
     assert!(result.is_err());
+}
+
+// =========================================================================
+// VelesConfig wiring — Wave 3 Commit 6
+//
+// The root config used to be defined in `config.rs` and loaded only by
+// server/CLI code; `Database::open` ignored it entirely. Commit 6 wires
+// a `config: Arc<VelesConfig>` field into `Database` and exposes the
+// `open_with_config` / `open_with_observer_and_config` constructors.
+// These tests anchor the happy path, the default fallback, and the
+// Arc-based accessor contract so later commits (7, 8, 9) can rely on
+// `db.config()` in every sub-system with confidence.
+// =========================================================================
+
+#[test]
+fn test_database_open_default_config_matches_veles_config_default() {
+    use crate::config::VelesConfig;
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    // `Database::open` must install the exact same `VelesConfig::default()`
+    // a user would get by calling the public builder — otherwise the
+    // "same behaviour as pre-Wave-3" guarantee is broken.
+    let default = VelesConfig::default();
+    let stored = db.config();
+    assert_eq!(
+        stored.limits.max_collections,
+        default.limits.max_collections
+    );
+    assert_eq!(stored.limits.max_dimensions, default.limits.max_dimensions);
+    assert_eq!(stored.wal_batch.enabled, default.wal_batch.enabled);
+    assert_eq!(
+        stored.wal_batch.max_batch_size,
+        default.wal_batch.max_batch_size
+    );
+}
+
+#[test]
+fn test_database_open_with_config_preserves_custom_fields() {
+    use crate::config::{LimitsConfig, VelesConfig, WalBatchConfig};
+
+    let dir = tempdir().unwrap();
+
+    let custom = VelesConfig {
+        limits: LimitsConfig {
+            max_dimensions: 2048,
+            max_vectors_per_collection: 50_000_000,
+            max_collections: 500,
+            max_payload_size: 524_288,
+            max_perfect_mode_vectors: 250_000,
+        },
+        wal_batch: WalBatchConfig {
+            enabled: true,
+            commit_delay_us: 250,
+            max_batch_size: 256,
+        },
+        ..VelesConfig::default()
+    };
+
+    let db = Database::open_with_config(dir.path(), custom).unwrap();
+    let stored = db.config();
+
+    assert_eq!(stored.limits.max_dimensions, 2048);
+    assert_eq!(stored.limits.max_collections, 500);
+    assert_eq!(stored.limits.max_payload_size, 524_288);
+    assert!(stored.wal_batch.enabled);
+    assert_eq!(stored.wal_batch.commit_delay_us, 250);
+    assert_eq!(stored.wal_batch.max_batch_size, 256);
+}
+
+#[test]
+fn test_database_config_arc_shares_same_instance() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    // `config_arc` must hand out clones of the same `Arc`, not
+    // deep-clone the inner struct. Sub-systems (background index
+    // builders, async reindex managers) rely on this so that config
+    // updates propagate without forcing a refcount traversal of the
+    // whole database.
+    let a = db.config_arc();
+    let b = db.config_arc();
+    assert!(std::sync::Arc::ptr_eq(&a, &b));
+    // And the underlying pointer is the same as the `config()` borrow.
+    let r: *const crate::config::VelesConfig = db.config();
+    let a_ptr: *const crate::config::VelesConfig = std::sync::Arc::as_ptr(&a);
+    assert!(std::ptr::eq(a_ptr, r));
+}
+
+// =========================================================================
+// LimitsConfig enforcement — Wave 3 Commit 7
+//
+// Runtime gates that read from `database.config().limits` and refuse
+// operations that would exceed a user-supplied ceiling. These tests
+// anchor each gate with nominal, edge, and negative coverage so later
+// refactors cannot silently relax the enforcement.
+// =========================================================================
+
+#[test]
+fn test_max_collections_limit_refuses_excess_with_guard_rail_error() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_collections: 2,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+
+    db.create_collection("one", 4, DistanceMetric::Cosine)
+        .unwrap();
+    db.create_collection("two", 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    // The third creation must fail with a guard-rail violation carrying
+    // the current/cap ratio in the message — that string is the contract
+    // for any client-side parser that wants to surface "raise the cap"
+    // guidance to the end user.
+    let err = db
+        .create_collection("three", 4, DistanceMetric::Cosine)
+        .unwrap_err();
+    match err {
+        Error::GuardRail(msg) => {
+            assert!(msg.contains("max_collections"));
+            assert!(msg.contains("2 / 2"));
+        }
+        other => panic!("expected GuardRail error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_max_collections_limit_counts_across_all_registries() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_collections: 3,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+
+    // Mix vector + graph + metadata collections — the limit is
+    // tenant-wide, not per-type.
+    db.create_collection("v1", 4, DistanceMetric::Cosine)
+        .unwrap();
+    db.create_graph_collection("g1", crate::collection::GraphSchema::new())
+        .unwrap();
+    db.create_metadata_collection("m1").unwrap();
+
+    // Fourth collection of any kind must be refused.
+    let err = db.create_metadata_collection("m2").unwrap_err();
+    assert!(matches!(err, Error::GuardRail(_)));
+}
+
+#[test]
+fn test_max_dimensions_limit_refuses_oversize_vector() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_dimensions: 512,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+
+    // Exactly at the cap is accepted (inclusive boundary).
+    db.create_collection("boundary", 512, DistanceMetric::Cosine)
+        .unwrap();
+
+    // One above the cap is refused with a guard-rail error.
+    let err = db
+        .create_vector_collection_with_options(
+            "too_big",
+            513,
+            DistanceMetric::Cosine,
+            StorageMode::Full,
+        )
+        .unwrap_err();
+    match err {
+        Error::GuardRail(msg) => {
+            assert!(msg.contains("513"));
+            assert!(msg.contains("512"));
+            assert!(msg.contains("max_dimensions"));
+        }
+        other => panic!("expected GuardRail error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_max_dimensions_limit_applies_to_graph_with_embeddings() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_dimensions: 128,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+
+    // Graph WITHOUT embeddings is always accepted — dimension 0 bypasses
+    // the gate so metadata-only graphs are unaffected.
+    db.create_graph_collection("plain_graph", crate::collection::GraphSchema::new())
+        .unwrap();
+
+    // Graph WITH embeddings must obey the same dimension cap as vector
+    // collections, because the embeddings live in the same HNSW index.
+    let err = db
+        .create_graph_collection_with_embeddings(
+            "embed_graph",
+            crate::collection::GraphSchema::new(),
+            256,
+            DistanceMetric::Cosine,
+        )
+        .unwrap_err();
+    assert!(matches!(err, Error::GuardRail(_)));
+}
+
+#[test]
+fn test_limits_config_default_accepts_common_embedding_dims() {
+    // Regression guard: the default LimitsConfig must accept every
+    // dimension used by popular embedding models without any user
+    // configuration. If someone tightens the default too much, this
+    // test catches the silent breakage immediately.
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    for (name, dim) in [
+        ("minilm", 384),
+        ("bert", 768),
+        ("openai_small", 1536),
+        ("openai_large", 3072),
+    ] {
+        db.create_collection(name, dim, DistanceMetric::Cosine)
+            .unwrap_or_else(|e| panic!("default limits should accept {name} ({dim}-d), got {e:?}"));
+    }
+}
+
+#[test]
+fn test_dimension_zero_is_exempt_from_limits_gate() {
+    // Metadata-only collections pass dimension=0 down the same
+    // pipeline — the dimension-limit gate must NOT reject them.
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    db.create_metadata_collection("meta").unwrap();
+    assert_eq!(db.list_collections(), vec!["meta"]);
 }

@@ -8,7 +8,6 @@ WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vec
 ## Features
 
 - **In-browser vector search** - No server required
-- **SIMD optimized** - Uses WASM SIMD128 for fast distance calculations
 - **Multiple metrics** - Cosine, Euclidean, Dot Product, Hamming, Jaccard
 - **Memory optimization** - SQ8 (4x) and Binary (32x) quantization
 - **Knowledge Graph** - In-memory graph store with BFS/DFS traversal

@@ -14,11 +14,16 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::types::{ErrorResponse, SparseVectorInput, UpsertPointsRequest};
+use crate::types::{
+    ErrorResponse, ScrollPoint, ScrollRequest, ScrollResponse, SparseVectorInput,
+    UpsertPointsRequest,
+};
 use crate::AppState;
 use velesdb_core::Point;
 
-use crate::handlers::helpers::{core_error_response, error_response, get_vector_collection_or_404};
+use crate::handlers::helpers::{
+    auto_core_error_response, error_response, get_vector_collection_or_404,
+};
 
 use velesdb_core::index::sparse::SparseVector;
 
@@ -111,7 +116,7 @@ pub async fn upsert_points(
             }))
             .into_response()
         }
-        Ok(Err(e)) => core_error_response(StatusCode::BAD_REQUEST, &e),
+        Ok(Err(e)) => auto_core_error_response(&e),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Task panicked: {e}"),
@@ -163,7 +168,10 @@ pub async fn get_point(
             "payload": point.payload
         }))
         .into_response(),
-        None => error_response(StatusCode::NOT_FOUND, format!("Point {} not found", id)),
+        // PR #586 Devin fix: emit `VELES-003 PointNotFound` via
+        // `auto_core_error_response` so typed-error clients surface
+        // `PointNotFoundError` instead of a generic fallback.
+        None => auto_core_error_response(&velesdb_core::Error::PointNotFound(id)),
     }
 }
 
@@ -196,6 +204,94 @@ pub async fn delete_point(
             "id": id
         }))
         .into_response(),
-        Err(e) => core_error_response(StatusCode::BAD_REQUEST, &e),
+        Err(e) => auto_core_error_response(&e),
     }
+}
+
+/// Maximum allowed batch size for scroll requests.
+const MAX_SCROLL_BATCH_SIZE: u32 = 10_000;
+
+/// Scroll through collection points with cursor-based pagination.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/points/scroll",
+    tag = "points",
+    params(("name" = String, Path, description = "Collection name")),
+    request_body = ScrollRequest,
+    responses(
+        (status = 200, description = "Scroll batch", body = ScrollResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
+pub async fn scroll_points(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<ScrollRequest>,
+) -> impl IntoResponse {
+    if req.batch_size == 0 || req.batch_size > MAX_SCROLL_BATCH_SIZE {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "batch_size must be between 1 and 10000".to_string(),
+        );
+    }
+
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    let filter = match parse_scroll_filter(&req.filter) {
+        Ok(f) => f,
+        Err(resp) => return resp,
+    };
+
+    let batch_size = req.batch_size as usize;
+    let cursor = req.cursor;
+
+    // scroll_batch is blocking (reads from storage).
+    let result = tokio::task::spawn_blocking(move || {
+        collection.scroll_batch(cursor, batch_size, filter.as_ref())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(batch)) => build_scroll_response(batch),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task panicked: {e}"),
+        ),
+    }
+}
+
+/// Parse the optional filter JSON into a core `Filter`.
+#[allow(clippy::result_large_err)]
+fn parse_scroll_filter(
+    filter_json: &Option<serde_json::Value>,
+) -> Result<Option<velesdb_core::Filter>, axum::response::Response> {
+    let Some(ref json) = filter_json else {
+        return Ok(None);
+    };
+    serde_json::from_value::<velesdb_core::Filter>(json.clone())
+        .map(Some)
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, format!("Invalid filter: {e}")))
+}
+
+/// Convert a core `ScrollBatch` into an HTTP JSON response.
+fn build_scroll_response(batch: velesdb_core::ScrollBatch) -> axum::response::Response {
+    let points: Vec<ScrollPoint> = batch
+        .points
+        .into_iter()
+        .map(|p| ScrollPoint {
+            id: p.id,
+            vector: p.vector,
+            payload: p.payload,
+        })
+        .collect();
+    Json(ScrollResponse {
+        next_cursor: batch.next_cursor,
+        points,
+    })
+    .into_response()
 }

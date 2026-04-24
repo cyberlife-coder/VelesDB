@@ -9,7 +9,7 @@ use crate::quantization::StorageMode;
 use crate::storage::VectorStorage;
 use std::collections::{BTreeMap, HashMap};
 
-use super::crud::QuantizationGuards;
+use super::crud_helpers::QuantizationGuards;
 
 impl Collection {
     /// Checks whether label index updates are needed for this batch.
@@ -135,16 +135,87 @@ impl Collection {
         }
     }
 
-    /// Updates the BM25 text index for a single point.
-    pub(super) fn update_text_index(text_index: &crate::index::Bm25Index, point: &Point) {
+    /// Updates the BM25 text index for a single point (WAL-then-apply).
+    ///
+    /// Issue #389: appends the mutation to `bm25.wal` BEFORE calling
+    /// `add_document` / `remove_document` on the in-memory index so
+    /// that a crash between the two replays the mutation on next
+    /// open. WAL append errors propagate; the in-memory mutation is
+    /// skipped so in-memory and WAL state never diverge.
+    pub(super) fn update_text_index(&self, point: &Point) -> Result<()> {
         if let Some(payload) = &point.payload {
             let text = Self::extract_text_from_payload(payload);
             if !text.is_empty() {
-                text_index.add_document(point.id, &text);
+                #[cfg(feature = "persistence")]
+                self.append_bm25_wal_add(point.id, &text)?;
+                self.text_index.add_document(point.id, &text);
             }
         } else {
-            text_index.remove_document(point.id);
+            #[cfg(feature = "persistence")]
+            self.append_bm25_wal_remove(point.id)?;
+            self.text_index.remove_document(point.id);
         }
+        Ok(())
+    }
+
+    /// Appends an `add_document` mutation to the BM25 WAL.
+    ///
+    /// Feature-gated — non-persistence builds have no on-disk WAL.
+    /// Callers already gate on `feature = "persistence"` when they
+    /// need crash-safety ordering.
+    #[cfg(feature = "persistence")]
+    #[inline]
+    pub(super) fn append_bm25_wal_add(&self, id: u64, text: &str) -> Result<()> {
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.path);
+        crate::index::bm25_persistence_wal::wal_append_add_document(&wal_path, id, text)
+    }
+
+    /// Appends a `remove_document` mutation to the BM25 WAL.
+    #[cfg(feature = "persistence")]
+    #[inline]
+    pub(super) fn append_bm25_wal_remove(&self, id: u64) -> Result<()> {
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.path);
+        crate::index::bm25_persistence_wal::wal_append_remove_document(&wal_path, id)
+    }
+
+    /// Appends `(name, point_id, sparse_vector)` triples to the per-index
+    /// sparse WAL under WAL-before-apply semantics.
+    ///
+    /// Centralises the `wal_path_for_name` + `wal_append_upsert` loop that was
+    /// duplicated between `apply_sparse_batch_upsert` (single-point path) and
+    /// `apply_sparse_batch_bulk` (bulk path). Callers keep ownership of their
+    /// input shape (`Vec<(u64, BTreeMap)>` vs `BTreeMap<String, Vec<(u64,
+    /// SparseVector)>>`) and build the iterator of triples themselves, which
+    /// keeps this helper allocation-free.
+    ///
+    /// Feature-gated on `persistence` — on targets without persistence the
+    /// sparse WAL does not exist and the caller short-circuits.
+    ///
+    /// Issue #450 Phase 3.1.
+    #[cfg(feature = "persistence")]
+    pub(super) fn append_sparse_wal_entries<'a, I>(&self, entries: I) -> Result<()>
+    where
+        I: IntoIterator<Item = (&'a str, u64, &'a crate::index::sparse::SparseVector)>,
+    {
+        // Cache wal_path across consecutive entries sharing the same index name
+        // so callers that yield entries grouped by name (e.g. apply_sparse_batch_bulk)
+        // retain the O(N_NAMES) path-resolution cost of the pre-refactor code
+        // rather than paying O(N_ENTRIES). Mixed-name callers degrade gracefully
+        // to one resolution per entry, matching the original per-triple cost.
+        let mut cached: Option<(&'a str, std::path::PathBuf)> = None;
+        for (name, point_id, sv) in entries {
+            if cached.as_ref().map(|(cached_name, _)| *cached_name) != Some(name) {
+                let wal_path =
+                    crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                cached = Some((name, wal_path));
+            }
+            let wal_path = &cached
+                .as_ref()
+                .expect("cache populated on first iteration")
+                .1;
+            crate::index::sparse::persistence::wal_append_upsert(wal_path, point_id, sv)?;
+        }
+        Ok(())
     }
 
     /// Applies buffered sparse vector upserts with WAL-before-apply semantics.
@@ -157,13 +228,11 @@ impl Collection {
         }
         #[cfg(feature = "persistence")]
         {
-            for (point_id, sv_map) in sparse_batch {
-                for (name, sv) in sv_map {
-                    let wal_path =
-                        crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
-                    crate::index::sparse::persistence::wal_append_upsert(&wal_path, *point_id, sv)?;
-                }
-            }
+            self.append_sparse_wal_entries(sparse_batch.iter().flat_map(|(point_id, sv_map)| {
+                sv_map
+                    .iter()
+                    .map(move |(name, sv)| (name.as_str(), *point_id, sv))
+            }))?;
         }
         let mut indexes = self.sparse_indexes.write();
         for (point_id, sv_map) in sparse_batch {

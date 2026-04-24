@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::types::{CreateIndexRequest, ErrorResponse, IndexResponse, ListIndexesResponse};
 use crate::AppState;
 
-use super::helpers::{core_error_response, error_response, get_vector_collection_or_404};
+use super::helpers::{auto_core_error_response, error_response, get_vector_collection_or_404};
 
 /// Create a property index on a graph collection.
 #[utoipa::path(
@@ -44,18 +44,27 @@ pub async fn create_index(
     };
 
     match result {
-        Ok(()) => (
-            StatusCode::CREATED,
-            Json(IndexResponse {
-                label: req.label,
-                property: req.property,
-                index_type: req.index_type,
-                cardinality: 0,
-                memory_bytes: 0,
-            }),
-        )
-            .into_response(),
-        Err(e) => core_error_response(StatusCode::BAD_REQUEST, &e),
+        Ok(()) => {
+            // Retrieve real cardinality/memory_bytes from the freshly-created index.
+            let (cardinality, memory_bytes) = collection
+                .list_indexes()
+                .into_iter()
+                .find(|i| i.label == req.label && i.property == req.property)
+                .map_or((0, 0), |i| (i.cardinality, i.memory_bytes));
+
+            (
+                StatusCode::CREATED,
+                Json(IndexResponse {
+                    label: req.label,
+                    property: req.property,
+                    index_type: req.index_type,
+                    cardinality,
+                    memory_bytes,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => auto_core_error_response(&e),
     }
 }
 
@@ -153,6 +162,6 @@ pub async fn delete_index(
                 )
             }
         }
-        Err(e) => core_error_response(StatusCode::BAD_REQUEST, &e),
+        Err(e) => auto_core_error_response(&e),
     }
 }

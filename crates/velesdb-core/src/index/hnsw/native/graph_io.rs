@@ -240,6 +240,15 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             stagnation_limit: graph.ef_construction / 2,
             pre_allocated_capacity: std::sync::atomic::AtomicUsize::new(0),
             columnar: parking_lot::RwLock::new(None),
+            #[cfg(feature = "gpu")]
+            gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),
+            #[cfg(feature = "gpu")]
+            gpu_vectors_snapshot: parking_lot::Mutex::new(None),
+            // Fresh-from-disk index: no mutations since load → version 0.
+            // The snapshot cache treats any stored version != 0 as stale,
+            // which is fine because no snapshot exists yet after load.
+            #[cfg(feature = "gpu")]
+            gpu_snapshot_version: std::sync::atomic::AtomicU64::new(0),
         })
     }
 

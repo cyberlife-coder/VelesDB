@@ -10,6 +10,7 @@ use super::values::Value;
 
 /// Aggregate function type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AggregateType {
     /// COUNT(*) or COUNT(column)
     Count,
@@ -21,15 +22,20 @@ pub enum AggregateType {
     Min,
     /// MAX(column)
     Max,
+    /// FIRST(column) — returns the value from the highest-scoring row in a group.
+    First,
 }
 
 /// Argument to an aggregate function.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AggregateArg {
     /// Wildcard (*) - only valid for COUNT.
     Wildcard,
     /// Column reference.
     Column(String),
+    /// The `score` pseudo-column representing `SearchResult.score`.
+    Score,
 }
 
 /// An aggregate function call in a SELECT statement.
@@ -52,6 +58,7 @@ pub struct GroupByClause {
 
 /// Logical operator for combining HAVING conditions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LogicalOp {
     /// Logical AND.
     And,

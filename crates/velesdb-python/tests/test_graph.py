@@ -4,8 +4,6 @@ Tests for VelesDB Graph operations (EPIC-016/US-030, US-032).
 Run with: pytest tests/test_graph.py -v
 """
 
-import pytest
-
 from conftest import _SKIP_NO_BINDINGS
 
 pytestmark = _SKIP_NO_BINDINGS

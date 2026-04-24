@@ -4,13 +4,13 @@ on:
   push:
     branches: [main]
     paths:
-      - 'crates/velesdb-core/src/simd/**'
+      - 'crates/velesdb-core/src/simd_native/**'
       - 'crates/velesdb-core/src/index/**'
       - 'crates/velesdb-core/benches/**'
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled]
     paths:
-      - 'crates/velesdb-core/src/simd/**'
+      - 'crates/velesdb-core/src/simd_native/**'
       - 'crates/velesdb-core/src/index/**'
       - 'crates/velesdb-core/benches/**'
   workflow_dispatch:
@@ -19,6 +19,10 @@ on:
         description: 'Baseline to compare against (e.g., main)'
         required: false
         default: ''
+
+permissions:
+  contents: read
+  pull-requests: write
 
 env:
   CARGO_TERM_COLOR: always

@@ -1,4 +1,3 @@
-#![allow(deprecated)] // Benches use legacy Collection.
 //! PQ recall accuracy benchmark suite (5K vectors, 128d, uniform random).
 //!
 //! Measures recall@10 for PQ, OPQ, and `RaBitQ` quantization methods
@@ -12,7 +11,7 @@
 //! neighbors, enabling HNSW (M=24, `ef_construction=300`, `ef_search=128`) to
 //! achieve recall@10 above 0.92, satisfying PQ-07.
 
-#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_precision_loss, clippy::doc_markdown)]
 
 use std::collections::{HashMap, HashSet};
 
@@ -21,7 +20,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tempfile::{tempdir, TempDir};
 use velesdb_core::velesql::Parser;
-use velesdb_core::{Collection, Database, DistanceMetric, Point, StorageMode};
+use velesdb_core::{Database, DistanceMetric, Point, StorageMode, VectorCollection};
 
 const DIMENSION: usize = 128;
 const NUM_VECTORS: usize = 5_000;
@@ -78,22 +77,27 @@ fn recall_at_k(ground_truth: &[u64], results: &[u64], k: usize) -> f64 {
     recall
 }
 
-/// Build a collection with full-precision storage mode (no quantization).
+/// Build a VectorCollection with full-precision storage mode (no quantization).
 ///
-/// Returns the `TempDir` alongside the `Collection` so the directory stays
+/// Returns the `TempDir` alongside the `VectorCollection` so the directory stays
 /// alive for the benchmark duration and is cleaned up on drop.
 fn build_pq_collection(
     storage_mode: StorageMode,
     dataset: &[Vec<f32>],
     dimension: usize,
     name: &str,
-) -> (Collection, TempDir) {
+) -> (VectorCollection, TempDir) {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join(name);
 
-    let collection =
-        Collection::create_with_options(path, dimension, DistanceMetric::Euclidean, storage_mode)
-            .expect("create collection");
+    let collection = VectorCollection::create(
+        path,
+        "bench",
+        dimension,
+        DistanceMetric::Euclidean,
+        storage_mode,
+    )
+    .expect("create VectorCollection");
 
     let points: Vec<Point> = dataset
         .iter()
@@ -108,23 +112,25 @@ fn build_pq_collection(
     (collection, dir)
 }
 
-/// Build a collection via `Database` + `VelesQL` `TRAIN QUANTIZER` for explicit
+/// Build a VectorCollection via `Database` + `VelesQL` `TRAIN QUANTIZER` for explicit
 /// PQ/OPQ/RaBitQ training with controlled parameters.
 ///
-/// Returns `(Collection, Database, TempDir)` -- `Database` and `TempDir`
-/// must stay alive to keep the collection valid.
+/// Returns `(VectorCollection, Database, TempDir)` -- `Database` and `TempDir`
+/// must stay alive to keep the VectorCollection valid.
 fn build_trained_collection(
     dataset: &[Vec<f32>],
     dimension: usize,
     name: &str,
     train_query: &str,
-) -> (Collection, Database, TempDir) {
+) -> (VectorCollection, Database, TempDir) {
     let dir = tempdir().expect("tempdir");
     let db = Database::open(dir.path()).expect("open database");
     db.create_collection(name, dimension, DistanceMetric::Euclidean)
-        .expect("create collection");
+        .expect("create VectorCollection");
 
-    let coll = db.get_collection(name).expect("get collection");
+    let coll = db
+        .get_vector_collection(name)
+        .expect("get VectorCollection");
     let points: Vec<Point> = dataset
         .iter()
         .enumerate()
@@ -142,14 +148,16 @@ fn build_trained_collection(
     db.execute_query(&query, &params)
         .expect("execute TRAIN QUANTIZER");
 
-    // Re-fetch collection after training
-    let coll = db.get_collection(name).expect("get trained collection");
+    // Re-fetch VectorCollection after training
+    let coll = db
+        .get_vector_collection(name)
+        .expect("get trained VectorCollection");
     (coll, db, dir)
 }
 
-/// Measure average recall@k for a collection against brute-force ground truth.
+/// Measure average recall@k for a VectorCollection against brute-force ground truth.
 fn measure_recall(
-    collection: &Collection,
+    collection: &VectorCollection,
     queries: &[Vec<f32>],
     dataset: &[Vec<f32>],
     k: usize,

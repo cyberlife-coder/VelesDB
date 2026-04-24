@@ -36,13 +36,12 @@
 //! ```
 #![allow(clippy::doc_markdown)] // Graph docs include many domain identifiers and acronyms.
 
-mod cart;
 mod clustered_index;
 mod csr_snapshot;
-mod degree_router;
 mod edge;
 mod edge_concurrent;
 mod edge_persistence;
+mod edge_removal;
 pub(crate) mod helpers;
 mod label_index;
 #[cfg(test)]
@@ -50,16 +49,16 @@ mod label_index_tests;
 mod label_table;
 #[cfg(test)]
 mod label_table_tests;
-mod memory_pool;
 mod metrics;
 mod node;
-mod property_index;
+pub(crate) mod property_index;
 mod range_index;
 mod schema;
 mod streaming;
 #[cfg(test)]
 mod streaming_tests;
 mod traversal;
+mod traversal_bidir;
 mod traversal_csr;
 #[cfg(test)]
 mod traversal_tests;
@@ -81,28 +80,25 @@ mod range_index_tests;
 #[cfg(test)]
 mod schema_tests;
 
-pub use cart::{CARTEdgeIndex, CompressedART};
-pub use clustered_index::{ClusteredEdgeIndex, ClusteredIndex};
+pub use clustered_index::ClusteredIndex;
 pub use csr_snapshot::{AdjacencySource, CsrSnapshot, EdgePredicate, LabelFilter, NoFilter};
-pub use degree_router::{
-    DegreeAdaptiveStorage, DegreeRouter, EdgeIndex, HashSetEdgeIndex, VecEdgeIndex,
-    DEFAULT_DEGREE_THRESHOLD,
-};
 pub use edge::{EdgeStore, GraphEdge};
+#[allow(unused_imports)] // Re-exported for test access via super::*
+pub(crate) use node::Element;
 // Re-exported for use by ConcurrentEdgeStore (Task 5) and other internal consumers.
 #[allow(unused_imports)]
 pub(crate) use csr_snapshot::SnapshotBuilder;
 pub use edge_concurrent::ConcurrentEdgeStore;
 pub use label_index::LabelIndex;
 pub use label_table::{LabelId, LabelTable};
-pub use memory_pool::{ConcurrentMemoryPool, ConcurrentPoolHandle, MemoryPool, PoolIndex};
 pub use metrics::{GraphMetrics, LatencyHistogram};
-pub use node::{Element, GraphNode};
+pub use node::GraphNode;
 pub use property_index::PropertyIndex;
-pub use range_index::{OrderedValue, RangeIndex};
+pub use range_index::RangeIndex;
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
 pub use streaming::{
     bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,
 };
 pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH};
+pub use traversal_bidir::bfs_traverse_both;
 pub use traversal_csr::{bfs_traverse_csr, bfs_traverse_csr_filtered};

@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 /// Vector precision format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum VectorPrecision {
     /// 32-bit floating point (4 bytes per dimension)
     #[default]
@@ -65,6 +66,7 @@ impl VectorPrecision {
 /// Stores vectors in their native precision format to minimize memory usage.
 /// Provides conversion methods for distance calculations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum VectorData {
     /// Full precision f32 vector
     F32(Vec<f32>),

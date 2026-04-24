@@ -5,13 +5,14 @@
 //!
 //! Read-only queries and traversal are in `query.rs`.
 
-// SAFETY: Numeric casts in edge store sharding are intentional:
+// Reason: Numeric casts in edge store sharding are intentional:
 // - u64->usize for node ID hashing: Node IDs are generated sequentially and fit in usize
 // - Used for sharding only, actual storage uses u64 for persistence
 #![allow(clippy::cast_possible_truncation)]
 
 mod persistence;
 mod query;
+mod snapshot;
 
 use super::clustered_index::ClusteredIndex;
 use super::csr_snapshot::{CsrSnapshot, SnapshotBuilder};
@@ -22,8 +23,7 @@ use arc_swap::ArcSwap;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 /// Default number of shards for concurrent edge store.
 /// Increased from 64 to 256 for better scalability with 10M+ edges (EPIC-019 US-001).
@@ -86,23 +86,32 @@ pub struct ConcurrentEdgeStore {
 
 impl ConcurrentEdgeStore {
     /// Creates a new concurrent edge store with the default number of shards.
+    ///
+    /// Uses `DEFAULT_NUM_SHARDS` (compile-time constant > 0), so this
+    /// constructor cannot fail in practice.
+    #[allow(clippy::missing_panics_doc)] // Invariant: DEFAULT_NUM_SHARDS > 0
     #[must_use]
     pub fn new() -> Self {
-        Self::with_shards(DEFAULT_NUM_SHARDS)
+        // DEFAULT_NUM_SHARDS is a compile-time constant > 0, so this cannot fail.
+        Self::with_shards(DEFAULT_NUM_SHARDS).expect("invariant: DEFAULT_NUM_SHARDS > 0")
     }
 
     /// Creates a new concurrent edge store with a specific number of shards.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `num_shards` is 0 (would cause division-by-zero in shard_index).
-    #[must_use]
-    pub fn with_shards(num_shards: usize) -> Self {
-        assert!(num_shards > 0, "num_shards must be at least 1");
+    /// Returns `Error::Config` if `num_shards` is 0 (would cause
+    /// division-by-zero in shard_index).
+    pub fn with_shards(num_shards: usize) -> crate::error::Result<Self> {
+        if num_shards == 0 {
+            return Err(crate::error::Error::Config(
+                "num_shards must be at least 1".to_string(),
+            ));
+        }
         let shards = (0..num_shards)
             .map(|_| RwLock::new(EdgeStore::new()))
             .collect();
-        Self {
+        Ok(Self {
             shards,
             num_shards,
             edge_ids: RwLock::new(FxHashMap::default()),
@@ -110,12 +119,13 @@ impl ConcurrentEdgeStore {
             csr_snapshot: ArcSwap::from_pointee(SnapshotBuilder::empty()),
             csr_dirty: AtomicBool::new(false),
             label_table: RwLock::new(LabelTable::new()),
-        }
+        })
     }
 
     /// Creates a concurrent edge store with optimal shard count for estimated edge count.
     ///
     /// **FLAG-6: Uses integer bit manipulation for ceiling log2.**
+    #[allow(clippy::missing_panics_doc)] // Invariant: optimal_shards >= 1 (clamped)
     #[must_use]
     pub fn with_estimated_edges(estimated_edges: usize) -> Self {
         let optimal_shards = if estimated_edges < MIN_EDGES_PER_SHARD {
@@ -129,7 +139,8 @@ impl ConcurrentEdgeStore {
             };
             (1usize << power_of_2).clamp(1, MAX_SHARDS)
         };
-        Self::with_shards(optimal_shards)
+        // optimal_shards is always >= 1 (clamped above), so this cannot fail.
+        Self::with_shards(optimal_shards).expect("invariant: optimal_shards >= 1")
     }
 
     /// Returns the shard index for a given node ID.
@@ -461,122 +472,8 @@ impl ConcurrentEdgeStore {
     }
 }
 
-// ---------------------------------------------------------------------------
-// CSR snapshot (read-only `ClusteredIndex` for zero-copy neighbor lookups)
-// ---------------------------------------------------------------------------
-
-impl ConcurrentEdgeStore {
-    /// Invalidates the clustered read snapshot.
-    ///
-    /// Called by every write method so that stale data is never served.
-    /// Readers fall back to per-shard lookup when the clustered snapshot
-    /// is absent.
-    #[inline]
-    fn invalidate_snapshot(&self) {
-        // Fast path: skip write lock if snapshot is already absent.
-        let guard = self.clustered_snapshot.read();
-        if guard.is_some() {
-            drop(guard);
-            *self.clustered_snapshot.write() = None;
-        }
-    }
-
-    /// Best-effort CSR snapshot rebuild after a mutation.
-    ///
-    /// Sets the `csr_dirty` flag so the next read triggers a rebuild.
-    /// This eliminates the O(N+E) rebuild on every `add_edge`/`remove_edge`,
-    /// deferring the cost to the next read.
-    #[inline]
-    fn rebuild_snapshot_best_effort(&self) {
-        self.csr_dirty.store(true, Ordering::Release);
-    }
-
-    /// Rebuilds the lock-free `CsrSnapshot` from all shards.
-    ///
-    /// Acquires read locks on all shards sequentially, merges outgoing edges
-    /// into a single `EdgeStore`, builds a `CsrSnapshot` via `SnapshotBuilder`,
-    /// and swaps it atomically into `self.csr_snapshot`.
-    ///
-    /// On failure the previous snapshot is retained (readers see stale but
-    /// structurally valid data).
-    ///
-    /// # Note
-    ///
-    /// This method does NOT acquire `edge_ids` — it reads directly from
-    /// shard `EdgeStore`s. This avoids deadlock when called from mutation
-    /// methods that already hold the `edge_ids` write lock.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::SnapshotBuildFailed` if the merge or build fails.
-    #[allow(clippy::unnecessary_wraps)] // Reason: Result kept for future allocation-failure propagation
-    pub(crate) fn rebuild_snapshot(&self) -> Result<()> {
-        // Build a merged EdgeStore from all shards (outgoing edges only).
-        // We iterate shards directly instead of using `to_merged_edge_store()`
-        // to avoid acquiring `edge_ids` (which may already be write-locked
-        // by the calling mutation method).
-        let mut merged = EdgeStore::new();
-        for shard in &self.shards {
-            let guard = shard.read();
-            for edge in guard.all_edges() {
-                // Ignore duplicates — cross-shard edges appear in both shards
-                // but `add_edge` deduplicates by edge ID.
-                let _ = merged.add_edge(edge.clone());
-            }
-        }
-        let label_table = self.label_table.read();
-        let new_snapshot = SnapshotBuilder::build(&merged, &label_table);
-        self.csr_snapshot.store(Arc::new(new_snapshot));
-        Ok(())
-    }
-
-    /// Builds a CSR-like read snapshot from current shard state.
-    ///
-    /// The snapshot stores only outgoing neighbor **target node IDs** per source
-    /// node in contiguous memory, enabling [`with_neighbors()`](Self::with_neighbors)
-    /// to provide zero-copy `&[u64]` access without shard locking.
-    ///
-    /// # Limitation — target IDs only
-    ///
-    /// The snapshot does **not** store edge IDs, labels, or properties.
-    /// It is optimized for BFS neighbor expansion where only connectivity
-    /// matters. To retrieve full edge metadata (edge ID, label, properties),
-    /// use [`get_outgoing()`](Self::get_outgoing) which reads from the
-    /// authoritative shard data.
-    ///
-    /// Call this after bulk inserts, after `flush()`, or after loading
-    /// from disk. The snapshot is automatically invalidated on any write.
-    pub fn build_read_snapshot(&self) {
-        let ids = self.edge_ids.read();
-        let edge_count = ids.len();
-        // Rough estimate: each edge contributes one outgoing target entry.
-        let mut snapshot = ClusteredIndex::with_capacity(edge_count, edge_count);
-
-        for (&edge_id, &source_id) in ids.iter() {
-            let shard_idx = self.shard_index(source_id);
-            let guard = self.shards[shard_idx].read();
-            if let Some(edge) = guard.get_edge(edge_id) {
-                snapshot.insert(source_id, edge.target());
-            }
-        }
-
-        // Compact once to eliminate any fragmentation from insert order.
-        snapshot.compact();
-
-        *self.clustered_snapshot.write() = Some(snapshot);
-
-        // Also rebuild the lock-free CSR snapshot.
-        let _ = self.rebuild_snapshot();
-    }
-
-    /// Returns `true` if a CSR read snapshot is currently available.
-    #[must_use]
-    pub fn has_read_snapshot(&self) -> bool {
-        self.clustered_snapshot.read().is_some()
-    }
-}
-
 // Persistence (from_edge_store, save_to_file, load_from_file) is in persistence.rs
+// CSR snapshot management (invalidate, rebuild, build) is in snapshot.rs
 
 impl Default for ConcurrentEdgeStore {
     fn default() -> Self {

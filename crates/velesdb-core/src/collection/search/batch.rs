@@ -115,27 +115,6 @@ impl Collection {
             .collect()
     }
 
-    /// Performs batch search for multiple query vectors in parallel with a single metadata filter.
-    ///
-    /// # Arguments
-    ///
-    /// * `queries` - List of query vector slices
-    /// * `k` - Maximum number of results per query
-    /// * `filter` - Metadata filter to apply to all results
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any query has incorrect dimension.
-    pub fn search_batch_with_filter(
-        &self,
-        queries: &[&[f32]],
-        k: usize,
-        filter: &crate::filter::Filter,
-    ) -> Result<Vec<Vec<SearchResult>>> {
-        let filters: Vec<Option<crate::filter::Filter>> = vec![Some(filter.clone()); queries.len()];
-        self.search_batch_with_filters(queries, k, &filters)
-    }
-
     /// Performs batch search for multiple query vectors in parallel.
     ///
     /// This method is optimized for high throughput using parallel index traversal.
@@ -280,7 +259,7 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if any query vector has a dimension
+    /// Returns [`crate::error::Error::DimensionMismatch`] if any query vector has a dimension
     /// different from the index dimension.
     fn search_and_merge_delta(
         &self,

@@ -34,7 +34,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if `data.len() != self.dimension`.
+    /// Returns [`crate::error::Error::DimensionMismatch`] if `data.len() != self.dimension`.
     #[inline]
     pub(crate) fn validate_dimension(&self, data: &[f32]) -> crate::error::Result<()> {
         validate_dimension_match(self.dimension, data.len())
@@ -69,6 +69,13 @@ impl HnswIndex {
     /// Performs HNSW-only search (no reranking).
     ///
     /// `pub(crate)` to allow reuse in `batch.rs` for `search_batch_parallel`.
+    ///
+    /// Uses [`NativeHnswInner::search_auto`] so that when the `gpu` feature is
+    /// enabled and the index is large enough (> 500K vectors, Standard backend),
+    /// layer-0 traversal is offloaded to the GPU via the SONG 3-stage pipeline.
+    /// Falls through to the CPU SIMD path transparently otherwise — the caller
+    /// sees the same `(node_id, raw_dist)` pairs and must still apply
+    /// [`NativeHnswInner::transform_score`] exactly as before.
     pub(crate) fn search_hnsw_only(
         &self,
         query: &[f32],
@@ -76,7 +83,7 @@ impl HnswIndex {
         ef_search: usize,
     ) -> Vec<ScoredResult> {
         let inner = self.inner.read();
-        let neighbours = inner.search(query, k, ef_search);
+        let neighbours = inner.search_auto(query, k, ef_search);
 
         let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
         for &(node_id, raw_dist) in &neighbours {
@@ -86,6 +93,36 @@ impl HnswIndex {
             }
         }
         results
+    }
+
+    /// Raw HNSW graph search with a literal `ef_search` budget.
+    ///
+    /// Bypasses both [`SearchQuality`] ef scaling (`ef_search_for_scale`) and
+    /// two-stage reranking. The `ef_search` value is passed verbatim to the
+    /// graph traversal — useful for reproducible ANN benchmarks (e.g. SIFT1M)
+    /// that need to compare plain-HNSW numbers across implementations
+    /// (HNSWlib, Faiss, etc.) without VelesDB's production quality-adapter
+    /// layering the ef budget or over-fetching candidates.
+    ///
+    /// This method is intentionally feature-gated (`bench-sift1m`) and is
+    /// **not** part of the stable public API — it is a benchmark-only seam.
+    /// Application code should use [`Self::search_with_quality`] or
+    /// [`Self::search_with_rerank_quality`] which honour the configured
+    /// quality/latency trade-offs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::DimensionMismatch`] if `query.len()`
+    /// does not equal the index dimension.
+    #[cfg(feature = "bench-sift1m")]
+    pub fn search_raw(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.validate_dimension(query)?;
+        Ok(self.search_hnsw_only(query, k, ef_search))
     }
 
     /// Performs HNSW search with a pre-filter bitmap.
@@ -106,7 +143,9 @@ impl HnswIndex {
         allowed_ids: &roaring::RoaringBitmap,
     ) -> Vec<ScoredResult> {
         let inner = self.inner.read();
-        let neighbours = inner.search(query, candidates_k, ef_search);
+        // GPU-aware entry point (falls back to CPU for < 500K vectors, RaBitQ,
+        // or GPU errors). See `search_hnsw_only` for rationale.
+        let neighbours = inner.search_auto(query, candidates_k, ef_search);
 
         let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
         for &(node_id, raw_dist) in &neighbours {
@@ -137,7 +176,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if query dimension is wrong.
+    /// Returns [`crate::error::Error::DimensionMismatch`] if query dimension is wrong.
     pub fn search_with_quality_and_bitmap(
         &self,
         query: &[f32],
@@ -152,14 +191,14 @@ impl HnswIndex {
         let candidates_k = k.saturating_mul(4).max(ef_search);
 
         let mut results =
-            self.search_bitmap_filtered_inner(query, candidates_k, ef_search, allowed_ids);
+            self.search_hnsw_only_filtered(query, candidates_k, ef_search, allowed_ids);
 
         // Adaptive retry: if too few results survived the bitmap filter,
         // double the candidate pool and retry once to find more matches.
         if results.len() < k && candidates_k < 10_000 {
             let retry_k = (candidates_k.saturating_mul(2)).min(10_000);
             let retry_results =
-                self.search_bitmap_filtered_inner(query, retry_k, ef_search, allowed_ids);
+                self.search_hnsw_only_filtered(query, retry_k, ef_search, allowed_ids);
             // Merge retry results, deduplicating by ID
             let existing_ids: rustc_hash::FxHashSet<u64> = results.iter().map(|r| r.id).collect();
             for r in retry_results {
@@ -172,31 +211,6 @@ impl HnswIndex {
         self.metric.sort_scored_results(&mut results);
         results.truncate(k);
         Ok(results)
-    }
-
-    /// Inner bitmap-filtered HNSW search (shared by initial + retry paths).
-    fn search_bitmap_filtered_inner(
-        &self,
-        query: &[f32],
-        candidates_k: usize,
-        ef_search: usize,
-        allowed_ids: &roaring::RoaringBitmap,
-    ) -> Vec<ScoredResult> {
-        let inner = self.inner.read();
-        let neighbours = inner.search(query, candidates_k, ef_search);
-
-        let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
-        for &(node_id, raw_dist) in &neighbours {
-            if let Some(id) = self.mappings.get_id(node_id) {
-                let in_bitmap = u32::try_from(id).is_ok_and(|id32| allowed_ids.contains(id32));
-                let exceeds_bitmap_range = u32::try_from(id).is_err();
-                if in_bitmap || exceeds_bitmap_range {
-                    let score = inner.transform_score(raw_dist);
-                    results.push(ScoredResult::new(id, score));
-                }
-            }
-        }
-        results
     }
 
     /// Determines whether two-stage reranking should be used.
@@ -307,7 +321,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// Returns [`crate::error::Error::DimensionMismatch`] if the query dimension does not
     /// match the index dimension.
     pub fn search_with_quality(
         &self,

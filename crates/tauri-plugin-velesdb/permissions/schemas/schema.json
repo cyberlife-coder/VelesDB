@@ -331,6 +331,18 @@
           "markdownDescription": "Denies the create_collection command without any pre-configured scope."
         },
         {
+          "description": "Enables the create_graph_collection command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-graph-collection",
+          "markdownDescription": "Enables the create_graph_collection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_graph_collection command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-graph-collection",
+          "markdownDescription": "Denies the create_graph_collection command without any pre-configured scope."
+        },
+        {
           "description": "Enables the create_index command without any pre-configured scope.",
           "type": "string",
           "const": "allow-create-index",
@@ -389,6 +401,30 @@
           "type": "string",
           "const": "deny-drop-index",
           "markdownDescription": "Denies the drop_index command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the episodic_recent command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-episodic-recent",
+          "markdownDescription": "Enables the episodic_recent command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the episodic_recent command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-episodic-recent",
+          "markdownDescription": "Denies the episodic_recent command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the episodic_record command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-episodic-record",
+          "markdownDescription": "Enables the episodic_record command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the episodic_record command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-episodic-record",
+          "markdownDescription": "Denies the episodic_record command without any pre-configured scope."
         },
         {
           "description": "Enables the flush command without any pre-configured scope.",
@@ -463,6 +499,18 @@
           "markdownDescription": "Denies the hybrid_search command without any pre-configured scope."
         },
         {
+          "description": "Enables the hybrid_sparse_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hybrid-sparse-search",
+          "markdownDescription": "Enables the hybrid_sparse_search command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hybrid_sparse_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hybrid-sparse-search",
+          "markdownDescription": "Denies the hybrid_sparse_search command without any pre-configured scope."
+        },
+        {
           "description": "Enables the is_empty command without any pre-configured scope.",
           "type": "string",
           "const": "allow-is-empty",
@@ -511,6 +559,30 @@
           "markdownDescription": "Denies the multi_query_search command without any pre-configured scope."
         },
         {
+          "description": "Enables the procedural_learn command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-procedural-learn",
+          "markdownDescription": "Enables the procedural_learn command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the procedural_learn command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-procedural-learn",
+          "markdownDescription": "Denies the procedural_learn command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the procedural_recall command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-procedural-recall",
+          "markdownDescription": "Enables the procedural_recall command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the procedural_recall command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-procedural-recall",
+          "markdownDescription": "Denies the procedural_recall command without any pre-configured scope."
+        },
+        {
           "description": "Enables the query command without any pre-configured scope.",
           "type": "string",
           "const": "allow-query",
@@ -521,6 +593,18 @@
           "type": "string",
           "const": "deny-query",
           "markdownDescription": "Denies the query command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scroll_collection command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scroll-collection",
+          "markdownDescription": "Enables the scroll_collection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scroll_collection command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scroll-collection",
+          "markdownDescription": "Denies the scroll_collection command without any pre-configured scope."
         },
         {
           "description": "Enables the search command without any pre-configured scope.",
@@ -559,6 +643,42 @@
           "markdownDescription": "Denies the semantic_store command without any pre-configured scope."
         },
         {
+          "description": "Enables the sparse_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sparse-search",
+          "markdownDescription": "Enables the sparse_search command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sparse_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sparse-search",
+          "markdownDescription": "Denies the sparse_search command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sparse_upsert command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sparse-upsert",
+          "markdownDescription": "Enables the sparse_upsert command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sparse_upsert command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sparse-upsert",
+          "markdownDescription": "Denies the sparse_upsert command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stream_insert command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stream-insert",
+          "markdownDescription": "Enables the stream_insert command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stream_insert command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stream-insert",
+          "markdownDescription": "Denies the stream_insert command without any pre-configured scope."
+        },
+        {
           "description": "Enables the text_search command without any pre-configured scope.",
           "type": "string",
           "const": "allow-text-search",
@@ -569,6 +689,18 @@
           "type": "string",
           "const": "deny-text-search",
           "markdownDescription": "Denies the text_search command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the train_pq command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-train-pq",
+          "markdownDescription": "Enables the train_pq command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the train_pq command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-train-pq",
+          "markdownDescription": "Denies the train_pq command without any pre-configured scope."
         },
         {
           "description": "Enables the traverse_graph command without any pre-configured scope.",
@@ -619,10 +751,10 @@
           "markdownDescription": "Denies the upsert_metadata command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-semantic-store`\n- `allow-semantic-query`\n- `allow-add-edge`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`\n- `allow-traverse-graph-parallel`\n- `allow-create-index`\n- `allow-drop-index`\n- `allow-list-indexes`",
+          "description": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-scroll-collection`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-sparse-search`\n- `allow-hybrid-sparse-search`\n- `allow-sparse-upsert`\n- `allow-train-pq`\n- `allow-stream-insert`\n- `allow-semantic-store`\n- `allow-semantic-query`\n- `allow-episodic-record`\n- `allow-episodic-recent`\n- `allow-procedural-learn`\n- `allow-procedural-recall`\n- `allow-create-graph-collection`\n- `allow-add-edge`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`\n- `allow-traverse-graph-parallel`\n- `allow-create-index`\n- `allow-drop-index`\n- `allow-list-indexes`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-semantic-store`\n- `allow-semantic-query`\n- `allow-add-edge`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`\n- `allow-traverse-graph-parallel`\n- `allow-create-index`\n- `allow-drop-index`\n- `allow-list-indexes`"
+          "markdownDescription": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-scroll-collection`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-sparse-search`\n- `allow-hybrid-sparse-search`\n- `allow-sparse-upsert`\n- `allow-train-pq`\n- `allow-stream-insert`\n- `allow-semantic-store`\n- `allow-semantic-query`\n- `allow-episodic-record`\n- `allow-episodic-recent`\n- `allow-procedural-learn`\n- `allow-procedural-recall`\n- `allow-create-graph-collection`\n- `allow-add-edge`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`\n- `allow-traverse-graph-parallel`\n- `allow-create-index`\n- `allow-drop-index`\n- `allow-list-indexes`"
         }
       ]
     }

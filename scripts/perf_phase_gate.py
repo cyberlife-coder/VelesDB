@@ -29,7 +29,6 @@ import re
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -263,7 +262,6 @@ def compare(phase: str) -> bool:
     # Recall check
     recall_ok = True
     for check_name in ["recall_rust"]:
-        before_status = before.get("recall", {}).get(check_name, {}).get("status", "unknown")
         after_status = after.get("recall", {}).get(check_name, {}).get("status", "unknown")
         if after_status != "pass":
             recall_ok = False

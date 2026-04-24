@@ -1,0 +1,263 @@
+//! BDD integration tests for JOIN in the WASM VelesQL executor (S4-13).
+
+use crate::database::DatabaseInner;
+use crate::velesql_exec::execute;
+
+fn db_with_users_orders() -> DatabaseInner {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("users").expect("test: users");
+    execute(
+        &mut db,
+        "INSERT INTO users (id, name) VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol')",
+        None,
+    )
+    .expect("test: seed users");
+    db.create_metadata_collection("orders")
+        .expect("test: orders");
+    execute(
+        &mut db,
+        "INSERT INTO orders (id, user_id, total) VALUES (10, 1, 50), (11, 1, 75), (12, 2, 20)",
+        None,
+    )
+    .expect("test: seed orders");
+    db
+}
+
+// =========================================================================
+// INNER JOIN — nominal
+// =========================================================================
+
+#[test]
+fn test_inner_join_pairs_matching_rows() {
+    let mut db = db_with_users_orders();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM users JOIN orders ON users.id = orders.user_id LIMIT 10",
+        None,
+    )
+    .expect("test: inner join");
+    // Alice has 2 orders, Bob has 1, Carol has 0. INNER JOIN drops Carol.
+    assert_eq!(r.row_count(), 3);
+}
+
+#[test]
+fn test_inner_join_filters_via_where_on_left_column() {
+    let mut db = db_with_users_orders();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM users JOIN orders ON users.id = orders.user_id WHERE name = 'Alice' LIMIT 10",
+        None,
+    )
+    .expect("test: where on left");
+    assert_eq!(r.row_count(), 2);
+}
+
+#[test]
+fn test_inner_join_filters_via_where_on_right_column() {
+    let mut db = db_with_users_orders();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM users JOIN orders ON users.id = orders.user_id WHERE total > 40 LIMIT 10",
+        None,
+    )
+    .expect("test: where on right");
+    assert_eq!(r.row_count(), 2); // orders 10 and 11
+}
+
+// =========================================================================
+// LEFT JOIN — nominal
+// =========================================================================
+
+#[test]
+fn test_left_join_keeps_unmatched_left_rows() {
+    let mut db = db_with_users_orders();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM users LEFT JOIN orders ON users.id = orders.user_id LIMIT 10",
+        None,
+    )
+    .expect("test: left join");
+    // Alice 2 rows + Bob 1 + Carol null-padded = 4
+    assert_eq!(r.row_count(), 4);
+}
+
+// =========================================================================
+// Edge cases
+// =========================================================================
+
+#[test]
+fn test_inner_join_between_empty_collections_returns_zero() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("a").expect("test: a");
+    db.create_metadata_collection("b").expect("test: b");
+    let r = execute(
+        &mut db,
+        "SELECT * FROM a JOIN b ON a.id = b.id LIMIT 10",
+        None,
+    )
+    .expect("test: empty join");
+    assert_eq!(r.row_count(), 0);
+}
+
+#[test]
+fn test_inner_join_with_limit_caps_result() {
+    let mut db = db_with_users_orders();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM users JOIN orders ON users.id = orders.user_id LIMIT 2",
+        None,
+    )
+    .expect("test: limited");
+    assert_eq!(r.row_count(), 2);
+}
+
+// =========================================================================
+// Negative (≥ 20%)
+// =========================================================================
+
+#[test]
+fn test_right_join_is_rejected() {
+    let mut db = db_with_users_orders();
+    let err = execute(
+        &mut db,
+        "SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id LIMIT 10",
+        None,
+    );
+    assert!(err.is_err());
+    assert!(err.expect_err("test: err").contains("RIGHT JOIN"));
+}
+
+#[test]
+fn test_full_join_is_rejected() {
+    let mut db = db_with_users_orders();
+    let err = execute(
+        &mut db,
+        "SELECT * FROM users FULL JOIN orders ON users.id = orders.user_id LIMIT 10",
+        None,
+    );
+    assert!(err.is_err());
+}
+
+#[test]
+fn test_join_missing_left_collection_errors() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("orders").expect("test: o");
+    let err = execute(
+        &mut db,
+        "SELECT * FROM ghost JOIN orders ON ghost.id = orders.user_id LIMIT 10",
+        None,
+    );
+    assert!(err.is_err());
+}
+
+#[test]
+fn test_join_missing_right_collection_errors() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("users").expect("test: u");
+    let err = execute(
+        &mut db,
+        "SELECT * FROM users JOIN ghost ON users.id = ghost.user_id LIMIT 10",
+        None,
+    );
+    assert!(err.is_err());
+}
+
+// =========================================================================
+// Alias-qualified WHERE (finding D) — nominal
+// =========================================================================
+
+fn db_with_orders_products() -> DatabaseInner {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("orders")
+        .expect("test: orders");
+    execute(
+        &mut db,
+        "INSERT INTO orders (id, product_id, total) VALUES \
+         (1, 100, 30), (2, 100, 50), (3, 200, 75), (4, 200, 20)",
+        None,
+    )
+    .expect("test: seed orders");
+    db.create_metadata_collection("products")
+        .expect("test: products");
+    execute(
+        &mut db,
+        "INSERT INTO products (id, name) VALUES (100, 'Widget'), (200, 'Gadget')",
+        None,
+    )
+    .expect("test: seed products");
+    db
+}
+
+#[test]
+fn test_join_where_qualified_column_on_left_table() {
+    // `orders.total > 40` must traverse the alias-scoped nested mirror,
+    // not literally match a flat `"orders.total"` key (which existed in
+    // the pre-fix behaviour and silently failed).
+    let mut db = db_with_orders_products();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM orders JOIN products ON orders.product_id = products.id \
+         WHERE orders.total > 40 LIMIT 10",
+        None,
+    )
+    .expect("test: qualified left");
+    // Orders 2 (50) and 3 (75) pass the threshold.
+    assert_eq!(r.row_count(), 2);
+}
+
+#[test]
+fn test_join_where_qualified_column_on_right_table() {
+    let mut db = db_with_orders_products();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM orders JOIN products ON orders.product_id = products.id \
+         WHERE products.name = 'Widget' LIMIT 10",
+        None,
+    )
+    .expect("test: qualified right");
+    // Orders 1 and 2 are linked to product 100 (Widget).
+    assert_eq!(r.row_count(), 2);
+}
+
+#[test]
+fn test_join_where_qualified_multiple_tables_with_and() {
+    let mut db = db_with_orders_products();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM orders JOIN products ON orders.product_id = products.id \
+         WHERE orders.total > 40 AND products.name = 'Gadget' LIMIT 10",
+        None,
+    )
+    .expect("test: qualified and");
+    // Order 3 (total=75, product=Gadget) is the only match.
+    assert_eq!(r.row_count(), 1);
+}
+
+#[test]
+fn test_join_where_unqualified_still_works() {
+    // Non-regression: bare `total` still resolves via the flat mirror.
+    let mut db = db_with_orders_products();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM orders JOIN products ON orders.product_id = products.id \
+         WHERE total > 40 LIMIT 10",
+        None,
+    )
+    .expect("test: unqualified");
+    assert_eq!(r.row_count(), 2);
+}
+
+#[test]
+fn test_join_where_qualified_unbound_alias_returns_zero() {
+    // Unbound alias prefix (`unknown.col`) silently fails per the WASM
+    // WHERE "missing column returns false" convention — no rows match.
+    let mut db = db_with_orders_products();
+    let r = execute(
+        &mut db,
+        "SELECT * FROM orders JOIN products ON orders.product_id = products.id \
+         WHERE unknown.col = 1 LIMIT 10",
+        None,
+    )
+    .expect("test: unbound alias");
+    assert_eq!(r.row_count(), 0);
+}

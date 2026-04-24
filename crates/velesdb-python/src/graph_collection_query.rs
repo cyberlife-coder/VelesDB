@@ -1,15 +1,16 @@
 //! VelesQL query methods for `PyGraphCollection`, extracted from `graph_collection.rs`.
 //!
 //! Contains the `#[pymethods]` impl block for VelesQL parity: `query`,
-//! `match_query`, `explain`, and `query_ids`.
+//! `match_query`, `explain`, `explain_analyze`, and `query_ids`.
 
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::collection::query::{
-    build_explain_dict, parse_velesql, run_velesql_match, run_velesql_select,
-    run_velesql_select_ids,
+    build_explain_analyze_dict, build_explain_dict, convert_params, parse_velesql,
+    run_velesql_match, run_velesql_select, run_velesql_select_ids,
 };
+use crate::collection_helpers::core_err;
 use crate::graph_collection::PyGraphCollection;
 
 #[pymethods]
@@ -100,6 +101,35 @@ impl PyGraphCollection {
     fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<PyObject> {
         let parsed = parse_velesql(query_str)?;
         Ok(build_explain_dict(py, &parsed))
+    }
+
+    /// Execute a query with instrumentation and return plan + actual stats (EXPLAIN ANALYZE).
+    ///
+    /// Unlike `explain()` (plan only), this method executes the query and
+    /// measures actual execution statistics.
+    ///
+    /// Args:
+    ///     query_str: VelesQL query string
+    ///     params: Optional query parameters (vectors as lists/numpy arrays, scalars)
+    ///
+    /// Returns:
+    ///     Dict with keys: plan, actual_stats, node_stats
+    #[pyo3(signature = (query_str, params=None))]
+    fn explain_analyze(
+        &self,
+        py: Python<'_>,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+    ) -> PyResult<PyObject> {
+        let parsed = parse_velesql(query_str)?;
+        let rust_params = convert_params(py, params)?;
+        let inner = &self.inner;
+        let output = py.allow_threads(move || {
+            inner
+                .explain_analyze_query(&parsed, &rust_params)
+                .map_err(core_err)
+        })?;
+        Ok(build_explain_analyze_dict(py, &output))
     }
 
     /// Execute a VelesQL query returning only IDs and scores (no payload).

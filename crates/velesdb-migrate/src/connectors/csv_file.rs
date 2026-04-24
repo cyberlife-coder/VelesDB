@@ -239,6 +239,8 @@ impl SourceConnector for CsvFileConnector {
                 fields,
                 vector_column: Some(self.config.vector_column.clone()),
                 id_column: Some(self.config.id_column.clone()),
+                // File-backed connectors cannot introspect the metric.
+                metric: None,
             });
         }
         Ok(())

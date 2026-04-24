@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Vector expression in a NEAR clause.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum VectorExpr {
     /// Literal vector: [0.1, 0.2, ...]
@@ -15,6 +16,7 @@ pub enum VectorExpr {
 }
 
 /// A value in VelesQL.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     /// Integer value.
@@ -95,6 +97,7 @@ pub struct CorrelatedColumn {
 }
 
 /// Temporal expression for date/time operations (EPIC-038).
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TemporalExpr {
     /// Current timestamp: `NOW()`
@@ -113,12 +116,11 @@ impl TemporalExpr {
     pub fn to_epoch_seconds(&self) -> i64 {
         use std::time::{SystemTime, UNIX_EPOCH};
 
-        // SAFETY: Current Unix timestamps fit in i64 until year 292 billion.
+        // Reason: Current Unix timestamps fit in i64 until year 292 billion.
         // Use saturating conversion for theoretical future-proofing.
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-            .unwrap_or(0);
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
 
         match self {
             Self::Now => now,
@@ -176,6 +178,7 @@ impl Value {
 }
 
 /// Time unit for INTERVAL expressions (EPIC-038).
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IntervalUnit {
     /// Seconds.

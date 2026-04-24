@@ -1,8 +1,34 @@
-//! Request/Response DTOs for Tauri commands.
+//! Request/Response DTOs for Tauri IPC commands.
 //!
-//! Shared defaults and result types are imported from `velesdb_core::api_types`.
-//! Tauri-specific types use `#[serde(rename_all = "camelCase")]` for JavaScript
-//! frontend compatibility and include a `collection` context field.
+//! # Why separate types from `velesdb-server`?
+//!
+//! Tauri commands are invoked from JavaScript via IPC, which imposes two
+//! constraints that differ from the REST server:
+//!
+//! 1. **`camelCase` serialization** — All types use `#[serde(rename_all = "camelCase")]`
+//!    so that JavaScript callers receive idiomatic field names (`topK`, `storageMode`, etc.).
+//!    The server uses `snake_case` (REST convention).
+//!
+//! 2. **`collection` field on requests** — In the REST API the collection name comes from
+//!    the URL path (`/collections/{name}/search`). In Tauri IPC there is no URL, so every
+//!    request carries a `collection: String` field.
+//!
+//! ## What is shared with core
+//!
+//! - **Default value functions** (`default_metric`, `default_top_k`, etc.) are re-exported
+//!   from [`velesdb_core::api_types`] to avoid duplication.
+//! - **`SearchResult`** re-uses the canonical [`velesdb_core::api_types::SearchResultResponse`]
+//!   via a type alias — its fields (`id`, `score`, `payload`) are single-word and therefore
+//!   identical under both `camelCase` and `snake_case` serialization.
+//!
+//! ## What stays Tauri-specific
+//!
+//! - All **request types** (they carry `collection` + use `camelCase` deserialization).
+//! - **`CollectionInfo`** — uses `count` instead of core's `point_count`, and `storage_mode`
+//!   is serialized as `storageMode` for JS.
+//! - **`HybridResult`** / **`QueryResponse`** — Tauri-specific multi-model query format.
+//! - **`PointOutput`** — no direct core response equivalent.
+//! - **Graph types** (`EdgeOutput`, `TraversalOutput`, etc.) — Tauri-specific wrappers.
 
 use serde::{Deserialize, Serialize};
 
@@ -11,14 +37,23 @@ pub use velesdb_core::api_types::{
     default_metric, default_storage_mode, default_top_k, default_vector_weight,
 };
 
-// Re-export the canonical search result type (single-word fields: camelCase-safe).
-pub use velesdb_core::api_types::SearchResultResponse;
-
 // ============================================================================
-// Request DTOs
+// Request DTOs — Tauri-IPC-specific
+//
+// These types MUST remain in this crate because they:
+// - Use `#[serde(rename_all = "camelCase")]` for JavaScript callers
+// - Include a `collection: String` field (no URL path in IPC)
+// - Have different field shapes than the REST API equivalents in core
 // ============================================================================
 
-/// Request to create a new collection.
+/// Request to create a new collection (Tauri IPC).
+///
+/// Supports optional advanced HNSW tuning parameters (`hnswM`,
+/// `hnswEfConstruction`, `hnswAlpha`, `hnswMaxElements`) and PQ rescore
+/// oversampling (`pqRescoreOversampling`). When all advanced fields are
+/// omitted the collection uses dimension-based auto-tuned defaults.
+///
+/// Uses `camelCase` deserialization for JavaScript callers.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateCollectionRequest {
@@ -32,6 +67,21 @@ pub struct CreateCollectionRequest {
     /// Storage mode: "full", "sq8", "binary".
     #[serde(default = "default_storage_mode")]
     pub storage_mode: String,
+    /// HNSW M parameter (max connections per node). Auto-tuned if omitted.
+    #[serde(default)]
+    pub hnsw_m: Option<usize>,
+    /// HNSW `ef_construction` parameter. Auto-tuned if omitted.
+    #[serde(default)]
+    pub hnsw_ef_construction: Option<usize>,
+    /// HNSW alpha for VAMANA neighbor diversification. Default: 1.2.
+    #[serde(default)]
+    pub hnsw_alpha: Option<f32>,
+    /// HNSW initial max elements capacity. Auto-tuned if omitted.
+    #[serde(default)]
+    pub hnsw_max_elements: Option<usize>,
+    /// PQ rescore oversampling factor. Default: 4.
+    #[serde(default)]
+    pub pq_rescore_oversampling: Option<u32>,
 }
 
 /// Request to create a metadata-only collection.
@@ -40,6 +90,31 @@ pub struct CreateCollectionRequest {
 pub struct CreateMetadataCollectionRequest {
     /// Collection name.
     pub name: String,
+}
+
+/// Request to create a graph collection with optional schema (Tauri IPC).
+///
+/// Supports two modes:
+/// - **Schemaless** (default): pass `graphSchema: { "schemaless": true }` or omit it entirely.
+/// - **Strict**: define `node_types` and `edge_types` in the `graphSchema` JSON object.
+///
+/// When `dimension` is set, node embeddings are enabled with the specified metric.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateGraphCollectionRequest {
+    /// Collection name.
+    pub name: String,
+    /// Optional vector dimension for node embeddings. If omitted, graph has no embeddings.
+    #[serde(default)]
+    pub dimension: Option<usize>,
+    /// Distance metric (when dimension is set). Default: "cosine".
+    #[serde(default = "default_metric")]
+    pub metric: String,
+    /// Graph schema definition as JSON.
+    /// Pass `{ "schemaless": true }` for schemaless mode (default),
+    /// or define `node_types` / `edge_types` for strict mode.
+    #[serde(default)]
+    pub graph_schema: Option<serde_json::Value>,
 }
 
 /// A metadata-only point to insert (no vector).
@@ -118,6 +193,10 @@ pub struct SearchRequest {
     /// Optional metadata filter.
     #[serde(default)]
     pub filter: Option<serde_json::Value>,
+    /// Search quality mode: "fast", "balanced", "accurate", "perfect", "auto",
+    /// "custom:\<ef\>", "adaptive:\<min\>:\<max\>".
+    #[serde(default)]
+    pub quality: Option<String>,
 }
 
 /// Individual search request within a batch.
@@ -132,6 +211,10 @@ pub struct IndividualSearchRequest {
     /// Optional metadata filter.
     #[serde(default)]
     pub filter: Option<serde_json::Value>,
+    /// Search quality mode: "fast", "balanced", "accurate", "perfect", "auto",
+    /// "custom:\<ef\>", "adaptive:\<min\>:\<max\>".
+    #[serde(default)]
+    pub quality: Option<String>,
 }
 
 /// Request for batch search.
@@ -299,9 +382,23 @@ pub struct StreamInsertRequest {
 
 // ============================================================================
 // Response DTOs
+//
+// Response types that differ from core only in serialization convention.
+// Where field names are single-word (camelCase == snake_case), we re-use
+// the canonical core type directly.
 // ============================================================================
 
-/// Response for collection info.
+/// Search result — re-uses the canonical core type.
+///
+/// All fields (`id`, `score`, `payload`) are single-word, so `camelCase` and
+/// `snake_case` serialization produce identical JSON. No wrapper needed.
+pub type SearchResult = velesdb_core::api_types::SearchResultResponse;
+
+/// Response for collection info (Tauri IPC).
+///
+/// Differs from [`velesdb_core::api_types::CollectionResponse`]:
+/// - Uses `count` instead of `point_count`
+/// - Serializes as `camelCase` (`storageMode` vs `storage_mode`)
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionInfo {
@@ -317,19 +414,10 @@ pub struct CollectionInfo {
     pub storage_mode: String,
 }
 
-/// Search result (camelCase wrapper over canonical `SearchResultResponse`).
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchResult {
-    /// Point ID.
-    pub id: u64,
-    /// Similarity/distance score.
-    pub score: f32,
-    /// Point payload.
-    pub payload: Option<serde_json::Value>,
-}
-
-/// Multi-model query result.
+/// Multi-model query result (Tauri IPC).
+///
+/// No core equivalent — this format is specific to the Tauri `query` command
+/// which fuses vector, graph, and column results into a single shape.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HybridResult {
@@ -347,7 +435,11 @@ pub struct HybridResult {
     pub column_data: Option<serde_json::Value>,
 }
 
-/// Response for `VelesQL` query operations.
+/// Response for `VelesQL` query operations (Tauri IPC).
+///
+/// Differs from [`velesdb_core::api_types::QueryResponse`] which has additional
+/// fields (`took_ms`, `rows_returned`, `meta`). The Tauri version is simpler,
+/// returning `HybridResult` items.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryResponse {
@@ -357,7 +449,10 @@ pub struct QueryResponse {
     pub timing_ms: f64,
 }
 
-/// Point output for get operations.
+/// Point output for get operations (Tauri IPC).
+///
+/// No direct core response equivalent. The core `Point` struct is the internal
+/// representation; this DTO projects only the fields needed by the JS frontend.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PointOutput {
@@ -369,7 +464,10 @@ pub struct PointOutput {
     pub payload: Option<serde_json::Value>,
 }
 
-/// Response for search operations.
+/// Response for search operations (Tauri IPC).
+///
+/// Differs from [`velesdb_core::api_types::SearchResponse`]: includes `timing_ms`
+/// (the core version does not) and uses `camelCase` serialization.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
@@ -433,17 +531,18 @@ pub struct SemanticQueryResult {
     pub content: String,
 }
 
-/// Request to record an episode.
+/// Request to record an episode in episodic memory.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodicRecordRequest {
+    /// Episode event ID.
+    pub event_id: u64,
     /// Episode description/content.
     pub content: String,
+    /// Timestamp (epoch seconds).
+    pub timestamp: i64,
     /// Embedding vector for the episode.
     pub embedding: Vec<f32>,
-    /// Optional context metadata.
-    #[serde(default)]
-    pub context: Option<serde_json::Value>,
 }
 
 /// Request to query recent episodes.
@@ -453,6 +552,9 @@ pub struct EpisodicRecentRequest {
     /// Number of recent episodes to return.
     #[serde(default = "default_top_k")]
     pub limit: usize,
+    /// Only return episodes since this timestamp (epoch seconds).
+    #[serde(default)]
+    pub since_timestamp: Option<i64>,
 }
 
 /// Result from episodic memory query.
@@ -464,15 +566,112 @@ pub struct EpisodicResult {
     /// Episode content.
     pub content: String,
     /// Timestamp (epoch seconds).
-    pub timestamp: u64,
-    /// Optional context.
-    pub context: Option<serde_json::Value>,
+    pub timestamp: i64,
+}
+
+// ============================================================================
+// ProceduralMemory DTOs
+// ============================================================================
+
+/// Default confidence for procedural learning.
+#[must_use]
+pub const fn default_confidence() -> f32 {
+    1.0
+}
+
+/// Request to learn a procedure.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProceduralLearnRequest {
+    /// Procedure ID.
+    pub procedure_id: u64,
+    /// Procedure name.
+    pub name: String,
+    /// Steps to perform.
+    pub steps: Vec<String>,
+    /// Embedding vector for the procedure.
+    pub embedding: Vec<f32>,
+    /// Confidence level (0.0-1.0). Default: 1.0.
+    #[serde(default = "default_confidence")]
+    pub confidence: f32,
+}
+
+/// Request to recall procedures by similarity.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProceduralRecallRequest {
+    /// Query embedding vector.
+    pub embedding: Vec<f32>,
+    /// Number of results.
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+    /// Minimum confidence threshold. Default: 0.0 (no filter).
+    #[serde(default)]
+    pub min_confidence: f32,
+}
+
+/// Result from procedural memory recall.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProceduralMatchResult {
+    /// Procedure ID.
+    pub id: u64,
+    /// Procedure name.
+    pub name: String,
+    /// Steps.
+    pub steps: Vec<String>,
+    /// Confidence score.
+    pub confidence: f32,
+    /// Similarity score from vector search.
+    pub score: f32,
 }
 
 // ============================================================================
 // Knowledge Graph Types (EPIC-015 US-001) — moved to types_graph.rs
 // ============================================================================
 pub use crate::types_graph::*;
+
+// ============================================================================
+// Scroll DTOs
+// ============================================================================
+
+/// Default batch size for scroll operations.
+#[must_use]
+pub const fn default_batch_size() -> usize {
+    100
+}
+
+/// Request to scroll through collection points.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrollRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Cursor from a previous scroll (omit for the first batch).
+    #[serde(default)]
+    pub cursor: Option<u64>,
+    /// Number of points per batch. Default: 100.
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+    /// Optional metadata filter.
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
+}
+
+/// Response from a scroll operation.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrollResponse {
+    /// Points in this batch.
+    pub points: Vec<PointOutput>,
+    /// Cursor for the next batch (absent when no more points).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<u64>,
+}
+
+// ============================================================================
+// Secondary Index DTOs
+// ============================================================================
 
 /// Request to create a secondary index on a metadata field.
 #[derive(Debug, Deserialize)]

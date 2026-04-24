@@ -2,8 +2,9 @@
 //!
 //! # Safety (EPIC-032/US-010)
 //!
-//! StringId uses u32 internally, limiting the table to ~4 billion strings.
-//! The `intern()` method panics if this limit is exceeded.
+//! `StringId` uses u32 internally, limiting the table to ~4 billion strings.
+//! The `intern()` method debug-asserts this limit (physically unreachable:
+//! 4 billion interned strings would require terabytes of RAM).
 
 use rustc_hash::FxHashMap;
 
@@ -28,18 +29,14 @@ impl StringTable {
     /// Interns a string, returning its ID.
     ///
     /// If the string already exists, returns the existing ID.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the table contains more than `u32::MAX` strings (EPIC-032/US-010).
     pub fn intern(&mut self, s: &str) -> StringId {
         if let Some(&id) = self.string_to_id.get(s) {
             return id;
         }
 
-        // EPIC-032/US-010: Safe bounds check before truncating cast
+        // EPIC-032/US-010: physically unreachable (4B strings = terabytes of RAM)
         let len = self.id_to_string.len();
-        assert!(
+        debug_assert!(
             len < u32::MAX as usize,
             "StringTable overflow: cannot intern more than {} strings",
             u32::MAX

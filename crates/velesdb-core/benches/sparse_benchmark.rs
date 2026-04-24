@@ -14,9 +14,81 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use velesdb_core::index::sparse::{sparse_search, SparseInvertedIndex, SparseVector};
+use velesdb_core::index::sparse::{sparse_search, ScoredDoc, SparseInvertedIndex, SparseVector};
 #[cfg(feature = "internal-bench")]
 use velesdb_core::internal_bench;
+
+/// Sample size used for the recall validation pass.
+const RECALL_SAMPLE_SIZE: usize = 20;
+
+/// Minimum acceptable recall@k of the optimized path vs brute-force ground
+/// truth. Below this threshold the bench fails loudly — a speedup that
+/// silently degrades retrieval semantics is not a valid speedup.
+const RECALL_FLOOR: f32 = 0.95;
+
+/// Brute-force top-k sparse inner-product search used as recall ground truth.
+///
+/// Computes the exact sparse dot product between `query` and every document
+/// in `corpus`, then sorts by score descending and keeps the top-k. This is
+/// intentionally O(`N` * `nnz_q` * log `nnz_d`) — only used once per bench
+/// setup to validate that the optimized `sparse_search` does not degrade
+/// recall.
+fn brute_force_top_k(corpus: &[SparseVector], query: &SparseVector, k: usize) -> Vec<ScoredDoc> {
+    let q_idx = &query.indices;
+    let q_val = &query.values;
+    let mut scored: Vec<ScoredDoc> = corpus
+        .iter()
+        .enumerate()
+        .filter_map(|(doc_id, doc)| {
+            // Merge-join on sorted indices to compute sparse inner product.
+            let mut score = 0.0_f32;
+            let (mut qi, mut di) = (0_usize, 0_usize);
+            while qi < q_idx.len() && di < doc.indices.len() {
+                match q_idx[qi].cmp(&doc.indices[di]) {
+                    std::cmp::Ordering::Equal => {
+                        score += q_val[qi] * doc.values[di];
+                        qi += 1;
+                        di += 1;
+                    }
+                    std::cmp::Ordering::Less => qi += 1,
+                    std::cmp::Ordering::Greater => di += 1,
+                }
+            }
+            if score > 0.0 {
+                Some(ScoredDoc {
+                    doc_id: doc_id as u64,
+                    score,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    // Sort by score descending, tie-break by doc_id ascending for stability.
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.doc_id.cmp(&b.doc_id))
+    });
+    scored.truncate(k);
+    scored
+}
+
+/// Compute recall@k of `actual` vs `expected` — fraction of expected IDs
+/// that also appear in `actual`. Score ordering is intentionally ignored
+/// (recall measures retrieval quality, not ranking).
+fn recall_at_k(actual: &[ScoredDoc], expected: &[ScoredDoc]) -> f32 {
+    if expected.is_empty() {
+        return 1.0;
+    }
+    let expected_ids: HashSet<u64> = expected.iter().map(|s| s.doc_id).collect();
+    let hits = actual
+        .iter()
+        .filter(|s| expected_ids.contains(&s.doc_id))
+        .count();
+    hits as f32 / expected.len() as f32
+}
 
 /// Generate a corpus of SPLADE-like sparse vectors.
 ///
@@ -142,10 +214,51 @@ fn sparse_insert_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
+/// Corpus is synthetic SPLADE-like (random term IDs + weights); it exercises
+/// the same code paths as real SPLADE but makes no claim about production
+/// retrieval quality. Production recall on realistic data is verified
+/// separately via `cargo test test_recall` (HNSW/dense) and dedicated SIFT1M
+/// / MS MARCO harnesses. The recall check below asserts that the optimized
+/// `sparse_search` (`MaxScore` DAAT + linear-scan fallback) does not regress
+/// against brute-force exact inner product on the SAME synthetic corpus —
+/// i.e. it proves the optimization is faithful to the scoring semantics.
 fn sparse_search_benchmarks(c: &mut Criterion) {
     let corpus = generate_splade_corpus(10_000, 42);
     let queries = generate_splade_corpus(100, 123);
     let index = build_index(&corpus);
+
+    // --- Recall validation (runs once, before any timed measurement) ---------
+    //
+    // For each top-k, sample a subset of queries, compute brute-force ground
+    // truth and compare to `sparse_search`. Aggregated recall MUST stay above
+    // RECALL_FLOOR — otherwise the optimization corrupted retrieval semantics
+    // and no speedup claim is admissible. The check deliberately runs outside
+    // `b.iter(...)` so criterion's timing is not contaminated.
+    for &k in &[10_usize, 100] {
+        let mut total_recall = 0.0_f32;
+        let mut counted = 0_usize;
+        for query in queries.iter().take(RECALL_SAMPLE_SIZE) {
+            let expected = brute_force_top_k(&corpus, query, k);
+            if expected.is_empty() {
+                continue;
+            }
+            let actual = sparse_search(&index, query, k);
+            total_recall += recall_at_k(&actual, &expected);
+            counted += 1;
+        }
+        let recall = if counted == 0 {
+            1.0
+        } else {
+            total_recall / counted as f32
+        };
+        println!(
+            "sparse_search recall@{k} = {recall:.4} (over {counted} queries, floor {RECALL_FLOOR})"
+        );
+        assert!(
+            recall >= RECALL_FLOOR,
+            "sparse recall@{k} regressed: {recall:.4} < {RECALL_FLOOR}"
+        );
+    }
 
     let mut group = c.benchmark_group("sparse_search");
     group.sample_size(20);

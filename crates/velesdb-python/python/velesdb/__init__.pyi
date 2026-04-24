@@ -3,7 +3,7 @@
 High-performance vector database with native Python bindings.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, overload
 import numpy as np
 
 __version__: str
@@ -125,6 +125,25 @@ class Collection:
         """Check if the collection is empty."""
         ...
 
+    @property
+    def dimension(self) -> int:
+        """The vector dimension of this collection."""
+        ...
+
+    @property
+    def metric(self) -> str:
+        """The distance metric (e.g. 'cosine', 'euclidean', 'dot')."""
+        ...
+
+    @property
+    def storage_mode(self) -> str:
+        """The storage mode (e.g. 'full', 'sq8', 'binary')."""
+        ...
+
+    def __len__(self) -> int:
+        """Return the number of points in the collection."""
+        ...
+
     def upsert(self, points: List[Dict[str, Any]]) -> int:
         """Insert or update vectors in the collection.
 
@@ -185,6 +204,36 @@ class Collection:
 
         Returns:
             Number of inserted points
+        """
+        ...
+
+    def upsert_bulk_numpy_json(
+        self,
+        vectors: "np.ndarray",
+        ids: List[int],
+        json_payloads: List[Optional[str]],
+    ) -> int:
+        """Bulk upsert with numpy vectors and JSON-encoded payloads.
+
+        Accepts pre-serialised JSON strings instead of Python dicts to
+        avoid the overhead of a Python→Rust dict conversion when the
+        caller already has JSON available (e.g. from a database cursor
+        or a streaming API response).
+
+        Args:
+            vectors: numpy.ndarray of shape (n, dimension), dtype float32,
+                C-contiguous.
+            ids: List of integer point IDs (length n).
+            json_payloads: List of JSON strings — one per point, or None
+                for points with no payload (length n).
+
+        Returns:
+            Number of inserted points.
+
+        Raises:
+            ValueError: If ids or json_payloads length != number of rows
+                in vectors, if vectors is not C-contiguous, or if a
+                JSON string is malformed.
         """
         ...
 
@@ -289,16 +338,19 @@ class Collection:
         self,
         vectors: List[Union[List[float], "np.ndarray"]],
         top_k: int = 10,
-        fusion: Optional[FusionStrategy] = None,
+        fusion: Optional["FusionStrategy"] = None,
         filter: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Multi-query search with result fusion.
 
         Args:
-            vectors: List of query vectors (max 10)
-            top_k: Number of results to return after fusion
-            fusion: Fusion strategy (default: RRF with k=60)
-            filter: Optional metadata filter applied to all queries
+            vectors: List of query vectors.
+            top_k: Number of results (default: 10).
+            fusion: Optional FusionStrategy instance. Defaults to RRF.
+            filter: Optional metadata filter dict.
+
+        Returns:
+            Fused search results as list of dicts.
         """
         ...
 
@@ -334,8 +386,84 @@ class Collection:
         """Flush pending changes to disk."""
         ...
 
+    def flush_full(self) -> None:
+        """Full durability flush including vectors.idx serialization.
+
+        Use on graceful shutdown to avoid a full WAL replay on next startup.
+        """
+        ...
+
     def count(self) -> int:
         """Return number of points in the collection."""
+        ...
+
+    def all_ids(self) -> List[int]:
+        """Get all point IDs in the collection."""
+        ...
+
+    def has_secondary_index(self, field: str) -> bool:
+        """Check if a secondary index exists on a payload field."""
+        ...
+
+    def drop_secondary_index(self, field: str) -> bool:
+        """Drop a secondary index on a payload field.
+
+        Returns:
+            True if the index existed and was dropped
+        """
+        ...
+
+    def indexes_memory_usage(self) -> int:
+        """Get total memory usage of all indexes in bytes."""
+        ...
+
+    def analyze(self) -> Dict[str, Any]:
+        """Analyze the collection and compute fresh statistics.
+
+        Returns:
+            Dict with row_count, deleted_count, total_size_bytes,
+            column_stats, index_stats, etc.
+        """
+        ...
+
+    def is_delta_active(self) -> bool:
+        """Check if the streaming delta buffer is active (HNSW rebuild in progress)."""
+        ...
+
+    def search_batch_parallel(
+        self,
+        vectors: List[Union[List[float], "np.ndarray"]],
+        top_k: int = 10,
+    ) -> List[List[Dict[str, Any]]]:
+        """Parallel batch search for multiple query vectors.
+
+        Args:
+            vectors: List of query vectors
+            top_k: Number of results per query (default: 10)
+
+        Returns:
+            List of result lists, one per query vector
+        """
+        ...
+
+    def search_with_quality(
+        self,
+        vector: Union[List[float], "np.ndarray"],
+        quality: str,
+        top_k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Search with a named quality mode.
+
+        Args:
+            vector: Query vector (list or numpy array).
+            quality: One of 'fast', 'balanced', 'accurate', 'perfect', 'autotune',
+                     'custom:<ef>' (e.g. 'custom:256'), or 'adaptive:<min>:<max>'
+                     (e.g. 'adaptive:32:512').
+            top_k: Number of results (default: 10).
+
+        Returns:
+            List of dicts with id, score, and payload.
+        """
         ...
 
     def get_graph_store(self) -> "GraphStore":
@@ -396,6 +524,172 @@ class Collection:
         """Return execution plan for a VelesQL query."""
         ...
 
+    def explain_analyze(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Execute a query with instrumentation and return plan with actual stats.
+
+        Args:
+            query_str: VelesQL query string.
+            params: Optional query parameters.
+
+        Returns:
+            Dict with keys:
+                - ``plan`` (dict): The execution plan.
+                - ``actual_stats`` (dict or None): Execution statistics with
+                  ``actual_rows``, ``actual_time_ms``, ``loops``,
+                  ``nodes_visited``, ``edges_traversed``.
+                - ``node_stats`` (list[dict] or None): Per-node **estimated**
+                  statistics (heuristic, not measured) with ``node_label``,
+                  ``actual_time_ms``, ``actual_rows``. Check ``estimated``
+                  flag to distinguish heuristic values from future measured ones.
+
+        Raises:
+            RuntimeError: If the query is invalid or execution fails.
+        """
+        ...
+
+    # --- Scroll cursor (issue #429) ---
+
+    @overload
+    def scroll(
+        self,
+        *,
+        batch_size: int = 100,
+        filter: Optional[Dict[str, Any]] = None,
+        as_dataframe: bool = False,
+        backend: str = "pandas",
+    ) -> Iterator[List[Dict[str, Any]]]: ...
+
+    @overload
+    def scroll(
+        self,
+        *,
+        batch_size: int = 100,
+        filter: Optional[Dict[str, Any]] = None,
+        as_dataframe: bool = True,
+        backend: str = "pandas",
+    ) -> Iterator[Any]: ...
+
+    def scroll(
+        self,
+        *,
+        batch_size: int = 100,
+        filter: Optional[Dict[str, Any]] = None,
+        as_dataframe: bool = False,
+        backend: str = "pandas",
+    ) -> Union[Iterator[List[Dict[str, Any]]], Iterator[Any]]:
+        """Yield batches of points from the collection.
+
+        Args:
+            batch_size: Points per batch (default 100).
+            filter: Optional payload filter dict.
+            as_dataframe: If True, yield DataFrames instead of list[dict].
+            backend: "pandas" or "polars" (default "pandas").
+
+        Returns:
+            Iterator of batches (list[dict] or DataFrame).
+
+        Raises:
+            ValueError: If batch_size is 0.
+            ImportError: If as_dataframe=True and backend is not installed.
+        """
+        ...
+
+    # --- DataFrame methods (issue #429) ---
+
+    def to_dataframe(
+        self,
+        results: List[Dict[str, Any]],
+        *,
+        backend: str = "pandas",
+    ) -> Any:
+        """Convert search results to a DataFrame.
+
+        Args:
+            results: List of search result dicts (id, score, payload).
+            backend: "pandas" or "polars" (default "pandas").
+
+        Returns:
+            A pandas.DataFrame or polars.DataFrame.
+        """
+        ...
+
+    def query_to_dataframe(
+        self,
+        results: List[Dict[str, Any]],
+        *,
+        backend: str = "pandas",
+    ) -> Any:
+        """Convert VelesQL query results to a DataFrame.
+
+        Args:
+            results: List of result dicts from Collection.query().
+            backend: "pandas" or "polars" (default "pandas").
+
+        Returns:
+            A pandas.DataFrame or polars.DataFrame.
+        """
+        ...
+
+    def upsert_from_dataframe(
+        self,
+        df: Any,
+        *,
+        backend: str = "pandas",
+    ) -> int:
+        """Upsert points from a DataFrame.
+
+        Args:
+            df: A pandas.DataFrame or polars.DataFrame with 'id',
+                optional 'vector', and payload columns.
+            backend: "pandas" or "polars" (default "pandas").
+
+        Returns:
+            Number of upserted points.
+
+        Raises:
+            ValueError: If required columns are missing or dimensions mismatch.
+        """
+        ...
+
+
+class ScrollIterator:
+    """Iterator returned by ``Collection.scroll()`` that yields batches of points.
+
+    Each call to ``__next__`` fetches the next batch from the collection
+    using a server-side cursor, releasing the GIL during the disk/mmap read.
+    Iteration ends when there are no more points to return.
+
+    This class is not instantiated directly — use ``Collection.scroll()``
+    to obtain one.
+
+    Example:
+        >>> for batch in collection.scroll(batch_size=500):
+        ...     for point in batch:
+        ...         print(point["id"], point["payload"])
+    """
+
+    def __iter__(self) -> "ScrollIterator":
+        """Return self (this iterator is its own iterator)."""
+        ...
+
+    def __next__(self) -> Union[List[Dict[str, Any]], Any]:
+        """Return the next batch of points.
+
+        Returns:
+            A list of point dicts when ``as_dataframe=False`` (the default),
+            or a ``pandas.DataFrame`` / ``polars.DataFrame`` when
+            ``as_dataframe=True``.
+
+        Raises:
+            StopIteration: When all points have been yielded.
+            RuntimeError: If an error occurs reading the next batch from disk.
+        """
+        ...
+
 
 class Database:
     """VelesDB Database - the main entry point for interacting with VelesDB.
@@ -406,11 +700,17 @@ class Database:
         >>> collection.upsert([{"id": 1, "vector": [0.1, 0.2], "payload": {"text": "hello"}}])
     """
 
-    def __init__(self, path: str) -> None:
+    def __init__(
+        self,
+        path: str,
+        config: Optional["VelesConfigOptions"] = None,
+    ) -> None:
         """Open or create a VelesDB database at the specified path.
 
         Args:
             path: Directory path for database storage
+            config: Optional typed configuration (limits, etc.) applied at
+                open time.
         """
         ...
 
@@ -420,8 +720,8 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
-        m: Optional[int] = None,
-        ef_construction: Optional[int] = None,
+        hnsw: Optional["HnswOptions"] = None,
+        auto_reindex: Optional["AutoReindexOptions"] = None,
     ) -> Collection:
         """Create a new vector collection.
 
@@ -429,9 +729,11 @@ class Database:
             name: Collection name
             dimension: Vector dimension
             metric: Distance metric ("cosine", "euclidean", "dot", "hamming", "jaccard")
-            storage_mode: "full", "sq8", or "binary"
-            m: Optional HNSW M parameter
-            ef_construction: Optional HNSW ef_construction parameter
+            storage_mode: "full", "sq8", "binary", "pq", or "rabitq"
+            hnsw: Optional typed HNSW parameters (replaces the legacy
+                `m` / `ef_construction` / `expected_vectors` kwargs)
+            auto_reindex: Optional auto-reindex policy, attached as a
+                runtime-only hook on the returned collection
 
         Returns:
             The created Collection
@@ -458,6 +760,8 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
+        hnsw: Optional["HnswOptions"] = None,
+        auto_reindex: Optional["AutoReindexOptions"] = None,
     ) -> Collection:
         """Get an existing collection or create a new one.
 
@@ -466,6 +770,8 @@ class Database:
             dimension: Vector dimension (used only if creating)
             metric: Distance metric (used only if creating)
             storage_mode: Storage mode (used only if creating)
+            hnsw: Optional typed HNSW parameters (used only if creating)
+            auto_reindex: Optional auto-reindex policy (used only if creating)
 
         Returns:
             The Collection (existing or newly created)
@@ -527,6 +833,22 @@ class Database:
         """
         ...
 
+    def execute_query(
+        self,
+        sql: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query string (SELECT, DDL, DML).
+
+        Args:
+            sql: VelesQL query string.
+            params: Optional parameter bindings (e.g., {"$v": [0.1, 0.2]}).
+
+        Returns:
+            List of result dicts for SELECT queries, empty list for DDL/DML.
+        """
+        ...
+
     def train_pq(
         self,
         collection_name: str,
@@ -581,7 +903,17 @@ class Database:
             name: Collection name to analyze
 
         Returns:
-            Dict with statistics (total_points, row_count, deleted_count, etc.)
+            Dict with keys:
+                - ``total_points`` (int): Total number of points including deleted.
+                - ``row_count`` (int): Number of active (non-deleted) rows.
+                - ``deleted_count`` (int): Number of soft-deleted points.
+                - ``avg_row_size_bytes`` (int): Average row size in bytes.
+                - ``payload_size_bytes`` (int): Total payload storage size.
+                - ``column_stats`` (dict): Mapping of column names to per-column
+                  stat dicts. Each per-column dict may include:
+                  ``histogram_buckets`` (int or None) — number of histogram
+                  buckets if a histogram was built, and ``histogram_stale``
+                  (bool or None) — whether the histogram is stale.
 
         Raises:
             RuntimeError: If the collection does not exist or analysis fails
@@ -595,7 +927,13 @@ class Database:
             name: Collection name
 
         Returns:
-            Dict with statistics or None if the collection has never been analyzed
+            Dict with same structure as ``analyze_collection()`` return value,
+            including top-level keys ``total_points``, ``row_count``,
+            ``deleted_count``, ``avg_row_size_bytes``, ``payload_size_bytes``,
+            ``column_stats``. Per-column stats may include
+            ``histogram_buckets`` (int or None) and ``histogram_stale``
+            (bool or None). Returns None if the collection has never been
+            analyzed.
         """
         ...
 
@@ -617,7 +955,7 @@ class VelesQLParameterError(Exception):
 class ParsedStatement:
     """Parsed VelesQL statement with helper inspectors."""
 
-    table_name: str
+    collection_name: Optional[str]
     columns: List[str]
     limit: Optional[int]
     offset: Optional[int]
@@ -750,6 +1088,17 @@ class PyGraphCollection:
         """
         ...
 
+    def add_edges_batch(self, edges: List[Dict[str, Any]]) -> int:
+        """Add multiple edges in batch (faster than add_edge in a loop).
+
+        Args:
+            edges: List of edge dicts (same format as add_edge)
+
+        Returns:
+            Number of edges successfully added
+        """
+        ...
+
     def get_edges(self, label: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get edges, optionally filtered by label."""
         ...
@@ -770,8 +1119,13 @@ class PyGraphCollection:
         """Returns (in_degree, out_degree) for a node."""
         ...
 
-    def store_node_payload(self, node_id: int, payload: Dict[str, Any]) -> None:
-        """Store payload (properties) for a node."""
+    def upsert_node_payload(self, node_id: int, payload: Dict[str, Any]) -> None:
+        """Upsert the payload (properties) for a node.
+
+        Renamed from `store_node_payload` in v1.13 to match the Rust core
+        API and the rest of the Python surface (which uses `upsert`
+        everywhere).
+        """
         ...
 
     def get_node_payload(self, node_id: int) -> Optional[Dict[str, Any]]:
@@ -788,6 +1142,7 @@ class PyGraphCollection:
         max_depth: Optional[int] = 3,
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
+        relationship_types: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Perform BFS traversal from a source node."""
         ...
@@ -798,8 +1153,28 @@ class PyGraphCollection:
         max_depth: Optional[int] = 3,
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
+        relationship_types: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Perform DFS traversal from a source node."""
+        ...
+
+    def traverse_bfs_parallel(
+        self,
+        source_ids: List[int],
+        max_depth: Optional[int] = 3,
+        limit: Optional[int] = 100,
+        rel_types: Optional[List[str]] = None,
+        relationship_types: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Perform multi-source BFS traversal with deduplication.
+
+        Args:
+            source_ids: List of starting node IDs
+            max_depth: Maximum traversal depth (default: 3)
+            limit: Maximum results to return (default: 100)
+            rel_types: Optional relationship type filter
+            relationship_types: Alias for rel_types
+        """
         ...
 
     def search_by_embedding(
@@ -857,6 +1232,33 @@ class PyGraphCollection:
         """
         ...
 
+    def explain_analyze(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Execute a query with instrumentation and return plan with actual stats.
+
+        Args:
+            query_str: VelesQL query string.
+            params: Optional query parameters.
+
+        Returns:
+            Dict with keys:
+                - ``plan`` (dict): The execution plan.
+                - ``actual_stats`` (dict or None): Execution statistics with
+                  ``actual_rows``, ``actual_time_ms``, ``loops``,
+                  ``nodes_visited``, ``edges_traversed``.
+                - ``node_stats`` (list[dict] or None): Per-node **estimated**
+                  statistics (heuristic, not measured) with ``node_label``,
+                  ``actual_time_ms``, ``actual_rows``. Check ``estimated``
+                  flag to distinguish heuristic values from future measured ones.
+
+        Raises:
+            RuntimeError: If the query is invalid or execution fails.
+        """
+        ...
+
     def query_ids(
         self,
         velesql: str,
@@ -871,6 +1273,52 @@ class PyGraphCollection:
 
     def flush(self) -> None:
         """Flush all graph state to disk."""
+        ...
+
+    def flush_full(self) -> None:
+        """Full durability flush including WAL serialization.
+
+        Use on graceful shutdown to avoid a full WAL replay on next startup.
+        """
+        ...
+
+    def __len__(self) -> int:
+        """Return the number of points (nodes with payload) in the graph."""
+        ...
+
+    def count(self) -> int:
+        """Return the number of points (nodes with payload) in the graph."""
+        ...
+
+    def is_empty(self) -> bool:
+        """Check if the graph collection has no stored points."""
+        ...
+
+    def get(self, ids: List[int]) -> List[Optional[Dict[str, Any]]]:
+        """Get points by their IDs.
+
+        Args:
+            ids: List of point IDs to retrieve
+
+        Returns:
+            List of point dicts (or None for missing IDs)
+        """
+        ...
+
+    def delete(self, ids: List[int]) -> None:
+        """Delete points by their IDs.
+
+        Args:
+            ids: List of point IDs to delete
+        """
+        ...
+
+    def remove_edge(self, edge_id: int) -> bool:
+        """Remove a specific edge by its ID.
+
+        Returns:
+            True if the edge existed and was removed
+        """
         ...
 
 
@@ -1000,3 +1448,135 @@ class AgentMemory:
     def procedural(self) -> PyProceduralMemory: ...
     @property
     def dimension(self) -> int: ...
+
+
+# ---------------------------------------------------------------------------
+# Typed options dataclasses (Wave 3 Commit 10)
+# ---------------------------------------------------------------------------
+
+
+class HnswOptions:
+    """Typed HNSW parameters for :meth:`Database.create_collection`.
+
+    All fields are optional — unspecified fields fall back to the engine
+    defaults. Replaces the v1.12 flat `m=`, `ef_construction=`,
+    `expected_vectors=` kwargs.
+
+    Example:
+        >>> opts = HnswOptions(m=48, ef_construction=600)
+        >>> db.create_collection("docs", dimension=768, hnsw=opts)
+        >>> # Auto-tuned:
+        >>> opts = HnswOptions.for_dataset_size(128, 1_000_000)
+    """
+
+    m: Optional[int]
+    ef_construction: Optional[int]
+    max_elements: Optional[int]
+    alpha: Optional[float]
+    pq_rescore_oversampling: Optional[int]
+
+    def __init__(
+        self,
+        m: Optional[int] = None,
+        ef_construction: Optional[int] = None,
+        max_elements: Optional[int] = None,
+        alpha: Optional[float] = None,
+        pq_rescore_oversampling: Optional[int] = None,
+    ) -> None: ...
+
+    @staticmethod
+    def for_dataset_size(dimension: int, expected_vectors: int) -> "HnswOptions":
+        """Return an HnswOptions pre-tuned for a specific dataset size."""
+        ...
+
+    @staticmethod
+    def fast() -> "HnswOptions":
+        """Preset optimized for insertion speed (M=16, ef_construction=150)."""
+        ...
+
+    @staticmethod
+    def turbo() -> "HnswOptions":
+        """Preset for maximum insert throughput (~85% recall)."""
+        ...
+
+    @staticmethod
+    def balanced(dimension: int) -> "HnswOptions":
+        """Engine-default balanced preset for the given dimension."""
+        ...
+
+    @staticmethod
+    def high_recall(dimension: int) -> "HnswOptions":
+        """High-recall preset (engine default + 8 M, +200 ef_construction)."""
+        ...
+
+    @staticmethod
+    def max_recall(dimension: int) -> "HnswOptions":
+        """Tightest recall preset for the given dimension."""
+        ...
+
+
+class LimitsOptions:
+    """Tenant-wide guard-rail limits mapped to core `LimitsConfig`.
+
+    All fields are optional — unspecified fields fall back to the engine
+    defaults (max_collections=1000, max_dimensions=4096, etc.).
+    """
+
+    max_collections: Optional[int]
+    max_dimensions: Optional[int]
+    max_vectors_per_collection: Optional[int]
+    max_payload_size: Optional[int]
+    max_perfect_mode_vectors: Optional[int]
+
+    def __init__(
+        self,
+        max_collections: Optional[int] = None,
+        max_dimensions: Optional[int] = None,
+        max_vectors_per_collection: Optional[int] = None,
+        max_payload_size: Optional[int] = None,
+        max_perfect_mode_vectors: Optional[int] = None,
+    ) -> None: ...
+
+
+class AutoReindexOptions:
+    """Per-collection auto-reindex policy mapped to `AutoReindexConfig`.
+
+    Pass an instance to :meth:`Database.create_collection(..., auto_reindex=...)`
+    to attach a runtime-only `AutoReindexManager`. Not persisted —
+    re-attach after every `Database(path)`.
+    """
+
+    enabled: bool
+    param_divergence_threshold: float
+    min_size_for_reindex: int
+    max_latency_regression_percent: float
+    max_recall_regression_percent: float
+    cooldown_secs: int
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        param_divergence_threshold: float = 1.5,
+        min_size_for_reindex: int = 10_000,
+        max_latency_regression_percent: float = 10.0,
+        max_recall_regression_percent: float = 2.0,
+        cooldown_secs: int = 3_600,
+    ) -> None: ...
+
+    @staticmethod
+    def disabled() -> "AutoReindexOptions":
+        """Return a disabled configuration that never triggers a reindex."""
+        ...
+
+
+class VelesConfigOptions:
+    """Global database-level configuration mapped to core `VelesConfig`.
+
+    Currently exposes the `limits` sub-section only. Other sub-sections
+    (search, hnsw, storage) are left at their engine defaults — user
+    tuning is done per-collection via :class:`HnswOptions`.
+    """
+
+    limits: Optional[LimitsOptions]
+
+    def __init__(self, limits: Optional[LimitsOptions] = None) -> None: ...

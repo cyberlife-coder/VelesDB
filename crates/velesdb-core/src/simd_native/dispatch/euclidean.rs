@@ -1,3 +1,4 @@
+#[allow(unused_imports)] // simd_level used only on x86_64/aarch64 targets
 use super::{dot::dot_product_native, simd_level, SimdLevel};
 
 /// Squared L2 distance with runtime SIMD dispatch.
@@ -15,42 +16,42 @@ pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
         SimdLevel::Avx512 if a.len() >= 1024 => {
             // SAFETY: AVX-512 8-acc squared-L2 kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
-            // Reason: 8-accumulator variant for very large dimensions (stride 128).
+            // SAFETY: 8-accumulator variant for very large dimensions (stride 128).
             unsafe { crate::simd_native::squared_l2_avx512_8acc(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 if a.len() >= 512 => {
             // SAFETY: AVX-512 squared-L2 kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
-            // Reason: call specialized kernel for higher throughput.
+            // SAFETY: call specialized kernel for higher throughput.
             unsafe { crate::simd_native::squared_l2_avx512_4acc(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 => {
             // SAFETY: AVX-512 squared-L2 kernel requires CPU feature.
             // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
-            // Reason: call specialized kernel for higher throughput.
+            // SAFETY: call specialized kernel for higher throughput.
             unsafe { crate::simd_native::squared_l2_avx512(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 if a.len() >= 256 => {
             // SAFETY: AVX2 squared-L2 kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx2` after runtime detection.
-            // Reason: call specialized kernel for higher throughput.
+            // SAFETY: call specialized kernel for higher throughput.
             unsafe { crate::simd_native::squared_l2_avx2_4acc(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 if a.len() >= 64 => {
             // SAFETY: AVX2 squared-L2 kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx2` after runtime detection.
-            // Reason: call specialized kernel for higher throughput.
+            // SAFETY: call specialized kernel for higher throughput.
             unsafe { crate::simd_native::squared_l2_avx2(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 if a.len() >= 8 => {
             // SAFETY: AVX2 squared-L2 kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx2` after runtime detection.
-            // Reason: call specialized kernel for higher throughput.
+            // SAFETY: call specialized kernel for higher throughput.
             unsafe { crate::simd_native::squared_l2_avx2_1acc(a, b) }
         }
         #[cfg(target_arch = "aarch64")]
@@ -101,7 +102,7 @@ fn scale_inplace_native(v: &mut [f32], factor: f32) {
         SimdLevel::Avx512 | SimdLevel::Avx2 if v.len() >= 8 => {
             // SAFETY: AVX2 scale kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` confirmed AVX2+ after runtime detection.
-            // Reason: broadcast factor and multiply 8 floats per iteration.
+            // SAFETY: broadcast factor and multiply 8 floats per iteration.
             unsafe { scale_inplace_avx2(v, factor) };
         }
         _ => {
@@ -163,6 +164,7 @@ pub fn batch_euclidean_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> 
     super::batch_with_prefetch(candidates, query, euclidean_native)
 }
 
+#[allow(unused_variables)] // dim used only on x86_64 for dimension-based dispatch
 pub(super) fn resolve_squared_l2(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]) -> f32 {
     match level {
         #[cfg(target_arch = "x86_64")]
@@ -170,7 +172,7 @@ pub(super) fn resolve_squared_l2(level: SimdLevel, dim: usize) -> fn(&[f32], &[f
             |a, b| {
                 // SAFETY: Resolver emitted AVX-512 8-acc implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_squared_l2`.
-                // Reason: execute AVX-512 8-accumulator squared-L2 for very large dims.
+                // SAFETY: execute AVX-512 8-accumulator squared-L2 for very large dims.
                 unsafe { crate::simd_native::squared_l2_avx512_8acc(a, b) }
             }
         }
@@ -179,7 +181,7 @@ pub(super) fn resolve_squared_l2(level: SimdLevel, dim: usize) -> fn(&[f32], &[f
             |a, b| {
                 // SAFETY: Resolver emitted AVX-512 implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_squared_l2`.
-                // Reason: execute AVX-512 specialized squared-L2 implementation.
+                // SAFETY: execute AVX-512 specialized squared-L2 implementation.
                 unsafe { crate::simd_native::squared_l2_avx512_4acc(a, b) }
             }
         }
@@ -187,7 +189,7 @@ pub(super) fn resolve_squared_l2(level: SimdLevel, dim: usize) -> fn(&[f32], &[f
         SimdLevel::Avx512 => |a, b| {
             // SAFETY: Resolver emitted AVX-512 implementation for this dimension.
             // - Condition 1: caller chose this function pointer via `resolve_squared_l2`.
-            // Reason: execute AVX-512 specialized squared-L2 implementation.
+            // SAFETY: execute AVX-512 specialized squared-L2 implementation.
             unsafe { crate::simd_native::squared_l2_avx512(a, b) }
         },
         #[cfg(target_arch = "x86_64")]
@@ -195,7 +197,7 @@ pub(super) fn resolve_squared_l2(level: SimdLevel, dim: usize) -> fn(&[f32], &[f
             |a, b| {
                 // SAFETY: Resolver emitted AVX2 implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_squared_l2`.
-                // Reason: execute AVX2 specialized squared-L2 implementation.
+                // SAFETY: execute AVX2 specialized squared-L2 implementation.
                 unsafe { crate::simd_native::squared_l2_avx2_4acc(a, b) }
             }
         }
@@ -203,7 +205,7 @@ pub(super) fn resolve_squared_l2(level: SimdLevel, dim: usize) -> fn(&[f32], &[f
         SimdLevel::Avx2 if dim >= 64 => |a, b| {
             // SAFETY: Resolver emitted AVX2 implementation for this dimension.
             // - Condition 1: caller chose this function pointer via `resolve_squared_l2`.
-            // Reason: execute AVX2 specialized squared-L2 implementation.
+            // SAFETY: execute AVX2 specialized squared-L2 implementation.
             unsafe { crate::simd_native::squared_l2_avx2(a, b) }
         },
         #[cfg(target_arch = "x86_64")]
@@ -211,7 +213,7 @@ pub(super) fn resolve_squared_l2(level: SimdLevel, dim: usize) -> fn(&[f32], &[f
             |a, b| {
                 // SAFETY: Resolver emitted AVX2 implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_squared_l2`.
-                // Reason: execute AVX2 specialized squared-L2 implementation.
+                // SAFETY: execute AVX2 specialized squared-L2 implementation.
                 unsafe { crate::simd_native::squared_l2_avx2_1acc(a, b) }
             }
         }

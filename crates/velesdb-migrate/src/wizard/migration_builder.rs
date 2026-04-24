@@ -33,6 +33,7 @@ pub(crate) fn build_migration_config(
         dimension: schema.dimension,
         metric: DistanceMetric::Cosine,
         storage_mode,
+        graph_collection: None,
     };
 
     let options = MigrationOptions {
@@ -43,11 +44,13 @@ pub(crate) fn build_migration_config(
         checkpoint_enabled: true,
         checkpoint_path: None,
         field_mappings: std::collections::HashMap::new(),
+        allow_metric_mismatch: false,
     };
 
     Ok(MigrationConfig {
         source,
         destination,
         options,
+        relations: vec![],
     })
 }

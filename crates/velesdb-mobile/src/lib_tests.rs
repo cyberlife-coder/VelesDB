@@ -1,5 +1,4 @@
 //! Tests for VelesDB Mobile UniFFI bindings.
-#![allow(deprecated)]
 
 use super::*;
 use tempfile::TempDir;
@@ -44,6 +43,74 @@ fn test_distance_metric_jaccard_conversion() {
 }
 
 // =========================================================================
+// SearchQuality Tests
+// =========================================================================
+
+#[test]
+fn test_search_quality_fast_conversion() {
+    let q = SearchQuality::Fast;
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::Fast));
+}
+
+#[test]
+fn test_search_quality_balanced_conversion() {
+    let q = SearchQuality::Balanced;
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::Balanced));
+}
+
+#[test]
+fn test_search_quality_accurate_conversion() {
+    let q = SearchQuality::Accurate;
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::Accurate));
+}
+
+#[test]
+fn test_search_quality_perfect_conversion() {
+    let q = SearchQuality::Perfect;
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::Perfect));
+}
+
+#[test]
+fn test_search_quality_custom_conversion() {
+    let q = SearchQuality::Custom { ef: 256 };
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::Custom(256)));
+}
+
+#[test]
+fn test_search_quality_adaptive_conversion() {
+    let q = SearchQuality::Adaptive {
+        min_ef: 32,
+        max_ef: 512,
+    };
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(
+        core,
+        CoreSearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 512
+        }
+    ));
+}
+
+#[test]
+fn test_search_quality_autotune_conversion() {
+    let q = SearchQuality::AutoTune;
+    let core: CoreSearchQuality = q.into();
+    assert!(matches!(core, CoreSearchQuality::AutoTune));
+}
+
+#[test]
+fn test_search_quality_default() {
+    let q = SearchQuality::default();
+    assert!(matches!(q, SearchQuality::Balanced));
+}
+
+// =========================================================================
 // StorageMode Tests
 // =========================================================================
 
@@ -66,6 +133,20 @@ fn test_storage_mode_binary_conversion() {
     let mode = StorageMode::Binary;
     let core: velesdb_core::StorageMode = mode.into();
     assert_eq!(core, velesdb_core::StorageMode::Binary);
+}
+
+#[test]
+fn test_storage_mode_product_quantization_conversion() {
+    let mode = StorageMode::ProductQuantization;
+    let core: velesdb_core::StorageMode = mode.into();
+    assert_eq!(core, velesdb_core::StorageMode::ProductQuantization);
+}
+
+#[test]
+fn test_storage_mode_rabitq_conversion() {
+    let mode = StorageMode::Rabitq;
+    let core: velesdb_core::StorageMode = mode.into();
+    assert_eq!(core, velesdb_core::StorageMode::RaBitQ);
 }
 
 // =========================================================================
@@ -147,6 +228,57 @@ fn test_collection_upsert_and_search() {
     let results = col.search(vec![1.0, 0.0, 0.0, 0.0], 1).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, 1);
+}
+
+#[test]
+fn test_collection_search_with_quality() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("quality_test".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db
+        .get_collection("quality_test".to_string())
+        .unwrap()
+        .unwrap();
+
+    col.upsert_batch(vec![
+        VelesPoint {
+            id: 1,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: None,
+        },
+        VelesPoint {
+            id: 2,
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            payload: None,
+        },
+    ])
+    .unwrap();
+
+    // Test all named quality modes produce valid results
+    let modes = [
+        SearchQuality::Fast,
+        SearchQuality::Balanced,
+        SearchQuality::Accurate,
+        SearchQuality::Perfect,
+        SearchQuality::AutoTune,
+        SearchQuality::Custom { ef: 200 },
+        SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 512,
+        },
+    ];
+
+    for quality in modes {
+        let results = col
+            .search_with_quality(vec![1.0, 0.0, 0.0, 0.0], 2, quality)
+            .unwrap();
+        assert!(!results.is_empty(), "quality mode should return results");
+        assert_eq!(results[0].id, 1, "closest vector should be id=1");
+    }
 }
 
 #[test]
@@ -267,11 +399,17 @@ fn test_all_five_metrics() {
 }
 
 // =========================================================================
-// All 3 Storage Modes Integration Tests
+// Storage Modes Integration Tests
 // =========================================================================
+//
+// Covers the three storage modes that accept upserts without a prior
+// training step (Full, Sq8, Binary). `ProductQuantization` and `Rabitq`
+// require a trained quantizer before inserts succeed and are covered by
+// pure conversion tests above — their end-to-end creation+upsert flow
+// is exercised by core and server crates where training helpers live.
 
 #[test]
-fn test_all_three_storage_modes() {
+fn test_untrained_storage_modes_full_upsert_flow() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().to_str().unwrap().to_string();
     let db = VelesDatabase::open(path).unwrap();
@@ -473,10 +611,16 @@ fn test_create_metadata_collection() {
     db.create_metadata_collection("meta_test".to_string())
         .unwrap();
 
-    let col = db.get_collection("meta_test".to_string()).unwrap().unwrap();
+    // Metadata collections are not vector collections, so get_collection
+    // should return an error directing the caller to the typed API.
+    let result = db.get_collection("meta_test".to_string());
+    assert!(
+        result.is_err(),
+        "get_collection should reject non-vector collections"
+    );
 
-    assert!(col.is_metadata_only());
-    assert_eq!(col.dimension(), 0);
+    // Verify the collection was created (visible in list)
+    assert!(db.list_collections().contains(&"meta_test".to_string()));
 }
 
 #[test]
@@ -494,6 +638,49 @@ fn test_regular_collection_not_metadata_only() {
         .unwrap();
 
     assert!(!col.is_metadata_only());
+}
+
+// =========================================================================
+// Graph Collection Tests
+// =========================================================================
+
+#[test]
+fn test_create_graph_collection() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_graph_collection("kg".to_string()).unwrap();
+
+    assert!(db.list_collections().contains(&"kg".to_string()));
+}
+
+#[test]
+fn test_create_graph_collection_with_embeddings() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_graph_collection_with_embeddings("kg_emb".to_string(), 128, DistanceMetric::Cosine)
+        .unwrap();
+
+    assert!(db.list_collections().contains(&"kg_emb".to_string()));
+}
+
+#[test]
+fn test_get_collection_rejects_graph_collection() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_graph_collection("kg_reject".to_string()).unwrap();
+
+    // get_collection should reject a graph collection with a clear error
+    let result = db.get_collection("kg_reject".to_string());
+    assert!(
+        result.is_err(),
+        "get_collection should reject graph collections"
+    );
 }
 
 // =========================================================================

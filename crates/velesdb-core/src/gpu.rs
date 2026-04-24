@@ -32,12 +32,34 @@ mod gpu_backend;
 #[path = "gpu/gpu_backend_tests.rs"]
 mod gpu_backend_tests;
 
+#[cfg(all(test, feature = "gpu"))]
+#[path = "gpu/gpu_csr_tests.rs"]
+mod gpu_csr_extended_tests;
+
 #[cfg(feature = "gpu")]
 #[path = "gpu/pq_gpu.rs"]
 pub mod pq_gpu;
 
 #[cfg(feature = "gpu")]
+#[path = "gpu/gpu_csr.rs"]
+pub mod gpu_csr;
+
+#[cfg(feature = "gpu")]
+#[path = "gpu/gpu_traversal_buffers.rs"]
+mod gpu_traversal_buffers;
+
+#[cfg(feature = "gpu")]
+#[path = "gpu/gpu_traversal_pipelines.rs"]
+mod gpu_traversal_pipelines;
+
+#[cfg(feature = "gpu")]
+#[path = "gpu/gpu_traversal.rs"]
+pub mod gpu_traversal;
+
+#[cfg(feature = "gpu")]
 pub use gpu_backend::GpuAccelerator;
+#[cfg(feature = "gpu")]
+pub use gpu_traversal::{should_traverse_gpu, GpuTraversalContext, GpuTraversalStats};
 #[cfg(feature = "gpu")]
 pub use pq_gpu::{gpu_kmeans_assign, should_use_gpu, PqGpuContext};
 
@@ -48,9 +70,17 @@ pub fn should_use_gpu(_n: usize, _k: usize, _subspace_dim: usize) -> bool {
     false
 }
 
+/// Check if GPU traversal is worthwhile (always false without gpu feature).
+#[cfg(not(feature = "gpu"))]
+#[must_use]
+pub fn should_traverse_gpu(_num_vectors: usize, _dimension: usize) -> bool {
+    false
+}
+
 /// Compute backend selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ComputeBackend {
+#[allow(dead_code)] // Used only when `gpu` feature is active
+pub(crate) enum ComputeBackend {
     /// CPU SIMD (default, always available)
     #[default]
     Simd,
@@ -59,6 +89,7 @@ pub enum ComputeBackend {
     Gpu,
 }
 
+#[allow(dead_code)] // Used only when `gpu` feature is active
 impl ComputeBackend {
     /// Returns the best available backend.
     ///

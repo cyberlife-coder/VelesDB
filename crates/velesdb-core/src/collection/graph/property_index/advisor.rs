@@ -2,11 +2,14 @@
 //!
 //! Tracks query patterns and suggests indexes that would improve performance.
 
-// SAFETY: Numeric casts in property indexing are intentional:
+// Reason: Numeric casts in property indexing are intentional:
 // - u128->u64 for millisecond timestamps: values fit within u64 range
 // - u64/usize->f64 for statistics: precision loss acceptable for query planning
 // - All values are bounded by collection sizes and query counts
 // - Used for index selection heuristics, not financial calculations
+// EPIC-047 US-005 — auto-index advisor based on query pattern tracking.
+// Fields are initialized in Collection; query-side methods are wired
+// but not yet called from the MATCH pipeline.
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
@@ -14,9 +17,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Predicate types for query pattern tracking.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum PredicateType {
+pub(crate) enum PredicateType {
     /// Equality check (=)
     Equality,
     /// Range comparison (>, <, >=, <=)
@@ -28,7 +30,6 @@ pub enum PredicateType {
 }
 
 /// A query pattern for index suggestion analysis.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct QueryPattern {
     /// Labels involved
@@ -40,7 +41,6 @@ pub struct QueryPattern {
 }
 
 /// Statistics for a query pattern.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PatternStats {
     /// Number of times this pattern was seen
@@ -54,7 +54,6 @@ pub struct PatternStats {
 }
 
 /// Tracks query patterns for index suggestion.
-#[allow(dead_code)]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct QueryPatternTracker {
     /// Pattern -> stats mapping
@@ -63,7 +62,6 @@ pub struct QueryPatternTracker {
     slow_query_threshold_ms: u64,
 }
 
-#[allow(dead_code)]
 impl QueryPatternTracker {
     /// Creates a new tracker with default threshold (100ms).
     #[must_use]
@@ -75,6 +73,7 @@ impl QueryPatternTracker {
     }
 
     /// Sets the slow query threshold.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future auto-tuning configuration
     pub fn set_threshold(&mut self, threshold_ms: u64) {
         self.slow_query_threshold_ms = threshold_ms;
     }
@@ -83,8 +82,7 @@ impl QueryPatternTracker {
     pub fn record(&mut self, pattern: QueryPattern, execution_time_ms: u64) {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_millis() as u64);
 
         let stats = self.patterns.entry(pattern).or_default();
         stats.count += 1;
@@ -100,12 +98,13 @@ impl QueryPatternTracker {
     #[must_use]
     pub fn expensive_patterns(&self) -> Vec<(&QueryPattern, &PatternStats)> {
         let mut patterns: Vec<_> = self.patterns.iter().collect();
-        patterns.sort_by(|a, b| b.1.total_time_ms.cmp(&a.1.total_time_ms));
+        patterns.sort_by_key(|b| std::cmp::Reverse(b.1.total_time_ms));
         patterns
     }
 
     /// Returns patterns that are slow (above threshold).
     #[must_use]
+    #[allow(dead_code)] // Reason: Public API — used by tests and future EXPLAIN/ANALYZE output
     pub fn slow_patterns(&self) -> Vec<(&QueryPattern, &PatternStats)> {
         self.patterns
             .iter()
@@ -115,7 +114,6 @@ impl QueryPatternTracker {
 }
 
 /// An index suggestion.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexSuggestion {
     /// DDL statement to create the index
@@ -131,14 +129,12 @@ pub struct IndexSuggestion {
 }
 
 /// Advisor that suggests indexes based on query patterns.
-#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub struct IndexAdvisor {
     /// Existing index names (to avoid duplicates)
     existing_indexes: std::collections::HashSet<String>,
 }
 
-#[allow(dead_code)]
 impl IndexAdvisor {
     /// Creates a new advisor.
     #[must_use]
@@ -147,6 +143,7 @@ impl IndexAdvisor {
     }
 
     /// Registers an existing index.
+    #[allow(dead_code)] // Reason: Public API — used by tests and future DDL CREATE INDEX handler
     pub fn register_index(&mut self, name: impl Into<String>) {
         self.existing_indexes.insert(name.into());
     }

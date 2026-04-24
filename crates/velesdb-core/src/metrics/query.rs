@@ -5,7 +5,7 @@
 //! - Tracing span builders for query phases
 //! - Duration histograms for Prometheus export
 
-// SAFETY: Numeric casts in metrics are intentional:
+// Reason: Numeric casts in metrics are intentional:
 // - u128->u64 for millisecond durations: durations fit within u64 (thousands of years)
 // - Used for logging and monitoring, not precise calculations
 #![allow(clippy::cast_possible_truncation)]
@@ -137,6 +137,7 @@ impl SlowQueryLogger {
 
 /// Query execution phases for tracing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum QueryPhase {
     /// Parsing the query
     Parse,
@@ -157,7 +158,7 @@ pub enum QueryPhase {
 impl QueryPhase {
     /// Returns the span name for this phase.
     #[must_use]
-    pub fn span_name(&self) -> &'static str {
+    pub fn span_name(self) -> &'static str {
         match self {
             Self::Parse => "parse",
             Self::Plan => "plan",
@@ -247,7 +248,7 @@ impl DurationHistogram {
     /// Observes a duration value (in seconds).
     pub fn observe(&self, seconds: f64) {
         self.count.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: Duration in seconds is expected to be non-negative (timing measurement).
+        // Reason: Duration in seconds is expected to be non-negative (timing measurement).
         // Multiplied by 1M gives microseconds. Practical durations are << u64::MAX microseconds.
         // Even 584,942 years in microseconds fits in u64.
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]

@@ -5,7 +5,7 @@
 //! - O(1) insertion and deletion
 //! - Efficient retrieval of recent events
 
-// SAFETY: u64 to usize casts are for deserialization counts. Data is created/loaded
+// Reason: u64 to usize casts are for deserialization counts. Data is created/loaded
 // on the same architecture, and counts represent actual serialized entry counts.
 // These values are validated against buffer bounds before use.
 #![allow(clippy::cast_possible_truncation)]

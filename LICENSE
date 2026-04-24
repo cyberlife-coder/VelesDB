@@ -4,6 +4,8 @@ Based on the Elastic License 2.0 (ELv2) — Adapted for VelesDB Core
 
 Copyright (c) 2024-2026 Wiscale France. All rights reserved.
 
+VelesDB® is a registered trademark of Wiscale France.
+
 ---
 
 ## Acceptance
@@ -296,7 +298,7 @@ However, using VelesDB Core as an internal component of a non-competing product 
 
 ### 15) Can I use the name "VelesDB" for my fork?
 
-**No automatic rights.** Trademark use is subject to applicable law. Do not brand your fork as "VelesDB" without written permission from Wiscale France.
+**No.** VelesDB® is a registered trademark of Wiscale France. You may not brand your fork, derivative work, or product as "VelesDB" without written permission from Wiscale France. Use of the VelesDB name or logo is subject to applicable trademark law.
 
 ### 16) What about a multi-tenant service where each tenant only has limited features?
 
@@ -351,3 +353,11 @@ Anything accessible by people outside your organization: a SaaS product, a publi
 ### 27) Can I use the VelesDB logo instead of text?
 
 **Yes.** Logo or text, your choice — as long as it links to velesdb.com. Brand assets are at https://velesdb.com/brand.
+
+---
+
+## Trademark Notice
+
+VelesDB® is a registered trademark of Wiscale France. All rights reserved.
+
+Use of the VelesDB name, logo, or brand assets is subject to applicable trademark law. You may not use the VelesDB name or logo to imply endorsement, affiliation, or sponsorship by Wiscale France without prior written permission. Forks and derivative works must not be branded as "VelesDB" without explicit authorization from Wiscale France.

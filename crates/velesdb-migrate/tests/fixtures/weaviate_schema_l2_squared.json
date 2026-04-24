@@ -1,0 +1,20 @@
+{
+  "classes": [
+    {
+      "class": "Product",
+      "vectorizer": "none",
+      "vectorIndexType": "hnsw",
+      "vectorIndexConfig": {
+        "skip": false,
+        "maxConnections": 64,
+        "efConstruction": 128,
+        "distance": "l2-squared"
+      },
+      "properties": [
+        {"name": "name", "dataType": ["text"]},
+        {"name": "price", "dataType": ["number"]}
+      ],
+      "shardingConfig": {"desiredCount": 1}
+    }
+  ]
+}

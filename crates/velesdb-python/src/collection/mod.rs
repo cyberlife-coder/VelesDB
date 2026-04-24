@@ -10,16 +10,17 @@
 //! PyO3 >= 0.21 supports this natively via inventory-based method registration.
 //! rust-analyzer may incorrectly flag `PyMethods` trait conflicts — verify with `cargo build`.
 
+mod dataframe;
 mod index;
 mod mutation;
 pub(crate) mod query;
+pub(crate) mod scroll;
 mod search;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
-#[allow(deprecated)] // CoreCollection = legacy Collection, kept for backward compat.
 use velesdb_core::{
-    Collection as CoreCollection, Filter, FusionStrategy as CoreFusionStrategy, SearchResult,
+    Filter, FusionStrategy as CoreFusionStrategy, SearchResult, VectorCollection as CoreCollection,
 };
 
 /// Default fusion strategy when none is specified by the caller.
@@ -30,7 +31,6 @@ const DEFAULT_FUSION: CoreFusionStrategy = CoreFusionStrategy::RRF { k: 60 };
 /// Collections store vectors with optional metadata (payload) and support
 /// efficient similarity search.
 #[pyclass]
-#[allow(deprecated)] // CoreCollection = legacy Collection, kept for backward compat.
 pub struct Collection {
     /// Core collection (cheap to clone — all fields are `Arc`-wrapped internally).
     pub(crate) inner: CoreCollection,
@@ -38,7 +38,6 @@ pub struct Collection {
     pub(crate) name: String,
 }
 
-#[allow(deprecated)]
 impl Collection {
     /// Create a new Collection wrapper.
     pub fn new(inner: CoreCollection, name: String) -> Self {
@@ -64,15 +63,23 @@ impl Collection {
             sparse_index_name.unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
 
         match (dense, sparse, filter) {
-            (Some(d), Some(s), Some(f)) => self
-                .inner
-                .hybrid_sparse_search_named_with_filter(
-                    &d, &s, top_k, &DEFAULT_FUSION, index_name, f,
-                )
-                .map_err(core_err),
+            (Some(d), Some(s), Some(f)) => {
+                // No native hybrid_sparse_search_with_filter — run unfiltered then post-filter
+                let mut results = self
+                    .inner
+                    .hybrid_sparse_search(&d, &s, top_k, index_name, &DEFAULT_FUSION)
+                    .map_err(core_err)?;
+                results.retain(|r| {
+                    r.point
+                        .payload
+                        .as_ref()
+                        .is_some_and(|p| f.matches(p))
+                });
+                Ok(results)
+            }
             (Some(d), Some(s), None) => self
                 .inner
-                .hybrid_sparse_search_named(&d, &s, top_k, &DEFAULT_FUSION, index_name)
+                .hybrid_sparse_search(&d, &s, top_k, index_name, &DEFAULT_FUSION)
                 .map_err(core_err),
             (Some(d), None, Some(f)) => self
                 .inner
@@ -84,7 +91,7 @@ impl Collection {
             )),
             (None, Some(s), None) => self
                 .inner
-                .sparse_search_named(&s, top_k, index_name)
+                .sparse_search(&s, top_k, index_name)
                 .map_err(core_err),
             (None, None, _) => Err(PyValueError::new_err(
                 "At least one of 'vector' or 'sparse_vector' must be provided",
@@ -112,7 +119,7 @@ impl Collection {
         let _ = dict.set_item(PyString::intern(py, "dimension"), config.dimension);
         let _ = dict.set_item(
             PyString::intern(py, "metric"),
-            format!("{:?}", config.metric).to_lowercase(),
+            config.metric.canonical_name(),
         );
         let _ = dict.set_item(
             PyString::intern(py, "storage_mode"),
@@ -131,5 +138,119 @@ impl Collection {
     /// Check if the collection is empty.
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    /// Get the vector dimension of this collection.
+    ///
+    /// Returns:
+    ///     int: The dimension (e.g. 768 for BERT embeddings)
+    #[getter]
+    fn dimension(&self) -> usize {
+        self.inner.dimension()
+    }
+
+    /// Get the distance metric used by this collection.
+    ///
+    /// Returns:
+    ///     str: The canonical metric name (e.g. "cosine", "euclidean", "dot")
+    #[getter]
+    fn metric(&self) -> String {
+        self.inner.metric().canonical_name().to_owned()
+    }
+
+    /// Get the storage mode of this collection.
+    ///
+    /// Returns:
+    ///     str: The storage mode (e.g. "full", "sq8", "binary")
+    #[getter]
+    fn storage_mode(&self) -> String {
+        format!("{:?}", self.inner.storage_mode()).to_lowercase()
+    }
+
+    /// Get the number of points in the collection.
+    ///
+    /// Returns:
+    ///     int: The point count
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Get the number of points in the collection.
+    ///
+    /// Returns:
+    ///     int: The point count
+    fn count(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Get all point IDs in the collection.
+    ///
+    /// Returns:
+    ///     List[int]: All point IDs
+    fn all_ids(&self, py: Python<'_>) -> Vec<u64> {
+        py.allow_threads(|| self.inner.all_ids())
+    }
+
+    /// Full durability flush including vectors.idx serialization.
+    ///
+    /// Use on graceful shutdown to avoid a full WAL replay on next startup.
+    /// For routine persistence, use ``flush()`` instead.
+    fn flush_full(&self, py: Python<'_>) -> PyResult<()> {
+        use crate::collection_helpers::core_err;
+        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+    }
+
+    /// Check if a secondary index exists on a payload field.
+    ///
+    /// Args:
+    ///     field: The payload field name (e.g. "category")
+    ///
+    /// Returns:
+    ///     bool: True if the index exists
+    #[pyo3(signature = (field))]
+    fn has_secondary_index(&self, field: &str) -> bool {
+        self.inner.has_secondary_index(field)
+    }
+
+    /// Drop a secondary index on a payload field.
+    ///
+    /// Args:
+    ///     field: The payload field name
+    ///
+    /// Returns:
+    ///     bool: True if the index existed and was dropped
+    #[pyo3(signature = (field))]
+    fn drop_secondary_index(&self, field: &str) -> bool {
+        self.inner.drop_secondary_index(field)
+    }
+
+    /// Get total memory usage of all indexes in bytes.
+    ///
+    /// Returns:
+    ///     int: Memory usage in bytes
+    fn indexes_memory_usage(&self) -> usize {
+        self.inner.indexes_memory_usage()
+    }
+
+    /// Analyze the collection and compute fresh statistics.
+    ///
+    /// Returns:
+    ///     dict: Statistics including row_count, deleted_count, total_size_bytes,
+    ///           column_stats, index_stats, etc.
+    fn analyze(&self, py: Python<'_>) -> PyResult<PyObject> {
+        use crate::collection_helpers::core_err;
+        let stats = py.allow_threads(|| self.inner.analyze().map_err(core_err))?;
+        let json = serde_json::to_value(&stats).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Stats serialization failed: {e}"))
+        })?;
+        Ok(crate::utils::json_to_python(py, &json))
+    }
+
+    /// Check if the streaming delta buffer is active (HNSW rebuild in progress).
+    ///
+    /// Returns:
+    ///     bool: True if delta buffer is active
+    fn is_delta_active(&self) -> bool {
+        self.inner.is_delta_active()
     }
 }

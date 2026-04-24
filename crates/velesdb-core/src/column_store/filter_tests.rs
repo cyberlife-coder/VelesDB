@@ -171,3 +171,203 @@ fn bitmap_or_combinator() {
     assert!(combined.contains(1));
     assert!(combined.contains(9));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GeoPoint filter tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::column_store::filter_geo::{CompareOp, GeoBboxParams, GeoDistanceParams};
+
+/// Helper: creates a column store with a GeoPoint column and pushes test rows.
+fn geo_store() -> ColumnStore {
+    let mut store = ColumnStore::with_schema(&[("location", ColumnType::GeoPoint)]);
+    // Paris
+    store.push_row(&[("location", ColumnValue::GeoPoint(48.8566, 2.3522))]);
+    // London
+    store.push_row(&[("location", ColumnValue::GeoPoint(51.5074, -0.1278))]);
+    // NYC
+    store.push_row(&[("location", ColumnValue::GeoPoint(40.7128, -74.0060))]);
+    // Null
+    store.push_row(&[("location", ColumnValue::Null)]);
+    store
+}
+
+#[test]
+fn filter_geo_distance_finds_nearby_points() {
+    let store = geo_store();
+    let params = GeoDistanceParams {
+        column: "location",
+        lat: 48.8566,
+        lng: 2.3522,
+        operator: CompareOp::Lt,
+        threshold: 500_000.0, // 500 km
+    };
+    let result = store.filter_geo_distance(&params);
+    // Paris (0) is 0m away, London (1) is ~343km away — both within 500km
+    assert!(result.contains(&0));
+    assert!(result.contains(&1));
+    // NYC (2) is too far, null (3) excluded
+    assert!(!result.contains(&2));
+    assert!(!result.contains(&3));
+}
+
+#[test]
+fn filter_geo_distance_nonexistent_column_returns_empty() {
+    let store = geo_store();
+    let params = GeoDistanceParams {
+        column: "nonexistent",
+        lat: 0.0,
+        lng: 0.0,
+        operator: CompareOp::Lt,
+        threshold: 1_000_000.0,
+    };
+    assert!(store.filter_geo_distance(&params).is_empty());
+}
+
+#[test]
+fn filter_geo_distance_non_geopoint_column_returns_empty() {
+    let store = store_with_rows(5, &["a"]);
+    let params = GeoDistanceParams {
+        column: "age",
+        lat: 0.0,
+        lng: 0.0,
+        operator: CompareOp::Lt,
+        threshold: 1_000_000.0,
+    };
+    assert!(store.filter_geo_distance(&params).is_empty());
+}
+
+#[test]
+fn filter_geo_bbox_finds_points_in_box() {
+    let store = geo_store();
+    let params = GeoBboxParams {
+        column: "location",
+        lat_min: 48.0,
+        lng_min: 2.0,
+        lat_max: 49.0,
+        lng_max: 3.0,
+    };
+    let result = store.filter_geo_bbox(&params);
+    assert!(result.contains(&0)); // Paris
+    assert!(!result.contains(&1)); // London outside
+    assert!(!result.contains(&3)); // Null excluded
+}
+
+#[test]
+fn filter_geo_bbox_inverted_returns_empty() {
+    let store = geo_store();
+    let params = GeoBboxParams {
+        column: "location",
+        lat_min: 49.0,
+        lng_min: 3.0,
+        lat_max: 48.0,
+        lng_max: 2.0,
+    };
+    assert!(store.filter_geo_bbox(&params).is_empty());
+}
+
+#[test]
+fn filter_geo_distance_bitmap_matches_vec() {
+    let store = geo_store();
+    let params = GeoDistanceParams {
+        column: "location",
+        lat: 48.8566,
+        lng: 2.3522,
+        operator: CompareOp::Lt,
+        threshold: 500_000.0,
+    };
+    let vec_result = store.filter_geo_distance(&params);
+    let bitmap_result = store.filter_geo_distance_bitmap(&params);
+    let bitmap_vec: Vec<usize> = bitmap_result.iter().map(|i| i as usize).collect();
+    assert_eq!(vec_result, bitmap_vec);
+}
+
+#[test]
+fn filter_geo_bbox_bitmap_matches_vec() {
+    let store = geo_store();
+    let params = GeoBboxParams {
+        column: "location",
+        lat_min: 40.0,
+        lng_min: -75.0,
+        lat_max: 52.0,
+        lng_max: 3.0,
+    };
+    let vec_result = store.filter_geo_bbox(&params);
+    let bitmap_result = store.filter_geo_bbox_bitmap(&params);
+    let bitmap_vec: Vec<usize> = bitmap_result.iter().map(|i| i as usize).collect();
+    assert_eq!(vec_result, bitmap_vec);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IN bitmap filters (Issue #512 — Task 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_filter_in_string_bitmap_nominal() {
+    let store = store_with_rows(9, &["a", "b", "c"]);
+    let bitmap = store.filter_in_string_bitmap("name", &["a", "c"]);
+    // a=0,3,6  c=2,5,8
+    let ids: Vec<u32> = bitmap.iter().collect();
+    assert_eq!(ids, vec![0, 2, 3, 5, 6, 8]);
+}
+
+#[test]
+fn test_filter_in_string_bitmap_missing_column() {
+    let store = store_with_rows(5, &["a"]);
+    let bitmap = store.filter_in_string_bitmap("nonexistent", &["a"]);
+    assert!(bitmap.is_empty());
+}
+
+#[test]
+fn test_filter_in_string_bitmap_excludes_deleted() {
+    let mut store = store_with_rows(6, &["a", "b"]);
+    // Rows: 0=a, 1=b, 2=a, 3=b, 4=a, 5=b
+    // Delete rows 0 and 4 (both "a")
+    store.deleted_rows.insert(0);
+    store.deletion_bitmap.insert(0);
+    store.deleted_rows.insert(4);
+    store.deletion_bitmap.insert(4);
+
+    let bitmap = store.filter_in_string_bitmap("name", &["a"]);
+    // Only row 2 should remain (row 0 and 4 deleted)
+    let ids: Vec<u32> = bitmap.iter().collect();
+    assert_eq!(ids, vec![2]);
+}
+
+#[test]
+fn test_filter_in_string_bitmap_no_matches() {
+    let store = store_with_rows(4, &["a"]);
+    let bitmap = store.filter_in_string_bitmap("name", &["z", "q"]);
+    assert!(bitmap.is_empty());
+}
+
+#[test]
+fn test_filter_in_int_bitmap_nominal() {
+    let store = store_with_rows(10, &["a"]);
+    // age column: 0,1,2,...,9
+    let bitmap = store.filter_in_int_bitmap("age", &[2, 5, 7]);
+    let ids: Vec<u32> = bitmap.iter().collect();
+    assert_eq!(ids, vec![2, 5, 7]);
+}
+
+#[test]
+fn test_filter_in_int_bitmap_type_mismatch() {
+    let store = store_with_rows(5, &["a"]);
+    // "name" is a String column, not Int
+    let bitmap = store.filter_in_int_bitmap("name", &[1, 2]);
+    assert!(bitmap.is_empty());
+}
+
+#[test]
+fn test_filter_in_int_bitmap_excludes_deleted() {
+    let mut store = store_with_rows(6, &["a"]);
+    // age column: 0,1,2,3,4,5
+    // Delete row 2
+    store.deleted_rows.insert(2);
+    store.deletion_bitmap.insert(2);
+
+    let bitmap = store.filter_in_int_bitmap("age", &[1, 2, 3]);
+    // Row 2 deleted, so only rows 1 and 3
+    let ids: Vec<u32> = bitmap.iter().collect();
+    assert_eq!(ids, vec![1, 3]);
+}

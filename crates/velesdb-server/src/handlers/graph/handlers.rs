@@ -22,13 +22,36 @@ use super::types::{
     TraverseRequest, TraverseResponse,
 };
 
+/// Shared graph preamble: record metric and resolve collection.
+///
+/// Mirrors [`super::super::search::search_preamble`] for graph handlers.
+/// `GraphCollection` does not expose guard rails, so only the metrics
+/// recording and collection resolution steps are performed.
+#[allow(clippy::result_large_err)]
+pub(super) fn graph_preamble(
+    state: &AppState,
+    name: &str,
+) -> Result<velesdb_core::GraphCollection, (StatusCode, Json<ErrorResponse>)> {
+    state.onboarding_metrics.record_graph_request();
+    get_graph_collection_or_404(state, name)
+}
+
 /// Resolves a `GraphCollection` by name.
 ///
-/// Returns 404 if no collection with that name exists at all.
-/// Returns 409 if a collection exists but is not a graph collection (type mismatch).
-/// Auto-creates a schemaless graph collection on first use if no collection exists yet,
-/// preserving backward compatibility with workflows that drive graph ops without
-/// an explicit `create_graph_collection` call.
+/// # Returns
+///
+/// * `Ok(collection)` if a graph collection with this name exists.
+/// * `Err(404 Not Found)` if no collection with this name exists.
+/// * `Err(409 Conflict)` if a collection exists with this name but is not
+///   a graph collection (type mismatch with vector or metadata collection).
+///
+/// # Contract
+///
+/// This function previously auto-created a schemaless graph collection
+/// on first use. That behaviour is retired (F-05): a missing graph
+/// collection now yields a 404 response instead of being created
+/// silently. Callers must issue `POST /collections` with
+/// `collection_type = "graph"` before targeting graph endpoints.
 pub(super) fn get_graph_collection_or_404(
     state: &AppState,
     name: &str,
@@ -45,38 +68,29 @@ pub(super) fn get_graph_collection_or_404(
             StatusCode::CONFLICT,
             Json(ErrorResponse {
                 error: format!(
-                    "Collection '{}' exists but is not a graph collection. \
-                     Use /collections/{}/graph only on graph-typed collections.",
-                    name, name
+                    "Collection '{name}' exists but is not a graph collection. \
+                     Use /collections/{name}/graph only on graph-typed collections.",
                 ),
                 code: None,
             }),
         ));
     }
 
-    use velesdb_core::GraphSchema;
-    state
-        .db
-        .create_graph_collection(name, GraphSchema::schemaless())
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to auto-create graph collection '{}': {e}", name),
-                    code: None,
-                }),
-            )
-        })?;
-
-    state.db.get_graph_collection(name).ok_or_else(|| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Graph collection '{}' not found after creation.", name),
-                code: None,
-            }),
-        )
-    })
+    // PR #586 Devin fix: propagate `VELES-002 CollectionNotFound` so
+    // typed-error clients surface `CollectionNotFoundError` instead of
+    // a status-derived `'NOT_FOUND'` string. The "create it first"
+    // hint stays in the message for human operators.
+    let err = velesdb_core::Error::CollectionNotFound(name.to_string());
+    Err((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: format!(
+                "{err}. Create it first with \
+                 POST /collections and collection_type = \"graph\".",
+            ),
+            code: Some(err.code().to_string()),
+        }),
+    ))
 }
 
 /// Get edges from a collection's graph filtered by label.
@@ -107,7 +121,7 @@ pub async fn get_edges(
         )
     })?;
 
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
 
     let edges: Vec<EdgeResponse> = coll
         .get_edges(Some(&label))
@@ -170,7 +184,7 @@ pub async fn add_edge(
         })?
         .with_properties(properties);
 
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
 
     coll.add_edge(edge).map_err(|e| {
         (
@@ -203,7 +217,7 @@ pub async fn traverse_graph(
     State(state): State<Arc<AppState>>,
     Json(request): Json<TraverseRequest>,
 ) -> Result<Json<TraverseResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
 
     let config = TraversalConfig::with_range(1, request.max_depth)
         .with_limit(request.limit)
@@ -241,7 +255,6 @@ pub async fn traverse_graph(
 
     Ok(Json(TraverseResponse {
         results,
-        next_cursor: None,
         has_more,
         stats: TraversalStats {
             visited,
@@ -269,7 +282,7 @@ pub async fn get_node_degree(
     Path((name, node_id)): Path<(String, u64)>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DegreeResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = get_graph_collection_or_404(&state, &name)?;
+    let coll = graph_preamble(&state, &name)?;
     let (in_degree, out_degree) = coll.node_degree(node_id);
     Ok(Json(DegreeResponse {
         in_degree,

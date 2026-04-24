@@ -73,16 +73,20 @@ pub mod column_store;
 mod column_store_tests;
 pub mod compression;
 pub mod config;
+pub mod config_quantization;
 #[cfg(test)]
 mod config_tests;
 mod config_validation;
 pub mod contiguous_ops;
+mod contiguous_resize;
 pub mod distance;
 #[cfg(test)]
 mod distance_tests;
 pub mod error;
 #[cfg(test)]
 mod error_tests;
+#[cfg(feature = "test-fault-injection")]
+pub mod fault_injection;
 pub mod filter;
 #[cfg(test)]
 mod filter_like_tests;
@@ -162,17 +166,10 @@ pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 #[cfg(feature = "persistence")]
 pub use collection::streaming::BackpressureError;
-// MIGRATION: Collection is deprecated since 2.0.0.
-// Use VectorCollection, GraphCollection, or MetadataCollection instead.
-// The deprecated re-export is separated so #[allow(deprecated)] targets only
-// the single item — a block-level allow on a grouped `use` is flagged by
-// llvm-cov instrumentation (issue #329).
-#[cfg(feature = "persistence")]
-#[allow(deprecated)]
-pub use collection::Collection;
-
 #[cfg(feature = "persistence")]
 pub use collection::{
+    // Type-erased collection handle (v2.0.0)
+    AnyCollection,
     // Diagnostics (US-006: embedded SDK health checks)
     CollectionDiagnostics,
     // Public user-facing types — 3 typed collections replace Collection as primary API
@@ -188,6 +185,8 @@ pub use collection::{
     IndexInfo,
     MetadataCollection,
     NodeType,
+    // Scroll cursor (Issue #429)
+    ScrollBatch,
     TraversalConfig,
     TraversalPath,
     TraversalResult,

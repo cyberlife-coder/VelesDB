@@ -93,12 +93,14 @@ pub(crate) fn parse_scalar_from_rule(
         Rule::string => Ok(Value::String(unescape_string_literal(pair.as_str()))),
         Rule::boolean => Ok(Value::Boolean(pair.as_str().eq_ignore_ascii_case("true"))),
         Rule::null_value => Ok(Value::Null),
-        Rule::parameter => {
-            let name = pair.as_str().trim_start_matches('$').to_string();
-            Ok(Value::Parameter(name))
-        }
+        Rule::parameter => Ok(parse_parameter_value(pair.as_str())),
         _ => Err(ParseError::syntax(0, pair.as_str(), "Unknown value type")),
     }
+}
+
+/// Parses a `$name` parameter token into [`Value::Parameter`].
+fn parse_parameter_value(raw: &str) -> Value {
+    Value::Parameter(raw.trim_start_matches('$').to_string())
 }
 
 /// Parses an integer literal string into [`Value::Integer`] or [`Value::UnsignedInteger`].

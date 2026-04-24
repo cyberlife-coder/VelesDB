@@ -7,7 +7,6 @@
 
 use crate::collection::types::Collection;
 use crate::error::Result;
-use crate::index::VectorIndex;
 use crate::point::Point;
 use crate::storage::{PayloadStorage, VectorStorage};
 
@@ -58,13 +57,28 @@ impl Collection {
     ///
     /// Returns an error if storage operations fail.
     pub fn delete(&self, ids: &[u64]) -> Result<()> {
+        // Collect old payloads for incremental histogram maintenance.
+        let old_payloads = self.collect_payloads_for_histogram(ids);
+
         if self.config.read().metadata_only {
             self.delete_metadata_only(ids)?;
         } else {
             self.delete_vector_points(ids)?;
         }
+
+        // Decrement histogram buckets BEFORE cache invalidation.
+        self.update_histograms_on_delete(&old_payloads);
+
         self.invalidate_caches_and_bump_generation();
         Ok(())
+    }
+
+    /// Collects current payloads for the given IDs (for histogram decrements on delete).
+    fn collect_payloads_for_histogram(&self, ids: &[u64]) -> Vec<Option<serde_json::Value>> {
+        let storage = self.payload_storage.read();
+        ids.iter()
+            .map(|&id| storage.retrieve(id).ok().flatten())
+            .collect()
     }
 
     /// Deletes metadata-only points.
@@ -75,6 +89,10 @@ impl Collection {
         for &id in ids {
             let old_payload = payload_storage.retrieve(id).ok().flatten();
             payload_storage.delete(id)?;
+            // Issue #389: WAL-before-apply for BM25 removes so crash
+            // recovery replays the remove.
+            #[cfg(feature = "persistence")]
+            self.append_bm25_wal_remove(id)?;
             self.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             if let Some(ref old) = old_payload {
@@ -114,6 +132,10 @@ impl Collection {
             sq8_cache.remove(&id);
             binary_cache.remove(&id);
             pq_cache.remove(&id);
+            // Issue #389: WAL-before-apply for BM25 removes so crash
+            // recovery replays the remove.
+            #[cfg(feature = "persistence")]
+            self.append_bm25_wal_remove(id)?;
             self.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             if let Some(ref old) = old_payload {
@@ -210,9 +232,12 @@ impl Collection {
     /// IDs from `vector_storage` (points with vectors) and
     /// `payload_storage` (points with payloads). Points inserted with
     /// `None` payload are included via the vector storage path.
+    /// Returns IDs in ascending sorted order.
+    /// Uses `BTreeSet` for deduplication and sorted iteration in one pass,
+    /// so callers (e.g. `scroll_batch`) need not sort separately.
     #[must_use]
     pub fn all_point_ids(&self) -> Vec<u64> {
-        let mut ids: std::collections::HashSet<u64> =
+        let mut ids: std::collections::BTreeSet<u64> =
             self.vector_storage.read().ids().into_iter().collect();
         for id in self.payload_storage.read().ids() {
             ids.insert(id);

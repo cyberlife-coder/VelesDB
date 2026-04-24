@@ -39,11 +39,11 @@ pub struct CommandError {
 impl From<Error> for CommandError {
     fn from(err: Error) -> Self {
         let code = match &err {
-            Error::Database(_) => "DATABASE_ERROR",
-            Error::CollectionNotFound(_) => "COLLECTION_NOT_FOUND",
+            Error::Database(core_err) => core_err.code(),
+            Error::CollectionNotFound(_) => "VELES-002",
             Error::InvalidConfig(_) => "INVALID_CONFIG",
             Error::Serialization(_) => "SERIALIZATION_ERROR",
-            Error::Io(_) => "IO_ERROR",
+            Error::Io(_) => "VELES-011",
         };
         Self {
             message: err.to_string(),
@@ -97,8 +97,8 @@ mod tests {
         // Act
         let cmd_err: CommandError = err.into();
 
-        // Assert
-        assert_eq!(cmd_err.code, "COLLECTION_NOT_FOUND");
+        // Assert — uses VELES-XXX code from core
+        assert_eq!(cmd_err.code, "VELES-002");
         assert!(cmd_err.message.contains("docs"));
     }
 
@@ -106,10 +106,7 @@ mod tests {
     fn test_command_error_codes() {
         // Arrange & Act & Assert
         let cases = vec![
-            (
-                Error::CollectionNotFound("x".to_string()),
-                "COLLECTION_NOT_FOUND",
-            ),
+            (Error::CollectionNotFound("x".to_string()), "VELES-002"),
             (Error::InvalidConfig("x".to_string()), "INVALID_CONFIG"),
             (Error::Serialization("x".to_string()), "SERIALIZATION_ERROR"),
         ];
@@ -118,5 +115,31 @@ mod tests {
             let cmd_err: CommandError = err.into();
             assert_eq!(cmd_err.code, expected_code);
         }
+    }
+
+    #[test]
+    fn test_command_error_database_uses_core_code() {
+        // Arrange — wrap a core error (CollectionExists uses VELES-001)
+        let core_err = velesdb_core::Error::CollectionExists("test".to_string());
+        let err = Error::Database(core_err);
+
+        // Act
+        let cmd_err: CommandError = err.into();
+
+        // Assert — should forward the core VELES-XXX code
+        assert_eq!(cmd_err.code, "VELES-001");
+    }
+
+    #[test]
+    fn test_command_error_io_uses_veles_011() {
+        // Arrange
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file gone");
+        let err = Error::Io(io_err);
+
+        // Act
+        let cmd_err: CommandError = err.into();
+
+        // Assert — IO maps to VELES-011
+        assert_eq!(cmd_err.code, "VELES-011");
     }
 }

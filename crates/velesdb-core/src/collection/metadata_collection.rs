@@ -110,10 +110,47 @@ impl MetadataCollection {
         self.inner.is_empty()
     }
 
+    /// Returns the collection configuration.
+    #[must_use]
+    pub fn config(&self) -> crate::collection::CollectionConfig {
+        self.inner.config()
+    }
+
+    /// Returns `true` — metadata collections are always metadata-only.
+    #[must_use]
+    pub fn is_metadata_only(&self) -> bool {
+        true
+    }
+
+    /// Inserts or updates metadata-only points (convenience alias for `upsert`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a point carries a non-empty vector.
+    pub fn upsert_metadata(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
+        self.upsert(points)
+    }
+
     /// Returns all stored IDs.
     #[must_use]
     pub fn all_ids(&self) -> Vec<u64> {
         self.inner.all_ids()
+    }
+
+    /// Returns the next batch of points for scroll iteration.
+    ///
+    /// Delegates to [`Collection::scroll_batch`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `batch_size` is 0.
+    pub fn scroll_batch(
+        &self,
+        cursor: Option<u64>,
+        batch_size: usize,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Result<crate::collection::ScrollBatch> {
+        self.inner.scroll_batch(cursor, batch_size, filter)
     }
 
     // -------------------------------------------------------------------------
@@ -165,6 +202,18 @@ impl MetadataCollection {
     /// Returns an error if storage retrieval fails.
     pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
         self.inner.text_search(query, k)
+    }
+
+    /// Performs vector similarity search.
+    ///
+    /// Note: metadata-only collections have no vectors, so this will
+    /// return an empty result set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the search fails.
+    pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
+        self.inner.search(query, k)
     }
 
     // -------------------------------------------------------------------------

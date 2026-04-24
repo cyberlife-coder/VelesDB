@@ -11,7 +11,7 @@ use std::ops::Bound;
 
 /// Orderable JSON primitive value used as a key in secondary indexes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum JsonValue {
+pub(crate) enum JsonValue {
     /// String JSON value.
     String(String),
     /// Numeric JSON value (normalized to f64 bits).
@@ -98,7 +98,7 @@ impl JsonValue {
 
 /// Secondary index implementation.
 #[derive(Debug)]
-pub enum SecondaryIndex {
+pub(crate) enum SecondaryIndex {
     /// B-tree index mapping JSON primitive values to point IDs.
     BTree(RwLock<BTreeMap<JsonValue, Vec<u64>>>),
 }

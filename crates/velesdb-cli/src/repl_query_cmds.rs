@@ -1,9 +1,12 @@
 //! REPL commands for query analysis and index management.
 //!
-//! Covers: `.explain`, `.analyze`, `.indexes`, `.delete`, `.flush`,
-//! `.create-index`, `.drop-index`.
+//! Covers: `.explain`, `.explain-analyze`, `.analyze`, `.indexes`, `.delete`,
+//! `.flush`, `.create-index`, `.drop-index`.
+
+use std::collections::HashMap;
 
 use colored::Colorize;
+use velesdb_core::collection::stats::{ColumnStats, IndexStats};
 use velesdb_core::Database;
 
 use crate::repl_commands::{parse_flag, CommandResult};
@@ -28,6 +31,143 @@ pub(crate) fn cmd_explain(db: &Database, parts: &[&str]) -> CommandResult {
         Err(e) => return CommandResult::Error(format!("Explain error: {e}")),
     }
     CommandResult::Continue
+}
+
+/// Execute a query with instrumentation and display plan + actual statistics.
+pub(crate) fn cmd_explain_analyze(db: &Database, parts: &[&str]) -> CommandResult {
+    if parts.len() < 2 {
+        println!("Usage: .explain-analyze <VelesQL query>\n");
+        return CommandResult::Continue;
+    }
+    let query_str = parts[1..].join(" ");
+
+    let parsed = match velesdb_core::velesql::Parser::parse(&query_str) {
+        Ok(q) => q,
+        Err(e) => return CommandResult::Error(format!("Parse error: {}", e.message)),
+    };
+
+    // Detect $param references in the query string. EXPLAIN ANALYZE executes
+    // the query so unbound parameters produce a confusing runtime error.
+    // Guide the user toward the HTTP API which accepts a 'params' map.
+    // Only flag `$` outside single-quoted VelesQL string literals.
+    if contains_unquoted_dollar(&query_str) {
+        return CommandResult::Error(
+            "EXPLAIN ANALYZE executes the query — parameterized queries ($param) \
+             cannot be analyzed from the REPL. Use the HTTP endpoint \
+             POST /query/explain with {\"analyze\": true, \"params\": {...}} instead."
+                .to_string(),
+        );
+    }
+
+    let params = std::collections::HashMap::new();
+    match db.explain_analyze_query(&parsed, &params) {
+        Ok(output) => {
+            println!("\n{}", output.plan.to_tree());
+            print_actual_stats(&output);
+            print_node_stats(&output);
+        }
+        Err(e) => return CommandResult::Error(format!("Explain analyze error: {e}")),
+    }
+    CommandResult::Continue
+}
+
+/// Display the "Actual Statistics" section of EXPLAIN ANALYZE output.
+fn print_actual_stats(output: &velesdb_core::velesql::ExplainOutput) {
+    let Some(ref stats) = output.actual_stats else {
+        return;
+    };
+    println!("{}", "Actual Statistics:".bold().underline());
+    println!("  {} {}", "Actual rows:".cyan(), stats.actual_rows);
+    println!("  {} {:.3}ms", "Actual time:".cyan(), stats.actual_time_ms);
+    println!("  {} {}", "Loops:".cyan(), stats.loops);
+    println!("  {} {}", "Nodes visited:".cyan(), stats.nodes_visited);
+    println!("  {} {}", "Edges traversed:".cyan(), stats.edges_traversed);
+
+    let estimated = output.plan.estimated_cost_ms;
+    let actual = stats.actual_time_ms;
+    let diverges = divergence_exceeds_threshold(estimated, actual);
+    if diverges {
+        println!(
+            "  {} estimated {:.3}ms vs actual {:.3}ms (>10\u{00d7} divergence)",
+            "\u{26a0}".yellow(),
+            estimated,
+            actual,
+        );
+    }
+
+    print_cost_metadata(output);
+    println!();
+}
+
+/// Display per-node statistics from EXPLAIN ANALYZE output.
+fn print_node_stats(output: &velesdb_core::velesql::ExplainOutput) {
+    if output.node_stats.is_empty() {
+        return;
+    }
+    println!("{}", "Per-Node Statistics:".bold().underline());
+    for ns in &output.node_stats {
+        let suffix = if ns.estimated { " (estimated)" } else { "" };
+        println!(
+            "  {}  {:.3}ms (rows: {} \u{2192} {}){}",
+            format!("{}:", ns.node_label).cyan(),
+            ns.actual_time_ms,
+            ns.actual_rows_in,
+            ns.actual_rows_out,
+            suffix,
+        );
+    }
+    println!();
+}
+
+/// Display cost factors and calibration source from EXPLAIN ANALYZE output.
+///
+/// Prints "N/A" when `cost_factors` or `calibration_source` is `None`.
+fn print_cost_metadata(output: &velesdb_core::velesql::ExplainOutput) {
+    let source = output.calibration_source.as_deref().unwrap_or("N/A");
+    println!("  {} {}", "Calibration source:".cyan(), source);
+
+    if let Some(ref factors) = output.cost_factors {
+        println!("  {}", "Cost factors:".cyan());
+        println!("    seq_page_cost:    {:.4}", factors.seq_page_cost);
+        println!("    random_page_cost: {:.4}", factors.random_page_cost);
+        println!("    cpu_tuple_cost:   {:.6}", factors.cpu_tuple_cost);
+        println!("    cpu_index_cost:   {:.6}", factors.cpu_index_cost);
+        println!("    cpu_distance_cost:{:.4}", factors.cpu_distance_cost);
+        println!("    cpu_edge_cost:    {:.4}", factors.cpu_edge_cost);
+    } else {
+        println!("  {} N/A", "Cost factors:".cyan());
+    }
+}
+
+/// Returns `true` when estimated cost diverges from actual time by more than 10×.
+fn divergence_exceeds_threshold(estimated_ms: f64, actual_ms: f64) -> bool {
+    if estimated_ms <= 0.0 || actual_ms <= 0.0 {
+        return false;
+    }
+    let ratio = if estimated_ms > actual_ms {
+        estimated_ms / actual_ms
+    } else {
+        actual_ms / estimated_ms
+    };
+    ratio > 10.0
+}
+
+/// Returns `true` if `s` contains a `$` character that is NOT inside a
+/// single-quoted VelesQL string literal (`'...'`).
+///
+/// VelesQL uses single-quoted strings (`'hello'`), so any `$` that appears
+/// between balanced `'` delimiters is treated as a literal character, not as
+/// a parameter reference.
+fn contains_unquoted_dollar(s: &str) -> bool {
+    let mut in_string = false;
+    for ch in s.chars() {
+        match ch {
+            '\'' => in_string = !in_string,
+            '$' if !in_string => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 pub(crate) fn cmd_analyze(db: &Database, parts: &[&str]) -> CommandResult {
@@ -65,35 +205,54 @@ pub(crate) fn cmd_analyze(db: &Database, parts: &[&str]) -> CommandResult {
                 "Avg Row Size:".cyan(),
                 stats.avg_row_size_bytes
             );
-
-            if !stats.field_stats.is_empty() {
-                println!("\n  {}", "Field Statistics:".bold());
-                for (field, fs) in &stats.field_stats {
-                    println!(
-                        "    {} distinct={}, null={}",
-                        field.cyan(),
-                        fs.distinct_values,
-                        fs.null_count
-                    );
-                }
-            }
-
-            if !stats.index_stats.is_empty() {
-                println!("\n  {}", "Index Statistics:".bold());
-                for (idx_name, is) in &stats.index_stats {
-                    println!(
-                        "    {} entries={}, size={} bytes",
-                        idx_name.cyan(),
-                        is.entry_count,
-                        is.size_bytes
-                    );
-                }
-            }
+            print_field_stats(&stats.field_stats);
+            print_index_stats(&stats.index_stats);
             println!();
         }
         Err(e) => return CommandResult::Error(format!("Analyze error: {e}")),
     }
     CommandResult::Continue
+}
+
+/// Prints per-field statistics from a collection analysis.
+fn print_field_stats(field_stats: &HashMap<String, ColumnStats>) {
+    if field_stats.is_empty() {
+        return;
+    }
+    println!("\n  {}", "Field Statistics:".bold());
+    for (field, fs) in field_stats {
+        println!(
+            "    {} distinct={}, null={}",
+            field.cyan(),
+            fs.distinct_values,
+            fs.null_count
+        );
+        if let Some(ref hist) = fs.histogram {
+            if !hist.buckets.is_empty() {
+                println!(
+                    "      histogram: {} buckets, stale={}",
+                    hist.buckets.len(),
+                    hist.stale
+                );
+            }
+        }
+    }
+}
+
+/// Prints per-index statistics from a collection analysis.
+fn print_index_stats(index_stats: &HashMap<String, IndexStats>) {
+    if index_stats.is_empty() {
+        return;
+    }
+    println!("\n  {}", "Index Statistics:".bold());
+    for (idx_name, is) in index_stats {
+        println!(
+            "    {} entries={}, size={} bytes",
+            idx_name.cyan(),
+            is.entry_count,
+            is.size_bytes
+        );
+    }
 }
 
 pub(crate) fn cmd_indexes(db: &Database, parts: &[&str]) -> CommandResult {
@@ -260,4 +419,47 @@ pub(crate) fn cmd_drop_index(db: &Database, parts: &[&str]) -> CommandResult {
         }
     }
     CommandResult::Continue
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_dollar_is_detected() {
+        assert!(contains_unquoted_dollar("SELECT * FROM t WHERE id = $id"));
+    }
+
+    #[test]
+    fn dollar_inside_single_quoted_string_is_ignored() {
+        assert!(!contains_unquoted_dollar(
+            "SELECT * FROM t WHERE name = '$foo'"
+        ));
+    }
+
+    #[test]
+    fn dollar_outside_quotes_with_quoted_string_present() {
+        assert!(contains_unquoted_dollar(
+            "SELECT * FROM t WHERE name = '$foo' AND id = $id"
+        ));
+    }
+
+    #[test]
+    fn no_dollar_at_all() {
+        assert!(!contains_unquoted_dollar(
+            "SELECT * FROM t WHERE name = 'hello'"
+        ));
+    }
+
+    #[test]
+    fn multiple_quoted_strings_no_bare_dollar() {
+        assert!(!contains_unquoted_dollar(
+            "SELECT * FROM t WHERE a = '$x' AND b = '$y'"
+        ));
+    }
+
+    #[test]
+    fn empty_string() {
+        assert!(!contains_unquoted_dollar(""));
+    }
 }

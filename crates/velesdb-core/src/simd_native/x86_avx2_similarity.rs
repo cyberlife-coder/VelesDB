@@ -6,7 +6,7 @@
 //! All functions require runtime AVX2+FMA detection before calling.
 //! Dispatch is handled by `dispatch.rs` after `simd_level()` confirms support.
 
-// SAFETY: Numeric casts in this file are intentional and safe:
+// Reason: Numeric casts in this file are intentional and safe:
 // - All casts are from well-bounded values (vector dimensions, loop indices)
 // - All casts are validated by extensive SIMD tests (simd_native_tests.rs)
 #![allow(clippy::cast_precision_loss)]

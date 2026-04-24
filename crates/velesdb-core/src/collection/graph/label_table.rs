@@ -3,7 +3,7 @@
 //! Provides memory-efficient storage for repetitive labels in knowledge graphs.
 //! With 10M edges having only ~20 distinct labels, this can save ~200MB of memory.
 
-// SAFETY: Numeric casts in label table are intentional:
+// Reason: Numeric casts in label table are intentional:
 // - usize->u32 for LabelId: Table capacity is bounded (typically < 10K labels)
 // - LabelId is validated against table bounds on lookup
 #![allow(clippy::cast_possible_truncation)]
@@ -13,6 +13,7 @@ use thiserror::Error;
 
 /// Error type for LabelTable operations.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LabelTableError {
     /// The label table has reached its maximum capacity.
     #[error("LabelTable overflow: cannot intern more than {max_labels} labels")]
@@ -118,7 +119,7 @@ impl LabelTable {
                 max_labels: u32::MAX,
             });
         }
-        // SAFETY: len checked against u32::MAX above, truncation impossible
+        // Reason: len checked against u32::MAX above, truncation impossible
         #[allow(clippy::cast_possible_truncation)]
         let id = LabelId(len as u32);
         self.strings.push(s.to_string());

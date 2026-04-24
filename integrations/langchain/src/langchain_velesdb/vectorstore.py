@@ -5,7 +5,12 @@ as the underlying vector database for storing and retrieving embeddings.
 
 Search and query operations are implemented in focused mixin modules:
 - :mod:`langchain_velesdb.search_ops` — vector/hybrid/text/batch/multi-query search
+- :mod:`langchain_velesdb.multi_query_ops` — batch and multi-query search
 - :mod:`langchain_velesdb.graph_ops` — VelesQL and MATCH query operations
+- :mod:`langchain_velesdb.scroll_ops` — cursor-paginated scroll iteration
+
+Point construction and streaming helpers live in:
+- :mod:`langchain_velesdb.point_builder` — build_point, flush_stream_batches
 """
 
 from __future__ import annotations
@@ -23,46 +28,34 @@ import velesdb
 
 from langchain_velesdb.security import (
     validate_path,
+    validate_search_quality,
     validate_text,
     validate_metric,
     validate_storage_mode,
     validate_batch_size,
     validate_collection_name,
     validate_sparse_vector,
+    validate_url,
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
 from langchain_velesdb._common import payload_to_doc_parts
+from langchain_velesdb.point_builder import build_point as _build_point, flush_stream_batches as _flush_stream_batches
 from langchain_velesdb.search_ops import SearchOpsMixin
 from langchain_velesdb.graph_ops import GraphOpsMixin
+from langchain_velesdb.scroll_ops import (  # noqa: F401  # pylint: disable=unused-import
+    ScrollOpsMixin,
+    # `_scroll_one_batch` is re-imported intentionally: tests
+    # monkeypatch ``langchain_velesdb.vectorstore._scroll_one_batch``
+    # to observe pagination, so the symbol must be bound at module
+    # scope even though nothing in this file calls it directly.
+    _scroll_one_batch,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _flush_stream_batches(collection: Any, points: list, batch_size: int) -> None:
-    """Send points to a collection in batches via stream_insert."""
-    for start in range(0, len(points), batch_size):
-        collection.stream_insert(points[start : start + batch_size])
-
-
-def _build_point(
-    int_id: int,
-    text: str,
-    embedding: List[float],
-    metadata: Optional[dict] = None,
-    sparse_vector: Optional[dict] = None,
-) -> dict:
-    """Build a single VelesDB point dict."""
-    payload: dict = {"text": text}
-    if metadata is not None:
-        payload.update(metadata)
-    point: dict = {"id": int_id, "vector": embedding, "payload": payload}
-    if sparse_vector is not None:
-        point["sparse_vector"] = sparse_vector
-    return point
-
-
-class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, VectorStore):
+class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, ScrollOpsMixin, VectorStore):
     """VelesDB vector store for LangChain.
 
     A high-performance vector store backed by VelesDB, designed for
@@ -93,6 +86,8 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ve
         collection_name: str = "langchain",
         metric: str = "cosine",
         storage_mode: str = "full",
+        server_url: Optional[str] = None,
+        search_quality: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize VelesDB vector store.
@@ -118,6 +113,14 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ve
                 - "rabitq": RaBitQ with scalar correction (32x compression, good recall).
 
                 Examples: ``storage_mode="f32"`` is equivalent to ``storage_mode="full"``.
+            server_url: Optional URL of a VelesDB server for server mode. When
+                provided, must be a valid http:// or https:// URL.
+            search_quality: Optional default quality preset for all similarity
+                searches: ``"fast"``, ``"balanced"``, ``"accurate"``,
+                ``"perfect"``, ``"autotune"``, ``"custom:N"``,
+                ``"adaptive:MIN:MAX"``. ``None`` uses the built-in search.
+                Per-call override: pass ``search_quality=`` to
+                :meth:`similarity_search_with_score`.
             **kwargs: Additional arguments passed to the database.
 
         Raises:
@@ -127,6 +130,12 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ve
         self._collection_name = validate_collection_name(collection_name)
         self._metric = validate_metric(metric)
         self._storage_mode = validate_storage_mode(storage_mode)
+        if server_url is not None:
+            validate_url(server_url)
+        self.server_url = server_url
+        self._search_quality: Optional[str] = None
+        if search_quality is not None:
+            self._search_quality = validate_search_quality(search_quality)
 
         self._embedding = embedding
         self._db: Optional[velesdb.Database] = None
@@ -503,6 +512,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ve
         if not texts_list:
             return []
 
+        validate_batch_size(len(texts_list))
         for text in texts_list:
             validate_text(text)
 
@@ -526,4 +536,5 @@ __all__ = [
     "VelesDBVectorStore",
     "SearchOpsMixin",
     "GraphOpsMixin",
+    "ScrollOpsMixin",
 ]

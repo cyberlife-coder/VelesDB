@@ -24,10 +24,14 @@ impl Database {
             .write()
             .insert(name.to_string(), stats.clone());
 
-        let stats_path = self.data_dir.join(name).join("collection.stats.json");
-        let serialized = serde_json::to_vec_pretty(&stats)
-            .map_err(|e| Error::Serialization(format!("failed to serialize stats: {e}")))?;
-        std::fs::write(&stats_path, serialized)?;
+        // Bug #51: route the write through Collection so that stats_io_mutex
+        // is held, preventing a race with incremental histogram updates.
+        collection.write_stats_guarded(&stats)?;
+
+        // Issue #608: bump analyze_generation after stats are persisted so
+        // the compiled plan cache key changes and stale plans are rebuilt
+        // with the fresh calibrated cost estimates.
+        collection.bump_analyze_generation();
 
         Ok(stats)
     }

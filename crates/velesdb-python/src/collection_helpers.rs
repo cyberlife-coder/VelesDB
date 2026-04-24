@@ -2,21 +2,154 @@
 //!
 //! Extracted from collection.rs to reduce file size and improve maintainability.
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyKeyError, PyMemoryError, PyOverflowError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::{BTreeMap, HashMap};
 
+use crate::exceptions::{
+    CollectionExistsError, CollectionNotFoundError, DatabaseLockedError, DimensionMismatchError,
+    EdgeExistsError,
+};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::sparse_index::SparseVector;
 use velesdb_core::{Filter, Point, SearchResult};
 
-/// Convert a `velesdb_core::Error` into a `PyRuntimeError`.
+/// Convert a `velesdb_core::Error` into the most specific Python exception available.
 ///
-/// Shared helper that replaces ~39 inline `map_err(|e| PyRuntimeError::new_err(...))` closures
-/// across the Python binding crate.
+/// Maps every `VELES-XXX` variant to the semantically correct Python
+/// exception type, so callers can write `except PyKeyError`,
+/// `except velesdb.CollectionExistsError`, etc. instead of squinting at
+/// a generic `RuntimeError` message.
+///
+/// # Mapping table
+///
+/// | VELES code | Variant                   | Python exception              |
+/// |------------|---------------------------|-------------------------------|
+/// | VELES-001  | `CollectionExists`        | `CollectionExistsError`       |
+/// | VELES-002  | `CollectionNotFound`      | `CollectionNotFoundError`     |
+/// | VELES-003  | `PointNotFound`           | `KeyError`                    |
+/// | VELES-004  | `DimensionMismatch`       | `DimensionMismatchError`      |
+/// | VELES-005  | `InvalidVector`           | `ValueError`                  |
+/// | VELES-006  | `Storage`                 | `VelesDBError`                |
+/// | VELES-007  | `Index`                   | `VelesDBError`                |
+/// | VELES-008  | `IndexCorrupted`          | `VelesDBError`                |
+/// | VELES-009  | `Config`                  | `ValueError`                  |
+/// | VELES-010  | `Query`                   | `ValueError`                  |
+/// | VELES-011  | `Io`                      | `VelesDBError`                |
+/// | VELES-012  | `Serialization`           | `VelesDBError`                |
+/// | VELES-013  | `Internal`                | `VelesDBError`                |
+/// | VELES-014  | `VectorNotAllowed`        | `ValueError`                  |
+/// | VELES-015  | `SearchNotSupported`      | `ValueError`                  |
+/// | VELES-016  | `VectorRequired`          | `ValueError`                  |
+/// | VELES-017  | `SchemaValidation`        | `ValueError`                  |
+/// | VELES-018  | `GraphNotSupported`       | `ValueError`                  |
+/// | VELES-019  | `EdgeExists`              | `EdgeExistsError`             |
+/// | VELES-020  | `EdgeNotFound`            | `KeyError`                    |
+/// | VELES-021  | `InvalidEdgeLabel`        | `ValueError`                  |
+/// | VELES-022  | `NodeNotFound`            | `KeyError`                    |
+/// | VELES-023  | `Overflow`                | `OverflowError`               |
+/// | VELES-024  | `ColumnStoreError`        | `VelesDBError`                |
+/// | VELES-025  | `GpuError`                | `VelesDBError`                |
+/// | VELES-026  | `EpochMismatch`           | `VelesDBError`                |
+/// | VELES-027  | `GuardRail`               | `VelesDBError`                |
+/// | VELES-028  | `InvalidQuantizerConfig`  | `ValueError`                  |
+/// | VELES-029  | `TrainingFailed`          | `VelesDBError`                |
+/// | VELES-030  | `SparseIndexError`        | `VelesDBError`                |
+/// | VELES-031  | `DatabaseLocked`          | `DatabaseLockedError`         |
+/// | VELES-032  | `InvalidDimension`        | `ValueError`                  |
+/// | VELES-033  | `AllocationFailed`        | `MemoryError`                 |
+/// | VELES-034  | `InvalidCollectionName`   | `ValueError`                  |
+/// | VELES-035  | `SnapshotBuildFailed`     | `VelesDBError`                |
+/// | VELES-036  | `IncompatibleSchemaVersion` | `VelesDBError`              |
+///
+/// The wildcard arm at the bottom handles future variants added under
+/// the `#[non_exhaustive]` attribute on `velesdb_core::Error`. New
+/// variants fall through to `VelesDBError` until this mapping is
+/// updated; the unit test `test_core_err_mapping_covers_every_code`
+/// in `exceptions.rs` guards against silently adding a code without a
+/// Python mapping.
 pub fn core_err(e: velesdb_core::Error) -> PyErr {
-    PyRuntimeError::new_err(e.to_string())
+    use velesdb_core::Error as E;
+    match &e {
+        // Conflicts / lifecycle — custom VelesDB exceptions
+        E::CollectionExists(_) => CollectionExistsError::new_err(e.to_string()),
+        E::CollectionNotFound(name) => {
+            CollectionNotFoundError::new_err(format!("Collection '{name}' not found"))
+        }
+        E::EdgeExists(id) => EdgeExistsError::new_err(format!("Edge with ID {id} already exists")),
+        E::DatabaseLocked(_) => DatabaseLockedError::new_err(e.to_string()),
+
+        // Lookup misses — Python's canonical KeyError
+        E::PointNotFound(id) => PyKeyError::new_err(format!("Point {id} not found")),
+        E::EdgeNotFound(id) => PyKeyError::new_err(format!("Edge {id} not found")),
+        E::NodeNotFound(id) => PyKeyError::new_err(format!("Node {id} not found")),
+
+        // Dimension mismatch — the only numeric arg-invalid case with its own class
+        E::DimensionMismatch { expected, actual } => {
+            DimensionMismatchError::new_err(format!("Expected {expected} dimensions, got {actual}"))
+        }
+
+        // Argument / configuration invalid — ValueError
+        E::InvalidVector(_)
+        | E::Config(_)
+        | E::Query(_)
+        | E::VectorNotAllowed(_)
+        | E::SearchNotSupported(_)
+        | E::VectorRequired(_)
+        | E::SchemaValidation(_)
+        | E::GraphNotSupported(_)
+        | E::InvalidEdgeLabel(_)
+        | E::InvalidQuantizerConfig(_)
+        | E::InvalidDimension { .. }
+        | E::InvalidCollectionName { .. } => PyValueError::new_err(e.to_string()),
+
+        // Numeric overflow / allocation failure — specific Python builtins
+        E::Overflow(_) => PyOverflowError::new_err(e.to_string()),
+        E::AllocationFailed(_) => PyMemoryError::new_err(e.to_string()),
+
+        // Engine / IO / internal — VelesDBError so callers can catch with
+        // `except velesdb.VelesDBError` as a catch-all for all engine errors.
+        E::Storage(_)
+        | E::Index(_)
+        | E::IndexCorrupted(_)
+        | E::Io(_)
+        | E::Serialization(_)
+        | E::Internal(_)
+        | E::ColumnStoreError(_)
+        | E::GpuError(_)
+        | E::EpochMismatch(_)
+        | E::GuardRail(_)
+        | E::TrainingFailed(_)
+        | E::SparseIndexError(_)
+        | E::SnapshotBuildFailed(_)
+        | E::IncompatibleSchemaVersion { .. } => {
+            crate::exceptions::VelesDBError::new_err(e.to_string())
+        }
+
+        // Forward-compat: unknown future variants fall back to VelesDBError.
+        // A new variant added to `velesdb_core::Error` should trigger the
+        // unit test `test_core_err_mapping_covers_every_code` and be given
+        // an explicit arm above before this wildcard catches it silently.
+        _ => crate::exceptions::VelesDBError::new_err(e.to_string()),
+    }
+}
+
+/// Convert a `velesdb_core::Error::DimensionMismatch` into a `DimensionMismatchError`
+/// with full collection context included in the message.
+///
+/// Use this variant at call-sites where the collection name is available,
+/// so the error reads: "Expected 768 dimensions, got 512 (collection 'docs' requires 768-dim vectors)".
+pub fn core_err_with_collection(e: velesdb_core::Error, collection_name: &str) -> PyErr {
+    match &e {
+        velesdb_core::Error::DimensionMismatch { expected, actual } => {
+            DimensionMismatchError::new_err(format!(
+                "Expected {expected} dimensions, got {actual} \
+                (collection '{collection_name}' requires {expected}-dim vectors)"
+            ))
+        }
+        _ => core_err(e),
+    }
 }
 
 /// Parse a Python filter object into a VelesDB Filter.
@@ -49,7 +182,11 @@ fn payload_to_python(py: Python<'_>, payload: &Option<serde_json::Value>) -> PyO
 ///
 /// Uses `PyDict::new()` + `set_item()` directly and `PyString::intern()` for
 /// static keys to avoid repeated string allocation.
-pub fn search_result_to_dict(py: Python<'_>, result: &SearchResult) -> PyObject {
+pub fn search_result_to_dict(
+    py: Python<'_>,
+    result: &SearchResult,
+    include_vectors: bool,
+) -> PyObject {
     let dict = PyDict::new(py);
     // PyString::intern reuses the same Python string object across calls
     let _ = dict.set_item(PyString::intern(py, "id"), result.point.id);
@@ -58,6 +195,12 @@ pub fn search_result_to_dict(py: Python<'_>, result: &SearchResult) -> PyObject 
         PyString::intern(py, "payload"),
         payload_to_python(py, &result.point.payload),
     );
+    if include_vectors {
+        let _ = dict.set_item(
+            PyString::intern(py, "vector"),
+            result.point.vector.as_slice(),
+        );
+    }
     dict.into_any().unbind()
 }
 
@@ -84,11 +227,16 @@ pub fn search_result_to_multimodel_dict(py: Python<'_>, result: &SearchResult) -
 }
 
 /// Convert a `Point` to a Python dict.
+///
+/// Omits the `vector` field when empty (e.g., graph collections
+/// without embeddings) to avoid misleading empty arrays.
 pub fn point_to_dict(py: Python<'_>, point: &Point) -> PyObject {
     let dict = PyDict::new(py);
     let _ = dict.set_item(PyString::intern(py, "id"), point.id);
-    let np_vector = numpy::PyArray1::from_slice(py, &point.vector);
-    let _ = dict.set_item(PyString::intern(py, "vector"), np_vector);
+    if !point.vector.is_empty() {
+        let np_vector = numpy::PyArray1::from_slice(py, &point.vector);
+        let _ = dict.set_item(PyString::intern(py, "vector"), np_vector);
+    }
     let _ = dict.set_item(
         PyString::intern(py, "payload"),
         payload_to_python(py, &point.payload),
@@ -97,10 +245,14 @@ pub fn point_to_dict(py: Python<'_>, point: &Point) -> PyObject {
 }
 
 /// Convert a list of `SearchResult`s to Python dicts.
-pub fn search_results_to_dicts(py: Python<'_>, results: Vec<SearchResult>) -> Vec<PyObject> {
+pub fn search_results_to_dicts(
+    py: Python<'_>,
+    results: Vec<SearchResult>,
+    include_vectors: bool,
+) -> Vec<PyObject> {
     results
         .into_iter()
-        .map(|r| search_result_to_dict(py, &r))
+        .map(|r| search_result_to_dict(py, &r, include_vectors))
         .collect()
 }
 
@@ -236,9 +388,17 @@ pub fn dict_to_json_map(
 }
 
 /// Extract the `"id"` field from a point dict as `u64`.
-pub fn extract_point_id(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResult<u64> {
+///
+/// `index` is the zero-based position of this point in the batch. When provided
+/// (i.e., the caller is iterating a list), it is embedded in the error message so
+/// the user can locate the offending item: "Point at index 4237 missing 'id' field".
+pub fn extract_point_id(
+    py: Python<'_>,
+    dict: &HashMap<String, PyObject>,
+    index: usize,
+) -> PyResult<u64> {
     dict.get("id")
-        .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
+        .ok_or_else(|| PyValueError::new_err(format!("Point at index {index} missing 'id' field")))?
         .extract(py)
 }
 
@@ -264,8 +424,8 @@ pub fn parse_point_dicts(
     points: &[HashMap<String, PyObject>],
 ) -> PyResult<Vec<Point>> {
     let mut result = Vec::with_capacity(points.len());
-    for point_dict in points {
-        let id = extract_point_id(py, point_dict)?;
+    for (index, point_dict) in points.iter().enumerate() {
+        let id = extract_point_id(py, point_dict, index)?;
         let vector = extract_point_vector(py, point_dict)?;
         let payload = parse_payload(py, point_dict.get("payload"))?;
         let sparse_vectors = parse_sparse_vectors_from_point(py, point_dict)?;
@@ -287,5 +447,46 @@ pub fn parse_payload(
             Ok(Some(dict_to_json_map(py, &dict)?))
         }
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::Python;
+
+    /// extract_point_id error message includes the batch index.
+    #[test]
+    fn test_extract_point_id_missing_includes_index() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            // Dict with no "id" key — simulates a malformed point at position 4237.
+            let empty: HashMap<String, PyObject> = HashMap::new();
+            let err = extract_point_id(py, &empty, 4237).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("4237"),
+                "error message must contain the batch index; got: {msg}"
+            );
+            assert!(
+                msg.contains("'id'"),
+                "error message must mention the missing field; got: {msg}"
+            );
+        });
+    }
+
+    /// extract_point_id at index 0 still includes the index in the message.
+    #[test]
+    fn test_extract_point_id_missing_at_index_zero() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let empty: HashMap<String, PyObject> = HashMap::new();
+            let err = extract_point_id(py, &empty, 0).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("index 0"),
+                "error message must contain 'index 0'; got: {msg}"
+            );
+        });
     }
 }

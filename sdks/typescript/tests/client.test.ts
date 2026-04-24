@@ -77,23 +77,23 @@ describe('VelesDB Client', () => {
     it('should validate document ID', async () => {
       (db as any).initialized = true;
       (db as any).backend = {
-        insert: vi.fn(),
+        upsert: vi.fn(),
       };
 
-      await expect(db.insert('test', { id: null as any, vector: [1, 2, 3] }))
+      await expect(db.upsert('test', { id: null as any, vector: [1, 2, 3] }))
         .rejects.toThrow(ValidationError);
     });
 
     it('should validate document vector', async () => {
       (db as any).initialized = true;
       (db as any).backend = {
-        insert: vi.fn(),
+        upsert: vi.fn(),
       };
 
-      await expect(db.insert('test', { id: '1', vector: null as any }))
+      await expect(db.upsert('test', { id: '1', vector: null as any }))
         .rejects.toThrow(ValidationError);
 
-      await expect(db.insert('test', { id: '1', vector: 'invalid' as any }))
+      await expect(db.upsert('test', { id: '1', vector: 'invalid' as any }))
         .rejects.toThrow(ValidationError);
     });
 
@@ -110,10 +110,10 @@ describe('VelesDB Client', () => {
     it('should validate batch documents', async () => {
       (db as any).initialized = true;
       (db as any).backend = {
-        insertBatch: vi.fn(),
+        upsertBatch: vi.fn(),
       };
 
-      await expect(db.insertBatch('test', 'invalid' as any))
+      await expect(db.upsertBatch('test', 'invalid' as any))
         .rejects.toThrow(ValidationError);
     });
   });
@@ -125,8 +125,8 @@ describe('VelesDB Client', () => {
     beforeEach(() => {
       db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
       mockBackend = {
-        insert: vi.fn(),
-        insertBatch: vi.fn(),
+        upsert: vi.fn(),
+        upsertBatch: vi.fn(),
         get: vi.fn(),
         delete: vi.fn(),
       };
@@ -134,9 +134,9 @@ describe('VelesDB Client', () => {
       (db as any).initialized = true;
     });
 
-    it('rejects non-numeric IDs for insert on REST backend', async () => {
+    it('rejects non-numeric IDs for upsert on REST backend', async () => {
       await expect(
-        db.insert('docs', { id: 'doc://alpha', vector: [0.1, 0.2, 0.3] }),
+        db.upsert('docs', { id: 'doc://alpha', vector: [0.1, 0.2, 0.3] }),
       ).rejects.toThrow(ValidationError);
     });
 
@@ -148,7 +148,7 @@ describe('VelesDB Client', () => {
     it('rejects IDs above JS safe integer range on REST backend', async () => {
       const tooLarge = Number.MAX_SAFE_INTEGER + 1;
       await expect(
-        db.insert('docs', { id: tooLarge, vector: [0.1, 0.2, 0.3] }),
+        db.upsert('docs', { id: tooLarge, vector: [0.1, 0.2, 0.3] }),
       ).rejects.toThrow(ValidationError);
       await expect(db.get('docs', tooLarge)).rejects.toThrow(ValidationError);
       await expect(db.delete('docs', tooLarge)).rejects.toThrow(ValidationError);
@@ -167,8 +167,8 @@ describe('VelesDB Client', () => {
         deleteCollection: vi.fn(),
         getCollection: vi.fn(),
         listCollections: vi.fn(),
-        insert: vi.fn(),
-        insertBatch: vi.fn(),
+        upsert: vi.fn(),
+        upsertBatch: vi.fn(),
         search: vi.fn(),
         delete: vi.fn(),
         get: vi.fn(),
@@ -203,19 +203,19 @@ describe('VelesDB Client', () => {
       expect(result).toEqual([{ name: 'test' }]);
     });
 
-    it('should call backend insert', async () => {
+    it('should call backend upsert', async () => {
       const doc = { id: '1', vector: [0.1, 0.2], payload: { title: 'test' } };
-      await db.insert('test', doc);
-      expect(mockBackend.insert).toHaveBeenCalledWith('test', doc);
+      await db.upsert('test', doc);
+      expect(mockBackend.upsert).toHaveBeenCalledWith('test', doc);
     });
 
-    it('should call backend insertBatch', async () => {
+    it('should call backend upsertBatch', async () => {
       const docs = [
         { id: '1', vector: [0.1, 0.2] },
         { id: '2', vector: [0.3, 0.4] },
       ];
-      await db.insertBatch('test', docs);
-      expect(mockBackend.insertBatch).toHaveBeenCalledWith('test', docs);
+      await db.upsertBatch('test', docs);
+      expect(mockBackend.upsertBatch).toHaveBeenCalledWith('test', docs);
     });
 
     it('should call backend search', async () => {
@@ -266,7 +266,8 @@ describe('VelesDB Client', () => {
     it('should call backend queryExplain', async () => {
       mockBackend.queryExplain.mockResolvedValue({ queryType: 'SELECT', plan: [] });
       await db.queryExplain('SELECT * FROM docs', {});
-      expect(mockBackend.queryExplain).toHaveBeenCalledWith('SELECT * FROM docs', {});
+      // client forwards (query, params, options) — options is undefined when caller omits it
+      expect(mockBackend.queryExplain).toHaveBeenCalledWith('SELECT * FROM docs', {}, undefined);
     });
 
     it('should validate collectionSanity input', async () => {

@@ -214,6 +214,11 @@ fn round_trip_collection_config_response() {
         metadata_only: false,
         graph_schema: Some(json!({"labels": ["Person"]})),
         embedding_dimension: Some(128),
+        schema_version: 1,
+        pq_rescore_oversampling: Some(4),
+        hnsw_params: None,
+        deferred_indexing: None,
+        async_index_builder: None,
     };
     let serialized = serde_json::to_value(&resp).unwrap();
     let deserialized: CollectionConfigResponse = serde_json::from_value(serialized).unwrap();
@@ -222,6 +227,8 @@ fn round_trip_collection_config_response() {
     assert_eq!(deserialized.metric, "cosine");
     assert_eq!(deserialized.storage_mode, "full");
     assert_eq!(deserialized.point_count, 1000);
+    assert_eq!(deserialized.schema_version, 1);
+    assert_eq!(deserialized.pq_rescore_oversampling, Some(4));
     assert!(!deserialized.metadata_only);
     assert!(deserialized.graph_schema.is_some());
     assert_eq!(deserialized.embedding_dimension, Some(128));
@@ -298,16 +305,6 @@ fn test_default_fusion_strategy() {
 #[test]
 fn test_default_rrf_k() {
     assert_eq!(default_rrf_k(), 60);
-}
-
-#[test]
-fn test_mode_to_ef_search_all_modes() {
-    assert_eq!(mode_to_ef_search("fast"), Some(64));
-    assert_eq!(mode_to_ef_search("balanced"), Some(128));
-    assert_eq!(mode_to_ef_search("accurate"), Some(512));
-    assert_eq!(mode_to_ef_search("perfect"), Some(usize::MAX));
-    assert_eq!(mode_to_ef_search("unknown_mode"), None);
-    assert_eq!(mode_to_ef_search(""), None);
 }
 
 // ============================================================================
@@ -451,14 +448,6 @@ fn filter_with_nested_conditions() {
 // ============================================================================
 
 #[test]
-fn test_mode_to_ef_search_case_insensitive() {
-    assert_eq!(mode_to_ef_search("FAST"), Some(64));
-    assert_eq!(mode_to_ef_search("Balanced"), Some(128));
-    assert_eq!(mode_to_ef_search("ACCURATE"), Some(512));
-    assert_eq!(mode_to_ef_search("Perfect"), Some(usize::MAX));
-}
-
-#[test]
 fn test_default_index_type() {
     assert_eq!(default_index_type(), "hash");
 }
@@ -595,14 +584,23 @@ fn serialize_collection_config_skips_none_graph_schema() {
         metadata_only: true,
         graph_schema: None,
         embedding_dimension: None,
+        schema_version: 1,
+        pq_rescore_oversampling: None,
+        hnsw_params: None,
+        deferred_indexing: None,
+        async_index_builder: None,
     };
     let json = serde_json::to_value(&resp).unwrap();
     // `skip_serializing_if = "Option::is_none"` omits the key entirely
-    assert!(!json.as_object().unwrap().contains_key("graph_schema"));
-    assert!(!json
-        .as_object()
-        .unwrap()
-        .contains_key("embedding_dimension"));
+    let obj = json.as_object().unwrap();
+    assert!(!obj.contains_key("graph_schema"));
+    assert!(!obj.contains_key("embedding_dimension"));
+    assert!(!obj.contains_key("pq_rescore_oversampling"));
+    assert!(!obj.contains_key("hnsw_params"));
+    assert!(!obj.contains_key("deferred_indexing"));
+    assert!(!obj.contains_key("async_index_builder"));
+    // `schema_version` is not an Option — always serialised.
+    assert_eq!(obj["schema_version"], 1);
 }
 
 #[test]
@@ -675,4 +673,249 @@ fn deserialize_fusion_request() {
     assert_eq!(req.k, None);
     assert!((req.dense_w.unwrap() - 0.7).abs() < f32::EPSILON);
     assert!((req.sparse_w.unwrap() - 0.3).abs() < f32::EPSILON);
+}
+
+// ============================================================================
+// F. u64 ID serialization as JSON string [WP-0D]
+// ============================================================================
+
+/// IDs above `Number.MAX_SAFE_INTEGER` (2^53 - 1) must serialize as strings.
+#[test]
+fn id_serialization_above_max_safe_integer() {
+    let above_safe = (1_u64 << 53) + 1; // 9_007_199_254_740_993
+    let result = SearchResultResponse {
+        id: above_safe,
+        score: 0.99,
+        payload: None,
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["id"], json!("9007199254740993"));
+}
+
+/// Small IDs also serialize as strings for consistency.
+#[test]
+fn id_serialization_small_id() {
+    let result = SearchResultResponse {
+        id: 42,
+        score: 0.5,
+        payload: None,
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["id"], json!("42"));
+}
+
+/// Zero ID serializes correctly.
+#[test]
+fn id_serialization_zero() {
+    let result = SearchResultResponse {
+        id: 0,
+        score: 0.0,
+        payload: None,
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["id"], json!("0"));
+}
+
+/// `u64::MAX` serializes as a string.
+#[test]
+fn id_serialization_u64_max() {
+    let result = SearchResultResponse {
+        id: u64::MAX,
+        score: 1.0,
+        payload: None,
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["id"], json!("18446744073709551615"));
+}
+
+/// Deserialization from a JSON string: `"9007199254740993"` -> u64.
+#[test]
+fn id_deserialization_from_string() {
+    let input = json!({ "id": "9007199254740993", "score": 0.9 });
+    let result: IdScoreResult = serde_json::from_value(input).unwrap();
+    assert_eq!(result.id, 9_007_199_254_740_993);
+}
+
+/// Deserialization from a JSON number (backward compat): `12345` -> u64.
+#[test]
+fn id_deserialization_from_number() {
+    let input = json!({ "id": 12345, "score": 0.8 });
+    let result: IdScoreResult = serde_json::from_value(input).unwrap();
+    assert_eq!(result.id, 12345);
+}
+
+/// Round-trip: serialize then deserialize preserves the exact u64 value.
+#[test]
+fn id_serialization_round_trip() {
+    let above_safe = (1_u64 << 53) + 1;
+    let original = IdScoreResult {
+        id: above_safe,
+        score: 0.75,
+    };
+    let serialized = serde_json::to_value(&original).unwrap();
+    assert_eq!(serialized["id"], json!("9007199254740993"));
+    let deserialized: IdScoreResult = serde_json::from_value(serialized).unwrap();
+    assert_eq!(deserialized.id, above_safe);
+}
+
+/// Request types accept string IDs (forward-compat for JS clients).
+#[test]
+fn id_deserialization_point_request_from_string() {
+    let input = json!({
+        "id": "9007199254740993",
+        "vector": [0.1, 0.2],
+        "payload": null
+    });
+    let req: PointRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.id, 9_007_199_254_740_993);
+}
+
+/// Request types still accept numeric IDs (backward compat).
+#[test]
+fn id_deserialization_point_request_from_number() {
+    let input = json!({
+        "id": 42,
+        "vector": [0.1, 0.2]
+    });
+    let req: PointRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.id, 42);
+}
+
+/// `StreamInsertRequest` accepts string IDs.
+#[test]
+fn id_deserialization_stream_insert_from_string() {
+    let input = json!({
+        "id": "18446744073709551615",
+        "vector": [1.0, 2.0, 3.0]
+    });
+    let req: StreamInsertRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.id, u64::MAX);
+}
+
+/// Invalid string ID is rejected.
+#[test]
+fn id_deserialization_invalid_string_rejected() {
+    let input = json!({ "id": "not_a_number", "score": 0.5 });
+    let result = serde_json::from_value::<IdScoreResult>(input);
+    assert!(result.is_err());
+}
+
+/// Negative number ID is rejected.
+#[test]
+fn id_deserialization_negative_rejected() {
+    let input = json!({ "id": -1, "score": 0.5 });
+    let result = serde_json::from_value::<IdScoreResult>(input);
+    assert!(result.is_err());
+}
+
+/// BUG-3 regression: `ScrollPoint::id` must serialize as a string, consistent
+/// with all other response types (`SearchResultResponse`, `IdScoreResult`).
+#[test]
+fn scroll_point_id_serialized_as_string() {
+    let above_safe = (1_u64 << 53) + 1;
+    let point = ScrollPoint {
+        id: above_safe,
+        vector: vec![0.1, 0.2],
+        payload: None,
+    };
+    let json = serde_json::to_value(&point).unwrap();
+    assert_eq!(
+        json["id"],
+        json!("9007199254740993"),
+        "ScrollPoint::id must serialize as a JSON string"
+    );
+}
+
+/// `ScrollPoint` small ID also serializes as a string.
+#[test]
+fn scroll_point_small_id_serialized_as_string() {
+    let point = ScrollPoint {
+        id: 42,
+        vector: vec![1.0],
+        payload: Some(json!({"key": "value"})),
+    };
+    let json = serde_json::to_value(&point).unwrap();
+    assert_eq!(json["id"], json!("42"));
+}
+
+// ============================================================================
+// G. ScrollResponse::next_cursor serialization as string [BUG PR #554]
+// ============================================================================
+
+/// `next_cursor` above 2^53 must serialize as a JSON string, not a number.
+#[test]
+fn scroll_response_next_cursor_serialized_as_string() {
+    let above_safe = (1_u64 << 53) + 1; // 9_007_199_254_740_993
+    let resp = ScrollResponse {
+        points: vec![],
+        next_cursor: Some(above_safe),
+    };
+    let json = serde_json::to_value(&resp).unwrap();
+    assert_eq!(
+        json["next_cursor"],
+        json!("9007199254740993"),
+        "next_cursor must serialize as a JSON string for JS precision safety"
+    );
+}
+
+/// `next_cursor: None` serializes as JSON null.
+#[test]
+fn scroll_response_next_cursor_none_serialized_as_null() {
+    let resp = ScrollResponse {
+        points: vec![],
+        next_cursor: None,
+    };
+    let json = serde_json::to_value(&resp).unwrap();
+    assert!(json["next_cursor"].is_null());
+}
+
+/// Round-trip: `ScrollResponse` with cursor = 2^53 + 1 preserves exact value.
+#[test]
+fn scroll_response_cursor_round_trip_above_max_safe_integer() {
+    let above_safe = (1_u64 << 53) + 1;
+    let original = ScrollResponse {
+        points: vec![ScrollPoint {
+            id: 1,
+            vector: vec![0.1],
+            payload: None,
+        }],
+        next_cursor: Some(above_safe),
+    };
+    let serialized = serde_json::to_value(&original).unwrap();
+    assert_eq!(serialized["next_cursor"], json!("9007199254740993"));
+
+    let deserialized: ScrollResponse = serde_json::from_value(serialized).unwrap();
+    assert_eq!(deserialized.next_cursor, Some(above_safe));
+    assert_eq!(deserialized.points.len(), 1);
+    assert_eq!(deserialized.points[0].id, 1);
+}
+
+/// `ScrollRequest::cursor` accepts a string ID from JS clients.
+#[test]
+fn scroll_request_cursor_accepts_string_id() {
+    let input = json!({
+        "cursor": "9007199254740993",
+        "batch_size": 50
+    });
+    let req: ScrollRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.cursor, Some((1_u64 << 53) + 1));
+    assert_eq!(req.batch_size, 50);
+}
+
+/// `ScrollRequest::cursor` accepts a numeric ID (backward compat).
+#[test]
+fn scroll_request_cursor_accepts_number_id() {
+    let input = json!({
+        "cursor": 42
+    });
+    let req: ScrollRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.cursor, Some(42));
+}
+
+/// `ScrollRequest::cursor` accepts null / absent (start from beginning).
+#[test]
+fn scroll_request_cursor_accepts_null() {
+    let input = json!({});
+    let req: ScrollRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.cursor, None);
 }

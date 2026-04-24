@@ -7,7 +7,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use common::{create_test_app, create_test_app_with_state};
+use common::{create_graph_collection, create_test_app, create_test_app_with_state};
 use futures::stream;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -857,7 +857,10 @@ async fn test_hybrid_search() {
     let results = json["results"].as_array().expect("Not an array");
     assert!(!results.is_empty());
     // Results should contain docs matching "rust" (ids 1 and 3)
-    let ids: Vec<i64> = results.iter().filter_map(|r| r["id"].as_i64()).collect();
+    let ids: Vec<i64> = results
+        .iter()
+        .filter_map(|r| r["id"].as_str().and_then(|s| s.parse::<i64>().ok()))
+        .collect();
     assert!(
         ids.contains(&1) || ids.contains(&3),
         "Should find rust-related docs"
@@ -1230,7 +1233,7 @@ async fn test_sq8_collection_upsert_and_search() {
     let results = json["results"].as_array().expect("Not an array");
     assert_eq!(results.len(), 3);
     // First result should be exact match
-    assert_eq!(results[0]["id"], 1);
+    assert_eq!(results[0]["id"], "1");
 }
 
 // =============================================================================
@@ -1923,6 +1926,9 @@ async fn test_graph_add_edge() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
 
+    // Graph collections must be explicitly created since F-05 (Sprint 1).
+    create_graph_collection(&app, "test").await;
+
     // Add edge
     let response = app
         .oneshot(
@@ -1952,6 +1958,7 @@ async fn test_graph_add_edge() {
 async fn test_graph_get_edges_by_label() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "test").await;
 
     // Add edges
     let response = app
@@ -2018,8 +2025,8 @@ async fn test_graph_get_edges_by_label() {
 
     assert_eq!(json["count"], 1);
     assert_eq!(json["edges"][0]["label"], "KNOWS");
-    assert_eq!(json["edges"][0]["source"], 100);
-    assert_eq!(json["edges"][0]["target"], 200);
+    assert_eq!(json["edges"][0]["source"], "100");
+    assert_eq!(json["edges"][0]["target"], "200");
 }
 
 #[tokio::test]
@@ -2045,6 +2052,7 @@ async fn test_graph_get_edges_missing_label() {
 async fn test_graph_traverse_bfs() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "graph_test").await;
 
     // Build a graph: 1 -> 2 -> 3 -> 4
     for (id, src, tgt) in [(1, 1, 2), (2, 2, 3), (3, 3, 4)] {
@@ -2112,6 +2120,7 @@ async fn test_graph_traverse_bfs() {
 async fn test_graph_traverse_dfs() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "dfs_test").await;
 
     // Build graph
     for (id, src, tgt) in [(1, 1, 2), (2, 2, 3)] {
@@ -2174,6 +2183,7 @@ async fn test_graph_traverse_dfs() {
 async fn test_graph_traverse_with_rel_type_filter() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "filter_test").await;
 
     // Build graph with mixed edge types: 1 -KNOWS-> 2 -WROTE-> 3
     let edges = [(1, 1, 2, "KNOWS"), (2, 2, 3, "WROTE")];
@@ -2233,13 +2243,14 @@ async fn test_graph_traverse_with_rel_type_filter() {
     // Should only find node 2 (KNOWS), not node 3 (WROTE)
     let results = json["results"].as_array().expect("Not an array");
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0]["target_id"], 2);
+    assert_eq!(results[0]["target_id"], "2");
 }
 
 #[tokio::test]
 async fn test_graph_traverse_invalid_strategy() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "test").await;
 
     let response = app
         .oneshot(
@@ -2267,6 +2278,7 @@ async fn test_graph_traverse_invalid_strategy() {
 async fn test_graph_node_degree() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "degree_test").await;
 
     // Build graph: 1 -> 2, 3 -> 2, 2 -> 4
     // Node 2 has in_degree=2, out_degree=1
@@ -2720,7 +2732,10 @@ async fn test_search_ids_with_filter() {
     let results = json["results"].as_array().expect("results is array");
 
     // Only IDs 1 and 3 have category="a"
-    let ids: Vec<u64> = results.iter().filter_map(|r| r["id"].as_u64()).collect();
+    let ids: Vec<u64> = results
+        .iter()
+        .filter_map(|r| r["id"].as_str().and_then(|s| s.parse::<u64>().ok()))
+        .collect();
     assert!(ids.contains(&1));
     assert!(ids.contains(&3));
     assert!(!ids.contains(&2));
@@ -2812,7 +2827,7 @@ async fn test_search_ids_with_mode() {
     assert!(!results.is_empty());
     // Verify id and score fields exist, but no payload
     for r in results {
-        assert!(r["id"].is_u64());
+        assert!(r["id"].is_string());
         assert!(r["score"].is_number());
         assert!(r.get("payload").is_none());
     }
@@ -2905,7 +2920,7 @@ async fn test_search_ids_sparse() {
 
     // Should return results as id+score only
     for r in results {
-        assert!(r["id"].is_u64());
+        assert!(r["id"].is_string());
         assert!(r["score"].is_number());
         assert!(r.get("payload").is_none());
     }
@@ -3285,4 +3300,1325 @@ async fn test_delete_point_by_id() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Multi-query search — filter forwarding (Sprint 1 / F-04 regression tests)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Helper: seed a collection named `multi_filter` with three categorised points.
+async fn seed_multi_query_filter_collection(app: &axum::Router) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "multi_filter",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build create collection request"),
+        )
+        .await
+        .expect("Create collection request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/multi_filter/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"category": "a"}},
+                            {"id": 2, "vector": [0.9, 0.1, 0.0, 0.0], "payload": {"category": "b"}},
+                            {"id": 3, "vector": [0.8, 0.2, 0.0, 0.0], "payload": {"category": "a"}}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build upsert request"),
+        )
+        .await
+        .expect("Upsert request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Nominal: `/search/multi` must apply a metadata filter and exclude rows
+/// that do not match. With three points (ids 1, 2, 3) and a filter
+/// `category = "a"`, the result set must be `{1, 3}` — id 2 belongs to
+/// category "b" and must be excluded.
+///
+/// Regression test for F-04: `MultiQuerySearchRequest.filter` was previously
+/// deserialized by the handler but never forwarded to
+/// `VectorCollection::multi_query_search`, so all rows were returned.
+#[tokio::test]
+async fn test_multi_query_search_with_filter_excludes_nonmatching_points() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_multi_query_filter_collection(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/multi_filter/search/multi")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vectors": [
+                            [1.0, 0.0, 0.0, 0.0],
+                            [0.95, 0.05, 0.0, 0.0]
+                        ],
+                        "top_k": 10,
+                        "strategy": "rrf",
+                        "rrf_k": 60,
+                        "filter": {
+                            "condition": {
+                                "type": "eq",
+                                "field": "category",
+                                "value": "a"
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build multi search request"),
+        )
+        .await
+        .expect("Multi search request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let results = json["results"].as_array().expect("results is an array");
+
+    let ids: Vec<u64> = results
+        .iter()
+        .filter_map(|r| {
+            r["id"]
+                .as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+                .or_else(|| r["id"].as_u64())
+        })
+        .collect();
+
+    assert!(
+        ids.contains(&1),
+        "expected id=1 (category=a) in filtered results, got {ids:?}"
+    );
+    assert!(
+        ids.contains(&3),
+        "expected id=3 (category=a) in filtered results, got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&2),
+        "id=2 (category=b) must be excluded by the filter, got {ids:?}"
+    );
+}
+
+/// Without a filter, `/search/multi` must return all three points (verifies
+/// that the filter fix does not break the baseline behaviour).
+#[tokio::test]
+async fn test_multi_query_search_without_filter_returns_all_points() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_multi_query_filter_collection(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/multi_filter/search/multi")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vectors": [[1.0, 0.0, 0.0, 0.0]],
+                        "top_k": 10,
+                        "strategy": "rrf",
+                        "rrf_k": 60
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build multi search request"),
+        )
+        .await
+        .expect("Multi search request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let results = json["results"].as_array().expect("results is an array");
+    assert_eq!(
+        results.len(),
+        3,
+        "without filter, all three points must be returned"
+    );
+}
+
+/// Negative: an invalid filter expression must produce a 400 response
+/// (not a 500 and not silently dropped).
+#[tokio::test]
+async fn test_multi_query_search_with_invalid_filter_returns_400() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_multi_query_filter_collection(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/multi_filter/search/multi")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vectors": [[1.0, 0.0, 0.0, 0.0]],
+                        "top_k": 10,
+                        "strategy": "rrf",
+                        "rrf_k": 60,
+                        "filter": {
+                            "condition": {
+                                "type": "nonexistent_operator",
+                                "field": "category",
+                                "value": "a"
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build multi search request"),
+        )
+        .await
+        .expect("Multi search request failed");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "invalid filter must be rejected with 400"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Graph collection resolution — no auto-create (Sprint 1 / F-05 regression)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Nominal negative: calling a graph endpoint on a collection that was
+/// never created must return 404 Not Found, not silently create a
+/// schemaless graph collection. This is the F-05 regression guard.
+#[tokio::test]
+async fn test_graph_endpoint_on_missing_collection_returns_404() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/never_created/graph/edges")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "id": 1,
+                        "source": 100,
+                        "target": 200,
+                        "label": "KNOWS"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "graph endpoints must return 404 when the collection does not exist"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let error_msg = json["error"].as_str().expect("error field must be present");
+    assert!(
+        error_msg.contains("never_created"),
+        "error message must include the collection name, got: {error_msg}"
+    );
+    assert!(
+        error_msg.contains("collection_type"),
+        "error message must guide callers to create the collection explicitly, got: {error_msg}"
+    );
+}
+
+/// GET /collections/{name}/graph/edges?label=... on a missing graph
+/// collection must return 404 (not auto-create and not 500).
+#[tokio::test]
+async fn test_graph_get_edges_on_missing_collection_returns_404() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/ghost/graph/edges?label=KNOWS")
+                .body(Body::empty())
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// POST /collections/{name}/graph/traverse on a missing graph collection
+/// must return 404 (regression: auto-create previously hid this path).
+#[tokio::test]
+async fn test_graph_traverse_on_missing_collection_returns_404() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/absent/graph/traverse")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "source": 1,
+                        "strategy": "bfs",
+                        "max_depth": 3
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// After an explicit `POST /collections` with `collection_type = "graph"`,
+/// graph endpoints must succeed as before — this is the happy path that
+/// validates the new explicit-creation contract.
+#[tokio::test]
+async fn test_graph_endpoint_works_after_explicit_creation() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "explicit").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/explicit/graph/edges")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "id": 1,
+                        "source": 100,
+                        "target": 200,
+                        "label": "KNOWS"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Per-request timeout_ms — honoured by /search (Sprint 1 / F-03)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Helper: seed a small vector collection for timeout tests.
+async fn seed_timeout_collection(app: &axum::Router, name: &str) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": name,
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create collection request"),
+        )
+        .await
+        .expect("test: create collection request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/collections/{name}/points"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+                            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+                            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0]}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build upsert request"),
+        )
+        .await
+        .expect("test: upsert request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Nominal: a search without `timeout_ms` must behave exactly as before
+/// and return 200 with the expected result set. This locks in the
+/// baseline so the F-03 wrapping does not introduce latency or break
+/// the no-timeout path.
+#[tokio::test]
+async fn test_search_without_timeout_returns_200() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_timeout_collection(&app, "timeout_ok").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/timeout_ok/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 3
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build search request"),
+        )
+        .await
+        .expect("test: search request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Nominal: a search with a generous `timeout_ms` (30 seconds) must
+/// return 200. This verifies the new wrapping code path behaves like
+/// the pass-through code path for any realistic query.
+#[tokio::test]
+async fn test_search_with_generous_timeout_returns_200() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_timeout_collection(&app, "timeout_generous").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/timeout_generous/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 3,
+                        "timeout_ms": 30000
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build search request"),
+        )
+        .await
+        .expect("test: search request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Negative: a search with `timeout_ms: 0` yields an immediate timeout.
+/// The handler must return 408 Request Timeout with a VELES-QUERY-TIMEOUT
+/// error code, not 200 with the results. The `tokio::time::timeout`
+/// wrapper fires on the very next runtime tick after the worker is
+/// spawned, so this deterministic test will always see the elapsed
+/// path regardless of how fast the underlying HNSW search is.
+#[tokio::test]
+async fn test_search_with_zero_timeout_returns_408() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_timeout_collection(&app, "timeout_zero").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/timeout_zero/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 3,
+                        "timeout_ms": 0
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build search request"),
+        )
+        .await
+        .expect("test: search request failed");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::REQUEST_TIMEOUT,
+        "F-03: timeout_ms=0 must return 408 Request Timeout"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+    assert_eq!(
+        json["code"].as_str(),
+        Some("VELES-QUERY-TIMEOUT"),
+        "error code must be VELES-QUERY-TIMEOUT, got: {}",
+        json["code"]
+    );
+    let error_msg = json["error"].as_str().expect("error field");
+    assert!(
+        error_msg.contains("timeout_zero"),
+        "error must include collection name, got: {error_msg}"
+    );
+    assert!(
+        error_msg.contains("0ms"),
+        "error must echo the budget, got: {error_msg}"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Type-mismatch branch for F-05 (retained from the previous section)
+// ────────────────────────────────────────────────────────────────────────────
+
+// ────────────────────────────────────────────────────────────────────────────
+// PROP-CONFIG-ADVANCED: CreateCollectionRequest accepts pq_rescore_oversampling,
+// deferred_indexing, async_index_builder; GET /collections/{name}/config
+// echoes them back (Sprint 1 / S1-07).
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Nominal round-trip: create a collection with pq_rescore_oversampling
+/// and async_index_builder, then GET /config and verify the values are
+/// persisted and echoed.
+#[tokio::test]
+async fn test_create_with_pq_rescore_and_async_builder_round_trip() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create with advanced config.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "advanced_cfg",
+                        "dimension": 16,
+                        "metric": "cosine",
+                        "pq_rescore_oversampling": 8,
+                        "async_index_builder": {
+                            "merge_threshold": 5000,
+                            "segment_count": 4
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Describe: GET /collections/{name}/config.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/advanced_cfg/config")
+                .body(Body::empty())
+                .expect("test: build describe request"),
+        )
+        .await
+        .expect("test: describe request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+
+    assert_eq!(json["name"], "advanced_cfg");
+    assert_eq!(json["dimension"], 16);
+    assert_eq!(
+        json["pq_rescore_oversampling"], 8,
+        "pq_rescore_oversampling must round-trip through describe, got: {}",
+        json["pq_rescore_oversampling"]
+    );
+
+    let aib = &json["async_index_builder"];
+    assert!(
+        aib.is_object(),
+        "async_index_builder must be populated in describe response, got: {aib}"
+    );
+    assert_eq!(
+        aib["merge_threshold"], 5000,
+        "async_index_builder.merge_threshold must round-trip"
+    );
+    assert_eq!(
+        aib["segment_count"], 4,
+        "async_index_builder.segment_count must round-trip"
+    );
+
+    // schema_version is always populated (non-optional in the response).
+    assert!(
+        json["schema_version"].as_u64().is_some(),
+        "schema_version must be present"
+    );
+}
+
+/// Edge: a collection created WITHOUT advanced overrides must still
+/// describe cleanly. pq_rescore_oversampling defaults to 4 (the core
+/// default); async_index_builder and deferred_indexing are absent.
+#[tokio::test]
+async fn test_create_without_advanced_config_describe_returns_defaults() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "minimal_cfg",
+                        "dimension": 8,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/minimal_cfg/config")
+                .body(Body::empty())
+                .expect("test: build describe request"),
+        )
+        .await
+        .expect("test: describe request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+
+    assert_eq!(
+        json["pq_rescore_oversampling"], 4,
+        "pq_rescore_oversampling must default to 4"
+    );
+    assert!(
+        json.get("async_index_builder").is_none() || json["async_index_builder"].is_null(),
+        "async_index_builder must be absent or null when not set"
+    );
+}
+
+/// Negative: a malformed `async_index_builder` payload must return
+/// 400 Bad Request with a message that identifies the offending field.
+#[tokio::test]
+async fn test_create_with_invalid_async_index_builder_returns_400() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "bad_aib",
+                        "dimension": 8,
+                        "metric": "cosine",
+                        "async_index_builder": {
+                            "merge_threshold": "this is not a number"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+    let error_msg = json["error"].as_str().expect("error field");
+    assert!(
+        error_msg.contains("async_index_builder"),
+        "error must name the offending field, got: {error_msg}"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// PROP-HNSW-ALPHA (Sprint 2 Wave 4 #21): CreateCollectionRequest accepts
+// hnsw_alpha and hnsw_max_elements alongside the existing hnsw_m and
+// hnsw_ef_construction; GET /collections/{name}/config echoes the full
+// HnswParams.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Nominal round-trip: create a collection with `hnsw_alpha` and
+/// `hnsw_max_elements`, then GET /config and verify the values landed in
+/// the persisted `hnsw_params` block.
+#[tokio::test]
+async fn test_create_with_hnsw_alpha_and_max_elements_round_trip() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "hnsw_tuned",
+                        "dimension": 128,
+                        "metric": "cosine",
+                        "hnsw_m": 48,
+                        "hnsw_ef_construction": 600,
+                        "hnsw_alpha": 1.5,
+                        "hnsw_max_elements": 500_000
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/hnsw_tuned/config")
+                .body(Body::empty())
+                .expect("test: build describe request"),
+        )
+        .await
+        .expect("test: describe request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+
+    let hnsw_params = &json["hnsw_params"];
+    assert!(
+        hnsw_params.is_object(),
+        "hnsw_params must be populated when any tuning field is supplied, got: {hnsw_params}"
+    );
+    assert_eq!(
+        hnsw_params["max_connections"], 48,
+        "hnsw_m must round-trip as max_connections"
+    );
+    assert_eq!(
+        hnsw_params["ef_construction"], 600,
+        "hnsw_ef_construction must round-trip"
+    );
+    assert!(
+        (hnsw_params["alpha"].as_f64().expect("alpha is f64") - 1.5).abs() < f64::EPSILON,
+        "hnsw_alpha must round-trip: {}",
+        hnsw_params["alpha"]
+    );
+    assert_eq!(
+        hnsw_params["max_elements"], 500_000,
+        "hnsw_max_elements must round-trip"
+    );
+}
+
+/// Edge: supplying only `hnsw_alpha` (no `hnsw_m`/`hnsw_ef_construction`)
+/// must still trigger the `with_params` path so the alpha value reaches
+/// disk. The other fields inherit the dimension-aware auto defaults.
+#[tokio::test]
+async fn test_create_with_only_hnsw_alpha_uses_auto_defaults_for_rest() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "alpha_only",
+                        "dimension": 128,
+                        "metric": "cosine",
+                        "hnsw_alpha": 1.8
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/alpha_only/config")
+                .body(Body::empty())
+                .expect("test: build describe request"),
+        )
+        .await
+        .expect("test: describe request failed");
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+
+    let hnsw_params = &json["hnsw_params"];
+    let alpha = hnsw_params["alpha"].as_f64().expect("alpha is f64");
+    // alpha is stored as f32 on disk and widened to f64 in the JSON
+    // response; compare with f32 epsilon (≈1.19e-7) to absorb the
+    // widening rounding (e.g. 1.8 → 1.7999999523162842).
+    assert!(
+        (alpha - 1.8).abs() < 1e-6,
+        "custom alpha must be persisted, got: {alpha}"
+    );
+    // max_connections and ef_construction inherit HnswParams::auto(128)
+    // — just assert they are non-zero engine defaults (24 for dim<=256).
+    assert!(
+        hnsw_params["max_connections"].as_u64().unwrap_or(0) > 0,
+        "max_connections must inherit auto default"
+    );
+    assert!(
+        hnsw_params["ef_construction"].as_u64().unwrap_or(0) > 0,
+        "ef_construction must inherit auto default"
+    );
+}
+
+/// Negative: a non-numeric `hnsw_alpha` must be rejected at parse time
+/// with 422 Unprocessable Entity (Axum's default `JsonRejection` status
+/// for type-mismatched request bodies).
+#[tokio::test]
+async fn test_create_with_invalid_hnsw_alpha_returns_422() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "bad_alpha",
+                        "dimension": 8,
+                        "metric": "cosine",
+                        "hnsw_alpha": "not a number"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// Regression: when Phase 2 (`apply_advanced_config`) fails after
+/// Phase 1 created the base collection, the handler must roll back
+/// the collection via `Database::delete_collection` so the client
+/// can retry without hitting `CollectionExists`.
+///
+/// The only realistic failure mode of `apply_advanced_config` is a
+/// disk I/O error in `save_config()`. Sprint 1.5 item S1.5-05
+/// introduced the `SaveConfigFaultGuard` seam in
+/// `velesdb_core::fault_injection` which lets this test force the
+/// failure without touching the real file system. The test is gated
+/// behind the `test-fault-injection` cargo feature:
+///
+/// ```sh
+/// cargo test -p velesdb-server --features test-fault-injection \
+///     test_advanced_config_failure_rolls_back_collection -- --test-threads=1
+/// ```
+///
+/// The `--test-threads=1` flag is important because the fault
+/// injection flag is process-wide (atomic, not thread-local) so
+/// parallel tests could observe each other's state.
+#[cfg(feature = "test-fault-injection")]
+#[tokio::test]
+async fn test_advanced_config_failure_rolls_back_collection() {
+    use std::sync::atomic::Ordering;
+    use velesdb_core::fault_injection::{SaveConfigFaultGuard, SAVE_CONFIG_CALL_COUNT};
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Step 1: probe how many `save_config()` calls a normal Phase 1
+    // (create_vector_collection) makes so we can configure the
+    // fault to fire exactly on the first Phase 2 call. We do this
+    // on a throw-away collection so the counter state is realistic.
+    SAVE_CONFIG_CALL_COUNT.store(0, Ordering::SeqCst);
+    let probe_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "rollback_probe",
+                        "dimension": 16,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build probe request"),
+        )
+        .await
+        .expect("test: probe request failed");
+    assert_eq!(probe_response.status(), StatusCode::CREATED);
+    let phase1_save_calls = SAVE_CONFIG_CALL_COUNT.load(Ordering::SeqCst);
+
+    // Delete the probe so the retry assertion below starts from a
+    // clean state without relying on collection name uniqueness.
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/collections/rollback_probe")
+                .body(Body::empty())
+                .expect("test: build delete request"),
+        )
+        .await;
+
+    // Step 2: GIVEN Phase 2 `save_config()` is scheduled to fail on
+    // the call immediately after Phase 1 completes (phase1_save_calls
+    // is the zero-based index of the first Phase 2 call).
+    {
+        let _guard = SaveConfigFaultGuard::activate(phase1_save_calls);
+
+        // WHEN: POST with advanced config → Phase 1 completes
+        // normally (probe calls reproduced), then Phase 2's
+        // apply_advanced_config hits the injected save_config error.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/collections")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "name": "rollback_cfg",
+                            "dimension": 16,
+                            "metric": "cosine",
+                            "pq_rescore_oversampling": 8
+                        })
+                        .to_string(),
+                    ))
+                    .expect("test: build create request"),
+            )
+            .await
+            .expect("test: create request failed");
+
+        // THEN: the handler surfaces a 400/500 depending on how the
+        // core::Error::Io variant maps through core_error_response.
+        // What matters is the downstream invariant verified below:
+        // the collection must be absent from the registry so retry
+        // succeeds.
+        assert!(
+            response.status() == StatusCode::BAD_REQUEST
+                || response.status() == StatusCode::INTERNAL_SERVER_ERROR,
+            "expected 400 or 500 after Phase 2 fault injection, got {}",
+            response.status()
+        );
+    }
+    // Guard dropped here — save_config() returns to normal operation.
+
+    // Invariant 1: the collection must be absent from the list.
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/collections")
+                .body(Body::empty())
+                .expect("test: build list request"),
+        )
+        .await
+        .expect("test: list request failed");
+    let list_body = axum::body::to_bytes(list_response.into_body(), usize::MAX)
+        .await
+        .expect("test: read list body");
+    let list_json: Value = serde_json::from_slice(&list_body).expect("test: parse list json");
+    let collections_array = list_json["collections"]
+        .as_array()
+        .expect("collections must be an array");
+    assert!(
+        !collections_array
+            .iter()
+            .any(|v| v.get("name").and_then(Value::as_str) == Some("rollback_cfg")),
+        "rollback_cfg must be absent after Phase 2 failure rollback, got: {collections_array:?}"
+    );
+
+    // Invariant 2: retrying the same POST without fault injection
+    // must succeed — no CollectionExists error from orphaned state.
+    let retry_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "rollback_cfg",
+                        "dimension": 16,
+                        "metric": "cosine",
+                        "pq_rescore_oversampling": 8
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build retry request"),
+        )
+        .await
+        .expect("test: retry request failed");
+    assert_eq!(
+        retry_response.status(),
+        StatusCode::CREATED,
+        "retry after rollback must succeed"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// PROP-GRAPHSCHEMA-SERVER: CreateCollectionRequest accepts a typed
+// graph_schema payload instead of hard-coding GraphSchema::schemaless()
+// (Sprint 1 / S1-08).
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Nominal: creating a graph collection with a typed `graph_schema`
+/// payload must succeed with 201 and the schema must persist through
+/// GET /config. The shape matches `velesdb_core::GraphSchema`: a
+/// `schemaless` boolean plus `node_types` / `edge_types` arrays.
+#[tokio::test]
+async fn test_create_graph_collection_with_typed_schema() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "typed_graph",
+                        "collection_type": "graph",
+                        "graph_schema": {
+                            "schemaless": false,
+                            "node_types": [],
+                            "edge_types": []
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "typed graph schema must be accepted"
+    );
+}
+
+/// Edge: a graph collection created without a `graph_schema` field must
+/// continue to work and fall back to `GraphSchema::schemaless()`. This
+/// locks in the backward-compatibility promise.
+#[tokio::test]
+async fn test_create_graph_collection_without_schema_uses_schemaless() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "implicit_schemaless",
+                        "collection_type": "graph"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+/// Negative: a malformed `graph_schema` payload must return 400 Bad
+/// Request with a message that identifies the offending field.
+#[tokio::test]
+async fn test_create_graph_collection_with_invalid_schema_returns_400() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "bad_schema",
+                        "collection_type": "graph",
+                        "graph_schema": "not an object"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+    let error_msg = json["error"].as_str().expect("error field");
+    assert!(
+        error_msg.contains("graph_schema"),
+        "error must name the offending field, got: {error_msg}"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// F-21: POST /collections/{name}/index/rebuild — HNSW vacuum endpoint
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Nominal: `POST /collections/{name}/index/rebuild` on a populated
+/// vector collection must return 200 with `compacted_entries` in the
+/// body. For a collection that has not had any deletions, the compacted
+/// count is expected to be 0 — the important contract is that the
+/// endpoint succeeds and surfaces the count honestly.
+#[tokio::test]
+async fn test_rebuild_index_on_populated_collection_returns_200() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Seed a small collection with three points.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "rebuild_ok",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build create request"),
+        )
+        .await
+        .expect("test: create request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rebuild_ok/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+                            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+                            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0]}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("test: build upsert request"),
+        )
+        .await
+        .expect("test: upsert request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Rebuild the index.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rebuild_ok/index/rebuild")
+                .body(Body::empty())
+                .expect("test: build rebuild request"),
+        )
+        .await
+        .expect("test: rebuild request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    let json: Value = serde_json::from_slice(&body).expect("test: parse json");
+
+    assert_eq!(json["message"], "Index rebuilt");
+    assert_eq!(json["collection"], "rebuild_ok");
+    assert!(
+        json["compacted_entries"].as_u64().is_some(),
+        "compacted_entries must be a number, got: {}",
+        json["compacted_entries"]
+    );
+}
+
+/// Negative: `POST /collections/{name}/index/rebuild` on a missing
+/// collection must return 404.
+#[tokio::test]
+async fn test_rebuild_index_on_missing_collection_returns_404() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/never_created/index/rebuild")
+                .body(Body::empty())
+                .expect("test: build rebuild request"),
+        )
+        .await
+        .expect("test: rebuild request failed");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// Type-mismatch: a vector collection already exists with the target
+/// name, but the caller targets a graph endpoint. The handler must
+/// return 409 Conflict (already the case before F-05, but we lock it
+/// in with an explicit test so the fix cannot regress the branch).
+#[tokio::test]
+async fn test_graph_endpoint_on_vector_collection_returns_409() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create a vector collection (not a graph collection).
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "type_mismatch",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build create collection request"),
+        )
+        .await
+        .expect("Create collection request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Now POST to its graph/edges endpoint → must be 409, not 404 or 500.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/type_mismatch/graph/edges")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "id": 1,
+                        "source": 1,
+                        "target": 2,
+                        "label": "X"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build graph edge request"),
+        )
+        .await
+        .expect("Graph edge request failed");
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }

@@ -1,10 +1,10 @@
 #![cfg(all(test, feature = "persistence"))]
 
 use crate::collection::types::CollectionConfig;
+use crate::collection::Collection;
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::HnswParams;
 use crate::quantization::StorageMode;
-use crate::Collection;
 use std::path::PathBuf;
 
 /// Verifies that custom HNSW params survive config round-trip serialization.
@@ -370,4 +370,211 @@ fn test_flush_with_inactive_delta_buffer_is_noop() {
     // Verify the collection is still functional
     let results = collection.search(&[1.0, 0.0, 0.0, 0.0], 1).expect("search");
     assert_eq!(results.len(), 1, "search should still work after flush");
+}
+
+// ── WP-0C: EdgeStore gap recovery when edge_store.bin missing ───────
+
+/// Regression test (WP-0C): `Collection::open()` must recover gracefully when
+/// `edge_store.bin` does not exist on disk.
+///
+/// Collections created before the BUG-1 persistence fix never had an
+/// `edge_store.bin` file. When such a collection is reopened, the
+/// `load_or_default` pattern in `load_edge_store()` must fall back to an
+/// empty `ConcurrentEdgeStore`, and graph operations must work immediately.
+#[test]
+fn test_open_without_edge_store_bin_recovers_gracefully() {
+    use crate::collection::graph::{GraphEdge, GraphSchema};
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let col_path = temp_dir.path().join("graph_col");
+
+    // 1. Create a graph collection, flush to persist config.json, then drop.
+    {
+        let schema = GraphSchema::new();
+        let collection = Collection::create_graph_collection(
+            col_path.clone(),
+            "graph_col",
+            schema,
+            None,
+            DistanceMetric::Cosine,
+        )
+        .expect("graph collection should be created");
+
+        let edge = GraphEdge::new(1, 100, 200, "KNOWS").expect("valid edge");
+        collection.add_edge(edge).expect("add edge should succeed");
+
+        collection.flush().expect("flush should succeed");
+    }
+
+    // 2. Verify edge_store.bin was created by flush, then delete it to
+    //    simulate a pre-fix collection directory.
+    let edge_store_path = col_path.join("edge_store.bin");
+    assert!(
+        edge_store_path.exists(),
+        "edge_store.bin should exist after flush"
+    );
+    std::fs::remove_file(&edge_store_path).expect("remove edge_store.bin");
+    assert!(
+        !edge_store_path.exists(),
+        "edge_store.bin should be deleted"
+    );
+
+    // 3. Reopen the collection — must NOT fail despite missing edge_store.bin.
+    let reopened = Collection::open(col_path).expect("open should succeed without edge_store.bin");
+
+    // 4. The recovered edge store should be empty (edges from before are lost,
+    //    which is expected for pre-fix collections).
+    assert_eq!(
+        reopened.edge_count(),
+        0,
+        "edge store should be empty after recovery without edge_store.bin"
+    );
+
+    // 5. Graph operations must work on the recovered collection.
+    let edge_a = GraphEdge::new(10, 1, 2, "LIKES").expect("valid edge");
+    reopened
+        .add_edge(edge_a)
+        .expect("add edge should succeed after recovery");
+    assert_eq!(reopened.edge_count(), 1, "edge count after add");
+
+    let outgoing = reopened.get_outgoing_edges(1);
+    assert_eq!(outgoing.len(), 1, "should have one outgoing edge");
+    assert_eq!(outgoing[0].target(), 2, "target should be 2");
+    assert_eq!(outgoing[0].label(), "LIKES", "label should be LIKES");
+
+    // 6. Verify flush works on the recovered collection.
+    reopened
+        .flush()
+        .expect("flush should succeed after recovery");
+    assert!(
+        edge_store_path.exists(),
+        "edge_store.bin should be re-created after flush"
+    );
+}
+
+// ── WP-2I: Schema version tests ────────────────────────────────────
+
+/// New collections must have `schema_version == CURRENT_SCHEMA_VERSION`.
+#[test]
+fn test_schema_version_set_on_new_collection() {
+    use crate::collection::types::CURRENT_SCHEMA_VERSION;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection should be created");
+
+    let cfg = collection.config();
+    assert_eq!(
+        cfg.schema_version, CURRENT_SCHEMA_VERSION,
+        "new collection must carry the current schema version"
+    );
+}
+
+/// `schema_version` must survive a config.json round-trip.
+#[test]
+fn test_schema_version_persisted_in_config_json() {
+    use crate::collection::types::CURRENT_SCHEMA_VERSION;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let _collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection should be created");
+
+    let raw = std::fs::read_to_string(temp_dir.path().join("config.json"))
+        .expect("config.json should exist");
+    let deserialized: CollectionConfig =
+        serde_json::from_str(&raw).expect("config.json should deserialize");
+    assert_eq!(deserialized.schema_version, CURRENT_SCHEMA_VERSION);
+}
+
+/// Old config.json files without `schema_version` must deserialize to 1.
+#[test]
+fn test_schema_version_defaults_to_1_for_legacy_config() {
+    let json = r#"{
+        "name": "legacy_no_version",
+        "dimension": 128,
+        "metric": "Cosine",
+        "point_count": 0,
+        "storage_mode": "full",
+        "metadata_only": false
+    }"#;
+
+    let cfg: CollectionConfig =
+        serde_json::from_str(json).expect("legacy config should deserialize");
+    assert_eq!(
+        cfg.schema_version, 1,
+        "missing schema_version must default to 1"
+    );
+}
+
+/// Opening a collection with a future schema version must return VELES-036.
+#[test]
+fn test_open_rejects_future_schema_version() {
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+
+    // 1. Create a valid collection so that storage files exist
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection should be created");
+    collection.flush().expect("flush should succeed");
+    drop(collection);
+
+    // 2. Tamper with config.json: set schema_version to 999
+    let config_path = temp_dir.path().join("config.json");
+    let raw = std::fs::read_to_string(&config_path).expect("read config");
+    let mut cfg: serde_json::Value = serde_json::from_str(&raw).expect("parse config");
+    cfg["schema_version"] = serde_json::Value::from(999);
+    std::fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&cfg).expect("serialize"),
+    )
+    .expect("write tampered config");
+
+    // 3. Attempt to open — must fail with VELES-036
+    let result = Collection::open(PathBuf::from(temp_dir.path()));
+    let err = expect_err(result);
+    assert_eq!(err.code(), "VELES-036");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("999"),
+        "error must mention the found version: {msg}"
+    );
+}
+
+/// `schema_version == 0` must be treated as v1 (silent migration).
+#[test]
+fn test_schema_version_zero_treated_as_v1() {
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+
+    // Create a valid collection
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection should be created");
+    collection.flush().expect("flush should succeed");
+    drop(collection);
+
+    // Set schema_version to 0 in config.json
+    let config_path = temp_dir.path().join("config.json");
+    let raw = std::fs::read_to_string(&config_path).expect("read config");
+    let mut cfg: serde_json::Value = serde_json::from_str(&raw).expect("parse config");
+    cfg["schema_version"] = serde_json::Value::from(0);
+    std::fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&cfg).expect("serialize"),
+    )
+    .expect("write config with version 0");
+
+    // Opening must succeed (0 is treated as v1)
+    let _reopened = Collection::open(PathBuf::from(temp_dir.path()))
+        .expect("collection with schema_version=0 should open");
+}
+
+/// `IncompatibleSchemaVersion` is not recoverable.
+#[test]
+fn test_incompatible_schema_version_is_not_recoverable() {
+    let err = crate::Error::IncompatibleSchemaVersion {
+        found: 99,
+        supported: 1,
+    };
+    assert!(
+        !err.is_recoverable(),
+        "IncompatibleSchemaVersion must not be recoverable"
+    );
 }

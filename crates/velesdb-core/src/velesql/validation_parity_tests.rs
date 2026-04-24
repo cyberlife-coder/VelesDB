@@ -3,7 +3,6 @@
 //! These tests ensure that the public QueryValidator and internal Collection
 //! validation methods produce consistent results.
 #![cfg(all(test, feature = "persistence"))]
-#![allow(deprecated)] // Tests use legacy Collection.
 
 mod tests {
     use crate::velesql::ast::{

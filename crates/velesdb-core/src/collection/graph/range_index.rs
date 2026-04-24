@@ -2,7 +2,7 @@
 //!
 //! Provides O(log n) range queries (>, <, >=, <=, BETWEEN) instead of O(n) scans.
 
-// SAFETY: Numeric casts in range index are intentional:
+// Reason: Numeric casts in range index are intentional:
 // - i64->f64 for mixed-type comparisons: precision loss acceptable for ordering
 // - Values represent property values, exact precision not required for comparisons
 #![allow(clippy::cast_precision_loss)]
@@ -17,7 +17,7 @@ use std::ops::Bound;
 ///
 /// JSON values are converted to this for ordered comparison.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OrderedValue {
+pub(crate) enum OrderedValue {
     /// Null value (sorts first)
     Null,
     /// Integer value

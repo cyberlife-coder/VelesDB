@@ -14,7 +14,6 @@
 //! ```
 
 #[cfg(test)]
-#[allow(deprecated)] // Collection is deprecated but used in legacy tests.
 pub(crate) mod fixtures {
     use crate::collection::Collection;
     use crate::distance::DistanceMetric;

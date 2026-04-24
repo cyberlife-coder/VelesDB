@@ -12,6 +12,7 @@ use crate::error::{Error, Result};
 /// Value types supported for node and edge properties.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ValueType {
     /// String value.
     String,

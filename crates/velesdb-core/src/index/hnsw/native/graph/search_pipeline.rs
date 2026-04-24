@@ -50,14 +50,24 @@ pub(in crate::index::hnsw::native::graph) fn search_layer_pipelined<D: DistanceE
     ef: usize,
     layer: usize,
     stagnation_limit: usize,
+    use_prefetch: bool,
 ) {
     while let Some(Reverse((OrderedFloat(c_dist), c_node))) = state.candidates.pop() {
         if state.should_terminate(c_dist, ef, stagnation_limit) {
             break;
         }
 
-        let improved =
-            gather_prefetch_compute(distance, query, vectors, layers, state, ef, layer, c_node);
+        let improved = gather_prefetch_compute(
+            distance,
+            query,
+            vectors,
+            layers,
+            state,
+            ef,
+            layer,
+            c_node,
+            use_prefetch,
+        );
 
         state.update_stagnation(improved);
     }
@@ -79,10 +89,11 @@ fn gather_prefetch_compute<D: DistanceEngine>(
     ef: usize,
     layer: usize,
     c_node: NodeId,
+    use_prefetch: bool,
 ) -> bool {
     let batch = layers[layer]
         .with_neighbors(c_node, |neighbors| {
-            gather_unvisited_neighbors(neighbors, &mut state.visited, vectors, true)
+            gather_unvisited_neighbors(neighbors, &mut state.visited, vectors, use_prefetch)
         })
         .unwrap_or_default();
 
@@ -92,7 +103,9 @@ fn gather_prefetch_compute<D: DistanceEngine>(
 
     // Speculative prefetch: peek at the next candidate and prefetch
     // its neighbor vectors while we compute distances for `batch`.
-    prefetch_next_candidate(state, layers, layer, vectors);
+    if use_prefetch {
+        prefetch_next_candidate(state, layers, layer, vectors);
+    }
 
     compute_and_process(distance, query, &batch, ef, state)
 }

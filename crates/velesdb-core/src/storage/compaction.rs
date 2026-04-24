@@ -102,7 +102,7 @@ fn punch_hole_linux(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     // SAFETY: `libc::fallocate` requires a valid fd and offsets.
     // - Condition 1: `fd` comes from `file.as_raw_fd()` on an open file handle.
     // - Condition 2: `offset`/`len` are caller-provided ranges for the same file.
-    // Reason: Hole punching is only exposed through this syscall on Linux.
+    // SAFETY: Hole punching is only exposed through this syscall on Linux.
     let ret = unsafe { libc::fallocate(fd, mode, offset_off_t, len_off_t) };
 
     if ret == 0 {
@@ -134,7 +134,7 @@ fn punch_hole_windows(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     }
 
     let handle = file.as_raw_handle() as HANDLE;
-    // SAFETY: Win32 API requires i64 for file offsets. offset and len are typically < i64::MAX
+    // Reason: Win32 API requires i64 for file offsets. offset and len are typically < i64::MAX
     // on any realistic file system. Saturate to prevent undefined behavior on edge cases.
     #[allow(clippy::cast_possible_wrap)]
     let info = FileZeroDataInformation {
@@ -147,7 +147,7 @@ fn punch_hole_windows(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     // SAFETY: `DeviceIoControl` requires valid handle/argument pointers.
     // - Condition 1: `handle` comes from `file.as_raw_handle()` for an open file.
     // - Condition 2: `info` and `bytes_returned` pointers are valid for the call duration.
-    // Reason: Windows sparse-zero operation is only reachable via this API.
+    // SAFETY: Windows sparse-zero operation is only reachable via this API.
     let result = unsafe {
         DeviceIoControl(
             handle,
@@ -359,7 +359,7 @@ impl CompactionContext<'_> {
         // SAFETY: `MmapMut::map_mut` requires a writable file sized for mapping.
         // - Condition 1: `temp_file` was opened read/write and resized via `set_len`.
         // - Condition 2: Mapping length is derived from the file's current size.
-        // Reason: Compaction copies active bytes through a mutable mmap.
+        // SAFETY: Compaction copies active bytes through a mutable mmap.
         let mut temp_mmap = unsafe { MmapMut::map_mut(&temp_file)? };
 
         // 3. Copy active vectors to new file with new offsets
@@ -393,7 +393,7 @@ impl CompactionContext<'_> {
         // SAFETY: `MmapMut::map_mut` requires a writable file sized for mapping.
         // - Condition 1: `new_data_file` is opened read/write after atomic replace.
         // - Condition 2: File contents are fully materialized by the preceding flush/rename flow.
-        // Reason: Reloading mmap is required to switch storage to compacted bytes.
+        // SAFETY: Reloading mmap is required to switch storage to compacted bytes.
         let new_mmap = unsafe { MmapMut::map_mut(&new_data_file)? };
 
         // 7. Write compaction marker to WAL

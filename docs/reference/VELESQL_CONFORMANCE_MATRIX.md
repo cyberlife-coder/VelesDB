@@ -4,7 +4,7 @@ This document lists every VelesQL feature with its parser and executor status.
 A feature can be **Parsed** (the grammar + AST accept it) without being
 **Executed** (the query engine acts on it at runtime).
 
-> Last updated: 2026-03-31 (v3.6.0)
+> Last updated: 2026-04-23 (v3.9.0 / VelesDB v1.13.0)
 
 ## Fully Supported (Parsed AND Executed)
 
@@ -50,6 +50,7 @@ A feature can be **Parsed** (the grammar + AST accept it) without being
 | `DROP COLLECTION` | `grammar.pest:drop_collection`, `ast/ddl.rs:DropCollectionStatement` | `database/query_engine.rs` | DDL v3.3; with IF EXISTS support |
 | `INSERT EDGE` | `grammar.pest:insert_edge`, `ast/dml.rs:InsertEdgeStatement` | `database/query_engine.rs` | Graph mutation v3.3 |
 | `DELETE EDGE` | `grammar.pest:delete_edge`, `ast/dml.rs:DeleteEdgeStatement` | `database/query_engine.rs` | Graph mutation v3.3 |
+| Window functions (`ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`) with `OVER ([PARTITION BY ...] [ORDER BY ...])` | `grammar.pest:window_item`, `grammar.pest:over_clause` | `velesql/window_evaluator.rs` | VelesDB v1.13.0 (PR #629); evaluated after DISTINCT, before ORDER BY/LIMIT |
 
 ## Parsed but NOT Executed
 
@@ -68,7 +69,6 @@ parse errors.
 
 | Feature | Notes |
 |---------|-------|
-| Window functions (`OVER`, `PARTITION BY`, `ROW_NUMBER()`) | Not in grammar or AST |
 | CTEs (`WITH name AS (SELECT ...)`) | VelesQL `WITH` is for query hints, not CTEs |
 | Subqueries in `FROM` clause | Only collection names allowed in `FROM` |
 | `CASE WHEN ... THEN ... END` | Not in grammar |

@@ -195,3 +195,101 @@ fn test_value_unsigned_integer_serialization_roundtrip() {
     let parsed: Value = serde_json::from_str(&json_str).expect("test: deserialize");
     assert_eq!(v, parsed);
 }
+
+// ---------------------------------------------------------------------------
+// `SelectColumns::to_display_names` — every SELECT-list variant must
+// contribute a display name. The Python/WASM bindings consume this list as
+// the column-metadata contract, so omitting a variant silently drops columns
+// from their returned schema. These tests pin the full contract.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_display_names_all_wildcard() {
+    let sc = SelectColumns::All;
+    assert_eq!(sc.to_display_names(), vec!["*".to_string()]);
+}
+
+#[test]
+fn test_display_names_columns_only() {
+    let sc = SelectColumns::Columns(vec![Column::new("title"), Column::new("score")]);
+    assert_eq!(
+        sc.to_display_names(),
+        vec!["title".to_string(), "score".to_string()]
+    );
+}
+
+#[test]
+fn test_display_names_similarity_score_with_alias() {
+    let sc = SelectColumns::SimilarityScore(SimilarityScoreExpr {
+        alias: Some("relevance".to_string()),
+    });
+    assert_eq!(sc.to_display_names(), vec!["relevance".to_string()]);
+}
+
+#[test]
+fn test_display_names_similarity_score_no_alias() {
+    let sc = SelectColumns::SimilarityScore(SimilarityScoreExpr { alias: None });
+    assert_eq!(sc.to_display_names(), vec!["similarity".to_string()]);
+}
+
+#[test]
+fn test_display_names_qualified_wildcard() {
+    let sc = SelectColumns::QualifiedWildcard("ctx".to_string());
+    assert_eq!(sc.to_display_names(), vec!["ctx.*".to_string()]);
+}
+
+/// Zero-tech-debt regression: the `Mixed` variant used to silently drop
+/// `similarity_scores` and `qualified_wildcards` from its display names,
+/// so bindings showed incomplete column lists for queries that combined
+/// those features with regular columns.
+#[test]
+fn test_display_names_mixed_includes_all_variants() {
+    let sc = SelectColumns::Mixed {
+        columns: vec![Column::new("title"), Column::new("author")],
+        aggregations: Vec::new(),
+        similarity_scores: vec![SimilarityScoreExpr {
+            alias: Some("score".to_string()),
+        }],
+        qualified_wildcards: vec!["ctx".to_string()],
+        window_functions: vec![WindowFunction {
+            function_type: WindowFunctionType::RowNumber,
+            over_clause: OverClause {
+                partition_by: Vec::new(),
+                order_by: Vec::new(),
+            },
+            alias: Some("rn".to_string()),
+        }],
+    };
+
+    // Expected order (mirrors the SELECT-list grammar):
+    //   columns → aggregations → similarity_scores → qualified_wildcards → windows
+    assert_eq!(
+        sc.to_display_names(),
+        vec![
+            "title".to_string(),
+            "author".to_string(),
+            "score".to_string(),
+            "ctx.*".to_string(),
+            "rn".to_string(),
+        ]
+    );
+}
+
+/// Edge case: Mixed with only a similarity score and a qualified wildcard
+/// (no regular columns). Pre-fix, this would return an empty `Vec`,
+/// completely hiding the SELECT list from bindings.
+#[test]
+fn test_display_names_mixed_without_columns_still_exposes_score_and_wildcard() {
+    let sc = SelectColumns::Mixed {
+        columns: Vec::new(),
+        aggregations: Vec::new(),
+        similarity_scores: vec![SimilarityScoreExpr { alias: None }],
+        qualified_wildcards: vec!["docs".to_string()],
+        window_functions: Vec::new(),
+    };
+
+    assert_eq!(
+        sc.to_display_names(),
+        vec!["similarity".to_string(), "docs.*".to_string()]
+    );
+}

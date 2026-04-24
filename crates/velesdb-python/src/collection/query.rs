@@ -1,8 +1,8 @@
-//! VelesQL query, match, and explain methods for Collection.
+//! VelesQL query, match, explain, and explain-analyze methods for Collection.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyString};
+use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 
 use crate::collection_helpers::{core_err, id_score_pairs_to_dicts};
@@ -75,6 +75,115 @@ pub(crate) fn build_explain_dict(
         PyString::intern(py, "index_used"),
         plan.index_used.map(|i| i.as_str().to_string()),
     );
+    dict.into_any().unbind()
+}
+
+/// Builds an EXPLAIN ANALYZE dict from an `ExplainOutput`.
+///
+/// Returns a Python dict with keys: `plan`, `actual_stats`, `node_stats`.
+/// The `plan` sub-dict mirrors `build_explain_dict` output.
+/// `actual_stats` is a dict with measured execution metrics (or `None`).
+/// `node_stats` is a list of per-node **estimated** statistic dicts
+/// (heuristic values derived from `actual_stats`, not individually measured).
+pub(crate) fn build_explain_analyze_dict(
+    py: Python<'_>,
+    output: &velesdb_core::velesql::ExplainOutput,
+) -> PyObject {
+    let dict = PyDict::new(py);
+
+    // Plan sub-dict (same keys as build_explain_dict)
+    let plan = &output.plan;
+    let plan_dict = PyDict::new(py);
+    let _ = plan_dict.set_item(
+        PyString::intern(py, "tree"),
+        to_pyobject(py, plan.to_tree()),
+    );
+    let _ = plan_dict.set_item(
+        PyString::intern(py, "estimated_cost_ms"),
+        plan.estimated_cost_ms,
+    );
+    let _ = plan_dict.set_item(
+        PyString::intern(py, "filter_strategy"),
+        plan.filter_strategy.as_str(),
+    );
+    let _ = plan_dict.set_item(
+        PyString::intern(py, "index_used"),
+        plan.index_used.map(|i| i.as_str().to_string()),
+    );
+    let _ = dict.set_item(PyString::intern(py, "plan"), plan_dict);
+
+    // actual_stats sub-dict (or None)
+    if let Some(stats) = &output.actual_stats {
+        let stats_dict = PyDict::new(py);
+        let _ = stats_dict.set_item(PyString::intern(py, "actual_rows"), stats.actual_rows);
+        let _ = stats_dict.set_item(PyString::intern(py, "actual_time_ms"), stats.actual_time_ms);
+        let _ = stats_dict.set_item(PyString::intern(py, "loops"), stats.loops);
+        let _ = stats_dict.set_item(PyString::intern(py, "nodes_visited"), stats.nodes_visited);
+        let _ = stats_dict.set_item(
+            PyString::intern(py, "edges_traversed"),
+            stats.edges_traversed,
+        );
+        let _ = dict.set_item(PyString::intern(py, "actual_stats"), stats_dict);
+    } else {
+        let _ = dict.set_item(PyString::intern(py, "actual_stats"), py.None());
+    }
+
+    // node_stats list
+    let node_dicts: Vec<PyObject> = output
+        .node_stats
+        .iter()
+        .map(|ns| {
+            let d = PyDict::new(py);
+            let _ = d.set_item(PyString::intern(py, "node_label"), &ns.node_label);
+            let _ = d.set_item(PyString::intern(py, "actual_time_ms"), ns.actual_time_ms);
+            let _ = d.set_item(PyString::intern(py, "actual_rows_in"), ns.actual_rows_in);
+            let _ = d.set_item(PyString::intern(py, "actual_rows_out"), ns.actual_rows_out);
+            let _ = d.set_item(PyString::intern(py, "loops"), ns.loops);
+            let _ = d.set_item(PyString::intern(py, "estimated"), ns.estimated);
+            d.into_any().unbind()
+        })
+        .collect();
+    let _ = dict.set_item(
+        PyString::intern(py, "node_stats"),
+        PyList::new(py, &node_dicts).unwrap_or_else(|_| PyList::empty(py)),
+    );
+
+    // cost_factors (dict or None)
+    if let Some(ref factors) = output.cost_factors {
+        let cf = PyDict::new(py);
+        let _ = cf.set_item(PyString::intern(py, "seq_page_cost"), factors.seq_page_cost);
+        let _ = cf.set_item(
+            PyString::intern(py, "random_page_cost"),
+            factors.random_page_cost,
+        );
+        let _ = cf.set_item(
+            PyString::intern(py, "cpu_tuple_cost"),
+            factors.cpu_tuple_cost,
+        );
+        let _ = cf.set_item(
+            PyString::intern(py, "cpu_index_cost"),
+            factors.cpu_index_cost,
+        );
+        let _ = cf.set_item(
+            PyString::intern(py, "cpu_distance_cost"),
+            factors.cpu_distance_cost,
+        );
+        let _ = cf.set_item(PyString::intern(py, "cpu_edge_cost"), factors.cpu_edge_cost);
+        let _ = dict.set_item(PyString::intern(py, "cost_factors"), cf);
+    } else {
+        let _ = dict.set_item(PyString::intern(py, "cost_factors"), py.None());
+    }
+
+    // calibration_source (str or None)
+    let _ = dict.set_item(
+        PyString::intern(py, "calibration_source"),
+        output
+            .calibration_source
+            .as_deref()
+            .map(|s| PyString::intern(py, s).into_any().unbind())
+            .unwrap_or_else(|| py.None()),
+    );
+
     dict.into_any().unbind()
 }
 
@@ -239,6 +348,35 @@ impl Collection {
     fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<PyObject> {
         let parsed = parse_velesql(query_str)?;
         Ok(build_explain_dict(py, &parsed))
+    }
+
+    /// Execute a query with instrumentation and return plan + actual stats (EXPLAIN ANALYZE).
+    ///
+    /// Unlike `explain()` (plan only), this method executes the query and
+    /// measures actual execution statistics.
+    ///
+    /// Args:
+    ///     query_str: VelesQL query string
+    ///     params: Optional query parameters (vectors as lists/numpy arrays, scalars)
+    ///
+    /// Returns:
+    ///     Dict with keys: plan, actual_stats, node_stats
+    #[pyo3(signature = (query_str, params=None))]
+    fn explain_analyze(
+        &self,
+        py: Python<'_>,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+    ) -> PyResult<PyObject> {
+        let parsed = parse_velesql(query_str)?;
+        let rust_params = convert_params(py, params)?;
+        let inner = &self.inner;
+        let output = py.allow_threads(move || {
+            inner
+                .explain_analyze_query(&parsed, &rust_params)
+                .map_err(core_err)
+        })?;
+        Ok(build_explain_analyze_dict(py, &output))
     }
 
     /// Execute a VelesQL query returning only IDs and scores (no payload).

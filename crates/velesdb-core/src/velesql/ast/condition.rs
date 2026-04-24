@@ -12,6 +12,7 @@ use crate::velesql::GraphPattern;
 
 /// A condition in a WHERE clause.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Condition {
     /// Vector similarity search: `vector NEAR [metric] $param`
     VectorSearch(VectorSearch),
@@ -35,6 +36,14 @@ pub enum Condition {
     Match(MatchCondition),
     /// Graph match predicate inside WHERE: `MATCH (a)-[:REL]->(b)`
     GraphMatch(GraphMatchPredicate),
+    /// Array containment: `column CONTAINS value` / `CONTAINS ANY` / `CONTAINS ALL`
+    Contains(ContainsCondition),
+    /// Strict text substring filter: `column CONTAINS_TEXT 'query'`
+    ContainsText(ContainsTextCondition),
+    /// Geospatial distance: `GEO_DISTANCE(column, lat, lng) op threshold`
+    GeoDistance(GeoDistanceCondition),
+    /// Geospatial bounding box: `GEO_BBOX(column, lat_min, lng_min, lat_max, lng_max)`
+    GeoBbox(GeoBboxCondition),
     /// Logical AND
     And(Box<Condition>, Box<Condition>),
     /// Logical OR
@@ -79,6 +88,7 @@ pub struct SparseVectorSearch {
 
 /// Expression representing a sparse vector value in a query.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SparseVectorExpr {
     /// Inline sparse literal: `{12: 0.8, 45: 0.3}`
     Literal(SparseVector),
@@ -112,6 +122,7 @@ pub struct Comparison {
 
 /// Comparison operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum CompareOp {
     /// Equal (=)
     Eq,
@@ -180,6 +191,71 @@ pub struct MatchCondition {
     pub query: String,
 }
 
+/// Strict text substring filter: `column CONTAINS_TEXT 'query'`
+///
+/// Unlike [`MatchCondition`] (RRF-boosted text search), this performs
+/// exact case-sensitive substring matching as a metadata filter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContainsTextCondition {
+    /// Column name to search within.
+    pub column: String,
+    /// Substring to search for.
+    pub query: String,
+}
+
+/// Containment mode for array CONTAINS operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ContainsMode {
+    /// Single value: `column CONTAINS value`
+    Single,
+    /// At least one: `column CONTAINS ANY (v1, v2, ...)`
+    Any,
+    /// All values: `column CONTAINS ALL (v1, v2, ...)`
+    All,
+}
+
+/// CONTAINS condition for array columns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContainsCondition {
+    /// Column name.
+    pub column: String,
+    /// Containment mode.
+    pub mode: ContainsMode,
+    /// Values to check for containment.
+    pub values: Vec<Value>,
+}
+
+/// GEO_DISTANCE condition: `GEO_DISTANCE(column, lat, lng) op threshold`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeoDistanceCondition {
+    /// Column name containing GeoPoint data.
+    pub column: String,
+    /// Reference latitude in degrees.
+    pub lat: f64,
+    /// Reference longitude in degrees.
+    pub lng: f64,
+    /// Comparison operator.
+    pub operator: CompareOp,
+    /// Distance threshold in meters.
+    pub threshold: f64,
+}
+
+/// GEO_BBOX condition: `GEO_BBOX(column, lat_min, lng_min, lat_max, lng_max)`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeoBboxCondition {
+    /// Column name containing GeoPoint data.
+    pub column: String,
+    /// Minimum latitude of the bounding box.
+    pub lat_min: f64,
+    /// Minimum longitude of the bounding box.
+    pub lng_min: f64,
+    /// Maximum latitude of the bounding box.
+    pub lat_max: f64,
+    /// Maximum longitude of the bounding box.
+    pub lng_max: f64,
+}
+
 impl Condition {
     /// Returns `true` if this condition (or any nested sub-condition) contains
     /// a vector search (`NEAR`, `NEAR_FUSED`, or `SPARSE_NEAR`).
@@ -191,7 +267,18 @@ impl Condition {
             }
             Self::And(l, r) | Self::Or(l, r) => l.has_vector_search() || r.has_vector_search(),
             Self::Group(inner) | Self::Not(inner) => inner.has_vector_search(),
-            _ => false,
+            Self::Contains(_)
+            | Self::ContainsText(_)
+            | Self::Comparison(_)
+            | Self::In(_)
+            | Self::Between(_)
+            | Self::Like(_)
+            | Self::IsNull(_)
+            | Self::Match(_)
+            | Self::GraphMatch(_)
+            | Self::Similarity(_)
+            | Self::GeoDistance(_)
+            | Self::GeoBbox(_) => false,
         }
     }
 }

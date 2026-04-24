@@ -13,6 +13,7 @@ mod join;
 mod select;
 mod train;
 mod values;
+mod window;
 mod with_clause;
 
 use serde::{Deserialize, Serialize};
@@ -24,9 +25,10 @@ pub use aggregation::{
     LogicalOp,
 };
 pub use condition::{
-    BetweenCondition, CompareOp, Comparison, Condition, GraphMatchPredicate, InCondition,
-    IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition, SparseVectorExpr,
-    SparseVectorSearch, VectorFusedSearch, VectorSearch,
+    BetweenCondition, CompareOp, Comparison, Condition, ContainsCondition, ContainsMode,
+    ContainsTextCondition, GeoBboxCondition, GeoDistanceCondition, GraphMatchPredicate,
+    InCondition, IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition,
+    SparseVectorExpr, SparseVectorSearch, VectorFusedSearch, VectorSearch,
 };
 pub use ddl::{
     AlterCollectionStatement, AnalyzeStatement, CreateCollectionKind, CreateCollectionStatement,
@@ -49,6 +51,7 @@ pub use train::TrainStatement;
 pub use values::{
     CorrelatedColumn, IntervalUnit, IntervalValue, Subquery, TemporalExpr, Value, VectorExpr,
 };
+pub use window::{OverClause, WindowFunction, WindowFunctionType, WindowOrderBy};
 pub use with_clause::{QuantizationMode, WithClause, WithOption, WithValue};
 
 /// A complete VelesQL query.
@@ -282,6 +285,7 @@ impl Query {
 
 /// SQL set operator for compound queries (EPIC-040 US-006).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SetOperator {
     /// UNION - merge results, remove duplicates.
     Union,

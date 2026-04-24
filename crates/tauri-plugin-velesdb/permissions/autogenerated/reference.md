@@ -11,6 +11,7 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-get-collection`
 - `allow-is-empty`
 - `allow-flush`
+- `allow-scroll-collection`
 - `allow-upsert`
 - `allow-upsert-metadata`
 - `allow-get-points`
@@ -21,8 +22,18 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-hybrid-search`
 - `allow-multi-query-search`
 - `allow-query`
+- `allow-sparse-search`
+- `allow-hybrid-sparse-search`
+- `allow-sparse-upsert`
+- `allow-train-pq`
+- `allow-stream-insert`
 - `allow-semantic-store`
 - `allow-semantic-query`
+- `allow-episodic-record`
+- `allow-episodic-recent`
+- `allow-procedural-learn`
+- `allow-procedural-recall`
+- `allow-create-graph-collection`
 - `allow-add-edge`
 - `allow-get-edges`
 - `allow-traverse-graph`
@@ -115,6 +126,32 @@ Enables the create_collection command without any pre-configured scope.
 <td>
 
 Denies the create_collection command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-create-graph-collection`
+
+</td>
+<td>
+
+Enables the create_graph_collection command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-create-graph-collection`
+
+</td>
+<td>
+
+Denies the create_graph_collection command without any pre-configured scope.
 
 </td>
 </tr>
@@ -245,6 +282,58 @@ Enables the drop_index command without any pre-configured scope.
 <td>
 
 Denies the drop_index command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-episodic-recent`
+
+</td>
+<td>
+
+Enables the episodic_recent command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-episodic-recent`
+
+</td>
+<td>
+
+Denies the episodic_recent command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-episodic-record`
+
+</td>
+<td>
+
+Enables the episodic_record command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-episodic-record`
+
+</td>
+<td>
+
+Denies the episodic_record command without any pre-configured scope.
 
 </td>
 </tr>
@@ -408,6 +497,32 @@ Denies the hybrid_search command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-hybrid-sparse-search`
+
+</td>
+<td>
+
+Enables the hybrid_sparse_search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-hybrid-sparse-search`
+
+</td>
+<td>
+
+Denies the hybrid_sparse_search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-is-empty`
 
 </td>
@@ -512,6 +627,58 @@ Denies the multi_query_search command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-procedural-learn`
+
+</td>
+<td>
+
+Enables the procedural_learn command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-procedural-learn`
+
+</td>
+<td>
+
+Denies the procedural_learn command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-procedural-recall`
+
+</td>
+<td>
+
+Enables the procedural_recall command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-procedural-recall`
+
+</td>
+<td>
+
+Denies the procedural_recall command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-query`
 
 </td>
@@ -531,6 +698,32 @@ Enables the query command without any pre-configured scope.
 <td>
 
 Denies the query command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-scroll-collection`
+
+</td>
+<td>
+
+Enables the scroll_collection command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-scroll-collection`
+
+</td>
+<td>
+
+Denies the scroll_collection command without any pre-configured scope.
 
 </td>
 </tr>
@@ -616,6 +809,84 @@ Denies the semantic_store command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-sparse-search`
+
+</td>
+<td>
+
+Enables the sparse_search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-sparse-search`
+
+</td>
+<td>
+
+Denies the sparse_search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-sparse-upsert`
+
+</td>
+<td>
+
+Enables the sparse_upsert command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-sparse-upsert`
+
+</td>
+<td>
+
+Denies the sparse_upsert command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-stream-insert`
+
+</td>
+<td>
+
+Enables the stream_insert command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-stream-insert`
+
+</td>
+<td>
+
+Denies the stream_insert command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-text-search`
 
 </td>
@@ -635,6 +906,32 @@ Enables the text_search command without any pre-configured scope.
 <td>
 
 Denies the text_search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-train-pq`
+
+</td>
+<td>
+
+Enables the train_pq command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-train-pq`
+
+</td>
+<td>
+
+Denies the train_pq command without any pre-configured scope.
 
 </td>
 </tr>

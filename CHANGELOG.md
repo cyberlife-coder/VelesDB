@@ -7,6 +7,985 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet — post-v1.13.0 work lives under feature branches tracked in [#634](https://github.com/cyberlife-coder/VelesDB/issues/634) (GPU hardening PR-C, PR-E) and [#639](https://github.com/cyberlife-coder/VelesDB/issues/639) (ef_search alignment)._
+
+## [1.13.0] — 2026-04-23
+
+### Summary
+
+Sprint 4 Phase C wraps up the VelesQL WASM executor, raises the TypeScript
+SDK test coverage to 94% (from the 80% threshold), lands the SIFT1M
+standardized ANN benchmark (the de-facto cross-implementation recall
+number used by every major ANN paper), and closes three ts-sdk
+follow-ups (`prefer-const`, `streamInsert` payload parity, `trainPq`
+validation). Pre-seed credibility audit: the README now carries
+reproducer commands next to every performance claim, a dedicated
+"Known Limitations" section for scope transparency, and a refreshed
+test-count badge (7634 tests across Rust, TypeScript, Python).
+
+**GPU-accelerated HNSW layer-0 traversal** (`#626`, closes `#502`) —
+new SONG 3-stage compute pipeline (Expand → Distance → Select) runs
+layer-0 BFS on the GPU via wgpu compute shaders. CPU still handles
+upper-layer greedy descent; the GPU kicks in only when
+`num_vectors > 500_000` AND `num_vectors * dim ≤ u32::MAX` (WGSL has
+no u64 — correctness gate). Graceful fallback to the CPU SIMD path
+on any GPU error. 77 new GPU tests, zero new dependencies, zero
+`unsafe`. Credit @SBALAVIGNESH123 for the original implementation.
+Four same-day hardening PRs (`#637`, `#638`, `#640`, `#641`, tracked
+under `#634`) close the remaining review findings: `search_auto`
+wired into the production query pipeline (the GPU path was dormant
+in the landed state of `#626`), explicit `LockRank` for
+`gpu_vectors_snapshot` + a `debug_assert`-enforced caller contract
+on `CsrCache::get_or_rebuild`, unified version counter for snapshot
++ CSR cache invalidation (closes the delete-then-insert-same-count
+stale-serve class), and a CSR cache count-check cleanup that aligns
+both caches on a single validity signal. Net: production-reachable,
+statically-enforced, no hidden mutator-must-remember contracts.
+
+**Pre-seed remediation (Option D)** — 10 phases merged across
+`#611`–`#623`: BM25 persistence cold-start dropped from O(N) to O(1),
+sparse search speed-up of 16× on 10K-doc corpora via k-way merge +
+corpus-size-aware routing, HNSW search reduced by 12–22 % on the
+sequential (< 10K) path through software prefetch plumbing, plus
+significant duplication cleanup in the collection, HNSW, and vector
+search layers (cumulative across all phases: jscpd `collection/`
+84 → ~75 clones, `hnsw/` 19 → 9, `search/vector.rs` 14.31 % → 2.47 %).
+Zero regression cumulatively —
+recall gate (Fast 0.90 / Balanced 0.95 / Accurate 0.99 / Perfect 1.00)
+passes on every phase.
+
+### Added — VelesQL window functions
+
+- **`ROW_NUMBER()`, `RANK()`, `DENSE_RANK()` with `OVER (PARTITION BY … ORDER BY …)`**
+  (`#629`, closes `#386`). Credit @SBALAVIGNESH123 for the original
+  implementation; the landed form includes a complete zero-tech-debt
+  hardening pass.
+
+  Grammar additions in `velesql/grammar.pest`: `window_item`,
+  `window_function_call`, `over_clause`, `partition_by_clause`,
+  `window_order_by_clause`. The evaluator lives in
+  `velesql/window_evaluator.rs` and runs after DISTINCT and before
+  ORDER BY / LIMIT in the query pipeline (see the design note on
+  `apply_select_postprocessing` for why the order deviates from the SQL
+  standard — vector-search survivors get a dense `1..N` numbering).
+
+  Implementation highlights (all pinned by regression tests):
+
+  - **Global snapshot-first evaluation** prevents three classes of
+    payload corruption — intra-function (alias collides with own
+    ORDER BY column), inter-function via ORDER BY, inter-function via
+    PARTITION BY. `evaluate` pre-captures every window function's
+    ORDER BY values and PARTITION BY keys **before** any injection,
+    so sequential window evaluation cannot read another function's
+    injected ranks.
+  - **Dispatch-by-variant** for rank computation (`compute_row_numbers`,
+    `compute_rank`, `compute_dense_rank`) with a shared `is_new_group`
+    tie-detection predicate — no dead state.
+  - **Canonical-JSON partition keys** preserve JSON type
+    discriminators, eliminating collisions between `Number(1)` and
+    `String("1")` and between `Null` and a literal payload string
+    `"__null__"`.
+
+### Changed — correctness fixes with visible effects
+
+These corrections resolve pre-existing bugs that were silently wrong.
+Each is pinned by regression tests; callers who depended on the buggy
+output must update.
+
+- **`SelectColumns::to_display_names` returns every SELECT-list item.**
+  Previous releases silently dropped `similarity()` expressions and
+  qualified wildcards from the Mixed SELECT variant, shortening the
+  list returned by the Python `VelesQL.parse(...).columns` getter and
+  the WASM `parsed.columns` getter. v1.13.0 returns the complete list
+  in grammar order (columns → aggregations → similarity scores →
+  qualified wildcards → window functions).
+
+  *Migration*: callers that hard-coded an expected list length or
+  `columns[n]` offsets against the buggy output will now see
+  additional entries. Update the expected length / offsets, or
+  switch to dict-style lookup by name. The complete contract is
+  pinned by
+  `velesql::ast_tests::test_display_names_mixed_includes_all_variants`.
+
+- **`DISTINCT` dedup key now includes qualified-wildcard-expanded
+  fields.** `SELECT DISTINCT ctx.*, title FROM docs` previously
+  deduped by `title` only, silently collapsing rows that differed
+  only on a wildcard-expanded field. v1.13.0 deduplicates by the full
+  payload when any qualified wildcard is in the SELECT list, matching
+  SQL's "DISTINCT considers the whole projected row" semantics.
+
+  *Migration*: queries of the shape
+  `SELECT DISTINCT alias.*, col, …` may return more rows than before.
+  If the pre-v1.13.0 behavior is required, replace `alias.*` with the
+  specific columns that should participate in the dedup key. Pinned
+  by
+  `collection::search::query::distinct_tests::tests::test_distinct_mixed_with_qualified_wildcard_dedupes_by_full_payload`.
+
+### Changed — API hardening (v1.13.0 pre-release)
+
+Five HIGH findings from a triple Rust-expert review landed as zero-tech-debt
+fixes during the develop→main rebase window. Public API only; no runtime
+behaviour change.
+
+- **`AnyCollection` variant access redesign.** The previous
+  `as_vector_collection_unchecked(self) -> VectorCollection` (plus its
+  deprecated alias `into_vector_collection`) is replaced by a full std-style
+  matrix: `as_vector / as_vector_mut / into_vector(…) -> Result<…, Self>`
+  (plus `as_graph*`, `as_metadata*`, `into_graph`, `into_metadata`). The
+  unchecked cross-cast survives only as `unsafe fn into_vector_unchecked`
+  so the logical-soundness contract is explicit at every call site. The
+  velesdb-mobile and tauri-plugin-velesdb bindings migrated to the safe
+  `into_vector()` API; the Python SDK keeps `into_vector_unchecked` under
+  a documented `// SAFETY:` block. See
+  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — F2.2.
+
+- **`CsrCache::get_if_clean` renamed to `clean_snapshot`.** Aligns with
+  VelesDB's existing `Snapshot` terminology (`Bm25Snapshot`, `HnswSnapshot`,
+  `to_snapshot`, `from_snapshot`). Option semantics unchanged.
+
+- **`WindowFunctionType` marked `#[non_exhaustive]`.** Future window
+  functions (`LAG`, `LEAD`, `NTILE`, aggregate windows, …) can now be
+  added without a semver break. Downstream crates matching on the enum
+  must include a `_ =>` wildcard arm.
+
+- **`ConcurrentEdgeStore::rebuild_snapshot` locking contract documented.**
+  The `# Note` docstring now explicitly forbids callers from holding an
+  `edge_ids` write lock or any `shards[*]` write lock when invoking this
+  method, and cross-references `docs/CONCURRENCY_MODEL.md`.
+
+### Added — GPU acceleration
+
+- **GPU HNSW layer-0 traversal** (`#626`, closes `#502`): SONG paper
+  3-stage pipeline on wgpu. New modules:
+  - `crates/velesdb-core/src/gpu/gpu_traversal.rs` — pipeline
+    orchestration (CSR snapshot cache, generation-based invalidation,
+    double-buffered frontier, adaptive 10–20 iterations based on
+    `ef_search`).
+  - `crates/velesdb-core/src/gpu/gpu_traversal_buffers.rs` — GPU
+    buffer management.
+  - `crates/velesdb-core/src/gpu/gpu_traversal_pipelines.rs` —
+    compute-shader pipeline setup (EXPAND_FRONTIER, TRAVERSAL_*
+    distance kernels for Euclidean-squared / Cosine / DotProduct,
+    SELECT_TOPK with workgroup-local bitonic sort).
+  - `crates/velesdb-core/src/index/hnsw/native/graph/gpu_search.rs`
+    — search entry point with correctness-gate guard
+    (`should_traverse_gpu`) and CPU fallback.
+
+  All iterations dispatched in a single command buffer (no per-iter
+  CPU↔GPU sync), activated behind the existing `--features gpu` flag.
+  Gate: `num_vectors > 500_000` AND `num_vectors * dim ≤ u32::MAX`.
+  Below either threshold, or on any GPU error, returns `None` so the
+  caller falls back to the CPU SIMD path — no behavior change for
+  workloads outside the GPU activation range.
+
+### Added — GPU hardening (post-landing follow-ups to `#626`)
+
+The four PRs below were merged the day v1.13.0 was cut to close the
+`🚩 ANALYSIS` findings Devin raised during the `#626` review. All are
+tracked under `#634` as sub-items PR-A / PR-B / PR-D / PR-F. Net
+effect: the GPU feature is reachable from production code paths,
+invalidation contracts are enforced statically in debug builds, and
+future mutators (e.g. a delete path) cannot accidentally serve
+stale caches.
+
+- **Wire `search_auto` into the production pipeline** (`#638`, PR-D).
+  In the landed state of `#626`, `NativeHnswInner::search_auto` was
+  annotated `#[allow(dead_code)]` with no production caller — the GPU
+  path was reachable only from unit tests and benchmarks. Routes the
+  three in-process search entry points
+  (`HnswIndex::search_hnsw_only`,
+  `HnswIndex::search_hnsw_only_filtered`,
+  `NativeHnswIndex::search_with_quality`) through `search_auto`, so
+  any build with `--features gpu` and an index above 500K vectors
+  automatically uses the GPU SONG pipeline. Sub-500K indices, RaBitQ
+  backends, and builds without `gpu` continue on the CPU SIMD path
+  with zero overhead. 5 new parity / routing tests (GPU ⇔ CPU top-k
+  equivalence on small indices).
+
+- **Explicit lock-ordering + CsrCache caller contract** (`#637`, PR-A).
+  Adds `LockRank::GpuVectorsSnapshot = 5` to the global lock order in
+  `graph/locking.rs` (acquired before `Vectors` = 10) and instruments
+  all three acquisition sites (`gpu_search.rs`, `insert.rs`,
+  `backend_adapter.rs`) so debug builds catch any future caller that
+  inverts the order. Fixes the misleading "CAS on generation" comment
+  on `CsrCache::get_or_rebuild` and adds a
+  `debug_assert!(holds_lock(Layers))` tripwire encoding the caller
+  contract (rebuilders must hold the layers read lock; without it,
+  overlapping rebuilders could silently commit stale CSRs). New
+  `holds_lock` helper + 3 regression tests for rank monotonicity
+  and nested-acquire semantics.
+
+- **Unified version counter for snapshot + CSR cache invalidation**
+  (`#640`, PR-B). Replaces the count-keyed snapshot cache with a
+  monotonic `gpu_snapshot_version: AtomicU64` that every mutation
+  bumps atomically. Consolidates the two scattered invalidation
+  blocks in `insert` and `parallel_insert` into a single
+  `NativeHnsw::invalidate_gpu_caches` helper (version bump → CSR
+  dirty flag → snapshot mutex clear, all in the declared lock order).
+  Prevents the delete-then-insert-back-to-same-count bug class that
+  would silently serve stale vectors to the GPU. Also folds the
+  pre-existing `reorder_for_locality` invalidation gap — reordering
+  rewrites vectors and neighbour lists in place but historically
+  never invalidated the GPU caches.
+
+- **CSR cache count-check cleanup** (`#641`, PR-F). Removes the
+  redundant `existing.num_nodes == count` secondary check in
+  `search_gpu`. Every mutation bumps `gpu_snapshot_version` AND calls
+  `gpu_csr_cache.invalidate()` through the helper, so `clean_snapshot`
+  (renamed from `get_if_clean` in the v1.13.0 API-hardening pass)
+  alone is the authoritative validity signal — "cache clean" ⇔
+  "snapshot version unchanged" ⇔ "topology unchanged since last
+  build". Removes the code-smell that kept pattern-matching against
+  the old count-keyed cache bug.
+
+### Added — Pre-seed remediation
+
+- **Phase 4.3 — HNSW sequential loop prefetch** (`#623`, progresses
+  `#377`): `search_loop_sequential` now honours `use_prefetch` so
+  datasets below the 10K pipeline threshold also benefit from
+  intra-gather software prefetch. `NativeHnsw::search_layer` refactored
+  via Fowler extract-function to `dispatch_layer_search` for clarity
+  and NLOC compliance. Measured gains (i9-14900KF, criterion): 
+  `search_layer/768d/ef50` −12.2 %, `ef128` −16.4 %, `ef256` −14.3 %;
+  `search_layer/128d/ef50` −21.7 %. Prefetch is a CPU hint only — recall
+  unchanged by construction (22/22 recall tests pass).
+
+- **Phase 4.2 — Sparse search 16× speedup** (`#621`, closes `#378`):
+  k-way merge in `get_all_postings` + `get_merged_postings_for_compaction`
+  eliminates O(N log N) sort, and corpus-size-aware routing adds a
+  `linear_scan_dense` fast path for corpora ≤ 100K (accumulator stays
+  L2-resident). `sparse_search(top-10, 10K docs, SPLADE)` drops from
+  ≈956 µs to ≈57.6 µs; top-100 drops 927 µs → 75.1 µs. Block-Max WAND
+  was implemented and passed parity (10/10 vs brute-force) but regressed
+  +65 % on this workload; kept in git history for reference but routed
+  out — a lesson on "profile before implementing a complex structure".
+
+- **Phase 4.1 — BM25 persistence cold-start** (`#619`, `#620` docs,
+  closes `#389`): BM25 index now persists via snapshot + WAL with a
+  generation counter committing `meta` last as the authoritative point.
+  Cold-start dropped from O(N) rebuild (re-tokenize every document) to
+  O(1) snapshot load. `KNOWN_LIMITATIONS.md` entry for BM25 cold-start
+  removed by `#620`.
+
+- **Phase 3 refactor wave — duplication cleanup**:
+  - `#614` (closes `#450`): WAL/crud dedup — extract histogram + sparse
+    WAL helpers. `Collection::upsert` CC 9→8. jscpd 84→82 clones on
+    `collection/`.
+  - `#615` (closes `#448`): HNSW distance/batch/persistence/search
+    dedup. jscpd `hnsw/` 19→9 clones (−53 %). `#[inline]` restored on
+    helpers extracted from hot paths (lesson from Devin on PR #615).
+  - `#616` (closes `#452`): vector search dispatch dedup — extract
+    finalize + validate helpers. jscpd `search/vector.rs` 14.31 %→2.47 %.
+  - `#618` (closes `#617`): HNSW `save_sidecars` atomicity fix via
+    generation counter; corruption fail-fast instead of silent reset.
+
+- **Phase 2B — CBO ORDER BY similarity routing** (`#613`, scope-reduced
+  `#467`): the cost-based optimiser now routes `ORDER BY similarity()`
+  queries through the native HNSW path when applicable.
+
+- **Phase 2A — EXPLAIN follow-ups** (`#612`, closes `#607` `#608`
+  `#609`): minor EXPLAIN readability and plan-cost consistency fixes.
+
+- **Phase 1 — SIFT1M pin + tunable fallback** (`#611`): JSON fingerprint
+  pinning for the SIFT1M fvecs/ivecs payload, filter-strategy fallback
+  threshold runtime-tunable via a dedicated knob.
+
+### Added — Benchmarks
+
+- **Standardized SIFT1M ANN benchmark** (1M × 128D vectors, L2 metric) —
+  closes the pre-seed benchmark credibility gap by replacing the
+  synthetic-only recall reporting with a measurement against the
+  de-facto-standard INRIA TEXMEX dataset used throughout the ANN
+  literature (Faiss, HNSWlib, ScaNN, DiskANN, Qdrant, Weaviate, Milvus).
+  New files:
+  - `crates/velesdb-core/benches/datasets/sift1m.rs` — fvecs/ivecs
+    loader with `VELESDB_SIFT1M_DIR` env override for offline /
+    pre-populated data, streaming SHA-256 fingerprint hook, and
+    INRIA mirror download fallback for first-run machines.
+  - `crates/velesdb-core/benches/sift1m_recall.rs` — Criterion
+    benchmark sweeping `ef_search` ∈ {64, 128, 256, 512} with
+    p50 latency (Criterion) + Recall@10 on the full 10,000-query
+    set (printed as grep-friendly `RECALL_REPORT` lines).
+  - `docs/BENCHMARKS.md § 11` — dataset provenance, methodology,
+    how to run, how to interpret, known limitations.
+  - `docs/reference/promise-contract.json` — new claim
+    `benchmarks_sift1m_recall_at_10`.
+
+  Gated behind `--features bench-sift1m` so CI does not trigger the
+  ≈168 MB download. Dev-deps (`flate2`, `tar`, `ureq`, `sha2`) are
+  optional production deps activated only by the feature — default,
+  WASM, and production builds never pull them in. SHA-256 fingerprints
+  are placeholders until the first manually-verified run; loader
+  prints observed hashes so they can be pinned rather than fabricated.
+
+### Added — Sprint 2 Wave 4 (TypeScript SDK)
+
+- **12 missing REST endpoint wrappers surfaced on the TS SDK**
+  (`sdks/typescript/src/backends/missing-endpoints.ts` + plumbing
+  in `rest.ts`, `wasm.ts`, `client.ts`, `types.ts`, Commit 8) —
+  closes the `S2-NEW-10` audit finding. The pre-v1.13 SDK
+  covered only the core CRUD + search paths; 12 server endpoints
+  were un-reachable from TS callers without resorting to
+  hand-written `fetch`. Every wrapper is now exposed on
+  `VelesDB` and fully typed.
+
+  New methods on `VelesDB`:
+  ```typescript
+  // Admin
+  await db.rebuildIndex('docs');                                // POST /collections/{name}/index/rebuild
+  const caps = await db.getGuardrails();                        // GET  /guardrails
+  await db.updateGuardrails({ maxDepth: 15, rateLimitQps: 200 }); // PUT  /guardrails
+
+  // Query
+  await db.aggregate('SELECT category, COUNT(*) FROM docs GROUP BY category'); // POST /aggregate
+  await db.matchQuery('kg', 'MATCH (a:Person)-[:KNOWS]->(b) RETURN b');        // POST /collections/{name}/match
+
+  // Graph
+  await db.removeEdge('kg', 42);                                // DELETE /collections/{name}/graph/edges/{id}
+  const n = await db.getEdgeCount('kg');                        // GET    /collections/{name}/graph/edges/count
+  const nodes = await db.listNodes('kg');                       // GET    /collections/{name}/graph/nodes
+  const edges = await db.getNodeEdges('kg', 10, { direction: 'in', label: 'KNOWS' });
+  const payload = await db.getNodePayload('kg', 10);            // GET    /collections/{name}/graph/nodes/{id}/payload
+  await db.upsertNodePayload('kg', 10, { name: 'Alice' });      // PUT    /collections/{name}/graph/nodes/{id}/payload
+  const res = await db.graphSearch('kg', { vector: [...], k: 5 }); // POST  /collections/{name}/graph/search
+  ```
+
+  All 12 wrappers honour the `snake_case ↔ camelCase` convention
+  used across the existing SDK (request bodies converted
+  camel→snake, responses converted snake→camel). `removeEdge`
+  follows the same "map-to-null" convention as `getCollection`:
+  if the server answers `VELES-020` (edge not found) the helper
+  returns `false` instead of throwing, so callers can use the
+  boolean return value.
+
+  **Scope limitation (explicit, not a saupoudrage)**: the 13th
+  endpoint listed in the audit — `GET /collections/{name}/graph/
+  traverse/stream` — is a Server-Sent Events endpoint, not a
+  plain JSON response. Wiring it to the TS SDK requires a
+  streaming-fetch abstraction that does not exist today in the
+  SDK codebase; adding a blocking "collect everything then
+  return" wrapper would defeat the whole point of the streaming
+  design. Deferred to a dedicated Sprint 3+ "streaming API"
+  commit that introduces the abstraction properly.
+
+  **WASM backend**: every new method on `IVelesDBBackend` is
+  implemented on `WasmBackend` too, throwing `wasmNotSupported`
+  for each — the features require persistent server-side
+  infrastructure (guard rails, graph, rebuild). The WASM
+  `CapabilityMap` already reports these as `false`.
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `RebuildIndexResponse`, `GuardRailsUpdateRequest`,
+    `GuardRailsConfigResponse`, `ListNodesResponse`,
+    `GetNodeEdgesOptions`, `NodePayloadResponse`,
+    `GraphSearchRequest`, `GraphSearchResponse`,
+    `GraphSearchResultItem`, `MatchQueryOptions`,
+    `AggregateQueryOptions`
+
+- **`db.capabilities()` API — static feature map per backend**
+  (`sdks/typescript/src/capabilities.ts` + client + both backends,
+  Commit 7) — closes the `#24 F-BACK-002` audit finding. Callers
+  can now inspect the active backend's feature set at
+  construction time and gracefully degrade their workflow instead
+  of catching a runtime `NOT_SUPPORTED` error after the fact.
+
+  ```typescript
+  import { VelesDB, type CapabilityMap } from '@wiscale/velesdb-sdk';
+
+  const db = new VelesDB({ backend: 'wasm' });
+  await db.init();
+
+  const caps: Readonly<CapabilityMap> = db.capabilities();
+  if (caps.graphTraversal) {
+    await db.traverseGraph('kg', { source: 1, direction: 'out' });
+  } else {
+    // WASM backend does not ship graph traversal — fall back to
+    // REST or a pure in-memory traversal
+  }
+  ```
+
+  The map is **frozen at backend construction** and does NOT
+  round-trip to a live server. It reflects the features the SDK
+  version actually wraps for the selected backend — callers who
+  want live server feature flags should still catch `VelesError`
+  at the call site.
+
+  `CapabilityMap` has 13 boolean fields covering every major SDK
+  surface: `vectorSearch`, `textSearch`, `hybridSearch`,
+  `multiQuerySearch`, `sparseSearch`, `scroll`, `graphTraversal`,
+  `secondaryIndexes`, `agentMemory`, `streamInsert`, `pqTraining`,
+  `velesqlQuery`, `collectionIntrospection`. REST advertises all
+  13 as `true`; WASM advertises the 5 search-and-query paths as
+  `true` and the 8 persistent/graph/streaming paths as `false`
+  (matching the `wasmNotSupported()` stubs).
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `CapabilityMap` (interface)
+  - `REST_CAPABILITIES`, `WASM_CAPABILITIES` (frozen singletons)
+
+- **WASM backend index-management stubs now throw explicitly**
+  (`sdks/typescript/src/backends/wasm-stubs.ts`, Commit 6) — closes
+  the `#23 F-BACK-001` audit finding where `wasmListIndexes`,
+  `wasmHasIndex`, and `wasmDropIndex` silently returned `[]` and
+  `false` respectively. Those empty results made callers believe
+  "this collection has no indexes / the drop succeeded" when in
+  reality the WASM backend does not support index management at
+  all. The stubs now throw a `VelesDBError` with code
+  `'NOT_SUPPORTED'` via the shared `wasmNotSupported()` helper,
+  making the capability boundary visible upfront.
+
+  ```typescript
+  const db = new VelesDB({ backend: 'wasm' });
+  await db.init();
+
+  // Pre-v1.13: silently returned [] — caller never knew the op
+  //            was unsupported and wrote code around an empty list.
+  // v1.13:     throws VelesDBError('... not supported in WASM
+  //            backend. Use REST backend.')
+  try {
+    const indexes = await db.listIndexes('docs');
+  } catch (e) {
+    if (e instanceof VelesDBError && e.code === 'NOT_SUPPORTED') {
+      // fall back to REST backend or a pure in-memory index
+    }
+  }
+  ```
+
+  `wasmCreateIndex` is also aligned onto the shared
+  `wasmNotSupported()` helper (it previously threw a bespoke
+  `Error`) so all four index-management stubs emit identical error
+  shapes.
+
+- **`SearchOptions.quality` forwarded to REST as `mode`**
+  (`sdks/typescript/src/search-quality.ts` +
+  `backends/search-backend.ts`, Commit 5) — the `quality` field that
+  has lived on `SearchOptions` since v1.4 is now actually delivered
+  to the server on the three search endpoints that support it
+  natively: `search`, `searchIds`, `searchBatch`. Closes the
+  `#22 F-API-001` audit finding.
+
+  ```typescript
+  // Named presets
+  await db.search('docs', query, { k: 10, quality: 'fast' });
+  await db.search('docs', query, { k: 10, quality: 'accurate' });
+  await db.search('docs', query, { k: 10, quality: 'autotune' });
+
+  // Template-literal presets (parsed server-side by
+  // velesdb_core::api_types::mode_to_search_quality)
+  await db.search('docs', query, { k: 10, quality: 'custom:256' });
+  await db.search('docs', query, { k: 10, quality: 'adaptive:64:512' });
+
+  // Per-sub-request on batch
+  await db.searchBatch('docs', [
+    { vector: v1, k: 10, quality: 'fast' },
+    { vector: v2, k: 10, quality: 'accurate' },
+  ]);
+  ```
+
+  The new `searchQualityToMode(quality)` helper exported from
+  `@wiscale/velesdb-sdk` is a pure string pass-through: it returns
+  `{ mode: quality }` when a value is supplied and `{}` when
+  undefined, so spreading its result into a request body is safe and
+  keys are omitted cleanly when the caller doesn't override the
+  default.
+
+  **Scope limitation (explicit, not a saupoudrage)**: `textSearch`,
+  `hybridSearch`, and `multiQuerySearch` do NOT accept `quality`.
+  Their core entry points (`VectorCollection::text_search`,
+  `::hybrid_search`, `::multi_query_search`) do not currently take
+  an `ef_search` or `SearchQuality` parameter — adding the option
+  to the SDK would create a silently-ignored field. Supporting
+  quality on those paths requires extending the core first and is
+  tracked as a follow-up (candidate for Sprint 3+).
+
+- **`hnsw_alpha` and `hnsw_max_elements` exposed on `POST /collections`**
+  (`velesdb-server::CreateCollectionRequest` + `velesdb-server::handlers::collections::build_hnsw_params_override`
+  + `sdks/typescript/src/backends/crud-backend.ts`, Commit 4) —
+  closes the `#21 PROP-HNSW-ALPHA` audit finding where the TS SDK's
+  `HnswParams` interface advertised `alpha` and `maxElements` but the
+  REST layer silently dropped them.
+
+  Both fields existed in the core `HnswParams` struct (used by the
+  Python SDK via v1.13 `HnswOptions`) but the REST handler's
+  `create_vector_collection_with_hnsw` path only carried `hnsw_m`
+  and `hnsw_ef_construction`. The handler now routes through
+  `Database::create_vector_collection_with_params` (the same entry
+  point Python uses) whenever any HNSW tuning field is supplied,
+  building a full `HnswParams` from `HnswParams::auto(dimension)`
+  and overriding just the fields the caller provided.
+
+  ```typescript
+  import { VelesDB } from '@wiscale/velesdb-sdk';
+  const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+  await db.init();
+
+  await db.createCollection('rag', {
+    dimension: 1536,
+    metric: 'cosine',
+    storageMode: 'full',
+    hnsw: {
+      m: 48,
+      efConstruction: 600,
+      alpha: 1.5,            // NEW — VAMANA diversification
+      maxElements: 1_000_000 // NEW — pre-size for bulk import
+    },
+  });
+  ```
+
+  Any combination of the four HNSW fields is valid: supplying only
+  `alpha` works, supplying only `maxElements` works, and the
+  unspecified fields inherit the dimension-aware engine defaults.
+  `GET /collections/{name}/config` echoes the full `hnsw_params`
+  block so callers can verify the persisted values.
+
+  **Backward compatible**: the two new fields are optional on the
+  wire (`#[serde(default)]`). Pre-v1.13 clients that send only
+  `hnsw_m` / `hnsw_ef_construction` continue to work unchanged, and
+  the legacy `Database::create_vector_collection_with_hnsw` helper
+  remains in the core API for other callers (Python, CLI, WASM).
+
+- **Advanced `CollectionConfig` fields wired through to REST**
+  (`sdks/typescript/src/types.ts` + `backends/crud-backend.ts` +
+  `backends/admin-backend.ts`, Commit 3) — the TS SDK now exposes
+  every advanced create-time option accepted by
+  `velesdb_core::api_types::CreateCollectionRequest` and every
+  advanced field returned by `CollectionConfigResponse`. Closes the
+  `#18 PROP-CONFIG-ADVANCED` audit finding.
+
+  New create-time fields on `CollectionConfig`:
+
+  ```typescript
+  import { VelesDB, type CollectionConfig } from '@wiscale/velesdb-sdk';
+
+  const config: CollectionConfig = {
+    dimension: 1536,
+    metric: 'cosine',
+    storageMode: 'pq',
+    hnsw: { m: 48, efConstruction: 600 },
+    // — NEW advanced options (all optional, default to engine behaviour) —
+    pqRescoreOversampling: 8,                        // PQ/SQ8 candidate rescoring factor
+    deferredIndexing: {                              // US-366 in-memory buffer
+      enabled: true,
+      mergeThreshold: 5000,
+      maxBufferAgeMs: 30_000,
+    },
+    asyncIndexBuilder: {                             // Issue #488 parallel bulk build
+      mergeThreshold: 50_000,
+      segmentCount: 8,
+    },
+  };
+  await db.createCollection('rag', config);
+  ```
+
+  The three new sub-interfaces (`DeferredIndexerOptions`,
+  `AsyncIndexBuilderOptions`) are TS-ergonomic camelCase mirrors of
+  the Rust `DeferredIndexerConfig` / `AsyncIndexBuilderConfig`
+  structs. The crud-backend converts them to the snake_case wire
+  format (`merge_threshold`, `max_buffer_age_ms`, `segment_count`)
+  before forwarding, and omits any field the caller did not supply
+  so the server falls back to its defaults.
+
+  New read-time fields on `CollectionConfigResponse`:
+  `schemaVersion`, `pqRescoreOversampling`, `hnswParams`,
+  `deferredIndexing`, `asyncIndexBuilder`. Consumers can now inspect
+  the on-disk schema version and the effective advanced configuration
+  of an existing collection via `db.getCollectionConfig()`.
+
+  **Backward compatible**: every new field is optional. Callers that
+  don't pass them see zero behavioural change — the REST body omits
+  the keys and the server applies defaults. Existing code compiles
+  and runs unchanged.
+
+- **Typed error hierarchy with verbatim `VELES-XXX` codes**
+  (`sdks/typescript/src/errors.ts`, Commit 2) — 36 typed error classes,
+  one per `velesdb_core::Error` variant, all extending a new `VelesError`
+  base class which itself extends `VelesDBError` for backward compat.
+  Closes the `#20 PROP-ERR-TSSDK` audit finding.
+
+  ```typescript
+  import {
+    CollectionNotFoundError,
+    DimensionMismatchError,
+    GuardRailError,
+    VelesError,
+  } from '@wiscale/velesdb-sdk';
+
+  try {
+    await db.search('docs', queryVector, { k: 10 });
+  } catch (e) {
+    if (e instanceof CollectionNotFoundError) {
+      // VELES-002 — e.code is preserved verbatim
+      console.log('code:', e.code); // "VELES-002"
+    } else if (e instanceof DimensionMismatchError) {
+      // VELES-004
+    } else if (e instanceof GuardRailError) {
+      // VELES-027 — rate limit, timeout, cardinality, etc.
+    } else if (e instanceof VelesError) {
+      // Any other VELES-XXX, forward-compat with newer core versions
+    } else {
+      throw e;
+    }
+  }
+  ```
+
+  The SDK no longer fabricates fake codes like `'NOT_FOUND'` when
+  dispatching server responses. The transport layer (`shared.ts::throwOnError`)
+  now routes via `parseVelesError(code, message)`, which instantiates
+  the matching typed class from the server's exact `VELES-XXX` code.
+
+  **Backward compatibility**: the four legacy client-side error classes
+  (`ConnectionError`, `ValidationError`, `NotFoundError`, `BackpressureError`)
+  are unchanged — they cover connection/validation/WASM-lookup scenarios
+  that never carry a `VELES-XXX` code. Existing `catch (e instanceof
+  VelesDBError)` handlers continue to catch everything they did before.
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `VelesError` (base class for server errors)
+  - 36 typed sub-classes (`CollectionNotFoundError`, `DimensionMismatchError`,
+    `StorageError`, `QueryError`, `GuardRailError`, ...)
+  - `parseVelesError(code, message)` — runtime discriminator factory
+  - `VELES_ERROR_CODES` — ordered const array of all 36 codes
+  - `VelesErrorCode` — union type of every known code
+
+- **Typed `Filter` DSL** (`sdks/typescript/src/filter.ts`, Commit 1) —
+  discriminated union mirror of `velesdb_core::filter::Condition`
+  (20 operators) with a fluent builder `f.*` for ergonomic filter
+  construction. Closes the `#19 PROP-FILTER-UNTYPED` audit finding.
+
+  ```typescript
+  import { f, VelesDB } from '@wiscale/velesdb-sdk';
+
+  const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+  await db.init();
+
+  // Typed builder (recommended — compile-time checked)
+  const filter = f.and([
+    f.eq('category', 'tech'),
+    f.gte('price', 100),
+    f.or([f.ilike('title', '%rust%'), f.ilike('title', '%go%')]),
+    f.not(f.isNull('author')),
+  ]);
+
+  const results = await db.search('docs', queryVector, { k: 10, filter });
+  ```
+
+  The 20 operators mirror the Rust enum exactly and serialize to the
+  same wire format (`{type, field, value}` with `rename_all = "snake_case"`):
+  `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `is_null`,
+  `is_not_null`, `and`, `or`, `not`, `like`, `ilike`, `array_contains`,
+  `array_contains_any`, `array_contains_all`, `geo_distance`, `geo_bbox`.
+
+  **Backward compatible**: pre-v1.13 code passing
+  `filter: Record<string, unknown>` continues to work unchanged. The
+  new `FilterInput = Filter | Record<string, unknown>` type is
+  accepted by every `filter?` parameter across `SearchOptions`,
+  `MultiQuerySearchOptions`, `ScrollRequest`, `searchBatch`,
+  `textSearch`, `hybridSearch`, and all WASM/REST backend variants.
+
+  New exports from `@wiscale/velesdb-sdk`:
+  - `Filter`, `Condition`, `CompareOp`, `FilterInput`, `JsonValue` (types)
+  - `f` (fluent builder), `isTypedFilter`, `normalizeFilter` (runtime helpers)
+
+### Breaking Changes
+- **`Collection` removed from public API** — `Collection` is now `pub(crate)` only. External code
+  must use `VectorCollection`, `GraphCollection`, `MetadataCollection`, or `AnyCollection`.
+- **`Database::get_collection()` removed** — Use `get_vector_collection()`, `get_graph_collection()`,
+  `get_metadata_collection()`, or `get_any_collection()` instead.
+
+#### Sprint 2 Wave 3 B2 — Python typed-options surface (Commits 10-12)
+
+- **`Database.create_collection` flat HNSW kwargs removed** — the legacy
+  `m=`, `ef_construction=`, and `expected_vectors=` kwargs are replaced
+  by a single typed `hnsw=HnswOptions(...)` parameter. A new
+  `auto_reindex=AutoReindexOptions(...)` parameter attaches a runtime-only
+  `AutoReindexManager` to the freshly-created collection.
+
+  ```python
+  # v1.12 — DEPRECATED
+  db.create_collection("docs", dimension=768, m=48, ef_construction=600)
+  db.create_collection("big", dimension=128, expected_vectors=1_000_000)
+
+  # v1.13 — current
+  from velesdb import HnswOptions, AutoReindexOptions
+  db.create_collection(
+      "docs", dimension=768, hnsw=HnswOptions(m=48, ef_construction=600),
+  )
+  db.create_collection(
+      "big", dimension=128, hnsw=HnswOptions.for_dataset_size(128, 1_000_000),
+  )
+  db.create_collection(
+      "agents", dimension=384,
+      auto_reindex=AutoReindexOptions(min_size_for_reindex=5_000),
+  )
+  ```
+
+- **`Database(path)` accepts an optional `config=VelesConfigOptions(...)`**
+  kwarg for database-level configuration (currently surfaces
+  `LimitsOptions` for tenant-wide guard-rails; other sub-sections stay
+  at engine defaults):
+
+  ```python
+  from velesdb import Database, LimitsOptions, VelesConfigOptions
+  db = Database(
+      "./tenant1",
+      config=VelesConfigOptions(limits=LimitsOptions(max_collections=50)),
+  )
+  ```
+
+- **`WalBatchOptions` is NOT exposed in Python** — concurrent multi-writer
+  WAL is a velesdb-premium Enterprise feature. See
+  `docs/guides/WRITE_CONCURRENCY.md` for the positioning and
+  `docs/CORE_WIRING_DEBT.md` for the technical rationale.
+
+- **`HnswOptions` presets** (Commit 11) — five classmethods for common
+  tuning profiles, each a 1:1 wrapper around the matching
+  `HnswParams` core factory:
+  - `HnswOptions.fast()` — M=16, ef_construction=150
+  - `HnswOptions.turbo()` — M=12, ef_construction=100 (~85% recall)
+  - `HnswOptions.balanced(dimension)` — engine default for the dim
+  - `HnswOptions.high_recall(dimension)` — balanced + 8 M, +200 ef
+  - `HnswOptions.max_recall(dimension)` — tightest recall preset
+
+- **`PyGraphCollection.store_node_payload` renamed to `upsert_node_payload`**
+  (Commit 12) — aligns the Python surface with the core API and the
+  rest of the `upsert*` naming convention:
+
+  ```python
+  # v1.12 — DEPRECATED
+  graph.store_node_payload(node_id, {"name": "Alice"})
+
+  # v1.13 — current
+  graph.upsert_node_payload(node_id, {"name": "Alice"})
+  ```
+
+- **`ParsedStatement.table_name` removed** (Commit 12) — use the
+  canonical `collection_name` getter instead (which has been the
+  preferred name since v1.8):
+
+  ```python
+  # v1.12 — DEPRECATED
+  parsed = VelesQL.parse("SELECT * FROM docs")
+  print(parsed.table_name)   # "docs"
+
+  # v1.13 — current
+  print(parsed.collection_name)  # "docs"
+  ```
+
+### Added — Sprint 2 Wave 3 B2
+
+- **`Database::open_with_config(path, VelesConfig)`** (Commit 6) — new
+  core constructor that threads a `VelesConfig` through
+  `Database::open_impl`. Backed by a new `Database::config()` /
+  `Database::config_arc()` accessor surface for read-only inspection.
+- **`LimitsConfig::max_collections` + `max_dimensions` enforcement**
+  (Commit 7) — both limits are now enforced at collection creation.
+  `max_collections` counts across every typed registry (vector +
+  graph + metadata). `max_dimensions` gates both vector and
+  graph-with-embedding paths. Rejections produce `Error::GuardRail`
+  with a `current / cap` ratio string.
+- **`Database::create_vector_collection_with_params`** (Commit 5) —
+  full-config constructor accepting `(name, dimension, metric,
+  storage_mode, hnsw_params, pq_rescore_oversampling)`. The
+  `storage_mode` argument wins over any `hnsw_params.storage_mode`
+  field, preserving explicit override semantics. Used internally by
+  the Python `Database.create_collection(..., hnsw=HnswOptions(...))`
+  path.
+- **`VectorCollection::attach_auto_reindex` / `detach_auto_reindex` /
+  `auto_reindex_manager` / `check_auto_reindex_divergence`** (Commit 9)
+  — runtime-only attachment of an `AutoReindexManager` to a
+  collection. No persistence: callers must re-attach after every
+  `Database::open`. The bulk upsert hot path consults the attached
+  manager and emits a `tracing::info!` event on divergence.
+  Automatic reindex reconstruction is out of scope — it is left to
+  the caller or an event-driven background task.
+
+### Added — Documentation (Commit 8 W3-honest + Commit 13)
+
+- **`docs/CORE_WIRING_DEBT.md`** — internal engineering debt catalogue
+  listing every `*Config` struct that is parsed but not fully wired
+  to the runtime, with explicit outcome per entry (wired in
+  Community, transferred to velesdb-premium, or scheduled removal).
+- **`docs/guides/WRITE_CONCURRENCY.md`** — customer-facing guide
+  explaining the single-writer-per-collection model, the three
+  Community best-practices (batching, sharding, async ingestion),
+  the anti-pattern to avoid, the Enterprise tier positioning, and
+  an FAQ.
+- **Cross-references added** in `docs/CONCURRENCY_MODEL.md` and
+  `docs/guides/CONCURRENCY_LOCKING.md` pointing at the new
+  `WRITE_CONCURRENCY.md` guide.
+- **`docs/README.md`** — new "Write Concurrency" entry in the User
+  Guides table.
+
+### Changed — Python error handling (Commits 1-4)
+
+- **Typed VelesDB exception hierarchy** — 36 `Error::VELES-XXX` core
+  variants are now mapped to Python exception subclasses via a
+  centralized `core_err()` helper. Three new exception types:
+  `CollectionExistsError`, `EdgeExistsError`, `DatabaseLockedError`,
+  all inheriting from `VelesDBError`. Every mutation path routes
+  through `core_err` instead of stringly-typed `PyRuntimeError`.
+- **GIL release on every `Database` mutation** — `Database.__new__`,
+  `create_collection`, `delete_collection`, `create_metadata_collection`,
+  `create_graph_collection`, `analyze_collection`, `get_collection_stats`,
+  `execute_query`, and `ScrollIterator.__next__` now release the GIL
+  via `py.allow_threads` around the core call. Unlocks parallel
+  Python worker throughput on multi-core machines.
+
+### Added
+- **Cost model calibration from histograms (Issue #467)** —
+  `OperationCostFactors` are now calibrated dynamically during `analyze()` from
+  collection statistics and equi-depth histograms, replacing the former hard-coded
+  constants (`FILTER_SCAN_IO_WEIGHT=0.2`, `FILTER_SCAN_CPU_WEIGHT=0.8`,
+  `HNSW_IO_WEIGHT=0.5`, `HNSW_CPU_WEIGHT=1.0`). New public types/fields:
+  `CostFactorBounds` (safety bounds), `OperationCostFactors::hdd_optimized()`,
+  `OperationCostFactors::clamped()`, `OperationCostFactors::is_default()`,
+  `CollectionStats::calibrated_cost_factors`. CBO behavior change:
+  `QueryPlanner::choose_strategy_with_cbo()` now derives I/O/CPU weights from
+  calibrated factors instead of duplicating `0.2`/`0.8` literals. `ExplainOutput`
+  gains `cost_factors` and `calibration_source` fields for observability.
+  Backward compatible: default factors produce identical costs to the old
+  constants; older `collection.stats.json` files without `calibrated_cost_factors`
+  deserialize to `None` via `#[serde(default)]`.
+- **Histogram-based selectivity estimation — CBO foundation (Issue #468)** —
+  Equi-depth histograms built during `ANALYZE` on Int, Float, and String columns
+  (10K-row sample, 64 buckets default). `CostEstimator` now dispatches on all 6
+  `CompareOp` variants (Eq/NotEq/Lt/Lte/Gt/Gte) with O(log B) binary search on
+  bucket boundaries. Histogram-aware selectivity for `IN`, `BETWEEN`, and prefix
+  `LIKE` predicates. Explicit heuristic constants for `Match` (0.1),
+  `ContainsText` (0.05), `Contains` (0.1), `GeoDistance` (0.1), `GeoBbox` (0.2)
+  — eliminates the `_ => 0.5` catch-all. Incremental bucket maintenance on
+  upsert/delete with 20% staleness threshold. `FilterPlan` gains
+  `estimated_rows` and `estimation_method` fields. Histograms persist in
+  `collection.stats.json` with `#[serde(default)]` backward compatibility.
+  4 BDD integration tests + 30 unit tests + 6 persistence tests.
+- **Python DataFrame integration + Scroll cursor + Polars support (Issue #429)** —
+  New `Collection.scroll()` generator for server-side cursor-based iteration over
+  collection points (yields batches of `list[dict]` or DataFrames). New
+  `Collection.to_dataframe()`, `Collection.query_to_dataframe()`, and
+  `Collection.upsert_from_dataframe()` convenience methods for Pandas/Polars
+  DataFrame conversion. Pandas and Polars are optional dependencies
+  (`pip install velesdb[pandas]`, `pip install velesdb[polars]`). All DataFrame
+  imports are deferred — zero overhead when not used. Rust-native `scroll_batch`
+  on `Collection` core with ascending-ID cursor, optional payload filtering,
+  and O(log n + batch_size) per batch. Type stubs updated for all new methods.
+- **Strict text filter `CONTAINS_TEXT` operator (Issue #446)** — New VelesQL operator
+  `column CONTAINS_TEXT 'keyword'` performs case-sensitive substring matching as a strict
+  metadata filter. Unlike `MATCH` (RRF boost), `CONTAINS_TEXT` guarantees every returned
+  result contains the specified substring. Maps to existing `filter::Condition::Contains`
+  at runtime — no new filter evaluation logic. Five touch points: grammar rule, AST variant
+  (`ContainsTextCondition`), parser function, filter conversion, and EXPLAIN formatting
+  (`column CONTAINS_TEXT ?`). Supports hybrid search (`vector NEAR $v AND content CONTAINS_TEXT 'keyword'`),
+  standalone metadata filtering, and combination with `MATCH` for boost + strict filter.
+  Case-insensitive keyword parsing. 10 BDD integration tests.
+- **EXPLAIN ANALYZE: ActualStats population during query execution (Issue #466)** —
+  New `explain_analyze_query()` method on `Database` that executes a query with lightweight
+  instrumentation and returns both the estimated plan and actual execution statistics
+  (`actual_rows`, `actual_time_ms`, `loops`, `nodes_visited`, `edges_traversed`).
+  Per-node statistics (`NodeStats`) provide time and row counts for each plan node.
+  CLI `.explain-analyze` command displays plan + actual stats side-by-side with `⚠` divergence
+  warnings. HTTP `/query/explain` endpoint supports `"analyze": true` for JSON stats.
+  Python bindings expose `explain_analyze()` on `Collection` and `GraphCollection`.
+  `ExplainOutput` and `ActualStats` structs activated (removed `#[allow(dead_code)]`).
+  Zero overhead on non-ANALYZE queries. Foundational for CBO feedback loop (#467–#469).
+- **Secondary index bitmap for IN/NOT IN filters (Issue #512)** — `bitmap_from_condition` now
+  handles `Condition::In` and `Condition::Not { In }` via secondary index B-tree lookups.
+  Builds a `RoaringBitmap` by unioning per-value lookups (O(N × log K)), restricting HNSW
+  traversal to matching points only. NOT IN uses universe bitmap subtraction. New
+  `ColumnStore::filter_in_string_bitmap` and `filter_in_int_bitmap` for JOIN-side IN filtering.
+  EXPLAIN plan now indicates bitmap pre-filter for IN on indexed fields. BDD + unit tests,
+  zero regression on existing queries.
+- **Cross-collection JOIN optimization (Issue #513)** — Filter pushdown and lookup join for
+  `execute_single_select`. WHERE conditions referencing the joined table (e.g.,
+  `inventory.price > 100`) are automatically pushed down before ColumnStore construction.
+  When the JOIN key is the primary key (`id`) and no pushdown filters apply, direct
+  `collection.get()` lookups replace full-scan ColumnStore builds. Reuses existing
+  `analyze_for_pushdown`, `Filter::matches`, and `build_join_column_store` infrastructure.
+  11 new BDD tests, zero regression on existing 8 cross-collection tests.
+- **EXPLAIN now surfaces WITH/LET/FUSION** — `ef_search` is read from `WITH clause` instead of
+  hardcoded to 100; `WITH options`, `LET bindings`, and `FUSION` details (strategy, k, weights)
+  are now displayed in the EXPLAIN output tree. Closes #471.
+- **Python typed exception hierarchy** — `VelesDBError`, `DimensionMismatchError`, and
+  `CollectionNotFoundError` are now catchable as typed Python exceptions. Bulk upsert errors
+  include the point index (e.g., `"Point at index 4237 missing 'id' field"`). Closes #427.
+- **Python performance guide** — `docs/guides/PYTHON_PERFORMANCE.md` documents numpy fast-paths,
+  `upsert_bulk_numpy()`, `batch_search()`, and threading patterns. Closes #409.
+- **Array Column Type with CONTAINS filter (Issue #510)** — `ColumnType::Array(Box<ColumnType>)`
+  for multi-value fields (tags, categories, amenities). Three VelesQL operators:
+  `CONTAINS value`, `CONTAINS ANY (v1, v2)`, `CONTAINS ALL (v1, v2)`. Bitmap-native filters
+  (`filter_contains_bitmap`, `filter_contains_any_bitmap`, `filter_contains_all_bitmap`).
+  SmallVec<8> storage for zero heap allocation on small arrays. 30 BDD + 22 unit tests.
+- **GeoPoint Column Type with GEO_DISTANCE and GEO_BBOX filters (Issue #514)** —
+  `ColumnType::GeoPoint` storing `(lat, lng)` coordinate pairs. Haversine-based
+  `GEO_DISTANCE(column, lat, lng) <op> meters` for proximity queries and
+  `GEO_BBOX(column, lat_min, lng_min, lat_max, lng_max)` for bounding-box containment.
+  Bitmap-native filter variants. Coordinate validation at insertion time.
+  Full VelesQL grammar, parser, AST, filter conversion, and payload matching integration.
+  12 BDD + 22 unit tests.
+- **Parent-document retrieval GROUP BY MAX_SIM (Issue #511)** — Vector-search-aware GROUP BY
+  for chunked document collections. Groups search results by a parent field with score
+  aggregation: `MAX(score)` (ColBERT-style MaxSim), `AVG(score)` (mean similarity), and
+  `FIRST(column)` (excerpt from highest-scoring chunk). Single-pass O(N) FxHashMap grouping
+  with ≤20% latency overhead. 11 BDD + 8 unit tests.
+- **`AnyCollection` enum** — Type-erased collection handle for callers that don't know the
+  collection type at compile time. Zero-cost dispatch via enum match (no vtable, no heap).
+  Methods: `config()`, `flush()`, `point_count()`, `is_empty()`, `name()`, `execute_query_str()`,
+  `execute_aggregate()`, `diagnostics()`, `into_vector_collection()`.
+- **`AnyCollection::into_vector_collection()`** — Converts any collection variant to
+  `VectorCollection` for SDK bindings that expose a single Collection type.
+- **`Database::get_any_collection()`** — Returns `Option<AnyCollection>` by checking
+  vector → graph → metadata registries in order.
+- **BDD tests** — 14 new BDD tests for `AnyCollection` dispatch, persistence round-trip,
+  typed registry integrity, and edge cases.
+
+### Added (migrate)
+- **Graph migration stats surfaced** — `MigrationStats` now includes `edges_created`,
+  `edges_failed`, and `relations_processed` from the graph migration phase. The wizard
+  success output displays these fields when a graph phase ran.
+- **`GraphMigrationPhase::close()`** — explicit connector close method; called after
+  `run()` in the pipeline for proper resource cleanup.
+- **Empty-batch guard in graph extraction loop** — prevents infinite loop when a
+  cursor-based connector returns `has_more=true` with an empty batch.
+- **Milvus `usize::try_from()` cast** — consistent with ChromaDB, replaces `as usize`
+  truncating cast with an explicit `try_from().unwrap_or(usize::MAX)`.
+
+### Fixed
+- **LET bindings in SELECT projection (Issue #473)** — LET binding values now injected into
+  result payloads during post-processing. LET bindings take precedence over payload fields
+  with the same name.
+- **Python SDK compilation errors** — Fixed `hybrid_search_with_filter` extra argument,
+  `dispatch_search` method names (`sparse_search`, `hybrid_sparse_search`).
+- **Python `get_collection()` returns None for graph/metadata** — Now uses `get_any_collection`
+  to find collections regardless of type.
+- **Python `create_metadata_collection()` disconnected instance** — Now returns the registered
+  instance via `get_any_collection` instead of creating a disconnected `VectorCollection::open`.
+- **Tauri `require_collection` vector-only** — Now uses `get_any_collection` so graph and
+  metadata collections are accessible through Tauri commands.
+- **Mobile SDK disconnected instance** — `get_collection` now uses `get_any_collection`
+  instead of falling back to `VectorCollection::open`.
+
+### Migration Guide
+1. **`velesdb_core::Collection` removed** — Replace with `VectorCollection`, `GraphCollection`,
+   `MetadataCollection`, or `AnyCollection` depending on your use case.
+2. **`Database::get_collection()` removed** — Replace with `get_vector_collection()`,
+   `get_graph_collection()`, `get_metadata_collection()`, or `get_any_collection()`.
+3. **`AnyCollection` enum added** — For callers that don't know the collection type at compile
+   time, use `db.get_any_collection(name)` and match on the variant.
+4. **Python SDK unchanged** — The Python `Collection` class name and API are identical.
+5. **Server REST API unchanged** — All HTTP endpoints behave identically.
+
+### Refactored
+- **Remove deprecated SIMD distance types** — `SimdDistance`, `NativeSimdDistance`, and
+  `AdaptiveSimdDistance` removed from `index::hnsw::native::distance`. All production code
+  and tests now use `CachedSimdDistance` exclusively. Benchmarks migrated.
+- **Remove deprecated `HnswMappings` module** — `mappings.rs` and `mappings_tests.rs` deleted.
+  Superseded by `ShardedMappings` since v1.6.0.
+- **Tauri types consolidation** — `SearchResult` is now a type alias for
+  `velesdb_core::api_types::SearchResultResponse`. Module-level documentation added explaining
+  the camelCase/collection-field constraints that require Tauri-specific request types.
+- **Project cleanup** — Removed 79 completed EPIC directories, 9 obsolete planning documents,
+  outdated audit reports, and stale research notes. Remaining docs: architecture reference,
+  roadmap strategy, EPIC-036 (mobile SDK), and internal process docs.
+
 ## [1.12.0] - 2026-04-05
 
 ### Added

@@ -105,6 +105,17 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
         self.promote_entry_point(node_id, node_layer);
         self.count.fetch_add(1, Ordering::Relaxed);
+
+        // Invalidate GPU caches — topology and vectors both changed.
+        // `vectors.write()` is already released at this point (the caller
+        // chain `allocate_and_store_vector → with_vectors_write` drops it
+        // before returning), so the `gpu_vectors_snapshot` acquisition
+        // inside the helper does not nest inside the vectors lock and
+        // respects the declared order
+        // (`GpuVectorsSnapshot` rank 5 → `Vectors` rank 10).
+        #[cfg(feature = "gpu")]
+        self.invalidate_gpu_caches();
+
         Ok(node_id)
     }
 

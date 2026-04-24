@@ -43,6 +43,7 @@ impl Database {
         metric: DistanceMetric,
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
+        self.enforce_vector_dimension_limit(dimension)?;
         let path = self.data_dir.join(name);
         let coll = GraphCollection::create(path, name, Some(dimension), metric, schema.clone())?;
         self.register_graph_collection(name, &coll, Some(dimension), metric, &schema);
@@ -58,15 +59,17 @@ impl Database {
         schema: &crate::collection::GraphSchema,
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
+        if let Some(d) = dimension {
+            self.enforce_vector_dimension_limit(d)?;
+        }
         let path = self.data_dir.join(name);
         let coll = GraphCollection::create(path, name, dimension, metric, schema.clone())?;
         self.register_graph_collection(name, &coll, dimension, metric, schema);
         Ok(())
     }
 
-    /// Registers a graph collection in both legacy and typed registries,
+    /// Registers a graph collection in the typed registry,
     /// notifies the observer, and bumps the schema version.
-    #[allow(deprecated)]
     fn register_graph_collection(
         &self,
         name: &str,
@@ -75,9 +78,6 @@ impl Database {
         metric: DistanceMetric,
         schema: &crate::collection::GraphSchema,
     ) {
-        self.collections
-            .write()
-            .insert(name.to_string(), coll.inner.clone());
         self.graph_colls
             .write()
             .insert(name.to_string(), coll.clone());

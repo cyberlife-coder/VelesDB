@@ -69,8 +69,8 @@ pub use reinforcement::{
     ReinforcementContext, ReinforcementStrategy, TemporalDecay,
 };
 pub use snapshot::{
-    load_snapshot, load_snapshot_from_file, save_snapshot_to_file, MemoryState, SnapshotError,
-    SnapshotManager, SnapshotMetadata,
+    load_snapshot, load_snapshot_from_file, save_snapshot_to_file, MemoryState, SnapshotManager,
+    SnapshotMetadata,
 };
 pub use temporal_index::{TemporalEntry, TemporalIndex, TemporalIndexStats};
 pub use ttl::{EvictionConfig, ExpireResult, MemoryTtl, TtlEntry};

@@ -4,12 +4,12 @@
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,
     clippy::float_cmp,
-    clippy::approx_constant,
-    deprecated // SimdDistance deprecated in favor of CachedSimdDistance
+    clippy::approx_constant
 )]
 //! Tests for distance computation engines.
 //!
 //! Extracted from `distance.rs` for maintainability (04-05 module splitting).
+//! Primary engine under test: `CachedSimdDistance` (production engine).
 
 use super::distance::*;
 use crate::distance::DistanceMetric;
@@ -38,7 +38,7 @@ fn test_euclidean_known_distance() {
 #[test]
 fn test_simd_matches_scalar() {
     let cpu = CpuDistance::new(DistanceMetric::Cosine);
-    let simd = SimdDistance::new(DistanceMetric::Cosine);
+    let cached = CachedSimdDistance::new(DistanceMetric::Cosine, 768);
 
     #[allow(clippy::cast_precision_loss)]
     let a: Vec<f32> = (0..768).map(|i| (i as f32 * 0.01).sin()).collect();
@@ -46,11 +46,11 @@ fn test_simd_matches_scalar() {
     let b: Vec<f32> = (0..768).map(|i| (i as f32 * 0.02).cos()).collect();
 
     let cpu_dist = cpu.distance(&a, &b);
-    let simd_dist = simd.distance(&a, &b);
+    let cached_dist = cached.distance(&a, &b);
 
     assert!(
-        (cpu_dist - simd_dist).abs() < 1e-4,
-        "SIMD should match scalar: cpu={cpu_dist}, simd={simd_dist}"
+        (cpu_dist - cached_dist).abs() < 1e-4,
+        "CachedSimd should match scalar: cpu={cpu_dist}, cached={cached_dist}"
     );
 }
 
@@ -60,7 +60,7 @@ fn test_simd_matches_scalar() {
 
 #[test]
 fn test_simd_hamming_uses_simd_implementation() {
-    let simd = SimdDistance::new(DistanceMetric::Hamming);
+    let cached = CachedSimdDistance::new(DistanceMetric::Hamming, 64);
 
     // Binary-like vectors (0.0 or 1.0)
     let a: Vec<f32> = (0..64)
@@ -70,7 +70,7 @@ fn test_simd_hamming_uses_simd_implementation() {
         .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
         .collect();
 
-    let dist = simd.distance(&a, &b);
+    let dist = cached.distance(&a, &b);
 
     // Verify result is reasonable (hamming distance between these patterns)
     assert!(dist >= 0.0, "Hamming distance must be non-negative");
@@ -79,13 +79,13 @@ fn test_simd_hamming_uses_simd_implementation() {
 
 #[test]
 fn test_simd_jaccard_uses_simd_implementation() {
-    let simd = SimdDistance::new(DistanceMetric::Jaccard);
+    let cached = CachedSimdDistance::new(DistanceMetric::Jaccard, 64);
 
     // Binary-like vectors for set similarity
     let a: Vec<f32> = (0..64).map(|i| if i < 32 { 1.0 } else { 0.0 }).collect();
     let b: Vec<f32> = (0..64).map(|i| if i < 48 { 1.0 } else { 0.0 }).collect();
 
-    let dist = simd.distance(&a, &b);
+    let dist = cached.distance(&a, &b);
 
     // Jaccard distance = 1 - similarity, should be in [0, 1]
     assert!(
@@ -103,12 +103,12 @@ fn test_simd_jaccard_uses_simd_implementation() {
 
 #[test]
 fn test_simd_hamming_identical_vectors() {
-    let simd = SimdDistance::new(DistanceMetric::Hamming);
+    let cached = CachedSimdDistance::new(DistanceMetric::Hamming, 32);
     let v: Vec<f32> = (0..32)
         .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
         .collect();
 
-    let dist = simd.distance(&v, &v);
+    let dist = cached.distance(&v, &v);
     assert!(
         dist.abs() < 1e-5,
         "Identical vectors should have distance 0"
@@ -117,12 +117,12 @@ fn test_simd_hamming_identical_vectors() {
 
 #[test]
 fn test_simd_jaccard_identical_vectors() {
-    let simd = SimdDistance::new(DistanceMetric::Jaccard);
+    let cached = CachedSimdDistance::new(DistanceMetric::Jaccard, 32);
     let v: Vec<f32> = (0..32)
         .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
         .collect();
 
-    let dist = simd.distance(&v, &v);
+    let dist = cached.distance(&v, &v);
     assert!(
         dist.abs() < 1e-5,
         "Identical vectors should have distance 0"
@@ -132,7 +132,7 @@ fn test_simd_jaccard_identical_vectors() {
 #[test]
 #[allow(clippy::cast_precision_loss)]
 fn test_batch_distance_with_prefetch() {
-    let simd = SimdDistance::new(DistanceMetric::Cosine);
+    let cached = CachedSimdDistance::new(DistanceMetric::Cosine, 768);
 
     let query: Vec<f32> = (0..768).map(|i| (i as f32 * 0.01).sin()).collect();
     let candidates: Vec<Vec<f32>> = (0..100)
@@ -145,7 +145,7 @@ fn test_batch_distance_with_prefetch() {
 
     let candidate_refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
 
-    let distances = simd.batch_distance(&query, &candidate_refs);
+    let distances = cached.batch_distance(&query, &candidate_refs);
 
     assert_eq!(distances.len(), 100, "Should return 100 distances");
 
@@ -158,7 +158,7 @@ fn test_batch_distance_with_prefetch() {
 #[test]
 #[allow(clippy::cast_precision_loss)]
 fn test_batch_distance_consistency() {
-    let simd = SimdDistance::new(DistanceMetric::Euclidean);
+    let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, 128);
 
     let query: Vec<f32> = (0..128).map(|i| i as f32).collect();
     let candidates: Vec<Vec<f32>> = (0..20)
@@ -168,12 +168,12 @@ fn test_batch_distance_consistency() {
     let candidate_refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
 
     // Batch distance
-    let batch_distances = simd.batch_distance(&query, &candidate_refs);
+    let batch_distances = cached.batch_distance(&query, &candidate_refs);
 
     // Individual distances
     let individual_distances: Vec<f32> = candidate_refs
         .iter()
-        .map(|c| simd.distance(&query, c))
+        .map(|c| cached.distance(&query, c))
         .collect();
 
     // Results should match exactly
@@ -191,57 +191,61 @@ fn test_batch_distance_consistency() {
 
 #[test]
 fn test_batch_distance_empty() {
-    let simd = SimdDistance::new(DistanceMetric::Cosine);
+    let cached = CachedSimdDistance::new(DistanceMetric::Cosine, 3);
     let query = vec![1.0, 2.0, 3.0];
     let candidates: Vec<&[f32]> = vec![];
 
-    let distances = simd.batch_distance(&query, &candidates);
+    let distances = cached.batch_distance(&query, &candidates);
     assert!(distances.is_empty(), "Empty candidates should return empty");
 }
 
 // =========================================================================
-// Tests for NativeSimdDistance (AVX-512/NEON intrinsics)
+// Tests for CachedSimdDistance against CpuDistance (scalar baseline)
 // =========================================================================
 
 #[test]
-fn test_native_simd_matches_simd() {
-    let simd = SimdDistance::new(DistanceMetric::Cosine);
-    let native = NativeSimdDistance::new(DistanceMetric::Cosine);
+fn test_cached_simd_matches_cpu_cosine() {
+    let cpu = CpuDistance::new(DistanceMetric::Cosine);
+    let cached = CachedSimdDistance::new(DistanceMetric::Cosine, 768);
 
     #[allow(clippy::cast_precision_loss)]
     let a: Vec<f32> = (0..768).map(|i| (i as f32 * 0.01).sin()).collect();
     #[allow(clippy::cast_precision_loss)]
     let b: Vec<f32> = (0..768).map(|i| (i as f32 * 0.02).cos()).collect();
 
-    let simd_dist = simd.distance(&a, &b);
-    let native_dist = native.distance(&a, &b);
+    let cpu_dist = cpu.distance(&a, &b);
+    let cached_dist = cached.distance(&a, &b);
 
     assert!(
-        (simd_dist - native_dist).abs() < 1e-3,
-        "Native SIMD should match SIMD: simd={simd_dist}, native={native_dist}"
+        (cpu_dist - cached_dist).abs() < 1e-3,
+        "CachedSimd should match CPU: cpu={cpu_dist}, cached={cached_dist}"
     );
 }
 
 #[test]
-fn test_native_simd_euclidean() {
-    let native = NativeSimdDistance::new(DistanceMetric::Euclidean);
+fn test_cached_simd_euclidean() {
+    let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, 4);
 
     let a = vec![0.0, 0.0, 0.0, 0.0];
     let b = vec![3.0, 4.0, 0.0, 0.0];
 
-    let dist = native.distance(&a, &b);
-    assert!((dist - 5.0).abs() < 1e-5, "3-4-5 triangle: got {dist}");
+    let dist = cached.distance(&a, &b);
+    // CachedSimdDistance returns squared L2 for Euclidean
+    assert!(
+        (dist - 25.0).abs() < 1e-5,
+        "3-4-5 triangle squared: got {dist}"
+    );
 }
 
 #[test]
 #[allow(clippy::cast_precision_loss)]
-fn test_native_simd_dot_product() {
-    let native = NativeSimdDistance::new(DistanceMetric::DotProduct);
+fn test_cached_simd_dot_product() {
+    let cached = CachedSimdDistance::new(DistanceMetric::DotProduct, 128);
 
     let a: Vec<f32> = (0..128).map(|i| i as f32 * 0.1).collect();
     let b: Vec<f32> = (0..128).map(|i| (128 - i) as f32 * 0.1).collect();
 
-    let dist = native.distance(&a, &b);
+    let dist = cached.distance(&a, &b);
     // DotProduct distance is negative dot product
     assert!(dist < 0.0, "DotProduct distance should be negative");
 }
@@ -291,94 +295,95 @@ fn test_cpu_distance_metric_accessor() {
 
 #[test]
 fn test_simd_distance_metric_accessor() {
-    let simd = SimdDistance::new(DistanceMetric::Cosine);
-    assert_eq!(simd.metric(), DistanceMetric::Cosine);
+    let cached = CachedSimdDistance::new(DistanceMetric::Cosine, 4);
+    assert_eq!(cached.metric(), DistanceMetric::Cosine);
 }
 
 #[test]
 fn test_native_simd_metric_accessor() {
-    let native = NativeSimdDistance::new(DistanceMetric::DotProduct);
-    assert_eq!(native.metric(), DistanceMetric::DotProduct);
+    let cached = CachedSimdDistance::new(DistanceMetric::DotProduct, 4);
+    assert_eq!(cached.metric(), DistanceMetric::DotProduct);
 }
 
 #[test]
 fn test_simd_dot_product() {
-    let simd = SimdDistance::new(DistanceMetric::DotProduct);
+    let cached = CachedSimdDistance::new(DistanceMetric::DotProduct, 4);
     let a = vec![1.0, 2.0, 3.0, 4.0];
     let b = vec![1.0, 1.0, 1.0, 1.0];
-    let dist = simd.distance(&a, &b);
+    let dist = cached.distance(&a, &b);
     // dot = 10, distance = -10
     assert!((dist + 10.0).abs() < 1e-4);
 }
 
 #[test]
 fn test_simd_euclidean() {
-    let simd = SimdDistance::new(DistanceMetric::Euclidean);
+    let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, 4);
     let a = vec![0.0, 0.0, 0.0, 0.0];
     let b = vec![3.0, 4.0, 0.0, 0.0];
-    let dist = simd.distance(&a, &b);
-    assert!((dist - 5.0).abs() < 1e-4);
+    let dist = cached.distance(&a, &b);
+    // CachedSimdDistance returns squared L2
+    assert!((dist - 25.0).abs() < 1e-4);
 }
 
 #[test]
-fn test_native_simd_hamming() {
-    let native = NativeSimdDistance::new(DistanceMetric::Hamming);
+fn test_cached_simd_hamming() {
+    let cached = CachedSimdDistance::new(DistanceMetric::Hamming, 32);
     let a: Vec<f32> = (0..32)
         .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
         .collect();
     let b: Vec<f32> = (0..32)
         .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
         .collect();
-    let dist = native.distance(&a, &b);
+    let dist = cached.distance(&a, &b);
     assert!(dist >= 0.0);
 }
 
 #[test]
-fn test_native_simd_jaccard() {
-    let native = NativeSimdDistance::new(DistanceMetric::Jaccard);
+fn test_cached_simd_jaccard() {
+    let cached = CachedSimdDistance::new(DistanceMetric::Jaccard, 4);
     let a = vec![1.0, 1.0, 0.0, 0.0];
     let b = vec![1.0, 1.0, 1.0, 0.0];
-    let dist = native.distance(&a, &b);
+    let dist = cached.distance(&a, &b);
     assert!((0.0..=1.0).contains(&dist));
 }
 
 // =========================================================================
-// Tests for AdaptiveSimdDistance bug fix (returns distance, not similarity)
+// Tests for CachedSimdDistance correctness (returns distance, not similarity)
 // =========================================================================
 
 #[test]
-fn test_adaptive_simd_cosine_returns_distance() {
-    let adaptive = AdaptiveSimdDistance::new(DistanceMetric::Cosine);
+fn test_cached_simd_cosine_returns_distance() {
+    let cached = CachedSimdDistance::new(DistanceMetric::Cosine, 4);
 
     // Identical vectors should have distance ~0 (not similarity ~1)
     let v = vec![1.0, 2.0, 3.0, 4.0];
-    let dist = adaptive.distance(&v, &v);
+    let dist = cached.distance(&v, &v);
     assert!(
         dist.abs() < 1e-4,
-        "AdaptiveSimdDistance should return distance ~0 for identical vectors, got {dist}"
+        "CachedSimdDistance should return distance ~0 for identical vectors, got {dist}"
     );
 
     // Opposite vectors should have distance ~2 (not similarity ~-1)
     let opposite: Vec<f32> = v.iter().map(|x| -x).collect();
-    let dist_opposite = adaptive.distance(&v, &opposite);
+    let dist_opposite = cached.distance(&v, &opposite);
     assert!(
         (dist_opposite - 2.0).abs() < 1e-4,
-        "AdaptiveSimdDistance should return distance ~2 for opposite vectors, got {dist_opposite}"
+        "CachedSimdDistance should return distance ~2 for opposite vectors, got {dist_opposite}"
     );
 }
 
 #[test]
-fn test_adaptive_simd_dot_product_returns_distance() {
-    let adaptive = AdaptiveSimdDistance::new(DistanceMetric::DotProduct);
+fn test_cached_simd_dot_product_returns_distance() {
+    let cached = CachedSimdDistance::new(DistanceMetric::DotProduct, 3);
 
     // Positive dot product should give negative distance (lower = better)
     let a = vec![1.0, 2.0, 3.0];
     let b = vec![1.0, 1.0, 1.0];
-    let dist = adaptive.distance(&a, &b);
+    let dist = cached.distance(&a, &b);
     // dot = 1*1 + 2*1 + 3*1 = 6, distance = -6
     assert!(
         dist < 0.0,
-        "AdaptiveSimdDistance DotProduct should return negative distance, got {dist}"
+        "CachedSimdDistance DotProduct should return negative distance, got {dist}"
     );
     assert!(
         (dist + 6.0).abs() < 1e-4,
@@ -387,67 +392,68 @@ fn test_adaptive_simd_dot_product_returns_distance() {
 }
 
 #[test]
-fn test_adaptive_simd_jaccard_returns_distance() {
-    let adaptive = AdaptiveSimdDistance::new(DistanceMetric::Jaccard);
+fn test_cached_simd_jaccard_returns_distance() {
+    let cached = CachedSimdDistance::new(DistanceMetric::Jaccard, 32);
 
     // Identical vectors should have distance ~0
     let v: Vec<f32> = (0..32)
         .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
         .collect();
-    let dist = adaptive.distance(&v, &v);
+    let dist = cached.distance(&v, &v);
     assert!(
         dist.abs() < 1e-4,
-        "AdaptiveSimdDistance Jaccard should return distance ~0 for identical vectors, got {dist}"
+        "CachedSimdDistance Jaccard should return distance ~0 for identical vectors, got {dist}"
     );
 
     // Jaccard distance should be in [0, 1]
     let b: Vec<f32> = (0..32)
         .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
         .collect();
-    let dist2 = adaptive.distance(&v, &b);
+    let dist2 = cached.distance(&v, &b);
     assert!(
         (0.0..=1.0).contains(&dist2),
-        "AdaptiveSimdDistance Jaccard distance should be in [0,1], got {dist2}"
+        "CachedSimdDistance Jaccard distance should be in [0,1], got {dist2}"
     );
 }
 
 #[test]
-fn test_adaptive_simd_matches_native_simd() {
-    // Ensure AdaptiveSimdDistance returns same results as NativeSimdDistance
-    let adaptive = AdaptiveSimdDistance::new(DistanceMetric::Cosine);
-    let native = NativeSimdDistance::new(DistanceMetric::Cosine);
+fn test_cached_simd_matches_cpu_all_metrics() {
+    // Ensure CachedSimdDistance returns same results as CpuDistance for non-Euclidean metrics
+    let cpu = CpuDistance::new(DistanceMetric::Cosine);
+    let cached = CachedSimdDistance::new(DistanceMetric::Cosine, 768);
 
     #[allow(clippy::cast_precision_loss)]
     let a: Vec<f32> = (0..768).map(|i| (i as f32 * 0.01).sin()).collect();
     #[allow(clippy::cast_precision_loss)]
     let b: Vec<f32> = (0..768).map(|i| (i as f32 * 0.02).cos()).collect();
 
-    let adaptive_dist = adaptive.distance(&a, &b);
-    let native_dist = native.distance(&a, &b);
+    let cpu_dist = cpu.distance(&a, &b);
+    let cached_dist = cached.distance(&a, &b);
 
     assert!(
-        (adaptive_dist - native_dist).abs() < 1e-3,
-        "AdaptiveSimdDistance should match NativeSimdDistance: adaptive={adaptive_dist}, native={native_dist}"
+        (cpu_dist - cached_dist).abs() < 1e-3,
+        "CachedSimdDistance should match CpuDistance: cpu={cpu_dist}, cached={cached_dist}"
     );
 }
 
 #[test]
-fn test_adaptive_simd_euclidean_returns_distance() {
-    let adaptive = AdaptiveSimdDistance::new(DistanceMetric::Euclidean);
+fn test_cached_simd_euclidean_returns_squared_distance() {
+    let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, 4);
 
     let a = vec![0.0, 0.0, 0.0, 0.0];
     let b = vec![3.0, 4.0, 0.0, 0.0];
-    let dist = adaptive.distance(&a, &b);
+    let dist = cached.distance(&a, &b);
 
+    // CachedSimdDistance returns squared L2 for Euclidean (25.0, not 5.0)
     assert!(
-        (dist - 5.0).abs() < 1e-4,
-        "AdaptiveSimdDistance Euclidean should return 5.0 for 3-4-5 triangle, got {dist}"
+        (dist - 25.0).abs() < 1e-4,
+        "CachedSimdDistance Euclidean should return squared L2 = 25.0, got {dist}"
     );
 }
 
 #[test]
-fn test_adaptive_simd_hamming_returns_distance() {
-    let adaptive = AdaptiveSimdDistance::new(DistanceMetric::Hamming);
+fn test_cached_simd_hamming_returns_distance() {
+    let cached = CachedSimdDistance::new(DistanceMetric::Hamming, 32);
 
     let a: Vec<f32> = (0..32)
         .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
@@ -456,22 +462,22 @@ fn test_adaptive_simd_hamming_returns_distance() {
         .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
         .collect();
 
-    let dist = adaptive.distance(&a, &b);
+    let dist = cached.distance(&a, &b);
     assert!(
         dist >= 0.0,
-        "AdaptiveSimdDistance Hamming distance should be non-negative, got {dist}"
+        "CachedSimdDistance Hamming distance should be non-negative, got {dist}"
     );
 }
 
 #[test]
 #[allow(clippy::cast_precision_loss)]
-fn test_native_simd_batch_dot_product() {
-    let native = NativeSimdDistance::new(DistanceMetric::DotProduct);
+fn test_cached_simd_batch_dot_product() {
+    let cached = CachedSimdDistance::new(DistanceMetric::DotProduct, 16);
     let query: Vec<f32> = vec![1.0; 16];
     let candidates: Vec<Vec<f32>> = (0..5).map(|i| vec![(i + 1) as f32; 16]).collect();
     let candidate_refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
 
-    let distances = native.batch_distance(&query, &candidate_refs);
+    let distances = cached.batch_distance(&query, &candidate_refs);
     assert_eq!(distances.len(), 5);
     // Each dot product = 16 * (i+1), distance = -dot
     for (i, &d) in distances.iter().enumerate() {
@@ -484,13 +490,13 @@ fn test_native_simd_batch_dot_product() {
 }
 
 #[test]
-fn test_native_simd_batch_euclidean() {
-    let native = NativeSimdDistance::new(DistanceMetric::Euclidean);
+fn test_cached_simd_batch_euclidean() {
+    let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, 8);
     let query = vec![0.0; 8];
     let candidates: Vec<Vec<f32>> = vec![vec![1.0; 8], vec![2.0; 8]];
     let candidate_refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
 
-    let distances = native.batch_distance(&query, &candidate_refs);
+    let distances = cached.batch_distance(&query, &candidate_refs);
     assert_eq!(distances.len(), 2);
 }
 
@@ -561,51 +567,57 @@ fn gen_vec(dim: usize, seed: f32) -> Vec<f32> {
 }
 
 #[test]
-fn test_cached_vs_simd_cosine_768d() {
+fn test_cached_cosine_768d() {
     let dim = 768;
-    let simd = SimdDistance::new(DistanceMetric::Cosine);
     let cached = CachedSimdDistance::new(DistanceMetric::Cosine, dim);
+    let cpu = CpuDistance::new(DistanceMetric::Cosine);
     let a = gen_vec(dim, 0.0);
     let b = gen_vec(dim, 1.0);
-    let s = simd.distance(&a, &b);
+    let cpu_d = cpu.distance(&a, &b);
     let c = cached.distance(&a, &b);
-    assert_eq!(s, c, "cosine 768d: simd={s}, cached={c}");
-}
-
-#[test]
-fn test_cached_vs_simd_euclidean_128d() {
-    let dim = 128;
-    let simd = SimdDistance::new(DistanceMetric::Euclidean);
-    let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
-    let a = gen_vec(dim, 0.0);
-    let b = gen_vec(dim, 1.0);
-    let s = simd.distance(&a, &b); // sqrt'd Euclidean
-    let c = cached.distance(&a, &b); // squared L2 (no sqrt)
-                                     // CachedSimdDistance returns squared L2 for HNSW traversal optimization;
-                                     // SimdDistance returns actual Euclidean (with sqrt).
     assert!(
-        (c - s * s).abs() < 1e-3,
-        "cached should equal simd^2: cached={c}, simd^2={}",
-        s * s,
+        (cpu_d - c).abs() < 1e-4,
+        "cosine 768d: cpu={cpu_d}, cached={c}"
     );
 }
 
 #[test]
-fn test_cached_vs_simd_dot_product_1536d() {
-    let dim = 1536;
-    let simd = SimdDistance::new(DistanceMetric::DotProduct);
-    let cached = CachedSimdDistance::new(DistanceMetric::DotProduct, dim);
+fn test_cached_euclidean_128d() {
+    let dim = 128;
+    let cpu = CpuDistance::new(DistanceMetric::Euclidean);
+    let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
     let a = gen_vec(dim, 0.0);
     let b = gen_vec(dim, 1.0);
-    let s = simd.distance(&a, &b);
-    let c = cached.distance(&a, &b);
-    assert_eq!(s, c, "dot_product 1536d: simd={s}, cached={c}");
+    let cpu_d = cpu.distance(&a, &b); // sqrt'd Euclidean
+    let c = cached.distance(&a, &b); // squared L2 (no sqrt)
+                                     // CachedSimdDistance returns squared L2 for HNSW traversal optimization;
+                                     // CpuDistance returns actual Euclidean (with sqrt).
+    assert!(
+        (c - cpu_d * cpu_d).abs() < 1e-3,
+        "cached should equal cpu^2: cached={c}, cpu^2={}",
+        cpu_d * cpu_d,
+    );
 }
 
 #[test]
-fn test_cached_vs_simd_hamming_64d() {
+fn test_cached_dot_product_1536d() {
+    let dim = 1536;
+    let cpu = CpuDistance::new(DistanceMetric::DotProduct);
+    let cached = CachedSimdDistance::new(DistanceMetric::DotProduct, dim);
+    let a = gen_vec(dim, 0.0);
+    let b = gen_vec(dim, 1.0);
+    let cpu_d = cpu.distance(&a, &b);
+    let c = cached.distance(&a, &b);
+    assert!(
+        (cpu_d - c).abs() < 1e-2,
+        "dot_product 1536d: cpu={cpu_d}, cached={c}"
+    );
+}
+
+#[test]
+fn test_cached_hamming_64d() {
     let dim = 64;
-    let simd = SimdDistance::new(DistanceMetric::Hamming);
+    let cpu = CpuDistance::new(DistanceMetric::Hamming);
     let cached = CachedSimdDistance::new(DistanceMetric::Hamming, dim);
     let a: Vec<f32> = (0..dim)
         .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
@@ -613,15 +625,15 @@ fn test_cached_vs_simd_hamming_64d() {
     let b: Vec<f32> = (0..dim)
         .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
         .collect();
-    let s = simd.distance(&a, &b);
+    let cpu_d = cpu.distance(&a, &b);
     let c = cached.distance(&a, &b);
-    assert_eq!(s, c, "hamming 64d: simd={s}, cached={c}");
+    assert_eq!(cpu_d, c, "hamming 64d: cpu={cpu_d}, cached={c}");
 }
 
 #[test]
-fn test_cached_vs_simd_jaccard_256d() {
+fn test_cached_jaccard_256d() {
     let dim = 256;
-    let simd = SimdDistance::new(DistanceMetric::Jaccard);
+    let cpu = CpuDistance::new(DistanceMetric::Jaccard);
     let cached = CachedSimdDistance::new(DistanceMetric::Jaccard, dim);
     let a: Vec<f32> = (0..dim)
         .map(|i| if i < dim / 2 { 1.0 } else { 0.0 })
@@ -629,9 +641,12 @@ fn test_cached_vs_simd_jaccard_256d() {
     let b: Vec<f32> = (0..dim)
         .map(|i| if i < dim * 3 / 4 { 1.0 } else { 0.0 })
         .collect();
-    let s = simd.distance(&a, &b);
+    let cpu_d = cpu.distance(&a, &b);
     let c = cached.distance(&a, &b);
-    assert_eq!(s, c, "jaccard 256d: simd={s}, cached={c}");
+    assert!(
+        (cpu_d - c).abs() < 1e-4,
+        "jaccard 256d: cpu={cpu_d}, cached={c}"
+    );
 }
 
 #[test]
@@ -807,7 +822,8 @@ fn test_distance_engine_euclidean_squared() {
 /// restoring the actual Euclidean distance for user-visible scores.
 #[test]
 fn test_transform_score_euclidean_applies_sqrt() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let dim = 32;
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
     let hnsw = super::graph::NativeHnsw::new(engine, 16, 100, 100);
 
     // If the raw distance from the search is squared L2 = 25.0,
@@ -888,7 +904,7 @@ fn test_squared_l2_preserves_topk_ordering() {
     let hnsw_results = hnsw.search(&query, k, 128);
 
     // Brute-force with ACTUAL Euclidean distances (with sqrt)
-    let bf_engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let bf_engine = CpuDistance::new(DistanceMetric::Euclidean);
     let mut bf_distances: Vec<(usize, f32)> = (0..500)
         .map(|i| {
             let v: Vec<f32> = (0..dim)

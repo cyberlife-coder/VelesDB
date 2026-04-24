@@ -394,10 +394,9 @@ mod tests {
     /// Semantics: DESC = most similar first, ASC = least similar first
     #[test]
     #[cfg(feature = "persistence")]
-    #[allow(deprecated)] // Test uses legacy Collection.
     fn test_order_by_similarity_respects_collection_metric() {
+        use crate::collection::Collection;
         use crate::distance::DistanceMetric;
-        use crate::Collection;
 
         let temp_dir = tempfile::tempdir().unwrap();
         let path = std::path::PathBuf::from(temp_dir.path());
@@ -459,10 +458,9 @@ mod tests {
     /// DESC should always mean "most similar first" regardless of metric type.
     #[test]
     #[cfg(feature = "persistence")]
-    #[allow(deprecated)] // Test uses legacy Collection.
     fn test_order_by_similarity_desc_euclidean_metric() {
+        use crate::collection::Collection;
         use crate::distance::DistanceMetric;
-        use crate::Collection;
 
         let temp_dir = tempfile::tempdir().unwrap();
         let path = std::path::PathBuf::from(temp_dir.path());

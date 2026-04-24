@@ -6,6 +6,7 @@ use crate::index::hnsw::HnswParams;
 
 /// Reindex state machine states
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 #[repr(u8)]
 pub enum ReindexState {
     /// No reindex in progress
@@ -31,6 +32,7 @@ impl From<u8> for ReindexState {
 
 /// Reason for triggering a reindex
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ReindexReason {
     /// Parameters diverged from optimal
     ParamDivergence {
@@ -49,6 +51,7 @@ pub enum ReindexReason {
 
 /// Events emitted during reindex lifecycle
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ReindexEvent {
     /// Reindex started
     Started {

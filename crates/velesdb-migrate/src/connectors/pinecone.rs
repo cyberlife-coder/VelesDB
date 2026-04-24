@@ -15,6 +15,13 @@ pub struct PineconeConnector {
     config: PineconeConfig,
     client: reqwest::Client,
     host: Option<String>,
+    /// Distance metric reported by the Pinecone `describe_index` call,
+    /// normalised to VelesDB core identifiers (`cosine`, `euclidean`,
+    /// `dot`). Captured in [`SourceConnector::connect`] and forwarded
+    /// to [`SourceSchema::metric`] in [`SourceConnector::get_schema`]
+    /// so `Pipeline::check_metric_fidelity` can detect mismatches
+    /// against the destination collection.
+    metric: Option<String>,
 }
 
 impl PineconeConnector {
@@ -25,6 +32,21 @@ impl PineconeConnector {
             config,
             client: create_http_client(),
             host: None,
+            metric: None,
+        }
+    }
+
+    /// Normalise a Pinecone metric string to the VelesDB core
+    /// identifier vocabulary. Pinecone exposes `cosine`, `euclidean`,
+    /// and `dotproduct`; VelesDB uses `dot` for the inner-product
+    /// metric. Unknown values are returned lowercased so
+    /// `check_metric_fidelity` can surface them verbatim in the
+    /// mismatch error instead of swallowing them.
+    fn normalise_pinecone_metric(raw: &str) -> String {
+        let lower = raw.to_ascii_lowercase();
+        match lower.as_str() {
+            "dotproduct" => "dot".to_string(),
+            _ => lower,
         }
     }
 
@@ -48,6 +70,8 @@ impl PineconeConnector {
         if let Some(base) = &self.config.base_url {
             return base.clone();
         }
+        // Invariant: callers (get_schema, extract_batch) always guard with
+        // `self.host.is_some()` before calling this method; "localhost" is unreachable.
         let host = self.host.as_deref().unwrap_or("localhost");
         format!("https://{host}")
     }
@@ -102,7 +126,7 @@ impl PineconeConnector {
 /// Converts a Pinecone vector response into an `ExtractedPoint`.
 fn pinecone_vec_to_point(v: PineconeVector) -> ExtractedPoint {
     let sparse = v.sparse_values.and_then(|sv| {
-        if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+        if crate::connectors::common::is_valid_sparse_vector(&sv.indices, &sv.values) {
             Some(sv.indices.into_iter().zip(sv.values).collect())
         } else {
             None
@@ -198,6 +222,7 @@ impl SourceConnector for PineconeConnector {
         }
 
         self.host = Some(desc.host);
+        self.metric = Some(Self::normalise_pinecone_metric(&desc.metric));
         info!(
             "Connected to Pinecone index: {} ({}D, {})",
             self.config.index, desc.dimension, desc.metric
@@ -238,6 +263,7 @@ impl SourceConnector for PineconeConnector {
             dimension: stats.dimension,
             total_count: count,
             fields: vec![],
+            metric: self.metric.clone(),
             ..Default::default()
         })
     }
@@ -301,6 +327,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(deprecated)]
     fn test_pinecone_connector_new() {
         let config = PineconeConfig {
             api_key: "test-key".to_string(),
@@ -313,6 +340,51 @@ mod tests {
         let connector = PineconeConnector::new(config);
         assert_eq!(connector.source_type(), "pinecone");
         assert!(connector.host.is_none());
+        assert!(connector.metric.is_none());
+    }
+
+    #[test]
+    fn test_normalise_pinecone_metric_maps_dotproduct_to_dot() {
+        // Pinecone reports `dotproduct` for inner-product indexes but
+        // VelesDB core identifies the same metric as `dot`. The
+        // normalisation layer is what makes
+        // `Pipeline::check_metric_fidelity` able to match Pinecone
+        // sources against a destination collection created with
+        // `metric: "dot"`.
+        assert_eq!(
+            PineconeConnector::normalise_pinecone_metric("dotproduct"),
+            "dot"
+        );
+        assert_eq!(
+            PineconeConnector::normalise_pinecone_metric("DotProduct"),
+            "dot"
+        );
+    }
+
+    #[test]
+    fn test_normalise_pinecone_metric_lowercases_known_values() {
+        // Already-compatible values are lowercased so
+        // `check_metric_fidelity` compares them against the core
+        // identifier vocabulary verbatim without surprise.
+        assert_eq!(
+            PineconeConnector::normalise_pinecone_metric("Cosine"),
+            "cosine"
+        );
+        assert_eq!(
+            PineconeConnector::normalise_pinecone_metric("EUCLIDEAN"),
+            "euclidean"
+        );
+    }
+
+    #[test]
+    fn test_normalise_pinecone_metric_preserves_unknown_values() {
+        // Unknown metric names are preserved (lowercased) rather than
+        // silently normalised to `None` — this keeps mismatch errors
+        // actionable instead of masking them behind a no-op schema.
+        assert_eq!(
+            PineconeConnector::normalise_pinecone_metric("manhattan"),
+            "manhattan"
+        );
     }
 
     #[test]
@@ -416,7 +488,7 @@ mod tests {
         };
 
         let sparse = v.sparse_values.and_then(|sv| {
-            if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+            if crate::connectors::common::is_valid_sparse_vector(&sv.indices, &sv.values) {
                 Some(sv.indices.into_iter().zip(sv.values).collect::<Vec<_>>())
             } else {
                 None

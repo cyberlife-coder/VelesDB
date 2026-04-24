@@ -2,53 +2,18 @@
 //!
 //! Read and delete operations are in `crud_read_delete.rs`.
 //! Bulk-specific methods (`upsert_bulk`, `upsert_bulk_from_raw`) are in `crud_bulk.rs`.
-//! Quantization caching helpers and secondary-index update helpers are in `crud_helpers.rs`.
+//! Quantization caching helpers, secondary-index update helpers,
+//! `DedupMap`, and `QuantizationGuards` are in `crud_helpers.rs`.
 
+use super::crud_helpers::{DedupMap, QuantizationGuards};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::point::Point;
-use crate::quantization::{BinaryQuantizedVector, PQVector, QuantizedVector, StorageMode};
+use crate::quantization::StorageMode;
 use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 
-use parking_lot::RwLockWriteGuard;
 use std::collections::{BTreeMap, HashMap};
-
-/// Pre-computed last-writer-wins dedup map: `point_id -> index_of_last_occurrence`.
-///
-/// Built once in `batch_store_all` and shared by both `write_deduped_payloads`
-/// and `write_deduped_vectors` to avoid redundant map construction (Issue #425).
-type DedupMap = HashMap<u64, usize>;
-
-pub(super) struct QuantizationGuards<'a> {
-    pub(super) sq8: Option<RwLockWriteGuard<'a, HashMap<u64, QuantizedVector>>>,
-    pub(super) binary: Option<RwLockWriteGuard<'a, HashMap<u64, BinaryQuantizedVector>>>,
-    pub(super) pq: Option<RwLockWriteGuard<'a, HashMap<u64, PQVector>>>,
-}
-
-impl<'a> QuantizationGuards<'a> {
-    fn acquire(collection: &'a Collection, mode: StorageMode) -> Self {
-        Self {
-            sq8: matches!(mode, StorageMode::SQ8).then(|| collection.sq8_cache.write()),
-            binary: matches!(mode, StorageMode::Binary).then(|| collection.binary_cache.write()),
-            pq: matches!(mode, StorageMode::ProductQuantization)
-                .then(|| collection.pq_cache.write()),
-        }
-    }
-
-    /// Acquires only the PQ cache guard (for when SQ8/Binary were handled in parallel).
-    ///
-    /// Issue #486: After parallel quantization for SQ8/Binary, only PQ mode
-    /// still needs a guard for sequential processing.
-    fn acquire_pq_only(collection: &'a Collection, mode: StorageMode) -> Self {
-        Self {
-            sq8: None,
-            binary: None,
-            pq: matches!(mode, StorageMode::ProductQuantization)
-                .then(|| collection.pq_cache.write()),
-        }
-    }
-}
 
 impl Collection {
     /// Inserts or updates points in the collection.
@@ -80,9 +45,15 @@ impl Collection {
             validate_dimension_match(dimension, point.dimension())?;
         }
 
-        let sparse_batch = self.upsert_storage_and_index(&points, storage_mode)?;
+        let (sparse_batch, old_payloads) = self.upsert_storage_and_index(&points, storage_mode)?;
 
         self.apply_sparse_batch_upsert(&sparse_batch)?;
+
+        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
+        // so only the final payload counts, then decrement old + increment
+        // new in one atomic cycle. See `apply_histogram_replace_dedup`.
+        self.apply_histogram_replace_dedup(&points, &old_payloads);
+
         self.invalidate_caches_and_bump_generation();
         Ok(())
     }
@@ -102,23 +73,27 @@ impl Collection {
     /// any missing vectors. The recovery window is bounded by one batch.
     ///
     /// Returns buffered sparse vectors for deferred insertion.
+    #[allow(clippy::type_complexity)] // Reason: tuple of (sparse_batch, old_payloads) — extracting a named type adds indirection without clarity
     fn upsert_storage_and_index(
         &self,
         points: &[Point],
         storage_mode: StorageMode,
-    ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
+    ) -> Result<(
+        Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>,
+        Vec<Option<serde_json::Value>>,
+    )> {
         // Phase 1: Batch storage under write locks (1 fsync per storage)
         let old_payloads = self.batch_store_all(points)?;
 
         // Phase 2: Per-point updates (no storage locks held)
-        let sparse_batch = self.per_point_updates(points, &old_payloads, storage_mode);
+        let sparse_batch = self.per_point_updates(points, &old_payloads, storage_mode)?;
 
         // Phase 3: Batch HNSW insert
         let vector_refs: Vec<(u64, &[f32])> =
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         self.bulk_index_or_defer(vector_refs);
 
-        Ok(sparse_batch)
+        Ok((sparse_batch, old_payloads))
     }
 
     /// Phase 1: Batch-stores vectors and payloads with minimal lock scope.
@@ -207,7 +182,7 @@ impl Collection {
     ///
     /// For intra-batch duplicates, only the first occurrence needs the pre-batch
     /// value; subsequent occurrences are handled by `seen_payloads` in Phase 2.
-    fn collect_old_payloads(
+    pub(crate) fn collect_old_payloads(
         points: &[Point],
         storage: &LogPayloadStorage,
     ) -> Vec<Option<serde_json::Value>> {
@@ -230,7 +205,7 @@ impl Collection {
     /// Issue #425: Computed once in `batch_store_all` and shared by both
     /// `write_deduped_payloads` and `write_deduped_vectors` to avoid
     /// redundant `HashMap` construction.
-    fn build_dedup_map(points: &[Point]) -> DedupMap {
+    pub(super) fn build_dedup_map(points: &[Point]) -> DedupMap {
         let mut map = HashMap::with_capacity(points.len());
         for (i, p) in points.iter().enumerate() {
             map.insert(p.id, i);
@@ -343,12 +318,12 @@ impl Collection {
         points: &[Point],
         old_payloads: &[Option<serde_json::Value>],
         storage_mode: StorageMode,
-    ) -> Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> {
+    ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
         // Issue #425: Fast-path — skip Phase 2 entirely when no secondary
         // processing is needed. Avoids lock acquisition, HashMap allocation,
         // and the per-point loop for the common StorageMode::Full case.
         if self.can_skip_phase2(points, storage_mode) {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // Issue #486: Parallel quantization for SQ8/Binary — compute all
@@ -383,7 +358,7 @@ impl Collection {
         storage_mode: StorageMode,
         quant_guards: &mut QuantizationGuards<'_>,
         quant_done: bool,
-    ) -> Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> {
+    ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
         let mut sparse_batch = Vec::new();
         let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::new();
         let skip_bm25 = self.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
@@ -400,7 +375,9 @@ impl Collection {
                 point.payload.as_ref(),
             );
             if !skip_bm25 {
-                Self::update_text_index(&self.text_index, point);
+                // Issue #389: WAL-before-apply — failure propagates so
+                // in-memory BM25 and on-disk WAL never diverge.
+                self.update_text_index(point)?;
             }
             Self::collect_sparse_vectors(point, &mut sparse_batch);
             if needs_label_updates {
@@ -410,7 +387,7 @@ impl Collection {
         }
 
         Self::apply_label_updates(&self.label_index, &label_updates);
-        sparse_batch
+        Ok(sparse_batch)
     }
 
     /// Inserts or updates metadata-only points (no vectors).
@@ -428,6 +405,12 @@ impl Collection {
         let mut payload_storage = self.payload_storage.write();
         let mut label_idx = self.label_index.write();
 
+        // Collect old payloads for histogram decrements before they are overwritten.
+        // Bug #46: use collect_old_payloads to deduplicate by ID — only the
+        // first occurrence retrieves the pre-batch value; duplicates get None
+        // so the old value is decremented exactly once.
+        let old_payloads_for_hist = Self::collect_old_payloads(&points, &payload_storage);
+
         for point in &points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
             if let Some(payload) = &point.payload {
@@ -435,7 +418,7 @@ impl Collection {
             } else {
                 let _ = payload_storage.delete(point.id);
             }
-            Self::update_text_index(&self.text_index, point);
+            self.update_text_index(point)?;
             self.update_secondary_indexes_on_upsert(
                 point.id,
                 old_payload.as_ref(),
@@ -451,13 +434,22 @@ impl Collection {
             }
         }
 
+        // LOCK ORDER: drop label_index(7) before acquiring config(1) and stats_io_mutex(12).
+        drop(label_idx);
+
         // LOCK ORDER: flush while payload_storage(3) still held, then drop before acquiring config(1).
         let point_count = payload_storage.ids().len();
         payload_storage.flush()?;
         drop(payload_storage);
 
-        // config(1) only — all higher-numbered locks released above.
+        // config(1) only — payload_storage(3) and label_index(7) both released above.
         self.config.write().point_count = point_count;
+
+        // Incremental histogram maintenance for metadata-only collections
+        // (Bug #47 + Bug #49): dedup by id and replace histograms in one
+        // atomic cycle. See `apply_histogram_replace_dedup`.
+        self.apply_histogram_replace_dedup(&points, &old_payloads_for_hist);
+
         self.invalidate_caches_and_bump_generation();
         Ok(())
     }

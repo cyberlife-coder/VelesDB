@@ -17,7 +17,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// Returns [`crate::error::Error::DimensionMismatch`] if the query dimension does not
     /// match the index dimension.
     pub fn search_with_rerank(
         &self,
@@ -53,7 +53,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if the query dimension does not
+    /// Returns [`crate::error::Error::DimensionMismatch`] if the query dimension does not
     /// match the index dimension.
     pub fn search_with_rerank_quality(
         &self,

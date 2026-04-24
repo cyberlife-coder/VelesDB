@@ -2,6 +2,9 @@
 
 This module provides a LlamaIndex-compatible VectorStore that uses VelesDB
 as the underlying vector database for storing and retrieving embeddings.
+
+Node construction and streaming helpers live in a dedicated module:
+- :mod:`llamaindex_velesdb.node_builder` — build_points_with_ids, flush_in_batches, etc.
 """
 
 from __future__ import annotations
@@ -21,104 +24,46 @@ import velesdb
 from llamaindex_velesdb.security import (
     validate_path,
     validate_metric,
+    validate_search_quality,
     validate_storage_mode,
     validate_batch_size,
     validate_collection_name,
     validate_sparse_vector,
+    validate_url,
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter
+from llamaindex_velesdb.node_builder import (
+    validate_all_embeddings as _validate_all_embeddings,
+    build_points_with_ids as _build_points_with_ids,
+    flush_in_batches as _flush_in_batches,
+    build_stream_points as _build_stream_points,
+)
 from llamaindex_velesdb.search_ops import SearchOpsMixin
 from llamaindex_velesdb.graph_ops import GraphOpsMixin
+from llamaindex_velesdb.scroll_ops import (  # noqa: F401  # pylint: disable=unused-import
+    ScrollOpsMixin,
+    # `_scroll_one_batch` is re-imported intentionally: tests
+    # monkeypatch ``llamaindex_velesdb.vectorstore._scroll_one_batch``
+    # to observe pagination, so the symbol must be bound at module
+    # scope even though nothing in this file calls it directly.
+    _scroll_one_batch,
+)
 
 # Re-export for backward compatibility and discoverability.
 __all__ = [
     "VelesDBVectorStore",
     "SearchOpsMixin",
     "GraphOpsMixin",
+    "ScrollOpsMixin",
     "metadata_filters_to_core_filter",
 ]
 
 logger = logging.getLogger(__name__)
 
 
-def _validate_all_embeddings(nodes: List[BaseNode]) -> None:
-    """Validate that every node has an embedding (required for sparse alignment)."""
-    for i, node in enumerate(nodes):
-        if node.get_embedding() is None:
-            raise ValueError(
-                f"Node at index {i} has no embedding. All nodes must have embeddings "
-                f"when sparse_vectors are provided to preserve index alignment."
-            )
-
-
-def _build_node_payload(node: BaseNode) -> dict:
-    """Build a VelesDB payload dict from a LlamaIndex node."""
-    node_id = node.node_id
-    payload: dict = {"text": node.get_content(), "node_id": node_id}
-    if hasattr(node, "metadata") and node.metadata:
-        for key, value in node.metadata.items():
-            if isinstance(value, (str, int, float, bool)):
-                payload[key] = value
-    return payload
-
-
-def _build_points_with_ids(
-    nodes: List[BaseNode],
-    sparse_vectors: Optional[list] = None,
-) -> tuple[list, List[str]]:
-    """Convert nodes to VelesDB points and collect node IDs."""
-    points: list = []
-    ids: List[str] = []
-    for idx, node in enumerate(nodes):
-        embedding = node.get_embedding()
-        if embedding is None:
-            continue
-        node_id = node.node_id
-        ids.append(node_id)
-        point: dict = {
-            "id": _stable_hash_id(node_id),
-            "vector": embedding,
-            "payload": _build_node_payload(node),
-        }
-        if sparse_vectors is not None and idx < len(sparse_vectors):
-            point["sparse_vector"] = sparse_vectors[idx]
-        points.append(point)
-    return points, ids
-
-
-def _flush_in_batches(collection: Any, points: list, batch_size: int) -> None:
-    """Send points to a collection in batches via stream_insert."""
-    for start in range(0, len(points), batch_size):
-        collection.stream_insert(points[start : start + batch_size])
-
-
-def _build_stream_points(
-    nodes: List[BaseNode],
-    sparse_vectors: Optional[list] = None,
-) -> list:
-    """Convert nodes to VelesDB points, requiring all nodes have embeddings."""
-    points: list = []
-    for idx, node in enumerate(nodes):
-        embedding = node.get_embedding()
-        if embedding is None:
-            raise ValueError(
-                f"Node at index {idx} (id={node.node_id!r}) has no embedding. "
-                f"All nodes passed to stream_insert must have embeddings."
-            )
-        point: dict = {
-            "id": _stable_hash_id(node.node_id),
-            "vector": embedding,
-            "payload": _build_node_payload(node),
-        }
-        if sparse_vectors is not None and idx < len(sparse_vectors):
-            point["sparse_vector"] = sparse_vectors[idx]
-        points.append(point)
-    return points
-
-
-class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore):
+class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, ScrollOpsMixin, BasePydanticVectorStore):
     """VelesDB vector store for LlamaIndex.
 
     A high-performance vector store backed by VelesDB, designed for
@@ -155,10 +100,13 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ba
     collection_name: str = "llamaindex"
     metric: str = "cosine"
     storage_mode: str = "full"
+    server_url: Optional[str] = None
+    search_quality: Optional[str] = None
 
     _db: Optional[velesdb.Database] = PrivateAttr(default=None)
     _collection: Optional[velesdb.Collection] = PrivateAttr(default=None)
     _dimension: Optional[int] = PrivateAttr(default=None)
+    _search_quality: Optional[str] = PrivateAttr(default=None)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -168,6 +116,8 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ba
         collection_name: str = "llamaindex",
         metric: str = "cosine",
         storage_mode: str = "full",
+        server_url: Optional[str] = None,
+        search_quality: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize VelesDB vector store.
@@ -192,6 +142,13 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ba
                 - "rabitq": RaBitQ with scalar correction (32x compression, good recall).
 
                 Examples: ``storage_mode="int8"`` is equivalent to ``storage_mode="sq8"``.
+            server_url: Optional URL of a VelesDB server for server mode. When
+                provided, must be a valid http:// or https:// URL.
+            search_quality: Optional default quality preset for all queries:
+                ``"fast"``, ``"balanced"``, ``"accurate"``, ``"perfect"``,
+                ``"autotune"``, ``"custom:N"``, ``"adaptive:MIN:MAX"``.
+                ``None`` uses the built-in search. Per-call override:
+                pass ``search_quality=`` to :meth:`query`.
             **kwargs: Additional arguments.
 
         Raises:
@@ -202,14 +159,22 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ba
         validated_collection = validate_collection_name(collection_name)
         validated_metric = validate_metric(metric)
         validated_storage_mode = validate_storage_mode(storage_mode)
+        if server_url is not None:
+            validate_url(server_url)
+        validated_quality: Optional[str] = None
+        if search_quality is not None:
+            validated_quality = validate_search_quality(search_quality)
 
         super().__init__(
             path=validated_path,
             storage_mode=validated_storage_mode,
             collection_name=validated_collection,
             metric=validated_metric,
+            server_url=server_url,
+            search_quality=validated_quality,
             **kwargs,
         )
+        self._search_quality = validated_quality
 
     # ------------------------------------------------------------------
     # Static / class helpers
@@ -291,6 +256,12 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ba
                 # Validate existing collection dimension matches
                 info = self._collection.info()
                 existing_dim = info.get("dimension", 0)
+                if existing_dim == 0 and dimension > 0:
+                    raise ValueError(
+                        f"Collection '{self.collection_name}' is metadata-only "
+                        f"(dimension=0) but requested dimension={dimension}. "
+                        f"Use a vector collection."
+                    )
                 if existing_dim != 0 and existing_dim != dimension:
                     raise ValueError(
                         f"Collection '{self.collection_name}' exists with dimension "
@@ -470,23 +441,32 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Ba
     # ------------------------------------------------------------------
 
     def get_nodes(self, node_ids: List[str], **kwargs: Any) -> List[TextNode]:
-        """Retrieve nodes by their IDs."""
-        if not node_ids or self._collection is None:
+        """Retrieve nodes by their LlamaIndex string IDs.
+
+        The string IDs are hashed through ``_stable_hash_id`` before the
+        VelesDB lookup, matching the insertion path in ``node_builder``.
+        For callers that already hold the hashed integer IDs (e.g. graph
+        traversals), use :meth:`get_nodes_by_int_ids` to avoid an extra
+        round of hashing.
+        """
+        if not node_ids:
             return []
-        int_ids = [_stable_hash_id(nid) for nid in node_ids]
+        return self.get_nodes_by_int_ids([_stable_hash_id(nid) for nid in node_ids])
+
+    def get_nodes_by_int_ids(self, int_ids: List[int]) -> List[TextNode]:
+        """Retrieve nodes by their VelesDB **internal integer point IDs**.
+
+        Use this when callers already hold the int IDs that VelesDB
+        stores (e.g. hash-based IDs produced by ``stable_hash_id`` during
+        insertion, or IDs returned from a graph traversal). Passing those
+        ints back through :meth:`get_nodes` would call ``_stable_hash_id``
+        on the string form of an already-hashed int and silently return
+        nothing.
+        """
+        if not int_ids or self._collection is None:
+            return []
         points = self._collection.get(int_ids)
-        result = []
-        for pt in points:
-            if pt:
-                p = pt.get("payload", {})
-                result.append(
-                    TextNode(
-                        text=p.get("text", ""),
-                        id_=p.get("node_id", ""),
-                        metadata=self._metadata_from_payload(p),
-                    )
-                )
-        return result
+        return [self._node_from_result(pt) for pt in points if pt]
 
     def get_collection_info(self) -> dict:
         """Get collection configuration information."""

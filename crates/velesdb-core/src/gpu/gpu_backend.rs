@@ -3,7 +3,7 @@
 //! Provides batch distance calculations on GPU for large datasets.
 //! WGSL shader sources are in `shaders.rs`.
 
-mod shaders;
+pub(super) mod shaders;
 
 use std::sync::{Arc, OnceLock};
 

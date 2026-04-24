@@ -1,4 +1,3 @@
-#![allow(deprecated)] // Benches use legacy Collection.
 //! HNSW Index Performance Benchmarks
 //!
 //! Run with: `cargo bench --bench hnsw_benchmark`
@@ -9,7 +8,7 @@ use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
 use std::time::Duration;
-use velesdb_core::{Collection, DistanceMetric, HnswIndex, Point, VectorIndex};
+use velesdb_core::{DistanceMetric, HnswIndex, Point, VectorCollection, VectorIndex};
 
 /// Generates a random-ish vector for benchmarking.
 fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
@@ -203,8 +202,14 @@ fn bench_collection_search(c: &mut Criterion) {
     let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
     let path = temp_dir.path().join("bench_collection");
 
-    let collection =
-        Collection::create(path, dim, DistanceMetric::Cosine).expect("Failed to create collection");
+    let collection = VectorCollection::create(
+        path,
+        "bench",
+        dim,
+        DistanceMetric::Cosine,
+        velesdb_core::StorageMode::Full,
+    )
+    .expect("Failed to create collection");
 
     // Insert 10k points
     let points: Vec<Point> = (0..10_000u64)

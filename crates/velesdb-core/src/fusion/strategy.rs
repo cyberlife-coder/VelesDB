@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 /// Error type for fusion operations.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum FusionError {
     /// Weights do not sum to 1.0 (within tolerance).
     InvalidWeightSum {
@@ -42,6 +43,7 @@ impl std::error::Error for FusionError {}
 /// - `RRF`: Position-based fusion, robust to score scale differences
 /// - `Weighted`: Custom combination with explicit control over factors
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum FusionStrategy {
     /// Average score across all queries where the document appears.
     ///

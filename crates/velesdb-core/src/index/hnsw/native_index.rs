@@ -22,7 +22,6 @@ use crate::index::VectorIndex;
 use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
 use parking_lot::RwLock;
-use std::path::Path;
 
 /// Native HNSW index for efficient approximate nearest neighbor search.
 ///
@@ -33,17 +32,17 @@ use std::path::Path;
 ///
 /// - **Recall**: ~99% parity with `hnsw_rs` (verified by parity tests)
 /// - **Insert**: Comparable performance with SIMD distance calculations
-/// - **Search**: Optimized with `SimdDistance` engine
+/// - **Search**: Optimized with `CachedSimdDistance` engine
 /// - **Persistence**: Native binary format (not compatible with `hnsw_rs` format)
 pub struct NativeHnswIndex {
-    dimension: usize,
-    metric: DistanceMetric,
-    inner: RwLock<NativeHnswInner>,
+    pub(crate) dimension: usize,
+    pub(crate) metric: DistanceMetric,
+    pub(crate) inner: RwLock<NativeHnswInner>,
     pub(crate) mappings: ShardedMappings,
-    vectors: ShardedVectors,
-    enable_vector_storage: bool,
+    pub(crate) vectors: ShardedVectors,
+    pub(crate) enable_vector_storage: bool,
     #[allow(dead_code)] // Retained for future vacuum/rebuild operations
-    params: HnswParams,
+    pub(crate) params: HnswParams,
 }
 
 impl NativeHnswIndex {
@@ -107,102 +106,6 @@ impl NativeHnswIndex {
         Ok(index)
     }
 
-    /// Saves the index to disk.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if file operations fail.
-    pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
-        use super::persistence::{self, HnswMappingsData, HnswMeta};
-
-        let path = path.as_ref();
-        std::fs::create_dir_all(path)?;
-
-        // Save HNSW graph
-        let inner = self.inner.read();
-        inner.file_dump(path, "native_hnsw")?;
-
-        // Save mappings
-        let (id_to_idx, idx_to_id, next_idx) = self.mappings.as_parts();
-        persistence::save_mappings(
-            path,
-            &HnswMappingsData {
-                id_to_idx,
-                idx_to_id,
-                next_idx,
-            },
-        )?;
-
-        // Save or clean up vectors (shared helper)
-        persistence::save_or_cleanup_vectors(path, self.enable_vector_storage, &self.vectors)?;
-
-        // Save metadata
-        persistence::save_meta(
-            path,
-            &HnswMeta {
-                dimension: self.dimension,
-                metric: self.metric,
-                enable_vector_storage: self.enable_vector_storage,
-                storage_mode: self.inner.read().storage_mode(),
-            },
-        )?;
-
-        Ok(())
-    }
-
-    /// Loads the index from disk.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Path to the index directory
-    /// * `_dimension` - Ignored (read from metadata) - for API compatibility
-    /// * `_metric` - Ignored (read from metadata) - for API compatibility
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if file operations fail or data is corrupted.
-    pub fn load<P: AsRef<Path>>(
-        path: P,
-        _dimension: usize,
-        _metric: DistanceMetric,
-    ) -> std::io::Result<Self> {
-        use super::persistence;
-
-        let path = path.as_ref();
-
-        let meta = persistence::load_meta(path)?;
-
-        // Load HNSW graph (with storage mode for RaBitQ backend support)
-        let inner = NativeHnswInner::file_load_with_storage_mode(
-            path,
-            "native_hnsw",
-            meta.metric,
-            meta.dimension,
-            meta.storage_mode,
-        )?;
-
-        // Load mappings
-        let mappings_data = persistence::load_mappings(path)?;
-        let mappings = ShardedMappings::from_parts(
-            mappings_data.id_to_idx,
-            mappings_data.idx_to_id,
-            mappings_data.next_idx,
-        );
-
-        // Load vectors (gracefully disables if file missing)
-        let (vectors, enable_vector_storage) = persistence::load_vectors_or_disable(path, &meta)?;
-
-        Ok(Self {
-            dimension: meta.dimension,
-            metric: meta.metric,
-            inner: RwLock::new(inner),
-            mappings,
-            vectors,
-            enable_vector_storage,
-            params: HnswParams::auto(meta.dimension),
-        })
-    }
-
     /// Returns the dimension of vectors in this index.
     #[inline]
     #[must_use]
@@ -248,6 +151,10 @@ impl NativeHnswIndex {
     }
 
     /// Searches with a specific quality profile.
+    ///
+    /// Uses [`NativeHnswInner::search_auto`] so that when the `gpu` feature is
+    /// enabled and the index is large enough (> 500K vectors, Standard backend),
+    /// layer-0 traversal is offloaded to the GPU. Falls back to CPU otherwise.
     #[must_use]
     pub fn search_with_quality(
         &self,
@@ -257,7 +164,7 @@ impl NativeHnswIndex {
     ) -> Vec<ScoredResult> {
         let ef_search = quality.ef_search(k);
         let inner = self.inner.read();
-        let neighbors = inner.search(query, k, ef_search);
+        let neighbors = inner.search_auto(query, k, ef_search);
 
         neighbors
             .into_iter()
@@ -330,18 +237,17 @@ impl NativeHnswIndex {
     ///
     /// Returns an error if any insertion fails.
     pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) -> crate::error::Result<()> {
-        // Validate all dimensions upfront before any upsert_mapping side effects.
-        for (_id, vec) in items {
-            validate_dimension_match(self.dimension, vec.len())?;
-        }
-
-        let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
-        let upsert_results = upsert::upsert_mapping_batch(
+        // RF-DEDUP #448 Group D — shared validate + upsert_mapping_batch
+        // pipeline (see `HnswIndex::prepare_batch_insert`). Runs dimension
+        // validation to completion BEFORE any mapping registration so
+        // failures cannot leave orphaned mappings.
+        let upsert_results = upsert::validate_and_register_batch(
             &self.mappings,
             &self.vectors,
             self.enable_vector_storage,
-            &ids,
-        );
+            self.dimension,
+            items,
+        )?;
 
         let mut data: Vec<(&[f32], usize)> = Vec::with_capacity(items.len());
         let mut rollback_info: Vec<(u64, UpsertResult)> = Vec::with_capacity(items.len());
@@ -354,18 +260,17 @@ impl NativeHnswIndex {
         let assigned_ids = match self.inner.read().parallel_insert(&data) {
             Ok(ids) => ids,
             Err(e) => {
-                // Reverse order: undo last upsert first so duplicate-ID chains
-                // restore correctly (each rollback depends on the previous state).
-                for (id, result) in rollback_info.iter().rev() {
-                    self.rollback_upsert(*id, result);
-                }
+                // RF-DEDUP #448 Group D — reverse-order rollback shared with
+                // HnswIndex::insert_batch_parallel.
+                upsert::rollback_batch(&self.mappings, &rollback_info);
                 return Err(e);
             }
         };
 
-        // Reconcile mappings: the graph may assign different node IDs than
-        // upsert_mapping_batch pre-registered. Fix mismatches.
-        let storage_ids = self.reconcile_batch_mappings(&rollback_info, &assigned_ids);
+        // RF-DEDUP #448 Group D — mapping reconciliation shared with
+        // HnswIndex::insert_batch_parallel.
+        let storage_ids =
+            upsert::reconcile_batch_mappings(&self.mappings, &rollback_info, &assigned_ids);
 
         if self.enable_vector_storage {
             for (vec_slice, idx) in data.iter().map(|(v, _)| *v).zip(storage_ids) {
@@ -376,42 +281,20 @@ impl NativeHnswIndex {
         Ok(())
     }
 
-    /// Reconciles pre-registered mapping indices with graph-assigned node IDs.
-    ///
-    /// For each item, if the graph-assigned ID differs from the pre-registered
-    /// index, removes the stale reverse mapping and restores the correct one.
-    /// Returns the authoritative storage index for each item.
-    fn reconcile_batch_mappings(
-        &self,
-        rollback_info: &[(u64, UpsertResult)],
-        assigned_ids: &[usize],
-    ) -> Vec<usize> {
-        let mut storage_ids = Vec::with_capacity(assigned_ids.len());
-        for (assigned_id, (ext_id, result)) in assigned_ids.iter().zip(rollback_info) {
-            if *assigned_id == result.idx {
-                storage_ids.push(result.idx);
-            } else {
-                self.mappings.remove_reverse(result.idx);
-                self.mappings.restore(*ext_id, *assigned_id);
-                storage_ids.push(*assigned_id);
-            }
-        }
-        storage_ids
-    }
-
     /// Removes a vector by ID (soft delete).
     ///
     /// Removes the ID from mappings and cleans up stored vector data.
     /// The HNSW graph node becomes a tombstone, filtered out during search.
+    ///
+    /// Delegates to [`upsert::soft_delete`], shared with `HnswIndex::remove`
+    /// (#448 Group F).
     pub fn remove(&self, id: u64) -> bool {
-        if let Some(old_idx) = self.mappings.remove(id) {
-            if self.enable_vector_storage {
-                self.vectors.remove(old_idx);
-            }
-            true
-        } else {
-            false
-        }
+        upsert::soft_delete(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            id,
+        )
     }
 
     /// Sets searching mode (no-op for native implementation).

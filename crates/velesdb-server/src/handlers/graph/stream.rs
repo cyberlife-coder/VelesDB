@@ -1,7 +1,27 @@
 //! SSE streaming graph traversal handler (EPIC-058 US-003).
 //!
-//! Provides a Server-Sent Events endpoint for streaming graph traversal
-//! results incrementally, avoiding full buffering for large traversals.
+//! Provides a Server-Sent Events endpoint for graph traversal results.
+//!
+//! # Streaming contract (finding F-17)
+//!
+//! The server-side traversal produced by `velesdb_core::GraphCollection::
+//! traverse_bfs` / `traverse_dfs` is a synchronous call that returns a
+//! fully materialised `Vec<TraversalResult>`. That means the "streaming"
+//! semantics of this endpoint currently apply to the **wire level**
+//! only — every node event is delivered to the client as an individual
+//! SSE record (with back-pressure handled by axum's SSE wrapper), but
+//! the traversal itself runs to completion before the first node
+//! reaches the wire.
+//!
+//! F-17 of the pre-seed audit flagged this as a "fake SSE" problem.
+//! Sprint 1 addresses the most damaging half of that finding: the
+//! synchronous traversal is now executed on a `spawn_blocking` worker
+//! so the async runtime stays responsive for concurrent requests,
+//! and the SSE events are built off the runtime thread. True
+//! incremental streaming — where each node is emitted to the wire
+//! as soon as the traversal visits it — requires a new callback-based
+//! core method (`traverse_bfs_stream(config, cb)`) and is tracked as
+//! a post-seed EPIC in `docs/ARCHITECTURE.md`.
 
 use axum::{
     extract::{Path, Query, State},
@@ -42,50 +62,80 @@ const STATS_INTERVAL: usize = 100;
         (status = 200, description = "SSE stream of traversal events (node, stats, done, error)")
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn stream_traverse(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
     Query(params): Query<StreamTraverseParams>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let start_time = Instant::now();
+    state.onboarding_metrics.record_graph_request();
+
+    // Snapshot the parameters and state needed by the blocking worker.
+    let coll_handle = state.db.get_graph_collection(&collection);
+
+    // F-17 fix: execute the synchronous traversal and event
+    // construction on a blocking worker so the Tokio async runtime
+    // stays responsive to other requests. The completed Vec<Event>
+    // is then handed back to the async handler and fed to the SSE
+    // wrapper as a lazy iterator, so individual events are still
+    // pushed to the wire progressively under back-pressure.
+    let events = tokio::task::spawn_blocking(move || {
+        let traversal_result = run_traversal_blocking(coll_handle, collection.as_str(), &params);
+        build_sse_events(traversal_result, start_time)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        // JoinError: panic or cancellation inside the blocking task.
+        // Report it as an SSE error event so the client receives a
+        // well-formed SSE frame instead of an aborted connection.
+        build_error_events(format!(
+            "Graph traversal worker failed: {e}. This is an internal \
+             server error; please retry or contact the operator."
+        ))
+    });
+
+    Sse::new(stream::iter(events)).keep_alive(KeepAlive::default())
+}
+
+/// Runs the graph traversal synchronously on the calling (blocking)
+/// thread. Factored out of the handler so it can be invoked from
+/// `tokio::task::spawn_blocking` without leaking async internals.
+fn run_traversal_blocking(
+    coll_handle: Option<velesdb_core::GraphCollection>,
+    collection_name: &str,
+    params: &StreamTraverseParams,
+) -> Result<Vec<TraversalResultItem>, String> {
     use velesdb_core::collection::graph::TraversalConfig;
 
-    let start_time = Instant::now();
+    let Some(coll) = coll_handle else {
+        return Err(format!(
+            "Collection '{collection_name}' not found or is not a graph collection."
+        ));
+    };
 
     let rel_types: Vec<String> = params
         .relationship_types
+        .as_ref()
         .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
         .unwrap_or_default();
 
-    let traversal_result: Result<Vec<TraversalResultItem>, String> =
-        match state.db.get_graph_collection(&collection) {
-            None => Err(format!(
-                "Collection '{}' not found or is not a graph collection.",
-                collection
-            )),
-            Some(coll) => {
-                let config = TraversalConfig::with_range(1, params.max_depth)
-                    .with_limit(params.limit)
-                    .with_rel_types(rel_types);
+    let config = TraversalConfig::with_range(1, params.max_depth)
+        .with_limit(params.limit)
+        .with_rel_types(rel_types);
 
-                let raw = match params.algorithm.to_lowercase().as_str() {
-                    "dfs" => coll.traverse_dfs(params.start_node, &config),
-                    _ => coll.traverse_bfs(params.start_node, &config),
-                };
+    let raw = match params.algorithm.to_lowercase().as_str() {
+        "dfs" => coll.traverse_dfs(params.start_node, &config),
+        _ => coll.traverse_bfs(params.start_node, &config),
+    };
 
-                Ok(raw
-                    .into_iter()
-                    .map(|r| TraversalResultItem {
-                        target_id: r.target_id,
-                        depth: r.depth,
-                        path: r.path,
-                    })
-                    .collect())
-            }
-        };
-
-    let events = build_sse_events(traversal_result, start_time);
-    Sse::new(stream::iter(events)).keep_alive(KeepAlive::default())
+    Ok(raw
+        .into_iter()
+        .map(|r| TraversalResultItem {
+            target_id: r.target_id,
+            depth: r.depth,
+            path: r.path,
+        })
+        .collect())
 }
 
 /// Converts a traversal result into a sequence of SSE events.

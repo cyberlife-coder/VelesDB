@@ -12,7 +12,7 @@ Host classes must expose:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict, Optional
 
 
 class CollectionAdminMixin:
@@ -61,3 +61,28 @@ class CollectionAdminMixin:
             Training result message.
         """
         return self._get_db().train_pq(self.collection_name, m=m, k=k, opq=opq)
+
+    def analyze_collection(self) -> dict:
+        """Analyze the collection, computing and persisting statistics.
+
+        Delegates to ``Database.analyze_collection(name)`` which computes
+        per-column stats including histogram metadata.
+
+        Returns:
+            Dict with keys: ``total_points``, ``row_count``, ``deleted_count``,
+            ``avg_row_size_bytes``, ``payload_size_bytes``, ``column_stats``
+            (dict mapping column names to per-column stat dicts with optional
+            ``histogram_buckets`` and ``histogram_stale`` fields).
+        """
+        return self._get_db().analyze_collection(self.collection_name)
+
+    def get_collection_stats(self) -> Optional[Dict[str, Any]]:
+        """Get cached collection statistics, or None if never analyzed.
+
+        Delegates to ``Database.get_collection_stats(name)``.
+
+        Returns:
+            Dict with same structure as ``analyze_collection()`` return value,
+            or None if the collection has never been analyzed.
+        """
+        return self._get_db().get_collection_stats(self.collection_name)

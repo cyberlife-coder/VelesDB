@@ -1,0 +1,38 @@
+{
+  "classes": [
+    {
+      "class": "ArticleNV",
+      "vectorizer": "none",
+      "vectorConfig": {
+        "default": {
+          "vectorizer": {
+            "text2vec-openai": {
+              "properties": ["title"]
+            }
+          },
+          "vectorIndexType": "hnsw",
+          "vectorIndexConfig": {
+            "distance": "dot",
+            "maxConnections": 64,
+            "efConstruction": 128
+          }
+        },
+        "body_vectors": {
+          "vectorizer": {
+            "text2vec-openai": {
+              "properties": ["body"]
+            }
+          },
+          "vectorIndexType": "flat",
+          "vectorIndexConfig": {
+            "distance": "cosine"
+          }
+        }
+      },
+      "properties": [
+        {"name": "title", "dataType": ["text"]},
+        {"name": "body", "dataType": ["text"]}
+      ]
+    }
+  ]
+}

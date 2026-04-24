@@ -224,19 +224,11 @@ impl HnswIndex {
 
         let meta = persistence::load_meta(path)?;
 
-        // Load HNSW graph
+        // Load HNSW graph (caller-specific — see persistence::load_sidecars).
         let inner = HnswInner::file_load(path, "native_hnsw", meta.metric, meta.dimension)?;
 
-        // Load mappings
-        let mappings_data = persistence::load_mappings(path)?;
-        let mappings = ShardedMappings::from_parts(
-            mappings_data.id_to_idx,
-            mappings_data.idx_to_id,
-            mappings_data.next_idx,
-        );
-
-        // Load vectors (gracefully disables if file missing)
-        let (vectors, enable_vector_storage) = persistence::load_vectors_or_disable(path, &meta)?;
+        // Mappings + vectors in one shared call (RF-DEDUP #448 Group C).
+        let (mappings, vectors, enable_vector_storage) = persistence::load_sidecars(path, &meta)?;
 
         Ok(Self {
             dimension: meta.dimension,
@@ -261,41 +253,43 @@ impl HnswIndex {
     ///
     /// Returns an error if the write fails.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::result::Result<(), std::io::Error> {
-        use crate::index::hnsw::persistence::{self, HnswMappingsData, HnswMeta};
+        use crate::index::hnsw::persistence::{self, HnswMeta};
 
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
 
-        // Save HNSW graph
-        let inner = self.inner.read();
-        inner.file_dump(path, "native_hnsw")?;
+        // #617: stamp every on-disk artefact with the same monotonic generation
+        // so that a crash between any two renames (graph, mappings, vectors,
+        // meta) is detectable on reload. Errors are propagated rather than
+        // silently resetting to generation 1 on corrupted meta (Devin #618
+        // follow-up).
+        let new_gen = persistence::next_generation(path)?;
 
-        // Save mappings
-        let (id_to_idx, idx_to_id, next_idx) = self.mappings.as_parts();
-        persistence::save_mappings(
+        // Dump the HNSW graph itself (caller-specific — see persistence::save_sidecars).
+        self.inner.read().file_dump(path, "native_hnsw")?;
+
+        // Graph-generation marker is written IMMEDIATELY after the graph dump
+        // and BEFORE the sidecars, so any crash after the graph rename leaves
+        // the marker at the new generation while the sidecars still stamp the
+        // old one — `load_sidecars` detects the mismatch.
+        persistence::save_graph_generation(path, new_gen)?;
+
+        // Mappings + vectors + meta in one shared call (RF-DEDUP #448 Group C).
+        // NativeHnsw exclusively uses StorageMode::Full for backward compat.
+        persistence::save_sidecars(
             path,
-            &HnswMappingsData {
-                id_to_idx,
-                idx_to_id,
-                next_idx,
-            },
-        )?;
-
-        // Save or clean up vectors (shared helper)
-        persistence::save_or_cleanup_vectors(path, self.enable_vector_storage, &self.vectors)?;
-
-        // Save metadata
-        persistence::save_meta(
-            path,
+            &self.mappings,
+            &self.vectors,
             &HnswMeta {
                 dimension: self.dimension,
                 metric: self.metric,
                 enable_vector_storage: self.enable_vector_storage,
                 storage_mode: crate::StorageMode::Full,
+                // `save_sidecars` overwrites this with `new_gen` (#617).
+                generation: 0,
             },
-        )?;
-
-        Ok(())
+            new_gen,
+        )
     }
 
     /// Returns the vector dimension.

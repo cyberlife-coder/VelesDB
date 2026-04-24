@@ -137,16 +137,17 @@ impl TrigramIndex {
     ///
     /// If a document with the same ID exists, it will be updated.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `doc_id` exceeds `u32::MAX` (4 billion documents).
-    /// This is a limitation of the underlying RoaringBitmap storage.
-    pub fn insert(&mut self, doc_id: u64, text: &str) {
+    /// Returns `Error::Overflow` if `doc_id` exceeds `u32::MAX` (4 billion
+    /// documents). This is a limitation of the underlying `RoaringBitmap`.
+    pub fn insert(&mut self, doc_id: u64, text: &str) -> crate::error::Result<()> {
         // Bounds check: RoaringBitmap uses u32 internally
-        assert!(
-            u32::try_from(doc_id).is_ok(),
-            "TrigramIndex: doc_id {doc_id} exceeds u32::MAX limit. Maximum 4B documents supported."
-        );
+        if u32::try_from(doc_id).is_err() {
+            return Err(crate::error::Error::Overflow(format!(
+                "TrigramIndex: doc_id {doc_id} exceeds u32::MAX limit. Maximum 4B documents supported."
+            )));
+        }
 
         // Remove old entry if exists
         if self.doc_trigrams.contains_key(&doc_id) {
@@ -164,7 +165,7 @@ impl TrigramIndex {
         self.doc_trigrams.insert(doc_id, trigram_set);
 
         // Add to inverted index
-        // SAFETY: Bounds checked above, truncation is safe
+        // Reason: Bounds checked above, truncation is safe
         #[allow(clippy::cast_possible_truncation)]
         let doc_id_u32 = doc_id as u32;
         for trigram in trigrams {
@@ -173,6 +174,7 @@ impl TrigramIndex {
 
         // Track document
         self.all_docs.insert(doc_id_u32);
+        Ok(())
     }
 
     /// Remove a document from the index.
@@ -185,7 +187,7 @@ impl TrigramIndex {
         if u32::try_from(doc_id).is_err() {
             return;
         }
-        // SAFETY: Bounds checked above
+        // Reason: Bounds checked above
         #[allow(clippy::cast_possible_truncation)]
         let doc_id_u32 = doc_id as u32;
         self.doc_fingerprints.remove(&doc_id);

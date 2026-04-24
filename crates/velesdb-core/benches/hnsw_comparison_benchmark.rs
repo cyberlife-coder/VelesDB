@@ -2,10 +2,8 @@
 //!
 //! Run with: `cargo bench --bench hnsw_comparison_benchmark`
 
-#![allow(deprecated)] // SimdDistance is deprecated in favor of CachedSimdDistance
-
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use velesdb_core::index::hnsw::native::{NativeHnsw, SimdDistance};
+use velesdb_core::index::hnsw::native::{CachedSimdDistance, NativeHnsw};
 use velesdb_core::index::hnsw::{HnswIndex, HnswParams};
 use velesdb_core::index::VectorIndex;
 use velesdb_core::DistanceMetric;
@@ -40,7 +38,7 @@ fn bench_insert(c: &mut Criterion) {
 
     group.bench_function("native_hnsw", |b| {
         b.iter(|| {
-            let distance = SimdDistance::new(DistanceMetric::Euclidean);
+            let distance = CachedSimdDistance::new(DistanceMetric::Euclidean, DIMENSIONS);
             let hnsw = NativeHnsw::new(distance, 16, 200, N_VECTORS);
             for (i, v) in vectors.iter().enumerate() {
                 hnsw.insert(v).expect("bench");
@@ -73,7 +71,7 @@ fn bench_search(c: &mut Criterion) {
     let queries = generate_vectors(100, DIMENSIONS);
 
     // Build native index
-    let native_distance = SimdDistance::new(DistanceMetric::Euclidean);
+    let native_distance = CachedSimdDistance::new(DistanceMetric::Euclidean, DIMENSIONS);
     let native_hnsw = NativeHnsw::new(native_distance, 16, 200, N_VECTORS);
     for v in &vectors {
         native_hnsw.insert(v).expect("bench");
@@ -119,7 +117,7 @@ fn bench_parallel_insert(c: &mut Criterion) {
 
     group.bench_function("native_hnsw_parallel", |b| {
         b.iter(|| {
-            let distance = SimdDistance::new(DistanceMetric::Euclidean);
+            let distance = CachedSimdDistance::new(DistanceMetric::Euclidean, DIMENSIONS);
             let hnsw = NativeHnsw::new(distance, 16, 200, N_VECTORS);
             let data: Vec<(&[f32], usize)> = vectors
                 .iter()

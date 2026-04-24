@@ -74,8 +74,8 @@ pub trait NativeHnswBackend: Send + Sync {
     /// Transforms raw distance to appropriate score based on metric type.
     ///
     /// For Euclidean metric, assumes the input is **squared L2** as produced
-    /// by `CachedSimdDistance`. Other distance engines (e.g. `SimdDistance`,
-    /// `NativeSimdDistance`) that already return actual Euclidean distance
+    /// by `CachedSimdDistance`. Other distance engines that already return
+    /// actual Euclidean distance
     /// should **not** have their results passed through this function, as
     /// it would incorrectly apply `sqrt()` to an already-sqrt'd value.
     fn transform_score(&self, raw_distance: f32) -> f32;
@@ -153,6 +153,16 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         self.connect_batch_chunked(&assignments[connect_start..], &processed, first_node)?;
         self.finalize_batch(&assignments, connect_start);
 
+        // Invalidate GPU caches — topology and vectors both changed.
+        // Single `insert()` does this per-call; batch path must do it once
+        // after all nodes are connected to avoid stale CSR/vector snapshots.
+        // `finalize_batch` has already released every `Vectors` write lock
+        // taken during the insert loop, so the helper's mutex acquisition
+        // is a flat acquire (rank 5) with nothing on the lock stack —
+        // consistent with the declared global order.
+        #[cfg(feature = "gpu")]
+        self.invalidate_gpu_caches();
+
         // Return the graph-assigned node IDs in input order
         let assigned_ids: Vec<usize> = assignments.iter().map(|(node_id, _)| *node_id).collect();
         Ok(assigned_ids)
@@ -214,6 +224,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// graph.
     ///
     /// Returns `(effective_ef, stagnation_limit)`.
+    #[allow(dead_code)] // Reason: Tested in backend_adapter_tests; wired in batch insert V2
     #[must_use]
     pub(in crate::index::hnsw::native) fn adaptive_ef_for_batch(
         &self,

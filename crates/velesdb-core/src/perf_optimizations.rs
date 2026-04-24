@@ -18,7 +18,7 @@
 //! via RAII with `AllocGuard` for panic-safe resize operations.
 
 use crate::validation::validate_dimension_match;
-use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::alloc::{alloc_zeroed, Layout};
 use std::fmt;
 use std::ptr::{self, NonNull};
 
@@ -57,12 +57,12 @@ pub struct ContiguousVectors {
 // SAFETY: `ContiguousVectors` is `Send` because it owns its allocation.
 // - Condition 1: The backing buffer is uniquely owned by the struct.
 // - Condition 2: Mutation requires `&mut self` or lock-guarded interior access.
-// Reason: Moving ownership of this container between threads is sound.
+// SAFETY: Moving ownership of this container between threads is sound.
 unsafe impl Send for ContiguousVectors {}
 // SAFETY: `ContiguousVectors` is `Sync` because shared access is read-only.
 // - Condition 1: All writes happen through methods requiring mutable or exclusive lock access.
 // - Condition 2: Returned shared slices borrow immutably and cannot mutate internal state.
-// Reason: Concurrent shared references cannot violate aliasing rules.
+// SAFETY: Concurrent shared references cannot violate aliasing rules.
 unsafe impl Sync for ContiguousVectors {}
 
 impl fmt::Debug for ContiguousVectors {
@@ -106,7 +106,7 @@ impl ContiguousVectors {
         // SAFETY: `alloc_zeroed` requires a valid non-zero layout.
         // - Condition 1: `dimension > 0` and `capacity >= 16` guarantee non-zero size.
         // - Condition 2: `layout` is built via `Layout::from_size_align` and therefore valid.
-        // Reason: Zero-initialized allocation guarantees all f32 slots are 0.0,
+        // SAFETY: Zero-initialized allocation guarantees all f32 slots are 0.0,
         // preventing UB when `insert_at` creates sparse gaps (indices 0..N not all written).
         let ptr = unsafe { alloc_zeroed(layout) };
 
@@ -191,7 +191,10 @@ impl ContiguousVectors {
         // (`alloc_zeroed`) and resize (`AllocGuard::new_zeroed`) zero-initialize the buffer.
         // `count * dimension <= capacity * dimension`, `data` is non-null per `NonNull`
         // invariant. Even sparse `insert_at` gaps contain valid 0.0 f32 values.
-        // Reason: Zero-copy GPU upload requires a contiguous &[f32] view.
+        // - Condition 1: `data` is a valid, aligned `NonNull<f32>` pointer.
+        // - Condition 2: `total <= capacity * dimension` ensures the slice is within the allocation.
+        // - Condition 3: All bytes in the allocation are initialized (zeroed or written).
+        // SAFETY: Zero-copy GPU upload requires a contiguous &[f32] view.
         unsafe { std::slice::from_raw_parts(self.data.as_ptr(), total) }
     }
 
@@ -225,37 +228,6 @@ impl ContiguousVectors {
         self.capacity * self.dimension * std::mem::size_of::<f32>()
     }
 
-    /// Ensures the storage has capacity for at least `required_capacity` vectors.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::AllocationFailed`] if reallocation fails.
-    ///
-    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
-    pub fn ensure_capacity(&mut self, required_capacity: usize) -> crate::error::Result<()> {
-        if required_capacity > self.capacity {
-            let new_capacity = required_capacity.max(self.capacity * 2);
-            self.resize(new_capacity)?;
-        }
-        Ok(())
-    }
-
-    /// Pre-allocates capacity for `additional` more vectors beyond the current length.
-    ///
-    /// Analogous to [`Vec::reserve`]: ensures the buffer can hold
-    /// `self.len() + additional` vectors without reallocating. No-op if
-    /// sufficient capacity already exists.
-    ///
-    /// Call before a batch push to guarantee `push_batch` won't resize.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::AllocationFailed`] if reallocation fails.
-    pub fn reserve_additional(&mut self, additional: usize) -> crate::error::Result<()> {
-        let required = self.count.saturating_add(additional);
-        self.ensure_capacity(required)
-    }
-
     /// Inserts a vector at a specific index.
     ///
     /// Automatically grows capacity if needed.
@@ -264,10 +236,10 @@ impl ContiguousVectors {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if `vector.len() != self.dimension`.
+    /// Returns [`crate::error::Error::DimensionMismatch`] if `vector.len() != self.dimension`.
     /// Returns [`Error::AllocationFailed`] if capacity growth fails.
     ///
-    /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
+    /// [`crate::error::Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub fn insert_at(&mut self, index: usize, vector: &[f32]) -> crate::error::Result<()> {
         validate_dimension_match(self.dimension, vector.len())?;
@@ -278,7 +250,7 @@ impl ContiguousVectors {
         // SAFETY: We ensured capacity covers index, data is non-null (NonNull invariant)
         // - Condition 1: Capacity was verified to cover the target index.
         // - Condition 2: Both source and destination pointers are valid and properly aligned.
-        // Reason: Efficient bulk memory copy for vector insertion.
+        // SAFETY: Efficient bulk memory copy for vector insertion.
         unsafe {
             ptr::copy_nonoverlapping(
                 vector.as_ptr(),
@@ -298,10 +270,10 @@ impl ContiguousVectors {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] if `vector.len() != self.dimension`.
+    /// Returns [`crate::error::Error::DimensionMismatch`] if `vector.len() != self.dimension`.
     /// Returns [`Error::AllocationFailed`] if capacity growth fails.
     ///
-    /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
+    /// [`crate::error::Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub fn push(&mut self, vector: &[f32]) -> crate::error::Result<()> {
         self.insert_at(self.count, vector)
@@ -319,10 +291,10 @@ impl ContiguousVectors {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DimensionMismatch`] or [`Error::AllocationFailed`] on the
+    /// Returns [`crate::error::Error::DimensionMismatch`] or [`Error::AllocationFailed`] on the
     /// first vector that fails. Vectors added before the failure remain in storage.
     ///
-    /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
+    /// [`crate::error::Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub fn push_batch(&mut self, vectors: &[&[f32]]) -> crate::error::Result<usize> {
         if vectors.is_empty() {
@@ -341,7 +313,7 @@ impl ContiguousVectors {
             // - Condition 1: offset + dimension is within allocated buffer.
             // - Condition 2: Both pointers are valid and aligned for f32.
             // - Condition 3: &mut self guarantees exclusive access — no data race.
-            // Reason: Batch push with single pre-allocation.
+            // SAFETY: Batch push with single pre-allocation.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     vector.as_ptr(),
@@ -372,7 +344,7 @@ impl ContiguousVectors {
         // SAFETY: Index is within bounds (checked against count, which is <= capacity)
         // - Condition 1: index < count ensures access is within initialized range.
         // - Condition 2: data is non-null per NonNull invariant.
-        // Reason: Zero-copy slice creation from contiguous storage.
+        // SAFETY: Zero-copy slice creation from contiguous storage.
         Some(unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension) })
     }
 
@@ -398,7 +370,7 @@ impl ContiguousVectors {
         // SAFETY: Caller guarantees index < count, data is non-null (NonNull invariant)
         // - Condition 1: Caller contract ensures index < count.
         // - Condition 2: data is non-null per NonNull invariant.
-        // Reason: Performance-critical path requiring unchecked access.
+        // SAFETY: Performance-critical path requiring unchecked access.
         std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension)
     }
 
@@ -414,94 +386,12 @@ impl ContiguousVectors {
             // data is non-null per NonNull invariant.
             // - Condition 1: Bounds check ensures offset + dimension <= capacity * dimension.
             // - Condition 2: NonNull guarantees pointer validity.
-            // Reason: Create slice for cross-platform multi-cache-line prefetch.
+            // SAFETY: Create slice for cross-platform multi-cache-line prefetch.
             let vector = unsafe {
                 std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension)
             };
             crate::simd_native::prefetch_vector_multi_cache_line(vector);
         }
-    }
-
-    /// Resizes the internal buffer.
-    ///
-    /// # P2 Audit + PERF-002: Panic-Safety with RAII Guard
-    ///
-    /// This function uses `AllocGuard` for panic-safe allocation:
-    /// 1. New buffer is allocated via RAII guard (auto-freed on panic)
-    /// 2. Data is copied to new buffer
-    /// 3. Guard ownership is transferred (no auto-free)
-    /// 4. Old buffer is deallocated
-    /// 5. State is updated atomically
-    ///
-    /// If panic occurs during copy, the guard ensures new buffer is freed.
-    fn resize(&mut self, new_capacity: usize) -> crate::error::Result<()> {
-        if new_capacity <= self.capacity {
-            return Ok(());
-        }
-
-        let old_layout = Self::layout(self.dimension, self.capacity)?;
-        let new_layout = Self::layout(self.dimension, new_capacity)?;
-
-        let new_data = Self::alloc_and_copy(new_layout, self.data, self.count, self.dimension)?;
-
-        // Deallocate old buffer
-        // SAFETY: self.data was allocated with old_layout, is non-null (NonNull invariant)
-        // - Condition 1: old_layout matches the allocation parameters.
-        // - Condition 2: Pointer is non-null per NonNull invariant.
-        // Reason: Free old buffer after data migration to new buffer.
-        unsafe {
-            dealloc(self.data.as_ptr().cast::<u8>(), old_layout);
-        }
-
-        // Update state (all-or-nothing)
-        self.data = new_data;
-        self.capacity = new_capacity;
-        Ok(())
-    }
-
-    /// Allocates a new buffer and copies existing data into it.
-    ///
-    /// Uses `AllocGuard` for panic-safety: if copy panics, the guard drops
-    /// and frees the new buffer automatically.
-    #[allow(clippy::cast_ptr_alignment)] // Layout is 64-byte aligned
-    fn alloc_and_copy(
-        new_layout: Layout,
-        src: NonNull<f32>,
-        count: usize,
-        dimension: usize,
-    ) -> crate::error::Result<NonNull<f32>> {
-        use crate::alloc_guard::AllocGuard;
-
-        // Allocate zero-initialized buffer with RAII guard (PERF-002)
-        let guard = AllocGuard::new_zeroed(new_layout).ok_or_else(|| {
-            crate::error::Error::AllocationFailed(format!(
-                "Failed to allocate {} bytes for ContiguousVectors resize",
-                new_layout.size()
-            ))
-        })?;
-
-        // EPIC-032/US-002: Use NonNull for type-level guarantee
-        let new_data = NonNull::new(guard.cast::<f32>()).ok_or_else(|| {
-            crate::error::Error::AllocationFailed("AllocGuard returned null pointer".to_string())
-        })?;
-
-        // Copy existing data to new buffer
-        if count > 0 {
-            let copy_size = count * dimension;
-            // SAFETY: Both pointers are valid (NonNull), non-overlapping, and properly aligned
-            // - Condition 1: Source pointer (src) is valid and properly aligned.
-            // - Condition 2: Destination pointer (new_data) is valid and properly aligned.
-            // - Condition 3: Pointers are non-overlapping (old and new allocations are distinct).
-            // Reason: Migrate data to newly allocated buffer during resize.
-            unsafe {
-                ptr::copy_nonoverlapping(src.as_ptr(), new_data.as_ptr(), copy_size);
-            }
-        }
-
-        // Transfer ownership - guard won't free on drop anymore
-        let _ = guard.into_raw();
-
-        Ok(new_data)
     }
 }
 

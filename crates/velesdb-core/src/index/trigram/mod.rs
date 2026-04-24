@@ -35,9 +35,8 @@ mod index;
 pub mod simd;
 
 pub use fingerprint::TrigramFingerprint;
-pub use gpu::TrigramComputeBackend;
 pub use index::{extract_trigrams, TrigramIndex};
-pub use simd::{extract_trigrams_simd, TrigramSimdLevel};
+pub use simd::extract_trigrams_simd;
 
 #[cfg(test)]
 mod simd_tests;

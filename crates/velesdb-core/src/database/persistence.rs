@@ -50,12 +50,21 @@ impl Database {
     /// Directories with invalid names are skipped with a warning.
     fn loadable_collection_name(&self, entry: &std::fs::DirEntry) -> Option<String> {
         let path = entry.path();
-        if !path.is_dir() {
+        if !path.is_dir() || !path.join("config.json").exists() {
             return None;
         }
-        if !path.join("config.json").exists() {
+        let name = Self::validated_collection_name(&path)?;
+        if self.is_already_registered(&name) {
             return None;
         }
+        Some(name)
+    }
+
+    /// Extracts and validates the collection name from a directory path.
+    ///
+    /// Returns `None` if the directory name is not valid UTF-8 or fails
+    /// collection name validation (logged as a warning).
+    fn validated_collection_name(path: &std::path::Path) -> Option<String> {
         let name = path.file_name()?.to_str()?.to_string();
         if crate::validation::validate_collection_name(&name).is_err() {
             tracing::warn!(
@@ -65,13 +74,14 @@ impl Database {
             );
             return None;
         }
-        if self.vector_colls.read().contains_key(&name)
-            || self.graph_colls.read().contains_key(&name)
-            || self.metadata_colls.read().contains_key(&name)
-        {
-            return None;
-        }
         Some(name)
+    }
+
+    /// Checks whether a collection name is already registered in any typed registry.
+    fn is_already_registered(&self, name: &str) -> bool {
+        self.vector_colls.read().contains_key(name)
+            || self.graph_colls.read().contains_key(name)
+            || self.metadata_colls.read().contains_key(name)
     }
 
     /// Attempts to load a single collection directory, returning `true` on success.
@@ -103,42 +113,40 @@ impl Database {
         }
     }
 
-    /// Loads a graph collection from disk, registering it in both registries.
+    /// Loads a graph collection from disk, registering it in the typed registry.
     fn load_graph_collection(&self, path: &std::path::Path, name: &str) -> bool {
         self.try_open_and_register(path, name, "graph", |p| {
-            GraphCollection::open(p).map(|c| (c.inner.clone(), TypedColl::Graph(c)))
+            GraphCollection::open(p).map(TypedColl::Graph)
         })
     }
 
-    /// Loads a metadata collection from disk, registering it in both registries.
+    /// Loads a metadata collection from disk, registering it in the typed registry.
     fn load_metadata_collection(&self, path: &std::path::Path, name: &str) -> bool {
         self.try_open_and_register(path, name, "metadata", |p| {
-            MetadataCollection::open(p).map(|c| (c.inner.clone(), TypedColl::Metadata(c)))
+            MetadataCollection::open(p).map(TypedColl::Metadata)
         })
     }
 
-    /// Loads a vector collection from disk, registering it in both registries.
+    /// Loads a vector collection from disk, registering it in the typed registry.
     fn load_vector_collection(&self, path: &std::path::Path, name: &str) -> bool {
         self.try_open_and_register(path, name, "vector", |p| {
-            VectorCollection::open(p).map(|c| (c.inner.clone(), TypedColl::Vector(c)))
+            VectorCollection::open(p).map(TypedColl::Vector)
         })
     }
 
-    /// Opens a collection from disk and registers it in the legacy + typed registries.
+    /// Opens a collection from disk and registers it in the typed registry.
     ///
-    /// The `open_fn` closure returns `(inner Collection clone, TypedColl variant)`.
+    /// The `open_fn` closure returns a `TypedColl` variant.
     /// Returns `true` on success, `false` on failure (logged as warning).
-    #[allow(deprecated)]
     fn try_open_and_register(
         &self,
         path: &std::path::Path,
         name: &str,
         kind: &str,
-        open_fn: impl FnOnce(std::path::PathBuf) -> crate::Result<(crate::Collection, TypedColl)>,
+        open_fn: impl FnOnce(std::path::PathBuf) -> crate::Result<TypedColl>,
     ) -> bool {
         match open_fn(path.to_path_buf()) {
-            Ok((inner, typed)) => {
-                self.collections.write().insert(name.to_string(), inner);
+            Ok(typed) => {
                 typed.insert_into(
                     &self.vector_colls,
                     &self.graph_colls,

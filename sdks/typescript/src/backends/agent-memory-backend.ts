@@ -44,7 +44,7 @@ let _idCounter = 0;
 let _lastTimestamp = 0;
 
 export function generateUniqueId(): number {
-  let now = Date.now();
+  const now = Date.now();
   if (now <= _lastTimestamp) {
     _idCounter++;
     if (_idCounter >= 1000) {

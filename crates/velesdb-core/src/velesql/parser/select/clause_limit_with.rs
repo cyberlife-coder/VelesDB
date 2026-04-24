@@ -84,6 +84,7 @@ impl Parser {
             "weighted" => crate::velesql::FusionStrategyType::Weighted,
             "maximum" => crate::velesql::FusionStrategyType::Maximum,
             "rsf" => crate::velesql::FusionStrategyType::Rsf,
+            "average" => crate::velesql::FusionStrategyType::Average,
             _ => crate::velesql::FusionStrategyType::Rrf,
         }
     }

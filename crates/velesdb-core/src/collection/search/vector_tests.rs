@@ -1,6 +1,8 @@
 #![cfg(all(test, feature = "persistence"))]
 
-use crate::{distance::DistanceMetric, point::Point, quantization::StorageMode, Collection};
+use crate::{
+    collection::Collection, distance::DistanceMetric, point::Point, quantization::StorageMode,
+};
 use std::path::PathBuf;
 use tempfile::TempDir;
 

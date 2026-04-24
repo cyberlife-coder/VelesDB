@@ -663,7 +663,7 @@ fn test_latency_stats_p99() {
 
     // Assert: p99 should be near the 99th value
     assert!(stats.p99 >= Duration::from_micros(990));
-    assert!(stats.p99 <= Duration::from_micros(1000));
+    assert!(stats.p99 <= Duration::from_millis(1));
 }
 
 #[test]

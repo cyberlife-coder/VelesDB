@@ -12,7 +12,7 @@
 //! - **Temporal Index**: Efficient O(log N) time-based queries
 //! - **Adaptive Reinforcement**: Extensible confidence update strategies
 
-// SAFETY: Numeric casts in agent memory are intentional:
+// Reason: Numeric casts in agent memory are intentional:
 // - u64 <-> i64 casts for timestamps (SystemTime uses u64, DB schema uses i64)
 // - Values are always positive (elapsed time) and bounded by reasonable ranges
 // - Casts verified by temporal index tests and snapshot functionality
@@ -190,8 +190,7 @@ impl AgentMemory {
         if self.eviction_config.consolidation_age_threshold > 0 {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+                .map_or(0, |d| d.as_secs() as i64);
             let cutoff = now - self.eviction_config.consolidation_age_threshold as i64;
             result.episodic_consolidated = self.consolidate_old_episodes(cutoff)?;
         }

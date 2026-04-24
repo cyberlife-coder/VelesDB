@@ -47,21 +47,21 @@ fn hamming_simd(a: &[f32], b: &[f32]) -> f32 {
         SimdLevel::Avx512 if a.len() >= 512 => {
             // SAFETY: AVX-512 4-acc hamming kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
-            // Reason: 4-accumulator kernel for large vectors.
+            // SAFETY: 4-accumulator kernel for large vectors.
             unsafe { crate::simd_native::hamming_avx512_4acc(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 if a.len() >= 16 => {
             // SAFETY: AVX-512 hamming kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
-            // Reason: call specialized kernel for higher throughput.
+            // SAFETY: call specialized kernel for higher throughput.
             unsafe { crate::simd_native::hamming_avx512(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 | SimdLevel::Avx2 if a.len() >= 8 => {
             // SAFETY: AVX2 hamming kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` confirmed AVX2+ (Avx512 implies Avx2 support).
-            // Reason: fallthrough for Avx512 with short vectors that don't meet 16-element minimum.
+            // SAFETY: fallthrough for Avx512 with short vectors that don't meet 16-element minimum.
             unsafe { crate::simd_native::hamming_avx2(a, b) }
         }
         #[cfg(target_arch = "aarch64")]
@@ -78,28 +78,28 @@ fn jaccard_simd(a: &[f32], b: &[f32]) -> f32 {
         SimdLevel::Avx512 if a.len() >= 1024 => {
             // SAFETY: AVX-512 8-acc jaccard kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
-            // Reason: 8-accumulator kernel for very large vectors (>= 1024 dims).
+            // SAFETY: 8-accumulator kernel for very large vectors (>= 1024 dims).
             unsafe { crate::simd_native::jaccard_avx512_8acc(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 if a.len() >= 512 => {
             // SAFETY: AVX-512 4-acc jaccard kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
-            // Reason: 4-accumulator kernel for large vectors.
+            // SAFETY: 4-accumulator kernel for large vectors.
             unsafe { crate::simd_native::jaccard_avx512_4acc(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 if a.len() >= 16 => {
             // SAFETY: AVX-512 jaccard kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
-            // Reason: call specialized kernel for higher throughput.
+            // SAFETY: call specialized kernel for higher throughput.
             unsafe { crate::simd_native::jaccard_avx512(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 | SimdLevel::Avx2 if a.len() >= 8 => {
             // SAFETY: AVX2 jaccard kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` confirmed AVX2+ (Avx512 implies Avx2 support).
-            // Reason: fallthrough for Avx512 with short vectors that don't meet 16-element minimum.
+            // SAFETY: fallthrough for Avx512 with short vectors that don't meet 16-element minimum.
             unsafe { crate::simd_native::jaccard_avx2(a, b) }
         }
         #[cfg(target_arch = "aarch64")]
@@ -116,7 +116,7 @@ pub(super) fn resolve_hamming(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]
             |a, b| {
                 // SAFETY: Resolver emitted AVX-512 4-acc implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_hamming`.
-                // Reason: execute AVX-512 4-accumulator hamming for large vectors.
+                // SAFETY: execute AVX-512 4-accumulator hamming for large vectors.
                 unsafe { crate::simd_native::hamming_avx512_4acc(a, b) }
             }
         }
@@ -125,7 +125,7 @@ pub(super) fn resolve_hamming(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]
             |a, b| {
                 // SAFETY: Resolver emitted AVX-512 implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_hamming`.
-                // Reason: execute AVX-512 specialized hamming implementation.
+                // SAFETY: execute AVX-512 specialized hamming implementation.
                 unsafe { crate::simd_native::hamming_avx512(a, b) }
             }
         }
@@ -133,7 +133,7 @@ pub(super) fn resolve_hamming(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]
         SimdLevel::Avx512 | SimdLevel::Avx2 if dim >= 8 => |a, b| {
             // SAFETY: Resolver emitted AVX2 implementation for this dimension.
             // - Condition 1: caller chose this function pointer via `resolve_hamming`.
-            // Reason: execute AVX2 specialized hamming implementation (Avx512 implies Avx2).
+            // SAFETY: execute AVX2 specialized hamming implementation (Avx512 implies Avx2).
             unsafe { crate::simd_native::hamming_avx2(a, b) }
         },
         #[cfg(target_arch = "aarch64")]
@@ -150,7 +150,7 @@ pub(super) fn resolve_jaccard(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]
             |a, b| {
                 // SAFETY: Resolver emitted AVX-512 8-acc implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_jaccard`.
-                // Reason: execute AVX-512 8-accumulator jaccard for very large vectors.
+                // SAFETY: execute AVX-512 8-accumulator jaccard for very large vectors.
                 unsafe { crate::simd_native::jaccard_avx512_8acc(a, b) }
             }
         }
@@ -159,7 +159,7 @@ pub(super) fn resolve_jaccard(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]
             |a, b| {
                 // SAFETY: Resolver emitted AVX-512 4-acc implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_jaccard`.
-                // Reason: execute AVX-512 4-accumulator jaccard for large vectors.
+                // SAFETY: execute AVX-512 4-accumulator jaccard for large vectors.
                 unsafe { crate::simd_native::jaccard_avx512_4acc(a, b) }
             }
         }
@@ -168,7 +168,7 @@ pub(super) fn resolve_jaccard(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]
             |a, b| {
                 // SAFETY: Resolver emitted AVX-512 implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_jaccard`.
-                // Reason: execute AVX-512 specialized jaccard implementation.
+                // SAFETY: execute AVX-512 specialized jaccard implementation.
                 unsafe { crate::simd_native::jaccard_avx512(a, b) }
             }
         }
@@ -176,7 +176,7 @@ pub(super) fn resolve_jaccard(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]
         SimdLevel::Avx512 | SimdLevel::Avx2 if dim >= 8 => |a, b| {
             // SAFETY: Resolver emitted AVX2 implementation for this dimension.
             // - Condition 1: caller chose this function pointer via `resolve_jaccard`.
-            // Reason: execute AVX2 specialized jaccard implementation (Avx512 implies Avx2).
+            // SAFETY: execute AVX2 specialized jaccard implementation (Avx512 implies Avx2).
             unsafe { crate::simd_native::jaccard_avx2(a, b) }
         },
         #[cfg(target_arch = "aarch64")]
@@ -200,7 +200,7 @@ pub(super) fn resolve_jaccard(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]
 #[inline]
 #[must_use]
 #[allow(clippy::cast_possible_truncation)]
-// Reason: return type is u32; max bits = len * 64 which fits in u32 for any
+// SAFETY: return type is u32; max bits = len * 64 which fits in u32 for any
 // practical binary vector dimension (up to ~67M words).
 pub fn hamming_binary_native(a: &[u64], b: &[u64]) -> u32 {
     assert_eq!(
@@ -217,21 +217,21 @@ pub fn hamming_binary_native(a: &[u64], b: &[u64]) -> u32 {
             // SAFETY: AVX-512 VPOPCNTDQ binary hamming uses native _mm512_popcnt_epi64.
             // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
             // - Condition 2: `has_avx512vpopcntdq()` confirms hardware popcount support.
-            // Reason: native 64-bit popcount avoids extract+scalar loop.
+            // SAFETY: native 64-bit popcount avoids extract+scalar loop.
             unsafe { crate::simd_native::hamming_binary_avx512_vpopcntdq(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 if a.len() >= 8 => {
             // SAFETY: AVX-512 binary hamming kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
-            // Reason: AVX-512 XOR on 8 packed u64 per iteration for higher throughput.
+            // SAFETY: AVX-512 XOR on 8 packed u64 per iteration for higher throughput.
             unsafe { crate::simd_native::hamming_binary_avx512(a, b) }
         }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 | SimdLevel::Avx2 if a.len() >= 4 => {
             // SAFETY: AVX2 binary hamming kernel requires CPU feature + minimum dim.
             // - Condition 1: `simd_level()` confirmed AVX2+ (Avx512 implies Avx2 support).
-            // Reason: AVX2 XOR on 4 packed u64 per iteration for higher throughput.
+            // SAFETY: AVX2 XOR on 4 packed u64 per iteration for higher throughput.
             unsafe { crate::simd_native::hamming_binary_avx2(a, b) }
         }
         #[cfg(target_arch = "aarch64")]

@@ -168,6 +168,8 @@ impl SourceConnector for JsonFileConnector {
                 fields,
                 vector_column: Some(self.config.vector_field.clone()),
                 id_column: Some(self.config.id_field.clone()),
+                // File-backed connectors cannot introspect the metric.
+                metric: None,
             });
         }
         Ok(())

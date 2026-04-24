@@ -9,20 +9,55 @@ use rustc_hash::FxHashSet;
 /// Apply DISTINCT deduplication to results based on selected columns (EPIC-052 US-001).
 ///
 /// Uses HashSet for O(n) complexity and preserves insertion order.
+///
+/// # Dedup-key contract
+///
+/// The SELECT-list variants drive the dedup key as follows:
+///
+/// - `Columns(cols)` → dedup by the listed payload fields only.
+/// - `Mixed { columns, qualified_wildcards, similarity_scores, .. }`:
+///   - if `qualified_wildcards` is **empty**, dedup by the listed `columns`;
+///   - if `qualified_wildcards` is **non-empty**, dedup by the **full payload**
+///     (same semantics as `SELECT *`) because a qualified wildcard expands
+///     to every payload field — those fields are part of the projected row
+///     and must participate in the dedup key, otherwise
+///     `SELECT DISTINCT ctx.*, title FROM docs` would collapse rows that
+///     differ only by non-title wildcard fields.
+///   - `similarity_scores` presence appends the similarity score to the key
+///     so rows differing only by score are not collapsed.
+///   - `aggregations` are handled by a separate aggregation pipeline and
+///     are not part of the DISTINCT key (they don't reach this path).
+///   - `window_functions` are deliberately excluded — DISTINCT runs BEFORE
+///     window evaluation per the VelesQL pipeline order (see the contract
+///     on `apply_select_postprocessing`), so any window-injected field
+///     doesn't exist on the payload yet.
+/// - `SimilarityScore(_)` → dedup by score only.
+/// - `All` / `QualifiedWildcard(_)` → dedup by full payload.
+/// - `Aggregations(_)` → no dedup (aggregations collapse rows themselves).
 pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Vec<SearchResult> {
-    // If SELECT *, deduplicate by all payload fields
     let (column_names, include_score) = match columns {
         SelectColumns::Columns(cols) => (cols.iter().map(|c| c.name.clone()).collect(), false),
         SelectColumns::Mixed {
             columns: cols,
             similarity_scores,
+            qualified_wildcards,
             ..
-        } => (
-            cols.iter().map(|c| c.name.clone()).collect(),
-            !similarity_scores.is_empty(),
-        ),
+        } => {
+            // Qualified wildcards expand to every payload field; fall back
+            // to "dedup by full payload" (empty column list) so those
+            // fields participate in the key.
+            let cols_for_dedup = if qualified_wildcards.is_empty() {
+                cols.iter().map(|c| c.name.clone()).collect()
+            } else {
+                Vec::new()
+            };
+            (cols_for_dedup, !similarity_scores.is_empty())
+        }
         SelectColumns::SimilarityScore(_) => (Vec::new(), true),
-        // All, Aggregations, QualifiedWildcard: use full payload or no dedup
+        // All / QualifiedWildcard → full payload; Aggregations → no dedup
+        // (the empty-column path below gives the same "full payload" key,
+        // which is harmless for Aggregations since that path never reaches
+        // this function in practice).
         SelectColumns::All
         | SelectColumns::Aggregations(_)
         | SelectColumns::QualifiedWildcard(_) => (Vec::new(), false),
@@ -198,6 +233,7 @@ mod tests {
                 alias: Some("score".to_string()),
             }],
             qualified_wildcards: vec![],
+            window_functions: vec![],
         };
 
         let distinct = apply_distinct(results, &columns);
@@ -220,6 +256,7 @@ mod tests {
             aggregations: vec![],
             similarity_scores: vec![],
             qualified_wildcards: vec![],
+            window_functions: vec![],
         };
 
         let distinct = apply_distinct(results, &columns);

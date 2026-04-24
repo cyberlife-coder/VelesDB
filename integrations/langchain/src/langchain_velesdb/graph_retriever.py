@@ -39,6 +39,19 @@ from langchain_velesdb._common import (
     parse_graph_traverse_response,
 )
 
+# Lazy VelesDBError resolution. `velesdb` is a runtime dependency for
+# every user of this integration (they pass a `velesdb.Collection`
+# instance to the retriever), but the integration package itself is
+# importable without it (e.g. for documentation, type-stubs, or smoke
+# tests running without the compiled Rust extension). When the typed
+# exception hierarchy is available we catch it alongside the built-in
+# errors; otherwise we fall back to `Exception` which never breaks the
+# defensive `try`/`except` logic below.
+try:
+    from velesdb import VelesDBError as _VelesDBError
+except (ImportError, AttributeError):  # pragma: no cover — optional dependency fallback
+    _VelesDBError = Exception  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -161,16 +174,44 @@ class GraphRetriever(BaseRetriever):
             )
 
     def _init_native_graph(self) -> Any:
-        """Resolve db_path and open the native graph collection."""
+        """Resolve the shared Database and open the native graph collection.
+
+        Reuses the vector store's lazy Database instance (via ``_get_db()``)
+        instead of opening a second ``velesdb.Database`` on the same path,
+        which would trigger VELES-031 (exclusive write-lock error).
+
+        If the vector store does not expose ``_get_db``, falls back to the
+        shared ``open_native_graph`` helper which opens its own Database.
+        In that case the caller must ensure the vector store's Database is
+        not already open on the same path.
+        """
+        if not self.graph_collection_name:
+            raise ValueError(
+                "Native mode requires 'graph_collection_name'."
+            )
+        get_db = getattr(self.vector_store, "_get_db", None)
+        if get_db is not None:
+            return self._open_graph_from_shared_db(get_db)
+        return self._open_graph_from_path()
+
+    def _open_graph_from_shared_db(self, get_db: Any) -> Any:
+        """Open graph collection from the vector store's shared Database."""
+        db = get_db()
+        graph = db.get_graph_collection(self.graph_collection_name)
+        if graph is None:
+            raise ValueError(
+                f"Graph collection '{self.graph_collection_name}' not found "
+                "in the shared database."
+            )
+        return graph
+
+    def _open_graph_from_path(self) -> Any:
+        """Open graph collection by resolving db_path (fallback path)."""
         resolved_path = self.db_path or _infer_db_path(self.vector_store)
         if resolved_path is None:
             raise ValueError(
                 "Native mode requires 'db_path' or a vector store with a "
                 "'_db_path' / '_path' attribute."
-            )
-        if not self.graph_collection_name:
-            raise ValueError(
-                "Native mode requires 'graph_collection_name'."
             )
         return open_native_graph(resolved_path, self.graph_collection_name)
 
@@ -219,13 +260,23 @@ class GraphRetriever(BaseRetriever):
         return result_docs
 
     def _build_expanded_results(self, seeds: List[Any]) -> List[Document]:
-        """Run graph expansion and return combined document list."""
+        """Run graph expansion and return combined document list.
+
+        ID convention (langchain): seed IDs are the **internal VelesDB
+        point IDs** injected by ``payload_to_doc_parts`` as
+        ``metadata["_int_id"]``. Graph edges must therefore be inserted
+        with ``source`` / ``target`` matching those internal IDs. This
+        differs from the llamaindex integration, which uses hash-based
+        IDs via ``_stable_hash_id(node_id)`` — see
+        ``integrations/llamaindex/src/llamaindex_velesdb/graph_retriever.py``
+        ``_extract_node_id``.
+        """
         expanded_ids: set = set()
         seed_docs: dict = {}
         graph_available = True
 
         for doc, score in seeds:
-            doc_id = doc.metadata.get("id") or doc.metadata.get("doc_id")
+            doc_id = doc.metadata.get("_int_id")
             if doc_id is None:
                 continue
             seed_docs[doc_id] = (doc, score)
@@ -246,7 +297,7 @@ class GraphRetriever(BaseRetriever):
             neighbors = self._traverse_graph(doc_id)
             for neighbor_id in neighbors:
                 expanded_ids.add(neighbor_id)
-        except (ValueError, RuntimeError, OSError, TimeoutError, ConnectionError) as exc:
+        except (ValueError, RuntimeError, OSError, TimeoutError, ConnectionError, _VelesDBError) as exc:
             if self._is_timeout(exc):
                 logger.warning(
                     "Graph traversal timeout for node %s, falling back to vector-only",
@@ -296,7 +347,7 @@ class GraphRetriever(BaseRetriever):
                     neighbor_doc.metadata["graph_depth"] = 1
                     neighbor_doc.metadata["retrieval_mode"] = "graph_expanded"
                     result_docs.append(neighbor_doc)
-            except (ValueError, RuntimeError, OSError, KeyError, ConnectionError) as exc:
+            except (ValueError, RuntimeError, OSError, KeyError, ConnectionError, _VelesDBError) as exc:
                 logger.debug("Failed to fetch neighbour document %s: %s", neighbor_id, exc)
 
     def _traverse_graph(self, source_id: int) -> List[int]:
@@ -365,7 +416,7 @@ class GraphRetriever(BaseRetriever):
             results = self.vector_store.get_by_ids([doc_id])
             if results:
                 return results[0]
-        except (ValueError, RuntimeError, OSError, KeyError, ConnectionError):
+        except (ValueError, RuntimeError, OSError, KeyError, ConnectionError, _VelesDBError):
             logger.debug("Failed to fetch document by ID: %s", doc_id, exc_info=True)
         return None
 

@@ -5,6 +5,7 @@ use thiserror::Error;
 
 /// Error variants returned by agent memory operations.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AgentMemoryError {
     /// Returned when a memory subsystem collection cannot be created or opened.
     #[error("Failed to initialize memory: {0}")]

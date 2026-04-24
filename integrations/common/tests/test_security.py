@@ -4,12 +4,21 @@ from velesdb_common.security import (
     validate_weight,
     validate_storage_mode,
     SecurityError,
-    validate_k,
     validate_text,
     ALLOWED_METRICS,
     ALLOWED_STORAGE_MODES,
     STORAGE_MODE_ALIASES,
 )
+
+
+def test_validate_text_rejects_empty_string():
+    with pytest.raises(SecurityError, match="empty or whitespace-only"):
+        validate_text("")
+
+
+def test_validate_text_rejects_whitespace_only():
+    with pytest.raises(SecurityError, match="empty or whitespace-only"):
+        validate_text("   ")
 
 
 def test_validate_batch_size_rejects_negative():

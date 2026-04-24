@@ -31,11 +31,13 @@ mod collection;
 mod collection_helpers;
 mod database;
 mod database_stats;
+mod exceptions;
 mod fusion;
 mod graph;
 mod graph_collection;
 mod graph_collection_query;
 mod graph_store;
+mod options;
 mod utils;
 mod velesql;
 mod velesql_helpers;
@@ -46,6 +48,7 @@ pub use fusion::FusionStrategy;
 pub use graph::{dict_to_edge, dict_to_node, edge_to_dict, node_to_dict, traversal_to_dict};
 pub use graph_collection::{PyGraphCollection, PyGraphSchema};
 pub use graph_store::{GraphStore, StreamingConfig, TraversalResult};
+pub use options::{AutoReindexOptions, HnswOptions, LimitsOptions, VelesConfigOptions};
 
 use pyo3::prelude::*;
 
@@ -75,6 +78,9 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SearchResult>()?;
     m.add_class::<FusionStrategy>()?;
 
+    // Scroll iterator (issue #429)
+    m.add_class::<collection::scroll::ScrollIterator>()?;
+
     // Persistent graph collection (Phase 1)
     m.add_class::<PyGraphCollection>()?;
     m.add_class::<PyGraphSchema>()?;
@@ -92,6 +98,12 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // VelesQL query language classes (EPIC-056/US-001)
     velesql::register_velesql_module(m)?;
+
+    // Typed options dataclasses (Wave 3 Commit 10)
+    options::register_options(m)?;
+
+    // Typed exception hierarchy (issue #427)
+    exceptions::register_exceptions(m)?;
 
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

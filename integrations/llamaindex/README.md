@@ -70,6 +70,7 @@ VelesDBVectorStore(
     collection_name: str = "llamaindex", # Collection name
     metric: str = "cosine",             # Distance metric
     storage_mode: str = "full",         # Storage / quantization mode
+    search_quality: str = None,         # Quality preset (see below)
 )
 ```
 
@@ -81,6 +82,7 @@ VelesDBVectorStore(
 | `collection_name` | `str` | `"llamaindex"` | Name of the collection |
 | `metric` | `str` | `"cosine"` | Distance metric: `cosine`, `euclidean`, `dot` (aliases: `dotproduct`, `inner`, `ip`), `hamming`, `jaccard` |
 | `storage_mode` | `str` | `"full"` | Storage mode: `full`/`f32`, `sq8`/`int8` (4× compression), `binary`/`bit` (32× compression), `pq` (8-32× compression), `rabitq` (32× with scalar correction) |
+| `search_quality` | `str \| None` | `None` | Quality preset: `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:N`, `adaptive:MIN:MAX` |
 
 **Methods:**
 
@@ -102,6 +104,7 @@ VelesDBVectorStore(
 | **Utilities** | |
 | `get_collection_info()` | Get collection metadata |
 | `is_empty()` | Check if collection is empty |
+| `scroll(batch_size)` | Iterate all points in stable batches without a query vector |
 
 ## Advanced Features
 
@@ -143,6 +146,79 @@ for node in results.nodes:
 - `"average"` - Mean score across all queries
 - `"maximum"` - Maximum score from any query
 - `"weighted"` - Custom combination of avg, max, and hit ratio
+- `"relative_score"` - Linear blend of dense and sparse scores
+
+```python
+# Relative Score Fusion
+results = vector_store.multi_query_search(
+    query_embeddings=[emb1, emb2],
+    similarity_top_k=10,
+    fusion="relative_score",
+    fusion_params={"dense_weight": 0.7, "sparse_weight": 0.3}
+)
+```
+
+### Advanced Search
+
+#### `search_quality` — Quality Presets
+
+Control the recall/latency trade-off for all queries with a single parameter set
+at construction time or overridden per-call via `query()` kwargs.
+
+```python
+# Set once on the store — applies to every query() call
+vector_store = VelesDBVectorStore(
+    path="./velesdb_data",
+    search_quality="accurate",   # higher recall at the cost of latency
+)
+
+q = VectorStoreQuery(query_embedding=embedding, similarity_top_k=10)
+results = vector_store.query(q)
+
+# Override per-call via kwargs
+results = vector_store.query(q, search_quality="fast")
+```
+
+Accepted values:
+
+| Value | Description |
+|-------|-------------|
+| `"fast"` | Lowest latency, reduced recall |
+| `"balanced"` | Balanced latency/recall |
+| `"accurate"` | Higher recall, higher latency |
+| `"perfect"` | Exhaustive search, maximum recall |
+| `"autotune"` | Runtime-adaptive quality |
+| `"custom:N"` | Explicit ef_search (e.g. `"custom:256"`) |
+| `"adaptive:MIN:MAX"` | Adaptive ef range (e.g. `"adaptive:32:512"`) |
+
+#### `query_with_ef(query_embedding, ef_search, top_k)`
+
+Search with an explicit HNSW `ef_search` parameter to trade query latency for recall.
+
+```python
+# Higher ef_search = better recall, slower query
+results = vector_store.query_with_ef(
+    query_embedding=embedding,
+    ef_search=256,
+    top_k=10
+)
+```
+
+#### `query_ids(query_embedding, top_k)`
+
+Search returning only node IDs and scores — no payloads transferred.
+Faster than `query()` when only IDs are needed (e.g., for post-processing pipelines).
+
+```python
+hits = vector_store.query_ids(query_embedding=embedding, top_k=50)
+# [{"id": "abc", "score": 0.92}, ...]
+```
+
+### Server Mode: URL Validation
+
+When connecting to a remote `velesdb-server` via the `path` parameter as a URL,
+`validate_url` is called automatically during initialization to reject
+malformed URLs before any network request is issued.
 
 ### Hybrid Search (Vector + BM25)
 
@@ -192,7 +268,7 @@ for row in results:
 ## Performance
 
 Measured on CI runners (ubuntu-latest, 2-core). Local hardware will be faster.
-Source: `benchmarks/baseline.json` (v1.11.1).
+Source: `benchmarks/baseline.json`.
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|

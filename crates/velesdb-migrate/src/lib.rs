@@ -1,5 +1,5 @@
 // Migration tool - pedantic lints reactivated per-module
-#![allow(clippy::doc_markdown)] // Product names in crate-level docs (MongoDB, ChromaDB, etc.)
+#![allow(clippy::doc_markdown)] // Product names in crate-level docs (ChromaDB, PostgREST, etc.)
 //! # `VelesDB` Migration Tool
 //!
 //! `velesdb-migrate` is a CLI tool and library for migrating vector data from
@@ -9,15 +9,13 @@
 //!
 //! | Source | Status | Notes |
 //! |--------|--------|-------|
-//! | Qdrant | ✅ | Full support via REST API |
-//! | Pinecone | ✅ | Full support via REST API |
-//! | Weaviate | ✅ | Full support via GraphQL |
+//! | Qdrant | ✅ | REST API |
+//! | Pinecone | ✅ | REST API |
+//! | Weaviate | ✅ | GraphQL |
 //! | Milvus | ✅ | REST API (v2) |
-//! | `ChromaDB` | ✅ | Full support via REST API |
-//! | pgvector | ✅ | Requires `postgres` feature |
-//! | Supabase | ✅ | Via pgvector connector (`PostgREST` API) |
+//! | `ChromaDB` | ✅ | REST API |
+//! | Supabase | ✅ | PostgREST API (pgvector-enabled projects) |
 //! | Elasticsearch | ✅ | Dense vector fields via REST API |
-//! | MongoDB Atlas | ✅ | Atlas Vector Search via REST API (not self-hosted) |
 //! | Redis | ✅ | RediSearch vector fields |
 //! | JSON file | ✅ | Local `.json` / `.jsonl` files |
 //! | CSV file | ✅ | Local `.csv` files with vector columns |
@@ -26,8 +24,12 @@
 //!
 //! - **Local destination only**: migrations write to a local VelesDB data directory.
 //!   Remote server migration (e.g., via HTTP to `velesdb-server`) is not supported.
-//! - **MongoDB**: Only Atlas deployments are supported (REST API). Self-hosted
-//!   MongoDB with vector search requires manual export to JSON first.
+//! - **MongoDB**: Not supported. The previous `mongodb` connector relied on the
+//!   Atlas Data API, which MongoDB deprecated on 2025-09-30. To migrate
+//!   MongoDB data, export it to JSONL with `mongoexport --collection <c> --out
+//!   data.jsonl` and use `--source json_file`.
+//! - **PostgreSQL (direct pgvector)**: Not supported. Use the Supabase
+//!   connector for pgvector-backed Supabase projects, or export to JSON.
 //!
 //! ## Quick Start
 //!
@@ -68,6 +70,8 @@ pub mod connectors;
 pub mod error;
 #[allow(clippy::pedantic)]
 pub mod pipeline;
+#[allow(clippy::pedantic)]
+pub mod pipeline_graph;
 #[allow(clippy::pedantic)]
 pub(crate) mod pipeline_points;
 #[allow(clippy::pedantic)]

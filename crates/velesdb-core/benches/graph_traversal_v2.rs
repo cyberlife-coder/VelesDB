@@ -208,7 +208,7 @@ fn bench_add_edge_throughput(c: &mut Criterion) {
             &batch_size,
             |b, &n| {
                 b.iter_with_setup(
-                    || ConcurrentEdgeStore::with_shards(4),
+                    || ConcurrentEdgeStore::with_shards(4).expect("bench: valid shard count"),
                     |store| {
                         for eid in 0..n {
                             let src = eid % 500;

@@ -14,12 +14,9 @@
 //! - Graph collections for knowledge graph storage (nodes, edges, traversal)
 //! - Async operations via `spawn_blocking` (EPIC-034/US-005)
 #![allow(clippy::doc_markdown)] // Collection docs contain many API/algorithm identifiers.
-#![allow(deprecated)] // Collection is deprecated but used internally throughout this module tree.
 
-pub mod async_ops;
-#[cfg(test)]
-mod async_ops_tests;
 pub mod auto_reindex;
+mod collection_config;
 mod core;
 pub mod diagnostics;
 pub mod graph;
@@ -33,6 +30,8 @@ pub mod streaming;
 pub(crate) mod text_utils;
 mod types;
 mod vector_collection;
+
+mod any_collection;
 
 #[cfg(test)]
 mod tests;
@@ -52,13 +51,16 @@ mod e2e_integration_tests;
 #[cfg(test)]
 mod set_operations_execution_tests;
 
-pub use core::{IndexInfo, MAX_DIMENSION, MIN_DIMENSION};
+pub use any_collection::AnyCollection;
+pub use collection_config::{CollectionConfig, CURRENT_SCHEMA_VERSION};
+pub use core::{IndexInfo, ScrollBatch, MAX_DIMENSION, MIN_DIMENSION};
 pub use diagnostics::{CollectionDiagnostics, IndexHealth};
 pub use graph::{
-    ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,
+    ConcurrentEdgeStore, EdgeStore, EdgeType, GraphEdge, GraphNode, GraphSchema, NodeType,
     PropertyIndex, RangeIndex, TraversalConfig, TraversalPath, TraversalResult, ValueType,
 };
 pub use graph_collection::GraphCollection;
 pub use metadata_collection::MetadataCollection;
-pub use types::{Collection, CollectionConfig, CollectionType};
+pub(crate) use types::Collection;
+pub use types::CollectionType;
 pub use vector_collection::VectorCollection;

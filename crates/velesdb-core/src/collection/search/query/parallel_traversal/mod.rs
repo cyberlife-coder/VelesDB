@@ -3,7 +3,7 @@
 //! This module provides parallel BFS/DFS traversal using rayon for
 //! efficient execution on multi-core systems.
 
-// SAFETY: Numeric casts in parallel traversal are intentional:
+// Reason: Numeric casts in parallel traversal are intentional:
 // - u64->usize for node ID hashing: Node IDs are generated sequentially and fit in usize
 // - Used for sharding only, actual storage uses u64 for persistence
 #![allow(clippy::cast_possible_truncation)]
@@ -67,6 +67,7 @@ impl TraversalResult {
 
 /// Thread configuration for parallel traversal (EPIC-051 US-006).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ThreadConfig {
     /// Automatically detect optimal thread count based on CPU.
     #[default]
@@ -82,9 +83,8 @@ impl ThreadConfig {
         match self {
             ThreadConfig::Auto => {
                 // Use std::thread::available_parallelism (same as rayon default)
-                let cpus = std::thread::available_parallelism()
-                    .map(std::num::NonZeroUsize::get)
-                    .unwrap_or(1);
+                let cpus =
+                    std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
                 // Leave 1 core for other work, minimum 1 thread
                 (cpus.saturating_sub(1)).max(1)
             }

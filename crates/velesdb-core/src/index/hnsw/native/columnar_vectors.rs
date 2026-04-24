@@ -1,3 +1,7 @@
+// Reason: PDX block-columnar storage — fields and accessors used by columnar_distance
+// kernels and tests. Production wiring via reorder_for_locality populates the struct.
+#![allow(dead_code)]
+
 //! Block-columnar (PDX) vector storage for SIMD-parallel distance computation.
 //!
 //! # Memory Layout

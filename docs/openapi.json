@@ -11,7 +11,7 @@
       "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
-    "version": "1.12.0"
+    "version": "1.13.0"
   },
   "servers": [
     {
@@ -1539,6 +1539,68 @@
         }
       }
     },
+    "/collections/{name}/points/scroll": {
+      "post": {
+        "tags": [
+          "points"
+        ],
+        "summary": "Scroll through collection points with cursor-based pagination.",
+        "operationId": "scroll_points",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Scroll batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrollResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{name}/points/stream": {
       "post": {
         "tags": [
@@ -2369,8 +2431,8 @@
         "tags": [
           "query"
         ],
-        "summary": "Explain a VelesQL query without executing it (EPIC-058 US-002).",
-        "description": "Returns the query plan, estimated costs, and detected features.",
+        "summary": "Explain a VelesQL query, optionally executing it with instrumentation.",
+        "description": "When `analyze` is false (default), returns the estimated plan only.\nWhen `analyze` is true, executes the query and returns actual statistics.",
         "operationId": "explain",
         "requestBody": {
           "content": {
@@ -2405,6 +2467,16 @@
           },
           "404": {
             "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VelesqlErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Query validation/execution error",
             "content": {
               "application/json": {
                 "schema": {
@@ -2450,6 +2522,48 @@
   },
   "components": {
     "schemas": {
+      "ActualStatsResponse": {
+        "type": "object",
+        "description": "Actual execution statistics for EXPLAIN ANALYZE responses.",
+        "required": [
+          "actual_rows",
+          "actual_time_ms",
+          "loops",
+          "nodes_visited",
+          "edges_traversed"
+        ],
+        "properties": {
+          "actual_rows": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Actual number of rows returned.",
+            "minimum": 0
+          },
+          "actual_time_ms": {
+            "type": "number",
+            "format": "double",
+            "description": "Actual execution time in milliseconds."
+          },
+          "edges_traversed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of edges traversed.",
+            "minimum": 0
+          },
+          "loops": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of loop iterations.",
+            "minimum": 0
+          },
+          "nodes_visited": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of nodes visited (for graph traversal).",
+            "minimum": 0
+          }
+        }
+      },
       "AddEdgeRequest": {
         "type": "object",
         "description": "Request to add an edge to the graph.",
@@ -2560,6 +2674,12 @@
           "metadata_only"
         ],
         "properties": {
+          "async_index_builder": {
+            "description": "Async index builder configuration (Issue `#488`) — `None` when\nthe feature is disabled for this collection."
+          },
+          "deferred_indexing": {
+            "description": "Deferred indexing configuration (`US-366`) — `None` when the\nfeature is disabled for this collection."
+          },
           "dimension": {
             "type": "integer",
             "description": "Vector dimension (0 for metadata-only collections).",
@@ -2576,6 +2696,9 @@
           "graph_schema": {
             "description": "Graph schema (if this is a graph collection)."
           },
+          "hnsw_params": {
+            "description": "Persisted HNSW parameters (M, `ef_construction`, etc.) when\ncustomised at create time. `None` means the defaults inferred\nfrom the collection dimension are in use."
+          },
           "metadata_only": {
             "type": "boolean",
             "description": "Whether this is a metadata-only collection."
@@ -2591,6 +2714,21 @@
           "point_count": {
             "type": "integer",
             "description": "Number of points in the collection.",
+            "minimum": 0
+          },
+          "pq_rescore_oversampling": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "PQ rescore oversampling factor. See `CollectionConfig` for\nthe semantics of `None`, `Some(0)`, and `Some(n > 0)`.",
+            "minimum": 0
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "On-disk schema version. Increments when the persisted\n`config.json` format changes in a way older `VelesDB` versions\ncannot safely read.",
             "minimum": 0
           },
           "storage_mode": {
@@ -2731,6 +2869,21 @@
             "description": "Number of distinct values (cardinality).",
             "minimum": 0
           },
+          "histogram_buckets": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Number of histogram buckets, or null if no histogram.",
+            "minimum": 0
+          },
+          "histogram_stale": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the histogram is stale, or null if no histogram."
+          },
           "max_value": {
             "type": [
               "string",
@@ -2764,10 +2917,16 @@
           "name"
         ],
         "properties": {
+          "async_index_builder": {
+            "description": "Async index builder configuration (Issue `#488` — Bulk Insert V2).\n\nWhen present, enables the `AsyncIndexBuilder` for deferred HNSW\ninsertion during bulk import. Accepted as a free-form JSON object\nmatching\n`velesdb_core::collection::streaming::AsyncIndexBuilderConfig`."
+          },
           "collection_type": {
             "type": "string",
             "description": "Collection type: \"vector\" (default) or \"`metadata_only`\".",
             "example": "vector"
+          },
+          "deferred_indexing": {
+            "description": "Deferred indexing configuration (`US-366`).\n\nWhen present, inserts are buffered in memory and batch-merged\ninto the HNSW index when the buffer reaches `merge_threshold`.\nAccepted as a free-form JSON object matching\n`velesdb_core::collection::streaming::DeferredIndexerConfig`."
           },
           "dimension": {
             "type": [
@@ -2777,6 +2936,18 @@
             "description": "Vector dimension (required for vector collections, ignored for `metadata_only`).",
             "example": 768,
             "minimum": 0
+          },
+          "graph_schema": {
+            "description": "Graph schema (only for `collection_type = \"graph\"`).\n\nAccepted as a free-form JSON object matching\n`velesdb_core::GraphSchema`. `GraphSchema::schemaless()` is\nused when the field is absent."
+          },
+          "hnsw_alpha": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "VAMANA alpha for neighbor diversification (default derived from dimension).\n\nValues > 1.0 bias `select_neighbors` toward diversity over proximity,\nproducing a more navigable graph with better recall. The engine\ndefault is 1.2 (VAMANA paper recommendation). Set to 1.0 for strict\nnearest-neighbor selection.",
+            "example": 1.2
           },
           "hnsw_ef_construction": {
             "type": [
@@ -2796,6 +2967,15 @@
             "example": 32,
             "minimum": 0
           },
+          "hnsw_max_elements": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Initial HNSW capacity (grows automatically if exceeded).\n\nPre-sizing matters for bulk imports: the engine avoids repeated\nrealloc-and-copy cycles when the final population is known upfront.\nUse this when migrating a large existing corpus into a fresh\ncollection.",
+            "example": 1000000,
+            "minimum": 0
+          },
           "metric": {
             "type": "string",
             "description": "Distance metric (cosine, euclidean, dot, hamming, jaccard).",
@@ -2805,6 +2985,16 @@
             "type": "string",
             "description": "Collection name.",
             "example": "documents"
+          },
+          "pq_rescore_oversampling": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "PQ rescore oversampling factor (default 4).\n\nThe search pipeline fetches `max(k * factor, k + 32)` candidates\nfrom HNSW and rescores them with full-precision ADC. Only\nmeaningful for quantised storage modes (SQ8, PQ). `Some(0)` is\ntreated as \"disabled\".",
+            "example": 4,
+            "minimum": 0
           },
           "storage_mode": {
             "type": "string",
@@ -3051,6 +3241,10 @@
           "query"
         ],
         "properties": {
+          "analyze": {
+            "type": "boolean",
+            "description": "When true, execute the query and return actual statistics alongside the plan."
+          },
           "params": {
             "type": "object",
             "description": "Named parameters for the query.",
@@ -3078,6 +3272,25 @@
           "features"
         ],
         "properties": {
+          "actual_stats": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ActualStatsResponse",
+                "description": "Actual execution statistics (only when `analyze: true`)."
+              }
+            ]
+          },
+          "actual_time_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Actual execution time in milliseconds (only when `analyze: true`)."
+          },
           "cache_hit": {
             "type": [
               "boolean",
@@ -3093,9 +3306,27 @@
             "$ref": "#/components/schemas/ExplainCost",
             "description": "Estimated cost metrics."
           },
+          "estimated_cost_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Estimated cost in milliseconds (for side-by-side comparison with actual)."
+          },
           "features": {
             "$ref": "#/components/schemas/ExplainFeatures",
             "description": "Query features detected."
+          },
+          "node_stats": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/NodeStatsResponse"
+            },
+            "description": "Per-node execution statistics (only when `analyze: true`)."
           },
           "plan": {
             "type": "array",
@@ -3144,6 +3375,13 @@
             "description": "Estimated rows processed/produced.",
             "minimum": 0
           },
+          "estimation_method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the row estimate was produced (e.g. \"histogram\", \"cardinality\", \"heuristic\")."
+          },
           "operation": {
             "type": "string",
             "description": "Operation type."
@@ -3162,6 +3400,14 @@
           "strategy"
         ],
         "properties": {
+          "avg_w": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Weighted fusion: weight applied to the average score component\n(only for strategy = \"weighted\", default 0.5)."
+          },
           "dense_w": {
             "type": [
               "number",
@@ -3169,6 +3415,14 @@
             ],
             "format": "float",
             "description": "Dense weight (only for strategy = \"rsf\", default 0.5)."
+          },
+          "hit_w": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Weighted fusion: weight applied to the hit-ratio component\n(only for strategy = \"weighted\", default 0.2)."
           },
           "k": {
             "type": [
@@ -3178,6 +3432,14 @@
             "format": "int32",
             "description": "RRF k parameter (only for strategy = \"rrf\", default 60).",
             "minimum": 0
+          },
+          "max_w": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Weighted fusion: weight applied to the maximum score component\n(only for strategy = \"weighted\", default 0.3)."
           },
           "sparse_w": {
             "type": [
@@ -3189,7 +3451,7 @@
           },
           "strategy": {
             "type": "string",
-            "description": "Fusion strategy: \"rrf\" or \"rsf\".",
+            "description": "Fusion strategy: \"rrf\", \"rsf\" (alias \"`relative_score`\"),\n\"average\" (alias \"avg\"), \"maximum\" (alias \"max\"), or \"weighted\".",
             "example": "rrf"
           }
         }
@@ -3712,6 +3974,12 @@
             "description": "Weighted fusion: weight for average score component.",
             "example": 0.5
           },
+          "dense_weight": {
+            "type": "number",
+            "format": "float",
+            "description": "Relative score fusion: weight for the dense (vector) branch.",
+            "example": 0.5
+          },
           "filter": {
             "description": "Optional metadata filter."
           },
@@ -3734,9 +4002,15 @@
             "example": 60,
             "minimum": 0
           },
+          "sparse_weight": {
+            "type": "number",
+            "format": "float",
+            "description": "Relative score fusion: weight for the sparse branch.",
+            "example": 0.5
+          },
           "strategy": {
             "type": "string",
-            "description": "Fusion strategy: \"average\", \"maximum\", \"rrf\", \"weighted\".",
+            "description": "Fusion strategy: \"average\", \"maximum\", \"rrf\", \"weighted\", \"`relative_score`\".",
             "example": "rrf"
           },
           "top_k": {
@@ -3797,6 +4071,51 @@
           },
           "payload": {
             "description": "Stored payload (null if none)."
+          }
+        }
+      },
+      "NodeStatsResponse": {
+        "type": "object",
+        "description": "Per-plan-node **estimated** execution statistics for EXPLAIN ANALYZE responses.\n\nAll values are synthetic heuristics derived from the plan-global\n`actual_time_ms` — they are **not** individually measured per node.\nField names keep the `actual_` prefix for API stability; check the\n`estimated` flag to distinguish heuristic values from future\ninstrumented measurements (#467).",
+        "required": [
+          "node_label",
+          "actual_time_ms",
+          "actual_rows_in",
+          "actual_rows_out",
+          "loops",
+          "estimated"
+        ],
+        "properties": {
+          "actual_rows_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Estimated rows entering this node (heuristic approximation).",
+            "minimum": 0
+          },
+          "actual_rows_out": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Estimated rows leaving this node (heuristic approximation).",
+            "minimum": 0
+          },
+          "actual_time_ms": {
+            "type": "number",
+            "format": "double",
+            "description": "Estimated wall-clock time for this node in milliseconds.\nDerived from total execution time using normalized weight fractions,\nnot real per-node instrumentation. Will be replaced by measured\ntiming (#467)."
+          },
+          "estimated": {
+            "type": "boolean",
+            "description": "When `true`, time and row counts are heuristic estimates, not real\nper-node measurements. Will become `false` once instrumented timing\nlands (#467)."
+          },
+          "loops": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of loop iterations (1 for non-looping nodes).",
+            "minimum": 0
+          },
+          "node_label": {
+            "type": "string",
+            "description": "Node label (e.g. `VectorSearch`, `Filter`, `Limit`)."
           }
         }
       },
@@ -4011,6 +4330,82 @@
           "velesql_contract_version": {
             "type": "string",
             "description": "`VelesQL` contract version used by this response."
+          }
+        }
+      },
+      "ScrollPoint": {
+        "type": "object",
+        "description": "A single point in a scroll response.",
+        "required": [
+          "id",
+          "vector"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Point ID.",
+            "minimum": 0
+          },
+          "payload": {
+            "description": "Optional payload."
+          },
+          "vector": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "Vector data."
+          }
+        }
+      },
+      "ScrollRequest": {
+        "type": "object",
+        "description": "Request body for the scroll endpoint.",
+        "properties": {
+          "batch_size": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum points per batch (1–10 000, default 100).",
+            "minimum": 0
+          },
+          "cursor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Resume after this point ID (exclusive). Omit to start from beginning.",
+            "minimum": 0
+          },
+          "filter": {
+            "description": "Optional filter expression."
+          }
+        }
+      },
+      "ScrollResponse": {
+        "type": "object",
+        "description": "Response from the scroll endpoint.",
+        "required": [
+          "points"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Cursor for the next batch. Null when iteration is complete.",
+            "minimum": 0
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScrollPoint"
+            },
+            "description": "Points in this batch (ascending ID order)."
           }
         }
       },
@@ -4395,13 +4790,6 @@
           "source"
         ],
         "properties": {
-          "cursor": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Optional cursor for pagination (not implemented yet)."
-          },
           "limit": {
             "type": "integer",
             "description": "Maximum number of results to return.",
@@ -4444,13 +4832,6 @@
           "has_more": {
             "type": "boolean",
             "description": "Whether more results are available."
-          },
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Cursor for next page (if applicable)."
           },
           "results": {
             "type": "array",

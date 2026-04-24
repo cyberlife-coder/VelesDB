@@ -6,7 +6,7 @@
 //! - `TemporalDecay`: Older procedures lose relevance over time
 //! - `ContextualReinforcement`: Considers usage context for updates
 
-// SAFETY: Numeric casts in reinforcement are intentional:
+// Reason: Numeric casts in reinforcement are intentional:
 // - u64->f32 casts for usage counts in decay calculations (approximate)
 // - Values bounded by practical limits (usage counts, time periods)
 // - Precision loss acceptable for confidence heuristics
@@ -38,8 +38,7 @@ impl ReinforcementContext {
         Self {
             current_time: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+                .map_or(0, |d| d.as_secs()),
             ..Default::default()
         }
     }

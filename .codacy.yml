@@ -55,6 +55,16 @@ exclude_paths:
   # TypeScript SDK REST/streaming backends — fetch URL constructed from
   # trusted application config (baseUrl), not user input. SSRF is FP.
   - "sdks/typescript/src/backends/**"
+  # Integration contains_text_search helpers — Codacy's online taint analysis
+  # flags VelesQL query construction as SQL injection. All user inputs are
+  # sanitized BEFORE the query is built:
+  #   - collection: validate_collection_name() → [a-zA-Z0-9_-]+ only
+  #   - column:     validate_column_name()     → [a-zA-Z0-9_.]+ only
+  #   - keyword:    keyword.replace("'","''")   → SQL-style quote escaping
+  # The static analyser cannot follow sanitization across Python call boundaries,
+  # producing persistent false positives despite repeated per-engine exclusions.
+  - "integrations/langchain/src/langchain_velesdb/search_ops.py"
+  - "integrations/llamaindex/src/llamaindex_velesdb/search_ops.py"
   # Root-level benchmark scripts (Python, not criterion)
   - "benchmarks/**"
   # Non-project directories (dependencies, tooling, build output)
@@ -63,6 +73,12 @@ exclude_paths:
   - "node_modules/**"
   - "target/**"
   - ".tmp/**"
+  # Local environment files (gitignored, never committed). Trivy scans the
+  # local filesystem including gitignored files, flagging dev-only tokens.
+  # Codacy Cloud only sees tracked files so this is a local-CLI-only concern.
+  - "**/.env"
+  - "**/.env.*"
+  - "**/.env.local"
 
   # --- Audited unsafe code (false positive suppression) ---
   # Codacy's "unsafe detected" rule cannot distinguish documented from
@@ -96,9 +112,6 @@ exclude_paths:
   - "crates/velesdb-core/src/index/hnsw/index/mod.rs"
   - "crates/velesdb-core/src/index/hnsw/index/vacuum.rs"
   - "crates/velesdb-core/src/index/hnsw/vector_store.rs"
-  # Memory pool — MaybeUninit for arena-allocated graph nodes
-  # RAII-guarded with compile-time size assertions.
-  - "crates/velesdb-core/src/collection/graph/memory_pool/mod.rs"
   # SIMD NEON intrinsics (ARM equivalent of AVX2)
   - "crates/velesdb-core/src/simd_neon.rs"
   - "crates/velesdb-core/src/simd_neon_prefetch.rs"
@@ -121,6 +134,12 @@ exclude_paths:
   # mmap capacity growth — MmapMut::map_mut after file resize (file was set_len'd
   # to new_len before remapping, ensuring bounds are valid).
   - "crates/velesdb-core/src/storage/mmap_capacity.rs"
+  # Contiguous resize — dealloc/realloc path extracted from contiguous_ops.rs
+  # to comply with the 500-NLOC per-file budget. Every unsafe block carries
+  # the same // SAFETY: documentation (layout alignment, ownership,
+  # non-overlapping invariants) as the pre-extraction version. Covered by
+  # Miri CI.
+  - "crates/velesdb-core/src/contiguous_resize.rs"
 
 # ---------------------------------------------------------------------------
 # Per-engine exclusions — targeted suppression without losing other checks
@@ -168,11 +187,6 @@ engines:
       - "crates/velesdb-migrate/src/pipeline.rs"
       - "crates/velesdb-migrate/src/retry.rs"
 
-      # --- Graph algorithmic complexity (CART tree operations) ---
-      # Binary tree insert/remove with rebalancing — inherently recursive
-      # and branch-heavy. Covered by extensive unit tests.
-      - "crates/velesdb-core/src/collection/graph/cart/node/mod.rs"
-
       # --- MATCH executor (Lizard false positive: merges adjacent fns) ---
       # accept_traversal_hit is 30 NLOC / CC=3 but Lizard reports "70 lines"
       # by merging it with the preceding execute_for_start_nodes function.
@@ -207,14 +221,10 @@ engines:
       # --- GPU backend (sequential hardware init pipeline) ---
       - "crates/velesdb-core/src/gpu/**"
 
-      # --- CART adaptive radix tree nodes ---
-      - "crates/velesdb-core/src/collection/graph/cart/node/mod.rs"
-
       # --- Point deserialization (serde custom impl) ---
       - "crates/velesdb-core/src/point.rs"
 
       # --- Async streaming (tokio pipeline) ---
-      - "crates/velesdb-core/src/collection/async_ops.rs"
       - "crates/velesdb-core/src/collection/streaming/ingester.rs"
 
       # --- Graph traversal (BFS/DFS algorithms) ---
@@ -230,8 +240,17 @@ engines:
       # --- HNSW beam search hot path (lock-held greedy descent + prefetch) ---
       - "crates/velesdb-core/src/index/hnsw/native/graph/search.rs"
 
-      # --- Server handlers (HTTP glue, not engine logic) ---
-      - "crates/velesdb-server/src/handlers/**"
+      # --- Server handlers: only files exceeding CC/NLOC Codacy limits ---
+      # pipeline.rs (771 NLOC): async search pipeline with filter/fusion/scoring branches
+      - "crates/velesdb-server/src/handlers/search/pipeline.rs"
+      # collections.rs (560 NLOC): CRUD handler with serde deserialization + validation branches
+      - "crates/velesdb-server/src/handlers/collections.rs"
+      # lib.rs (572 NLOC): REST API library root — module declarations + large
+      # #[derive(OpenApi)] macro invocation that utoipa expands into ~300 lines
+      # of generated code, plus a small section of module-level conformance
+      # tests. Splitting would fragment the public API surface with no clarity
+      # gain; utoipa requires the OpenApi derive in the crate root.
+      - "crates/velesdb-server/src/lib.rs"
 
       # --- ORDER BY ordering (Lizard false positive: counts impl block + free fn as one unit) ---
       # ScoreContext::new is 5 lines but Lizard merges the impl block with the
@@ -278,6 +297,33 @@ engines:
       # match_exec/mod.rs and crud.rs false positives above.
       - "crates/velesdb-core/src/velesql/parser/select/clause_from_join.rs"
 
+      # --- Files extracted during the 500-NLOC refactor waves ---
+      # The listed files host functions whose original locations were
+      # already excluded. The complexity is inherent to the domain and
+      # was previously accepted. These exclusions preserve the prior
+      # policy after extraction.
+
+      # ColumnStore geo filters — previously in filter.rs. `filter_geo_bbox`
+      # walks row coordinates and short-circuits on the 4-corner bounding
+      # box test; complexity follows the geometry predicate.
+      - "crates/velesdb-core/src/column_store/filter_geo.rs"
+
+      # VelesQL specialized condition parsers — previously in conditions.rs.
+      # `parse_similarity_expr`, `parse_geo_distance_expr`, and
+      # `parse_geo_bbox_expr` dispatch over pest grammar rule variants;
+      # complexity reflects the number of grammar branches.
+      - "crates/velesdb-core/src/velesql/parser/conditions_specialized.rs"
+
+      # VelesQL MATCH pattern parser — `parse_path_pattern` walks the pest
+      # pair tree over node and edge alternatives with greedy consumption.
+      - "crates/velesdb-core/src/velesql/parser/match_patterns.rs"
+
+      # Bulk import pipeline — previously in crud_bulk.rs.
+      # `upsert_bulk_from_raw` sequences raw-to-typed conversion, batched
+      # WAL sync, and deferred HNSW insert. NLOC reflects the sequential
+      # I/O phases, not branch complexity.
+      - "crates/velesdb-core/src/collection/core/bulk_import.rs"
+
   opengrep:
     exclude_paths:
       # Integration memory modules — random.randint used for session-scoped
@@ -290,3 +336,31 @@ engines:
       # GitHub workflows — dtolnay/rust-toolchain downloads only official
       # Rust binaries from static.rust-lang.org; pinning is handled per-file
       - ".github/workflows/**"
+      # Audited unsafe Rust — also listed in global exclude_paths but opengrep's
+      # unsafe-usage rule bypasses the global exclusion for this engine.
+      # contiguous_ops.rs: RAII-guarded dealloc + ptr::copy_nonoverlapping for
+      # cache-locality reordering; all blocks have // SAFETY: comments.
+      - "crates/velesdb-core/src/contiguous_ops.rs"
+      # mmap_capacity.rs: MmapMut::map_mut after file resize (file was set_len'd
+      # to new_len before remapping, ensuring bounds are valid).
+      - "crates/velesdb-core/src/storage/mmap_capacity.rs"
+      # contiguous_resize.rs: dealloc/realloc path extracted from
+      # contiguous_ops.rs to comply with the per-file NLOC budget. Every
+      # unsafe block carries // SAFETY: comments documenting layout
+      # alignment, ownership, and non-overlapping invariants.
+      - "crates/velesdb-core/src/contiguous_resize.rs"
+      # contains_text_search in LangChain/LlamaIndex integrations — opengrep's
+      # taint analysis cannot track sanitization across Python function calls.
+      # All three user-supplied parameters are sanitized before query construction:
+      #   - collection: validated by validate_collection_name() → [a-zA-Z0-9_-]+ only
+      #   - column:     validated by validate_column_name()     → [a-zA-Z0-9_.]+, must start with letter/underscore
+      #   - keyword:    escaped with keyword.replace("'", "''") → SQL-style quote doubling
+      # The resulting VelesQL query cannot be injected. False positive from static taint analysis.
+      - "integrations/langchain/src/langchain_velesdb/search_ops.py"
+      - "integrations/llamaindex/src/llamaindex_velesdb/search_ops.py"
+      # LangChain integration modules — opengrep's `ai.python.detect-langchain`
+      # rule triggers on any `from langchain_core...` / `from langchain...`
+      # import. These files ARE the LangChain integration; flagging "possible
+      # LangChain usage" is a self-reference false positive.
+      - "integrations/langchain/src/langchain_velesdb/scroll_ops.py"
+      - "integrations/langchain/src/langchain_velesdb/multi_query_ops.py"

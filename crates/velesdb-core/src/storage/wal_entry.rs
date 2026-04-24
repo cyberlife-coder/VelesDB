@@ -1,8 +1,18 @@
 //! WAL entry domain type — separates parsing from application.
 //!
 //! Extracted from `log_payload.rs` to reduce NLOC.
+//!
+//! ## WAL versioning (WP-2I)
+//!
+//! The WAL format is implicitly versioned through its marker bytes. Legacy
+//! entries use `LEGACY_STORE_MARKER` / `LEGACY_DELETE_MARKER` (no CRC),
+//! while v2 entries use `CRC_STORE_MARKER` / `CRC_DELETE_MARKER` (with
+//! CRC32 integrity checking). Future format changes should introduce new
+//! marker values, preserving backward-compatible reading of older entries.
+//! No separate schema-version header is needed because the per-entry
+//! marker already encodes the wire format.
 
-use super::log_payload::{
+use super::log_payload_io::{
     compute_delete_crc, compute_store_crc, CRC_DELETE_MARKER, CRC_STORE_MARKER,
     LEGACY_DELETE_MARKER, LEGACY_STORE_MARKER,
 };

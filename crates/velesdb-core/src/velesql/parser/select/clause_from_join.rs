@@ -84,10 +84,8 @@ impl Parser {
         let mut aliases = Vec::new();
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
-                Rule::identifier => {
-                    if table.is_empty() {
-                        table = extract_identifier(&inner_pair);
-                    }
+                Rule::identifier if table.is_empty() => {
+                    table = extract_identifier(&inner_pair);
                 }
                 Rule::from_alias => {
                     for alias_inner in inner_pair.into_inner() {

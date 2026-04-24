@@ -289,6 +289,7 @@ impl HnswParams {
 
 /// Search quality profile controlling the recall/latency tradeoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SearchQuality {
     /// Fast search with `ef_search=96`. ~95% recall, lowest latency.
     Fast,

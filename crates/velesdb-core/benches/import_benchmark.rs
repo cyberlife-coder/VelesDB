@@ -63,7 +63,7 @@ fn bench_single_insert(c: &mut Criterion) {
                         (dir, db, vectors.clone())
                     },
                     |(dir, db, vecs)| {
-                        let col = db.get_collection("test").unwrap();
+                        let col = db.get_vector_collection("test").unwrap();
                         for (i, vec) in vecs.iter().enumerate() {
                             col.upsert(vec![Point::without_payload(i as u64, vec.clone())])
                                 .unwrap();
@@ -102,7 +102,7 @@ fn bench_batch_insert(c: &mut Criterion) {
                         (dir, db, points.clone())
                     },
                     |(dir, db, pts)| {
-                        let col = db.get_collection("test").unwrap();
+                        let col = db.get_vector_collection("test").unwrap();
                         for batch in pts.chunks(bs) {
                             col.upsert(batch.to_vec()).unwrap();
                         }
@@ -140,7 +140,7 @@ fn bench_bulk_vs_regular(c: &mut Criterion) {
                 (dir, db, points.clone())
             },
             |(dir, db, pts)| {
-                let col = db.get_collection("test").unwrap();
+                let col = db.get_vector_collection("test").unwrap();
                 for batch in pts.chunks(batch_size) {
                     col.upsert(batch.to_vec()).unwrap();
                 }
@@ -162,7 +162,7 @@ fn bench_bulk_vs_regular(c: &mut Criterion) {
                 (dir, db, points.clone())
             },
             |(dir, db, pts)| {
-                let col = db.get_collection("test").unwrap();
+                let col = db.get_vector_collection("test").unwrap();
                 for batch in pts.chunks(batch_size) {
                     col.upsert_bulk(batch).unwrap();
                 }
@@ -198,7 +198,7 @@ fn bench_insert_throughput(c: &mut Criterion) {
                     (dir, db, points.clone())
                 },
                 |(dir, db, pts)| {
-                    let col = db.get_collection("test").unwrap();
+                    let col = db.get_vector_collection("test").unwrap();
                     for batch in pts.chunks(batch_size) {
                         col.upsert(batch.to_vec()).unwrap();
                     }
@@ -242,7 +242,7 @@ fn bench_payload_overhead(c: &mut Criterion) {
                 (dir, db, points_no_payload.clone())
             },
             |(dir, db, pts)| {
-                let col = db.get_collection("test").unwrap();
+                let col = db.get_vector_collection("test").unwrap();
                 for batch in pts.chunks(batch_size) {
                     col.upsert(batch.to_vec()).unwrap();
                 }
@@ -263,7 +263,7 @@ fn bench_payload_overhead(c: &mut Criterion) {
                 (dir, db, points_with_payload.clone())
             },
             |(dir, db, pts)| {
-                let col = db.get_collection("test").unwrap();
+                let col = db.get_vector_collection("test").unwrap();
                 for batch in pts.chunks(batch_size) {
                     col.upsert(batch.to_vec()).unwrap();
                 }

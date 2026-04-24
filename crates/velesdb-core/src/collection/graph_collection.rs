@@ -211,6 +211,22 @@ impl GraphCollection {
         self.inner.all_ids()
     }
 
+    /// Returns the next batch of points for scroll iteration.
+    ///
+    /// Delegates to [`Collection::scroll_batch`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `batch_size` is 0.
+    pub fn scroll_batch(
+        &self,
+        cursor: Option<u64>,
+        batch_size: usize,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Result<crate::collection::ScrollBatch> {
+        self.inner.scroll_batch(cursor, batch_size, filter)
+    }
+
     /// Returns the number of nodes (points) stored in this collection.
     #[must_use]
     pub fn len(&self) -> usize {

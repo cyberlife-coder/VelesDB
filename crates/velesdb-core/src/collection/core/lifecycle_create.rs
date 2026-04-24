@@ -3,7 +3,7 @@
 //! Extracted from `lifecycle.rs` to reduce NLOC below the 500 threshold.
 //! Contains all `create_*` public constructors and their shared helpers.
 
-use crate::collection::types::{Collection, CollectionConfig, CollectionType};
+use crate::collection::types::{Collection, CollectionConfig, CURRENT_SCHEMA_VERSION};
 use crate::distance::DistanceMetric;
 use crate::error::Result;
 use crate::quantization::StorageMode;
@@ -17,6 +17,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or the config cannot be saved.
+    #[allow(dead_code)] // Reason: Called in velesql tests and test_fixtures
     pub fn create(path: PathBuf, dimension: usize, metric: DistanceMetric) -> Result<Self> {
         Self::create_with_options(path, dimension, metric, StorageMode::default())
     }
@@ -74,6 +75,7 @@ impl Collection {
             dimension,
             metric,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode,
             metadata_only: false,
             graph_schema: None,
@@ -93,9 +95,18 @@ impl Collection {
     /// control over the HNSW graph topology (M, `ef_construction`) while
     /// retaining the standard storage pipeline.
     ///
+    /// Uses the engine default `pq_rescore_oversampling = 4`. Callers that
+    /// need to override the PQ rescore factor should use
+    /// [`Collection::create_with_full_config`] instead.
+    ///
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or the config cannot be saved.
+    #[allow(dead_code)] // Reason: kept as a convenience shortcut for lifecycle tests; the
+                        // canonical constructor is `create_with_full_config`, which is used by all production
+                        // call-sites since Wave 3 Commit 5. Deleting this wrapper would force every test to
+                        // restate `Some(4)` for `pq_rescore_oversampling`, spreading the engine default across
+                        // the test suite.
     pub fn create_with_hnsw_params(
         path: PathBuf,
         dimension: usize,
@@ -103,16 +114,47 @@ impl Collection {
         storage_mode: StorageMode,
         hnsw_params: crate::index::hnsw::HnswParams,
     ) -> Result<Self> {
+        Self::create_with_full_config(path, dimension, metric, storage_mode, hnsw_params, Some(4))
+    }
+
+    /// Creates a new collection with custom HNSW parameters and an explicit
+    /// PQ rescore oversampling factor.
+    ///
+    /// This is the most expressive vector constructor: callers pass a fully
+    /// populated [`HnswParams`] (including `alpha`, `max_elements`, and any
+    /// future fields) together with an explicit `pq_rescore_oversampling`
+    /// override. It is the single underlying factory called by
+    /// [`Collection::create_with_hnsw_params`] (which pins the PQ factor to
+    /// its engine default of `Some(4)`).
+    ///
+    /// Passing `pq_rescore_oversampling = None` keeps the on-disk config
+    /// in "no explicit override" mode, which allows later migrations to
+    /// recompute the factor from the dataset shape without having to
+    /// distinguish a persisted explicit value from a legacy default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config
+    /// cannot be saved.
+    pub fn create_with_full_config(
+        path: PathBuf,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+        hnsw_params: crate::index::hnsw::HnswParams,
+        pq_rescore_oversampling: Option<u32>,
+    ) -> Result<Self> {
         let config = CollectionConfig {
             name: Self::name_from_path(&path),
             dimension,
             metric,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode,
             metadata_only: false,
             graph_schema: None,
             embedding_dimension: None,
-            pq_rescore_oversampling: Some(4),
+            pq_rescore_oversampling,
             hnsw_params: Some(hnsw_params),
             #[cfg(feature = "persistence")]
             deferred_indexing: None,
@@ -140,6 +182,7 @@ impl Collection {
             dimension,
             metric,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode: StorageMode::Full,
             metadata_only: false,
             graph_schema: None,
@@ -151,29 +194,6 @@ impl Collection {
             async_index_builder: Some(async_builder_config),
         };
         Self::create_from_config(path, config, None)
-    }
-
-    /// Creates a new collection with a specific type (Vector or `MetadataOnly`).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the directory cannot be created or the config cannot be saved.
-    pub fn create_typed(
-        path: PathBuf,
-        name: &str,
-        collection_type: &CollectionType,
-    ) -> Result<Self> {
-        match collection_type {
-            CollectionType::Vector {
-                dimension,
-                metric,
-                storage_mode,
-            } => Self::create_with_options(path, *dimension, *metric, *storage_mode),
-            CollectionType::MetadataOnly => Self::create_metadata_only(path, name),
-            CollectionType::Graph { .. } => Err(crate::Error::GraphNotSupported(
-                "Graph collection creation not yet implemented".to_string(),
-            )),
-        }
     }
 
     /// Creates a new metadata-only collection (no vectors, no HNSW index).
@@ -191,6 +211,7 @@ impl Collection {
             dimension: 0,
             metric: DistanceMetric::Cosine,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode: StorageMode::Full,
             metadata_only: true,
             graph_schema: None,
@@ -223,6 +244,7 @@ impl Collection {
             dimension: embedding_dim.unwrap_or(0),
             metric,
             point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
             storage_mode: StorageMode::Full,
             metadata_only: false,
             graph_schema: Some(schema),

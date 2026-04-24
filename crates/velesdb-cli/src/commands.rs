@@ -54,7 +54,7 @@ pub enum Commands {
         action: CollectionCommands,
     },
 
-    /// Data operations (import, export, upsert, get, delete)
+    /// Data operations (import, export, upsert, get, delete, stream-insert)
     Data {
         #[command(subcommand)]
         action: DataCommands,
@@ -303,6 +303,41 @@ pub enum DataCommands {
         #[arg(required = true)]
         ids: Vec<u64>,
     },
+
+    /// Scroll through collection points with cursor-based pagination
+    Scroll {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Batch size (number of points per page)
+        #[arg(short, long, default_value = "20")]
+        batch_size: usize,
+
+        /// Starting cursor (point ID to resume after). Omit for first page.
+        #[arg(long)]
+        cursor: Option<u64>,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "json")]
+        format: String,
+    },
+
+    /// Stream-insert points from stdin (one JSON object per line)
+    #[command(name = "stream-insert")]
+    StreamInsert {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Batch size for micro-batching (points buffered before upsert)
+        #[arg(short, long, default_value = "100")]
+        batch_size: usize,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +384,27 @@ pub enum QueryCommands {
         /// RRF k parameter (only for rrf strategy)
         #[arg(long, default_value = "60")]
         rrf_k: u32,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
+
+    /// Perform batch search: multiple independent queries in parallel
+    #[command(name = "batch-search")]
+    BatchSearch {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Query vectors as JSON array of arrays (e.g., '[[1.0, 0.0], [0.0, 1.0]]')
+        vectors: String,
+
+        /// Number of results per query
+        #[arg(short = 'k', long, default_value = "10")]
+        top_k: usize,
 
         /// Output format (table, json)
         #[arg(short, long, default_value = "table")]

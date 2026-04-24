@@ -17,14 +17,10 @@ pub enum SourceType {
     Milvus,
     /// ChromaDB vector database.
     ChromaDB,
-    /// PostgreSQL with pgvector extension (direct SQL).
-    PgVector,
     /// JSON file import.
     JsonFile,
     /// CSV file import.
     CsvFile,
-    /// MongoDB Atlas Vector Search.
-    MongoDB,
     /// Elasticsearch/OpenSearch with vector search.
     Elasticsearch,
     /// Redis Vector Search (Redis Stack).
@@ -41,10 +37,8 @@ impl SourceType {
             Self::Weaviate,
             Self::Milvus,
             Self::ChromaDB,
-            Self::PgVector,
             Self::JsonFile,
             Self::CsvFile,
-            Self::MongoDB,
             Self::Elasticsearch,
             Self::Redis,
         ]
@@ -59,10 +53,8 @@ impl SourceType {
             Self::Weaviate => "Weaviate",
             Self::Milvus => "Milvus / Zilliz Cloud",
             Self::ChromaDB => "ChromaDB",
-            Self::PgVector => "PostgreSQL (pgvector direct)",
             Self::JsonFile => "JSON File (local import)",
             Self::CsvFile => "CSV File (local import)",
-            Self::MongoDB => "MongoDB Atlas Vector Search",
             Self::Elasticsearch => "Elasticsearch / OpenSearch",
             Self::Redis => "Redis Vector Search",
         }
@@ -77,10 +69,8 @@ impl SourceType {
             Self::Weaviate => "weaviate",
             Self::Milvus => "milvus",
             Self::ChromaDB => "chromadb",
-            Self::PgVector => "pgvector",
             Self::JsonFile => "json_file",
             Self::CsvFile => "csv_file",
-            Self::MongoDB => "mongodb",
             Self::Elasticsearch => "elasticsearch",
             Self::Redis => "redis",
         }
@@ -88,7 +78,7 @@ impl SourceType {
 
     /// Whether this source requires an API key.
     pub fn requires_api_key(&self) -> bool {
-        matches!(self, Self::Supabase | Self::Pinecone | Self::MongoDB)
+        matches!(self, Self::Supabase | Self::Pinecone)
     }
 
     /// Whether API key is optional.

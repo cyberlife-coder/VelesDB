@@ -22,7 +22,7 @@ pub(super) fn vector_to_bytes(vector: &[f32]) -> &[u8] {
     // SAFETY: `from_raw_parts` requires a valid pointer and byte length.
     // - Condition 1: `vector.as_ptr()` is valid for `size_of_val(vector)` bytes.
     // - Condition 2: Lifetime of returned bytes is tied to `vector`.
-    // Reason: Zero-copy view avoids allocating during persistence writes.
+    // SAFETY: Zero-copy view avoids allocating during persistence writes.
     unsafe {
         std::slice::from_raw_parts(vector.as_ptr().cast::<u8>(), std::mem::size_of_val(vector))
     }
@@ -39,24 +39,27 @@ pub(super) fn vector_to_bytes(vector: &[f32]) -> &[u8] {
 ///
 /// A new `Vec<f32>` containing the converted data.
 ///
-/// # Panics
+/// # Safety contract
 ///
-/// Panics if `bytes.len() < dimension * size_of::<f32>()`.
+/// Caller must ensure `bytes.len() >= dimension * size_of::<f32>()`.
+/// The mmap reader (`vector_io.rs`) validates offset bounds before calling.
 #[inline]
 pub(super) fn bytes_to_vector(bytes: &[u8], dimension: usize) -> Vec<f32> {
     let vector_size = dimension * std::mem::size_of::<f32>();
+    // Hard assert: this guards a `copy_nonoverlapping` below. In release builds
+    // a `debug_assert!` would be elided, allowing out-of-bounds reads (UB).
     assert!(
         bytes.len() >= vector_size,
-        "bytes_to_vector: buffer too small ({} < {})",
+        "bytes_to_vector: buffer too small ({} < {vector_size})",
         bytes.len(),
-        vector_size
     );
 
     let mut vector = vec![0.0f32; dimension];
     // SAFETY: `copy_nonoverlapping` requires valid, non-overlapping ranges.
-    // - Condition 1: Source has at least `vector_size` bytes (assert above).
+    // - Condition 1: Source has at least `vector_size` bytes (assert above,
+    //   plus caller bounds-checks in mmap_io before calling).
     // - Condition 2: Destination is freshly allocated `Vec<f32>` storage.
-    // Reason: Copying into aligned owned memory avoids alignment UB from direct cast reads.
+    // SAFETY: Copying into aligned owned memory avoids alignment UB from direct cast reads.
     unsafe {
         std::ptr::copy_nonoverlapping(
             bytes.as_ptr(),

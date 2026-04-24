@@ -1,14 +1,14 @@
 //! Tests for native HNSW implementation.
 
-#![allow(clippy::cast_precision_loss, deprecated)]
+#![allow(clippy::cast_precision_loss)]
 
-use super::distance::{CpuDistance, SimdDistance};
+use super::distance::{CachedSimdDistance, CpuDistance};
 use super::graph::{NativeHnsw, DEFAULT_ALPHA};
 use crate::distance::DistanceMetric;
 
 #[test]
 fn test_native_hnsw_basic_insert_search() {
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 128);
     let hnsw = NativeHnsw::new(engine, 16, 100, 1000);
 
     // Insert 100 vectors
@@ -30,7 +30,7 @@ fn test_native_hnsw_basic_insert_search() {
 
 #[test]
 fn test_native_hnsw_recall() {
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 128);
     // Reduced parameters for faster test execution
     let hnsw = NativeHnsw::new(engine, 16, 100, 500);
 
@@ -104,7 +104,7 @@ fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 #[test]
 fn test_cpu_vs_simd_consistency() {
     let cpu_engine = CpuDistance::new(DistanceMetric::Euclidean);
-    let simd_engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let simd_engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 64);
 
     let cpu_hnsw = NativeHnsw::new(cpu_engine, 16, 100, 100);
     let simd_hnsw = NativeHnsw::new(simd_engine, 16, 100, 100);
@@ -135,7 +135,7 @@ fn test_cpu_vs_simd_consistency() {
 #[test]
 fn test_native_hnsw_with_alpha_diversification() {
     // Test that higher alpha produces more diverse neighbors
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 32);
 
     // Create index with alpha=1.2 (VAMANA-style diversification)
     let hnsw = NativeHnsw::with_alpha(engine, 16, 100, 100, 1.2);
@@ -180,7 +180,7 @@ fn test_native_hnsw_with_alpha_diversification() {
 #[test]
 fn test_native_hnsw_alpha_default_is_vamana() {
     // Default alpha should be DEFAULT_ALPHA (1.2, VAMANA recommendation)
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     assert!(
@@ -192,8 +192,8 @@ fn test_native_hnsw_alpha_default_is_vamana() {
 #[test]
 fn test_native_hnsw_alpha_affects_graph_structure() {
     // With alpha > 1.0, the graph should have more diverse connections
-    let engine1 = SimdDistance::new(DistanceMetric::Euclidean);
-    let engine2 = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine1 = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
+    let engine2 = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
 
     let hnsw_standard = NativeHnsw::new(engine1, 16, 100, 100);
     let hnsw_diverse = NativeHnsw::with_alpha(engine2, 16, 100, 100, 1.2);
@@ -215,7 +215,7 @@ fn test_native_hnsw_alpha_affects_graph_structure() {
 
 #[test]
 fn test_search_multi_entry_returns_results() {
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Insert vectors
@@ -235,7 +235,7 @@ fn test_search_multi_entry_returns_results() {
 
 #[test]
 fn test_search_multi_entry_vs_standard() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Insert vectors
@@ -265,9 +265,8 @@ fn test_search_multi_entry_vs_standard() {
 fn test_concurrent_insert_search_no_deadlock() {
     use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
 
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 500));
 
     // Pre-populate with some vectors
@@ -316,7 +315,7 @@ fn test_parallel_insert_stress_no_deadlock() {
     use std::sync::Arc;
     use std::thread;
 
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 64);
     let hnsw = Arc::new(NativeHnsw::new(engine, 32, 200, 1000));
 
     let num_threads = 8;
@@ -363,7 +362,7 @@ fn test_mixed_operations_no_deadlock() {
     use std::sync::Arc;
     use std::thread;
 
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 300));
 
     // Pre-populate
@@ -429,7 +428,7 @@ fn test_concurrent_insert_deterministic_count() {
     use std::sync::Arc;
     use std::thread;
 
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 64);
     let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 2000));
 
     let num_threads = 8;
@@ -489,7 +488,7 @@ fn test_concurrent_insert_search_correctness() {
     use std::sync::Arc;
     use std::thread;
 
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 1000));
 
     // Pre-populate to ensure searches have data
@@ -573,7 +572,7 @@ fn test_concurrent_insert_multi_entry_search() {
     use std::sync::Arc;
     use std::thread;
 
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 32);
     let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 600));
 
     // Pre-populate
@@ -635,7 +634,7 @@ fn test_hnsw_no_deadlock_during_parallel_insert_search() {
     use std::sync::Arc;
     use std::thread;
 
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 64);
     let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 500));
 
     // Pre-populate so search has data to traverse
@@ -708,7 +707,6 @@ fn test_hnsw_no_deadlock_during_parallel_insert_search() {
 fn test_concurrent_insert_delete_search_at_index_level() {
     use crate::distance::DistanceMetric as DM;
     use crate::index::hnsw::native_index::NativeHnswIndex;
-    use crate::index::VectorIndex;
     use std::sync::Arc;
     use std::thread;
 
@@ -809,7 +807,6 @@ fn test_concurrent_insert_delete_search_at_index_level() {
 fn test_delete_exclusion_under_concurrent_search() {
     use crate::distance::DistanceMetric as DM;
     use crate::index::hnsw::native_index::NativeHnswIndex;
-    use crate::index::VectorIndex;
     use std::sync::atomic::{AtomicBool, Ordering as AtomOrd};
     use std::sync::Arc;
     use std::thread;
@@ -896,7 +893,7 @@ fn test_prenormalized_cosine_recall_matches_standard() {
     let dim = 128;
 
     // Standard (non-prenormalized) cosine index
-    let engine_std = SimdDistance::new(DistanceMetric::Cosine);
+    let engine_std = CachedSimdDistance::new(DistanceMetric::Cosine, dim);
     let hnsw_std = NativeHnsw::new(engine_std, 16, 100, 500);
 
     // Pre-normalized cosine index
@@ -985,7 +982,7 @@ fn test_prenormalized_search_distances_are_consistent() {
 
 #[test]
 fn test_safety_counters_accessible_after_operations() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     for i in 0..20_u64 {
@@ -1020,7 +1017,7 @@ fn test_safety_counters_accessible_after_operations() {
 /// which would fill the list with nearby, redundant neighbors.
 #[test]
 fn test_backward_pruning_preserves_diversity_across_clusters() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     // M=16 ensures the graph is well-connected across clusters.
     // With M0=32 layer-0 connections, the hub can reach all clusters.
     let hnsw = NativeHnsw::with_alpha(engine, 16, 200, 200, 1.2);
@@ -1093,7 +1090,7 @@ fn test_backward_pruning_preserves_diversity_across_clusters() {
 /// compared to a baseline threshold.
 #[test]
 fn test_diversity_backward_pruning_recall_not_degraded() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 64);
     let hnsw = NativeHnsw::new(engine, 16, 100, 500);
 
     let vectors: Vec<Vec<f32>> = (0..200)
@@ -1158,7 +1155,7 @@ fn test_diversity_backward_pruning_recall_not_degraded() {
 /// the new node replaces a neighbor only if it is closer to the anchor.
 #[test]
 fn test_eviction_respects_distance_when_all_equally_diverse() {
-    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 8);
     // M=2 so M0=4, very constrained to force eviction decisions.
     let hnsw = NativeHnsw::with_alpha(engine, 2, 100, 50, 1.2);
 

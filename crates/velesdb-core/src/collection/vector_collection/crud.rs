@@ -23,8 +23,8 @@ impl VectorCollection {
     ///
     /// # Errors
     ///
-    /// - Returns [`Error::InvalidVector`] if `vectors.len() != ids.len() * dimension`.
-    /// - Returns [`Error::DimensionMismatch`] if `dimension` mismatches the collection.
+    /// - Returns [`crate::error::Error::InvalidVector`] if `vectors.len() != ids.len() * dimension`.
+    /// - Returns [`crate::error::Error::DimensionMismatch`] if `dimension` mismatches the collection.
     pub fn upsert_bulk_from_raw(
         &self,
         vectors: &[f32],
@@ -145,5 +145,14 @@ impl VectorCollection {
     /// - Returns an error if the drop operation fails.
     pub fn drop_index(&self, label: &str, property: &str) -> Result<bool> {
         self.inner.drop_index(label, property)
+    }
+
+    /// Adds a graph edge to the collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the edge cannot be stored.
+    pub fn add_edge(&self, edge: crate::collection::GraphEdge) -> Result<()> {
+        self.inner.add_edge(edge)
     }
 }

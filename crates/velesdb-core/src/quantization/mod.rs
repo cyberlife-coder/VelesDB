@@ -19,14 +19,18 @@ pub(crate) mod codec_helpers;
 mod pq;
 pub(crate) mod pq_kmeans;
 pub(crate) mod pq_opq;
+#[cfg(feature = "persistence")]
+mod pq_persistence;
 mod rabitq;
 pub(crate) mod rabitq_store;
 mod scalar;
 
 // Re-export binary quantization
 pub use binary::BinaryQuantizedVector;
-#[allow(unused_imports)]
+#[allow(unused_imports)] // Called from vector.rs search path (persistence-gated).
 pub(crate) use pq::distance_pq_l2;
+#[allow(unused_imports)] // Called from vector.rs search path (persistence-gated).
+pub(crate) use pq::pq_adc_batch_rescore;
 pub use pq::{PQCodebook, PQVector, ProductQuantizer};
 #[cfg(feature = "persistence")]
 pub use pq_opq::train_opq;

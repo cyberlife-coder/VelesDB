@@ -3,9 +3,18 @@
 //! This module provides intelligent query planning for hybrid graph-vector queries,
 //! choosing the optimal execution strategy based on estimated selectivity.
 //!
-//! # Future: Cost-Based Optimization (v2.0)
+//! # Cost-based strategy selection (Issue #467)
 //!
-//! The current planner uses heuristic-based strategy selection. Future improvements:
+//! `choose_strategy_with_cbo()` now uses calibrated [`OperationCostFactors`]
+//! from [`CollectionStats::calibrated_cost_factors`] instead of the former
+//! hard-coded weights `0.2` (I/O) and `0.8` (CPU). The calibrated factors
+//! are derived during `analyze()` from collection statistics and histograms.
+//! When no calibrated factors are available (collection never analyzed), the
+//! planner falls back to `OperationCostFactors::default()`, which reproduces
+//! the exact same costs as the old constants.
+//!
+//! # Future improvements
+//!
 //! - Collect runtime statistics for actual selectivity estimation
 //! - Implement cost model based on index cardinality
 //! - Add adaptive query execution with plan switching
@@ -19,13 +28,15 @@
     clippy::cast_sign_loss
 )]
 
+use crate::collection::query_cost::cost_model::OperationCostFactors;
 use crate::collection::stats::CollectionStats;
 use crate::velesql::ast::Condition;
-pub use crate::velesql::cost_estimator::{Cost, CostEstimator};
+pub use crate::velesql::cost_estimator::{Cost, CostEstimator, SelectivityMethod};
 pub use crate::velesql::query_stats::QueryStats;
 
 /// Execution strategy for hybrid queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExecutionStrategy {
     /// Execute vector search first, then filter by graph pattern.
     /// Best when graph filter is not very selective (>10% of data).
@@ -89,6 +100,11 @@ impl QueryPlanner {
     }
 
     /// Chooses strategy using CBO with collection statistics and optional filter.
+    ///
+    /// Uses calibrated [`OperationCostFactors`] from `stats.calibrated_cost_factors`
+    /// (when available) to derive I/O and CPU weights for the candidate filter cost.
+    /// Falls back to `OperationCostFactors::default()` when no calibrated factors
+    /// exist, reproducing the historical `0.2` / `0.8` I/O/CPU split.
     #[must_use]
     pub fn choose_strategy_with_cbo(
         &self,
@@ -111,9 +127,17 @@ impl QueryPlanner {
         // Required over-fetch scales inversely with filter selectivity.
         let over_fetch = (1.0 / filter_selectivity).clamp(1.0, 64.0);
         let candidate_rows = ((k.max(1) as f64) * over_fetch).min(total_rows); // usize→f64: planning heuristic
+                                                                               // Derive I/O and CPU weights from calibrated factors using the same
+                                                                               // backward-compatible pattern as CostEstimator: multiply the historical
+                                                                               // ratios (0.2 / 0.8) by (calibrated / default) so that default factors
+                                                                               // produce identical costs to the old hard-coded constants.
+        let defaults = OperationCostFactors::default();
+        let factors = stats.calibrated_cost_factors.as_ref().unwrap_or(&defaults);
+        let io_ratio = factors.seq_page_cost / defaults.seq_page_cost;
+        let cpu_ratio = factors.cpu_tuple_cost / defaults.cpu_tuple_cost;
         let candidate_filter_cost = Cost::new(
-            candidate_rows * 0.2, // filter scan I/O weight (same as CostEstimator)
-            candidate_rows * 0.8, // filter scan CPU weight (same as CostEstimator)
+            candidate_rows * 0.2 * io_ratio,
+            candidate_rows * 0.8 * cpu_ratio,
         );
         let vector_first =
             vector_cost.total() + (candidate_filter_cost.total() * VECTOR_FIRST_FILTER_PENALTY);

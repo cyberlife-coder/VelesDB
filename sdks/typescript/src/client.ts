@@ -8,6 +8,7 @@ import type {
   Collection,
   VectorDocument,
   SearchOptions,
+  SearchQuality,
   SearchResult,
   IVelesDBBackend,
   MultiQuerySearchOptions,
@@ -29,74 +30,51 @@ import type {
   CollectionStatsResponse,
   CollectionConfigResponse,
   AgentMemoryConfig,
+  ScrollRequest,
+  ScrollResponse,
+  RebuildIndexResponse,
+  GuardRailsUpdateRequest,
+  GuardRailsConfigResponse,
+  ListNodesResponse,
+  GetNodeEdgesOptions,
+  NodePayloadResponse,
+  GraphSearchRequest,
+  GraphSearchResponse,
+  AggregateQueryOptions,
+  AggregateResponse,
+  MatchQueryOptions,
+  MatchQueryResponse,
+  StreamUpsertResponse,
 } from './types';
+import type { FilterInput } from './filter';
+import type { CapabilityMap } from './capabilities';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
 import { RestBackend } from './backends/rest';
 import { AgentMemoryClient } from './agent-memory';
+import {
+  requireNonEmptyString,
+  validateDocsBatch,
+  validateDocument,
+  validateRestPointId,
+} from './client/validation';
+import * as searchMethods from './client/search-methods';
+import * as graphMethods from './client/graph-methods';
 
 // Re-export for backward compatibility
 export { AgentMemoryClient } from './agent-memory';
 
-// ---------------------------------------------------------------------------
-// Shared validation helpers (eliminates duplicated checks across methods)
-// ---------------------------------------------------------------------------
-
-/** Validate that a value is a non-empty string, throwing with the given label. */
-function requireNonEmptyString(value: unknown, label: string): void {
-  if (!value || typeof value !== 'string') {
-    throw new ValidationError(`${label} must be a non-empty string`);
-  }
-}
-
-/** Validate that a value is a vector (number[] or Float32Array). */
-function requireVector(value: unknown, label: string): void {
-  if (!value || (!Array.isArray(value) && !(value instanceof Float32Array))) {
-    throw new ValidationError(`${label} must be an array or Float32Array`);
-  }
-}
-
-/** Validate a docs array and each document within it. */
-function validateDocsBatch(
-  docs: VectorDocument[],
-  validateDoc: (doc: VectorDocument) => void
-): void {
-  if (!Array.isArray(docs)) {
-    throw new ValidationError('Documents must be an array');
-  }
-  for (const doc of docs) {
-    validateDoc(doc);
-  }
-}
-
 /**
  * VelesDB Client
- * 
+ *
  * Provides a unified interface for interacting with VelesDB
  * using either WASM (browser/Node.js) or REST API backends.
- * 
- * @example
- * ```typescript
- * const db = new VelesDB({ backend: 'wasm' });
- * await db.init();
- * 
- * await db.createCollection('embeddings', { dimension: 768, metric: 'cosine' });
- * await db.insert('embeddings', { id: 'doc1', vector: [...], payload: { title: 'Hello' } });
- * 
- * const results = await db.search('embeddings', queryVector, { k: 5 });
- * ```
  */
 export class VelesDB {
   private readonly config: VelesDBConfig;
   private backend: IVelesDBBackend;
   private initialized = false;
 
-  /**
-   * Create a new VelesDB client
-   * 
-   * @param config - Client configuration
-   * @throws {ValidationError} If configuration is invalid
-   */
   constructor(config: VelesDBConfig) {
     this.validateConfig(config);
     this.config = config;
@@ -107,11 +85,9 @@ export class VelesDB {
     if (!config.backend) {
       throw new ValidationError('Backend type is required');
     }
-
     if (config.backend !== 'wasm' && config.backend !== 'rest') {
       throw new ValidationError(`Invalid backend type: ${config.backend}. Use 'wasm' or 'rest'`);
     }
-
     if (config.backend === 'rest' && !config.url) {
       throw new ValidationError('URL is required for REST backend');
     }
@@ -128,24 +104,15 @@ export class VelesDB {
     }
   }
 
-  /**
-   * Initialize the client
-   * Must be called before any other operations
-   */
+  /** Initialize the client. Must be called before any other operations. */
   async init(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
+    if (this.initialized) { return; }
     await this.backend.init();
     this.initialized = true;
   }
 
-  /**
-   * Check if client is initialized
-   */
-  isInitialized(): boolean {
-    return this.initialized;
-  }
+  /** Check if client is initialized. */
+  isInitialized(): boolean { return this.initialized; }
 
   private ensureInitialized(): void {
     if (!this.initialized) {
@@ -153,408 +120,79 @@ export class VelesDB {
     }
   }
 
-  /**
-   * Create a new collection
-   * 
-   * @param name - Collection name
-   * @param config - Collection configuration
-   */
+  // ========================================================================
+  // Collection CRUD
+  // ========================================================================
+
   async createCollection(name: string, config: CollectionConfig): Promise<void> {
     this.ensureInitialized();
     requireNonEmptyString(name, 'Collection name');
-
-    // Dimension is required for vector collections, not for metadata_only
     const isMetadataOnly = config.collectionType === 'metadata_only';
     if (!isMetadataOnly && (!config.dimension || config.dimension <= 0)) {
       throw new ValidationError('Dimension must be a positive integer for vector collections');
     }
-
     await this.backend.createCollection(name, config);
   }
 
-  /**
-   * Create a metadata-only collection (no vectors, just payload data)
-   * 
-   * Useful for storing reference data that can be JOINed with vector collections.
-   * 
-   * @param name - Collection name
-   * 
-   * @example
-   * ```typescript
-   * await db.createMetadataCollection('products');
-   * await db.insertMetadata('products', { id: 'P001', name: 'Widget', price: 99 });
-   * ```
-   */
   async createMetadataCollection(name: string): Promise<void> {
     this.ensureInitialized();
     requireNonEmptyString(name, 'Collection name');
-
     await this.backend.createCollection(name, { collectionType: 'metadata_only' });
   }
 
-  /**
-   * Delete a collection
-   * 
-   * @param name - Collection name
-   */
   async deleteCollection(name: string): Promise<void> {
     this.ensureInitialized();
     await this.backend.deleteCollection(name);
   }
 
-  /**
-   * Get collection information
-   * 
-   * @param name - Collection name
-   * @returns Collection info or null if not found
-   */
   async getCollection(name: string): Promise<Collection | null> {
     this.ensureInitialized();
     return this.backend.getCollection(name);
   }
 
-  /**
-   * List all collections
-   * 
-   * @returns Array of collections
-   */
   async listCollections(): Promise<Collection[]> {
     this.ensureInitialized();
     return this.backend.listCollections();
   }
 
-  /**
-   * Insert a vector document
-   * 
-   * @param collection - Collection name
-   * @param doc - Document to insert
-   */
-  async insert(collection: string, doc: VectorDocument): Promise<void> {
+  // ========================================================================
+  // Point CRUD
+  // ========================================================================
+
+  async upsert(collection: string, doc: VectorDocument): Promise<void> {
     this.ensureInitialized();
-    this.validateDocument(doc);
-    await this.backend.insert(collection, doc);
+    validateDocument(doc, this.config);
+    await this.backend.upsert(collection, doc);
   }
 
-  /**
-   * Insert multiple vector documents
-   * 
-   * @param collection - Collection name
-   * @param docs - Documents to insert
-   */
-  async insertBatch(collection: string, docs: VectorDocument[]): Promise<void> {
+  async upsertBatch(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
-    validateDocsBatch(docs, doc => this.validateDocument(doc));
-
-    await this.backend.insertBatch(collection, docs);
+    validateDocsBatch(docs, doc => validateDocument(doc, this.config));
+    await this.backend.upsertBatch(collection, docs);
   }
 
-  private validateDocument(doc: VectorDocument): void {
-    if (doc.id === undefined || doc.id === null) {
-      throw new ValidationError('Document ID is required');
-    }
-
-    requireVector(doc.vector, 'Vector');
-
-    this.validateRestPointId(doc.id);
-  }
-
-  private validateRestPointId(id: string | number): void {
-    if (
-      this.config.backend === 'rest' &&
-      (
-        typeof id !== 'number' ||
-        !Number.isInteger(id) ||
-        id < 0 ||
-        id > Number.MAX_SAFE_INTEGER
-      )
-    ) {
-      throw new ValidationError(
-        `REST backend requires numeric u64-compatible document IDs in JS safe integer range (0..${Number.MAX_SAFE_INTEGER})`
-      );
-    }
-  }
-
-  /**
-   * Search for similar vectors
-   * 
-   * @param collection - Collection name
-   * @param query - Query vector
-   * @param options - Search options
-   * @returns Search results sorted by relevance
-   */
-  async search(
-    collection: string,
-    query: number[] | Float32Array,
-    options?: SearchOptions
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-    requireVector(query, 'Query');
-
-    return this.backend.search(collection, query, options);
-  }
-
-  /**
-   * Search for multiple vectors in parallel
-   * 
-   * @param collection - Collection name
-   * @param searches - List of search queries
-   * @returns List of search results for each query
-   */
-  async searchBatch(
-    collection: string,
-    searches: Array<{
-      vector: number[] | Float32Array;
-      k?: number;
-      filter?: Record<string, unknown>;
-    }>
-  ): Promise<SearchResult[][]> {
-    this.ensureInitialized();
-
-    if (!Array.isArray(searches)) {
-      throw new ValidationError('Searches must be an array');
-    }
-
-    for (const s of searches) {
-      requireVector(s.vector, 'Each search vector');
-    }
-
-    return this.backend.searchBatch(collection, searches);
-  }
-
-  /**
-   * Delete a vector by ID
-   * 
-   * @param collection - Collection name
-   * @param id - Document ID
-   * @returns true if deleted, false if not found
-   */
   async delete(collection: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
-    this.validateRestPointId(id);
+    validateRestPointId(id, this.config);
     return this.backend.delete(collection, id);
   }
 
-  /**
-   * Get a vector by ID
-   * 
-   * @param collection - Collection name
-   * @param id - Document ID
-   * @returns Document or null if not found
-   */
   async get(collection: string, id: string | number): Promise<VectorDocument | null> {
     this.ensureInitialized();
-    this.validateRestPointId(id);
+    validateRestPointId(id, this.config);
     return this.backend.get(collection, id);
   }
 
-  /**
-   * Perform full-text search using BM25
-   * 
-   * @param collection - Collection name
-   * @param query - Text query
-   * @param options - Search options (k, filter)
-   * @returns Search results sorted by BM25 score
-   */
-  async textSearch(
-    collection: string,
-    query: string,
-    options?: { k?: number; filter?: Record<string, unknown> }
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-    requireNonEmptyString(query, 'Query');
-
-    return this.backend.textSearch(collection, query, options);
-  }
-
-  /**
-   * Perform hybrid search combining vector similarity and BM25 text search
-   * 
-   * @param collection - Collection name
-   * @param vector - Query vector
-   * @param textQuery - Text query for BM25
-   * @param options - Search options (k, vectorWeight, filter)
-   * @returns Search results sorted by fused score
-   */
-  async hybridSearch(
-    collection: string,
-    vector: number[] | Float32Array,
-    textQuery: string,
-    options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-    requireVector(vector, 'Vector');
-    requireNonEmptyString(textQuery, 'Text query');
-
-    return this.backend.hybridSearch(collection, vector, textQuery, options);
-  }
-
-  /**
-   * Execute a VelesQL multi-model query (EPIC-031 US-011)
-   * 
-   * Supports hybrid vector + graph queries with VelesQL syntax.
-   * 
-   * @param collection - Collection name
-   * @param queryString - VelesQL query string
-   * @param params - Query parameters (vectors, scalars).
-   *   For cross-collection MATCH queries, pass `_collection` to specify the
-   *   primary collection (the one with graph edges). Nodes annotated with
-   *   `@collection` in the MATCH pattern will have their payloads enriched
-   *   from the named collection after traversal.
-   * @param options - Query options (timeout, streaming)
-   * @returns Query response with results and execution stats
-   * 
-   * @example
-   * ```typescript
-   * const response = await db.query('docs', `
-   *   MATCH (d:Doc) WHERE vector NEAR $q LIMIT 20
-   * `, { q: queryVector });
-   * 
-   * for (const r of response.results) {
-   *   console.log(`ID ${r.id}, title: ${r.title}`);
-   * }
-   * ```
-   *
-   * @example Cross-collection MATCH
-   * ```typescript
-   * // Enrich Product nodes with Inventory data from the 'inventory' collection
-   * const response = await db.query('catalog_graph', `
-   *   MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory)
-   *   RETURN p.name, inv.price, inv.stock
-   *   LIMIT 20
-   * `);
-   * ```
-   */
-  async query(
-    collection: string,
-    queryString: string,
-    params?: Record<string, unknown>,
-    options?: QueryOptions
-  ): Promise<QueryApiResponse> {
-    this.ensureInitialized();
-    requireNonEmptyString(collection, 'Collection name');
-    requireNonEmptyString(queryString, 'Query string');
-
-    return this.backend.query(collection, queryString, params, options);
-  }
-
-  /**
-   * Explain the execution plan for a VelesQL query without running it
-   *
-   * @param queryString - VelesQL query string to explain
-   * @param params - Optional query parameters (vectors, scalars)
-   * @returns Explain response with the query execution plan
-   */
-  async queryExplain(queryString: string, params?: Record<string, unknown>): Promise<ExplainResponse> {
-    this.ensureInitialized();
-    requireNonEmptyString(queryString, 'Query string');
-
-    return this.backend.queryExplain(queryString, params);
-  }
-
-  async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
-    this.ensureInitialized();
-    requireNonEmptyString(collection, 'Collection name');
-
-    return this.backend.collectionSanity(collection);
-  }
-
-  /**
-   * Multi-query fusion search combining results from multiple query vectors
-   *
-   * Ideal for RAG pipelines using Multiple Query Generation (MQG).
-   *
-   * @param collection - Collection name
-   * @param vectors - Array of query vectors
-   * @param options - Search options (k, fusion strategy, fusionParams, filter)
-   * @returns Fused search results
-   *
-   * @example
-   * ```typescript
-   * // RRF fusion (default)
-   * const results = await db.multiQuerySearch('docs', [emb1, emb2, emb3], {
-   *   k: 10,
-   *   fusion: 'rrf',
-   *   fusionParams: { k: 60 }
-   * });
-   *
-   * // Weighted fusion
-   * const results = await db.multiQuerySearch('docs', [emb1, emb2], {
-   *   k: 10,
-   *   fusion: 'weighted',
-   *   fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 }
-   * });
-   * ```
-   */
-  async multiQuerySearch(
-    collection: string,
-    vectors: Array<number[] | Float32Array>,
-    options?: MultiQuerySearchOptions
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-
-    if (!Array.isArray(vectors) || vectors.length === 0) {
-      throw new ValidationError('Vectors must be a non-empty array');
-    }
-
-    for (const v of vectors) {
-      requireVector(v, 'Each vector');
-    }
-
-    return this.backend.multiQuerySearch(collection, vectors, options);
-  }
-
-  /**
-   * Train Product Quantization on a collection
-   *
-   * @param collection - Collection name
-   * @param options - PQ training options (m, k, opq)
-   * @returns Server response message
-   */
-  async trainPq(collection: string, options?: PqTrainOptions): Promise<string> {
-    this.ensureInitialized();
-    return this.backend.trainPq(collection, options);
-  }
-
-  /**
-   * Stream-insert documents with backpressure support
-   *
-   * Sends documents sequentially to respect server backpressure.
-   * Throws BackpressureError on 429 responses.
-   *
-   * @param collection - Collection name
-   * @param docs - Documents to insert
-   */
-  async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
-    this.ensureInitialized();
-    validateDocsBatch(docs, doc => this.validateDocument(doc));
-
-    await this.backend.streamInsert(collection, docs);
-  }
-
-  /**
-   * Check if a collection is empty
-   *
-   * @param collection - Collection name
-   * @returns true if empty, false otherwise
-   */
   async isEmpty(collection: string): Promise<boolean> {
     this.ensureInitialized();
     return this.backend.isEmpty(collection);
   }
 
-  /**
-   * Flush pending changes to disk
-   * 
-   * @param collection - Collection name
-   */
   async flush(collection: string): Promise<void> {
     this.ensureInitialized();
     await this.backend.flush(collection);
   }
 
-  /**
-   * Close the client and release resources
-   */
   async close(): Promise<void> {
     if (this.initialized) {
       await this.backend.close();
@@ -562,301 +200,227 @@ export class VelesDB {
     }
   }
 
-  /**
-   * Get the current backend type
-   */
-  get backendType(): string {
-    return this.config.backend;
+  // ========================================================================
+  // Search & Query -- delegates to client/search-methods.ts
+  // ========================================================================
+
+  async search(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<SearchResult[]> {
+    this.ensureInitialized();
+    return searchMethods.search(this.backend, collection, query, options);
+  }
+
+  async searchBatch(collection: string, searches: Array<{ vector: number[] | Float32Array; k?: number; filter?: FilterInput; quality?: SearchQuality }>): Promise<SearchResult[][]> {
+    this.ensureInitialized();
+    return searchMethods.searchBatch(this.backend, collection, searches);
+  }
+
+  async textSearch(collection: string, query: string, options?: { k?: number; filter?: FilterInput }): Promise<SearchResult[]> {
+    this.ensureInitialized();
+    return searchMethods.textSearch(this.backend, collection, query, options);
+  }
+
+  async hybridSearch(collection: string, vector: number[] | Float32Array, textQuery: string, options?: { k?: number; vectorWeight?: number; filter?: FilterInput }): Promise<SearchResult[]> {
+    this.ensureInitialized();
+    return searchMethods.hybridSearch(this.backend, collection, vector, textQuery, options);
+  }
+
+  async multiQuerySearch(collection: string, vectors: Array<number[] | Float32Array>, options?: MultiQuerySearchOptions): Promise<SearchResult[]> {
+    this.ensureInitialized();
+    return searchMethods.multiQuerySearch(this.backend, collection, vectors, options);
+  }
+
+  async query(collection: string, queryString: string, params?: Record<string, unknown>, options?: QueryOptions): Promise<QueryApiResponse> {
+    this.ensureInitialized();
+    return searchMethods.query(this.backend, collection, queryString, params, options);
+  }
+
+  async queryExplain(queryString: string, params?: Record<string, unknown>, options?: { analyze?: boolean }): Promise<ExplainResponse> {
+    this.ensureInitialized();
+    return searchMethods.queryExplain(this.backend, queryString, params, options);
+  }
+
+  async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
+    this.ensureInitialized();
+    return searchMethods.collectionSanity(this.backend, collection);
+  }
+
+  async scroll(collection: string, request?: ScrollRequest): Promise<ScrollResponse> {
+    this.ensureInitialized();
+    return searchMethods.scroll(this.backend, collection, request);
+  }
+
+  async trainPq(collection: string, options?: PqTrainOptions): Promise<string> {
+    this.ensureInitialized();
+    return searchMethods.trainPq(this.backend, collection, options);
+  }
+
+  async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
+    this.ensureInitialized();
+    return searchMethods.streamInsert(this.backend, this.config, collection, docs);
+  }
+
+  async streamUpsertPoints(collection: string, docs: VectorDocument[]): Promise<StreamUpsertResponse> {
+    this.ensureInitialized();
+    return searchMethods.streamUpsertPoints(this.backend, this.config, collection, docs);
+  }
+
+  async searchIds(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<Array<{ id: number; score: number }>> {
+    this.ensureInitialized();
+    return searchMethods.searchIds(this.backend, collection, query, options);
+  }
+
+  // ========================================================================
+  // Admin / Stats -- delegates to client/search-methods.ts
+  // ========================================================================
+
+  async rebuildIndex(collection: string): Promise<RebuildIndexResponse> {
+    this.ensureInitialized();
+    return searchMethods.rebuildIndex(this.backend, collection);
+  }
+
+  async getGuardrails(): Promise<GuardRailsConfigResponse> {
+    this.ensureInitialized();
+    return searchMethods.getGuardrails(this.backend);
+  }
+
+  async updateGuardrails(req: GuardRailsUpdateRequest): Promise<GuardRailsConfigResponse> {
+    this.ensureInitialized();
+    return searchMethods.updateGuardrails(this.backend, req);
+  }
+
+  async aggregate(queryString: string, params?: Record<string, unknown>, options?: AggregateQueryOptions): Promise<AggregateResponse> {
+    this.ensureInitialized();
+    return searchMethods.aggregate(this.backend, queryString, params, options);
+  }
+
+  async getCollectionStats(collection: string): Promise<CollectionStatsResponse | null> {
+    this.ensureInitialized();
+    return searchMethods.getCollectionStats(this.backend, collection);
+  }
+
+  async analyzeCollection(collection: string): Promise<CollectionStatsResponse> {
+    this.ensureInitialized();
+    return searchMethods.analyzeCollection(this.backend, collection);
+  }
+
+  async getCollectionConfig(collection: string): Promise<CollectionConfigResponse> {
+    this.ensureInitialized();
+    return searchMethods.getCollectionConfig(this.backend, collection);
   }
 
   // ========================================================================
   // Index Management (EPIC-009)
   // ========================================================================
 
-  /**
-   * Create a property index for O(1) equality lookups or O(log n) range queries
-   * 
-   * @param collection - Collection name
-   * @param options - Index configuration (label, property, indexType)
-   * 
-   * @example
-   * ```typescript
-   * // Create hash index for fast email lookups
-   * await db.createIndex('users', { label: 'Person', property: 'email' });
-   * 
-   * // Create range index for timestamp queries
-   * await db.createIndex('events', { label: 'Event', property: 'timestamp', indexType: 'range' });
-   * ```
-   */
   async createIndex(collection: string, options: CreateIndexOptions): Promise<void> {
     this.ensureInitialized();
-    
     if (!options.label || !options.property) {
       throw new ValidationError('Index requires label and property');
     }
-
     await this.backend.createIndex(collection, options);
   }
 
-  /**
-   * List all indexes on a collection
-   * 
-   * @param collection - Collection name
-   * @returns Array of index information
-   */
   async listIndexes(collection: string): Promise<IndexInfo[]> {
     this.ensureInitialized();
     return this.backend.listIndexes(collection);
   }
 
-  /**
-   * Check if an index exists
-   * 
-   * @param collection - Collection name
-   * @param label - Node label
-   * @param property - Property name
-   * @returns true if index exists
-   */
   async hasIndex(collection: string, label: string, property: string): Promise<boolean> {
     this.ensureInitialized();
     return this.backend.hasIndex(collection, label, property);
   }
 
-  /**
-   * Drop an index
-   * 
-   * @param collection - Collection name
-   * @param label - Node label
-   * @param property - Property name
-   * @returns true if index was dropped, false if it didn't exist
-   */
   async dropIndex(collection: string, label: string, property: string): Promise<boolean> {
     this.ensureInitialized();
     return this.backend.dropIndex(collection, label, property);
   }
 
   // ========================================================================
-  // Knowledge Graph (EPIC-016 US-041)
+  // Knowledge Graph -- delegates to client/graph-methods.ts
   // ========================================================================
 
-  /**
-   * Add an edge to the collection's knowledge graph
-   * 
-   * @param collection - Collection name
-   * @param edge - Edge to add (id, source, target, label, properties)
-   * 
-   * @example
-   * ```typescript
-   * await db.addEdge('social', {
-   *   id: 1,
-   *   source: 100,
-   *   target: 200,
-   *   label: 'FOLLOWS',
-   *   properties: { since: '2024-01-01' }
-   * });
-   * ```
-   */
   async addEdge(collection: string, edge: AddEdgeRequest): Promise<void> {
     this.ensureInitialized();
-    
-    if (!edge.label || typeof edge.label !== 'string') {
-      throw new ValidationError('Edge label is required and must be a string');
-    }
-    
-    if (typeof edge.source !== 'number' || typeof edge.target !== 'number') {
-      throw new ValidationError('Edge source and target must be numbers');
-    }
-
-    await this.backend.addEdge(collection, edge);
+    return graphMethods.addEdge(this.backend, collection, edge);
   }
 
-  /**
-   * Get edges from the collection's knowledge graph
-   * 
-   * @param collection - Collection name
-   * @param options - Query options (filter by label)
-   * @returns Array of edges
-   * 
-   * @example
-   * ```typescript
-   * // Get all edges with label "FOLLOWS"
-   * const edges = await db.getEdges('social', { label: 'FOLLOWS' });
-   * ```
-   */
   async getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]> {
     this.ensureInitialized();
-    return this.backend.getEdges(collection, options);
+    return graphMethods.getEdges(this.backend, collection, options);
   }
 
-  // ========================================================================
-  // Graph Traversal (EPIC-016 US-050)
-  // ========================================================================
-
-  /**
-   * Traverse the graph using BFS or DFS from a source node
-   * 
-   * @param collection - Collection name
-   * @param request - Traversal request options
-   * @returns Traversal response with results and stats
-   * 
-   * @example
-   * ```typescript
-   * // BFS traversal from node 100
-   * const result = await db.traverseGraph('social', {
-   *   source: 100,
-   *   strategy: 'bfs',
-   *   maxDepth: 3,
-   *   limit: 100,
-   *   relTypes: ['FOLLOWS', 'KNOWS']
-   * });
-   * 
-   * for (const node of result.results) {
-   *   console.log(`Reached node ${node.targetId} at depth ${node.depth}`);
-   * }
-   * ```
-   */
   async traverseGraph(collection: string, request: TraverseRequest): Promise<TraverseResponse> {
     this.ensureInitialized();
-    
-    if (typeof request.source !== 'number') {
-      throw new ValidationError('Source node ID must be a number');
-    }
-
-    if (request.strategy && !['bfs', 'dfs'].includes(request.strategy)) {
-      throw new ValidationError("Strategy must be 'bfs' or 'dfs'");
-    }
-
-    return this.backend.traverseGraph(collection, request);
+    return graphMethods.traverseGraph(this.backend, collection, request);
   }
 
-  /**
-   * Multi-source parallel BFS traversal with deduplication.
-   * 
-   * Starts BFS from multiple source nodes simultaneously and deduplicates
-   * results by path signature.
-   * 
-   * @param collection - Collection name
-   * @param request - Parallel traverse request with sources array
-   * @returns Traverse response with results, stats, and pagination
-   * 
-   * @example
-   * ```typescript
-   * const result = await db.traverseParallel('social', {
-   *   sources: [100, 200, 300],
-   *   maxDepth: 3,
-   *   limit: 50,
-   * });
-   * ```
-   */
   async traverseParallel(collection: string, request: TraverseParallelRequest): Promise<TraverseResponse> {
     this.ensureInitialized();
-
-    if (!Array.isArray(request.sources) || request.sources.length === 0) {
-      throw new ValidationError('At least one source node ID is required');
-    }
-
-    return this.backend.traverseParallel(collection, request);
+    return graphMethods.traverseParallel(this.backend, collection, request);
   }
 
-  /**
-   * Get the in-degree and out-degree of a node
-   * 
-   * @param collection - Collection name
-   * @param nodeId - Node ID
-   * @returns Degree response with inDegree and outDegree
-   * 
-   * @example
-   * ```typescript
-   * const degree = await db.getNodeDegree('social', 100);
-   * console.log(`In: ${degree.inDegree}, Out: ${degree.outDegree}`);
-   * ```
-   */
   async getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse> {
     this.ensureInitialized();
-
-    if (typeof nodeId !== 'number') {
-      throw new ValidationError('Node ID must be a number');
-    }
-
-    return this.backend.getNodeDegree(collection, nodeId);
+    return graphMethods.getNodeDegree(this.backend, collection, nodeId);
   }
 
-  // ========================================================================
-  // Graph Collection Management (Phase 8)
-  // ========================================================================
-
-  /**
-   * Create a graph collection
-   *
-   * @param name - Collection name
-   * @param config - Optional graph collection configuration
-   */
   async createGraphCollection(name: string, config?: GraphCollectionConfig): Promise<void> {
     this.ensureInitialized();
-    requireNonEmptyString(name, 'Collection name');
-    await this.backend.createGraphCollection(name, config);
+    return graphMethods.createGraphCollection(this.backend, name, config);
   }
 
-  /**
-   * Get collection statistics (requires prior analyze)
-   *
-   * @param collection - Collection name
-   * @returns Statistics or null if not yet analyzed
-   */
-  async getCollectionStats(collection: string): Promise<CollectionStatsResponse | null> {
+  async matchQuery(collection: string, queryString: string, params?: Record<string, unknown>, options?: MatchQueryOptions): Promise<MatchQueryResponse> {
     this.ensureInitialized();
-    return this.backend.getCollectionStats(collection);
+    return graphMethods.matchQuery(this.backend, collection, queryString, params, options);
   }
 
-  /**
-   * Analyze a collection to compute statistics
-   *
-   * @param collection - Collection name
-   * @returns Computed statistics
-   */
-  async analyzeCollection(collection: string): Promise<CollectionStatsResponse> {
+  async removeEdge(collection: string, edgeId: number): Promise<boolean> {
     this.ensureInitialized();
-    return this.backend.analyzeCollection(collection);
+    return graphMethods.removeEdge(this.backend, collection, edgeId);
   }
 
-  /**
-   * Get collection configuration
-   *
-   * @param collection - Collection name
-   * @returns Collection configuration details
-   */
-  async getCollectionConfig(collection: string): Promise<CollectionConfigResponse> {
+  async getEdgeCount(collection: string): Promise<number> {
     this.ensureInitialized();
-    return this.backend.getCollectionConfig(collection);
+    return graphMethods.getEdgeCount(this.backend, collection);
   }
 
-  /**
-   * Search returning only IDs and scores (lightweight)
-   *
-   * @param collection - Collection name
-   * @param query - Query vector
-   * @param options - Search options
-   * @returns Array of id/score pairs
-   */
-  async searchIds(
-    collection: string,
-    query: number[] | Float32Array,
-    options?: SearchOptions
-  ): Promise<Array<{ id: number; score: number }>> {
+  async listNodes(collection: string): Promise<ListNodesResponse> {
     this.ensureInitialized();
-    return this.backend.searchIds(collection, query, options);
+    return graphMethods.listNodes(this.backend, collection);
   }
+
+  async getNodeEdges(collection: string, nodeId: number, options?: GetNodeEdgesOptions): Promise<GraphEdge[]> {
+    this.ensureInitialized();
+    return graphMethods.getNodeEdges(this.backend, collection, nodeId, options);
+  }
+
+  async getNodePayload(collection: string, nodeId: number): Promise<NodePayloadResponse> {
+    this.ensureInitialized();
+    return graphMethods.getNodePayload(this.backend, collection, nodeId);
+  }
+
+  async upsertNodePayload(collection: string, nodeId: number, payload: Record<string, unknown>): Promise<void> {
+    this.ensureInitialized();
+    return graphMethods.upsertNodePayload(this.backend, collection, nodeId, payload);
+  }
+
+  async graphSearch(collection: string, request: GraphSearchRequest): Promise<GraphSearchResponse> {
+    this.ensureInitialized();
+    return graphMethods.graphSearch(this.backend, collection, request);
+  }
+
+  // ========================================================================
+  // Capabilities & Backend Info
+  // ========================================================================
+
+  capabilities(): Readonly<CapabilityMap> { return this.backend.capabilities(); }
+
+  get backendType(): string { return this.config.backend; }
 
   // ========================================================================
   // Agent Memory (Phase 8)
   // ========================================================================
 
-  /**
-   * Create an agent memory interface
-   *
-   * @param config - Optional agent memory configuration
-   * @returns AgentMemoryClient instance
-   */
   agentMemory(config?: AgentMemoryConfig): AgentMemoryClient {
     this.ensureInitialized();
     return new AgentMemoryClient(this.backend, config);

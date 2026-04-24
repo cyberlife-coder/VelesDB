@@ -63,6 +63,7 @@ impl Filter {
 /// A condition for filtering metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Condition {
     /// Equality comparison: field == value
     Eq {
@@ -167,5 +168,52 @@ pub enum Condition {
         field: String,
         /// Pattern with SQL wildcards
         pattern: String,
+    },
+    /// Check if an array field contains a specific value.
+    ArrayContains {
+        /// Field name
+        field: String,
+        /// Value to search for in the array
+        value: Value,
+    },
+    /// Check if an array field contains at least one of the values.
+    ArrayContainsAny {
+        /// Field name
+        field: String,
+        /// Values to search for (at least one must match)
+        values: Vec<Value>,
+    },
+    /// Check if an array field contains all of the values.
+    ArrayContainsAll {
+        /// Field name
+        field: String,
+        /// Values that must all be present in the array
+        values: Vec<Value>,
+    },
+    /// Geospatial distance filter: Haversine distance comparison.
+    GeoDistance {
+        /// Field name containing `GeoPoint` data
+        field: String,
+        /// Reference latitude in degrees
+        lat: f64,
+        /// Reference longitude in degrees
+        lng: f64,
+        /// Comparison operator
+        operator: crate::velesql::CompareOp,
+        /// Distance threshold in meters
+        threshold: f64,
+    },
+    /// Geospatial bounding box filter: coordinate containment check.
+    GeoBbox {
+        /// Field name containing `GeoPoint` data
+        field: String,
+        /// Minimum latitude
+        lat_min: f64,
+        /// Minimum longitude
+        lng_min: f64,
+        /// Maximum latitude
+        lat_max: f64,
+        /// Maximum longitude
+        lng_max: f64,
     },
 }

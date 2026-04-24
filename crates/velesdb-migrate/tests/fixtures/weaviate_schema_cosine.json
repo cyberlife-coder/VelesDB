@@ -1,0 +1,28 @@
+{
+  "classes": [
+    {
+      "class": "Article",
+      "vectorizer": "none",
+      "vectorIndexType": "hnsw",
+      "vectorIndexConfig": {
+        "skip": false,
+        "cleanupIntervalSeconds": 300,
+        "maxConnections": 64,
+        "efConstruction": 128,
+        "ef": -1,
+        "dynamicEfFactor": 8,
+        "dynamicEfMax": 500,
+        "dynamicEfMin": 100,
+        "vectorCacheMaxObjects": 2000000000000,
+        "flatSearchCutoff": 40000,
+        "distance": "cosine",
+        "pq": {"enabled": false}
+      },
+      "properties": [
+        {"name": "title", "dataType": ["text"]},
+        {"name": "body", "dataType": ["text"]}
+      ],
+      "shardingConfig": {"desiredCount": 1}
+    }
+  ]
+}

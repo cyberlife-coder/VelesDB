@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::collection_helpers::core_err;
 use crate::graph::{dict_to_edge, edge_to_dict};
 use velesdb_core::collection::graph::EdgeStore;
 
@@ -115,9 +116,7 @@ impl GraphStore {
         let graph_edge = dict_to_edge(py, &edge)?;
         py.allow_threads(|| {
             let mut store = self.inner.write();
-            store
-                .add_edge(graph_edge)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to add edge: {e}")))
+            store.add_edge(graph_edge).map_err(core_err)
         })
     }
 

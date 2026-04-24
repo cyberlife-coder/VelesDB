@@ -7,8 +7,6 @@
 //!
 //! [`repl_run`] is a thin helper that pipes commands + `.quit` via stdin.
 
-#![allow(deprecated)]
-
 use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;

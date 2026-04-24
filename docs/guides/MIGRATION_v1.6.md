@@ -1,6 +1,6 @@
 # Migration Guide: v1.5 → v1.6
 
-> **Archive notice:** This guide is for upgrading from v1.5 to v1.6. Current version is v1.11.1. For the latest API, see [VELESQL_SPEC.md](../VELESQL_SPEC.md).
+> **Archive notice:** This guide is for upgrading from v1.5 to v1.6. For the current released version and latest API, see [VELESQL_SPEC.md](../VELESQL_SPEC.md) and the root [README](../../README.md).
 
 **Time to upgrade: under 5 minutes.**
 

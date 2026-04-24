@@ -67,7 +67,8 @@ impl QueryValidator {
             Self::validate_condition(condition, stmt.limit, config)?;
         }
         Self::validate_similarity_context(stmt)?;
-        Self::validate_qualified_wildcards(stmt)
+        Self::validate_qualified_wildcards(stmt)?;
+        Self::validate_vector_group_by(stmt)
     }
 
     /// Validates that `similarity()` in SELECT or ORDER BY has a score context.
@@ -410,6 +411,71 @@ impl QueryValidator {
                 Self::has_multiple_similarity_in_or(inner)
             }
             _ => false,
+        }
+    }
+
+    /// Validates vector-search GROUP BY semantic constraints.
+    ///
+    /// - `FIRST(column)` requires GROUP BY
+    /// - `MAX(score)` / `AVG(score)` requires vector NEAR in WHERE
+    fn validate_vector_group_by(stmt: &super::ast::SelectStatement) -> Result<(), ValidationError> {
+        let aggregations = Self::collect_aggregations(&stmt.columns);
+        let has_group_by = stmt.group_by.is_some();
+        let has_vector_near = stmt
+            .where_clause
+            .as_ref()
+            .is_some_and(super::ast::condition::Condition::has_vector_search);
+
+        for agg in &aggregations {
+            Self::validate_single_aggregate(agg, has_group_by, has_vector_near)?;
+        }
+        Ok(())
+    }
+
+    /// Validates a single aggregate function for vector GROUP BY constraints.
+    fn validate_single_aggregate(
+        agg: &super::ast::AggregateFunction,
+        has_group_by: bool,
+        has_vector_near: bool,
+    ) -> Result<(), ValidationError> {
+        if matches!(agg.function_type, super::ast::AggregateType::First) && !has_group_by {
+            return Err(ValidationError::new(
+                ValidationErrorKind::InvalidLetBinding,
+                None,
+                "FIRST()",
+                "FIRST() aggregate function requires a GROUP BY clause",
+            ));
+        }
+        // MAX(score)/AVG(score) without NEAR is only an error when GROUP BY is present,
+        // because without GROUP BY, "score" is treated as a regular payload field.
+        if has_group_by && Self::is_score_column(&agg.argument) && !has_vector_near {
+            let fn_name = format!("{:?}(score)", agg.function_type);
+            let msg = format!(
+                "{}(score) requires a vector NEAR search in the WHERE clause",
+                format!("{:?}", agg.function_type).to_uppercase()
+            );
+            return Err(ValidationError::new(
+                ValidationErrorKind::SimilarityWithoutContext,
+                None,
+                fn_name,
+                msg,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns `true` if the argument references the score pseudo-column.
+    fn is_score_column(arg: &super::ast::AggregateArg) -> bool {
+        matches!(arg, super::ast::AggregateArg::Score)
+            || matches!(arg, super::ast::AggregateArg::Column(col) if col.eq_ignore_ascii_case("score"))
+    }
+
+    /// Collects aggregate functions from `SelectColumns`.
+    fn collect_aggregations(columns: &SelectColumns) -> Vec<super::ast::AggregateFunction> {
+        match columns {
+            SelectColumns::Aggregations(aggs) => aggs.clone(),
+            SelectColumns::Mixed { aggregations, .. } => aggregations.clone(),
+            _ => Vec::new(),
         }
     }
 }

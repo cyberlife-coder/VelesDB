@@ -63,7 +63,7 @@ fn bench_upsert_bulk_standard(c: &mut Criterion) {
                 (dir, db, points.clone())
             },
             |(dir, db, pts)| {
-                let col = db.get_collection("bench").unwrap();
+                let col = db.get_vector_collection("bench").unwrap();
                 for batch in pts.chunks(BATCH_SIZE) {
                     col.upsert_bulk(batch).unwrap();
                 }
@@ -94,7 +94,6 @@ fn bench_async_builder_enqueue_drain(c: &mut Criterion) {
                 let config = AsyncIndexBuilderConfig {
                     merge_threshold: VECTOR_COUNT + 1,
                     segment_count: Some(4),
-                    sync_mode: false,
                 };
                 (AsyncIndexBuilder::new(config), tuples.clone())
             },
@@ -121,7 +120,6 @@ fn bench_async_builder_buffer_search(c: &mut Criterion) {
     let config = AsyncIndexBuilderConfig {
         merge_threshold: VECTOR_COUNT + 1,
         segment_count: Some(4),
-        sync_mode: false,
     };
     let builder = AsyncIndexBuilder::new(config);
     builder.enqueue(tuples);
@@ -156,10 +154,8 @@ fn bench_upsert_bulk_v2_wired(c: &mut Criterion) {
                 let config = AsyncIndexBuilderConfig {
                     merge_threshold: VECTOR_COUNT + 1, // Don't trigger flush during bench
                     segment_count: Some(4),
-                    sync_mode: false,
                 };
-                #[allow(deprecated)]
-                let coll = velesdb_core::collection::Collection::create_with_async_builder(
+                let coll = velesdb_core::VectorCollection::create_with_async_builder(
                     dir.path().join("bench_v2"),
                     DIMENSION,
                     DistanceMetric::Cosine,

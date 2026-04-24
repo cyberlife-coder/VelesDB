@@ -2,12 +2,10 @@
 //!
 //! Extracted from `query/mod.rs` to reduce NLOC below the 500 threshold.
 
+use super::options::MAX_LIMIT;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
-
-/// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
-const MAX_LIMIT: usize = 100_000;
 
 /// Context for early-return query paths (NOT-similarity, union).
 pub(super) struct EarlyReturnCtx<'a> {

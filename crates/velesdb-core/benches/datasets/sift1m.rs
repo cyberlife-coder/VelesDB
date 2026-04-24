@@ -1,0 +1,586 @@
+//! SIFT1M dataset loader (INRIA TEXMEX corpus).
+//!
+//! SIFT1M is the de-facto standard ANN benchmark:
+//!   - 1,000,000 base vectors (128-dim SIFT descriptors)
+//!   - 10,000 query vectors
+//!   - 100 ground-truth nearest neighbours per query (L2 metric)
+//!
+//! On first bench run the loader downloads `sift.tar.gz` from the
+//! INRIA mirror (≈ 168 MB compressed, ≈ 525 MB uncompressed) and
+//! extracts it to `target/bench-data/sift1m/`. Override the cache
+//! directory with the `VELESDB_SIFT1M_DIR` env var for pre-populated
+//! data (offline / CI runners).
+//!
+//! File format: `.fvecs` / `.ivecs` — records of `[dim:u32 LE][dim × f32 LE]`
+//! (or `u32` for the ivecs variant), concatenated with no header.
+//!
+//! # SHA-256 fingerprints — two-tier verification
+//!
+//! Two sources of truth, checked in order:
+//!
+//! 1. **JSON sidecar** `benches/datasets/sift1m_fingerprints.json`
+//!    (committed once after the capture workflow below). When present
+//!    and well-formed, its hashes are used in **strict mode**: any
+//!    mismatch surfaces as [`DatasetError::Parse`]. This is the pinned
+//!    path used by CI and reproducible benchmarks.
+//! 2. **Fallback constants** `SHA256_*` below. When the sidecar is
+//!    absent (fresh clone before bootstrap, local tinkering), the
+//!    loader falls back to these constants. They remain `TODO_`
+//!    placeholders: [`verify_fingerprint`] then prints the observed
+//!    hash to stderr with a `[WARN]` prefix and returns `Ok(())` so
+//!    the maintainer can capture and commit them.
+//!
+//! # One-command bootstrap
+//!
+//! Run once on the reference machine (first-run downloads ~168 MB):
+//!
+//! ```text
+//! cargo bench -p velesdb-core --features bench-sift1m \
+//!     --bench capture_sift1m_fingerprints
+//! ```
+//!
+//! The bench writes `benches/datasets/sift1m_fingerprints.json` ready
+//! to commit. Subsequent runs of any SIFT1M bench then enjoy strict
+//! verification automatically.
+//!
+//! Until the sidecar is committed, bit-level corruption in a
+//! valid-shape file is NOT detected — [`check_shape`] only validates
+//! row count and dimension. Committing the sidecar closes that gap
+//! without requiring a source-code edit for every hash change.
+
+#![allow(dead_code)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
+use std::fs::{self, File};
+use std::io::{self, BufReader, Read};
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
+
+/// In-memory SIFT1M dataset.
+#[derive(Debug)]
+pub struct Sift1M {
+    /// 1,000,000 base vectors × 128D, L2 metric.
+    pub base: Vec<Vec<f32>>,
+    /// 10,000 query vectors × 128D.
+    pub query: Vec<Vec<f32>>,
+    /// 10,000 × 100 ground-truth nearest-neighbour IDs per query.
+    pub groundtruth: Vec<Vec<u32>>,
+}
+
+/// Errors surfaced by the SIFT1M loader.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DatasetError {
+    /// Dataset is not present in the cache and network download is
+    /// unavailable. Set `VELESDB_SIFT1M_DIR` or enable network.
+    #[error(
+        "SIFT1M not cached. Set VELESDB_SIFT1M_DIR to a directory containing \
+         sift_base.fvecs, sift_query.fvecs, sift_groundtruth.ivecs — \
+         or allow the first-run download."
+    )]
+    NotCached,
+    /// Download failed (network, mirror unreachable, …).
+    #[error("Download failed: {0}")]
+    Download(String),
+    /// File parsed incorrectly (truncated, unexpected dim, fingerprint mismatch).
+    #[error("Parse failed: {0}")]
+    Parse(String),
+    /// Raw I/O error (permissions, disk full, …).
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+/// HTTP mirror used as the default download URL. Override with
+/// `VELESDB_SIFT1M_URL` env for corporate mirrors. `ureq` only supports
+/// HTTP/HTTPS, so the INRIA FTP endpoint cannot be used here — the HTTP
+/// mirror served by `corpus-texmex.irisa.fr` is the canonical fetch
+/// target for this loader.
+const DOWNLOAD_MIRROR: &str = "http://corpus-texmex.irisa.fr/sift.tar.gz";
+
+/// Base vectors: 1M × 128D.
+const BASE_FILE: &str = "sift_base.fvecs";
+/// Query vectors: 10K × 128D.
+const QUERY_FILE: &str = "sift_query.fvecs";
+/// Ground truth: 10K × 100 IDs.
+const GT_FILE: &str = "sift_groundtruth.ivecs";
+
+const BASE_DIM: u32 = 128;
+const GT_K: u32 = 100;
+const BASE_COUNT: usize = 1_000_000;
+const QUERY_COUNT: usize = 10_000;
+
+// Fallback fingerprints used when the JSON sidecar is absent. The
+// official INRIA distribution does not publish checksums for the
+// uncompressed files; the recommended workflow is to run the
+// `capture_sift1m_fingerprints` bench once on a trusted machine,
+// which writes the sidecar JSON ready to commit. These constants stay
+// as `TODO_` placeholders on purpose: a fresh clone without the JSON
+// still loads the dataset in TOFU mode (prints observed, returns Ok)
+// so developers are never blocked, while CI uses the pinned sidecar
+// for strict verification.
+const SHA256_BASE: &str = "TODO_FINGERPRINT_sift_base_fvecs";
+const SHA256_QUERY: &str = "TODO_FINGERPRINT_sift_query_fvecs";
+const SHA256_GT: &str = "TODO_FINGERPRINT_sift_groundtruth_ivecs";
+
+/// Sidecar filename (sibling of this source file) carrying the pinned
+/// SHA-256 hashes. Committed after one successful capture run.
+pub(crate) const FINGERPRINTS_JSON_NAME: &str = "sift1m_fingerprints.json";
+
+/// Env var for overriding the cache directory (pre-populated data).
+const ENV_CACHE_DIR: &str = "VELESDB_SIFT1M_DIR";
+/// Env var for overriding the download URL (corporate mirror).
+const ENV_URL: &str = "VELESDB_SIFT1M_URL";
+/// Env var: set to `0` to skip network download and hard-fail with
+/// `DatasetError::NotCached` instead.
+const ENV_ALLOW_DOWNLOAD: &str = "VELESDB_SIFT1M_ALLOW_DOWNLOAD";
+
+/// Loads the full SIFT1M dataset (1M base + 10K queries + groundtruth).
+///
+/// # Errors
+/// Returns [`DatasetError::NotCached`] when the files are missing and
+/// network download is disabled, or [`DatasetError::Parse`] on corrupt
+/// input, or [`DatasetError::Download`] on network failure.
+pub fn load_sift1m() -> Result<Sift1M, DatasetError> {
+    let cache_dir = resolve_cache_dir();
+    ensure_cached(&cache_dir)?;
+    read_full_dataset(&cache_dir)
+}
+
+/// Loads a SIFT1M subset for smoke testing.
+///
+/// Truncates base vectors to `n_base`, queries to `n_query`. Filters each
+/// groundtruth row to retain only IDs that reference vectors still present
+/// in the truncated base, so Recall@k is meaningful on the subset. Queries
+/// whose filtered groundtruth row is shorter than `k` will produce
+/// best-effort recall against what remains (caller should divide by
+/// `min(k, filtered_gt.len())`).
+///
+/// # Errors
+/// Same error envelope as [`load_sift1m`].
+pub fn load_sift1m_subset(n_base: usize, n_query: usize) -> Result<Sift1M, DatasetError> {
+    let mut full = load_sift1m()?;
+    full.base.truncate(n_base);
+    full.query.truncate(n_query);
+    full.groundtruth = filter_groundtruth(full.groundtruth, n_base, n_query);
+    Ok(full)
+}
+
+/// Truncates `groundtruth` to `n_query` rows and filters each surviving row
+/// to retain only IDs that reference vectors still present after the base
+/// truncation (`id < n_base`). Without this filter, `intersection_ratio`
+/// would count out-of-range IDs as misses and report artificially low recall.
+pub(crate) fn filter_groundtruth(
+    groundtruth: Vec<Vec<u32>>,
+    n_base: usize,
+    n_query: usize,
+) -> Vec<Vec<u32>> {
+    let n_base_u32 = u32::try_from(n_base).unwrap_or(u32::MAX);
+    groundtruth
+        .into_iter()
+        .take(n_query)
+        .map(|row| row.into_iter().filter(|&id| id < n_base_u32).collect())
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Cache + download orchestration
+// ---------------------------------------------------------------------------
+
+fn resolve_cache_dir() -> PathBuf {
+    if let Ok(custom) = std::env::var(ENV_CACHE_DIR) {
+        return PathBuf::from(custom);
+    }
+    default_cache_dir()
+}
+
+fn default_cache_dir() -> PathBuf {
+    // `CARGO_MANIFEST_DIR` points to `crates/velesdb-core` during bench runs.
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(manifest)
+        .join("..")
+        .join("..")
+        .join("target")
+        .join("bench-data")
+        .join("sift1m")
+}
+
+fn ensure_cached(cache_dir: &Path) -> Result<(), DatasetError> {
+    if !is_fully_cached(cache_dir) {
+        if !download_allowed() {
+            return Err(DatasetError::NotCached);
+        }
+        fs::create_dir_all(cache_dir)?;
+        download_and_extract(cache_dir)?;
+    }
+    verify_all_fingerprints(cache_dir)
+}
+
+/// Pinned SHA-256 fingerprints loaded from the JSON sidecar or inlined
+/// by [`compute_fingerprints`] at capture time. Hex-encoded SHA-256 over
+/// the uncompressed files.
+///
+/// JSON key names match the `.fvecs` / `.ivecs` filenames exactly so the
+/// committed sidecar is self-documenting for maintainers reading it
+/// without source context.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PinnedFingerprints {
+    /// SHA-256 of `sift_base.fvecs` (1M × 128D base vectors).
+    #[serde(rename = "sift_base_fvecs_sha256")]
+    pub base: String,
+    /// SHA-256 of `sift_query.fvecs` (10K × 128D query vectors).
+    #[serde(rename = "sift_query_fvecs_sha256")]
+    pub query: String,
+    /// SHA-256 of `sift_groundtruth.ivecs` (10K × 100 nearest IDs).
+    #[serde(rename = "sift_groundtruth_ivecs_sha256")]
+    pub groundtruth: String,
+}
+
+/// Loads pinned fingerprints from the JSON sidecar co-located with this
+/// source file. Returns `None` when the sidecar is absent or malformed
+/// (loader then falls back to the `SHA256_*` constants).
+pub(crate) fn load_pinned_fingerprints() -> Option<PinnedFingerprints> {
+    let path = sidecar_path()?;
+    let raw = fs::read_to_string(&path).ok()?;
+    serde_json::from_str::<PinnedFingerprints>(&raw).ok()
+}
+
+/// Resolves the on-disk path of the JSON sidecar. Uses `CARGO_MANIFEST_DIR`
+/// to locate `benches/datasets/sift1m_fingerprints.json` relative to this
+/// crate. Returns `None` when the env var is missing (non-cargo runtime).
+fn sidecar_path() -> Option<PathBuf> {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    Some(
+        PathBuf::from(manifest)
+            .join("benches")
+            .join("datasets")
+            .join(FINGERPRINTS_JSON_NAME),
+    )
+}
+
+/// Computes SHA-256 fingerprints for the three SIFT1M files in `cache_dir`.
+/// Ensures the dataset is present (triggers download if allowed) before
+/// hashing. Used by the `capture_sift1m_fingerprints` bench to regenerate
+/// the JSON sidecar.
+///
+/// # Errors
+/// Same envelope as [`load_sift1m`]: `NotCached` when the dataset is missing
+/// and download is disabled, `Download` on network failure, `Parse` on a
+/// structurally invalid file, `Io` on I/O errors.
+pub fn compute_fingerprints(cache_dir: &Path) -> Result<PinnedFingerprints, DatasetError> {
+    if !is_fully_cached(cache_dir) {
+        if !download_allowed() {
+            return Err(DatasetError::NotCached);
+        }
+        fs::create_dir_all(cache_dir)?;
+        download_and_extract(cache_dir)?;
+    }
+    Ok(PinnedFingerprints {
+        base: hash_file(&cache_dir.join(BASE_FILE))?,
+        query: hash_file(&cache_dir.join(QUERY_FILE))?,
+        groundtruth: hash_file(&cache_dir.join(GT_FILE))?,
+    })
+}
+
+/// Returns the default cache directory (same policy as the loader): honors
+/// `VELESDB_SIFT1M_DIR` first, otherwise `target/bench-data/sift1m/`.
+pub fn default_cache_directory() -> PathBuf {
+    resolve_cache_dir()
+}
+
+/// Writes `fingerprints` to the JSON sidecar (`benches/datasets/
+/// sift1m_fingerprints.json`). Returns the path written.
+///
+/// # Errors
+/// Returns [`DatasetError::Io`] when the file cannot be written, or
+/// [`DatasetError::Parse`] when `CARGO_MANIFEST_DIR` is unavailable (the
+/// capture bench runs via cargo so this should never happen in practice).
+pub fn write_pinned_fingerprints_json(
+    fingerprints: &PinnedFingerprints,
+) -> Result<PathBuf, DatasetError> {
+    let path = sidecar_path().ok_or_else(|| {
+        DatasetError::Parse(
+            "CARGO_MANIFEST_DIR not set; run via cargo so the sidecar path resolves".into(),
+        )
+    })?;
+    // Reason: ancestor exists (crate root) but `benches/datasets` may be
+    // fresh — create_dir_all is a no-op if already present.
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(fingerprints)
+        .map_err(|e| DatasetError::Parse(format!("serialize fingerprints: {e}")))?;
+    fs::write(&path, json)?;
+    Ok(path)
+}
+
+/// Verifies SHA-256 fingerprints of the three cached SIFT1M files.
+///
+/// Preference order:
+/// 1. If the JSON sidecar is present and parseable, uses its pinned hashes
+///    in **strict mode** — any mismatch surfaces as [`DatasetError::Parse`].
+/// 2. Otherwise falls back to the `SHA256_*` constants. When those are
+///    still `TODO_` placeholders, [`verify_fingerprint`] prints the observed
+///    hashes to stderr and returns `Ok(())` (first-run capture path).
+fn verify_all_fingerprints(cache_dir: &Path) -> Result<(), DatasetError> {
+    let (base_expected, query_expected, gt_expected) = match load_pinned_fingerprints() {
+        Some(p) => (p.base, p.query, p.groundtruth),
+        None => (
+            SHA256_BASE.to_string(),
+            SHA256_QUERY.to_string(),
+            SHA256_GT.to_string(),
+        ),
+    };
+    verify_fingerprint(&cache_dir.join(BASE_FILE), &base_expected)?;
+    verify_fingerprint(&cache_dir.join(QUERY_FILE), &query_expected)?;
+    verify_fingerprint(&cache_dir.join(GT_FILE), &gt_expected)?;
+    Ok(())
+}
+
+fn is_fully_cached(cache_dir: &Path) -> bool {
+    cache_dir.join(BASE_FILE).is_file()
+        && cache_dir.join(QUERY_FILE).is_file()
+        && cache_dir.join(GT_FILE).is_file()
+}
+
+fn download_allowed() -> bool {
+    std::env::var(ENV_ALLOW_DOWNLOAD)
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(true)
+}
+
+fn download_and_extract(cache_dir: &Path) -> Result<(), DatasetError> {
+    let url = std::env::var(ENV_URL).unwrap_or_else(|_| DOWNLOAD_MIRROR.to_string());
+    let tarball = cache_dir.join("sift.tar.gz");
+    eprintln!("[sift1m] downloading {url} -> {}", tarball.display());
+    download_tarball(&url, &tarball)?;
+    eprintln!("[sift1m] extracting {}", tarball.display());
+    extract_tarball(&tarball, cache_dir)?;
+    // `sift.tar.gz` extracts into a `sift/` subdir — flatten into cache_dir.
+    flatten_sift_subdir(cache_dir)?;
+    Ok(())
+}
+
+fn download_tarball(url: &str, dest: &Path) -> Result<(), DatasetError> {
+    let resp = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(300))
+        .call()
+        .map_err(|e| DatasetError::Download(format!("GET {url}: {e}")))?;
+    let mut out = File::create(dest)?;
+    let mut reader = resp.into_reader();
+    io::copy(&mut reader, &mut out)?;
+    Ok(())
+}
+
+fn extract_tarball(src: &Path, dest_dir: &Path) -> Result<(), DatasetError> {
+    let file = File::open(src)?;
+    let gz = flate2::read::GzDecoder::new(BufReader::new(file));
+    let mut archive = tar::Archive::new(gz);
+    archive
+        .unpack(dest_dir)
+        .map_err(|e| DatasetError::Parse(format!("untar: {e}")))?;
+    Ok(())
+}
+
+fn flatten_sift_subdir(cache_dir: &Path) -> Result<(), DatasetError> {
+    let nested = cache_dir.join("sift");
+    if !nested.is_dir() {
+        return Ok(());
+    }
+    for name in [BASE_FILE, QUERY_FILE, GT_FILE] {
+        let from = nested.join(name);
+        let to = cache_dir.join(name);
+        if from.is_file() && !to.is_file() {
+            fs::rename(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Reading + parsing
+// ---------------------------------------------------------------------------
+
+fn read_full_dataset(cache_dir: &Path) -> Result<Sift1M, DatasetError> {
+    let base = parse_fvecs(&cache_dir.join(BASE_FILE))?;
+    check_shape(&base, BASE_COUNT, BASE_DIM as usize, BASE_FILE)?;
+    let query = parse_fvecs(&cache_dir.join(QUERY_FILE))?;
+    check_shape(&query, QUERY_COUNT, BASE_DIM as usize, QUERY_FILE)?;
+    let groundtruth = parse_ivecs(&cache_dir.join(GT_FILE))?;
+    check_shape_u32(&groundtruth, QUERY_COUNT, GT_K as usize, GT_FILE)?;
+    Ok(Sift1M {
+        base,
+        query,
+        groundtruth,
+    })
+}
+
+fn check_shape(
+    rows: &[Vec<f32>],
+    expected_rows: usize,
+    expected_dim: usize,
+    name: &str,
+) -> Result<(), DatasetError> {
+    if rows.len() != expected_rows {
+        return Err(DatasetError::Parse(format!(
+            "{name}: expected {expected_rows} rows, got {}",
+            rows.len()
+        )));
+    }
+    if rows.first().map(Vec::len) != Some(expected_dim) {
+        return Err(DatasetError::Parse(format!(
+            "{name}: expected dim {expected_dim}, got {:?}",
+            rows.first().map(Vec::len)
+        )));
+    }
+    Ok(())
+}
+
+fn check_shape_u32(
+    rows: &[Vec<u32>],
+    expected_rows: usize,
+    expected_dim: usize,
+    name: &str,
+) -> Result<(), DatasetError> {
+    if rows.len() != expected_rows {
+        return Err(DatasetError::Parse(format!(
+            "{name}: expected {expected_rows} rows, got {}",
+            rows.len()
+        )));
+    }
+    if rows.first().map(Vec::len) != Some(expected_dim) {
+        return Err(DatasetError::Parse(format!(
+            "{name}: expected dim {expected_dim}, got {:?}",
+            rows.first().map(Vec::len)
+        )));
+    }
+    Ok(())
+}
+
+/// Parses a `.fvecs` file into owned `Vec<Vec<f32>>`.
+fn parse_fvecs(path: &Path) -> Result<Vec<Vec<f32>>, DatasetError> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut out = Vec::new();
+    loop {
+        match read_record_header(&mut reader)? {
+            None => break,
+            Some(dim) => {
+                let mut buf = vec![0u8; dim as usize * 4];
+                reader.read_exact(&mut buf)?;
+                out.push(bytes_to_f32_vec(&buf));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Parses a `.ivecs` file into owned `Vec<Vec<u32>>`.
+fn parse_ivecs(path: &Path) -> Result<Vec<Vec<u32>>, DatasetError> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut out = Vec::new();
+    loop {
+        match read_record_header(&mut reader)? {
+            None => break,
+            Some(dim) => {
+                let mut buf = vec![0u8; dim as usize * 4];
+                reader.read_exact(&mut buf)?;
+                out.push(bytes_to_u32_vec(&buf));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Reads the 4-byte record dimension header. Returns `None` at EOF.
+fn read_record_header<R: Read>(reader: &mut R) -> Result<Option<u32>, DatasetError> {
+    let mut dim_buf = [0u8; 4];
+    match reader.read_exact(&mut dim_buf) {
+        Ok(()) => Ok(Some(u32::from_le_bytes(dim_buf))),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+        Err(e) => Err(DatasetError::Io(e)),
+    }
+}
+
+fn bytes_to_f32_vec(buf: &[u8]) -> Vec<f32> {
+    buf.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+fn bytes_to_u32_vec(buf: &[u8]) -> Vec<u32> {
+    buf.chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// SHA-256 fingerprint verification (currently opt-in — see TODO above)
+// ---------------------------------------------------------------------------
+
+/// Streams `path` through SHA-256 and returns the hex digest.
+fn hash_file(path: &Path) -> Result<String, DatasetError> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut hasher = Sha256::new();
+    // Heap-allocated scratch buffer: 64 KiB stack arrays trigger
+    // `clippy::large_stack_arrays` (limit 16 KiB).
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_encode(&hasher.finalize()))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+/// Verifies `path` against `expected_sha256`. When the expected value
+/// is a `TODO_` placeholder, prints the observed hash and returns Ok.
+/// Callers opt into strict verification by passing a non-placeholder.
+pub(crate) fn verify_fingerprint(path: &Path, expected_sha256: &str) -> Result<(), DatasetError> {
+    let actual = hash_file(path)?;
+    if expected_sha256.starts_with("TODO_") {
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("<unknown>");
+        eprintln!(
+            "\n[WARN] [sift1m] verify_fingerprint: {filename} — placeholder fingerprint detected.\n\
+             [WARN] Observed SHA-256: {actual}\n\
+             [WARN] Close the integrity gap in one command:\n\
+             [WARN]     cargo bench -p velesdb-core --features bench-sift1m \\\n\
+             [WARN]         --bench capture_sift1m_fingerprints\n\
+             [WARN] The capture bench writes benches/datasets/sift1m_fingerprints.json;\n\
+             [WARN] commit it to promote verification from TOFU to strict mode.\n\
+             [WARN] Until committed, bit-level corruption is NOT detected\n\
+             [WARN] (only dimension and row count are validated via check_shape).\n"
+        );
+        return Ok(());
+    }
+    if actual != expected_sha256 {
+        return Err(DatasetError::Parse(format!(
+            "{}: SHA-256 mismatch (expected {expected_sha256}, got {actual})",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+// Unit tests for the pure helpers (`filter_groundtruth`, `verify_fingerprint`)
+// live at `tests/sift1m_loader_unit_tests.rs` — the dataset module is included
+// there via `#[path]`. A `#[cfg(test)] mod tests` block here would never be
+// compiled by `cargo test` because the bench binary `sift1m_recall.rs` uses
+// `criterion_main!`, which replaces the default test harness. If future work
+// needs parser coverage on the full 168 MB corpus, lift the parse helpers
+// into `crates/velesdb-core/src/` behind a `bench-utils` module.

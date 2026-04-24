@@ -51,15 +51,17 @@ mod agent;
 mod collection;
 mod collection_sparse;
 mod graph;
+mod query;
 mod types;
 
 pub use agent::{SemanticResult, VelesSemanticMemory};
 pub use collection::VelesCollection;
 pub use graph::{MobileGraphEdge, MobileGraphNode, MobileGraphStore, TraversalResult};
+pub use query::{QueryResult, QueryResultKind, QueryResultRow};
 pub use types::{
     DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileCollectionStats,
-    MobileIndexInfo, PqTrainConfig, SearchResult, StorageMode, VelesError, VelesPoint,
-    VelesSparseVector,
+    MobileIndexInfo, PqTrainConfig, SearchQuality, SearchResult, StorageMode, VelesError,
+    VelesPoint, VelesSparseVector,
 };
 
 use std::sync::Arc;
@@ -69,6 +71,8 @@ use velesdb_core::Database as CoreDatabase;
 use velesdb_core::DistanceMetric as CoreDistanceMetric;
 #[cfg(test)]
 use velesdb_core::FusionStrategy as CoreFusionStrategy;
+#[cfg(test)]
+use velesdb_core::SearchQuality as CoreSearchQuality;
 
 // NOTE: VelesError, DistanceMetric, StorageMode, FusionStrategy, SearchResult,
 // VelesPoint, IndividualSearchRequest moved to types.rs (EPIC-061/US-005 refactoring)
@@ -131,13 +135,17 @@ impl VelesDatabase {
     /// * `name` - Unique name for the collection
     /// * `dimension` - Vector dimension
     /// * `metric` - Distance metric
-    /// * `storage_mode` - Storage optimization (Full, Sq8, Binary)
+    /// * `storage_mode` - Storage optimization (see [`StorageMode`])
     ///
     /// # Storage Modes
     ///
     /// - **Full**: Best recall, 4 bytes/dimension
     /// - **Sq8**: 4x compression, ~1% recall loss (recommended for mobile)
     /// - **Binary**: 32x compression, ~5-10% recall loss (for extreme constraints)
+    /// - **`ProductQuantization`**: 8x-16x compression via trained codebooks
+    ///   (requires a training step before upserts)
+    /// - **`Rabitq`**: 32x compression with ~1-2% recall loss (1-bit with
+    ///   rotation + scalar correction)
     pub fn create_collection_with_storage(
         &self,
         name: String,
@@ -167,38 +175,64 @@ impl VelesDatabase {
         Ok(())
     }
 
-    /// Gets a collection by name.
+    /// Creates a graph collection for knowledge graph workloads.
+    ///
+    /// Creates a schemaless graph collection (no node embeddings).
+    /// For graph collections with node embeddings, use
+    /// [`create_graph_collection_with_embeddings`](Self::create_graph_collection_with_embeddings).
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique name for the collection
+    pub fn create_graph_collection(&self, name: String) -> Result<(), VelesError> {
+        self.inner
+            .create_graph_collection(&name, velesdb_core::GraphSchema::schemaless())?;
+        Ok(())
+    }
+
+    /// Creates a graph collection with node embeddings.
+    ///
+    /// Nodes in this collection can store vector embeddings and support
+    /// similarity search alongside graph traversal.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique name for the collection
+    /// * `dimension` - Vector dimension for node embeddings
+    /// * `metric` - Distance metric for similarity calculations
+    pub fn create_graph_collection_with_embeddings(
+        &self,
+        name: String,
+        dimension: u32,
+        metric: DistanceMetric,
+    ) -> Result<(), VelesError> {
+        self.inner.create_graph_collection_with_embeddings(
+            &name,
+            velesdb_core::GraphSchema::schemaless(),
+            usize::try_from(dimension).unwrap_or(usize::MAX),
+            metric.into(),
+        )?;
+        Ok(())
+    }
+
+    /// Gets a vector collection by name.
     ///
     /// Returns `None` if the collection does not exist.
-    /// Checks vector, metadata, and graph registries in order.
+    /// Returns an error if the collection exists but is not a vector collection
+    /// (use [`get_graph_collection`](Self::get_graph_collection) for graph collections).
     pub fn get_collection(&self, name: String) -> Result<Option<Arc<VelesCollection>>, VelesError> {
-        // Try typed vector collection first (most common case).
-        if let Some(coll) = self.inner.get_vector_collection(&name) {
-            return Ok(Some(Arc::new(VelesCollection { inner: coll })));
+        match self.inner.get_any_collection(&name) {
+            Some(any_coll) => match any_coll.into_vector() {
+                Ok(vc) => Ok(Some(Arc::new(VelesCollection { inner: vc }))),
+                Err(_other_variant) => Err(VelesError::Collection {
+                    message: format!(
+                        "Collection '{name}' is not a vector collection. \
+                         Use get_graph_collection() for graph collections."
+                    ),
+                }),
+            },
+            None => Ok(None),
         }
-        // For metadata-only and graph collections, the legacy registry holds the
-        // same shared inner Collection. VectorCollection wraps Collection 1:1
-        // (same Arc<> fields) so opening it from the same on-disk path is
-        // equivalent — but cheaper: just ask get_vector_collection which falls
-        // back to disk and checks config type. The disk fallback in
-        // get_vector_collection already guards against non-vector types, so we
-        // need to open directly from disk for metadata/graph.
-        // Simplest correct path: VectorCollection::open the path, which loads all
-        // Collection fields regardless of collection type.
-        let path = self.inner.data_dir().join(&name);
-        if path.join("config.json").exists() {
-            match velesdb_core::VectorCollection::open(path) {
-                Ok(coll) => return Ok(Some(Arc::new(VelesCollection { inner: coll }))),
-                Err(e) => {
-                    tracing::warn!(
-                        collection = %name,
-                        error = %e,
-                        "VectorCollection::open failed for existing config; collection skipped"
-                    );
-                }
-            }
-        }
-        Ok(None)
     }
 
     /// Lists all collection names.
@@ -253,6 +287,74 @@ impl VelesDatabase {
             })?;
 
         Ok("PQ training complete".to_string())
+    }
+
+    /// Executes an arbitrary VelesQL query and returns structured results.
+    ///
+    /// This is the primary entry point for mobile apps to run the full
+    /// VelesQL surface: SELECT, INSERT, UPDATE, DELETE, MATCH, DDL
+    /// (CREATE/DROP/ALTER/TRUNCATE), TRAIN QUANTIZER, SHOW, DESCRIBE,
+    /// EXPLAIN, ANALYZE, and FLUSH.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - VelesQL query string
+    /// * `params_json` - Optional JSON object with query parameters
+    ///   (keys are bare names; use `$name` syntax in SQL).
+    ///   Pass `None` or `"{}"` when no parameters are needed.
+    ///
+    /// # Returns
+    ///
+    /// A [`QueryResult`] containing the result kind, rows (as JSON strings),
+    /// row count, and a human-readable status message.
+    ///
+    /// # Example (Swift)
+    ///
+    /// ```swift
+    /// let result = try db.executeQuery(
+    ///     sql: "SELECT * FROM docs LIMIT 10",
+    ///     paramsJson: nil
+    /// )
+    /// for row in result.rows {
+    ///     let json = try JSONSerialization.jsonObject(with: row.dataJson.data(using: .utf8)!)
+    ///     print(json)
+    /// }
+    /// ```
+    pub fn execute_query(
+        &self,
+        sql: String,
+        params_json: Option<String>,
+    ) -> Result<QueryResult, VelesError> {
+        let parsed =
+            velesdb_core::velesql::Parser::parse(&sql).map_err(|e| VelesError::Database {
+                message: format!("VelesQL parse error: {}", e.message),
+            })?;
+
+        let params = query::parse_params(params_json)?;
+        let kind = query::classify_query(&parsed);
+
+        let core_results =
+            self.inner
+                .execute_query(&parsed, &params)
+                .map_err(|e| VelesError::Database {
+                    message: format!("Query execution failed: {e}"),
+                })?;
+
+        let rows: Result<Vec<QueryResultRow>, VelesError> =
+            core_results.iter().map(query::to_result_row).collect();
+        let rows = rows?;
+
+        #[allow(clippy::cast_possible_truncation)]
+        // Reason: row count from a single query will not exceed u32::MAX.
+        let row_count = rows.len() as u32;
+        let message = query::build_message(&kind, row_count);
+
+        Ok(QueryResult {
+            kind,
+            rows,
+            row_count,
+            message,
+        })
     }
 }
 

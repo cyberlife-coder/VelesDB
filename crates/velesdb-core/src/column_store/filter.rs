@@ -1,7 +1,10 @@
-//! Filter operations for ColumnStore.
+//! Scalar filter operations for `ColumnStore`.
 //!
-//! This module provides efficient filtering methods for column-oriented data,
-//! including bitmap-based operations for large datasets.
+//! This module provides efficient filtering methods for scalar column types
+//! (integer, string) including bitmap-based operations for large datasets.
+//!
+//! Array filters live in [`super::filter_array`], geo filters in
+//! [`super::filter_geo`].
 
 use roaring::RoaringBitmap;
 
@@ -243,6 +246,83 @@ impl ColumnStore {
     #[must_use]
     pub fn bitmap_or(a: &RoaringBitmap, b: &RoaringBitmap) -> RoaringBitmap {
         a | b
+    }
+
+    /// Returns a `RoaringBitmap` of row indices matching any value in the IN list.
+    ///
+    /// Reuses `scan_string_column_in` infrastructure, converting `Vec<usize>` to bitmap.
+    /// Excludes deleted rows. Returns empty bitmap for missing/mismatched columns.
+    ///
+    /// Time complexity: O(rows) — full column scan with `HashSet` lookup per row.
+    #[must_use]
+    pub fn filter_in_string_bitmap(&self, column: &str, values: &[&str]) -> RoaringBitmap {
+        let Some(TypedColumn::String(col)) = self.columns.get(column) else {
+            return RoaringBitmap::new();
+        };
+
+        let ids: Vec<StringId> = values
+            .iter()
+            .filter_map(|s| self.string_table.get_id(s))
+            .collect();
+
+        if ids.is_empty() {
+            return RoaringBitmap::new();
+        }
+
+        self.scan_string_column_in_bitmap(col, &ids)
+    }
+
+    /// Returns a `RoaringBitmap` of row indices matching any i64 value in the IN list.
+    ///
+    /// Uses `FxHashSet` for O(1) per-row membership test when `values.len() > 16`,
+    /// linear scan otherwise. Excludes deleted rows.
+    ///
+    /// Time complexity: O(rows) — full column scan.
+    #[must_use]
+    pub fn filter_in_int_bitmap(&self, column: &str, values: &[i64]) -> RoaringBitmap {
+        if values.len() > 16 {
+            let set: rustc_hash::FxHashSet<i64> = values.iter().copied().collect();
+            scan_int_column_bitmap(self, column, |v| set.contains(&v))
+        } else {
+            scan_int_column_bitmap(self, column, |v| values.contains(&v))
+        }
+    }
+
+    /// Scans a string column for rows whose interned id is in `ids`,
+    /// returning a `RoaringBitmap`. Excludes deleted rows.
+    ///
+    /// Uses `FxHashSet` for large id lists (>16) and linear scan for small ones.
+    /// Indices >= `u32::MAX` are safely skipped.
+    fn scan_string_column_in_bitmap(
+        &self,
+        col: &[Option<StringId>],
+        ids: &[StringId],
+    ) -> RoaringBitmap {
+        if ids.len() > 16 {
+            let id_set: rustc_hash::FxHashSet<StringId> = ids.iter().copied().collect();
+            self.filter_column_by_bitmap(col, |id| id_set.contains(id))
+        } else {
+            self.filter_column_by_bitmap(col, |id| ids.contains(id))
+        }
+    }
+
+    /// Filters a string column by a predicate on the interned id, returning a bitmap.
+    ///
+    /// Excludes deleted rows. Indices >= `u32::MAX` are safely skipped.
+    fn filter_column_by_bitmap(
+        &self,
+        col: &[Option<StringId>],
+        predicate: impl Fn(&StringId) -> bool,
+    ) -> RoaringBitmap {
+        col.iter()
+            .enumerate()
+            .filter_map(|(idx, v)| match v {
+                Some(id) if predicate(id) && !self.deleted_rows.contains(&idx) => {
+                    u32::try_from(idx).ok()
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Scans a string column for rows whose interned id is in `ids`.

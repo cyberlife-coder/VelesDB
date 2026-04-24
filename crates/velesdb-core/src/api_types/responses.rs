@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
 
+use super::serde_id;
+
+// Re-export EXPLAIN-related types for backward compatibility.
+pub use super::responses_explain::*;
+
 // ============================================================================
 // Collection Responses
 // ============================================================================
@@ -47,6 +52,28 @@ pub struct CollectionConfigResponse {
     /// Embedding dimension for graph node vectors.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding_dimension: Option<usize>,
+    /// On-disk schema version. Increments when the persisted
+    /// `config.json` format changes in a way older `VelesDB` versions
+    /// cannot safely read.
+    #[serde(default)]
+    pub schema_version: u32,
+    /// PQ rescore oversampling factor. See `CollectionConfig` for
+    /// the semantics of `None`, `Some(0)`, and `Some(n > 0)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pq_rescore_oversampling: Option<u32>,
+    /// Persisted HNSW parameters (M, `ef_construction`, etc.) when
+    /// customised at create time. `None` means the defaults inferred
+    /// from the collection dimension are in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hnsw_params: Option<serde_json::Value>,
+    /// Deferred indexing configuration (`US-366`) — `None` when the
+    /// feature is disabled for this collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_indexing: Option<serde_json::Value>,
+    /// Async index builder configuration (Issue `#488`) — `None` when
+    /// the feature is disabled for this collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_index_builder: Option<serde_json::Value>,
 }
 
 // ============================================================================
@@ -58,6 +85,7 @@ pub struct CollectionConfigResponse {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SearchResultResponse {
     /// Point ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Similarity score.
     pub score: f32,
@@ -96,6 +124,10 @@ pub struct SearchIdsResponse {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct IdScoreResult {
     /// Point ID.
+    #[serde(
+        serialize_with = "serde_id::serialize_id_as_string",
+        deserialize_with = "serde_id::deserialize_id_from_string_or_number"
+    )]
     pub id: u64,
     /// Similarity score.
     pub score: f32,
@@ -120,6 +152,7 @@ pub struct ErrorResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum QueryType {
     /// Vector similarity search.
     Search,
@@ -243,89 +276,6 @@ pub struct VelesqlErrorResponse {
 }
 
 // ============================================================================
-// EXPLAIN Responses
-// ============================================================================
-
-/// Response from query EXPLAIN.
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "openapi", derive(ToSchema))]
-pub struct ExplainResponse {
-    /// The original query.
-    pub query: String,
-    /// Query type (SELECT, MATCH, etc.).
-    pub query_type: String,
-    /// Target collection name.
-    pub collection: String,
-    /// Query plan steps.
-    pub plan: Vec<ExplainStep>,
-    /// Estimated cost metrics.
-    pub estimated_cost: ExplainCost,
-    /// Query features detected.
-    pub features: ExplainFeatures,
-    /// Whether this plan was served from the compiled plan cache.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "openapi", schema(nullable))]
-    pub cache_hit: Option<bool>,
-    /// How many times this cached plan has been reused.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "openapi", schema(nullable))]
-    pub plan_reuse_count: Option<u64>,
-}
-
-/// A step in the query execution plan.
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "openapi", derive(ToSchema))]
-pub struct ExplainStep {
-    /// Step number (1-indexed).
-    pub step: usize,
-    /// Operation type.
-    pub operation: String,
-    /// Description of what this step does.
-    pub description: String,
-    /// Estimated rows processed/produced.
-    pub estimated_rows: Option<usize>,
-}
-
-/// Estimated cost metrics for the query.
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "openapi", derive(ToSchema))]
-pub struct ExplainCost {
-    /// Whether an index can be used.
-    pub uses_index: bool,
-    /// Index name if used.
-    pub index_name: Option<String>,
-    /// Estimated selectivity (0.0 - 1.0).
-    pub selectivity: f64,
-    /// Estimated complexity class.
-    pub complexity: String,
-}
-
-/// Features detected in the query.
-#[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "openapi", derive(ToSchema))]
-pub struct ExplainFeatures {
-    /// Has vector search (NEAR clause).
-    pub has_vector_search: bool,
-    /// Has metadata filter.
-    pub has_filter: bool,
-    /// Has ORDER BY clause.
-    pub has_order_by: bool,
-    /// Has GROUP BY clause.
-    pub has_group_by: bool,
-    /// Has aggregation functions.
-    pub has_aggregation: bool,
-    /// Has JOIN clause.
-    pub has_join: bool,
-    /// Has FUSION clause.
-    pub has_fusion: bool,
-    /// LIMIT value if present.
-    pub limit: Option<u64>,
-    /// OFFSET value if present.
-    pub offset: Option<u64>,
-}
-
-// ============================================================================
 // Index Responses
 // ============================================================================
 
@@ -353,6 +303,63 @@ pub struct ListIndexesResponse {
     pub indexes: Vec<IndexResponse>,
     /// Total number of indexes.
     pub total: usize,
+}
+
+// ============================================================================
+// Scroll Responses
+// ============================================================================
+
+/// Request body for the scroll endpoint.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ScrollRequest {
+    /// Resume after this point ID (exclusive). Omit to start from beginning.
+    #[serde(
+        default,
+        deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
+    )]
+    pub cursor: Option<u64>,
+    /// Maximum points per batch (1–10 000, default 100).
+    #[serde(default = "default_scroll_batch_size")]
+    pub batch_size: u32,
+    /// Optional filter expression.
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
+}
+
+/// Default batch size for scroll requests.
+fn default_scroll_batch_size() -> u32 {
+    100
+}
+
+/// Response from the scroll endpoint.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ScrollResponse {
+    /// Points in this batch (ascending ID order).
+    pub points: Vec<ScrollPoint>,
+    /// Cursor for the next batch. Null when iteration is complete.
+    #[serde(
+        serialize_with = "serde_id::serialize_option_id_as_string",
+        deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
+    )]
+    pub next_cursor: Option<u64>,
+}
+
+/// A single point in a scroll response.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ScrollPoint {
+    /// Point ID.
+    #[serde(
+        serialize_with = "serde_id::serialize_id_as_string",
+        deserialize_with = "serde_id::deserialize_id_from_string_or_number"
+    )]
+    pub id: u64,
+    /// Vector data.
+    pub vector: Vec<f32>,
+    /// Optional payload.
+    pub payload: Option<serde_json::Value>,
 }
 
 // ============================================================================
@@ -407,6 +414,14 @@ pub struct ColumnStatsResponse {
     pub max_value: Option<String>,
     /// Average value size in bytes.
     pub avg_size_bytes: u64,
+    /// Number of histogram buckets, or null if no histogram.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable))]
+    pub histogram_buckets: Option<usize>,
+    /// Whether the histogram is stale, or null if no histogram.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable))]
+    pub histogram_stale: Option<bool>,
 }
 
 /// Per-index statistics in a collection stats response.

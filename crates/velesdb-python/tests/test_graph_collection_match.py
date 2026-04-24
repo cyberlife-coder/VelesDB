@@ -23,9 +23,9 @@ def graph_db(tmp_path):
     graph = db.create_graph_collection("kg", dimension=4)
 
     # Store node payloads (with _labels for MATCH label matching)
-    graph.store_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
-    graph.store_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
-    graph.store_node_payload(30, {"_labels": ["Company"], "name": "Acme"})
+    graph.upsert_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
+    graph.upsert_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
+    graph.upsert_node_payload(30, {"_labels": ["Company"], "name": "Acme"})
 
     # Edges: Alice -KNOWS-> Bob, Bob -WORKS_AT-> Acme
     graph.add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})
@@ -102,8 +102,14 @@ def test_query_method_on_graph_collection(graph_db):
 
 
 def test_match_query_rejects_non_match(graph_db):
-    """match_query should reject SELECT queries."""
-    with pytest.raises(Exception):
+    """match_query should reject SELECT queries with a typed `ValueError`.
+
+    Passing a SELECT statement to `match_query` is a query-shape error
+    (`VELES-010 Query`), which `core_err` routes to Python's canonical
+    `ValueError` since Wave 3 Commit 2 — the previous `pytest.raises(Exception)`
+    was too loose and would silently accept any regression.
+    """
+    with pytest.raises(ValueError):
         graph_db.match_query("SELECT * FROM kg LIMIT 1")
 
 

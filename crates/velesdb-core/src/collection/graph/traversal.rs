@@ -8,8 +8,6 @@
 //! For large graphs, the module provides streaming iterators that yield results
 //! lazily without loading all visited nodes into memory at once.
 
-#![allow(dead_code)] // WIP: Will be used by MATCH clause execution
-
 use super::EdgeStore;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -73,9 +71,8 @@ impl TraversalResult {
     /// public API boundary.
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
-    // Reason: Call sites pass owned SmallVecs (often via move or clone); taking
-    // by value avoids requiring callers to borrow-then-clone at call sites that
-    // already own the value.
+    // Reason: Constructor used by MATCH clause traversal (Wave 6 wiring).
+    #[allow(dead_code)]
     pub(crate) fn from_smallvec(target_id: u64, path: TraversalPath, depth: u32) -> Self {
         Self {
             target_id,
@@ -447,55 +444,6 @@ pub fn bfs_traverse_reverse(
     config: &TraversalConfig,
 ) -> Vec<TraversalResult> {
     bfs_traverse_directed(edge_store, source_id, config, BfsDirection::Reverse)
-}
-
-/// Performs bidirectional BFS (follows both directions).
-///
-/// # Deduplication strategy
-///
-/// Uses target-only dedup via `FxHashSet<u64>`: each target node appears
-/// at most once across forward and reverse results. This was chosen over
-/// the prior path+target dedup because:
-/// - O(1) `HashSet::contains` vs O(n) linear scan per reverse result.
-/// - Cleaner output — a node reached by both forward and reverse edges
-///   appears once (via whichever direction discovered it first).
-/// - The forward pass populates the `seen` set; reverse results are skipped
-///   if their `target_id` is already present.
-#[must_use]
-pub fn bfs_traverse_both(
-    edge_store: &EdgeStore,
-    source_id: u64,
-    config: &TraversalConfig,
-) -> Vec<TraversalResult> {
-    let mut results = Vec::new();
-    let half_limit = config.limit / 2 + 1;
-
-    let config_half = TraversalConfig {
-        limit: half_limit,
-        ..config.clone()
-    };
-
-    // Forward traversal
-    let forward = bfs_traverse(edge_store, source_id, &config_half);
-    // Build O(1) dedup set from forward results to avoid O(n) linear scan per reverse result.
-    let seen: FxHashSet<u64> = forward.iter().map(|r| r.target_id).collect();
-    results.extend(forward);
-
-    // Reverse traversal — skip targets already reached by forward BFS
-    if results.len() < config.limit {
-        let reverse = bfs_traverse_reverse(edge_store, source_id, &config_half);
-        for r in reverse {
-            if results.len() >= config.limit {
-                break;
-            }
-            if !seen.contains(&r.target_id) {
-                results.push(r);
-            }
-        }
-    }
-
-    results.truncate(config.limit);
-    results
 }
 
 // Tests moved to traversal_tests.rs per project rules

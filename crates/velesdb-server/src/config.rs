@@ -16,6 +16,7 @@ struct FileConfig {
     server: Option<ServerSection>,
     auth: Option<AuthSection>,
     tls: Option<TlsSection>,
+    cors: Option<CorsSection>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -24,6 +25,7 @@ struct ServerSection {
     port: Option<u16>,
     data_dir: Option<String>,
     shutdown_timeout_secs: Option<u64>,
+    rate_limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -35,6 +37,15 @@ struct AuthSection {
 struct TlsSection {
     cert: Option<String>,
     key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CorsSection {
+    allowed_origins: Option<Vec<String>>,
+    allowed_methods: Option<Vec<String>>,
+    allowed_headers: Option<Vec<String>>,
+    allow_credentials: Option<bool>,
+    max_age_secs: Option<u64>,
 }
 
 // ============================================================================
@@ -51,6 +62,64 @@ pub struct ServerConfig {
     pub tls_cert: Option<String>,
     pub tls_key: Option<String>,
     pub shutdown_timeout_secs: u64,
+    /// Maximum requests per second per IP address (0 = disabled).
+    pub rate_limit: u32,
+    /// CORS configuration for cross-origin requests.
+    pub cors: CorsConfig,
+}
+
+/// CORS configuration for the server.
+///
+/// When `allowed_origins` contains `"*"`, the server uses a fully permissive
+/// CORS policy (equivalent to `CorsLayer::permissive()`). Otherwise, only the
+/// listed origins are allowed.
+///
+/// Defaults to permissive (`["*"]`) for backward compatibility.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorsConfig {
+    /// Allowed origins. Use `["*"]` for permissive mode.
+    pub allowed_origins: Vec<String>,
+    /// Allowed HTTP methods (e.g. `["GET", "POST"]`).
+    pub allowed_methods: Vec<String>,
+    /// Allowed request headers (e.g. `["Content-Type", "Authorization"]`).
+    /// Use `["*"]` to allow any header.
+    pub allowed_headers: Vec<String>,
+    /// Whether to allow credentials (cookies, authorization headers).
+    pub allow_credentials: bool,
+    /// How long (in seconds) browsers may cache preflight responses.
+    pub max_age_secs: u64,
+}
+
+/// Default burst budget for rate limiting (requests per second per IP).
+const DEFAULT_RATE_LIMIT: u32 = 100;
+
+/// Default preflight cache duration in seconds (1 hour).
+const DEFAULT_CORS_MAX_AGE_SECS: u64 = 3600;
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            allowed_origins: vec!["*".to_string()],
+            allowed_methods: vec![
+                "GET".to_string(),
+                "POST".to_string(),
+                "PUT".to_string(),
+                "DELETE".to_string(),
+                "PATCH".to_string(),
+                "OPTIONS".to_string(),
+            ],
+            allowed_headers: vec!["*".to_string()],
+            allow_credentials: false,
+            max_age_secs: DEFAULT_CORS_MAX_AGE_SECS,
+        }
+    }
+}
+
+impl CorsConfig {
+    /// Returns `true` when CORS is in fully permissive mode (any origin).
+    pub fn is_permissive(&self) -> bool {
+        self.allowed_origins.iter().any(|o| o == "*")
+    }
 }
 
 impl Default for ServerConfig {
@@ -63,6 +132,8 @@ impl Default for ServerConfig {
             tls_cert: None,
             tls_key: None,
             shutdown_timeout_secs: 30,
+            rate_limit: DEFAULT_RATE_LIMIT,
+            cors: CorsConfig::default(),
         }
     }
 }
@@ -87,6 +158,7 @@ impl ServerConfig {
         let server = file.server.unwrap_or_default();
         let auth = file.auth.unwrap_or_default();
         let tls = file.tls.unwrap_or_default();
+        let cors_section = file.cors.unwrap_or_default();
 
         // Layer: TOML over defaults
         let host = server.host.unwrap_or(defaults.host);
@@ -95,9 +167,11 @@ impl ServerConfig {
         let shutdown_timeout_secs = server
             .shutdown_timeout_secs
             .unwrap_or(defaults.shutdown_timeout_secs);
+        let rate_limit = server.rate_limit.unwrap_or(defaults.rate_limit);
         let api_keys = auth.api_keys.unwrap_or(defaults.api_keys);
         let tls_cert = tls.cert.or(defaults.tls_cert);
         let tls_key = tls.key.or(defaults.tls_key);
+        let cors = resolve_cors(defaults.cors, cors_section);
 
         // Layer: CLI/env over TOML (only override when explicitly set)
         let host = cli.host.unwrap_or(host);
@@ -106,6 +180,7 @@ impl ServerConfig {
         let api_keys = cli.api_keys.unwrap_or(api_keys);
         let tls_cert = cli.tls_cert.or(tls_cert);
         let tls_key = cli.tls_key.or(tls_key);
+        let rate_limit = cli.rate_limit.unwrap_or(rate_limit);
 
         Self {
             host,
@@ -115,6 +190,8 @@ impl ServerConfig {
             tls_cert,
             tls_key,
             shutdown_timeout_secs,
+            rate_limit,
+            cors,
         }
     }
 
@@ -158,6 +235,11 @@ impl ServerConfig {
     pub fn tls_enabled(&self) -> bool {
         self.tls_cert.is_some() && self.tls_key.is_some()
     }
+
+    /// Returns `true` when rate limiting is enabled (rate_limit > 0).
+    pub fn rate_limit_enabled(&self) -> bool {
+        self.rate_limit > 0
+    }
 }
 
 // ============================================================================
@@ -175,6 +257,7 @@ pub struct CliOverrides {
     pub api_keys: Option<Vec<String>>,
     pub tls_cert: Option<String>,
     pub tls_key: Option<String>,
+    pub rate_limit: Option<u32>,
 }
 
 // ============================================================================
@@ -205,6 +288,96 @@ fn load_toml_file(path: &Option<PathBuf>) -> anyhow::Result<FileConfig> {
         .map_err(|e| anyhow::anyhow!("failed to parse config file {}: {e}", candidate.display()))?;
 
     Ok(cfg)
+}
+
+// ============================================================================
+// CORS resolution & layer builder
+// ============================================================================
+
+/// Merges a `CorsSection` (from TOML) over `CorsConfig` defaults.
+fn resolve_cors(defaults: CorsConfig, section: CorsSection) -> CorsConfig {
+    CorsConfig {
+        allowed_origins: section.allowed_origins.unwrap_or(defaults.allowed_origins),
+        allowed_methods: section.allowed_methods.unwrap_or(defaults.allowed_methods),
+        allowed_headers: section.allowed_headers.unwrap_or(defaults.allowed_headers),
+        allow_credentials: section
+            .allow_credentials
+            .unwrap_or(defaults.allow_credentials),
+        max_age_secs: section.max_age_secs.unwrap_or(defaults.max_age_secs),
+    }
+}
+
+/// Builds a [`tower_http::cors::CorsLayer`] from the resolved CORS config.
+///
+/// When `allowed_origins` contains `"*"`, returns `CorsLayer::permissive()`
+/// for full backward compatibility. Otherwise, constructs a restrictive
+/// layer with the specified origins, methods, and headers.
+pub fn build_cors_layer(cors: &CorsConfig) -> tower_http::cors::CorsLayer {
+    use tower_http::cors::{AllowOrigin, CorsLayer};
+
+    if cors.is_permissive() {
+        return CorsLayer::permissive();
+    }
+
+    let origins: Vec<axum::http::HeaderValue> = cors
+        .allowed_origins
+        .iter()
+        .filter_map(|o| o.parse().ok())
+        .collect();
+    let methods: Vec<axum::http::Method> = cors
+        .allowed_methods
+        .iter()
+        .filter_map(|m| m.parse().ok())
+        .collect();
+
+    let layer = CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods(methods)
+        .max_age(std::time::Duration::from_secs(cors.max_age_secs));
+
+    let layer = apply_cors_headers_policy(layer, cors);
+
+    if cors.allow_credentials {
+        layer.allow_credentials(true)
+    } else {
+        layer
+    }
+}
+
+/// Applies the headers policy to a `CorsLayer`, honouring the CORS spec rule that
+/// `allow_credentials=true` is incompatible with wildcard headers (browsers reject
+/// the preflight). Logs a warning and falls back to default headers in that case.
+fn apply_cors_headers_policy(
+    layer: tower_http::cors::CorsLayer,
+    cors: &CorsConfig,
+) -> tower_http::cors::CorsLayer {
+    use tower_http::cors::Any;
+
+    let has_wildcard = cors.allowed_headers.iter().any(|h| h == "*");
+    if has_wildcard && !cors.allow_credentials {
+        return layer.allow_headers(Any);
+    }
+    if has_wildcard && cors.allow_credentials {
+        tracing::warn!(
+            "CORS: allow_credentials=true is incompatible with wildcard \
+             headers per CORS spec. Falling back to default headers \
+             (Content-Type, Authorization)."
+        );
+    }
+    let headers: Vec<axum::http::HeaderName> = cors
+        .allowed_headers
+        .iter()
+        .filter(|h| h.as_str() != "*")
+        .filter_map(|h| h.parse().ok())
+        .collect();
+    if headers.is_empty() && cors.allow_credentials {
+        layer.allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+        ])
+    } else {
+        layer.allow_headers(headers)
+    }
 }
 
 // ============================================================================
@@ -245,8 +418,11 @@ mod tests {
         assert!(cfg.tls_cert.is_none());
         assert!(cfg.tls_key.is_none());
         assert_eq!(cfg.shutdown_timeout_secs, 30);
+        assert_eq!(cfg.rate_limit, 100);
         assert!(!cfg.auth_enabled());
         assert!(!cfg.tls_enabled());
+        assert!(cfg.rate_limit_enabled());
+        assert!(cfg.cors.is_permissive());
     }
 
     #[test]
@@ -448,5 +624,214 @@ data_dir = "/toml/data"
         assert_eq!(cfg.port, 3000); // CLI wins
         assert_eq!(cfg.host, "0.0.0.0"); // TOML wins (no CLI override)
         assert_eq!(cfg.data_dir, "/toml/data"); // TOML wins (no CLI override)
+    }
+
+    #[test]
+    fn test_rate_limit_from_toml() {
+        let toml_content = r#"
+[server]
+rate_limit = 50
+"#;
+        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let cli = CliOverrides::default();
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert_eq!(cfg.rate_limit, 50);
+        assert!(cfg.rate_limit_enabled());
+    }
+
+    #[test]
+    fn test_rate_limit_disabled_via_toml() {
+        let toml_content = r#"
+[server]
+rate_limit = 0
+"#;
+        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let cli = CliOverrides::default();
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert_eq!(cfg.rate_limit, 0);
+        assert!(!cfg.rate_limit_enabled());
+    }
+
+    #[test]
+    fn test_rate_limit_cli_overrides_toml() {
+        let toml_content = r#"
+[server]
+rate_limit = 50
+"#;
+        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let cli = CliOverrides {
+            rate_limit: Some(200),
+            ..Default::default()
+        };
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert_eq!(cfg.rate_limit, 200);
+    }
+
+    #[test]
+    fn test_rate_limit_cli_disables() {
+        let file_cfg = FileConfig::default();
+        let cli = CliOverrides {
+            rate_limit: Some(0),
+            ..Default::default()
+        };
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert_eq!(cfg.rate_limit, 0);
+        assert!(!cfg.rate_limit_enabled());
+    }
+
+    // ====================================================================
+    // CORS configuration tests
+    // ====================================================================
+
+    #[test]
+    fn test_cors_default_is_permissive() {
+        let cors = CorsConfig::default();
+        assert!(cors.is_permissive());
+        assert_eq!(cors.allowed_origins, vec!["*"]);
+        assert_eq!(cors.allowed_headers, vec!["*"]);
+        assert!(!cors.allow_credentials);
+        assert_eq!(cors.max_age_secs, 3600);
+    }
+
+    #[test]
+    fn test_cors_specific_origins_not_permissive() {
+        let cors = CorsConfig {
+            allowed_origins: vec![
+                "https://app.example.com".to_string(),
+                "https://admin.example.com".to_string(),
+            ],
+            ..CorsConfig::default()
+        };
+        assert!(!cors.is_permissive());
+        assert_eq!(cors.allowed_origins.len(), 2);
+    }
+
+    #[test]
+    fn test_cors_from_toml_specific_origins() {
+        let toml_content = r#"
+[cors]
+allowed_origins = ["https://app.example.com", "https://admin.example.com"]
+allowed_methods = ["GET", "POST"]
+allowed_headers = ["Content-Type", "Authorization"]
+allow_credentials = true
+max_age_secs = 7200
+"#;
+        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let cli = CliOverrides::default();
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert!(!cfg.cors.is_permissive());
+        assert_eq!(
+            cfg.cors.allowed_origins,
+            vec!["https://app.example.com", "https://admin.example.com"]
+        );
+        assert_eq!(cfg.cors.allowed_methods, vec!["GET", "POST"]);
+        assert_eq!(
+            cfg.cors.allowed_headers,
+            vec!["Content-Type", "Authorization"]
+        );
+        assert!(cfg.cors.allow_credentials);
+        assert_eq!(cfg.cors.max_age_secs, 7200);
+    }
+
+    #[test]
+    fn test_cors_from_toml_partial_uses_defaults() {
+        let toml_content = r#"
+[cors]
+allowed_origins = ["https://myapp.com"]
+"#;
+        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let cli = CliOverrides::default();
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert!(!cfg.cors.is_permissive());
+        assert_eq!(cfg.cors.allowed_origins, vec!["https://myapp.com"]);
+        // Other fields use defaults
+        assert_eq!(cfg.cors.allowed_headers, vec!["*"]);
+        assert!(!cfg.cors.allow_credentials);
+        assert_eq!(cfg.cors.max_age_secs, 3600);
+        assert_eq!(cfg.cors.allowed_methods.len(), 6); // default methods
+    }
+
+    #[test]
+    fn test_cors_absent_from_toml_uses_permissive_default() {
+        let toml_content = r#"
+[server]
+port = 9090
+"#;
+        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let cli = CliOverrides::default();
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert!(cfg.cors.is_permissive());
+        assert_eq!(cfg.cors, CorsConfig::default());
+    }
+
+    #[test]
+    fn test_cors_empty_section_uses_defaults() {
+        let toml_content = r#"
+[cors]
+"#;
+        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let cli = CliOverrides::default();
+        let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+
+        assert!(cfg.cors.is_permissive());
+    }
+
+    #[test]
+    fn test_build_cors_layer_permissive() {
+        let cors = CorsConfig::default();
+        // Should not panic — produces a valid CorsLayer
+        let _layer = build_cors_layer(&cors);
+    }
+
+    #[test]
+    fn test_build_cors_layer_specific_origins() {
+        let cors = CorsConfig {
+            allowed_origins: vec![
+                "https://app.example.com".to_string(),
+                "http://localhost:3000".to_string(),
+            ],
+            allowed_methods: vec!["GET".to_string(), "POST".to_string()],
+            allowed_headers: vec!["Content-Type".to_string(), "Authorization".to_string()],
+            allow_credentials: true,
+            max_age_secs: 600,
+        };
+        // Should not panic — produces a valid CorsLayer
+        let _layer = build_cors_layer(&cors);
+    }
+
+    #[test]
+    fn test_build_cors_layer_wildcard_headers() {
+        let cors = CorsConfig {
+            allowed_origins: vec!["https://myapp.com".to_string()],
+            allowed_headers: vec!["*".to_string()],
+            ..CorsConfig::default()
+        };
+        let _layer = build_cors_layer(&cors);
+    }
+
+    #[test]
+    fn test_build_cors_layer_invalid_origin_skipped() {
+        let cors = CorsConfig {
+            allowed_origins: vec![
+                "https://valid.com".to_string(),
+                "not a valid \x00 origin".to_string(),
+            ],
+            ..CorsConfig::default()
+        };
+        // Invalid origins are silently filtered via filter_map
+        let _layer = build_cors_layer(&cors);
+    }
+
+    #[test]
+    fn test_server_config_default_includes_cors() {
+        let cfg = ServerConfig::default();
+        assert!(cfg.cors.is_permissive());
     }
 }

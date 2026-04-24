@@ -1,5 +1,4 @@
 #![cfg(feature = "persistence")]
-#![allow(deprecated)] // Tests use legacy Collection.
 //! Integration tests proving `VelesDB`'s hybrid query value proposition.
 //!
 //! HYB-01: `VelesQL` NEAR + scalar filter with ranking identity assertions
@@ -23,7 +22,7 @@ fn test_hyb01_velesql_near_scalar_filter_ranking() {
     let db = Database::open(dir.path()).expect("open db");
     db.create_collection("corpus", 4, DistanceMetric::Cosine)
         .expect("create collection");
-    let collection = db.get_collection("corpus").expect("get collection");
+    let collection = db.get_vector_collection("corpus").expect("get collection");
 
     // 4-dimensional corpus: orthogonal-ish vectors with category payloads
     collection
@@ -113,7 +112,7 @@ fn test_hyb02_fusion_ranking_differs_from_pure_vector() {
     let db = Database::open(dir.path()).expect("open db");
     db.create_collection("docs", 4, DistanceMetric::Cosine)
         .expect("create collection");
-    let collection = db.get_collection("docs").expect("get collection");
+    let collection = db.get_vector_collection("docs").expect("get collection");
 
     // 3-doc corpus: vector and BM25 signals intentionally diverge
     collection
@@ -158,7 +157,7 @@ fn test_hyb02_fusion_ranking_differs_from_pure_vector() {
 
     // Hybrid fusion: must differ from pure vector ranking
     let hybrid_results = collection
-        .hybrid_search(&[1.0, 0.0, 0.0, 0.0_f32], "rust", 3, Some(0.5), None)
+        .hybrid_search(&[1.0, 0.0, 0.0, 0.0_f32], "rust", 3, Some(0.5))
         .expect("hybrid search");
 
     let vector_ids: Vec<u64> = vector_results.iter().map(|r| r.point.id).collect();
@@ -178,7 +177,7 @@ fn test_hyb03_graph_match_traversal_returns_real_edges() {
     let db = Database::open(dir.path()).expect("open db");
     db.create_collection("kg", 4, DistanceMetric::Cosine)
         .expect("create collection");
-    let collection = db.get_collection("kg").expect("get collection");
+    let collection = db.get_vector_collection("kg").expect("get collection");
 
     // 3-node knowledge graph with _labels for MATCH label filtering
     collection

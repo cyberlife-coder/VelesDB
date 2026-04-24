@@ -22,6 +22,9 @@ pub(crate) fn error_response(status: StatusCode, message: String) -> axum::respo
 
 /// Build an error response from a [`velesdb_core::Error`], including the
 /// VELES-XXX code in the JSON body.
+///
+/// Prefer [`auto_core_error_response`] which derives the HTTP status
+/// automatically from the error variant.
 pub(crate) fn core_error_response(
     status: StatusCode,
     error: &velesdb_core::Error,
@@ -36,38 +39,91 @@ pub(crate) fn core_error_response(
         .into_response()
 }
 
-/// Look up a legacy collection by name, returning a 404 response on miss.
-#[allow(deprecated, clippy::result_large_err)]
+/// Derive the canonical HTTP status code from a [`velesdb_core::Error`].
+///
+/// Centralizes the error→status mapping so that every handler returns
+/// consistent HTTP codes for the same error variant.
+pub(crate) fn http_status_for_error(e: &velesdb_core::Error) -> StatusCode {
+    use velesdb_core::Error;
+    match e {
+        // 404 Not Found
+        Error::CollectionNotFound(_)
+        | Error::PointNotFound(_)
+        | Error::EdgeNotFound(_)
+        | Error::NodeNotFound(_) => StatusCode::NOT_FOUND,
+
+        // 409 Conflict
+        Error::CollectionExists(_) | Error::EdgeExists(_) => StatusCode::CONFLICT,
+
+        // 400 Bad Request — client input errors
+        Error::DimensionMismatch { .. }
+        | Error::InvalidVector(_)
+        | Error::InvalidCollectionName { .. }
+        | Error::InvalidDimension { .. }
+        | Error::Config(_)
+        | Error::Query(_)
+        | Error::InvalidEdgeLabel(_)
+        | Error::InvalidQuantizerConfig(_)
+        | Error::SchemaValidation(_)
+        | Error::VectorNotAllowed(_)
+        | Error::VectorRequired(_)
+        | Error::SearchNotSupported(_)
+        | Error::GraphNotSupported(_)
+        | Error::Overflow(_) => StatusCode::BAD_REQUEST,
+
+        // 503 Service Unavailable
+        Error::DatabaseLocked(_) | Error::GuardRail(_) => StatusCode::SERVICE_UNAVAILABLE,
+
+        // 500 Internal Server Error — everything else
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// Build an error response from a [`velesdb_core::Error`], automatically
+/// deriving the HTTP status code from the error variant.
+pub(crate) fn auto_core_error_response(error: &velesdb_core::Error) -> axum::response::Response {
+    core_error_response(http_status_for_error(error), error)
+}
+
+/// Look up a type-erased collection by name, returning a 404 response on miss.
+///
+/// Emits `VELES-002 CollectionNotFound` via [`core_error_response`] so that
+/// SDK clients (TS, Python, …) can surface a typed
+/// `CollectionNotFoundError` via `instanceof`. Fixes PR #586 Devin
+/// finding #1: the prior `error_response` call set `code: None`, which
+/// serde skipped from the JSON body. Clients then fell back to a
+/// status-derived `'NOT_FOUND'` string and could not discriminate
+/// collection-not-found from point/edge/node-not-found.
+#[allow(clippy::result_large_err)]
 pub(crate) fn get_collection_or_404(
     state: &AppState,
     name: &str,
-) -> Result<velesdb_core::Collection, axum::response::Response> {
-    state.db.get_collection(name).ok_or_else(|| {
-        error_response(
+) -> Result<velesdb_core::AnyCollection, axum::response::Response> {
+    state.db.get_any_collection(name).ok_or_else(|| {
+        core_error_response(
             StatusCode::NOT_FOUND,
-            format!("Collection '{name}' not found"),
+            &velesdb_core::Error::CollectionNotFound(name.to_string()),
         )
     })
 }
 
 /// Look up a vector collection by name, returning a 404 response on miss.
+///
+/// Emits `VELES-002 CollectionNotFound` (same typed-error rationale as
+/// [`get_collection_or_404`]). The "or is not a vector collection"
+/// disambiguation lives in the response body message — the code field
+/// stays VELES-002 so typed-error clients can still narrow on
+/// `CollectionNotFoundError`.
 #[allow(clippy::result_large_err)]
 pub(crate) fn get_vector_collection_or_404(
     state: &AppState,
     name: &str,
 ) -> Result<velesdb_core::collection::VectorCollection, axum::response::Response> {
     state.db.get_vector_collection(name).ok_or_else(|| {
-        (
+        core_error_response(
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!(
-                    "Collection '{}' not found or is not a vector collection",
-                    name
-                ),
-                code: None,
-            }),
+            &velesdb_core::Error::CollectionNotFound(name.to_string()),
         )
-            .into_response()
     })
 }
 

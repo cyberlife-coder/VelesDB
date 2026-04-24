@@ -2,9 +2,17 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.12.0** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.13.0** | Node.js >= 18 | Browser (WASM) | MIT License
 
-## What's New in v1.12.0
+## What's New in v1.13.0
+
+- **WASM VelesQL executor** -- full browser-side VelesQL execution: SELECT/INSERT/UPDATE/DELETE/DDL + aggregations (COUNT/SUM/AVG/MIN/MAX) + GROUP BY/HAVING/UNION/INTERSECT/EXCEPT/JOIN/FUSION/MATCH 1-2 hops + NOT De Morgan distribution
+- **TS SDK coverage raised to 94%** -- 423 tests, per-file thresholds codified in `vitest.config.ts`
+- **SIFT1M standardized ANN benchmark** -- fvecs/ivecs loader + Criterion ef sweep on the INRIA TEXMEX dataset, feature-gated behind `--features bench-sift1m`
+- **Security hardening** -- `validateCollectionName()` helper on TS SDK prevents VelesQL injection in `trainPq`
+- **API consistency** -- `streamInsert` now serializes `payload: null` explicitly (matches `streamUpsertPoints`)
+
+### Previous (v1.12.0)
 
 - **Cross-collection MATCH queries** -- `@collection` annotation on MATCH node patterns enables cross-collection graph queries
 - **MATCH via `/query` endpoint** -- MATCH queries can now be executed via `Database::execute_query`
@@ -74,15 +82,15 @@ await db.createCollection('documents', {
   metric: 'cosine'
 });
 
-// 3. Insert vectors with metadata
-await db.insert('documents', {
+// 3. Upsert vectors with metadata
+await db.upsert('documents', {
   id: 'doc-1',
   vector: new Float32Array(768).fill(0.1),
   payload: { title: 'Hello World', category: 'greeting' }
 });
 
-// 4. Batch insert for better throughput
-await db.insertBatch('documents', [
+// 4. Batch upsert for better throughput
+await db.upsertBatch('documents', [
   { id: 'doc-2', vector: new Float32Array(768).fill(0.2), payload: { title: 'Second doc' } },
   { id: 'doc-3', vector: new Float32Array(768).fill(0.3), payload: { title: 'Third doc' } },
 ]);
@@ -113,11 +121,16 @@ await db.init();
 
 // Same API as WASM backend
 await db.createCollection('products', { dimension: 1536 });
-await db.insert('products', { id: 1, vector: embedding });
+await db.upsert('products', { id: 1, vector: embedding });
 const results = await db.search('products', queryVector, { k: 10 });
 ```
 
 > **REST backend note:** Document IDs must be numeric integers in the range `0..Number.MAX_SAFE_INTEGER`. String IDs are only supported with the WASM backend.
+
+> **Versioned routes:** The REST backend uses `/v1/` as the canonical route prefix
+> (e.g. `POST /v1/collections/{name}/search`). Legacy routes without the prefix
+> are accepted for backward compatibility but are deprecated and will be removed
+> in a future major version. Always target `/v1/` in custom HTTP clients.
 
 ## API Reference
 
@@ -209,14 +222,14 @@ List all collections. Returns an array of `Collection` objects.
 
 ---
 
-### Insert and Retrieve
+### Upsert and Retrieve
 
-#### `db.insert(collection, document)`
+#### `db.upsert(collection, document)`
 
-Insert a single vector document.
+Upsert (insert or replace) a single vector document.
 
 ```typescript
-await db.insert('docs', {
+await db.upsert('docs', {
   id: 'unique-id',
   vector: [0.1, 0.2, 0.3],    // number[] or Float32Array
   payload: { key: 'value' },   // optional metadata
@@ -224,12 +237,12 @@ await db.insert('docs', {
 });
 ```
 
-#### `db.insertBatch(collection, documents)`
+#### `db.upsertBatch(collection, documents)`
 
-Insert multiple vectors in a single call. More efficient than repeated `insert()`.
+Upsert multiple vectors in a single call. More efficient than repeated `upsert()`.
 
 ```typescript
-await db.insertBatch('docs', [
+await db.upsertBatch('docs', [
   { id: 'a', vector: vecA, payload: { title: 'First' } },
   { id: 'b', vector: vecB, payload: { title: 'Second' } },
 ]);
@@ -297,6 +310,40 @@ const hits = await db.searchIds('docs', queryVector, { k: 100 });
 // Returns: Array<{ id: number, score: number }>
 ```
 
+#### `db.scroll(collection, request)`
+
+Iterate over all points in a collection in stable, paginated batches without a
+query vector. Useful for export pipelines, re-embedding, and full-collection
+inspection. Pagination is cursor-based — pass the `nextCursor` from each
+`ScrollResponse` until it is `null`.
+
+```typescript
+import { ScrollRequest, ScrollResponse } from '@wiscale/velesdb-sdk';
+
+let cursor: string | number | null = null;
+let hasMore = true;
+while (hasMore) {
+  const req: ScrollRequest = { batchSize: 100 };
+  if (cursor !== null) {
+    req.cursor = cursor;
+  }
+
+  const page: ScrollResponse = await db.scroll('docs', req);
+
+  for (const point of page.points) {
+    console.log(point.id, point.payload);
+  }
+  cursor = page.nextCursor;
+  hasMore = cursor !== null;
+}
+```
+
+| Field (`ScrollRequest`) | Type | Default | Description |
+|-------------------------|------|---------|-------------|
+| `cursor` | `string \| number` | - | Cursor from previous `ScrollResponse.nextCursor` |
+| `batchSize` | `number` | `100` | Points per page |
+| `filter` | `object` | - | Optional payload filter expression |
+
 #### `db.textSearch(collection, query, options?)`
 
 Full-text search using BM25 scoring.
@@ -325,7 +372,7 @@ Multi-query fusion search for RAG pipelines using Multiple Query Generation (MQG
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `k` | `number` | `10` | Number of results |
-| `fusion` | `'rrf' \| 'average' \| 'maximum' \| 'weighted'` | `'rrf'` | Fusion strategy |
+| `fusion` | `'rrf' \| 'average' \| 'maximum' \| 'weighted' \| 'relative_score'` | `'rrf'` | Fusion strategy |
 | `fusionParams` | `object` | `{ k: 60 }` | Strategy-specific parameters |
 | `filter` | `object` | - | Payload filter expression |
 
@@ -343,9 +390,16 @@ const results = await db.multiQuerySearch('docs', [emb1, emb2], {
   fusion: 'weighted',
   fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 }
 });
+
+// Relative Score Fusion — linear blend of dense and sparse scores
+const results = await db.multiQuerySearch('docs', [emb1, emb2], {
+  k: 10,
+  fusion: 'relative_score',
+  fusionParams: { denseWeight: 0.7, sparseWeight: 0.3 }
+});
 ```
 
-> **Note:** WASM supports `rrf`, `average`, `maximum`. The `weighted` strategy is REST-only.
+> **Note:** WASM supports `rrf`, `average`, `maximum`. The `weighted` and `relative_score` strategies are REST-only.
 
 ---
 
@@ -756,7 +810,7 @@ import {
 
 ## Performance Tips
 
-1. **Use `insertBatch()`** instead of repeated `insert()` calls
+1. **Use `upsertBatch()`** instead of repeated `upsert()` calls
 2. **Reuse `Float32Array`** buffers for query vectors when possible
 3. **Use WASM backend** for browser apps (zero network latency)
 4. **Use `searchIds()`** when you only need IDs and scores (skips payload transfer)

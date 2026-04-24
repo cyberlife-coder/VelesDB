@@ -3,10 +3,7 @@
 //! This module provides cost-based query planning for MATCH queries,
 //! choosing between Graph-First, Vector-First, or Parallel execution.
 
-#![allow(dead_code)]
-// Planner is used by execute_match integration
-
-// SAFETY: Numeric casts in query planning are intentional:
+// Reason: Numeric casts in query planning are intentional:
 // - u64->f64 for limit calculations: precision loss acceptable for estimates
 // - f32->f64 for selectivity: values bounded (0.0-1.0 range)
 // - usize->f64 for estimate calculations: values bounded (limit * 100 max)
@@ -19,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 /// Execution strategy for MATCH queries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum MatchExecutionStrategy {
     /// Traverse graph first, then filter by similarity.
     /// Best when: graph is selective, or no similarity condition.

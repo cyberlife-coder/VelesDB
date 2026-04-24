@@ -1,4 +1,3 @@
-#![allow(deprecated)] // Benches use legacy Collection.
 //! Fast performance smoke test for CI.
 //!
 //! EPIC-026/US-002: Runs in < 2 minutes on typical CI runner.
@@ -20,7 +19,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{Rng, SeedableRng};
 use tempfile::TempDir;
-use velesdb_core::{Collection, DistanceMetric, Point};
+use velesdb_core::{DistanceMetric, Point, VectorCollection};
 
 const SMOKE_VECTORS: usize = 10_000;
 const SMOKE_DIM: usize = 128;
@@ -48,9 +47,14 @@ fn smoke_insert(c: &mut Criterion) {
 
         b.iter(|| {
             let dir = TempDir::new().unwrap();
-            let collection =
-                Collection::create(dir.path().to_path_buf(), SMOKE_DIM, DistanceMetric::Cosine)
-                    .unwrap();
+            let collection = VectorCollection::create(
+                dir.path().to_path_buf(),
+                "bench",
+                SMOKE_DIM,
+                DistanceMetric::Cosine,
+                velesdb_core::StorageMode::Full,
+            )
+            .unwrap();
 
             let points: Vec<Point> = vectors
                 .iter()
@@ -69,8 +73,14 @@ fn smoke_insert(c: &mut Criterion) {
 
 fn smoke_search(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
-    let collection =
-        Collection::create(dir.path().to_path_buf(), SMOKE_DIM, DistanceMetric::Cosine).unwrap();
+    let collection = VectorCollection::create(
+        dir.path().to_path_buf(),
+        "bench",
+        SMOKE_DIM,
+        DistanceMetric::Cosine,
+        velesdb_core::StorageMode::Full,
+    )
+    .unwrap();
 
     let vectors = generate_deterministic_vectors(SMOKE_VECTORS, SMOKE_DIM, 42);
     let points: Vec<Point> = vectors
@@ -101,8 +111,14 @@ fn smoke_search(c: &mut Criterion) {
 
 fn smoke_hybrid(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
-    let collection =
-        Collection::create(dir.path().to_path_buf(), SMOKE_DIM, DistanceMetric::Cosine).unwrap();
+    let collection = VectorCollection::create(
+        dir.path().to_path_buf(),
+        "bench",
+        SMOKE_DIM,
+        DistanceMetric::Cosine,
+        velesdb_core::StorageMode::Full,
+    )
+    .unwrap();
 
     let vectors = generate_deterministic_vectors(1000, SMOKE_DIM, 42);
     let points: Vec<Point> = vectors

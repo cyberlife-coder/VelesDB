@@ -2,7 +2,7 @@
 //!
 //! Extracted from query/mod.rs for complexity reduction (EPIC-044).
 
-// SAFETY: Numeric casts in similarity filtering are intentional:
+// Reason: Numeric casts in similarity filtering are intentional:
 // - f64->f32 for similarity thresholds: precision loss acceptable for filtering
 
 use crate::collection::types::Collection;

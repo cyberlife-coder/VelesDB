@@ -17,6 +17,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Configuration for the async index builder.
+///
+/// Legacy configurations persisted with a `sync_mode` field are
+/// accepted transparently: serde ignores unknown fields by default,
+/// so the value is dropped silently on load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsyncIndexBuilderConfig {
     /// Number of buffered vectors that triggers a build.
@@ -26,10 +30,6 @@ pub struct AsyncIndexBuilderConfig {
     /// Number of segments for parallel construction (default: `num_cpus`).
     #[serde(default)]
     pub segment_count: Option<usize>,
-
-    /// Synchronous mode — `enqueue` indexes immediately instead of buffering.
-    #[serde(default)]
-    pub sync_mode: bool,
 }
 
 fn default_merge_threshold() -> usize {
@@ -41,20 +41,19 @@ impl Default for AsyncIndexBuilderConfig {
         Self {
             merge_threshold: default_merge_threshold(),
             segment_count: None,
-            sync_mode: false,
         }
     }
 }
 
-/// Async HNSW index builder that buffers vectors and builds in background.
+/// Async HNSW index builder that buffers vectors and flushes them to the
+/// HNSW index via [`HnswIndex::insert_batch_parallel`].
 ///
-/// Extends the concept of `DeferredIndexer` with segmented parallel
-/// construction via [`HnswSegmentBuilder`]. For the minimal implementation,
-/// only synchronous flush is supported; the background thread is added in
-/// Task 4 integration.
+/// Only synchronous flush is currently supported; background-thread
+/// integration into the Collection pipeline is tracked under Issue #488
+/// Task 4.
 ///
 /// Lock order position: 11 (after `delta_buffer` at 10).
-#[allow(dead_code)] // Wired into Collection pipeline in Task 4
+#[allow(dead_code)] // Pipeline integration tracked under Issue #488 Task 4.
 pub struct AsyncIndexBuilder {
     /// Buffer of vectors pending indexation.
     buffer: RwLock<Vec<(u64, Vec<f32>)>>,
@@ -128,10 +127,11 @@ impl AsyncIndexBuilder {
         results
     }
 
-    /// Drains the buffer and indexes all vectors synchronously.
+    /// Drains the buffer and inserts all buffered vectors into the HNSW
+    /// index via [`HnswIndex::insert_batch_parallel`].
     ///
-    /// Uses `HnswSegmentBuilder` for segmented parallel construction
-    /// when the batch is large enough.
+    /// Concurrent calls are serialized: the second caller returns
+    /// `Ok(0)` while the first is in progress.
     ///
     /// # Errors
     ///

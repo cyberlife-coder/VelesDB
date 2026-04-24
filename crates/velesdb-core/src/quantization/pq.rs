@@ -141,7 +141,6 @@ impl ProductQuantizer {
     /// - `num_centroids` is 0 or exceeds `u16::MAX`
     /// - vector dimension is not divisible by `num_subspaces`
     /// - `num_centroids` exceeds `vectors.len()`
-    #[allow(clippy::too_many_lines)]
     pub fn train(
         vectors: &[Vec<f32>],
         num_subspaces: usize,
@@ -204,7 +203,7 @@ impl ProductQuantizer {
             let start = subspace * self.codebook.subspace_dim;
             let end = start + self.codebook.subspace_dim;
             let code = nearest_centroid(&effective[start..end], &self.codebook.centroids[subspace]);
-            // SAFETY: `num_centroids` is validated to fit in u16 during `train()`.
+            // Reason: `num_centroids` is validated to fit in u16 during `train()`.
             // `nearest_centroid` returns an index < num_centroids, so it always fits.
             #[allow(clippy::cast_possible_truncation)]
             codes.push(code as u16);
@@ -331,99 +330,6 @@ fn check_degenerate_centroids(centroids: &[Vec<Vec<f32>>]) {
     }
 }
 
-/// RF-2: Serializes `value` with postcard and atomically writes to `dir/filename`.
-///
-/// Write goes to `.tmp` suffix first, then renamed for crash safety.
-#[cfg(feature = "persistence")]
-fn postcard_save_atomic<T: Serialize>(
-    dir: &std::path::Path,
-    filename: &str,
-    value: &T,
-    label: &str,
-) -> Result<(), Error> {
-    let data = postcard::to_allocvec(value).map_err(|e| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("failed to serialize {label}: {e}"),
-        ))
-    })?;
-    let tmp_path = dir.join(format!("{filename}.tmp"));
-    let final_path = dir.join(filename);
-    std::fs::write(&tmp_path, &data)?;
-    std::fs::rename(&tmp_path, &final_path)?;
-    Ok(())
-}
-
-/// RF-2: Loads and deserializes a postcard file from `dir/filename`.
-///
-/// Returns `Ok(None)` when the file does not exist.
-#[cfg(feature = "persistence")]
-fn postcard_load<T: for<'de> Deserialize<'de>>(
-    dir: &std::path::Path,
-    filename: &str,
-    label: &str,
-) -> Result<Option<T>, Error> {
-    let path = dir.join(filename);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let data = std::fs::read(&path)?;
-    let value: T = postcard::from_bytes(&data).map_err(|e| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("failed to deserialize {label}: {e}"),
-        ))
-    })?;
-    Ok(Some(value))
-}
-
-/// Persistence methods for codebook and rotation matrix storage.
-#[cfg(feature = "persistence")]
-impl ProductQuantizer {
-    /// Save trained codebook to `<dir>/codebook.pq` using postcard.
-    /// Uses atomic write (write to .tmp, then rename).
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Io` if serialization or file I/O fails.
-    pub fn save_codebook(&self, dir: &std::path::Path) -> Result<(), Error> {
-        postcard_save_atomic(dir, "codebook.pq", self, "PQ codebook")
-    }
-
-    /// Load codebook from `<dir>/codebook.pq`. Returns `None` if file doesn't exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Io` if deserialization or file I/O fails.
-    pub fn load_codebook(dir: &std::path::Path) -> Result<Option<Self>, Error> {
-        postcard_load(dir, "codebook.pq", "PQ codebook")
-    }
-
-    /// Save OPQ rotation matrix to `<dir>/rotation.opq` using postcard.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Io` if the rotation is `None`, serialization, or file I/O fails.
-    pub fn save_rotation(&self, dir: &std::path::Path) -> Result<(), Error> {
-        let rotation = self.rotation.as_ref().ok_or_else(|| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "no rotation matrix to save",
-            ))
-        })?;
-        postcard_save_atomic(dir, "rotation.opq", rotation, "OPQ rotation")
-    }
-
-    /// Load OPQ rotation matrix from `<dir>/rotation.opq`. Returns `None` if file doesn't exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Io` if deserialization or file I/O fails.
-    pub fn load_rotation(dir: &std::path::Path) -> Result<Option<Vec<f32>>, Error> {
-        postcard_load(dir, "rotation.opq", "OPQ rotation")
-    }
-}
-
 impl ProductQuantizer {
     /// Precompute ADC lookup table for a query vector.
     ///
@@ -477,7 +383,7 @@ impl ProductQuantizer {
 /// `pq_vector.codes.len() == quantizer.codebook.num_subspaces`. These invariants
 /// are enforced at insert/train time and asserted only in debug builds.
 #[must_use]
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
 pub(crate) fn distance_pq_l2(
     query_vector: &[f32],
     pq_vector: &PQVector,
@@ -496,7 +402,7 @@ pub(crate) fn distance_pq_l2(
 /// The LUT is indexed as `lut[subspace * k + centroid_id]`.
 /// This is the hot inner loop for batch ADC scoring.
 #[must_use]
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
 pub(crate) fn distance_pq_l2_with_lut(
     pq_vector: &PQVector,
     lut: &[f32],
@@ -509,6 +415,66 @@ pub(crate) fn distance_pq_l2_with_lut(
         .map(|(subspace, &code)| lut[subspace * num_centroids + usize::from(code)])
         .sum::<f32>()
         .sqrt()
+}
+
+/// Minimum batch size for SIMD ADC path.
+///
+/// Below this threshold the overhead of building code slices and dispatching
+/// through `adc_distances_batch` exceeds the scalar per-item path.
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
+const ADC_SIMD_BATCH_THRESHOLD: usize = 8;
+
+/// Batch ADC rescoring using SIMD-accelerated distance computation.
+///
+/// Builds a single LUT from the query vector (applying OPQ rotation if
+/// present), then dispatches to [`crate::simd_native::adc::adc_distances_batch`]
+/// for vectorized distance computation across all candidates.
+///
+/// Returns `(index, sqrt_distance)` pairs preserving the input order.
+///
+/// Falls back to scalar per-item scoring when the batch is smaller than
+/// [`ADC_SIMD_BATCH_THRESHOLD`] or when the SIMD path returns an error.
+///
+/// # Errors
+///
+/// Returns `Err` only if LUT construction parameters are inconsistent
+/// (zero subspaces). In practice this cannot happen with a validly
+/// trained `ProductQuantizer`.
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
+pub(crate) fn pq_adc_batch_rescore(
+    quantizer: &ProductQuantizer,
+    query: &[f32],
+    pq_vectors: &[&PQVector],
+) -> crate::error::Result<Vec<f32>> {
+    if pq_vectors.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let m = quantizer.codebook.num_subspaces;
+
+    // Small batches: scalar path avoids slice-building overhead.
+    if pq_vectors.len() < ADC_SIMD_BATCH_THRESHOLD {
+        let lut = quantizer.precompute_lut(query);
+        let k = quantizer.codebook.num_centroids;
+        return Ok(pq_vectors
+            .iter()
+            .map(|pq_vec| distance_pq_l2_with_lut(pq_vec, &lut, k))
+            .collect());
+    }
+
+    // Build LUT once (includes OPQ rotation).
+    let lut = quantizer.precompute_lut(query);
+
+    // Collect code slices for the SIMD kernel.
+    let code_slices: Vec<&[u16]> = pq_vectors
+        .iter()
+        .map(|pq_vec| pq_vec.codes.as_slice())
+        .collect();
+
+    // SIMD-accelerated ADC returns squared L2 sums; apply sqrt for L2 distance.
+    let squared_dists = crate::simd_native::adc::adc_distances_batch(&lut, &code_slices, m)?;
+
+    Ok(squared_dists.iter().map(|&d| d.sqrt()).collect())
 }
 
 #[cfg(test)]

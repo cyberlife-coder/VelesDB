@@ -32,11 +32,16 @@ toml = "0.8"
 
 [features]
 default = ["velesdb-core/default"]
+bench-sift1m = ["velesdb-core/bench-sift1m"]
 gpu = ["velesdb-core/gpu"]
 internal-bench = ["velesdb-core/internal-bench"]
 loom = ["velesdb-core/loom"]
 openapi = ["velesdb-core/openapi"]
 persistence = ["velesdb-core/persistence"]
+## Forwards `velesdb-core/test-fault-injection`. Only enable for
+## integration tests that exercise rollback paths. Never include
+## in production Tauri bundles.
+test-fault-injection = ["velesdb-core/test-fault-injection"]
 update-check = ["velesdb-core/update-check"]
 
 [lints]

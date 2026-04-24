@@ -74,9 +74,25 @@ impl AuthState {
     }
 }
 
-/// Paths that bypass authentication.
+/// Paths that bypass authentication (both legacy and `/v1/` versioned).
+///
+/// `/health` and `/ready` are the only genuinely public endpoints — they
+/// expose no internal state beyond liveness booleans and are needed by
+/// container orchestrators that cannot carry authentication headers.
+///
+/// `/metrics` is **not** in this list. The Prometheus metrics endpoint
+/// returns detailed operational data (collection counts, cache hit
+/// rates, query latencies, per-collection sizes, WAL depths) that
+/// constitutes an information leak when the surrounding REST API is
+/// protected by API keys. The fix for F-02 moves `/metrics` behind the
+/// same API key gate as the rest of the REST surface: scrapers must
+/// present `Authorization: Bearer <key>` like any other client.
+///
+/// Operators who need a dedicated scraping credential can provision a
+/// distinct API key for the Prometheus scraper and rotate it
+/// independently.
 fn is_public_path(path: &str) -> bool {
-    path == "/health" || path == "/ready" || path == "/metrics"
+    matches!(path, "/health" | "/ready" | "/v1/health" | "/v1/ready")
 }
 
 /// Extract the Bearer token from the Authorization header value.
@@ -173,8 +189,21 @@ mod tests {
     }
 
     #[test]
-    fn test_is_public_path_metrics() {
-        assert!(is_public_path("/metrics"));
+    fn test_is_public_path_metrics_is_protected() {
+        // F-02: /metrics must not bypass authentication — it leaks
+        // operational details about the running database.
+        assert!(!is_public_path("/metrics"));
+        assert!(!is_public_path("/v1/metrics"));
+    }
+
+    #[test]
+    fn test_is_public_path_versioned_health() {
+        assert!(is_public_path("/v1/health"));
+    }
+
+    #[test]
+    fn test_is_public_path_versioned_ready() {
+        assert!(is_public_path("/v1/ready"));
     }
 
     #[test]
@@ -182,6 +211,7 @@ mod tests {
         assert!(!is_public_path("/collections"));
         assert!(!is_public_path("/query"));
         assert!(!is_public_path("/health/extra"));
+        assert!(!is_public_path("/v1/collections"));
     }
 
     #[test]

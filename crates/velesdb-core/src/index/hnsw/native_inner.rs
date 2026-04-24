@@ -7,8 +7,6 @@
 //! - **Standard**: Full f32 distances (`NativeHnsw`)
 //! - **`RaBitQ`**: Binary traversal + f32 re-ranking (`RaBitQPrecisionHnsw`)
 
-// Temporarily allow dead_code until integration into HnswIndex
-#![allow(dead_code)]
 #![allow(clippy::cast_precision_loss)]
 
 use super::native::rabitq_precision::RaBitQPrecisionHnsw;
@@ -20,7 +18,7 @@ use std::path::Path;
 ///
 /// `Standard` uses full f32 distances. `RaBitQ` uses binary graph traversal
 /// (32x compression) with f32 re-ranking for final results.
-// Reason: `Standard` (272 B) is the hot path — boxing it would add pointer
+// SAFETY: `Standard` (272 B) is the hot path — boxing it would add pointer
 // indirection on every search call. `RaBitQ` is boxed intentionally to avoid
 // inflating `Standard`-mode layout across cache lines.
 #[allow(clippy::large_enum_variant)]
@@ -43,6 +41,7 @@ pub struct NativeHnswInner {
     /// The underlying HNSW backend (standard or `RaBitQ`).
     backend: HnswBackend,
     /// The distance metric used.
+    #[allow(dead_code)] // Reason: Exposed via `metric()` accessor — API surface for callers
     metric: DistanceMetric,
 }
 
@@ -80,6 +79,7 @@ impl NativeHnswInner {
     /// # Errors
     ///
     /// Returns an error if vector storage pre-allocation fails.
+    #[allow(dead_code)] // Reason: Convenience constructor — public API surface for callers
     pub fn new_with_storage_mode(
         metric: DistanceMetric,
         max_connections: usize,
@@ -184,7 +184,54 @@ impl NativeHnswInner {
         }
     }
 
+    /// Searches the HNSW graph, automatically choosing GPU or CPU path.
+    ///
+    /// When the GPU feature is enabled and the index exceeds the traversal
+    /// threshold (500K vectors), attempts GPU-accelerated layer-0 search.
+    /// Falls back to CPU on any GPU error or if GPU is unavailable.
+    ///
+    /// Returns raw distances in the same format as [`search`](Self::search) —
+    /// the caller **must** call [`transform_score`](Self::transform_score)
+    /// regardless of which path was taken. GPU shaders output HNSW-compatible
+    /// distances (1-cosine, squared L2, -dot) matching CPU semantics.
+    ///
+    /// For `RaBitQ` backend, always uses CPU (binary distance GPU shader
+    /// is not yet implemented).
+    #[must_use]
+    pub fn search_auto(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
+        #[cfg(feature = "gpu")]
+        {
+            if let HnswBackend::Standard(hnsw) = &self.backend {
+                // `query.len()` is authoritative for the index dimension: a query
+                // of wrong length would fail distance evaluation anyway.
+                if crate::gpu::should_traverse_gpu(hnsw.len(), query.len()) {
+                    if let Some(results) = self.search_gpu(query, k, ef_search) {
+                        return results;
+                    }
+                    // GPU failed — fall through to CPU
+                }
+            }
+        }
+
+        self.search(query, k, ef_search)
+    }
+
+    /// Attempts GPU-accelerated search on the Standard backend.
+    ///
+    /// Returns `None` if GPU is unavailable, the metric is unsupported,
+    /// or any GPU operation fails. The caller should fall back to CPU search.
+    #[cfg(feature = "gpu")]
+    fn search_gpu(&self, query: &[f32], k: usize, ef_search: usize) -> Option<Vec<(usize, f32)>> {
+        let hnsw = match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw,
+            HnswBackend::RaBitQ(_) => return None,
+        };
+
+        hnsw.search_gpu(query, k, ef_search, self.metric)
+    }
+
     /// Searches the HNSW graph and returns results as `NativeNeighbour` structs.
+    #[allow(dead_code)] // Reason: API surface — used by callers needing typed neighbour results
     #[inline]
     #[must_use]
     pub fn search_neighbours(
@@ -370,6 +417,7 @@ impl NativeHnswInner {
     }
 
     /// Returns the number of elements in the index.
+    #[allow(dead_code)] // Reason: API surface — introspection accessor for callers
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
@@ -380,6 +428,7 @@ impl NativeHnswInner {
     }
 
     /// Returns true if the index is empty.
+    #[allow(dead_code)] // Reason: API surface — emptiness check paired with `len()`
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -390,6 +439,7 @@ impl NativeHnswInner {
     }
 
     /// Returns the distance metric used by this index.
+    #[allow(dead_code)] // Reason: API surface — metric accessor for callers
     #[inline]
     #[must_use]
     pub fn metric(&self) -> DistanceMetric {
@@ -439,10 +489,10 @@ impl NativeHnswInner {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Internal`] if vector storage is not initialized.
+    /// Returns [`crate::error::Error::Internal`] if vector storage is not initialized.
     /// Propagates any error returned by the closure.
     ///
-    /// [`Error::Internal`]: crate::error::Error::Internal
+    /// [`crate::error::Error::Internal`]: crate::error::Error::Internal
     pub fn with_contiguous_vectors_mut<R>(
         &self,
         f: impl FnOnce(&mut crate::perf_optimizations::ContiguousVectors) -> crate::error::Result<R>,
@@ -461,13 +511,21 @@ impl NativeHnswInner {
 // SAFETY: `NativeHnswInner` is `Send` because ownership transfer preserves invariants.
 // - Condition 1: Internal mutability is synchronized via `parking_lot::RwLock`/atomics.
 // - Condition 2: No thread-affine resources are stored in the wrapper.
-// Reason: Moving the index wrapper between threads is sound.
+// SAFETY: Moving the index wrapper between threads is sound.
 unsafe impl Send for NativeHnswInner {}
 // SAFETY: `NativeHnswInner` is `Sync` because shared references are concurrency-safe.
 // - Condition 1: Concurrent access to mutable graph state is lock/atomic protected.
 // - Condition 2: Exposed APIs do not bypass synchronization primitives.
-// Reason: `&NativeHnswInner` can be shared safely across threads.
+// SAFETY: `&NativeHnswInner` can be shared safely across threads.
 unsafe impl Sync for NativeHnswInner {}
+
+// Compile-time assertion: NativeHnswInner must satisfy Send + Sync.
+// If the struct gains a non-Send/Sync field, this causes a build error
+// rather than a subtle runtime data race.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<NativeHnswInner>();
+};
 
 // ============================================================================
 // Tests moved to native_inner_tests.rs per project rules

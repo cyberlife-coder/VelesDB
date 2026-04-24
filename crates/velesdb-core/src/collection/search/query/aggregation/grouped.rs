@@ -3,7 +3,7 @@
 //! Extracted from aggregation.rs for complexity reduction (Plan 04-04).
 //! HAVING evaluation, sorting, and parameter resolution are in `having.rs`.
 
-// SAFETY: Numeric casts in aggregation are intentional:
+// Reason: Numeric casts in aggregation are intentional:
 // - All casts are for computing aggregate statistics (sum, avg, count)
 // - i64->usize for group limits: limits bounded by MAX_GROUPS (1M)
 // - Values bounded by result set size and field cardinality
@@ -125,19 +125,20 @@ impl Collection {
     }
 
     /// Extracts the list of columns to aggregate and whether COUNT(*) is present.
+    ///
+    /// `AggregateArg::Score` is treated as `Column("score")` in the non-vector
+    /// aggregation path so that payload fields named "score" are aggregated normally.
     pub(super) fn prepare_agg_columns(aggregations: &[AggregateFunction]) -> (Vec<String>, bool) {
         let mut seen = std::collections::HashSet::new();
         let columns: Vec<String> = aggregations
             .iter()
-            .filter_map(|agg| match &agg.argument {
-                AggregateArg::Column(col) => {
-                    if seen.insert(col.clone()) {
-                        Some(col.clone())
-                    } else {
-                        None
-                    }
-                }
-                AggregateArg::Wildcard => None,
+            .filter_map(|agg| {
+                let col_name = match &agg.argument {
+                    AggregateArg::Column(col) => Some(col.clone()),
+                    AggregateArg::Score => Some("score".to_string()),
+                    AggregateArg::Wildcard => None,
+                };
+                col_name.filter(|c| seen.insert(c.clone()))
             })
             .collect();
         let has_count_star = aggregations
@@ -213,6 +214,17 @@ impl Collection {
         } else {
             match &agg.argument {
                 AggregateArg::Wildcard => "count".to_string(),
+                AggregateArg::Score => {
+                    let prefix = match agg.function_type {
+                        AggregateType::Count => "count",
+                        AggregateType::Sum => "sum",
+                        AggregateType::Avg => "avg",
+                        AggregateType::Min => "min",
+                        AggregateType::Max => "max",
+                        AggregateType::First => "first",
+                    };
+                    format!("{prefix}_score")
+                }
                 AggregateArg::Column(col) => {
                     let prefix = match agg.function_type {
                         AggregateType::Count => "count",
@@ -220,6 +232,7 @@ impl Collection {
                         AggregateType::Avg => "avg",
                         AggregateType::Min => "min",
                         AggregateType::Max => "max",
+                        AggregateType::First => "first",
                     };
                     format!("{prefix}_{col}")
                 }
@@ -228,33 +241,42 @@ impl Collection {
     }
 
     /// Compute the result value for an aggregation function.
+    ///
+    /// `AggregateArg::Score` is treated as `Column("score")` in the non-vector
+    /// aggregation path so that payload fields named "score" are aggregated normally.
     pub(crate) fn aggregation_result_value(
         agg: &AggregateFunction,
         agg_result: &AggregateResult,
     ) -> serde_json::Value {
-        match (&agg.function_type, &agg.argument) {
-            (AggregateType::Count, AggregateArg::Wildcard) => {
+        // Normalize Score to Column("score") for the non-vector aggregation path.
+        let col_name = match &agg.argument {
+            AggregateArg::Column(col) => Some(col.as_str()),
+            AggregateArg::Score => Some("score"),
+            AggregateArg::Wildcard => None,
+        };
+        match (&agg.function_type, col_name) {
+            (AggregateType::Count, None) => {
                 serde_json::json!(agg_result.count)
             }
-            (AggregateType::Count, AggregateArg::Column(col)) => {
-                let count = agg_result.counts.get(col.as_str()).copied().unwrap_or(0);
+            (AggregateType::Count, Some(col)) => {
+                let count = agg_result.counts.get(col).copied().unwrap_or(0);
                 serde_json::json!(count)
             }
-            (AggregateType::Sum, AggregateArg::Column(col)) => agg_result
+            (AggregateType::Sum, Some(col)) => agg_result
                 .sums
-                .get(col.as_str())
+                .get(col)
                 .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-            (AggregateType::Avg, AggregateArg::Column(col)) => agg_result
+            (AggregateType::Avg, Some(col)) => agg_result
                 .avgs
-                .get(col.as_str())
+                .get(col)
                 .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-            (AggregateType::Min, AggregateArg::Column(col)) => agg_result
+            (AggregateType::Min, Some(col)) => agg_result
                 .mins
-                .get(col.as_str())
+                .get(col)
                 .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-            (AggregateType::Max, AggregateArg::Column(col)) => agg_result
+            (AggregateType::Max, Some(col)) => agg_result
                 .maxs
-                .get(col.as_str())
+                .get(col)
                 .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
             _ => serde_json::Value::Null,
         }

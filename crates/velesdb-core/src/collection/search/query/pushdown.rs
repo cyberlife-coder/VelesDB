@@ -4,8 +4,6 @@
 //! data source, enabling filters to be pushed down before JOIN operations
 //! for significant performance improvements.
 
-#![allow(dead_code)]
-
 use crate::velesql::{Condition, JoinClause};
 use std::collections::HashSet;
 
@@ -166,6 +164,14 @@ fn get_condition_source(
             // MATCH uses column for full-text search
             classify_column(&m.column, graph_vars, join_tables)
         }
+
+        Condition::Contains(cc) => classify_column(&cc.column, graph_vars, join_tables),
+
+        Condition::ContainsText(ct) => classify_column(&ct.column, graph_vars, join_tables),
+
+        Condition::GeoDistance(gd) => classify_column(&gd.column, graph_vars, join_tables),
+
+        Condition::GeoBbox(gb) => classify_column(&gb.column, graph_vars, join_tables),
 
         // Graph pattern predicates and vector conditions are classified as Graph
         // because VelesDB stores embeddings in the collection/graph layer.

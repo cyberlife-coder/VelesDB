@@ -1,11 +1,9 @@
-#![allow(deprecated)] // Tests use legacy Collection via field access.
-
 use super::recovery;
+use crate::collection::Collection;
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
 use crate::point::Point;
 use crate::storage::VectorStorage;
-use crate::Collection;
 use std::path::PathBuf;
 
 /// Creates N distinct 4-dim points with IDs 0..n.

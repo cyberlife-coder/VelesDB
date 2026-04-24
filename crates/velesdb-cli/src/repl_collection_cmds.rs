@@ -1,7 +1,7 @@
 //! REPL commands for collection inspection and management.
 //!
 //! Covers: `.collections`, `.schema`, `.describe`, `.count`, `.sample`,
-//! `.browse`, `.nodes`, `.stats`.
+//! `.browse`, `.nodes`, `.stats`, `.scroll`.
 
 use colored::Colorize;
 use std::collections::HashMap;
@@ -364,6 +364,59 @@ pub(crate) fn cmd_stats(db: &Database, parts: &[&str]) -> CommandResult {
     CommandResult::Continue
 }
 
+/// Scroll through collection points with cursor-based pagination.
+///
+/// Usage: `.scroll <collection> [batch_size] [cursor]`
+///
+/// Defaults: `batch_size = 20`, `cursor = None` (start from beginning).
+pub(crate) fn cmd_scroll(db: &Database, parts: &[&str]) -> CommandResult {
+    if parts.len() < 2 {
+        println!("Usage: .scroll <collection> [batch_size] [cursor]\n");
+        return CommandResult::Continue;
+    }
+    let name = parts[1];
+
+    let batch_size: usize = match parts.get(2) {
+        Some(s) => match s.parse::<usize>() {
+            Ok(0) => {
+                return CommandResult::Error(
+                    "Invalid batch_size: must be a positive integer".to_string(),
+                );
+            }
+            Ok(n) => n,
+            Err(_) => {
+                return CommandResult::Error(
+                    "Invalid batch_size: must be a positive integer".to_string(),
+                );
+            }
+        },
+        None => 20,
+    };
+
+    let cursor: Option<u64> = match parts.get(3) {
+        Some(s) => match s.parse::<u64>() {
+            Ok(id) => Some(id),
+            Err(_) => {
+                return CommandResult::Error("Invalid cursor: must be a valid ID".to_string())
+            }
+        },
+        None => None,
+    };
+
+    let col = match db.get_vector_collection(name) {
+        Some(c) => c,
+        None => return CommandResult::Error(format!("Collection '{name}' not found")),
+    };
+
+    match col.scroll_batch(cursor, batch_size, None) {
+        Ok(batch) => {
+            print_scroll_results(&batch.points, name, batch.next_cursor);
+        }
+        Err(e) => return CommandResult::Error(format!("Scroll error: {e}")),
+    }
+    CommandResult::Continue
+}
+
 // ============================================================================
 // Display helpers
 // ============================================================================
@@ -455,5 +508,24 @@ fn print_browse_page(
             "\nUse {} to see next page\n",
             format!(".browse {} {}", name, page + 1).yellow()
         );
+    }
+}
+
+/// Prints scroll batch results: each point's ID and payload preview, then cursor info.
+fn print_scroll_results(points: &[velesdb_core::Point], name: &str, next_cursor: Option<u64>) {
+    if points.is_empty() {
+        println!("No points found.\n");
+    } else {
+        println!("\n{} point(s) from {}:\n", points.len(), name.green());
+        let rows: Vec<HashMap<String, serde_json::Value>> = points
+            .iter()
+            .map(|p| helpers::point_payload_to_row(p.id, &p.payload))
+            .collect();
+        crate::repl_output::print_table(&rows);
+    }
+
+    match next_cursor {
+        Some(cursor) => println!("\n  {} {}\n", "Next cursor:".cyan(), cursor),
+        None => println!("\n  {}\n", "Iteration complete.".green()),
     }
 }

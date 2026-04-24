@@ -47,10 +47,8 @@ pub fn build_source_config(params: &SourceParams<'_>) -> Result<SourceConfig> {
         SourceType::Weaviate => Ok(build_weaviate(params)),
         SourceType::Milvus => Ok(build_milvus(params)),
         SourceType::ChromaDB => Ok(build_chromadb(params)),
-        SourceType::PgVector => build_pgvector(params),
         SourceType::JsonFile => Ok(build_json_file(params)),
         SourceType::CsvFile => Ok(build_csv_file(params)),
-        SourceType::MongoDB => build_mongodb(params),
         SourceType::Elasticsearch => Ok(build_elasticsearch(params)),
         SourceType::Redis => Ok(build_redis(params)),
     }
@@ -82,10 +80,8 @@ pub fn parse_source_type(source_type: &str) -> Result<SourceType> {
         "weaviate" => Ok(SourceType::Weaviate),
         "milvus" => Ok(SourceType::Milvus),
         "chromadb" => Ok(SourceType::ChromaDB),
-        "pgvector" => Ok(SourceType::PgVector),
         "json_file" | "json" => Ok(SourceType::JsonFile),
         "csv_file" | "csv" => Ok(SourceType::CsvFile),
-        "mongodb" => Ok(SourceType::MongoDB),
         "elasticsearch" => Ok(SourceType::Elasticsearch),
         "redis" => Ok(SourceType::Redis),
         other => Err(Error::Config(format!("Unknown source type: {other}"))),
@@ -121,12 +117,10 @@ mod tests {
             ("weaviate", SourceType::Weaviate),
             ("milvus", SourceType::Milvus),
             ("chromadb", SourceType::ChromaDB),
-            ("pgvector", SourceType::PgVector),
             ("json_file", SourceType::JsonFile),
             ("json", SourceType::JsonFile),
             ("csv_file", SourceType::CsvFile),
             ("csv", SourceType::CsvFile),
-            ("mongodb", SourceType::MongoDB),
             ("elasticsearch", SourceType::Elasticsearch),
             ("redis", SourceType::Redis),
         ];
@@ -325,27 +319,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_source_config_mongodb() {
-        let params = SourceParams {
-            source_type: SourceType::MongoDB,
-            url: "https://data.mongodb-api.com/v1",
-            api_key: Some("mongo-key"),
-            collection: "embeddings",
-        };
-
-        let result = build_source_config(&params);
-        assert!(result.is_ok());
-        match result.unwrap() {
-            SourceConfig::MongoDB(cfg) => {
-                assert_eq!(cfg.data_api_url, "https://data.mongodb-api.com/v1");
-                assert_eq!(cfg.api_key, "mongo-key");
-                assert_eq!(cfg.collection, "embeddings");
-            }
-            _ => panic!("Expected MongoDB config"),
-        }
-    }
-
-    #[test]
     fn test_build_source_config_elasticsearch() {
         let params = SourceParams {
             source_type: SourceType::Elasticsearch,
@@ -418,17 +391,6 @@ mod tests {
             url: "https://index.pinecone.io",
             api_key: None,
             collection: "my-index",
-        };
-        assert!(build_source_config(&params).is_err());
-    }
-
-    #[test]
-    fn test_mongodb_missing_api_key_rejected() {
-        let params = SourceParams {
-            source_type: SourceType::MongoDB,
-            url: "https://data.mongodb-api.com/v1",
-            api_key: None,
-            collection: "embeddings",
         };
         assert!(build_source_config(&params).is_err());
     }

@@ -229,6 +229,8 @@ def validate_text(text: str, max_length: int = MAX_TEXT_LENGTH) -> str:
     """
     if not isinstance(text, str):
         raise SecurityError(f"Text must be a string, got {type(text).__name__}")
+    if not text.strip():
+        raise SecurityError("Text cannot be empty or whitespace-only")
     if len(text) > max_length:
         raise SecurityError(f"Text exceeds maximum length of {max_length}")
     return text
@@ -345,6 +347,35 @@ def validate_collection_name(name: str) -> str:
     return name
 
 
+def validate_column_name(name: str) -> str:
+    """Validate column name.
+
+    Args:
+        name: Column name (may include dots for nested payload fields).
+
+    Returns:
+        Validated name.
+
+    Raises:
+        SecurityError: If name is invalid.
+    """
+    if not isinstance(name, str):
+        raise SecurityError(
+            f"Column name must be a string, got {type(name).__name__}"
+        )
+    if not name:
+        raise SecurityError("Column name cannot be empty")
+    if len(name) > 256:
+        raise SecurityError("Column name exceeds maximum length of 256")
+    # Allow alphanumeric, underscore, dot; must start with letter or underscore
+    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_.]*$", name):
+        raise SecurityError(
+            "Column name must start with a letter or underscore and can only "
+            "contain alphanumeric characters, underscores, and dots"
+        )
+    return name
+
+
 def validate_url(url: str) -> str:
     """Validate server URL.
 
@@ -390,6 +421,58 @@ def _validate_sparse_entry(key: Any, value: Any) -> None:
         raise SecurityError(
             f"Sparse vector weights must be finite, got {value} for key {key}"
         )
+
+
+_SIMPLE_QUALITIES = frozenset({
+    "fast", "balanced", "accurate", "perfect",
+    "autotune", "auto_tune", "auto",  # aliases for consistency with WASM/Rust
+})
+_CUSTOM_QUALITY_RE = re.compile(r"^custom:\d+$")
+_ADAPTIVE_QUALITY_RE = re.compile(r"^adaptive:\d+:\d+$")
+
+
+def validate_search_quality(quality: str) -> str:
+    """Validate a search quality string.
+
+    Accepted forms:
+    - Simple presets: ``'fast'``, ``'balanced'``, ``'accurate'``,
+      ``'perfect'``, ``'autotune'``
+    - Custom ef: ``'custom:N'`` where N is a positive integer (e.g. ``'custom:256'``)
+    - Adaptive range: ``'adaptive:MIN:MAX'`` (e.g. ``'adaptive:32:512'``)
+
+    Args:
+        quality: Search quality preset or custom/adaptive string.
+
+    Returns:
+        Validated quality string (lowercased).
+
+    Raises:
+        SecurityError: If quality is not a string or not a recognised form.
+    """
+    if not isinstance(quality, str):
+        raise SecurityError(
+            f"search_quality must be a string, got {type(quality).__name__}"
+        )
+    quality_lower = quality.lower()
+    if quality_lower in _SIMPLE_QUALITIES:
+        return quality_lower
+    if _CUSTOM_QUALITY_RE.match(quality_lower):
+        return quality_lower
+    adaptive_match = _ADAPTIVE_QUALITY_RE.match(quality_lower)
+    if adaptive_match:
+        parts = quality_lower.split(":")
+        min_ef, max_ef = int(parts[1]), int(parts[2])
+        if min_ef > max_ef:
+            raise SecurityError(
+                f"Invalid adaptive range: min_ef ({min_ef}) > max_ef ({max_ef})"
+            )
+        return quality_lower
+    raise SecurityError(
+        f"Invalid search_quality '{quality}'. "
+        f"Allowed presets: {', '.join(sorted(_SIMPLE_QUALITIES))}. "
+        "Custom form: 'custom:N' (e.g. 'custom:256'). "
+        "Adaptive form: 'adaptive:MIN:MAX' (e.g. 'adaptive:32:512')."
+    )
 
 
 def validate_sparse_vector(sparse_vector: Any) -> dict:

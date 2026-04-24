@@ -58,26 +58,24 @@ impl UpdateCheckConfig {
     #[must_use]
     pub fn is_enabled(&self) -> bool {
         // Check negative form: VELESDB_NO_UPDATE_CHECK
-        // Only disable if explicitly set to a truthy value (not just existing)
         if let Ok(val) = std::env::var("VELESDB_NO_UPDATE_CHECK") {
-            let val_lower = val.to_lowercase();
-            // Truthy values: "1", "true", "yes", "on", or any non-empty non-falsy value
-            if val_lower != "0" && val_lower != "false" && val_lower != "no" && val_lower != "off" {
+            if is_truthy(&val) {
                 return false;
             }
         }
 
         // Check positive form: VELESDB_UPDATE_CHECK
         if let Ok(val) = std::env::var("VELESDB_UPDATE_CHECK") {
-            let val_lower = val.to_lowercase();
-            return val_lower != "0"
-                && val_lower != "false"
-                && val_lower != "no"
-                && val_lower != "off";
+            return is_truthy(&val);
         }
 
         self.enabled
     }
+}
+
+/// Returns `true` if the value is a truthy string (not "0", "false", "no", "off").
+fn is_truthy(val: &str) -> bool {
+    !matches!(val.to_lowercase().as_str(), "0" | "false" | "no" | "off")
 }
 
 #[cfg(test)]

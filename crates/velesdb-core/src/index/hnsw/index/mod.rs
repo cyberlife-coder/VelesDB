@@ -174,6 +174,30 @@ impl HnswIndex {
         upsert::rollback_upsert(&self.mappings, id, result);
     }
 
+    /// Removes a vector by ID (soft delete).
+    ///
+    /// Returns `true` if the ID existed and was removed from the mappings,
+    /// `false` if the ID was absent. The HNSW graph node is not physically
+    /// deleted — it becomes a tombstone, filtered out on search via the
+    /// reverse mapping. Sidecar vectors in `ShardedVectors` are purged when
+    /// vector storage is enabled.
+    ///
+    /// For workloads with many deletions, consider periodic
+    /// [`Self::vacuum`] to rebuild the graph and reclaim memory.
+    ///
+    /// This is the single inherent implementation shared by the
+    /// [`VectorIndex::remove`](crate::index::VectorIndex::remove) trait impl
+    /// and delegates to [`upsert::soft_delete`] (also used by
+    /// `NativeHnswIndex::remove`).
+    pub fn remove(&self, id: u64) -> bool {
+        upsert::soft_delete(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            id,
+        )
+    }
+
     /// Reorders graph nodes in BFS traversal order for improved cache locality.
     ///
     /// After reordering, vectors that are close in the graph are also close
@@ -196,7 +220,7 @@ impl Drop for HnswIndex {
         // - Condition 1: `inner` is wrapped in ManuallyDrop to suppress automatic drop.
         // - Condition 2: Write lock guarantees no concurrent access during drop.
         // - Condition 3: This Drop impl is the only site that calls ManuallyDrop::drop.
-        // Reason: Drop order invariant — `inner` must be destroyed before `io_holder`
+        // SAFETY: Drop order invariant — `inner` must be destroyed before `io_holder`
         // to remain forward-compatible with backends that borrow from io_holder.
         unsafe {
             ManuallyDrop::drop(&mut *self.inner.write());

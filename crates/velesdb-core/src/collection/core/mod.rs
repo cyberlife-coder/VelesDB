@@ -6,9 +6,11 @@
 //! - Index management: `create_property_index`, `create_range_index`,
 //!   `list_indexes`, `drop_index`
 
+mod bulk_import;
 mod crud;
 mod crud_bulk;
 mod crud_helpers;
+mod crud_histogram;
 mod crud_indexing;
 mod crud_read_delete;
 #[cfg(test)]
@@ -19,6 +21,7 @@ mod flush_defer_tests;
 mod graph_api;
 #[cfg(test)]
 mod graph_api_tests;
+mod graph_property_index_wiring;
 mod graph_traversal_helpers;
 mod index_management;
 #[cfg(test)]
@@ -30,10 +33,14 @@ mod lifecycle_tests;
 mod recovery;
 #[cfg(all(test, feature = "persistence"))]
 mod recovery_tests;
+mod scroll;
+#[cfg(all(test, feature = "persistence"))]
+mod scroll_tests;
 mod statistics;
 
 pub use crate::validation::{MAX_DIMENSION, MIN_DIMENSION};
 pub use index_management::IndexInfo;
+pub use scroll::ScrollBatch;
 
 // All implementations are in submodules, no re-exports needed here
 // as they extend the Collection type defined in types.rs

@@ -3,8 +3,8 @@
 use velesdb_core::VectorCollection as CoreCollection;
 
 use crate::types::{
-    IndividualSearchRequest, MobileCollectionStats, MobileIndexInfo, SearchResult, VelesError,
-    VelesPoint,
+    IndividualSearchRequest, MobileCollectionStats, MobileIndexInfo, SearchQuality, SearchResult,
+    VelesError, VelesPoint,
 };
 
 // ============================================================================
@@ -38,6 +38,40 @@ impl VelesCollection {
             .into_iter()
             .map(|sr| SearchResult {
                 id: sr.id,
+                score: sr.score,
+                payload: None,
+            })
+            .collect())
+    }
+
+    /// Searches with a specific quality profile controlling recall/latency.
+    ///
+    /// # Arguments
+    ///
+    /// * `vector` - Query vector
+    /// * `limit` - Maximum number of results to return
+    /// * `quality` - Search quality profile (Fast, Balanced, Accurate, etc.)
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results sorted by similarity.
+    pub fn search_with_quality(
+        &self,
+        vector: Vec<f32>,
+        limit: u32,
+        quality: SearchQuality,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        let core_quality: velesdb_core::SearchQuality = quality.into();
+        let results = self.inner.search_with_quality(
+            &vector,
+            usize::try_from(limit).unwrap_or(usize::MAX),
+            core_quality,
+        )?;
+
+        Ok(results
+            .into_iter()
+            .map(|sr| SearchResult {
+                id: sr.point.id,
                 score: sr.score,
                 payload: None,
             })

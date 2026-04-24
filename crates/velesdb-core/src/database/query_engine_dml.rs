@@ -7,7 +7,6 @@ use crate::{Error, Result, SearchResult};
 
 use super::Database;
 
-#[allow(deprecated)]
 impl Database {
     /// Executes an INSERT or UPSERT statement (single or multi-row).
     pub(super) fn execute_insert(
@@ -71,7 +70,7 @@ impl Database {
 
     /// Builds a `Point` for an INSERT statement, validating vector presence.
     fn build_insert_point(
-        collection: &crate::Collection,
+        collection: &crate::collection::Collection,
         point_id: u64,
         vector: Option<Vec<f32>>,
         payload: serde_json::Map<String, serde_json::Value>,
@@ -138,7 +137,7 @@ impl Database {
 
     /// Upserts updated points and returns them as search results.
     fn upsert_and_collect(
-        collection: &crate::Collection,
+        collection: &crate::collection::Collection,
         updated_points: Vec<crate::Point>,
     ) -> Result<Vec<SearchResult>> {
         if updated_points.is_empty() {
@@ -154,7 +153,7 @@ impl Database {
 
     /// Applies field assignments to matching points, producing updated points.
     fn apply_update_assignments(
-        collection: &crate::Collection,
+        collection: &crate::collection::Collection,
         rows: Vec<Option<crate::Point>>,
         filter: Option<&crate::Filter>,
         assignments: &[(String, serde_json::Value)],

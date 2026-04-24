@@ -112,6 +112,7 @@ fn bench_comprehensive(c: &mut Criterion) {
                 SearchQuality::Custom(e) => ("Custom", e),
                 SearchQuality::Adaptive { min_ef, .. } => ("Adaptive", min_ef),
                 SearchQuality::AutoTune => ("AutoTune", 128),
+                _ => ("Unknown", 128),
             };
 
             // Measure latencies

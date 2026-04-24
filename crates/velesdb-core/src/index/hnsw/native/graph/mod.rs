@@ -21,9 +21,12 @@ mod search_state;
 #[cfg(test)]
 mod search_tests;
 
+#[cfg(feature = "gpu")]
+mod gpu_search;
+
 use super::columnar_vectors::ColumnarVectors;
 use super::distance::DistanceEngine;
-use super::layer::{Layer, NodeId};
+use super::layer::Layer;
 use crate::perf_optimizations::ContiguousVectors;
 use locking::{record_lock_acquire, record_lock_release, LockRank};
 use parking_lot::RwLock;
@@ -101,7 +104,39 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// Built automatically after BFS reordering (`reorder_for_locality()`).
     /// Lock rank 15 (between vectors=10 and layers=20).
     pub(in crate::index::hnsw::native) columnar: RwLock<Option<ColumnarVectors>>,
+    /// Per-instance CSR cache for GPU traversal.
+    ///
+    /// Each `NativeHnsw` instance owns its own cache, preventing cross-collection
+    /// contamination when multiple indices exist in the same process.
+    /// Invalidated automatically on insert/delete via [`Self::invalidate_gpu_caches`].
+    #[cfg(feature = "gpu")]
+    pub(in crate::index::hnsw::native) gpu_csr_cache: crate::gpu::gpu_csr::CsrCache,
+    /// Cached flat vector snapshot for GPU upload.
+    ///
+    /// Stores `(version_at_snapshot, dimension, Arc<[f32]>)`. Validity is
+    /// checked against [`Self::gpu_snapshot_version`] rather than `count`
+    /// alone so that a hypothetical future delete+insert that returns to
+    /// the same count cannot silently serve stale vectors.
+    #[cfg(feature = "gpu")]
+    pub(in crate::index::hnsw::native) gpu_vectors_snapshot:
+        parking_lot::Mutex<Option<GpuVectorsSnapshot>>,
+    /// Monotonic version counter bumped on every vectors / topology
+    /// mutation. Anchors GPU cache validity (snapshot + CSR) to a single
+    /// observable value — the snapshot compares its recorded version
+    /// against this counter on read, so the cache remains invalid after
+    /// any mutation even if a future code path forgets to explicitly
+    /// clear the snapshot mutex (belt-and-suspenders).
+    #[cfg(feature = "gpu")]
+    pub(in crate::index::hnsw::native) gpu_snapshot_version: AtomicU64,
 }
+
+/// Cached GPU vector snapshot: `(version, dimension, flat_vectors)`.
+///
+/// Only refreshed when [`NativeHnsw::gpu_snapshot_version`] moves past
+/// the value captured at build time. Subsequent queries clone the `Arc`
+/// (O(1) pointer bump) instead of copying ~1.5GB.
+#[cfg(feature = "gpu")]
+pub(in crate::index::hnsw::native) type GpuVectorsSnapshot = (u64, usize, std::sync::Arc<[f32]>);
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Creates a new native HNSW index with VAMANA diversification (`alpha = 1.2`).
@@ -228,6 +263,16 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             stagnation_limit: ef_construction / 2,
             pre_allocated_capacity: AtomicUsize::new(0),
             columnar: RwLock::new(None),
+            #[cfg(feature = "gpu")]
+            gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),
+            #[cfg(feature = "gpu")]
+            gpu_vectors_snapshot: parking_lot::Mutex::new(None),
+            // Starts at 0. Snapshots built before any mutation store
+            // `0` as `version_at_build`; a fresh index therefore hits
+            // the cache on its first read, and any mutation bumps this
+            // counter to invalidate all subsequent reads.
+            #[cfg(feature = "gpu")]
+            gpu_snapshot_version: AtomicU64::new(0),
         }
     }
 
@@ -247,6 +292,34 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Invalidates both GPU caches (CSR topology + vectors snapshot) as a
+    /// single atomic step.
+    ///
+    /// Call this **after every mutation** that changes the set of active
+    /// nodes or their vector data — currently insert and parallel insert;
+    /// a future delete path must call this too.
+    ///
+    /// Bumps [`Self::gpu_snapshot_version`] first (Release), then
+    /// invalidates the CSR cache, then clears the snapshot mutex. The
+    /// version bump is the canonical invalidation signal: even if a
+    /// hypothetical caller forgot the explicit `None`-clear, the next
+    /// snapshot read would still observe `stored_version !=
+    /// current_version` and rebuild from the fresh vectors. The explicit
+    /// clear is kept as belt-and-suspenders (frees the `Arc` promptly so
+    /// the old buffer can drop).
+    #[cfg(feature = "gpu")]
+    pub(in crate::index::hnsw::native) fn invalidate_gpu_caches(&self) {
+        use self::locking::{record_lock_acquire, record_lock_release, LockRank};
+        // Release ordering: any thread that subsequently loads the
+        // version with Acquire will observe every mutation that
+        // happened-before this fetch_add.
+        self.gpu_snapshot_version.fetch_add(1, Ordering::Release);
+        self.gpu_csr_cache.invalidate();
+        record_lock_acquire(LockRank::GpuVectorsSnapshot);
+        *self.gpu_vectors_snapshot.lock() = None;
+        record_lock_release(LockRank::GpuVectorsSnapshot);
     }
 
     /// Computes the raw distance between two vectors using this index's distance engine.
@@ -293,10 +366,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Internal`] if vector storage is not initialized.
+    /// Returns [`crate::error::Error::Internal`] if vector storage is not initialized.
     /// Propagates any error returned by the closure.
     ///
-    /// [`Error::Internal`]: crate::error::Error::Internal
+    /// [`crate::error::Error::Internal`]: crate::error::Error::Internal
     pub(in crate::index::hnsw) fn with_vectors_write<R>(
         &self,
         f: impl FnOnce(&mut ContiguousVectors) -> crate::error::Result<R>,
@@ -313,6 +386,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Executes a closure with a layers read snapshot and tracked lock rank.
+    #[allow(dead_code)] // Reason: API surface — layers-only access for callers not needing vectors
     #[inline]
     pub(in crate::index::hnsw::native) fn with_layers_read<R>(
         &self,
@@ -358,7 +432,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         result
     }
 
-    // SAFETY: Layer selection uses exponential distribution capped at 15.
+    // Reason: Layer selection uses exponential distribution capped at 15.
     // - cast_precision_loss: u64 to f64 may lose precision but is acceptable for PRNG
     // - cast_possible_truncation: floor() result is capped at 15, fitting in usize
     // - cast_sign_loss: -ln(uniform) is always positive since uniform is in (0, 1)

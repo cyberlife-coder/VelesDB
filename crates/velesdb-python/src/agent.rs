@@ -5,7 +5,7 @@
 //! - EpisodicMemory: Event timeline
 //! - ProceduralMemory: Learned patterns
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::sync::Arc;
@@ -15,6 +15,9 @@ use velesdb_core::agent::{
     DEFAULT_DIMENSION,
 };
 use velesdb_core::Database as CoreDatabase;
+
+use crate::collection_helpers::core_err;
+use crate::exceptions::DimensionMismatchError;
 
 /// Convert procedural memory matches to a Python list of dicts.
 fn procedures_to_pylist(
@@ -47,9 +50,33 @@ fn events_to_pylist(py: Python<'_>, events: Vec<(u64, String, i64)>) -> PyResult
     Ok(list.into())
 }
 
-/// Convert `AgentMemoryError` to `PyErr`.
+/// Convert `AgentMemoryError` to the most specific Python exception.
+///
+/// `AgentMemoryError::DatabaseError` is a transparent wrapper around
+/// `velesdb_core::Error`, so its inner variant is unwrapped and
+/// delegated to [`core_err`] — this means a `VELES-002 CollectionNotFound`
+/// raised from inside an agent memory operation surfaces as
+/// `CollectionNotFoundError` in Python, not a flat `RuntimeError`.
+///
+/// Other `AgentMemoryError` variants carry agent-layer semantics that
+/// do not have a direct core equivalent:
+///
+/// * `DimensionMismatch` → mapped to the typed `DimensionMismatchError`
+///   (same class used by `core_err` for `VELES-004`).
+/// * `NotFound` → mapped to the Python built-in `KeyError` — agents
+///   call this when a memory entry (not a collection) is missing.
+/// * `InitializationError`, `CollectionError`, `SnapshotError`,
+///   `SnapshotIoError` → fall through to `PyRuntimeError` because they
+///   wrap opaque agent-layer messages without a structured inner type.
 fn to_py_err(e: AgentMemoryError) -> PyErr {
-    PyRuntimeError::new_err(format!("{e}"))
+    match e {
+        AgentMemoryError::DatabaseError(inner) => core_err(inner),
+        AgentMemoryError::DimensionMismatch { expected, actual } => {
+            DimensionMismatchError::new_err(format!("Expected {expected} dimensions, got {actual}"))
+        }
+        AgentMemoryError::NotFound(msg) => PyKeyError::new_err(msg),
+        other => PyRuntimeError::new_err(other.to_string()),
+    }
 }
 
 /// Python wrapper for AgentMemory.

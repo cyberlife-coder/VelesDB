@@ -36,7 +36,7 @@ fn bench_trigram_insert(c: &mut Criterion) {
             b.iter(|| {
                 let mut index = TrigramIndex::new();
                 for (i, doc) in docs.iter().enumerate() {
-                    index.insert(i as u64, doc);
+                    let _ = index.insert(i as u64, doc);
                 }
                 black_box(index)
             });
@@ -53,7 +53,7 @@ fn bench_trigram_search(c: &mut Criterion) {
         let docs = generate_documents(size);
         let mut index = TrigramIndex::new();
         for (i, doc) in docs.iter().enumerate() {
-            index.insert(i as u64, doc);
+            let _ = index.insert(i as u64, doc);
         }
 
         group.bench_with_input(BenchmarkId::new("search_like", size), &index, |b, index| {
@@ -78,7 +78,7 @@ fn bench_trigram_vs_linear(c: &mut Criterion) {
     let docs = generate_documents(10_000);
     let mut index = TrigramIndex::new();
     for (i, doc) in docs.iter().enumerate() {
-        index.insert(i as u64, doc);
+        let _ = index.insert(i as u64, doc);
     }
 
     // With trigram index

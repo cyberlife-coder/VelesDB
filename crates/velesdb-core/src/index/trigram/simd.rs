@@ -24,7 +24,7 @@ pub type Trigram = [u8; 3];
 
 /// SIMD capability for trigram operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrigramSimdLevel {
+pub(crate) enum TrigramSimdLevel {
     /// AVX-512 (512-bit vectors)
     #[cfg(target_arch = "x86_64")]
     Avx512,
@@ -63,7 +63,8 @@ impl TrigramSimdLevel {
 
     /// Get the name of the SIMD level
     #[must_use]
-    pub const fn name(&self) -> &'static str {
+    #[allow(dead_code)] // Reserved for diagnostic/logging use
+    pub const fn name(self) -> &'static str {
         match self {
             #[cfg(target_arch = "x86_64")]
             Self::Avx512 => "AVX-512",
@@ -165,7 +166,7 @@ unsafe fn extract_trigrams_avx2_inner(bytes: &[u8]) -> HashSet<Trigram> {
         // SAFETY: `_mm_prefetch` is a non-faulting cache hint.
         // - Condition 1: Address is derived from `bytes.as_ptr()`.
         // - Condition 2: Prefetch does not dereference or write memory.
-        // Reason: Hinting improves throughput in long trigram scans.
+        // SAFETY: Hinting improves throughput in long trigram scans.
         _mm_prefetch(bytes.as_ptr().add(i + 64) as *const i8, _MM_HINT_T0);
 
         // Scalar trigram extraction within the chunk
@@ -203,7 +204,7 @@ pub fn extract_trigrams_avx2(text: &str) -> HashSet<Trigram> {
         // SAFETY: Runtime feature detection guarantees AVX2 before call.
         // - Condition 1: `is_x86_feature_detected!("avx2")` is true in this branch.
         // - Condition 2: Input slice lifetime outlives the callee use.
-        // Reason: Calling `#[target_feature(enable = "avx2")]` function requires AVX2 CPU support.
+        // SAFETY: Calling `#[target_feature(enable = "avx2")]` function requires AVX2 CPU support.
         unsafe { extract_trigrams_avx2_inner(&padded) }
     } else {
         extract_trigrams_scalar(text)
@@ -235,7 +236,7 @@ unsafe fn extract_trigrams_avx512_inner(bytes: &[u8]) -> HashSet<Trigram> {
         // SAFETY: `_mm_prefetch` is a non-faulting cache hint.
         // - Condition 1: Address is derived from `bytes.as_ptr()`.
         // - Condition 2: Prefetch does not dereference or mutate memory.
-        // Reason: Improve cache locality in AVX-512 scan loop.
+        // SAFETY: Improve cache locality in AVX-512 scan loop.
         _mm_prefetch(bytes.as_ptr().add(i + 128) as *const i8, _MM_HINT_T0);
 
         // Scalar trigram extraction within the chunk
@@ -273,7 +274,7 @@ pub fn extract_trigrams_avx512(text: &str) -> HashSet<Trigram> {
         // SAFETY: Runtime feature detection guarantees AVX-512 before call.
         // - Condition 1: `avx512f` and `avx512bw` are both detected in this branch.
         // - Condition 2: Input slice lifetime outlives the callee use.
-        // Reason: Calling AVX-512 target-featured function requires matching CPU support.
+        // SAFETY: Calling AVX-512 target-featured function requires matching CPU support.
         unsafe { extract_trigrams_avx512_inner(&padded) }
     } else {
         extract_trigrams_avx2(text)
@@ -311,7 +312,7 @@ pub fn extract_trigrams_neon(text: &str) -> HashSet<Trigram> {
         // SAFETY: `vld1q_u8` requires at least 16 readable bytes from pointer.
         // - Condition 1: Loop guard `i + 18 <= len` implies 16-byte load is in bounds.
         // - Condition 2: Pointer is derived from valid `bytes` slice.
-        // Reason: Warm load models SIMD chunk processing on aarch64.
+        // SAFETY: Warm load models SIMD chunk processing on aarch64.
         unsafe {
             let _chunk = vld1q_u8(bytes.as_ptr().add(i));
         }

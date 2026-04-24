@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llama-index-vector-stores-velesdb"
-version = "1.12.0"
+version = "1.13.0"
 description = "LlamaIndex VectorStore for VelesDB: The Local AI Memory Database. Microsecond RAG retrieval."
 readme = "README.md"
 license = "MIT"
@@ -26,15 +26,15 @@ classifiers = [
 ]
 
 dependencies = [
-    "llama-index-core>=0.10.0",
-    "velesdb>=1.9.0",
-    "velesdb-common>=1.9.0",
+    "llama-index-core>=0.10.0,<1.0.0",
+    "velesdb>=1.12.0",
+    "velesdb-common>=1.12.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0",
-    "pytest-asyncio>=0.21",
+    "pytest>=7.0,<9.0",
+    "pytest-asyncio>=0.21,<1.0.0",
 ]
 
 [project.urls]

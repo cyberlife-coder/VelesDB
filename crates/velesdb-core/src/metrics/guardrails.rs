@@ -106,6 +106,7 @@ impl TraversalMetrics {
 ///
 /// Note: rate-limit rejections are tracked separately via [`GuardRailsMetrics::record_rate_limit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum LimitType {
     /// Query timeout exceeded
     Timeout,
@@ -120,7 +121,7 @@ pub enum LimitType {
 impl LimitType {
     /// Returns the string representation for metrics.
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Timeout => "timeout",
             Self::Depth => "depth",

@@ -19,23 +19,17 @@
   <a href="https://pypi.org/project/velesdb/"><img src="https://img.shields.io/pypi/v/velesdb.svg" alt="PyPI"></a>
   <a href="https://www.npmjs.com/package/@wiscale/velesdb-sdk"><img src="https://img.shields.io/npm/v/@wiscale/velesdb-sdk.svg" alt="npm"></a>
   <a href="https://app.codacy.com/gh/cyberlife-coder/VelesDB/dashboard"><img src="https://app.codacy.com/project/badge/Coverage/58c73832dd294ba38144856ae69e9cf2" alt="Coverage"></a>
-  <img src="https://img.shields.io/badge/tests-4685_(incl._238_BDD)-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-7634_(Rust%2BTS%2BPy)-brightgreen" alt="Tests">
   <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-VelesDB_Core_1.0-blue" alt="License"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="Stars"></a>
   <a href="https://img.shields.io/badge/contributors-welcome-brightgreen"><img src="https://img.shields.io/badge/contributors-welcome-brightgreen" alt="Contributors Welcome"></a>
 </p>
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.12.0">Download v1.12.0</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/latest">Download latest release</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
 </p>
-
-<!-- TODO: Uncomment when GIF demo is ready
-<p align="center">
-  <img src="docs/assets/velesdb-demo.gif" alt="VelesDB Demo" width="700"/>
-</p>
--->
 
 ---
 
@@ -63,7 +57,7 @@ VelesDB removes the US provider from the chain entirely. One Rust binary, local-
 
 | Today (3 systems to maintain) | With VelesDB (1 binary) |
 |-------------------------------|------------------------|
-| pgvector for embeddings | **Vector Engine** — 47us HNSW search (768D) |
+| pgvector for embeddings | **Vector Engine** — ~55us HNSW search (5K/768D, k=10) |
 | Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
 | PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows |
 | Custom glue code + 3 query languages | **VelesQL** — one language for everything |
@@ -76,9 +70,12 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 
 | Engine | What it does | Performance |
 |--------|-------------|-------------|
-| **Vector** | Semantic similarity search (HNSW + AVX2/NEON SIMD) | **450us** p50 end-to-end (384D, WAL ON, recall>=96%) |
+| **Vector** | Semantic similarity search (HNSW + AVX2/NEON SIMD) | **450us** p50 end-to-end (384D, WAL ON, recall>=96%) [1] |
 | **Graph** | Knowledge relationships (BFS/DFS, edge properties) | Native **MATCH** clause |
-| **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning |
+| **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning [2] |
+
+> [1] Reproduce: `python benchmarks/velesdb_benchmark.py --recall` (Python SDK path, 10K/384D, WAL fsync on, i9-14900KF reference machine). See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [CHANGELOG v1.13.0](CHANGELOG.md).
+> [2] Reproduce: `cargo bench -p velesdb-core --bench filter_benchmark`. See [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md) — at 100K rows: ColumnStore 29.5 us vs JSON scan 3.84 ms (integer equality filter).
 
 All three are queried through **VelesQL** — a single SQL-like language with vector, graph, and columnar extensions:
 
@@ -141,6 +138,25 @@ memory.procedural.learn(1, "answer_geography", steps, embedding, confidence=0.8)
 > **VelesDB's sweet spot:** When you need vector + graph + structured filtering in a single engine, local-first deployment, or a lightweight binary that runs anywhere.
 >
 > **Not the best fit (yet):** If you need a managed cloud service with a multi-node distributed cluster.
+
+---
+
+## Known Limitations
+
+VelesDB is honest about its boundaries. The following are current scope limits of the open-source Community Edition — each is either a deliberate design trade-off or a feature tracked for a separate Enterprise edition. We list them here so you can make an informed technical choice.
+
+| # | Limitation | Scope | Tracked |
+|---|------------|-------|---------|
+| 1 | **Single writer per collection** — WAL is serialized; concurrent writers contend on the same fsync lock. | Design trade-off (local-first, crash-safe by default). Read throughput is unaffected. | Concurrent WAL writer is planned for the Enterprise edition (separate product, not yet public). See [docs/CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md). |
+| 2 | **No distributed replication** — VelesDB is single-node. No Raft, no sharding, no automatic failover in Core. | Deliberate: the sweet spot is local-first / embedded. | Raft-based replication is tracked internally for the Enterprise edition. Contact us for timeline. |
+| 3 | **No advanced RBAC / multi-tenant isolation** — The `DatabaseObserver` hook is shipped (Core) and can be wired to a homegrown RBAC layer, but a production-grade RBAC/audit implementation is not in Core. | Core ships the hook, not the policy engine. | Enterprise feature. |
+| 4 | **WASM MATCH limited to 2 hops** — The browser build of `velesdb-wasm` supports 1- and 2-hop graph `MATCH` patterns today. 3+ hop `MATCH` works fully in native builds (server / Python / mobile / CLI) via `velesdb-core`. | Scope of Sprint 4 item S4-13. | Tracked, not a correctness issue — native path already supports full traversal. |
+| 5 | **SIFT1M benchmark fingerprints — pinning workflow ships, sidecar not yet committed** — The loader reads its pinned SHA-256 hashes from `benches/datasets/sift1m_fingerprints.json` when present (strict mode, mismatch fails the bench). Until a maintainer runs `cargo bench -p velesdb-core --features bench-sift1m --bench capture_sift1m_fingerprints` on the reference machine and commits the generated sidecar, the loader falls back to TOFU mode (prints the observed SHA-256 and proceeds). | Not a correctness issue — `check_shape` still validates row count and dimension. The one-command bootstrap closes the integrity gap in a single run. | One-command bootstrap shipped; sidecar commit pending first reference-machine run. |
+| 6 | **No head-to-head Docker Compose benchmark vs Qdrant / Chroma / FAISS yet** — The SIFT1M benchmark (new in v1.13.0) is the standardized cross-implementation comparable number and matches the dataset used by every major ANN paper. A one-shot Docker Compose harness that runs all four systems on the same machine is deferred until the benchmark infrastructure stabilizes. | Transparency: side-by-side numbers require infrastructure we have not frozen yet. | Tracked; SIFT1M already gives comparable recall@10 numbers against the literature. |
+
+None of the above is a correctness gap — the Community Edition is production-ready for single-node, local-first deployments. The items above are feature-scope boundaries, not bugs.
+
+For **internal technical limitations** (query-planner approximations, plan cache semantics around `ANALYZE`, CBO integration status), see [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md) — each entry is tracked by a GitHub issue or documented as an explicit approximation with regression tests.
 
 ---
 
@@ -232,7 +248,7 @@ curl -X POST http://localhost:8080/collections/docs/search \
 
 ## Vector Engine
 
-Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search on commodity hardware.
+Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search on modern x86_64 hardware.
 
 | Metric | Value |
 |--------|-------|
@@ -246,17 +262,20 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 <details>
 <summary>Detailed benchmarks and search modes</summary>
 
-| Benchmark | Result |
-|-----------|--------|
-| HNSW Search (5K/768D, k=10) | **55 us** |
-| SIMD Dot Product (768D, AVX2) | **21.7 ns** |
-| Recall@10 (Accurate) | **100%** |
+| Benchmark | Result | How to reproduce |
+|-----------|--------|------------------|
+| HNSW Search (5K/768D, k=10) | **55 us** | `cargo bench -p velesdb-core --bench hnsw_benchmark -- hnsw_search_latency` |
+| SIMD Dot Product (768D, AVX2) | **21.7 ns** | `cargo bench -p velesdb-core --bench simd_benchmark` |
+| Recall@10 (Accurate) | **100%** | `cargo bench -p velesdb-core --bench recall_benchmark` |
+| BM25 Sparse Search (10K docs, top-10) | **57.6 us** (16x from 956 us in v1.12) | `cargo bench -p velesdb-core --bench sparse_benchmark -- top10_10k_corpus` |
 
 | Mode | ef_search | Recall@10 | Use case |
 |------|-----------|-----------|----------|
 | Fast | 64 | 92.2% | Real-time suggestions, typeahead |
 | Balanced (default) | 128 | 98.8% | Production search, RAG pipelines |
 | Accurate | 512 | 100% | Evaluation, ground truth comparison |
+
+*Measurements sourced from `benchmarks/results/pr363_365_comparison.md` (i9-14900KF, 64 GB DDR5, Windows 11, `--release`, `target-cpu=native`). Windows micro-benchmarks carry 5-10% noise — expect a range, not a single point.*
 
 </details>
 
@@ -282,6 +301,8 @@ CREATE COLLECTION fingerprints (dimension = 256, metric = 'hamming');
 ```sql
 SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 5
 ```
+
+- **SIFT1M standardized ANN benchmark** — measured on the de-facto-standard INRIA TEXMEX dataset (1M × 128D vectors, L2 metric). See [docs/BENCHMARKS.md § 11](docs/BENCHMARKS.md#11-sift1m--standard-ann-benchmark) for methodology, dataset provenance, and how to reproduce.
 
 > **Full benchmarks and methodology:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | [velesdb-benchmarks repo](https://github.com/cyberlife-coder/velesdb-benchmarks) | **Quantization guide:** [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md)
 
@@ -385,6 +406,8 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | v1.5 — Python SDK, WASM, Mobile bindings | ✅ Shipped |
 | v1.10 — Agent Memory SDK, hybrid search, quantization | ✅ Shipped |
 | v1.11 — Cross-collection MATCH, bitmap pre-filter, CSR graph | ✅ Shipped |
+| v1.12 — Cross-collection MATCH (graph/BM25/HNSW hybrids), Sprint 4 Phase B (TS SDK stability) | ✅ Shipped |
+| v1.13 — Pre-seed remediation: BM25 O(1) cold-start, sparse search 16× speedup, HNSW prefetch, EXPLAIN/CBO routing, VelesQL window functions, SIFT1M standardized harness | ✅ Shipped |
 
 > VelesDB Core is open-source. Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
 
@@ -397,7 +420,7 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | Domain | Component | Install |
 |--------|-----------|---------|
 | **Core** | [velesdb-core](crates/velesdb-core) — Vector + Graph + ColumnStore + VelesQL | `cargo add velesdb-core` |
-| **Server** | [velesdb-server](crates/velesdb-server) — REST API (37 endpoints, OpenAPI) | `cargo install velesdb-server` |
+| **Server** | [velesdb-server](crates/velesdb-server) — REST API (46 endpoints, OpenAPI) | `cargo install velesdb-server` |
 | **CLI** | [velesdb-cli](crates/velesdb-cli) — Interactive VelesQL REPL | `cargo install velesdb-cli` |
 | **Python** | [velesdb-python](crates/velesdb-python) — PyO3 bindings + NumPy | `pip install velesdb` |
 | **TypeScript** | [typescript-sdk](sdks/typescript) — Node.js & Browser SDK | `npm install @wiscale/velesdb-sdk` |
@@ -461,15 +484,15 @@ The container runs as a non-root `velesdb` user. Data persists via the named vol
 </details>
 
 <details>
-<summary>API Reference (37 REST endpoints)</summary>
+<summary>API Reference (46 REST endpoints)</summary>
 
 | Category | Key Endpoints |
 |----------|--------------|
 | **Collections** | `POST /collections`, `GET /collections`, `GET/DELETE /collections/{name}` |
-| **Points** | `/collections/{name}/points`, `/collections/{name}/stream/insert` |
+| **Points** | `/collections/{name}/points`, `/collections/{name}/points/scroll`, `/collections/{name}/stream/insert` |
 | **Search** | `/collections/{name}/search`, `/collections/{name}/search/batch`, `/collections/{name}/search/hybrid`, `/collections/{name}/search/text`, `/collections/{name}/search/multi`, `/collections/{name}/search/ids`, `/collections/{name}/match` |
 | **Graph** | `/collections/{name}/graph/edges`, `/collections/{name}/graph/edges/{id}`, `/collections/{name}/graph/edges/count`, `/collections/{name}/graph/traverse`, `/collections/{name}/graph/traverse/stream`, `/collections/{name}/graph/traverse/parallel`, `/collections/{name}/graph/nodes`, `/collections/{name}/graph/nodes/{id}/degree`, `/collections/{name}/graph/nodes/{id}/edges`, `/collections/{name}/graph/nodes/{id}/payload`, `/collections/{name}/graph/search` |
-| **Indexes** | `GET/POST /collections/{name}/indexes`, `DELETE /collections/{name}/indexes/{label}/{property}` |
+| **Indexes** | `GET/POST /collections/{name}/indexes`, `DELETE /collections/{name}/indexes/{label}/{property}`, `/collections/{name}/index/rebuild` |
 | **VelesQL** | `/query`, `/aggregate`, `/query/explain` |
 | **Admin** | `/health`, `/ready`, `/metrics`, `/guardrails`, `/collections/{name}/stats`, `/collections/{name}/config`, `/collections/{name}/flush`, `/collections/{name}/analyze`, `/collections/{name}/empty`, `/collections/{name}/sanity` |
 
@@ -534,17 +557,16 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ---
 
-## Using VelesDB?
+## Powered by VelesDB
+
+| Project | Use case |
+|---------|----------|
+| [WPLink](https://wplink.ai) | AI-powered semantic analysis to find and apply internal linking opportunities for WordPress sites |
+| *Your project here* | [Get listed →](mailto:contact@wiscale.fr?subject=VelesDB%20Showcase) |
 
 [![Built with VelesDB](https://img.shields.io/badge/Built_with-VelesDB-blue?style=flat-square)](https://github.com/cyberlife-coder/VelesDB)
 
-Tell us about your project and get featured on the [**"Powered by VelesDB"** showcase on velesdb.com](https://velesdb.com). We highlight companies and projects that build with VelesDB — from RAG pipelines to sovereign AI agents.
-
-How to get listed:
-- Open a [GitHub Discussion](https://github.com/cyberlife-coder/VelesDB/discussions) describing your use case
-- Or email [contact@wiscale.fr](mailto:contact@wiscale.fr) with your project name, logo, and a one-liner
-
-Your feedback shapes the roadmap.
+Using VelesDB in production? Open a [GitHub Discussion](https://github.com/cyberlife-coder/VelesDB/discussions) or email [contact@wiscale.fr](mailto:contact@wiscale.fr) to get featured. Your feedback shapes the roadmap.
 
 ---
 

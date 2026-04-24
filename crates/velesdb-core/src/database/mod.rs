@@ -7,6 +7,7 @@
 //! - [`graph_ops`] — Graph collection create/get
 //! - [`metadata_ops`] — Metadata-only collection create/get
 //! - [`query_engine`] — `VelesQL` query execution, plan caching, DML dispatch
+//! - [`query_join`] — JOIN execution strategies (lookup, filtered, condition pushdown)
 //! - [`dml_executor`] — DML mutations (INSERT EDGE, DELETE, DELETE EDGE, SELECT EDGES, INSERT NODE)
 //! - [`persistence`] — Loading collections from disk at startup
 //! - [`training`] — `TRAIN QUANTIZER` statement execution
@@ -16,8 +17,7 @@
 use crate::collection::{GraphCollection, MetadataCollection, VectorCollection};
 use crate::observer::DatabaseObserver;
 use crate::simd_dispatch;
-#[allow(deprecated)]
-use crate::{Collection, ColumnStore, Error, Result};
+use crate::{ColumnStore, Error, Result};
 
 mod admin_executor;
 mod collection_ops;
@@ -26,10 +26,12 @@ mod ddl_executor;
 mod dml_executor;
 mod graph_ops;
 mod introspection_executor;
+mod join_pushdown;
 mod metadata_ops;
 mod persistence;
 mod query_engine;
 mod query_engine_dml;
+mod query_join;
 mod stats;
 mod training;
 mod vector_ops;
@@ -39,6 +41,8 @@ mod database_helpers;
 
 #[cfg(all(test, feature = "persistence"))]
 mod collection_ops_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod database_helpers_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod database_tests;
 #[cfg(all(test, feature = "persistence"))]
@@ -70,14 +74,16 @@ pub struct Database {
     /// The lock is held for the lifetime of the `Database` and released on `Drop`.
     /// The `_` prefix signals this field is kept for its RAII side effect.
     _lock_file: std::fs::File,
-    /// Legacy registry (Collection god-object) — **migration-only**.
+    /// Root configuration applied to every subsystem.
     ///
-    /// Populated in parallel with the typed registries for backward compatibility.
-    /// Internal code should use `vector_colls`, `graph_colls`, or `metadata_colls`
-    /// instead. This field is retained solely for the public `get_collection()` API
-    /// and will be removed once all external consumers have migrated.
-    #[allow(deprecated)]
-    collections: parking_lot::RwLock<std::collections::HashMap<String, Collection>>,
+    /// Stored as an `Arc` so `Database::config()` can hand out cheap,
+    /// cloneable references without forcing the whole struct onto the
+    /// heap or locking. The value is populated at construction time
+    /// (`open`, `open_with_observer`, or `open_with_config`) and is
+    /// immutable for the life of the `Database` — Wave 3 never needs
+    /// to mutate the root config at runtime, and making it immutable
+    /// rules out a large class of surprising behaviours.
+    config: std::sync::Arc<crate::config::VelesConfig>,
     /// Typed registry: vector collections.
     vector_colls: parking_lot::RwLock<std::collections::HashMap<String, VectorCollection>>,
     /// Typed registry: graph collections.
@@ -110,17 +116,47 @@ impl Database {
     /// The new `open()` is a strict auto-load: all `config.json` directories under
     /// `path` are loaded on startup.
     ///
+    /// Uses the default [`VelesConfig`](crate::config::VelesConfig) — every
+    /// subsystem behaves identically to the pre-Wave-3 version of this
+    /// function, so existing callers keep their exact behaviour. Users
+    /// that need to customise subsystem limits or WAL batching should
+    /// call [`Database::open_with_config`] instead.
+    ///
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or accessed.
     pub fn open<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        Self::open_impl(path, None)
+        Self::open_impl(path, None, None)
+    }
+
+    /// Opens a database with an explicit [`VelesConfig`](crate::config::VelesConfig).
+    ///
+    /// Every subsystem that honours a config field (HNSW defaults, WAL
+    /// batching, runtime limits, search quality) reads from the passed
+    /// instance. A clone is stored inside the `Database` and retained
+    /// for the lifetime of the handle so sub-systems can consult it
+    /// without re-parsing a TOML file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created, the lock
+    /// cannot be acquired, or any already-present collection exceeds
+    /// the limits declared in `config.limits` (see
+    /// [`Database::open`] for the default-limit behaviour).
+    pub fn open_with_config<P: AsRef<std::path::Path>>(
+        path: P,
+        config: crate::config::VelesConfig,
+    ) -> Result<Self> {
+        Self::open_impl(path, None, Some(config))
     }
 
     /// Opens a database with a [`DatabaseObserver`] (used by velesdb-premium).
     ///
     /// The observer receives lifecycle hooks for every collection operation,
     /// enabling RBAC, audit logging, multi-tenant routing, etc.
+    ///
+    /// Equivalent to [`Database::open`] plus the observer injection —
+    /// applies the default [`VelesConfig`](crate::config::VelesConfig).
     ///
     /// # Errors
     ///
@@ -129,12 +165,28 @@ impl Database {
         path: P,
         observer: std::sync::Arc<dyn DatabaseObserver>,
     ) -> Result<Self> {
-        Self::open_impl(path, Some(observer))
+        Self::open_impl(path, Some(observer), None)
+    }
+
+    /// Opens a database with both an explicit [`VelesConfig`] and a
+    /// [`DatabaseObserver`]. Used by the premium shell that layers
+    /// RBAC/audit on top of a tenant-specific config file.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Database::open_with_config`].
+    pub fn open_with_observer_and_config<P: AsRef<std::path::Path>>(
+        path: P,
+        observer: std::sync::Arc<dyn DatabaseObserver>,
+        config: crate::config::VelesConfig,
+    ) -> Result<Self> {
+        Self::open_impl(path, Some(observer), Some(config))
     }
 
     fn open_impl<P: AsRef<std::path::Path>>(
         path: P,
         observer: Option<std::sync::Arc<dyn DatabaseObserver>>,
+        config: Option<crate::config::VelesConfig>,
     ) -> Result<Self> {
         let data_dir = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&data_dir)?;
@@ -156,7 +208,7 @@ impl Database {
         let db = Self {
             data_dir,
             _lock_file: lock_file,
-            collections: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            config: std::sync::Arc::new(config.unwrap_or_default()),
             vector_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
             graph_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
             metadata_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
@@ -170,6 +222,28 @@ impl Database {
         db.load_collections()?;
 
         Ok(db)
+    }
+
+    /// Returns a reference to the root [`VelesConfig`](crate::config::VelesConfig)
+    /// that was supplied at construction (or the default if the database
+    /// was opened via [`Database::open`]).
+    ///
+    /// Sub-systems (`vector_ops`, `query_engine`, `stats`, …) consult this
+    /// through `database.config()` when they need to honour a user-supplied
+    /// limit or toggle — the shared `Arc` makes the call free of locks
+    /// and cheap to propagate to background threads.
+    #[must_use]
+    pub fn config(&self) -> &crate::config::VelesConfig {
+        &self.config
+    }
+
+    /// Returns a cheap, cloneable handle to the root config.
+    ///
+    /// Use this when you need to move the config into a thread or
+    /// long-lived closure that outlives the current `&self` borrow.
+    #[must_use]
+    pub fn config_arc(&self) -> std::sync::Arc<crate::config::VelesConfig> {
+        std::sync::Arc::clone(&self.config)
     }
 
     /// Returns the path to the data directory.

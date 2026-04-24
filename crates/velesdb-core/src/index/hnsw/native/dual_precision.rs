@@ -20,9 +20,11 @@
 //! │  quantized_store: Vec<u8>      (int8 vectors, contiguous)   │
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! Int8 graph traversal logic is in [`super::int8_traversal`].
 
 use super::distance::DistanceEngine;
-use super::graph::{NativeHnsw, NO_ENTRY_POINT};
+use super::graph::NativeHnsw;
 use super::layer::NodeId;
 use super::quantization::{QuantizedVectorStore, ScalarQuantizer};
 use std::sync::Arc;
@@ -61,7 +63,7 @@ impl Default for DualPrecisionConfig {
 /// 2. Final re-ranking uses exact float32 distances (preserves accuracy)
 pub struct DualPrecisionHnsw<D: DistanceEngine> {
     /// Inner HNSW index (graph + float32 vectors)
-    inner: NativeHnsw<D>,
+    pub(in crate::index::hnsw) inner: NativeHnsw<D>,
     /// Scalar quantizer (trained lazily or on first batch)
     quantizer: Option<Arc<ScalarQuantizer>>,
     /// Quantized vector storage (contiguous int8 array)
@@ -163,7 +165,10 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
 
         // Train on accumulated samples
         let refs: Vec<&[f32]> = self.training_buffer.iter().map(Vec::as_slice).collect();
-        let quantizer = Arc::new(ScalarQuantizer::train(&refs));
+        // Training buffer is guarded by `is_empty()` check above, so this cannot fail.
+        let quantizer = Arc::new(
+            ScalarQuantizer::train(&refs).expect("invariant: training_buffer is non-empty"),
+        );
 
         // Create quantized store and quantize all existing vectors
         let mut store = QuantizedVectorStore::new(Arc::clone(&quantizer), self.inner.len() + 1000);
@@ -270,7 +275,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     /// may be squared L2 for Euclidean when `D = CachedSimdDistance`. We apply
     /// `transform_score()` to convert to the user-visible metric (e.g. sqrt
     /// for Euclidean, similarity clamping for Cosine).
-    fn rerank_with_exact_f32(
+    pub(super) fn rerank_with_exact_f32(
         &self,
         query: &[f32],
         candidate_ids: &[NodeId],
@@ -368,168 +373,5 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         // Phase 2: Re-rank with exact f32 distances (RF-DEDUP: shared helper)
         let candidate_ids: Vec<NodeId> = coarse_candidates.into_iter().map(|(id, _)| id).collect();
         self.rerank_with_exact_f32(query, &candidate_ids, k)
-    }
-
-    /// Search using int8 quantized distances for graph traversal.
-    ///
-    /// This is the key optimization: uses 4x less memory bandwidth during
-    /// graph exploration by using u8 vectors instead of f32.
-    fn search_layer_int8(
-        &self,
-        query_int8: &[u8],
-        k: usize,
-        ef_search: usize,
-        store: &QuantizedVectorStore,
-    ) -> Vec<(NodeId, u32)> {
-        use rustc_hash::FxHashSet;
-        use std::cmp::Reverse;
-        use std::collections::BinaryHeap;
-
-        let ep = self
-            .inner
-            .entry_point
-            .load(std::sync::atomic::Ordering::Acquire);
-        if ep == NO_ENTRY_POINT {
-            return Vec::new();
-        }
-
-        let max_layer = self
-            .inner
-            .max_layer
-            .load(std::sync::atomic::Ordering::Relaxed);
-
-        // Greedy search from top layer to layer 1 using int8 distances
-        let mut current_ep = ep;
-        for layer_idx in (1..=max_layer).rev() {
-            current_ep = self.greedy_search_int8(query_int8, current_ep, layer_idx, store);
-        }
-
-        // Search layer 0 with ef_search using int8 distances
-        let ef = ef_search.max(k);
-        let mut visited: FxHashSet<NodeId> = FxHashSet::default();
-        let mut candidates: BinaryHeap<Reverse<(u32, NodeId)>> = BinaryHeap::new();
-        let mut results: BinaryHeap<(u32, NodeId)> = BinaryHeap::new();
-
-        Self::init_search_from_ep(
-            store,
-            query_int8,
-            current_ep,
-            &mut visited,
-            &mut candidates,
-            &mut results,
-        );
-
-        while let Some(Reverse((c_dist, c_node))) = candidates.pop() {
-            if c_dist > results.peek().map_or(u32::MAX, |r| r.0) && results.len() >= ef {
-                break;
-            }
-
-            let layers = self.inner.layers.read();
-            let _ = layers[0].with_neighbors(c_node, |neighbors| {
-                Self::process_int8_neighbors(
-                    store,
-                    query_int8,
-                    neighbors,
-                    ef,
-                    &mut visited,
-                    &mut candidates,
-                    &mut results,
-                );
-            });
-        }
-
-        let mut result_vec: Vec<(NodeId, u32)> = results.into_iter().map(|(d, n)| (n, d)).collect();
-        result_vec.sort_by_key(|&(_, d)| d);
-        result_vec.truncate(k);
-        result_vec
-    }
-
-    /// Seeds the search state with the entry point for layer-0 int8 search.
-    fn init_search_from_ep(
-        store: &QuantizedVectorStore,
-        query_int8: &[u8],
-        ep: NodeId,
-        visited: &mut rustc_hash::FxHashSet<NodeId>,
-        candidates: &mut std::collections::BinaryHeap<std::cmp::Reverse<(u32, NodeId)>>,
-        results: &mut std::collections::BinaryHeap<(u32, NodeId)>,
-    ) {
-        if let Some(ep_slice) = store.get_slice(ep) {
-            let dist = store
-                .quantizer()
-                .distance_l2_quantized_slice(query_int8, ep_slice);
-            candidates.push(std::cmp::Reverse((dist, ep)));
-            results.push((dist, ep));
-            visited.insert(ep);
-        }
-    }
-
-    /// Evaluates neighbor candidates using int8 distances, updating the search state.
-    fn process_int8_neighbors(
-        store: &QuantizedVectorStore,
-        query_int8: &[u8],
-        neighbors: &[NodeId],
-        ef: usize,
-        visited: &mut rustc_hash::FxHashSet<NodeId>,
-        candidates: &mut std::collections::BinaryHeap<std::cmp::Reverse<(u32, NodeId)>>,
-        results: &mut std::collections::BinaryHeap<(u32, NodeId)>,
-    ) {
-        let quantizer = store.quantizer();
-        for &neighbor in neighbors {
-            if !visited.insert(neighbor) {
-                continue;
-            }
-            let Some(neighbor_slice) = store.get_slice(neighbor) else {
-                continue;
-            };
-            let dist = quantizer.distance_l2_quantized_slice(query_int8, neighbor_slice);
-            let furthest = results.peek().map_or(u32::MAX, |r| r.0);
-
-            if dist < furthest || results.len() < ef {
-                candidates.push(std::cmp::Reverse((dist, neighbor)));
-                results.push((dist, neighbor));
-                if results.len() > ef {
-                    results.pop();
-                }
-            }
-        }
-    }
-
-    /// Greedy search in a single layer using int8 distances.
-    fn greedy_search_int8(
-        &self,
-        query_int8: &[u8],
-        entry: NodeId,
-        layer: usize,
-        store: &QuantizedVectorStore,
-    ) -> NodeId {
-        let quantizer = store.quantizer();
-        let mut current = entry;
-        let mut current_dist = store.get_slice(entry).map_or(u32::MAX, |s| {
-            quantizer.distance_l2_quantized_slice(query_int8, s)
-        });
-
-        loop {
-            let mut improved = false;
-            let layers = self.inner.layers.read();
-            let _ = layers[layer].with_neighbors(current, |neighbors| {
-                for &neighbor in neighbors {
-                    if let Some(neighbor_slice) = store.get_slice(neighbor) {
-                        let dist =
-                            quantizer.distance_l2_quantized_slice(query_int8, neighbor_slice);
-                        if dist < current_dist {
-                            current = neighbor;
-                            current_dist = dist;
-                            improved = true;
-                        }
-                    }
-                }
-            });
-
-            if !improved {
-                break;
-            }
-        }
-
-        current
     }
 }

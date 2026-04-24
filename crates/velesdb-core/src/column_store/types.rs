@@ -1,9 +1,11 @@
 //! Types and enums for column store module.
 
+use smallvec::SmallVec;
 use thiserror::Error;
 
 /// Errors that can occur in ColumnStore operations.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColumnStoreError {
     /// Duplicate primary key value.
     #[error("Duplicate primary key: {0}")]
@@ -41,7 +43,8 @@ pub enum ColumnStoreError {
 pub struct StringId(pub(crate) u32);
 
 /// Column type for schema definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColumnType {
     /// 64-bit signed integer
     Int,
@@ -51,10 +54,15 @@ pub enum ColumnType {
     String,
     /// Boolean
     Bool,
+    /// Array of scalar values (single-level nesting only).
+    Array(Box<ColumnType>),
+    /// Geographic coordinate pair (latitude, longitude).
+    GeoPoint,
 }
 
 /// A value that can be stored in a column.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ColumnValue {
     /// Integer value
     Int(i64),
@@ -66,10 +74,34 @@ pub enum ColumnValue {
     Bool(bool),
     /// Null value
     Null,
+    /// Array of scalar values.
+    Array(Vec<ColumnValue>),
+    /// Geographic coordinate pair (latitude, longitude).
+    GeoPoint(f64, f64),
 }
+
+impl PartialEq for ColumnValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Float(a), Self::Float(b)) => a.to_bits() == b.to_bits(),
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Null, Self::Null) => true,
+            (Self::Array(a), Self::Array(b)) => a == b,
+            (Self::GeoPoint(lat1, lng1), Self::GeoPoint(lat2, lng2)) => {
+                lat1.to_bits() == lat2.to_bits() && lng1.to_bits() == lng2.to_bits()
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ColumnValue {}
 
 /// A typed column storing values of a specific type.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum TypedColumn {
     /// Integer column (i64)
     Int(Vec<Option<i64>>),
@@ -79,6 +111,15 @@ pub enum TypedColumn {
     String(Vec<Option<StringId>>),
     /// Boolean column
     Bool(Vec<Option<bool>>),
+    /// Array column: each row is an optional `SmallVec` of scalar values.
+    Array {
+        /// Element type for this array column.
+        element_type: ColumnType,
+        /// Per-row array data (None = null row).
+        data: Vec<Option<SmallVec<[ColumnValue; 8]>>>,
+    },
+    /// Geographic point column: each row is an optional `(lat, lng)` pair.
+    GeoPoint(Vec<Option<(f64, f64)>>),
 }
 
 impl TypedColumn {
@@ -106,6 +147,21 @@ impl TypedColumn {
         Self::Bool(Vec::with_capacity(capacity))
     }
 
+    /// Creates a new array column with the given element type and capacity.
+    #[must_use]
+    pub fn new_array(element_type: ColumnType, capacity: usize) -> Self {
+        Self::Array {
+            element_type,
+            data: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Creates a new geographic point column with the given capacity.
+    #[must_use]
+    pub fn new_geopoint(capacity: usize) -> Self {
+        Self::GeoPoint(Vec::with_capacity(capacity))
+    }
+
     /// Returns the number of values in the column.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -114,6 +170,8 @@ impl TypedColumn {
             Self::Float(v) => v.len(),
             Self::String(v) => v.len(),
             Self::Bool(v) => v.len(),
+            Self::Array { data, .. } => data.len(),
+            Self::GeoPoint(v) => v.len(),
         }
     }
 
@@ -130,6 +188,8 @@ impl TypedColumn {
             Self::Float(v) => v.push(None),
             Self::String(v) => v.push(None),
             Self::Bool(v) => v.push(None),
+            Self::Array { data, .. } => data.push(None),
+            Self::GeoPoint(v) => v.push(None),
         }
     }
 
@@ -143,6 +203,14 @@ impl TypedColumn {
             (Self::Float(col), ColumnValue::Float(v)) => col.push(Some(*v)),
             (Self::String(col), ColumnValue::String(id)) => col.push(Some(*id)),
             (Self::Bool(col), ColumnValue::Bool(v)) => col.push(Some(*v)),
+            (Self::Array { data, .. }, ColumnValue::Array(arr)) => {
+                data.push(Some(SmallVec::from_vec(arr.clone())));
+            }
+            (Self::GeoPoint(col), ColumnValue::GeoPoint(lat, lng)) => {
+                // Coordinate validation happens at insert_row level;
+                // push_typed is unchecked and stores as-is.
+                col.push(Some((*lat, *lng)));
+            }
             (col, ColumnValue::Null | _) => col.push_null(),
         }
     }
@@ -151,6 +219,7 @@ impl TypedColumn {
     ///
     /// String columns require the `StringTable` to resolve interned IDs, so
     /// callers must use `ColumnStore::get_value_as_json` for string resolution.
+    /// Array columns with string elements also need the `StringTable`.
     #[must_use]
     pub fn get_as_json_non_string(&self, row_idx: usize) -> Option<serde_json::Value> {
         match self {
@@ -163,7 +232,10 @@ impl TypedColumn {
             Self::Bool(v) => v
                 .get(row_idx)
                 .and_then(|opt| opt.map(|v| serde_json::json!(v))),
-            Self::String(_) => None,
+            Self::GeoPoint(v) => v
+                .get(row_idx)
+                .and_then(|opt| opt.map(|(lat, lng)| serde_json::json!({"lat": lat, "lng": lng}))),
+            Self::String(_) | Self::Array { .. } => None,
         }
     }
 }
@@ -199,6 +271,7 @@ pub struct ExpireResult {
 
 /// Result of a single upsert operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UpsertResult {
     /// A new row was inserted.
     Inserted,

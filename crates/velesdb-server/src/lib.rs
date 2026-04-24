@@ -1,11 +1,12 @@
-// Server - pedantic/nursery lints relaxed for Axum handler ergonomics
-// and utoipa derive compatibility (many handlers are async for the Axum
-// trait signature even when they don't await).
-#![allow(clippy::pedantic)] // Axum handlers + utoipa derive generate pedantic warnings
-#![allow(clippy::nursery)] // false positives on Axum extractors
+// Server — triaged pedantic/nursery lints (Sprint 2 Wave 8, A.10).
+// Blanket `#![allow(clippy::pedantic)]` removed; each remaining lint is
+// justified below.  Axum handler signatures, utoipa derives, and
+// OpenAPI-documented error contracts drive most of these.
 #![allow(clippy::uninlined_format_args)] // readability in error messages
 #![allow(clippy::manual_let_else)] // pattern matching in handlers is clearer
 #![allow(clippy::cast_possible_truncation)] // u128→u64 timing casts are bounded
+#![allow(clippy::cast_sign_loss)] // Duration→u64 timing casts are non-negative
+#![allow(clippy::cast_precision_loss)] // byte-count→f64 display casts are fine
 #![allow(clippy::ref_option)] // utoipa-generated code triggers this
 #![allow(clippy::match_same_arms)] // explicit arms improve readability in routers
 #![allow(clippy::trivially_copy_pass_by_ref)] // Axum extractors require &
@@ -13,6 +14,15 @@
 #![allow(clippy::enum_glob_use)] // StatusCode::* in handlers
 #![allow(clippy::unused_async)] // Axum requires async signature even for sync handlers
 #![allow(clippy::needless_for_each)] // readability in metric recording loops
+#![allow(clippy::doc_markdown)] // backtick pedantry — docs use utoipa annotations
+#![allow(clippy::missing_errors_doc)] // errors documented in #[utoipa::path] responses
+#![allow(clippy::must_use_candidate)] // handlers return impl IntoResponse, not Option
+#![allow(clippy::similar_names)] // handler params are intentionally close (name/names)
+#![allow(clippy::needless_raw_string_hashes)] // cosmetic, low-value fix
+#![allow(clippy::needless_pass_by_value)] // Axum extractors consume by value
+#![allow(clippy::redundant_closure_for_method_calls)] // readability in map chains
+#![allow(clippy::single_match_else)] // pattern matching in handlers is clearer
+#![allow(clippy::assigning_clones)] // minor optimisation, not performance-critical
 //! `VelesDB` Server - REST API library for the `VelesDB` vector database.
 //!
 //! This module provides the HTTP handlers and types for the `VelesDB` REST API.
@@ -27,6 +37,8 @@ pub mod auth;
 pub mod config;
 mod handlers;
 pub mod onboarding;
+pub mod rate_limit;
+pub mod routes;
 mod security_addon;
 pub mod tls;
 mod types;
@@ -45,8 +57,8 @@ pub use handlers::{
     create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
     get_collection, get_collection_config, get_collection_stats, get_guardrails, get_point,
     health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
-    multi_query_search, query, readiness_check, search, search_ids, stream_insert,
-    stream_upsert_points, text_search, update_guardrails, upsert_points,
+    multi_query_search, query, readiness_check, rebuild_index, scroll_points, search, search_ids,
+    stream_insert, stream_upsert_points, text_search, update_guardrails, upsert_points,
 };
 
 pub use handlers::graph::{
@@ -114,6 +126,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::points::stream_insert,
         handlers::points::get_point,
         handlers::points::delete_point,
+        handlers::points::scroll_points,
         handlers::search::search,
         handlers::search::batch_search,
         handlers::search::multi_query_search,
@@ -174,12 +187,17 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             ExplainStep,
             ExplainCost,
             ExplainFeatures,
+            ActualStatsResponse,
+            NodeStatsResponse,
             CreateIndexRequest,
             IndexResponse,
             ListIndexesResponse,
             CollectionStatsResponse,
             ColumnStatsResponse,
             IndexStatsResponse,
+            ScrollRequest,
+            ScrollResponse,
+            ScrollPoint,
             GuardRailsConfigRequest,
             GuardRailsConfigResponse,
             handlers::graph::TraverseRequest,
@@ -519,7 +537,8 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"results\""));
-        assert!(json.contains("\"id\":1"));
+        // IDs are serialized as strings to prevent JavaScript precision loss (WP-0D).
+        assert!(json.contains("\"id\":\"1\""));
     }
 
     #[test]
@@ -532,5 +551,114 @@ mod tests {
         assert!(json.contains("\"error\":\"Test error\""));
         // code: None is omitted from JSON output
         assert!(!json.contains("\"code\""));
+    }
+
+    // ========================================================================
+    // OpenAPI <-> Router structural conformance
+    // ========================================================================
+
+    /// Extracts every `(path_template, HTTP method)` pair declared in the
+    /// OpenAPI spec. Returns a sorted `Vec` for deterministic assertions.
+    fn extract_openapi_operations() -> Vec<(String, axum::http::Method)> {
+        let openapi = ApiDoc::openapi();
+        let mut ops = Vec::new();
+        for (path, item) in &openapi.paths.paths {
+            if item.get.is_some() {
+                ops.push((path.clone(), axum::http::Method::GET));
+            }
+            if item.post.is_some() {
+                ops.push((path.clone(), axum::http::Method::POST));
+            }
+            if item.put.is_some() {
+                ops.push((path.clone(), axum::http::Method::PUT));
+            }
+            if item.delete.is_some() {
+                ops.push((path.clone(), axum::http::Method::DELETE));
+            }
+            if item.patch.is_some() {
+                ops.push((path.clone(), axum::http::Method::PATCH));
+            }
+        }
+        ops.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.as_str().cmp(b.1.as_str())));
+        ops
+    }
+
+    /// Converts an OpenAPI path template into a concrete URI by replacing
+    /// each `{param}` placeholder with a safe dummy value.
+    fn template_to_uri(template: &str) -> String {
+        template
+            .replace("{name}", "test_col")
+            .replace("{id}", "1")
+            .replace("{node_id}", "1")
+            .replace("{edge_id}", "1")
+            .replace("{label}", "test_label")
+            .replace("{property}", "test_prop")
+    }
+
+    /// Creates a minimal [`AppState`] backed by an ephemeral directory.
+    /// Returns both the state and the `TempDir` guard (must stay alive).
+    fn create_conformance_state() -> (std::sync::Arc<AppState>, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().expect("test: create temp dir");
+        let db = Database::open(dir.path()).expect("test: open database");
+        let state = std::sync::Arc::new(AppState {
+            db,
+            onboarding_metrics: OnboardingMetrics::default(),
+            query_limits: parking_lot::RwLock::new(QueryLimits::default()),
+            ready: AtomicBool::new(true),
+        });
+        (state, dir)
+    }
+
+    /// Returns `true` when the response is Axum's built-in fallback (route
+    /// not found), which is a `404` with an empty body. Handler-generated
+    /// 404s always carry a non-empty JSON body.
+    async fn is_axum_fallback(resp: axum::http::Response<axum::body::Body>) -> bool {
+        if resp.status() != axum::http::StatusCode::NOT_FOUND {
+            return false;
+        }
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .expect("test: read response body");
+        body.is_empty()
+    }
+
+    /// Structural conformance: every `(path, method)` declared in the OpenAPI
+    /// spec must be reachable through the Axum router (must NOT hit Axum's
+    /// built-in fallback 404).
+    #[tokio::test]
+    async fn test_openapi_routes_match_router() {
+        let operations = extract_openapi_operations();
+        assert!(
+            !operations.is_empty(),
+            "OpenAPI spec should declare at least one operation"
+        );
+
+        let (state, _dir) = create_conformance_state();
+        let router = crate::routes::api_routes().with_state(state);
+
+        let mut failures: Vec<String> = Vec::new();
+        for (template, method) in &operations {
+            let uri = template_to_uri(template);
+            let req = axum::http::Request::builder()
+                .method(method)
+                .uri(&uri)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from("{}"))
+                .expect("test: build request");
+
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .expect("test: send request");
+
+            if is_axum_fallback(resp).await {
+                failures.push(format!("{method} {template}"));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "OpenAPI operations with no matching router route:\n  {}",
+            failures.join("\n  ")
+        );
     }
 }

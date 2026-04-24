@@ -14,10 +14,9 @@
 
 use tempfile::TempDir;
 use velesdb_core::collection::streaming::{AsyncIndexBuilder, AsyncIndexBuilderConfig};
-use velesdb_core::collection::Collection;
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::quantization::StorageMode;
-use velesdb_core::Point;
+use velesdb_core::{Point, VectorCollection};
 
 /// Generates a deterministic vector with a known pattern.
 fn make_vector(seed: u64, dim: usize) -> Vec<f32> {
@@ -27,14 +26,19 @@ fn make_vector(seed: u64, dim: usize) -> Vec<f32> {
 }
 
 /// Creates a standard vector collection for testing.
-#[allow(deprecated)]
 fn create_test_collection(
     dir: &std::path::Path,
     dimension: usize,
     metric: DistanceMetric,
-) -> Collection {
-    Collection::create_with_options(dir.to_path_buf(), dimension, metric, StorageMode::Full)
-        .expect("create collection")
+) -> VectorCollection {
+    VectorCollection::create(
+        dir.to_path_buf(),
+        "test",
+        dimension,
+        metric,
+        StorageMode::Full,
+    )
+    .expect("create collection")
 }
 
 // ── AsyncIndexBuilder standalone integration ────────────────────────────
@@ -44,7 +48,6 @@ fn async_builder_enqueue_and_buffer_search() {
     let config = AsyncIndexBuilderConfig {
         merge_threshold: 100_000,
         segment_count: Some(2),
-        sync_mode: false,
     };
     let builder = AsyncIndexBuilder::new(config);
 
@@ -73,7 +76,6 @@ fn async_builder_threshold_triggers_correctly() {
     let config = AsyncIndexBuilderConfig {
         merge_threshold: 50,
         segment_count: Some(2),
-        sync_mode: false,
     };
     let builder = AsyncIndexBuilder::new(config);
 
@@ -174,8 +176,7 @@ fn wal_reopen_preserves_vectors() {
     }
 
     // Reopen and verify vectors are still searchable.
-    #[allow(deprecated)]
-    let coll = Collection::open(coll_dir).expect("reopen");
+    let coll = VectorCollection::open(coll_dir).expect("reopen");
     let query = make_vector(0, dim);
     let results = coll.search(&query, 5).expect("search after reopen");
     assert!(!results.is_empty(), "vectors must survive reopen");
@@ -212,8 +213,7 @@ fn crash_recovery_reindexes_gap_vectors() {
     // Collection dropped — simulates crash (HNSW may not be saved).
 
     // Reopen — recovery should detect gap and re-index.
-    #[allow(deprecated)]
-    let coll = Collection::open(coll_dir).expect("reopen after crash");
+    let coll = VectorCollection::open(coll_dir).expect("reopen after crash");
     let results = coll
         .search(&make_vector(0, dim), 5)
         .expect("search after recovery");
@@ -240,9 +240,7 @@ fn flush_full_no_recovery_needed() {
         coll.upsert_bulk(&points).expect("upsert_bulk");
         coll.flush_full().expect("flush_full");
     }
-
-    #[allow(deprecated)]
-    let coll = Collection::open(coll_dir).expect("reopen");
+    let coll = VectorCollection::open(coll_dir).expect("reopen");
     let results = coll
         .search(&make_vector(0, dim), 5)
         .expect("search after flush_full reopen");
@@ -278,6 +276,9 @@ fn async_builder_config_serde_backward_compat() {
 fn async_builder_config_serde_with_config() {
     use velesdb_core::collection::CollectionConfig;
 
+    // The legacy `sync_mode` field is retained in this fixture on purpose:
+    // older `config.json` files persisted before its removal must continue
+    // to deserialize. serde drops unknown fields silently.
     let json = r#"{
         "name": "new_collection",
         "dimension": 128,
@@ -296,7 +297,6 @@ fn async_builder_config_serde_with_config() {
         .expect("async_index_builder must be Some");
     assert_eq!(aib.merge_threshold, 5000);
     assert_eq!(aib.segment_count, Some(4));
-    assert!(aib.sync_mode);
 }
 
 // ── V2 wired path: DirectVectorWriter + AsyncIndexBuilder ───────────────
@@ -310,12 +310,10 @@ fn v2_path_produces_searchable_results() {
     let config = velesdb_core::collection::streaming::AsyncIndexBuilderConfig {
         merge_threshold: 50, // Low threshold to trigger flush during test
         segment_count: Some(2),
-        sync_mode: false,
     };
-
-    #[allow(deprecated)]
-    let coll = Collection::create_with_async_builder(coll_dir, dim, DistanceMetric::Cosine, config)
-        .expect("create collection with async builder");
+    let coll =
+        VectorCollection::create_with_async_builder(coll_dir, dim, DistanceMetric::Cosine, config)
+            .expect("create collection with async builder");
 
     // Insert 100 vectors via upsert_bulk (V2 path).
     let points: Vec<Point> = (0..100)
@@ -350,11 +348,9 @@ fn v2_path_maintains_recall() {
     let config = velesdb_core::collection::streaming::AsyncIndexBuilderConfig {
         merge_threshold: 50,
         segment_count: Some(2),
-        sync_mode: false,
     };
-    #[allow(deprecated)]
     let v2_coll =
-        Collection::create_with_async_builder(v2_dir, dim, DistanceMetric::Cosine, config)
+        VectorCollection::create_with_async_builder(v2_dir, dim, DistanceMetric::Cosine, config)
             .expect("create V2 collection");
 
     // Create standard collection for comparison.

@@ -29,13 +29,10 @@ impl QuantizedVector {
     /// # Arguments
     ///
     /// * `vector` - The original f32 vector to quantize
-    ///
-    /// # Panics
-    ///
-    /// Panics if the vector is empty.
     #[must_use]
     pub fn from_f32(vector: &[f32]) -> Self {
-        assert!(!vector.is_empty(), "Cannot quantize empty vector");
+        // Caller guarantees non-empty (dimension validated at collection level).
+        debug_assert!(!vector.is_empty(), "Cannot quantize empty vector");
 
         let min = vector.iter().copied().fold(f32::INFINITY, f32::min);
         let max = vector.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -46,7 +43,7 @@ impl QuantizedVector {
             vec![128u8; vector.len()]
         } else {
             let scale = 255.0 / range;
-            // SAFETY: Value is clamped to [0.0, 255.0] before cast, guaranteeing it fits in u8.
+            // Reason: Value is clamped to [0.0, 255.0] before cast, guaranteeing it fits in u8.
             // cast_sign_loss is safe because clamped value is always non-negative.
             // cast_possible_truncation is safe because clamped value is always <= 255.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

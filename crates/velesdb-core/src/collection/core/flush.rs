@@ -44,7 +44,7 @@ impl Collection {
         // Drain async index builder buffer (V2 bulk insert path) into HNSW.
         // Without this, sub-threshold batches from upsert_bulk would remain
         // invisible to search until the buffer reaches merge_threshold.
-        self.drain_async_index_builder();
+        self.drain_async_index_builder()?;
         // Issue #423 Component 3: Save HNSW only when insert threshold
         // exceeded. Otherwise defer to flush_full() (shutdown/compaction).
         self.save_hnsw_if_threshold_exceeded()?;
@@ -63,20 +63,55 @@ impl Collection {
     ///
     /// Returns an error if storage operations fail.
     pub fn flush_full(&self) -> Result<()> {
+        self.flush_core_storage()?;
+        self.flush_derived_indexes()?;
+        // Write the deferred vectors.idx AFTER all other flush steps.
+        self.vector_storage.read().flush_index()?;
+        Ok(())
+    }
+
+    /// Flushes config + vector/payload storage + drains + HNSW save.
+    ///
+    /// Extracted from `flush_full` to keep its CC under the Codacy limit
+    /// after adding the BM25 snapshot/WAL step (#389).
+    fn flush_core_storage(&self) -> Result<()> {
         self.save_config()?;
         self.vector_storage.write().flush()?;
         self.payload_storage.write().flush()?;
         self.drain_delta_into_index();
         self.drain_deferred_into_index();
-        self.drain_async_index_builder();
+        self.drain_async_index_builder()?;
         // Always save HNSW on full flush and reset the counter.
         self.index.save(&self.path)?;
         self.inserts_since_last_hnsw_save
             .store(0, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Persists all derived indexes (secondary, sparse, BM25) in order.
+    ///
+    /// BM25 (issue #389) is ordered AFTER sparse so the collection-level
+    /// flush semantics remain "durable → truncate WAL" uniformly for both.
+    fn flush_derived_indexes(&self) -> Result<()> {
         self.flush_secondary_indexes()?;
         self.flush_sparse_indexes()?;
-        // Write the deferred vectors.idx after all other flush steps.
-        self.vector_storage.read().flush_index()?;
+        self.flush_bm25_index()?;
+        Ok(())
+    }
+
+    /// Persists the BM25 index as an atomic snapshot and truncates its
+    /// WAL on success (issue #389).
+    ///
+    /// Skipped entirely when the index is empty: no snapshot file is
+    /// created, so a pre-existing (non-BM25) collection reopened by
+    /// newer code does not gain a spurious empty snapshot.
+    fn flush_bm25_index(&self) -> Result<()> {
+        if self.text_index.is_empty() {
+            return Ok(());
+        }
+        crate::index::bm25_persistence::save_snapshot(&self.path, &self.text_index)?;
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.path);
+        crate::index::bm25_persistence_wal::wal_truncate(&wal_path)?;
         Ok(())
     }
 
@@ -190,7 +225,14 @@ impl Collection {
     /// `AsyncIndexBuilder` would be stored but invisible to ANN search.
     ///
     /// No-op when the async index builder is not configured.
-    fn drain_async_index_builder(&self) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the async index builder flush fails (e.g. lock
+    /// contention or internal batch-insert error). The error is logged at
+    /// `warn` level before propagation so that operational dashboards can
+    /// alert on repeated failures.
+    fn drain_async_index_builder(&self) -> Result<()> {
         if let Some(ref aib) = self.async_index_builder {
             match aib.flush_sync(&self.index) {
                 Ok(count) if count > 0 => {
@@ -198,10 +240,12 @@ impl Collection {
                 }
                 Err(e) => {
                     tracing::warn!("flush: async index builder drain failed: {e}");
+                    return Err(e);
                 }
                 _ => {}
             }
         }
+        Ok(())
     }
 
     /// Persists property index, range index, and edge store (EPIC-009 US-005).
@@ -243,8 +287,27 @@ impl Collection {
     /// Saves the collection configuration to disk.
     ///
     /// Uses atomic write-tmp-fsync-rename to prevent torn writes on crash.
+    ///
+    /// Under the `test-fault-injection` cargo feature, checks a
+    /// process-wide flag first and returns a synthetic `Error::Io`
+    /// without touching the file system. This seam lets downstream
+    /// crates (velesdb-server tests in particular) exercise the
+    /// rollback path of `apply_advanced_config` without needing a
+    /// real disk-full or permission error. The check is a single
+    /// atomic load and is optimised out entirely when the feature
+    /// is disabled.
     pub(crate) fn save_config(&self) -> Result<()> {
         use std::io::Write;
+
+        #[cfg(feature = "test-fault-injection")]
+        {
+            if crate::fault_injection::should_fail_save_config() {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "fault-injected save_config failure (test-fault-injection feature)",
+                )));
+            }
+        }
 
         let config = self.config.read();
         let config_path = self.path.join("config.json");
@@ -259,5 +322,68 @@ impl Collection {
         writer.get_ref().sync_all()?;
         std::fs::rename(&tmp_path, &config_path)?;
         Ok(())
+    }
+
+    /// Vacuums the HNSW index of this collection, rebuilding the
+    /// graph from the current vector storage and reclaiming memory
+    /// occupied by tombstoned entries. Returns the number of entries
+    /// compacted.
+    ///
+    /// This is the collection-level wrapper around
+    /// [`HnswIndex::vacuum`] used by the server admin endpoint
+    /// `POST /collections/{name}/index/rebuild` (finding F-21).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying HNSW vacuum fails (for
+    /// instance, when vector storage is disabled on the index).
+    pub(crate) fn vacuum_hnsw_index(&self) -> Result<usize> {
+        self.index
+            .vacuum()
+            .map_err(|e| Error::Index(format!("HNSW vacuum failed: {e}")))
+    }
+
+    /// Applies post-creation overrides to the advanced configuration
+    /// fields and persists the updated `config.json` atomically.
+    ///
+    /// This is used by the server `POST /collections` handler to wire
+    /// `pq_rescore_oversampling`, `deferred_indexing`, and
+    /// `async_index_builder` from the REST payload after the collection
+    /// has been created with its base options (HNSW, storage mode).
+    /// Passing `None` leaves the corresponding field unchanged — callers
+    /// that need to clear a field should pass `Some(None)` via the
+    /// nested `Option`.
+    ///
+    /// The `Option<Option<T>>` pattern encodes three states:
+    /// `None` (leave unchanged), `Some(None)` (clear the field), and
+    /// `Some(Some(v))` (set the field to `v`). A clippy allow is
+    /// applied locally because that is exactly what we need here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the updated config cannot be written to disk.
+    #[allow(clippy::option_option)]
+    pub(crate) fn apply_advanced_config(
+        &self,
+        pq_rescore_oversampling: Option<Option<u32>>,
+        #[cfg(feature = "persistence")] deferred_indexing: Option<
+            Option<crate::collection::streaming::DeferredIndexerConfig>,
+        >,
+        async_index_builder: Option<Option<crate::collection::streaming::AsyncIndexBuilderConfig>>,
+    ) -> Result<()> {
+        {
+            let mut config = self.config.write();
+            if let Some(rescore) = pq_rescore_oversampling {
+                config.pq_rescore_oversampling = rescore;
+            }
+            #[cfg(feature = "persistence")]
+            if let Some(deferred) = deferred_indexing {
+                config.deferred_indexing = deferred;
+            }
+            if let Some(aib) = async_index_builder {
+                config.async_index_builder = aib;
+            }
+        }
+        self.save_config()
     }
 }

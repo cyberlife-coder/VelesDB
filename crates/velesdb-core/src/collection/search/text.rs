@@ -36,6 +36,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if storage retrieval fails.
+    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
         let bm25_results = self.text_index.search(query, k);
 
@@ -70,6 +71,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if storage retrieval fails.
+    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn text_search_with_filter(
         &self,
         query: &str,

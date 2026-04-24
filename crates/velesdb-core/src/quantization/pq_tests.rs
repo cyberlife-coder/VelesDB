@@ -1,6 +1,6 @@
 //! Tests for Product Quantization (PQ) and OPQ modules.
 
-use super::{distance_pq_l2, PQVector, ProductQuantizer};
+use super::{distance_pq_l2, pq_adc_batch_rescore, PQVector, ProductQuantizer};
 use crate::error::Error;
 use crate::quantization::pq_kmeans::l2_squared;
 
@@ -877,4 +877,104 @@ fn compute_avg_recall(
     }
 
     total_recall / num_queries as f64
+}
+
+// ====================================================================
+// ADC SIMD batch integration tests
+// ====================================================================
+
+#[test]
+fn adc_batch_rescore_empty_input_returns_empty() {
+    let vectors = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
+    let pq = ProductQuantizer::train(&vectors, 2, 2).expect("test: training succeeds");
+    let query = [1.0, 2.0, 3.0, 4.0];
+    let result = pq_adc_batch_rescore(&pq, &query, &[]).expect("test: empty batch succeeds");
+    assert!(result.is_empty(), "empty input should produce empty output");
+}
+
+#[test]
+fn adc_batch_rescore_matches_scalar_small_batch() {
+    // Small batch (< ADC_SIMD_BATCH_THRESHOLD=8) exercises the scalar fallback.
+    let vectors = generate_offset_clustered_vectors(100, 16, 4, 2.0, 9999);
+    let pq = ProductQuantizer::train(&vectors, 4, 16).expect("test: training succeeds");
+
+    let codes: Vec<PQVector> = vectors.iter().map(|v| pq.quantize(v).unwrap()).collect();
+    let query = &vectors[0];
+
+    // Scalar reference: per-item distance_pq_l2
+    let scalar_dists: Vec<f32> = codes
+        .iter()
+        .take(4)
+        .map(|c| distance_pq_l2(query, c, &pq))
+        .collect();
+
+    // Batch ADC
+    let pq_refs: Vec<&PQVector> = codes.iter().take(4).collect();
+    let batch_dists =
+        pq_adc_batch_rescore(&pq, query, &pq_refs).expect("test: batch rescore succeeds");
+
+    assert_eq!(batch_dists.len(), scalar_dists.len());
+    for (i, (batch, scalar)) in batch_dists.iter().zip(scalar_dists.iter()).enumerate() {
+        assert!(
+            (batch - scalar).abs() < 1e-4,
+            "distance mismatch at index {i}: batch={batch}, scalar={scalar}"
+        );
+    }
+}
+
+#[test]
+fn adc_batch_rescore_matches_scalar_large_batch() {
+    // Large batch (>= 8) exercises the SIMD path.
+    let vectors = generate_offset_clustered_vectors(200, 32, 4, 3.0, 42);
+    let pq = ProductQuantizer::train(&vectors, 8, 32).expect("test: training succeeds");
+
+    let codes: Vec<PQVector> = vectors.iter().map(|v| pq.quantize(v).unwrap()).collect();
+    let query = &vectors[10];
+
+    // Scalar reference
+    let scalar_dists: Vec<f32> = codes
+        .iter()
+        .map(|c| distance_pq_l2(query, c, &pq))
+        .collect();
+
+    // Batch ADC (all 200 vectors)
+    let pq_refs: Vec<&PQVector> = codes.iter().collect();
+    let batch_dists =
+        pq_adc_batch_rescore(&pq, query, &pq_refs).expect("test: batch rescore succeeds");
+
+    assert_eq!(batch_dists.len(), scalar_dists.len());
+    for (i, (batch, scalar)) in batch_dists.iter().zip(scalar_dists.iter()).enumerate() {
+        assert!(
+            (batch - scalar).abs() < 1e-3,
+            "distance mismatch at index {i}: batch={batch}, scalar={scalar}"
+        );
+    }
+}
+
+#[test]
+fn adc_batch_rescore_preserves_ordering() {
+    // Verify that the batch ADC path produces the same top-k ranking as scalar.
+    let vectors = generate_offset_clustered_vectors(500, 64, 4, 5.0, 777);
+    let pq = ProductQuantizer::train(&vectors, 8, 256).expect("test: training succeeds");
+
+    let codes: Vec<PQVector> = vectors.iter().map(|v| pq.quantize(v).unwrap()).collect();
+    let query = &vectors[0];
+    let top_k = 10;
+
+    // Scalar top-k
+    let scalar_top = pq_adc_top_k(query, &vectors, &pq, top_k);
+
+    // Batch ADC top-k
+    let pq_refs: Vec<&PQVector> = codes.iter().collect();
+    let batch_dists =
+        pq_adc_batch_rescore(&pq, query, &pq_refs).expect("test: batch rescore succeeds");
+    let mut indexed: Vec<(usize, f32)> = batch_dists.into_iter().enumerate().collect();
+    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    let batch_top: Vec<usize> = indexed.iter().take(top_k).map(|&(i, _)| i).collect();
+
+    let recall = recall_fraction(&scalar_top, &batch_top);
+    assert!(
+        recall >= 1.0,
+        "batch ADC top-k should match scalar top-k exactly, got recall={recall}"
+    );
 }

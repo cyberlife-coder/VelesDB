@@ -12,10 +12,18 @@ from typing import Any, Iterable
 
 from velesdb.velesdb import (  # type: ignore[attr-defined]
     AgentMemory,
+    AutoReindexOptions,
     Collection as _RawCollection,
+    CollectionExistsError,
+    CollectionNotFoundError,
     Database as _RawDatabase,
+    DatabaseLockedError,
+    DimensionMismatchError,
+    EdgeExistsError,
     FusionStrategy,
     GraphStore as _RawGraphStore,
+    HnswOptions,
+    LimitsOptions,
     ParsedStatement,
     PyEpisodicMemory,
     GraphCollection as PyGraphCollection,
@@ -25,11 +33,32 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     SearchResult,
     StreamingConfig,
     TraversalResult,
+    VelesConfigOptions,
+    VelesDBError,
     VelesQL as _RawVelesQL,
     VelesQLParameterError,
     VelesQLSyntaxError,
     __version__,
 )
+
+
+# Canonical metric names used by the Rust engine (DistanceMetric::canonical_name).
+# Maps common aliases to the canonical form so Python-side comparisons are
+# consistent regardless of which spelling the user provides.
+_METRIC_ALIASES: dict[str, str] = {
+    "dotproduct": "dot",
+    "dot_product": "dot",
+    "inner": "dot",
+    "ip": "dot",
+    "l2": "euclidean",
+    "cos": "cosine",
+}
+
+
+def _normalize_metric(m: str) -> str:
+    """Normalize a metric name to its canonical form."""
+    key = m.strip().lower()
+    return _METRIC_ALIASES.get(key, key)
 
 
 class GraphStore:
@@ -105,6 +134,9 @@ class Collection:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
+    def __len__(self) -> int:
+        return self._inner.__len__()
+
     def upsert(
         self,
         points_or_id: Any,
@@ -156,6 +188,37 @@ class Collection:
             searches = [{"vector": list(v), "top_k": int(top_k)} for v in queries]
         return self._inner.batch_search(searches)
 
+    def multi_query_search(
+        self,
+        vectors: list[list[float]],
+        top_k: int = 10,
+        fusion: Any = None,
+        filter: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Multi-query search with result fusion.
+
+        Args:
+            vectors: List of query vectors.
+            top_k: Number of results per query (default: 10).
+            fusion: Optional FusionStrategy instance.
+            filter: Optional metadata filter dict.
+        """
+        return self._inner.multi_query_search(
+            vectors, top_k=top_k, fusion=fusion, filter=filter,
+        )
+
+    def stream_insert(self, points: list[dict[str, Any]]) -> int:
+        """Streaming insert for real-time ingestion."""
+        return self._inner.stream_insert(points)
+
+    def search_batch_parallel(
+        self,
+        vectors: list[list[float]],
+        top_k: int = 10,
+    ) -> list[list[dict[str, Any]]]:
+        """Parallel batch search using rayon."""
+        return self._inner.search_batch_parallel(vectors, top_k=top_k)
+
     def search_with_quality(
         self,
         vector: Any,
@@ -166,7 +229,9 @@ class Collection:
 
         Args:
             vector: Query vector (list or numpy array).
-            quality: One of 'fast', 'balanced', 'accurate', 'perfect', 'autotune'.
+            quality: One of 'fast', 'balanced', 'accurate', 'perfect', 'autotune',
+                     'custom:<ef>' (e.g. 'custom:256'), or 'adaptive:<min>:<max>'
+                     (e.g. 'adaptive:32:512').
             top_k: Number of results (default: 10).
 
         Returns:
@@ -175,10 +240,27 @@ class Collection:
         return self._inner.search_with_quality(vector, quality, top_k)
 
     def count(self) -> int:
-        info = self._inner.info()
-        return int(info.get("point_count", 0))
+        """Return the number of points in the collection."""
+        return self._inner.count()
 
     def get_graph_store(self) -> GraphStore:
+        """Return a standalone in-memory graph store.
+
+        Warning:
+            This graph store is **independent** of this collection's data.
+            Edges and nodes added here are NOT persisted to the collection.
+            For persistent graph operations, use
+            ``Database.get_graph_collection()`` instead.
+        """
+        import warnings
+
+        warnings.warn(
+            "Collection.get_graph_store() returns a standalone in-memory "
+            "graph not connected to this collection. Use "
+            "Database.get_graph_collection() for persistent graph operations.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if self._graph_store is None:
             self._graph_store = GraphStore()
         return self._graph_store
@@ -187,8 +269,12 @@ class Collection:
 class Database:
     """Compatibility adapter around the Rust Database binding."""
 
-    def __init__(self, path: str) -> None:
-        self._inner = _RawDatabase(path)
+    def __init__(
+        self,
+        path: str,
+        config: VelesConfigOptions | None = None,
+    ) -> None:
+        self._inner = _RawDatabase(path, config)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -199,12 +285,41 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
-        m: int | None = None,
-        ef_construction: int | None = None,
-        expected_vectors: int | None = None,
+        hnsw: HnswOptions | None = None,
+        auto_reindex: AutoReindexOptions | None = None,
     ) -> "Collection":
+        """Create a new vector collection.
+
+        Args:
+            name: Collection name.
+            dimension: Vector dimension (e.g. 768 for BERT embeddings).
+            metric: Distance metric (default ``"cosine"``). One of ``"cosine"``,
+                ``"euclidean"``, ``"dot"``, ``"hamming"``, ``"jaccard"``.
+            storage_mode: Storage mode (default ``"full"``). Accepted values
+                (case-insensitive; aliases in parentheses):
+
+                - ``"full"`` (``"f32"``): Full f32 precision — best recall.
+                - ``"sq8"`` (``"int8"``): 8-bit scalar quantization — 4x compression.
+                - ``"binary"`` (``"bit"``): 1-bit binary quantization — 32x compression.
+                - ``"pq"`` (``"product_quantization"``): Product Quantization — 8x-16x
+                  compression via trained codebooks (requires a training step).
+                - ``"rabitq"``: RaBitQ — 1-bit with rotation + scalar correction,
+                  32x compression with ~1-2% recall loss.
+
+            hnsw: Optional :class:`HnswOptions` dataclass with typed HNSW
+                parameters. Replaces the legacy v1.12 flat kwargs
+                (``m=``, ``ef_construction=``, ``expected_vectors=``) —
+                see the v1.13 CHANGELOG for the migration guide.
+            auto_reindex: Optional :class:`AutoReindexOptions` dataclass.
+                When provided, an ``AutoReindexManager`` is constructed and
+                attached to the freshly-created collection as a runtime-only
+                hook (not persisted — re-attach after every ``Database(path)``).
+
+        Returns:
+            Collection instance wrapping the underlying Rust collection.
+        """
         col = self._inner.create_collection(
-            name, dimension, metric, storage_mode, m, ef_construction, expected_vectors
+            name, dimension, metric, storage_mode, hnsw, auto_reindex
         )
         return Collection(col)
 
@@ -220,16 +335,48 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
-        m: int | None = None,
-        ef_construction: int | None = None,
-        expected_vectors: int | None = None,
+        hnsw: HnswOptions | None = None,
+        auto_reindex: AutoReindexOptions | None = None,
     ) -> "Collection":
+        """Return an existing collection or create it if missing.
+
+        When the collection already exists, its ``dimension`` and ``metric``
+        are validated against the requested parameters. A ``ValueError`` is
+        raised on mismatch. Other parameters (``storage_mode``, ``hnsw``,
+        ``auto_reindex``) are ignored for the lookup path.
+
+        Args and accepted storage modes are identical to :meth:`create_collection`.
+
+        Returns:
+            Existing :class:`Collection` if found, otherwise a freshly created one.
+
+        Raises:
+            ValueError: If the existing collection has a different dimension or metric.
+        """
         existing = self.get_collection(name)
         if existing is not None:
+            existing_dim = existing._inner.dimension
+            existing_metric = existing._inner.metric
+            if existing_dim != dimension:
+                raise ValueError(
+                    f"Collection '{name}' exists with dimension {existing_dim}, "
+                    f"but requested dimension {dimension}. "
+                    f"Use a different name or matching parameters."
+                )
+            if _normalize_metric(existing_metric) != _normalize_metric(metric):
+                raise ValueError(
+                    f"Collection '{name}' exists with metric '{existing_metric}', "
+                    f"but requested metric '{metric}'. "
+                    f"Use a different name or matching parameters."
+                )
             return existing
         return self.create_collection(
-            name, dimension=dimension, metric=metric, storage_mode=storage_mode,
-            m=m, ef_construction=ef_construction, expected_vectors=expected_vectors,
+            name,
+            dimension=dimension,
+            metric=metric,
+            storage_mode=storage_mode,
+            hnsw=hnsw,
+            auto_reindex=auto_reindex,
         )
 
     def create_metadata_collection(self, name: str) -> "Collection":
@@ -331,5 +478,22 @@ __all__ = [
     "PyProceduralMemory",
     "PyGraphCollection",
     "PyGraphSchema",
+    # Typed VelesDB exception hierarchy (all inherit from `VelesDBError`).
+    # Import them via `import velesdb` and catch the specific subclass
+    # for actionable error handling; use `VelesDBError` as a catch-all.
+    "VelesDBError",
+    "CollectionNotFoundError",
+    "CollectionExistsError",
+    "DimensionMismatchError",
+    "EdgeExistsError",
+    "DatabaseLockedError",
+    # Typed options dataclasses (Wave 3 Commit 10). `HnswOptions` and
+    # `AutoReindexOptions` are passed to `Database.create_collection`;
+    # `LimitsOptions` wraps tenant-wide guard-rails; `VelesConfigOptions`
+    # is the database-level wrapper passed to `Database(path, config=...)`.
+    "HnswOptions",
+    "LimitsOptions",
+    "AutoReindexOptions",
+    "VelesConfigOptions",
     "__version__",
 ]

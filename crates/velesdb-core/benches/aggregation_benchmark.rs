@@ -1,4 +1,3 @@
-#![allow(deprecated)] // Benches use legacy Collection.
 //! Benchmark for parallel aggregation (EPIC-018 US-001).
 //!
 //! Compares performance at different data scales to prove parallel speedup.
@@ -9,14 +8,14 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use serde_json::json;
 use std::collections::HashMap;
 use tempfile::TempDir;
-use velesdb_core::{Collection, Database, DistanceMetric, Point};
+use velesdb_core::{Database, DistanceMetric, Point, VectorCollection};
 
-fn create_test_collection(size: usize) -> (Collection, TempDir) {
+fn create_test_collection(size: usize) -> (VectorCollection, TempDir) {
     let tmp = TempDir::new().expect("temp dir");
     let db = Database::open(tmp.path()).expect("db");
     db.create_collection("bench", 64, DistanceMetric::Cosine)
         .expect("collection");
-    let collection = db.get_collection("bench").expect("get collection");
+    let collection = db.get_vector_collection("bench").expect("get collection");
 
     let categories = ["tech", "science", "business", "sports", "health"];
     let points: Vec<Point> = (0..size)

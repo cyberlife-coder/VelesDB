@@ -3,7 +3,7 @@
 //! Provides O(1) lookups on (label, property_name, value) instead of O(n) scans.
 //! Also includes composite indexes for (label, property1, property2, ...) lookups.
 
-// SAFETY: Numeric casts in property indexing are intentional:
+// Reason: Numeric casts in property indexing are intentional:
 // - u128->u64 for millisecond timestamps: values fit within u64 range
 // - u64/usize->f64 for statistics: precision loss acceptable for query planning
 // - All values are bounded by collection sizes and query counts
@@ -15,14 +15,16 @@ mod advisor;
 mod composite;
 mod range;
 
-// Reason: EPIC-047 types are dead_code (not yet used externally), suppress unused import warnings
+pub(crate) use advisor::PredicateType;
+#[allow(unused_imports)] // Reason: PatternStats used by property_index_tests
+pub use advisor::{IndexAdvisor, IndexSuggestion, PatternStats, QueryPattern, QueryPatternTracker};
 #[allow(unused_imports)]
-pub use advisor::{
-    IndexAdvisor, IndexSuggestion, PatternStats, PredicateType, QueryPattern, QueryPatternTracker,
-};
+// Reason: Used by property_index_tests; not referenced from production code yet
+pub(crate) use composite::CompositeIndexType;
+#[allow(unused_imports)] // Reason: CompositeGraphIndex used by property_index_tests
+pub use composite::{CompositeGraphIndex, CompositeIndexManager};
 #[allow(unused_imports)]
-pub use composite::{CompositeGraphIndex, CompositeIndexManager, CompositeIndexType};
-#[allow(unused_imports)]
+// Reason: IndexIntersection, OrderedValue used by property_index_tests
 pub use range::{CompositeRangeIndex, EdgePropertyIndex, IndexIntersection, OrderedValue};
 
 use super::helpers::{make_label_prop_key, safe_bitmap_id, PostcardPersistence};

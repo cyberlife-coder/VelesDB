@@ -8,9 +8,9 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use super::{
-    default_avg_weight, default_collection_type, default_fusion_strategy, default_hit_weight,
-    default_index_type, default_max_weight, default_metric, default_rrf_k, default_storage_mode,
-    default_top_k, default_vector_weight,
+    default_avg_weight, default_collection_type, default_dense_weight, default_fusion_strategy,
+    default_hit_weight, default_index_type, default_max_weight, default_metric, default_rrf_k,
+    default_sparse_weight, default_storage_mode, default_top_k, default_vector_weight, serde_id,
 };
 
 // ============================================================================
@@ -47,6 +47,56 @@ pub struct CreateCollectionRequest {
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(example = 400, nullable))]
     pub hnsw_ef_construction: Option<usize>,
+    /// VAMANA alpha for neighbor diversification (default derived from dimension).
+    ///
+    /// Values > 1.0 bias `select_neighbors` toward diversity over proximity,
+    /// producing a more navigable graph with better recall. The engine
+    /// default is 1.2 (VAMANA paper recommendation). Set to 1.0 for strict
+    /// nearest-neighbor selection.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(example = 1.2, nullable))]
+    pub hnsw_alpha: Option<f32>,
+    /// Initial HNSW capacity (grows automatically if exceeded).
+    ///
+    /// Pre-sizing matters for bulk imports: the engine avoids repeated
+    /// realloc-and-copy cycles when the final population is known upfront.
+    /// Use this when migrating a large existing corpus into a fresh
+    /// collection.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(example = 1_000_000, nullable))]
+    pub hnsw_max_elements: Option<usize>,
+    /// PQ rescore oversampling factor (default 4).
+    ///
+    /// The search pipeline fetches `max(k * factor, k + 32)` candidates
+    /// from HNSW and rescores them with full-precision ADC. Only
+    /// meaningful for quantised storage modes (SQ8, PQ). `Some(0)` is
+    /// treated as "disabled".
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(example = 4, nullable))]
+    pub pq_rescore_oversampling: Option<u32>,
+    /// Deferred indexing configuration (`US-366`).
+    ///
+    /// When present, inserts are buffered in memory and batch-merged
+    /// into the HNSW index when the buffer reaches `merge_threshold`.
+    /// Accepted as a free-form JSON object matching
+    /// `velesdb_core::collection::streaming::DeferredIndexerConfig`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_indexing: Option<serde_json::Value>,
+    /// Async index builder configuration (Issue `#488` — Bulk Insert V2).
+    ///
+    /// When present, enables the `AsyncIndexBuilder` for deferred HNSW
+    /// insertion during bulk import. Accepted as a free-form JSON object
+    /// matching
+    /// `velesdb_core::collection::streaming::AsyncIndexBuilderConfig`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_index_builder: Option<serde_json::Value>,
+    /// Graph schema (only for `collection_type = "graph"`).
+    ///
+    /// Accepted as a free-form JSON object matching
+    /// `velesdb_core::GraphSchema`. `GraphSchema::schemaless()` is
+    /// used when the field is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_schema: Option<serde_json::Value>,
 }
 
 // ============================================================================
@@ -60,6 +110,7 @@ pub struct CreateCollectionRequest {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum SparseVectorInput {
     /// Canonical parallel-array format with explicit indices and values.
     Parallel {
@@ -131,7 +182,8 @@ impl SparseVectorInput {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct FusionRequest {
-    /// Fusion strategy: "rrf" or "rsf".
+    /// Fusion strategy: "rrf", "rsf" (alias "`relative_score`"),
+    /// "average" (alias "avg"), "maximum" (alias "max"), or "weighted".
     #[cfg_attr(feature = "openapi", schema(example = "rrf"))]
     pub strategy: String,
     /// RRF k parameter (only for strategy = "rrf", default 60).
@@ -143,6 +195,18 @@ pub struct FusionRequest {
     /// Sparse weight (only for strategy = "rsf", default 0.5).
     #[serde(default)]
     pub sparse_w: Option<f32>,
+    /// Weighted fusion: weight applied to the average score component
+    /// (only for strategy = "weighted", default 0.5).
+    #[serde(default)]
+    pub avg_w: Option<f32>,
+    /// Weighted fusion: weight applied to the maximum score component
+    /// (only for strategy = "weighted", default 0.3).
+    #[serde(default)]
+    pub max_w: Option<f32>,
+    /// Weighted fusion: weight applied to the hit-ratio component
+    /// (only for strategy = "weighted", default 0.2).
+    #[serde(default)]
+    pub hit_w: Option<f32>,
 }
 
 // ============================================================================
@@ -162,6 +226,7 @@ pub struct UpsertPointsRequest {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct PointRequest {
     /// Point ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Vector data.
     pub vector: Vec<f32>,
@@ -180,6 +245,7 @@ pub struct PointRequest {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct StreamInsertRequest {
     /// Point ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Dense vector data.
     pub vector: Vec<f32>,
@@ -287,7 +353,7 @@ pub struct MultiQuerySearchRequest {
     #[serde(default = "default_top_k")]
     #[cfg_attr(feature = "openapi", schema(example = 10))]
     pub top_k: usize,
-    /// Fusion strategy: "average", "maximum", "rrf", "weighted".
+    /// Fusion strategy: "average", "maximum", "rrf", "weighted", "`relative_score`".
     #[serde(default = "default_fusion_strategy")]
     #[cfg_attr(feature = "openapi", schema(example = "rrf"))]
     pub strategy: String,
@@ -307,6 +373,14 @@ pub struct MultiQuerySearchRequest {
     #[serde(default = "default_hit_weight")]
     #[cfg_attr(feature = "openapi", schema(example = 0.2))]
     pub hit_weight: f32,
+    /// Relative score fusion: weight for the dense (vector) branch.
+    #[serde(default = "default_dense_weight")]
+    #[cfg_attr(feature = "openapi", schema(example = 0.5))]
+    pub dense_weight: f32,
+    /// Relative score fusion: weight for the sparse branch.
+    #[serde(default = "default_sparse_weight")]
+    #[cfg_attr(feature = "openapi", schema(example = 0.5))]
+    pub sparse_weight: f32,
     /// Optional metadata filter.
     #[serde(default)]
     pub filter: Option<serde_json::Value>,
@@ -343,6 +417,9 @@ pub struct ExplainRequest {
     /// Named parameters for the query.
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
+    /// When true, execute the query and return actual statistics alongside the plan.
+    #[serde(default)]
+    pub analyze: bool,
 }
 
 // ============================================================================

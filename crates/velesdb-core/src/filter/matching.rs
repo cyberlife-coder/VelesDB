@@ -7,6 +7,72 @@ use serde_json::Value;
 const LIKE_MAX_PATTERN_BYTES: usize = 4096;
 const LIKE_MAX_DYN_OPS: usize = 2_000_000;
 
+/// Evaluates array-level conditions (single, any, all).
+fn match_array_condition(payload: &Value, field: &str, values: &[Value], mode: ArrayMode) -> bool {
+    get_field(payload, field).is_some_and(|v| match v {
+        Value::Array(arr) => match mode {
+            ArrayMode::Single => values
+                .first()
+                .is_some_and(|val| arr.iter().any(|e| values_equal(e, val))),
+            ArrayMode::Any => values
+                .iter()
+                .any(|val| arr.iter().any(|e| values_equal(e, val))),
+            ArrayMode::All => values
+                .iter()
+                .all(|val| arr.iter().any(|e| values_equal(e, val))),
+        },
+        _ => false,
+    })
+}
+
+/// Array condition matching mode.
+#[derive(Clone, Copy)]
+enum ArrayMode {
+    Single,
+    Any,
+    All,
+}
+
+/// Evaluates geospatial conditions (distance, bounding box).
+fn match_geo_distance(
+    payload: &Value,
+    field: &str,
+    lat: f64,
+    lng: f64,
+    operator: crate::velesql::CompareOp,
+    threshold: f64,
+) -> bool {
+    get_field(payload, field).is_some_and(|v| {
+        extract_geo_point(v).is_some_and(|(plat, plng)| {
+            let dist = haversine_distance_m(plat, plng, lat, lng);
+            compare_geo_distance(dist, threshold, operator)
+        })
+    })
+}
+
+/// Evaluates a geospatial bounding box check.
+fn match_geo_bbox(
+    payload: &Value,
+    field: &str,
+    lat_min: f64,
+    lng_min: f64,
+    lat_max: f64,
+    lng_max: f64,
+) -> bool {
+    get_field(payload, field).is_some_and(|v| {
+        extract_geo_point(v).is_some_and(|(plat, plng)| {
+            plat >= lat_min && plat <= lat_max && plng >= lng_min && plng <= lng_max
+        })
+    })
+}
+
+/// Extracts `(lat, lng)` from a JSON object with `"lat"` and `"lng"` keys.
+fn extract_geo_point(v: &Value) -> Option<(f64, f64)> {
+    let lat = v.get("lat").and_then(Value::as_f64)?;
+    let lng = v.get("lng").and_then(Value::as_f64)?;
+    Some((lat, lng))
+}
+
 impl Condition {
     /// Evaluates the condition against a payload.
     #[must_use]
@@ -43,6 +109,32 @@ impl Condition {
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, false))),
             Self::ILike { field, pattern } => get_field(payload, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, true))),
+            Self::ArrayContains { field, value } => match_array_condition(
+                payload,
+                field,
+                std::slice::from_ref(value),
+                ArrayMode::Single,
+            ),
+            Self::ArrayContainsAny { field, values } => {
+                match_array_condition(payload, field, values, ArrayMode::Any)
+            }
+            Self::ArrayContainsAll { field, values } => {
+                match_array_condition(payload, field, values, ArrayMode::All)
+            }
+            Self::GeoDistance {
+                field,
+                lat,
+                lng,
+                operator,
+                threshold,
+            } => match_geo_distance(payload, field, *lat, *lng, *operator, *threshold),
+            Self::GeoBbox {
+                field,
+                lat_min,
+                lng_min,
+                lat_max,
+                lng_max,
+            } => match_geo_bbox(payload, field, *lat_min, *lng_min, *lat_max, *lng_max),
         }
     }
 }
@@ -184,4 +276,31 @@ fn like_match_impl(text: &[u8], pattern: &[u8]) -> bool {
     }
 
     prev[n]
+}
+
+/// Haversine great-circle distance. Returns distance in **meters** (WGS-84 mean radius).
+///
+/// Kept local so this module compiles without the `persistence` feature
+/// (which gates `column_store::haversine`).
+fn haversine_distance_m(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
+    const EARTH_RADIUS_M: f64 = 6_371_000.0;
+    let (lat1, lng1) = (lat1.to_radians(), lng1.to_radians());
+    let (lat2, lng2) = (lat2.to_radians(), lng2.to_radians());
+    let dlat = lat2 - lat1;
+    let dlng = lng2 - lng1;
+    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlng / 2.0).sin().powi(2);
+    EARTH_RADIUS_M * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())
+}
+
+/// Applies a comparison operator to a geo-distance value and threshold.
+fn compare_geo_distance(dist: f64, threshold: f64, op: crate::velesql::CompareOp) -> bool {
+    use crate::velesql::CompareOp;
+    match op {
+        CompareOp::Eq => (dist - threshold).abs() < f64::EPSILON,
+        CompareOp::NotEq => (dist - threshold).abs() >= f64::EPSILON,
+        CompareOp::Gt => dist > threshold,
+        CompareOp::Gte => dist >= threshold,
+        CompareOp::Lt => dist < threshold,
+        CompareOp::Lte => dist <= threshold,
+    }
 }

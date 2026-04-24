@@ -3,7 +3,7 @@
 //! This module provides score breakdown and combination strategies
 //! for combining vector similarity, graph distance, and metadata boosts.
 
-// SAFETY: Numeric casts in score fusion are intentional:
+// Reason: Numeric casts in score fusion are intentional:
 // - All casts are for score normalization and combination (0-1 range)
 // - f64 precision loss acceptable for ranking heuristics
 // - usize->i32 for powi() indices: values bounded by path lengths (typically < 100)
@@ -17,7 +17,9 @@ mod boost;
 mod explanation;
 mod path;
 
-pub use boost::{BoostCombination, BoostFunction, CompositeBoost, FieldBoost, RecencyBoost};
+#[allow(unused_imports)] // Re-exported for test access
+pub(crate) use boost::BoostCombination;
+pub use boost::{BoostFunction, CompositeBoost, FieldBoost, RecencyBoost};
 pub use explanation::{ComponentExplanation, ScoreExplanation};
 pub use path::PathScorer;
 
@@ -151,7 +153,7 @@ impl ScoreBreakdown {
     }
 
     /// Compute final score using the specified strategy.
-    pub fn compute_final(&mut self, strategy: &FusionStrategy) {
+    pub fn compute_final(&mut self, strategy: &ScoreFusionMethod) {
         self.final_score = strategy.combine(self);
     }
 
@@ -184,8 +186,12 @@ impl ScoreBreakdown {
 }
 
 /// Strategy for combining multiple scores (EPIC-049 US-004).
+///
+/// Named `ScoreFusionMethod` to distinguish from the public
+/// [`crate::fusion::FusionStrategy`] enum used for multi-query result fusion.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum FusionStrategy {
+#[non_exhaustive]
+pub enum ScoreFusionMethod {
     /// Reciprocal Rank Fusion (RRF) - good for combining ranked lists.
     #[default]
     Rrf,
@@ -206,7 +212,7 @@ pub enum FusionStrategy {
     Average,
 }
 
-impl FusionStrategy {
+impl ScoreFusionMethod {
     /// Combine scores from a breakdown using this strategy.
     #[must_use]
     pub fn combine(&self, breakdown: &ScoreBreakdown) -> f32 {
@@ -241,7 +247,7 @@ impl FusionStrategy {
             }
             Self::Weighted => {
                 // Equal weights for now - could be configurable
-                // SAFETY: scores.len() is typically < 100, fits in f32 with full precision
+                // Reason: scores.len() is typically < 100, fits in f32 with full precision
                 #[allow(clippy::cast_precision_loss)]
                 let weight = 1.0 / scores.len() as f32;
                 scores.iter().map(|&s| s * weight).sum()
@@ -249,7 +255,7 @@ impl FusionStrategy {
             Self::Maximum => scores.iter().copied().fold(f32::MIN, f32::max),
             Self::Minimum => scores.iter().copied().fold(f32::MAX, f32::min),
             Self::Product => scores.iter().copied().product(),
-            // SAFETY: scores.len() is typically < 100, fits in f32 with full precision
+            // Reason: scores.len() is typically < 100, fits in f32 with full precision
             #[allow(clippy::cast_precision_loss)]
             Self::Average => scores.iter().sum::<f32>() / scores.len() as f32,
         };

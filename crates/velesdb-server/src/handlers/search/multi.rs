@@ -11,7 +11,8 @@ use std::sync::Arc;
 use crate::types::{ErrorResponse, MultiQuerySearchRequest, SearchResponse};
 use crate::AppState;
 
-use super::pipeline::{finish_search_with_cb, validate_query_dimension};
+use super::pipeline::{finish_search_with_cb, parse_filter_or_400, validate_query_dimension};
+use super::workers::run_blocking_search;
 use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
 /// Multi-query search with fusion strategies.
@@ -27,7 +28,7 @@ use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_co
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async, clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::result_large_err)]
 pub async fn multi_query_search(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -57,12 +58,17 @@ pub async fn multi_query_search(
             max_weight: req.max_weight,
             hit_weight: req.hit_weight,
         },
+        "relative_score" | "rsf" => FusionStrategy::RelativeScore {
+            dense_weight: req.dense_weight,
+            sparse_weight: req.sparse_weight,
+        },
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: format!(
-                        "Invalid strategy: {}. Valid: average, maximum, rrf, weighted",
+                        "Invalid strategy: {}. Valid: average, maximum, rrf, weighted, \
+                         relative_score",
                         req.strategy
                     ),
                     code: None,
@@ -86,10 +92,44 @@ pub async fn multi_query_search(
         }
     }
 
-    let start = std::time::Instant::now();
-    let query_refs: Vec<&[f32]> = req.vectors.iter().map(Vec::as_slice).collect();
+    // Parse the optional metadata filter. We need to materialise the
+    // `Filter` before starting the stopwatch so that a malformed filter
+    // yields a 400 response instead of a misleading 200 with unfiltered
+    // results. Regression guard: see
+    // `test_multi_query_search_with_filter_excludes_nonmatching_points`
+    // and `test_multi_query_search_with_invalid_filter_returns_400`
+    // (F-04).
+    let filter = match req.filter.as_ref() {
+        Some(filter_json) => match parse_filter_or_400(filter_json, &state.onboarding_metrics) {
+            Ok(f) => Some(f),
+            Err(resp) => return resp,
+        },
+        None => None,
+    };
 
-    let search_result = collection.multi_query_search(&query_refs, req.top_k, strategy, None);
+    let start = std::time::Instant::now();
+
+    // F-01 sweep: multi-vector fusion is CPU-bound (multiple HNSW
+    // passes plus a fusion step) and was previously executed on the
+    // async runtime thread. Move it to a blocking worker so concurrent
+    // requests stay responsive. We move `vectors` (owned
+    // `Vec<Vec<f32>>`) into the closure and rebuild the `&[f32]` slice
+    // view inside, because `spawn_blocking` requires a 'static closure
+    // and borrowed slice references cannot cross the boundary.
+    let collection_for_work = collection.clone();
+    let vectors = req.vectors;
+    let top_k = req.top_k;
+
+    let work_result = run_blocking_search(move || {
+        let query_refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+        Ok(collection_for_work.multi_query_search(&query_refs, top_k, strategy, filter.as_ref()))
+    })
+    .await;
+
+    let search_result = match work_result {
+        Ok(inner) => inner,
+        Err(resp) => return resp,
+    };
 
     finish_search_with_cb(&state, &name, start, &collection, search_result)
 }

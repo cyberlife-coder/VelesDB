@@ -1,11 +1,10 @@
-#![allow(deprecated)] // Benches use legacy Collection.
 //! Benchmark HNSW search with Full vs SQ8 vs PQ storage modes.
 
 #![allow(clippy::cast_precision_loss)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tempfile::tempdir;
-use velesdb_core::{Collection, DistanceMetric, Point, StorageMode};
+use velesdb_core::{DistanceMetric, Point, StorageMode, VectorCollection};
 
 fn generate_vector(dimension: usize, seed: usize) -> Vec<f32> {
     (0..dimension)
@@ -16,14 +15,19 @@ fn generate_vector(dimension: usize, seed: usize) -> Vec<f32> {
         .collect()
 }
 
-fn build_collection(storage_mode: StorageMode, n: usize, dimension: usize) -> Collection {
+fn build_collection(storage_mode: StorageMode, n: usize, dimension: usize) -> VectorCollection {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join(format!("bench_{storage_mode:?}"));
     std::mem::forget(dir); // keep for bench duration
 
-    let collection =
-        Collection::create_with_options(path, dimension, DistanceMetric::Euclidean, storage_mode)
-            .expect("create collection");
+    let collection = VectorCollection::create(
+        path,
+        "bench",
+        dimension,
+        DistanceMetric::Euclidean,
+        storage_mode,
+    )
+    .expect("create collection");
 
     let points: Vec<Point> = (0..n)
         .map(|id| Point::new(id as u64, generate_vector(dimension, id), None))

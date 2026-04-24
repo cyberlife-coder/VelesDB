@@ -98,6 +98,7 @@ impl fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Validation error categories.
 pub enum ValidationErrorKind {

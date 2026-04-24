@@ -28,7 +28,7 @@
 //! println!("Estimated latency: {}ms", estimate.estimated_latency_ms);
 //! ```
 
-// SAFETY: Numeric casts in query cost estimation are intentional:
+// Reason: Numeric casts in query cost estimation are intentional:
 // - All casts are for cost modeling and latency estimation
 // - f64/usize conversions for computing operation costs
 // - Values bounded by dataset size and hardware limits
@@ -39,6 +39,8 @@
 
 use std::fmt;
 
+pub mod calibration;
+pub mod cost_factors;
 pub mod cost_model;
 pub mod plan_generator;
 pub mod query_executor;
@@ -49,7 +51,7 @@ mod plan_generator_tests;
 mod tests;
 
 pub use cost_model::{CostEstimator, OperationCost, OperationCostFactors};
-pub use plan_generator::{CandidatePlan, PhysicalPlan, PlanGenerator, QueryCharacteristics};
+pub use plan_generator::{CandidatePlan, PlanGenerator, QueryCharacteristics};
 pub use query_executor::{ExecutionContext, PlanCache, QueryOptimizer};
 
 /// Parameters for cost estimation

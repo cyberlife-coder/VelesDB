@@ -46,7 +46,7 @@ impl Collection {
     ///
     /// Returns:
     ///     List of dicts with id, score, and payload.
-    #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None, sparse_index_name=None))]
+    #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None, sparse_index_name=None, include_vectors=false))]
     fn search(
         &self,
         py: Python<'_>,
@@ -55,6 +55,7 @@ impl Collection {
         top_k: usize,
         filter: Option<PyObject>,
         sparse_index_name: Option<String>,
+        include_vectors: bool,
     ) -> PyResult<Vec<PyObject>> {
         // Phase 1: Parse Python args (GIL held — required for PyObject access)
         let dense = vector.as_ref().map(|v| extract_vector(py, v)).transpose()?;
@@ -76,7 +77,7 @@ impl Collection {
         })?;
 
         // Phase 3: Convert results (GIL held — required for PyObject creation)
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, include_vectors))
     }
 
     /// Search for similar vectors with custom HNSW ef_search parameter.
@@ -96,7 +97,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Search with a named quality mode (fast, balanced, accurate, perfect, autotune).
@@ -124,7 +125,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Search returning only IDs and scores.
@@ -168,7 +169,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Full-text search using BM25 ranking.
@@ -195,7 +196,7 @@ impl Collection {
             }
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Hybrid search combining vector similarity and text search.
@@ -221,21 +222,15 @@ impl Collection {
                     top_k,
                     Some(vector_weight),
                     &f,
-                    None,
                 )
             } else {
-                self.inner.hybrid_search(
-                    &query_vector,
-                    &query_owned,
-                    top_k,
-                    Some(vector_weight),
-                    None,
-                )
+                self.inner
+                    .hybrid_search(&query_vector, &query_owned, top_k, Some(vector_weight))
             }
             .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Batch search for multiple query vectors in parallel.
@@ -283,7 +278,41 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results))
+        Ok(search_results_to_dicts(py, results, false))
+    }
+
+    /// Parallel batch search for multiple query vectors.
+    ///
+    /// Each query is executed in parallel using rayon. All queries share the
+    /// same ``top_k`` value. For per-query ``top_k`` control, use
+    /// ``batch_search`` instead.
+    ///
+    /// Args:
+    ///     vectors: List of query vectors (lists or numpy arrays).
+    ///     top_k: Number of results per query (default: 10).
+    ///
+    /// Returns:
+    ///     List of result lists, one per query vector.
+    #[pyo3(signature = (vectors, top_k = 10))]
+    fn search_batch_parallel(
+        &self,
+        py: Python<'_>,
+        vectors: Vec<PyObject>,
+        top_k: usize,
+    ) -> PyResult<Vec<Vec<PyObject>>> {
+        let query_vectors: Vec<Vec<f32>> = vectors
+            .iter()
+            .map(|v| extract_vector(py, v))
+            .collect::<PyResult<_>>()?;
+
+        let results = py.allow_threads(|| {
+            let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
+            self.inner
+                .search_batch_parallel(&query_refs, top_k)
+                .map_err(core_err)
+        })?;
+
+        Ok(Self::convert_batch_results(py, results))
     }
 
     /// Multi-query search returning only IDs and fused scores.
@@ -412,11 +441,17 @@ impl Collection {
         }
 
         // Invariant: every query index was assigned to exactly one group.
-        debug_assert!(
-            output.iter().all(Option::is_some),
-            "batch dispatch left unassigned slots"
-        );
-        Ok(output.into_iter().map(|o| o.unwrap_or_default()).collect())
+        output
+            .into_iter()
+            .enumerate()
+            .map(|(i, slot)| {
+                slot.ok_or_else(|| {
+                    core_err(velesdb_core::error::Error::Query(format!(
+                        "batch dispatch left slot {i} unassigned"
+                    )))
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()
     }
 
     /// Converts core `SearchResult` vectors to Python dicts.
@@ -429,7 +464,7 @@ impl Collection {
             .map(|query_results| {
                 query_results
                     .iter()
-                    .map(|r| search_result_to_dict(py, r))
+                    .map(|r| search_result_to_dict(py, r, false))
                     .collect()
             })
             .collect()
@@ -437,15 +472,232 @@ impl Collection {
 }
 
 /// Parse a Python quality mode string into [`SearchQuality`].
+///
+/// Supports named modes (`fast`, `balanced`, `accurate`, `perfect`, `autotune`)
+/// plus advanced modes:
+/// - `"custom:<ef>"` for a custom `ef_search` value
+/// - `"adaptive:<min_ef>:<max_ef>"` for two-phase adaptive search
 fn parse_search_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
-    match mode.to_lowercase().as_str() {
+    let lower = mode.to_lowercase();
+    match lower.as_str() {
         "fast" => Ok(velesdb_core::SearchQuality::Fast),
         "balanced" => Ok(velesdb_core::SearchQuality::Balanced),
         "accurate" => Ok(velesdb_core::SearchQuality::Accurate),
         "perfect" => Ok(velesdb_core::SearchQuality::Perfect),
         "autotune" | "auto_tune" | "auto" => Ok(velesdb_core::SearchQuality::AutoTune),
-        other => Err(PyValueError::new_err(format!(
-            "Unknown search quality: '{other}'. Valid: fast, balanced, accurate, perfect, autotune"
-        ))),
+        other => parse_advanced_quality(other),
+    }
+}
+
+/// Parse advanced quality modes: `custom:<ef>` and `adaptive:<min_ef>:<max_ef>`.
+fn parse_advanced_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
+    if let Some(ef_str) = mode.strip_prefix("custom:") {
+        let ef = ef_str.parse::<usize>().map_err(|_| {
+            PyValueError::new_err(format!(
+                "Invalid custom ef_search value: '{ef_str}'. Expected a positive integer, \
+                 e.g. 'custom:256'"
+            ))
+        })?;
+        return Ok(velesdb_core::SearchQuality::Custom(ef));
+    }
+    if let Some(params) = mode.strip_prefix("adaptive:") {
+        return parse_adaptive_params(params);
+    }
+    Err(PyValueError::new_err(format!(
+        "Unknown search quality: '{mode}'. Valid: fast, balanced, accurate, perfect, \
+         autotune, custom:<ef>, adaptive:<min_ef>:<max_ef>"
+    )))
+}
+
+/// Parse `<min_ef>:<max_ef>` for the adaptive quality mode.
+fn parse_adaptive_params(params: &str) -> PyResult<velesdb_core::SearchQuality> {
+    let parts: Vec<&str> = params.split(':').collect();
+    if parts.len() != 2 {
+        return Err(PyValueError::new_err(format!(
+            "Invalid adaptive format: 'adaptive:{params}'. \
+             Expected 'adaptive:<min_ef>:<max_ef>', e.g. 'adaptive:32:512'"
+        )));
+    }
+    let min_ef = parts[0]
+        .parse::<usize>()
+        .map_err(|_| PyValueError::new_err(format!("Invalid adaptive min_ef: '{}'", parts[0])))?;
+    let max_ef = parts[1]
+        .parse::<usize>()
+        .map_err(|_| PyValueError::new_err(format!("Invalid adaptive max_ef: '{}'", parts[1])))?;
+    if min_ef > max_ef {
+        return Err(PyValueError::new_err(format!(
+            "Adaptive min_ef ({min_ef}) must be <= max_ef ({max_ef})"
+        )));
+    }
+    Ok(velesdb_core::SearchQuality::Adaptive { min_ef, max_ef })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Initialize the Python interpreter once (idempotent, required by PyO3
+    /// error constructors such as `PyValueError::new_err`).
+    fn init_python() {
+        pyo3::prepare_freethreaded_python();
+    }
+
+    // ---- Named modes ----
+
+    #[test]
+    fn test_parse_named_modes() {
+        init_python();
+        assert!(matches!(
+            parse_search_quality("fast").unwrap(),
+            velesdb_core::SearchQuality::Fast
+        ));
+        assert!(matches!(
+            parse_search_quality("balanced").unwrap(),
+            velesdb_core::SearchQuality::Balanced
+        ));
+        assert!(matches!(
+            parse_search_quality("accurate").unwrap(),
+            velesdb_core::SearchQuality::Accurate
+        ));
+        assert!(matches!(
+            parse_search_quality("perfect").unwrap(),
+            velesdb_core::SearchQuality::Perfect
+        ));
+        assert!(matches!(
+            parse_search_quality("autotune").unwrap(),
+            velesdb_core::SearchQuality::AutoTune
+        ));
+        assert!(matches!(
+            parse_search_quality("auto").unwrap(),
+            velesdb_core::SearchQuality::AutoTune
+        ));
+    }
+
+    #[test]
+    fn test_parse_named_modes_case_insensitive() {
+        init_python();
+        assert!(matches!(
+            parse_search_quality("FAST").unwrap(),
+            velesdb_core::SearchQuality::Fast
+        ));
+        assert!(matches!(
+            parse_search_quality("Balanced").unwrap(),
+            velesdb_core::SearchQuality::Balanced
+        ));
+    }
+
+    // ---- Custom mode ----
+
+    #[test]
+    fn test_parse_custom_valid() {
+        init_python();
+        let q = parse_search_quality("custom:256").unwrap();
+        assert!(matches!(q, velesdb_core::SearchQuality::Custom(256)));
+    }
+
+    #[test]
+    fn test_parse_custom_case_insensitive() {
+        init_python();
+        let q = parse_search_quality("Custom:128").unwrap();
+        assert!(matches!(q, velesdb_core::SearchQuality::Custom(128)));
+    }
+
+    #[test]
+    fn test_parse_custom_invalid_value() {
+        init_python();
+        let err = parse_search_quality("custom:abc").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid custom ef_search"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_parse_custom_empty_value() {
+        init_python();
+        let err = parse_search_quality("custom:").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid custom ef_search"), "got: {msg}");
+    }
+
+    // ---- Adaptive mode ----
+
+    #[test]
+    fn test_parse_adaptive_valid() {
+        init_python();
+        let q = parse_search_quality("adaptive:32:512").unwrap();
+        assert!(matches!(
+            q,
+            velesdb_core::SearchQuality::Adaptive {
+                min_ef: 32,
+                max_ef: 512
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_adaptive_equal_bounds() {
+        init_python();
+        let q = parse_search_quality("adaptive:100:100").unwrap();
+        assert!(matches!(
+            q,
+            velesdb_core::SearchQuality::Adaptive {
+                min_ef: 100,
+                max_ef: 100
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_adaptive_case_insensitive() {
+        init_python();
+        let q = parse_search_quality("Adaptive:16:256").unwrap();
+        assert!(matches!(
+            q,
+            velesdb_core::SearchQuality::Adaptive {
+                min_ef: 16,
+                max_ef: 256
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_adaptive_inverted_range() {
+        init_python();
+        let err = parse_search_quality("adaptive:512:32").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("must be <= max_ef"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_parse_adaptive_missing_max() {
+        init_python();
+        let err = parse_search_quality("adaptive:32").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid adaptive format"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_parse_adaptive_non_numeric() {
+        init_python();
+        let err = parse_search_quality("adaptive:a:b").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid adaptive min_ef"), "got: {msg}");
+    }
+
+    // ---- Unknown mode ----
+
+    #[test]
+    fn test_parse_unknown_mode() {
+        init_python();
+        let err = parse_search_quality("nonexistent").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Unknown search quality"), "got: {msg}");
+        assert!(
+            msg.contains("custom:<ef>"),
+            "error should mention custom syntax: {msg}"
+        );
+        assert!(
+            msg.contains("adaptive:<min_ef>:<max_ef>"),
+            "error should mention adaptive syntax: {msg}"
+        );
     }
 }

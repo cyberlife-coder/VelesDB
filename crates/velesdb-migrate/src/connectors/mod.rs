@@ -6,11 +6,12 @@ pub mod csv_file;
 pub mod elasticsearch;
 pub mod json_file;
 pub mod milvus;
-pub mod mongodb;
-pub mod pgvector;
 pub mod pinecone;
 pub mod qdrant;
+#[cfg(feature = "redis-source")]
 pub mod redis;
+pub mod relation_detector;
+pub mod supabase;
 pub mod weaviate;
 
 use async_trait::async_trait;
@@ -65,6 +66,19 @@ pub struct SourceSchema {
     /// Detected ID column name (for SQL-based sources).
     #[serde(default)]
     pub id_column: Option<String>,
+    /// Distance metric reported by the source, when the connector
+    /// can introspect it (Qdrant, Pinecone, Weaviate, Milvus,
+    /// ChromaDB, Supabase, Elasticsearch, Redis). File-backed
+    /// connectors (JSON, CSV) leave this field empty because the
+    /// source format does not carry a metric annotation.
+    ///
+    /// Values are normalised to the lowercase core identifiers
+    /// (`"cosine"`, `"euclidean"`, `"dot"`, `"hamming"`,
+    /// `"jaccard"`). Unrecognised source values are preserved
+    /// verbatim so `Pipeline::check_metric_fidelity` can report
+    /// them honestly in the mismatch error.
+    #[serde(default)]
+    pub metric: Option<String>,
 }
 
 /// Information about a payload field.
@@ -130,11 +144,8 @@ pub fn create_connector(config: &crate::config::SourceConfig) -> Result<Box<dyn 
         crate::config::SourceConfig::ChromaDB(cfg) => {
             Ok(Box::new(chromadb::ChromaDBConnector::new(cfg.clone())))
         }
-        crate::config::SourceConfig::PgVector(cfg) => {
-            Ok(Box::new(pgvector::PgVectorConnector::new(cfg.clone())))
-        }
         crate::config::SourceConfig::Supabase(cfg) => {
-            Ok(Box::new(pgvector::SupabaseConnector::new(cfg.clone())))
+            Ok(Box::new(supabase::SupabaseConnector::new(cfg.clone())))
         }
         crate::config::SourceConfig::JsonFile(cfg) => {
             Ok(Box::new(json_file::JsonFileConnector::new(cfg.clone())))
@@ -142,15 +153,17 @@ pub fn create_connector(config: &crate::config::SourceConfig) -> Result<Box<dyn 
         crate::config::SourceConfig::CsvFile(cfg) => {
             Ok(Box::new(csv_file::CsvFileConnector::new(cfg.clone())))
         }
-        crate::config::SourceConfig::MongoDB(cfg) => {
-            Ok(Box::new(mongodb::MongoDBConnector::new(cfg.clone())))
-        }
         crate::config::SourceConfig::Elasticsearch(cfg) => Ok(Box::new(
             elasticsearch::ElasticsearchConnector::new(cfg.clone()),
         )),
+        #[cfg(feature = "redis-source")]
         crate::config::SourceConfig::Redis(cfg) => {
             Ok(Box::new(redis::RedisConnector::new(cfg.clone())))
         }
+        #[cfg(not(feature = "redis-source"))]
+        crate::config::SourceConfig::Redis(_) => Err(crate::error::Error::UnsupportedSource(
+            "Redis source requires the 'redis-source' feature".to_string(),
+        )),
     }
 }
 

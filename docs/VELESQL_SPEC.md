@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.6.0 | **Last Updated**: 2026-03-30
+**Version**: 3.9.0 | **Last Updated**: 2026-04-23 (VelesDB v1.13.0)
 
 ---
 
@@ -56,6 +56,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | SHOW COLLECTIONS | Stable | 3.4 |
 | DESCRIBE COLLECTION | Stable | 3.4 |
 | EXPLAIN query plan | Stable | 3.4 |
+| EXPLAIN ANALYZE execution stats | API-level (via `explain_analyze_query()` and `/query/explain?analyze=true`, not a parsed VelesQL statement) | 3.8 |
 | CREATE INDEX / DROP INDEX | Stable | 3.5 |
 | ANALYZE | Stable | 3.5 |
 | TRUNCATE | Stable | 3.5 |
@@ -66,6 +67,12 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | SELECT EDGES graph query | Stable | 3.5 |
 | INSERT NODE graph mutation | Stable | 3.5 |
 | FLUSH / FLUSH FULL | Stable | 3.6 |
+| CONTAINS array filter | Stable | 3.7 |
+| GEO_DISTANCE / GEO_BBOX geospatial | Stable | 3.7 |
+| GROUP BY MAX(score) / AVG(score) | Stable | 3.7 |
+| FIRST(column) projection | Stable | 3.7 |
+| CONTAINS_TEXT strict text filter | Stable | 3.8 |
+| Window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK`) with `OVER`, `PARTITION BY`, `ORDER BY` | Stable | 3.9 (VelesDB v1.13.0) |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -101,7 +108,7 @@ The SELECT statement is the primary way to query data from collections.
 
 ```sql
 [LET <name> = <expr> ...]
-SELECT [DISTINCT] <columns>
+SELECT [DISTINCT] <columns> [, <window_fn>() OVER (...) [AS <alias>] ...]
 FROM <collection> [AS <alias>]
 [JOIN <collection2> [AS <alias>] ON <condition> | USING (<column>)]
 [WHERE <conditions>]
@@ -200,6 +207,9 @@ SELECT SUM(quantity) AS total FROM orders
 | `AVG(col)` | Average of numeric values | Column name |
 | `MIN(col)` | Minimum value | Column name |
 | `MAX(col)` | Maximum value | Column name |
+| `MAX(score)` | Max similarity score across group (v3.7+) | `score` pseudo-column |
+| `AVG(score)` | Mean similarity score across group (v3.7+) | `score` pseudo-column |
+| `FIRST(col)` | Value from highest-scoring row in group (v3.7+) | Column name |
 
 ### Similarity Score in SELECT
 
@@ -307,6 +317,29 @@ WHERE similarity(p.embedding, $query) > 0.7
 LIMIT 20
 ```
 
+### JOIN Optimizations (v1.12+)
+
+The query engine automatically applies two optimizations to cross-collection JOINs:
+
+**Filter Pushdown**: WHERE conditions that reference the joined table (using qualified column names like `inventory.price > 100`) are automatically pushed down and evaluated before loading points into the ColumnStore. This reduces memory usage and I/O for large joined collections.
+
+```sql
+-- inventory.stock > 0 is pushed down to filter inventory before JOIN
+SELECT * FROM products
+JOIN inventory ON products.id = inventory.id
+WHERE inventory.stock > 0
+```
+
+**Lookup Join**: When the JOIN condition references the primary key (`id`) on both sides and no pushdown filters apply, the engine uses direct `collection.get()` lookups instead of building a full ColumnStore, achieving O(K) instead of O(N) retrieval.
+
+```sql
+-- Uses optimized lookup path (both sides reference id)
+SELECT * FROM products
+JOIN inventory ON products.id = inventory.id
+```
+
+Both optimizations are transparent and produce identical results to the non-optimized path.
+
 ---
 
 ## WHERE Clause
@@ -387,6 +420,14 @@ SELECT * FROM docs WHERE category NOT IN ('draft', 'deleted')
 SELECT * FROM docs WHERE id NOT IN (1, 2, 3)
 ```
 
+**Index acceleration**: When a secondary index exists on the filtered column,
+`IN` uses bitmap pre-filtering to restrict HNSW traversal to matching points
+only. The engine builds a `RoaringBitmap` by unioning per-value B-tree lookups
+(time complexity: O(N × log K) where N = list size, K = index cardinality).
+`NOT IN` on indexed fields computes the universe bitmap minus the IN bitmap
+(set subtraction). Queries on non-indexed fields fall back to post-filtering
+transparently. Results are identical in both paths.
+
 ### BETWEEN
 
 Test if a value falls within a range (inclusive):
@@ -459,6 +500,54 @@ SELECT * FROM docs WHERE category IS NOT NULL
 SELECT * FROM users WHERE email IS NOT NULL AND verified = true
 ```
 
+### CONTAINS (Array Filter, v3.7+)
+
+Test whether an array field contains specific values. Three modes are supported:
+
+| Syntax | Description |
+|--------|-------------|
+| `column CONTAINS value` | Array contains the single value |
+| `column CONTAINS ANY (v1, v2, ...)` | Array contains at least one of the values |
+| `column CONTAINS ALL (v1, v2, ...)` | Array contains every listed value |
+
+```sql
+-- Single value containment
+SELECT * FROM hotels WHERE amenities CONTAINS 'pool' LIMIT 10
+
+-- At least one match (OR semantics)
+SELECT * FROM hotels WHERE amenities CONTAINS ANY ('spa', 'bar') LIMIT 10
+
+-- All values must be present (AND semantics)
+SELECT * FROM hotels WHERE amenities CONTAINS ALL ('pool', 'gym') LIMIT 10
+
+-- Combined with scalar filters
+SELECT * FROM hotels
+WHERE amenities CONTAINS 'pool' AND rating > 4.5
+LIMIT 10
+
+-- Combined with vector search
+SELECT * FROM hotels
+WHERE amenities CONTAINS 'spa' OR vector NEAR $v
+LIMIT 10
+
+-- Integer arrays
+SELECT * FROM items WHERE scores CONTAINS 10 LIMIT 10
+
+-- NOT negation
+SELECT * FROM hotels WHERE NOT (amenities CONTAINS 'pool') LIMIT 10
+
+-- Multiple array fields
+SELECT * FROM hotels
+WHERE amenities CONTAINS 'gym' AND tags CONTAINS 'luxury'
+LIMIT 10
+```
+
+Behavior on edge cases:
+- Empty array (`[]`): CONTAINS returns no match
+- Null/missing field: row excluded from results
+- Non-array field: CONTAINS returns no match (use `LIKE` for substring matching)
+- Non-existent field: returns empty result set
+
 ### Full-Text Search (MATCH)
 
 The `MATCH` operator performs BM25 full-text search against the collection's
@@ -489,10 +578,83 @@ LIMIT 10
 ```
 
 > **Known Limitations (v1.9.0)**:
-> - **No strict text filter**: `MATCH` in hybrid mode boosts but does not filter.
->   A dedicated text filter operator is planned (see issue #446).
 > - **Column parameter ignored**: The column name (e.g., `content`) is parsed but
 >   the execution engine searches all indexed text fields regardless.
+
+> **Tip**: For strict text filtering (exclude results that do not contain a keyword),
+> use `CONTAINS_TEXT` instead of `MATCH`. See the CONTAINS_TEXT section below.
+
+### Strict Text Filter (CONTAINS_TEXT, v3.8+)
+
+The `CONTAINS_TEXT` operator performs case-sensitive substring matching on a
+string payload field. Unlike `MATCH` (which boosts via RRF), `CONTAINS_TEXT`
+is a **strict filter**: any result whose target field does not contain the
+specified substring is excluded from the result set.
+
+```sql
+column CONTAINS_TEXT 'substring'
+```
+
+The keyword is case-insensitive (`contains_text`, `Contains_Text`, `CONTAINS_TEXT`
+are all valid). The substring match itself is case-sensitive.
+
+**Standalone metadata filter** — returns all documents where the field contains
+the substring:
+
+```sql
+SELECT * FROM docs WHERE content CONTAINS_TEXT 'rust' LIMIT 10
+```
+
+**With vector search (hybrid strict filter)** — applies as a post-filter on
+vector search results, guaranteeing every returned result contains the substring:
+
+```sql
+-- Every result is guaranteed to contain 'database' in the content field
+SELECT * FROM docs
+WHERE vector NEAR $v AND content CONTAINS_TEXT 'database'
+LIMIT 10
+```
+
+**Combined with MATCH (boost + strict filter)** — `MATCH` provides RRF score
+boosting while `CONTAINS_TEXT` enforces strict inclusion:
+
+```sql
+-- MATCH boosts results mentioning 'database' via RRF
+-- CONTAINS_TEXT guarantees every result actually contains 'database'
+SELECT * FROM docs
+WHERE vector NEAR $v
+  AND content MATCH 'database'
+  AND content CONTAINS_TEXT 'database'
+LIMIT 10
+```
+
+**Combined with other filters**:
+
+```sql
+SELECT * FROM docs
+WHERE content CONTAINS_TEXT 'rust' AND category = 'tech'
+LIMIT 10
+```
+
+#### MATCH vs CONTAINS_TEXT
+
+| Feature | `MATCH` | `CONTAINS_TEXT` |
+|---------|---------|-----------------|
+| Purpose | BM25 text search / RRF boost | Strict substring filter |
+| With NEAR | Boosts score via RRF fusion | Excludes non-matching results |
+| Non-matching results | May still appear (lower score) | Always excluded |
+| Matching | BM25 tokenized relevance | Case-sensitive `str::contains()` |
+| Best for | "Rank by text relevance" | "Must contain this text" |
+
+#### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| `CONTAINS_TEXT ''` (empty string) | Matches all string fields (every string contains `""`) |
+| Missing payload field | Returns `false` (row excluded) |
+| Non-string field (e.g., integer) | Returns `false` (row excluded) |
+| All results filtered out | Empty result set, no error |
+| Unicode text | Supported (case-sensitive byte-level matching) |
 
 ### Vector Search (NEAR)
 
@@ -773,6 +935,56 @@ ORDER BY COUNT(*) DESC
 LIMIT 10
 ```
 
+### Vector-Search GROUP BY (Parent-Document Retrieval, v3.7+)
+
+When combined with a vector NEAR search, GROUP BY enables parent-document
+retrieval from chunked collections. This groups search results by a parent
+field and aggregates similarity scores across chunks.
+
+Use `MAX(score)` for ColBERT-style MaxSim (max score across chunks),
+`AVG(score)` for mean similarity, and `FIRST(column)` to surface the
+excerpt from the highest-scoring chunk.
+
+```sql
+-- Parent-document retrieval with MAX_SIM scoring
+SELECT parent_id, MAX(score) AS relevance, FIRST(text) AS excerpt
+FROM chunks
+WHERE vector NEAR $embedding
+GROUP BY parent_id
+ORDER BY relevance DESC
+LIMIT 20
+
+-- AVG_SIM scoring (mean across chunks)
+SELECT document_id, AVG(score) AS avg_sim
+FROM paragraphs
+WHERE vector NEAR $query
+GROUP BY document_id
+ORDER BY avg_sim DESC
+LIMIT 10
+
+-- Combined with metadata filter
+SELECT parent_id, MAX(score) AS relevance, FIRST(text) AS excerpt
+FROM chunks
+WHERE vector NEAR $v AND category = 'science'
+GROUP BY parent_id
+ORDER BY relevance DESC
+LIMIT 10
+```
+
+| Function | Description | Requires |
+|----------|-------------|----------|
+| `MAX(score)` | Maximum similarity score across chunks in group | `NEAR` + `GROUP BY` |
+| `AVG(score)` | Mean similarity score across chunks in group | `NEAR` + `GROUP BY` |
+| `FIRST(col)` | Value of `col` from the highest-scoring chunk | `GROUP BY` |
+
+Behavior:
+- Chunks missing the GROUP BY field are silently skipped
+- `FIRST(col)` returns `null` if the best chunk lacks the specified column
+- Multiple `FIRST` projections all come from the same highest-scoring chunk
+- `FIRST(*)` is not supported (parse error)
+- `MAX(score)` / `AVG(score)` without `NEAR` returns an error
+- `FIRST(col)` without `GROUP BY` returns an error
+
 ---
 
 ## HAVING Clause (v2.0+)
@@ -803,6 +1015,109 @@ GROUP BY category
 HAVING COUNT(*) > 5
 ORDER BY AVG(price) DESC
 ```
+
+---
+
+## Window Functions (v1.13.0+)
+
+Window functions compute a value for each row based on a "window" of related rows,
+without collapsing the result set the way `GROUP BY` does. VelesDB supports
+three ranking functions over a `PARTITION BY` / `ORDER BY` window.
+
+### Syntax
+
+```sql
+<function>() OVER ([PARTITION BY <expr> [, <expr> ...]] [ORDER BY <expr> [ASC|DESC] [, <expr> ...]])
+```
+
+Place the window call in the SELECT list, optionally with an alias.
+
+### Supported Functions
+
+| Function | Description |
+|----------|-------------|
+| `ROW_NUMBER()` | Sequential position within the window (1, 2, 3, ...). Ties are broken by input order. |
+| `RANK()` | Rank with gaps after ties. Tied rows share a rank; the next distinct row skips ahead (e.g. 1, 2, 2, 4). |
+| `DENSE_RANK()` | Rank without gaps (e.g. 1, 2, 2, 3). |
+
+All three functions take no arguments; the `OVER (...)` clause is mandatory.
+
+### Semantics
+
+- **`PARTITION BY`** (optional) groups rows into independent windows. Each
+  partition restarts the row counter / rank at 1.
+- **`ORDER BY`** (optional inside `OVER`) defines the ordering within each
+  partition. Without an `ORDER BY`, ranks are assigned in the order rows
+  arrive at the evaluator — deterministic for a given input but not
+  meaningful.
+- **Stability**: when two rows tie on the `ORDER BY` key, relative input
+  order is preserved (stable ordering).
+
+### Evaluation Order
+
+Window functions are evaluated **after** `WHERE`, `GROUP BY`, `HAVING`, and
+`DISTINCT`, and **before** the outer `ORDER BY` / `LIMIT` / `OFFSET`.
+Each window call pre-captures its inputs and emits one output value per
+input row; the outer `ORDER BY` then sees those values as ordinary
+projected columns.
+
+Grammar: `grammar.pest:window_item`, `grammar.pest:over_clause`.
+Evaluator: `crates/velesdb-core/src/velesql/window_evaluator.rs`.
+
+### Examples
+
+```sql
+-- Rank products by price within each category
+SELECT
+  category,
+  name,
+  price,
+  ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC) AS rank
+FROM products
+```
+
+Expected output (shape, not literal rows):
+
+```
+category   name             price   rank
+tech       laptop-pro       1999    1
+tech       laptop-mid       999     2
+tech       laptop-entry     499     3
+books      encyclopedia     120     1
+books      paperback        12      2
+```
+
+```sql
+-- DENSE_RANK on similarity scores inside each department
+SELECT
+  payload.department AS dept,
+  payload.title,
+  similarity() AS score,
+  DENSE_RANK() OVER (PARTITION BY payload.department ORDER BY similarity() DESC) AS r
+FROM docs
+WHERE vector NEAR $query
+LIMIT 100
+```
+
+```sql
+-- Global row numbering, no partition
+SELECT
+  id,
+  payload.title,
+  ROW_NUMBER() OVER (ORDER BY payload.created_at DESC) AS seq
+FROM posts
+LIMIT 50
+```
+
+### Limitations
+
+- Framing clauses (`ROWS BETWEEN ... AND ...`, `RANGE`, `GROUPS`) are **not**
+  supported. All three functions operate on the full partition.
+- Aggregate windows (`SUM() OVER`, `AVG() OVER`, `LAG`, `LEAD`, `NTILE`,
+  `PERCENT_RANK`, `CUME_DIST`, `FIRST_VALUE`, `LAST_VALUE`) are **not** yet
+  supported.
+- A single query may contain multiple window calls, each with its own
+  `OVER (...)` clause.
 
 ---
 
@@ -845,6 +1160,17 @@ WHERE vector NEAR $v
 ORDER BY similarity() DESC, created_at DESC
 LIMIT 20
 ```
+
+> **CBO routing (v1.13.0+):** When `ORDER BY` contains `similarity(<col>, $q)`
+> (two-argument form) against a vector column with an HNSW index, the
+> cost-based optimiser (CBO) automatically routes the query through the
+> native HNSW path — even if the query does not contain an explicit `NEAR`
+> clause. The planner rewrites the sort into a top-k vector search and
+> short-circuits when a `LIMIT` is present. The legacy full-scan-then-sort
+> path remains available and is chosen by the CBO when the top-k target is
+> large relative to the collection size or when no HNSW index exists for
+> the column. See `crates/velesdb-core/src/velesql/planner/similarity_route.rs`
+> and `docs/guides/TUNING_GUIDE.md` for the routing heuristics.
 
 ### Order by Aggregate
 
@@ -1388,12 +1714,166 @@ EXPLAIN SELECT * FROM docs LIMIT 10
 EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 ```
 
+#### Phase 2A enhancements (v1.13.0)
+
+`EXPLAIN` output is now **stat-aware**: Filter nodes report a cardinality
+estimate derived from column histograms (`ANALYZE` output) rather than a
+hard-coded fallback, and join / sort cost factors are calibrated against
+`CollectionStats::calibrated_cost_factors`. As a result, the `estimated_cost`
+field returned in the plan tracks real execution time closely enough for
+the CBO to decide between HNSW routing, bitmap pre-filter, and full scan
+on the same query shape. Plan-cost consistency fixes (`#607` / `#608` /
+`#609`) ensure a single query produces the same plan whether invoked via
+the REST `/query/explain` endpoint, the CLI `.explain` command, or
+`EXPLAIN ANALYZE`.
+
+When `ORDER BY similarity(<col>, $q)` is present without `NEAR`, the plan
+tree now explicitly surfaces the similarity-as-predicate routing decision
+(see **Order by Similarity** above) — the `VectorSearch` node appears even
+though the SQL text has no `NEAR`.
+
 Returns a single row with:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `plan` | object | Structured query plan (JSON) |
 | `tree` | string | Human-readable plan tree |
+
+The `tree` field now surfaces additional context when the query uses `WITH`, `LET`, or `FUSION`
+clauses:
+
+- **`WITH` options** — `ef_search`, `mode`, `rerank`, `timeout_ms` are read from the `WITH` clause
+  and displayed as-is (no longer hardcoded to 100 for `ef_search`).
+- **`LET` bindings** — each named binding is listed under a `LET bindings:` node.
+- **`FUSION` details** — strategy name, `k`, and per-source weights appear under a `FUSION:` node.
+
+Example enriched output:
+
+```
+── VectorSearch (docs) ef_search=512
+   ├── WITH options:
+   │   ├── ef_search: 512
+   │   ├── mode: accurate
+   │   └── rerank: true
+   ├── LET bindings:
+   │   └── boost = vector_score * 1.5
+   ├── FUSION: rrf (k=60, vector_weight=0.7, bm25_weight=0.3)
+   ├── Filter (PreFilter)
+   └── Limit 10
+```
+
+### EXPLAIN ANALYZE (v3.8+)
+
+Executes the query with lightweight instrumentation and returns both the
+estimated plan and actual execution statistics side-by-side. Unlike `EXPLAIN`
+(which only plans), `EXPLAIN ANALYZE` runs the query to collect real metrics.
+
+> **Caution:** EXPLAIN ANALYZE executes the query. Use with care on write
+> queries (INSERT, UPDATE, DELETE) as they will modify data.
+
+#### Syntax
+
+```sql
+EXPLAIN ANALYZE <query>
+```
+
+#### Return Fields
+
+The result includes the estimated plan (identical to `EXPLAIN`) plus:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `plan` | object | Estimated query plan (same as EXPLAIN) |
+| `actual_stats` | object | Top-level actual execution statistics |
+| `node_stats` | array | Per-plan-node actual statistics |
+
+**`actual_stats` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `actual_rows` | u64 | Number of rows returned by execution |
+| `actual_time_ms` | f64 | Wall-clock execution time in milliseconds |
+| `loops` | u64 | Number of execution iterations (always 1) |
+| `nodes_visited` | u64 | Graph nodes visited (0 for non-MATCH queries) |
+| `edges_traversed` | u64 | Graph edges traversed (0 for non-MATCH queries) |
+
+**`node_stats` entry fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `node_label` | string | Plan node type (e.g. "VectorSearch", "Filter") |
+| `actual_time_ms` | f64 | Estimated wall-clock time for this node |
+| `actual_rows_in` | u64 | Rows entering this node |
+| `actual_rows_out` | u64 | Rows leaving this node |
+| `loops` | u64 | Loop iterations for this node |
+
+**Filter plan fields (v3.9+):**
+
+When histogram data is available, `Filter` plan nodes include additional fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `estimated_rows` | u64? | Histogram-based cardinality estimate (selectivity × total_rows) |
+| `estimation_method` | string? | `"histogram"`, `"cardinality"`, or `"no histogram"` |
+
+#### Examples
+
+```sql
+-- Analyze a vector search query
+EXPLAIN ANALYZE SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+
+-- Analyze a filtered query
+EXPLAIN ANALYZE SELECT * FROM products WHERE category = 'tech' AND price > 50 LIMIT 20
+
+-- Analyze a graph traversal
+EXPLAIN ANALYZE MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10
+```
+
+#### CLI Usage
+
+The CLI REPL provides the `.explain-analyze` command:
+
+```
+velesdb> .explain-analyze SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+
+Query Plan:
+└─ VectorSearch
+   ├─ Collection: docs
+   ├─ ef_search: 100
+   └─ Candidates: 10
+
+Estimated cost: 0.050ms
+
+Actual Statistics:
+  Actual rows:      10
+  Actual time:      1.234ms
+  Loops:            1
+  Nodes visited:    0
+  Edges traversed:  0
+
+Per-Node Statistics:
+  VectorSearch:  1.173ms (rows: 10 → 10)
+  Limit:         0.012ms (rows: 10 → 10)
+```
+
+When the estimated cost diverges from actual time by more than 10×, a `⚠`
+warning marker is displayed to highlight potential cost model inaccuracies.
+
+#### HTTP API
+
+Send a POST to `/query/explain` with `"analyze": true` in the request body:
+
+```json
+{
+  "query": "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+  "params": { "v": [0.1, 0.2, 0.3] },
+  "analyze": true
+}
+```
+
+The response includes `actual_stats` and `node_stats` fields alongside the
+plan. When `analyze` is `false` or absent, the endpoint behaves identically
+to the existing EXPLAIN-only mode.
 
 ---
 
@@ -1517,7 +1997,7 @@ Dropping a non-existent index succeeds silently (no error).
 - Indexes are in-memory only; they are not persisted to disk in the current
   implementation.
 
-### ANALYZE (v3.5+)
+### ANALYZE (v3.5+, histograms v3.9+)
 
 Computes cost-based optimizer (CBO) statistics for a collection. The statistics
 are cached in memory and persisted to disk (`collection.stats.json`).
@@ -1531,6 +2011,25 @@ ANALYZE COLLECTION docs   -- optional COLLECTION keyword
 Returns a JSON payload with collection statistics including `total_points`,
 `row_count`, `deleted_count`, `avg_row_size_bytes`, `payload_size_bytes`,
 and per-field cardinality information.
+
+#### Histogram Construction (v3.9+)
+
+`ANALYZE` builds equi-depth histograms on Int, Float, and String columns to
+enable accurate selectivity estimation for the CBO. Key characteristics:
+
+- **Sampling**: up to 10,000 rows sampled per column (separate from the
+  1,000-row payload stats sample).
+- **Bucket count**: 64 buckets by default. Fewer buckets when distinct values
+  < 64 (one bucket per distinct value).
+- **String columns**: mapped to ordinal ranks (lexicographic sort order) for
+  histogram construction.
+- **Persistence**: histograms are serialized as part of `collection.stats.json`
+  and restored on database startup.
+- **Incremental maintenance**: upsert/delete operations update histogram bucket
+  counts incrementally (O(log B) binary search). After 20% cumulative updates,
+  the histogram is marked stale and a `debug!` log recommends re-running ANALYZE.
+- **Backward compatibility**: new histogram fields use `#[serde(default)]` so
+  pre-histogram stats files deserialize without error.
 
 ### TRUNCATE (v3.5+)
 
@@ -2004,7 +2503,7 @@ The following keywords cannot be used as identifiers without quoting:
 | JOINs | `JOIN`, `INNER`, `LEFT`, `RIGHT`, `FULL`, `OUTER`, `ON`, `USING` |
 | Bindings | `LET`, `RETURN`, `MATCH` |
 | Temporal | `NOW`, `INTERVAL` |
-| Misc | `DISTINCT`, `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` |
+| Misc | `DISTINCT`, `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `FIRST`, `CONTAINS` |
 
 ### Quoting Styles
 
@@ -2127,6 +2626,38 @@ VelesQL returns structured errors:
 | MATCH (text) | `column MATCH 'text'` | `WHERE content MATCH 'database'` |
 | `=` `!=` `>` `>=` `<` `<=` | `column op value` | `WHERE price > 100` |
 | IN | `column IN (values)` | `WHERE id IN (1, 2, 3)` |
+| GEO_DISTANCE | `GEO_DISTANCE(col, lat, lng) op meters` | `WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500` |
+| GEO_BBOX | `GEO_BBOX(col, lat_min, lng_min, lat_max, lng_max)` | `WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4)` |
+
+### Geospatial Functions
+
+#### GEO_DISTANCE
+
+Computes the Haversine great-circle distance in meters between a GeoPoint column value and a reference coordinate pair.
+
+```sql
+SELECT * FROM places WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500;
+SELECT * FROM places WHERE GEO_DISTANCE(location, 48, 2) >= 1000;
+```
+
+- Coordinates accept both float (`48.8566`) and integer (`48`) literals.
+- Returns distance in meters (SI unit).
+- Null GeoPoint values are excluded from results.
+- Non-GeoPoint or non-existent columns return empty results (no error).
+- Combinable with AND, OR, NOT, and other WHERE operators.
+
+#### GEO_BBOX
+
+Tests whether a GeoPoint column value falls within a latitude/longitude bounding box (inclusive).
+
+```sql
+SELECT * FROM places WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4);
+```
+
+- All four coordinate parameters accept float and integer literals.
+- Boundary is inclusive: points exactly on the edge are included.
+- Inverted coordinates (`lat_min > lat_max`) return empty results.
+- Null GeoPoint values are excluded from results.
 | NOT IN | `column NOT IN (values)` | `WHERE status NOT IN ('deleted')` |
 | BETWEEN | `column BETWEEN a AND b` | `WHERE price BETWEEN 10 AND 100` |
 | LIKE | `column LIKE 'pattern'` | `WHERE name LIKE 'John%'` |
@@ -2162,6 +2693,9 @@ VelesQL returns structured errors:
 | `AVG(col)` | Average value | `SELECT AVG(rating) FROM reviews` |
 | `MIN(col)` | Minimum value | `SELECT MIN(created_at) FROM logs` |
 | `MAX(col)` | Maximum value | `SELECT MAX(score) FROM results` |
+| `MAX(score)` | Max similarity in group | `SELECT MAX(score) AS rel FROM chunks ... GROUP BY parent_id` |
+| `AVG(score)` | Mean similarity in group | `SELECT AVG(score) AS avg FROM chunks ... GROUP BY parent_id` |
+| `FIRST(col)` | Value from best chunk | `SELECT FIRST(text) AS excerpt FROM chunks ... GROUP BY parent_id` |
 
 ### Value Types
 

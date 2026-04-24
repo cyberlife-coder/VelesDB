@@ -1,17 +1,23 @@
-//! Collection types and configuration.
+//! Collection internal types (struct fields, streaming methods).
+//!
+//! Configuration types (`CollectionConfig`, `CURRENT_SCHEMA_VERSION`) live in
+//! the sibling `collection_config` module.
 
+use crate::collection::graph::property_index::{
+    CompositeIndexManager, CompositeRangeIndex, EdgePropertyIndex, IndexAdvisor,
+    QueryPatternTracker,
+};
 use crate::collection::graph::{
     ConcurrentEdgeStore, GraphSchema, LabelIndex, PropertyIndex, RangeIndex,
 };
 use crate::collection::stats::CollectionStats;
 #[cfg(feature = "persistence")]
 use crate::collection::streaming::delta::DeltaBuffer;
-use crate::collection::streaming::{AsyncIndexBuilder, AsyncIndexBuilderConfig};
+use crate::collection::streaming::AsyncIndexBuilder;
 #[cfg(feature = "persistence")]
 use crate::collection::streaming::{BackpressureError, DeferredIndexer, StreamIngester};
 use crate::distance::DistanceMetric;
 use crate::guardrails::GuardRails;
-use crate::index::hnsw::HnswParams;
 use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
 #[cfg(feature = "persistence")]
@@ -19,13 +25,15 @@ use crate::point::Point;
 use crate::quantization::{
     BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
 };
-use crate::storage::{LogPayloadStorage, MmapStorage};
+use crate::storage::{LogPayloadStorage, MmapStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+pub(crate) use super::collection_config::{CollectionConfig, CURRENT_SCHEMA_VERSION};
 
 type PqTrainingSample = (u64, Vec<f32>);
 
@@ -122,93 +130,6 @@ impl CollectionType {
     }
 }
 
-/// Metadata for a collection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CollectionConfig {
-    /// Name of the collection.
-    pub name: String,
-
-    /// Vector dimension (0 for metadata-only or graph-without-embeddings collections).
-    pub dimension: usize,
-
-    /// Distance metric.
-    pub metric: DistanceMetric,
-
-    /// Number of points in the collection.
-    pub point_count: usize,
-
-    /// Storage mode for vectors (Full, SQ8, Binary).
-    #[serde(default)]
-    pub storage_mode: StorageMode,
-
-    /// Whether this is a metadata-only collection.
-    #[serde(default)]
-    pub metadata_only: bool,
-
-    /// Graph schema — `Some` iff this is a graph collection.
-    /// Persisted to config.json; `None` for vector and metadata collections.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub graph_schema: Option<GraphSchema>,
-
-    /// Embedding dimension for graph node vectors (None = no embeddings).
-    /// Only meaningful when `graph_schema` is `Some`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedding_dimension: Option<usize>,
-
-    /// PQ rescore oversampling factor. `Some(4)` by default.
-    ///
-    /// The search pipeline fetches `max(k * factor, k + 32)` candidates from HNSW
-    /// and rescores them with full-precision ADC.
-    ///
-    /// - `None`: disables rescore entirely (expert-only; risks silent recall collapse).
-    /// - `Some(0)`: treated as disabled (equivalent to `None`) — the oversampling factor
-    ///   of 0 produces a candidates count of 0, which falls back to raw HNSW results.
-    /// - `Some(n)` where `n > 0`: enables rescore with `n`-fold oversampling.
-    #[serde(default = "default_pq_rescore_oversampling")]
-    pub pq_rescore_oversampling: Option<u32>,
-
-    /// Custom HNSW index parameters (M, `ef_construction`, etc.).
-    ///
-    /// When `Some`, these parameters are used to rebuild the HNSW index on
-    /// collection reopen if `hnsw.bin` does not yet exist (empty collection).
-    /// When `None`, the default `HnswParams::auto(dimension)` is used.
-    ///
-    /// Backward compatible: old `config.json` files without this field
-    /// deserialize to `None`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hnsw_params: Option<HnswParams>,
-
-    /// Deferred indexing configuration (US-366).
-    ///
-    /// When `Some` and `enabled`, inserts are buffered in memory and
-    /// batch-merged into the HNSW index when the buffer reaches
-    /// `merge_threshold`. This decouples write latency from index cost.
-    ///
-    /// Backward compatible: old `config.json` files without this field
-    /// deserialize to `None` (disabled).
-    #[cfg(feature = "persistence")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deferred_indexing: Option<crate::collection::streaming::DeferredIndexerConfig>,
-
-    /// Async index builder configuration (Issue #488 — Bulk Insert V2).
-    ///
-    /// When `Some`, enables the `AsyncIndexBuilder` for deferred HNSW
-    /// construction during bulk insert. Vectors are buffered and indexed
-    /// asynchronously via `HnswSegmentBuilder`.
-    ///
-    /// Backward compatible: old `config.json` files without this field
-    /// deserialize to `None` (disabled).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub async_index_builder: Option<AsyncIndexBuilderConfig>,
-}
-
-/// Returns `Some(4)` as the default PQ rescore oversampling factor.
-/// Returns `Option` because the field type is `Option<u32>` (None = disabled).
-#[allow(clippy::unnecessary_wraps)]
-fn default_pq_rescore_oversampling() -> Option<u32> {
-    Some(4)
-}
-
 // === LOCK ORDERING ===
 // All code acquiring multiple locks on Collection MUST follow this order.
 // Acquiring in any other order risks deadlock under concurrent access.
@@ -225,14 +146,14 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 //   9. sparse_indexes
 //  10. delta_buffer
 //  11. deferred_indexer / async_index_builder (internal locks)
+//  12. stats_io_mutex                         (disk I/O only, no other lock held)
 
 /// A collection of vectors with associated metadata.
-#[deprecated(
-    since = "2.0.0",
-    note = "Use VectorCollection, GraphCollection, or MetadataCollection instead"
-)]
+///
+/// Internal executor type — external callers should use `VectorCollection`,
+/// `GraphCollection`, or `MetadataCollection` instead.
 #[derive(Clone)]
-pub struct Collection {
+pub(crate) struct Collection {
     /// Path to the collection data.
     pub(super) path: PathBuf,
 
@@ -282,6 +203,33 @@ pub struct Collection {
     /// Range index for O(log n) range queries on graph nodes (EPIC-009).
     pub(super) range_index: Arc<RwLock<RangeIndex>>,
 
+    /// Graph node property range indexes keyed by `"label.property"` (EPIC-047).
+    ///
+    /// Populated automatically when nodes are stored via `store_node_payload`.
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    pub(crate) graph_range_indexes: Arc<RwLock<HashMap<String, CompositeRangeIndex>>>,
+
+    /// Edge property indexes keyed by `"rel_type.property"` (EPIC-047).
+    ///
+    /// Populated automatically when edges with properties are added.
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    pub(crate) edge_range_indexes: Arc<RwLock<HashMap<String, EdgePropertyIndex>>>,
+
+    /// Composite index manager for multi-property lookups (EPIC-047).
+    ///
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    pub(crate) composite_index_manager: Arc<RwLock<CompositeIndexManager>>,
+
+    /// Query pattern tracker for auto-index suggestion (EPIC-047).
+    ///
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    pub(crate) query_pattern_tracker: Arc<RwLock<QueryPatternTracker>>,
+
+    /// Index advisor that suggests indexes based on tracked patterns (EPIC-047).
+    ///
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    pub(crate) index_advisor: Arc<RwLock<IndexAdvisor>>,
+
     /// Concurrent edge store for knowledge graph relationships (EPIC-015).
     ///
     /// Uses sharded internal locking (256 shards) — no outer `RwLock` needed.
@@ -307,12 +255,29 @@ pub struct Collection {
     /// Cached CBO statistics with TTL (avoids O(n) scan per query).
     pub(crate) cached_stats: Arc<Mutex<Option<(CollectionStats, std::time::Instant)>>>,
 
+    /// Guards read → modify → write cycles on `collection.stats.json`.
+    ///
+    /// Lock order position: **12** (after `deferred_indexer`/`async_index_builder`
+    /// at 11). Protects only disk I/O — no other lock is held while this one is
+    /// held, so it cannot participate in a deadlock chain.
+    pub(super) stats_io_mutex: Arc<Mutex<()>>,
+
     /// Monotonic write generation counter (CACHE-01).
     ///
     /// Incremented once per mutation batch (upsert, `upsert_bulk`, `upsert_metadata`, delete).
     /// Used by `CompiledPlanCache` to invalidate cached query plans when collection data changes.
     /// `Arc` because `Collection` is `Clone` and all clones must share the same counter.
     pub(crate) write_generation: Arc<std::sync::atomic::AtomicU64>,
+
+    /// Monotonic analyze generation counter (issue #608).
+    ///
+    /// Incremented every time `ANALYZE` produces fresh `CollectionStats`.
+    /// Threaded into the compiled plan cache key so that running `ANALYZE`
+    /// alone (without any subsequent mutation) invalidates plans whose cost
+    /// estimates were derived from pre-analyze heuristics.
+    ///
+    /// Stored behind `Arc` for the same reason as `write_generation`.
+    pub(crate) analyze_generation: Arc<std::sync::atomic::AtomicU64>,
 
     /// Tracks inserts since the last HNSW index save (Issue #423 Component 3).
     ///
@@ -349,17 +314,37 @@ pub struct Collection {
 
     /// Async index builder for bulk insert V2 (Issue #488).
     ///
-    /// `None` when not configured. When `Some`, provides deferred HNSW
-    /// construction via `HnswSegmentBuilder` for high-throughput bulk import.
+    /// `None` when not configured. When `Some`, buffers vectors during
+    /// bulk import and flushes them to the HNSW index via
+    /// `HnswIndex::insert_batch_parallel`.
     ///
     /// Lock order position: **11** (same tier as `deferred_indexer`).
-    #[allow(dead_code)] // Read by future upsert_bulk_v2 path
     pub(crate) async_index_builder: Option<Arc<AsyncIndexBuilder>>,
+
+    /// Runtime-only auto-reindex manager (Wave 3 Commit 9).
+    ///
+    /// `None` by default. Attached via
+    /// [`VectorCollection::attach_auto_reindex`] after the collection is
+    /// opened. **Not persisted** to `config.json` — each caller must
+    /// re-attach after every [`Database::open`](crate::Database::open) to
+    /// avoid the `Duration` serde round-trip problem and the associated
+    /// schema version bump.
+    ///
+    /// When attached, the bulk upsert hot path (see `crud_bulk.rs`) calls
+    /// [`AutoReindexManager::should_reindex`](crate::collection::auto_reindex::AutoReindexManager::should_reindex)
+    /// after a successful batch. A `true` result is surfaced via
+    /// `tracing::info!` — automatic reconstruction is out of scope for
+    /// Wave 3 and is left to the caller or a background task.
+    ///
+    /// Lock order position: **11** (same tier as `deferred_indexer` /
+    /// `async_index_builder`).
+    pub(crate) auto_reindex:
+        Arc<RwLock<Option<Arc<crate::collection::auto_reindex::AutoReindexManager>>>>,
 }
 
 impl Collection {
     /// Returns a reference to the named sparse indexes lock (EPIC-062 sparse integration).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Used in tests for sparse index verification
     pub(crate) fn sparse_indexes(&self) -> &Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>> {
         &self.sparse_indexes
     }
@@ -371,6 +356,29 @@ impl Collection {
     pub(crate) fn write_generation(&self) -> u64 {
         self.write_generation
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Returns the current analyze generation counter (issue #608).
+    ///
+    /// Starts at 0 and increments each time `ANALYZE` is run against the
+    /// collection. Threaded through the compiled plan cache key so that the
+    /// cache invalidates when calibrated stats change, even when no data
+    /// mutation has bumped `write_generation`.
+    #[must_use]
+    pub(crate) fn analyze_generation(&self) -> u64 {
+        self.analyze_generation
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Bumps the analyze generation counter (issue #608).
+    ///
+    /// Called by `Database::analyze_collection` after fresh stats are
+    /// persisted. Uses `Relaxed` ordering because the cache key is rebuilt
+    /// on every query dispatch; observing a slightly stale counter on a
+    /// concurrent reader at most causes one extra cache miss (self-healing).
+    pub(crate) fn bump_analyze_generation(&self) {
+        self.analyze_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Extracts all string values from a JSON payload for text indexing.
@@ -444,104 +452,105 @@ impl Collection {
                 .extend(entries.iter().map(|(id, v)| (*id, v.clone())));
         }
     }
-}
 
-#[cfg(test)]
-mod rescore_config_tests {
-    use super::*;
-    use crate::distance::DistanceMetric;
-    use crate::quantization::StorageMode;
+    /// Attaches a runtime-only [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager).
+    ///
+    /// Replaces any previously attached manager. The manager is consulted by
+    /// the bulk upsert hot path after every successful batch and can be
+    /// queried externally via [`Self::auto_reindex_manager`] or
+    /// [`Self::check_auto_reindex_divergence`].
+    ///
+    /// The attachment is **not persisted**. After a [`Database::open`] the
+    /// caller must re-attach the manager if auto-reindex behavior is desired.
+    pub(crate) fn attach_auto_reindex(
+        &self,
+        manager: Arc<crate::collection::auto_reindex::AutoReindexManager>,
+    ) {
+        *self.auto_reindex.write() = Some(manager);
+    }
 
-    fn make_config(oversampling: Option<u32>) -> CollectionConfig {
-        CollectionConfig {
-            name: "test".to_string(),
-            dimension: 128,
-            metric: DistanceMetric::Euclidean,
-            point_count: 0,
-            storage_mode: StorageMode::ProductQuantization,
-            metadata_only: false,
-            graph_schema: None,
-            embedding_dimension: None,
-            pq_rescore_oversampling: oversampling,
-            hnsw_params: None,
-            #[cfg(feature = "persistence")]
-            deferred_indexing: None,
-            async_index_builder: None,
+    /// Detaches the currently attached auto-reindex manager, if any.
+    ///
+    /// Subsequent bulk upserts will no longer consult the manager. Returns
+    /// the previously attached manager so callers can drop or reuse it.
+    pub(crate) fn detach_auto_reindex(
+        &self,
+    ) -> Option<Arc<crate::collection::auto_reindex::AutoReindexManager>> {
+        self.auto_reindex.write().take()
+    }
+
+    /// Returns a clone of the currently attached auto-reindex manager, if any.
+    ///
+    /// External consumers use this to inspect the manager state, register
+    /// their own event callbacks, or trigger a manual reindex.
+    #[must_use]
+    pub(crate) fn auto_reindex_manager(
+        &self,
+    ) -> Option<Arc<crate::collection::auto_reindex::AutoReindexManager>> {
+        self.auto_reindex.read().as_ref().map(Arc::clone)
+    }
+
+    /// Returns a [`DivergenceCheck`](crate::collection::auto_reindex::DivergenceCheck)
+    /// from the attached manager, or `None` if no manager is attached.
+    ///
+    /// Uses the collection's current persisted HNSW params, the live vector
+    /// count, and the configured dimension. Callers that want to force a
+    /// particular parameter set should use the manager directly via
+    /// [`Self::auto_reindex_manager`].
+    ///
+    /// This method is a read-only query — it does not trigger any state
+    /// transition on the manager.
+    #[must_use]
+    pub(crate) fn check_auto_reindex_divergence(
+        &self,
+    ) -> Option<crate::collection::auto_reindex::DivergenceCheck> {
+        let manager = self.auto_reindex_manager()?;
+        let (params, size, dimension) = self.auto_reindex_inputs();
+        Some(manager.check_divergence(&params, size, dimension))
+    }
+
+    /// Notifies the attached auto-reindex manager after a successful bulk
+    /// upsert, surfacing a `tracing::info!` event when the manager reports
+    /// that a reindex would be beneficial.
+    ///
+    /// Silently no-ops when no manager is attached. Does not block the
+    /// hot path — the only cost is three `parking_lot::RwLock::read()`
+    /// calls when a manager is attached, and zero syscalls when it is not.
+    ///
+    /// This method intentionally does NOT trigger automatic reindex
+    /// reconstruction: the runtime-only attachment model leaves that
+    /// decision to the caller. External consumers can wire their own
+    /// reindex pipeline on top of [`Self::auto_reindex_manager`].
+    pub(crate) fn notify_auto_reindex_after_bulk(&self) {
+        let Some(manager) = self.auto_reindex_manager() else {
+            return;
+        };
+        let (params, size, dimension) = self.auto_reindex_inputs();
+        if manager.should_reindex(&params, size, dimension) {
+            let name = self.config.read().name.clone();
+            tracing::info!(
+                collection = %name,
+                current_size = size,
+                dimension = dimension,
+                "auto-reindex manager reports divergence — reindex recommended"
+            );
         }
     }
 
-    #[test]
-    fn rescore_default_oversampling_is_4() {
-        let config = make_config(default_pq_rescore_oversampling());
-        assert_eq!(config.pq_rescore_oversampling, Some(4));
-    }
-
-    #[test]
-    fn rescore_candidates_k_formula_default() {
-        // Default factor = 4, k = 10
-        // candidates_k = max(10 * 4, 10 + 32) = max(40, 42) = 42
-        let factor = 4_usize;
-        let k = 10_usize;
-        let candidates_k = k.saturating_mul(factor).max(k + 32);
-        assert_eq!(candidates_k, 42);
-    }
-
-    #[test]
-    fn rescore_candidates_k_formula_custom_factor_6() {
-        // factor = 6, k = 10
-        // candidates_k = max(10 * 6, 10 + 32) = max(60, 42) = 60
-        let factor = 6_usize;
-        let k = 10_usize;
-        let candidates_k = k.saturating_mul(factor).max(k + 32);
-        assert_eq!(candidates_k, 60);
-    }
-
-    #[test]
-    fn rescore_none_disables_oversampling() {
-        let config = make_config(None);
-        let oversampling = config.pq_rescore_oversampling.unwrap_or(0);
-        assert_eq!(oversampling, 0, "None should map to 0 (disabled)");
-    }
-
-    #[test]
-    fn rescore_active_by_default_for_pq() {
-        let config = make_config(default_pq_rescore_oversampling());
-        assert!(
-            config.pq_rescore_oversampling.is_some(),
-            "Rescore must be active by default for PQ"
-        );
-        assert!(
-            config.pq_rescore_oversampling.unwrap() > 0,
-            "Default oversampling must be > 0"
-        );
-    }
-
-    #[test]
-    fn rescore_serde_default_backward_compat() {
-        // Simulate deserializing a config without pq_rescore_oversampling field.
-        // The serde default should kick in and set Some(4).
-        let json = r#"{
-            "name": "old_collection",
-            "dimension": 128,
-            "metric": "Euclidean",
-            "point_count": 100,
-            "storage_mode": "productquantization"
-        }"#;
-        let config: CollectionConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            config.pq_rescore_oversampling,
-            Some(4),
-            "Missing field must deserialize to Some(4) for backward compat"
-        );
-    }
-
-    #[test]
-    fn rescore_minimum_floor_preserved() {
-        // Even with small k, the floor k + 32 must dominate
-        let factor = 4_usize;
-        let k = 5_usize;
-        let candidates_k = k.saturating_mul(factor).max(k + 32);
-        // max(20, 37) = 37
-        assert_eq!(candidates_k, 37);
+    /// Gathers the three inputs `AutoReindexManager` needs from the
+    /// collection: current HNSW params (persisted in config, falling back
+    /// to the engine default when unset), live vector count, and the
+    /// configured vector dimension.
+    ///
+    /// Extracted as a helper so [`Self::check_auto_reindex_divergence`]
+    /// and [`Self::notify_auto_reindex_after_bulk`] share the same source
+    /// of truth instead of drifting.
+    fn auto_reindex_inputs(&self) -> (crate::index::hnsw::HnswParams, usize, usize) {
+        let config = self.config.read();
+        let params = config.hnsw_params.unwrap_or_default();
+        let dimension = config.dimension;
+        drop(config);
+        let size = self.vector_storage.read().len();
+        (params, size, dimension)
     }
 }

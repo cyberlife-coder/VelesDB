@@ -146,6 +146,20 @@ pub(crate) fn resolve_sparse_input(
 /// Parses fusion configuration into a core `FusionStrategy`.
 ///
 /// Defaults to RRF k=60 when no fusion config is provided.
+///
+/// Supported strategy strings (case-insensitive):
+///
+/// | Strategy | Aliases | Parameters |
+/// |---|---|---|
+/// | RRF | `rrf` | `k` (default 60) |
+/// | Relative Score | `rsf`, `relative_score` | `dense_w`, `sparse_w` (default 0.5 / 0.5) |
+/// | Average | `average`, `avg` | — |
+/// | Maximum | `maximum`, `max` | — |
+/// | Weighted | `weighted` | `avg_w`, `max_w`, `hit_w` (default 0.5 / 0.3 / 0.2) |
+///
+/// Unknown strategies yield a 400 Bad Request response listing the
+/// supported values. This propagates the full `velesdb_core::FusionStrategy`
+/// enum to the REST surface (findings PROP-FUS-HYBRID / PROP-FUS-SPARSE).
 #[allow(clippy::result_large_err)]
 pub(crate) fn parse_fusion_strategy(
     fusion: Option<&crate::types::FusionRequest>,
@@ -176,12 +190,21 @@ pub(crate) fn parse_fusion_strategy(
                     .into_response()
             })
         }
+        "average" | "avg" => Ok(velesdb_core::FusionStrategy::Average),
+        "maximum" | "max" => Ok(velesdb_core::FusionStrategy::Maximum),
+        "weighted" => Ok(velesdb_core::FusionStrategy::Weighted {
+            avg_weight: f.avg_w.unwrap_or(0.5),
+            max_weight: f.max_w.unwrap_or(0.3),
+            hit_weight: f.hit_w.unwrap_or(0.2),
+        }),
         other => Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!(
-                    "Invalid fusion strategy: '{other}'. \
-                     Valid values: 'rrf', 'rsf' (alias: 'relative_score')"
+                    "Invalid fusion strategy: '{other}'. Valid values: \
+                     'rrf', 'rsf' (alias: 'relative_score'), \
+                     'average' (alias: 'avg'), \
+                     'maximum' (alias: 'max'), 'weighted'"
                 ),
                 code: None,
             }),
@@ -223,6 +246,68 @@ pub(crate) fn execute_dense_search(
     Ok(result)
 }
 
+/// Search mode classification used by [`execute_search_request`] to
+/// dispatch to the appropriate search backend.
+///
+/// The variants enumerate the three legitimate combinations of
+/// dense and sparse query payloads on a `SearchRequest`:
+/// - `Hybrid` : both a dense vector and a sparse vector are present.
+/// - `DenseOnly` : only a dense vector is present.
+/// - `SparseOnly` : only a sparse vector is present.
+///
+/// The "neither" case is rejected upfront with a 400 Bad Request,
+/// so the enum does not carry a fallback variant.
+///
+/// # Exhaustiveness guarantee
+///
+/// Both [`SearchMode::classify`] and the `match` dispatch in
+/// [`execute_search_request`] are exhaustive over this enum. Adding
+/// a new search mode (e.g. a future `HybridLexical` combining
+/// dense + BM25 + sparse) will trigger a compile error at both
+/// sites instead of silently falling through to the legacy
+/// dense-only code path — this is the audit A P1 finding S2-NEW-08
+/// that motivated the refactor from the previous if-let chain.
+enum SearchMode<'a> {
+    /// Both dense and sparse vectors are present — route to the
+    /// hybrid fusion backend.
+    Hybrid {
+        sparse: &'a velesdb_core::index::sparse::SparseVector,
+    },
+    /// Only a dense vector is present.
+    DenseOnly,
+    /// Only a sparse vector is present.
+    SparseOnly {
+        sparse: &'a velesdb_core::index::sparse::SparseVector,
+    },
+}
+
+impl<'a> SearchMode<'a> {
+    /// Classify a request by its dense/sparse payload presence.
+    ///
+    /// Returns a 400 Bad Request when neither is provided — the
+    /// only invalid state. All three legitimate combinations map
+    /// to a corresponding [`SearchMode`] variant.
+    #[allow(clippy::result_large_err)]
+    fn classify(
+        has_dense: bool,
+        sparse: Option<&'a velesdb_core::index::sparse::SparseVector>,
+    ) -> Result<Self, axum::response::Response> {
+        match (has_dense, sparse) {
+            (true, Some(s)) => Ok(Self::Hybrid { sparse: s }),
+            (true, None) => Ok(Self::DenseOnly),
+            (false, Some(s)) => Ok(Self::SparseOnly { sparse: s }),
+            (false, None) => Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Either 'vector' or 'sparse_vector' must be provided".to_string(),
+                    code: None,
+                }),
+            )
+                .into_response()),
+        }
+    }
+}
+
 /// Runs the full search pipeline (dense, sparse, or hybrid) based on
 /// `SearchRequest` fields. Returns search results or an error response.
 #[allow(clippy::result_large_err)]
@@ -234,40 +319,21 @@ pub(crate) fn execute_search_request(
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
     let sparse_vec = resolve_sparse_input(req)?;
     let has_dense = !req.vector.is_empty();
-    let has_sparse = sparse_vec.is_some();
-
-    if !has_dense && !has_sparse {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Either 'vector' or 'sparse_vector' must be provided".to_string(),
-                code: None,
-            }),
-        )
-            .into_response());
-    }
 
     let index_name = req
         .sparse_index
         .as_deref()
         .unwrap_or(DEFAULT_SPARSE_INDEX_NAME);
 
-    // Hybrid: both dense and sparse
-    if has_dense {
-        if let Some(sparse_query) = sparse_vec {
-            return execute_hybrid_sparse(state, name, collection, req, &sparse_query, index_name);
+    match SearchMode::classify(has_dense, sparse_vec.as_ref())? {
+        SearchMode::Hybrid { sparse } => {
+            execute_hybrid_sparse(state, name, collection, req, sparse, index_name)
         }
-        // Dense-only
-        return execute_dense_search(state, name, collection, req);
+        SearchMode::DenseOnly => execute_dense_search(state, name, collection, req),
+        SearchMode::SparseOnly { sparse } => {
+            Ok(collection.sparse_search(sparse, req.top_k, index_name))
+        }
     }
-
-    // Sparse-only
-    if let Some(sparse_query) = sparse_vec {
-        return Ok(collection.sparse_search(&sparse_query, req.top_k, index_name));
-    }
-
-    // Dense-only (fallback — should not reach here given earlier validation)
-    execute_dense_search(state, name, collection, req)
 }
 
 /// Hybrid dense+sparse search path with dimension validation and fusion.
@@ -425,4 +491,171 @@ pub(crate) fn finish_search_with_status(
     finish_search_core(state, name, start, error_status, search_result, |results| {
         Json(build_search_response(results)).into_response()
     })
+}
+
+/// Builds the 408 Request Timeout response returned when a search
+/// exceeds the per-request `timeout_ms` budget. Includes the collection
+/// name and the budget in milliseconds so that clients can log
+/// actionable diagnostics.
+pub(crate) fn timeout_response(collection_name: &str, timeout_ms: u64) -> axum::response::Response {
+    (
+        StatusCode::REQUEST_TIMEOUT,
+        Json(ErrorResponse {
+            error: format!(
+                "Search on collection '{collection_name}' exceeded the \
+                 requested timeout of {timeout_ms}ms. The server returned \
+                 early; the in-flight query may continue in the background \
+                 until completion.",
+            ),
+            code: Some("VELES-QUERY-TIMEOUT".to_string()),
+        }),
+    )
+        .into_response()
+}
+
+// Async worker wrappers (TimeoutElapsed, run_search_with_optional_timeout,
+// run_blocking_search) extracted to workers.rs — Extract Module (Fowler).
+
+#[cfg(test)]
+mod parse_fusion_strategy_tests {
+    use super::parse_fusion_strategy;
+    use crate::types::FusionRequest;
+
+    fn strat(name: &str) -> FusionRequest {
+        FusionRequest {
+            strategy: name.to_string(),
+            k: None,
+            dense_w: None,
+            sparse_w: None,
+            avg_w: None,
+            max_w: None,
+            hit_w: None,
+        }
+    }
+
+    #[test]
+    fn test_default_is_rrf_k60() {
+        let result = parse_fusion_strategy(None).expect("None must default to RRF");
+        match result {
+            velesdb_core::FusionStrategy::RRF { k } => assert_eq!(k, 60),
+            other => panic!("expected RRF, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_rrf_with_custom_k() {
+        let mut req = strat("rrf");
+        req.k = Some(120);
+        let result = parse_fusion_strategy(Some(&req)).expect("rrf must parse");
+        match result {
+            velesdb_core::FusionStrategy::RRF { k } => assert_eq!(k, 120),
+            other => panic!("expected RRF, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_average_no_params() {
+        for alias in ["average", "avg", "AVG"] {
+            let req = strat(alias);
+            let result = parse_fusion_strategy(Some(&req))
+                .unwrap_or_else(|_| panic!("'{alias}' must parse"));
+            assert!(matches!(result, velesdb_core::FusionStrategy::Average));
+        }
+    }
+
+    #[test]
+    fn test_maximum_no_params() {
+        for alias in ["maximum", "max", "MAX"] {
+            let req = strat(alias);
+            let result = parse_fusion_strategy(Some(&req))
+                .unwrap_or_else(|_| panic!("'{alias}' must parse"));
+            assert!(matches!(result, velesdb_core::FusionStrategy::Maximum));
+        }
+    }
+
+    #[test]
+    fn test_weighted_with_defaults() {
+        let req = strat("weighted");
+        let result = parse_fusion_strategy(Some(&req)).expect("weighted must parse");
+        match result {
+            velesdb_core::FusionStrategy::Weighted {
+                avg_weight,
+                max_weight,
+                hit_weight,
+            } => {
+                assert!((avg_weight - 0.5).abs() < f32::EPSILON);
+                assert!((max_weight - 0.3).abs() < f32::EPSILON);
+                assert!((hit_weight - 0.2).abs() < f32::EPSILON);
+            }
+            other => panic!("expected Weighted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_weighted_with_explicit_weights() {
+        let mut req = strat("weighted");
+        req.avg_w = Some(0.7);
+        req.max_w = Some(0.2);
+        req.hit_w = Some(0.1);
+        let result = parse_fusion_strategy(Some(&req)).expect("weighted must parse");
+        match result {
+            velesdb_core::FusionStrategy::Weighted {
+                avg_weight,
+                max_weight,
+                hit_weight,
+            } => {
+                assert!((avg_weight - 0.7).abs() < f32::EPSILON);
+                assert!((max_weight - 0.2).abs() < f32::EPSILON);
+                assert!((hit_weight - 0.1).abs() < f32::EPSILON);
+            }
+            other => panic!("expected Weighted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_rsf_with_dense_weight_only() {
+        let mut req = strat("rsf");
+        req.dense_w = Some(0.7);
+        let result = parse_fusion_strategy(Some(&req)).expect("rsf must parse");
+        match result {
+            velesdb_core::FusionStrategy::RelativeScore {
+                dense_weight,
+                sparse_weight,
+            } => {
+                assert!((dense_weight - 0.7).abs() < f32::EPSILON);
+                assert!((sparse_weight - 0.3).abs() < f32::EPSILON);
+            }
+            other => panic!("expected RelativeScore, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_relative_score_alias() {
+        let req = strat("relative_score");
+        let result = parse_fusion_strategy(Some(&req)).expect("relative_score must parse");
+        assert!(matches!(
+            result,
+            velesdb_core::FusionStrategy::RelativeScore { .. }
+        ));
+    }
+
+    #[test]
+    fn test_unknown_strategy_returns_error() {
+        let req = strat("nonexistent");
+        let result = parse_fusion_strategy(Some(&req));
+        assert!(
+            result.is_err(),
+            "unknown strategy must return Err (400 response)"
+        );
+    }
+
+    #[test]
+    fn test_rrf_alias_case_insensitive() {
+        for alias in ["rrf", "RRF", "Rrf"] {
+            let req = strat(alias);
+            let result = parse_fusion_strategy(Some(&req))
+                .unwrap_or_else(|_| panic!("'{alias}' must parse"));
+            assert!(matches!(result, velesdb_core::FusionStrategy::RRF { .. }));
+        }
+    }
 }

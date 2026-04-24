@@ -14,16 +14,16 @@ pub struct MigrationConfig {
     /// Migration options.
     #[serde(default)]
     pub options: MigrationOptions,
+    /// Relations to migrate as graph edges (optional).
+    #[serde(default)]
+    pub relations: Vec<RelationConfig>,
 }
 
 /// Source database configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SourceConfig {
-    /// `PostgreSQL` with pgvector extension.
-    #[serde(rename = "pgvector")]
-    PgVector(PgVectorConfig),
-    /// Supabase (pgvector-based).
+    /// Supabase (PostgREST API over a pgvector-enabled PostgreSQL).
     #[serde(rename = "supabase")]
     Supabase(SupabaseConfig),
     /// Qdrant vector database.
@@ -47,35 +47,44 @@ pub enum SourceConfig {
     /// CSV file import.
     #[serde(rename = "csv_file")]
     CsvFile(crate::connectors::csv_file::CsvFileConfig),
-    /// MongoDB Atlas Vector Search.
-    #[serde(rename = "mongodb")]
-    MongoDB(crate::connectors::mongodb::MongoDBConfig),
     /// Elasticsearch/OpenSearch with vector search.
     #[serde(rename = "elasticsearch")]
     Elasticsearch(crate::connectors::elasticsearch::ElasticsearchConfig),
     /// Redis Vector Search (Redis Stack).
     #[serde(rename = "redis")]
-    Redis(crate::connectors::redis::RedisConfig),
+    Redis(RedisConfig),
 }
 
-/// `PostgreSQL` pgvector configuration.
+/// Configuration for Redis Vector Search.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PgVectorConfig {
-    /// Connection string (postgres://user:pass@host:port/db).
-    pub connection_string: String,
-    /// Table name containing vectors.
-    pub table: String,
-    /// Column name for vector data.
-    #[serde(default = "default_vector_column")]
-    pub vector_column: String,
-    /// Column name for primary key/ID.
-    #[serde(default = "default_id_column")]
-    pub id_column: String,
-    /// Additional columns to include in payload.
+pub struct RedisConfig {
+    /// Redis URL (e.g., `redis://localhost:6379` or `rediss://...` for TLS).
+    pub url: String,
+    /// Redis password (optional).
     #[serde(default)]
-    pub payload_columns: Vec<String>,
-    /// Optional WHERE clause for filtering.
+    pub password: Option<String>,
+    /// Index name created with `FT.CREATE`.
+    pub index: String,
+    /// Field name containing the vector embedding.
+    #[serde(default = "default_redis_vector_field")]
+    pub vector_field: String,
+    /// Prefix for document keys (e.g., "doc:").
+    #[serde(default = "default_redis_key_prefix")]
+    pub key_prefix: String,
+    /// Fields to include in payload (empty = all).
+    #[serde(default)]
+    pub payload_fields: Vec<String>,
+    /// Optional filter query (RediSearch syntax).
+    #[serde(default)]
     pub filter: Option<String>,
+}
+
+fn default_redis_vector_field() -> String {
+    "embedding".to_string()
+}
+
+fn default_redis_key_prefix() -> String {
+    "doc:".to_string()
 }
 
 /// Supabase configuration.
@@ -96,6 +105,24 @@ pub struct SupabaseConfig {
     /// Additional columns to include in payload.
     #[serde(default)]
     pub payload_columns: Vec<String>,
+    /// Optional distance metric declared by the operator.
+    ///
+    /// Supabase's PostgREST surface does not expose `pg_catalog`
+    /// tables by default, so the pgvector index operator class
+    /// (`vector_cosine_ops`, `vector_l2_ops`, `vector_ip_ops`)
+    /// cannot be auto-introspected without a custom RPC. Operators
+    /// who know their index definition can declare it here and the
+    /// value is forwarded to `SourceSchema.metric` so
+    /// `Pipeline::check_metric_fidelity` can catch mismatches.
+    ///
+    /// Accepted values: the VelesDB core vocabulary
+    /// (`cosine`/`euclidean`/`dot`/...) or the pgvector operator
+    /// class aliases (`vector_cosine_ops`/`vector_l2_ops`/
+    /// `vector_ip_ops`). Values are normalised before forwarding.
+    /// Leaving this unset emits a `tracing::warn!` on `get_schema`
+    /// so the skipped fidelity check is never silent.
+    #[serde(default)]
+    pub metric: Option<String>,
 }
 
 /// Qdrant configuration.
@@ -113,11 +140,18 @@ pub struct QdrantConfig {
 }
 
 /// Pinecone configuration.
+#[allow(deprecated)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PineconeConfig {
     /// Pinecone API key.
     pub api_key: String,
-    /// Environment (e.g., "us-east-1-aws").
+    /// Deprecated: Pinecone serverless (2024+) discovers the host dynamically
+    /// via `GET /indexes/{name}`. Kept for backward compatibility with existing YAML configs.
+    #[serde(default)]
+    #[deprecated(
+        since = "1.12.0",
+        note = "Pinecone serverless ignores environments; host is discovered via the API"
+    )]
     pub environment: String,
     /// Index name.
     pub index: String,
@@ -168,6 +202,27 @@ pub struct ChromaDBConfig {
     pub database: Option<String>,
 }
 
+/// Configuration of a source relation to migrate as graph edges.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationConfig {
+    /// Column/field in the source containing the FK (e.g., "author_id").
+    pub from_column: String,
+    /// Target table/collection (e.g., "authors").
+    pub to_table: String,
+    /// ID column in the target (e.g., "id"). Defaults to "id".
+    #[serde(default = "default_relation_id_column")]
+    pub to_column: String,
+    /// Edge label in `VelesDB` (e.g., "AUTHORED_BY").
+    pub edge_label: String,
+    /// Optional column for a numeric edge weight.
+    #[serde(default)]
+    pub weight_column: Option<String>,
+}
+
+fn default_relation_id_column() -> String {
+    "id".to_string()
+}
+
 /// Destination `VelesDB` configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DestinationConfig {
@@ -183,6 +238,9 @@ pub struct DestinationConfig {
     /// Storage mode.
     #[serde(default)]
     pub storage_mode: StorageMode,
+    /// Name of the `GraphCollection` for graph edges (optional).
+    #[serde(default)]
+    pub graph_collection: Option<String>,
 }
 
 /// Distance metric for `VelesDB`.
@@ -195,7 +253,12 @@ pub enum DistanceMetric {
     /// Euclidean distance. Best for unnormalized embeddings.
     Euclidean,
     /// Dot product. Fast but requires normalized vectors.
+    #[serde(alias = "DotProduct", alias = "dot_product")]
     Dot,
+    /// Hamming distance for binary vectors.
+    Hamming,
+    /// Jaccard similarity for set-like vectors.
+    Jaccard,
 }
 
 /// Storage mode for `VelesDB`.
@@ -240,6 +303,14 @@ pub struct MigrationOptions {
     /// Continue on errors.
     #[serde(default)]
     pub continue_on_error: bool,
+    /// Allow the pipeline to proceed even when the source reports a
+    /// distance metric that differs from the destination
+    /// configuration (finding M-P0-3). Defaults to `false`: a
+    /// mismatch aborts the migration with an error that names both
+    /// metrics. Set to `true` for controlled migrations where the
+    /// operator knows the semantic difference is acceptable.
+    #[serde(default)]
+    pub allow_metric_mismatch: bool,
 }
 
 impl Default for MigrationOptions {
@@ -252,6 +323,7 @@ impl Default for MigrationOptions {
             dry_run: false,
             field_mappings: HashMap::new(),
             continue_on_error: false,
+            allow_metric_mismatch: false,
         }
     }
 }
@@ -346,8 +418,10 @@ mod tests {
                 dimension: 0,
                 metric: DistanceMetric::Cosine,
                 storage_mode: StorageMode::Full,
+                graph_collection: None,
             },
             options: MigrationOptions::default(),
+            relations: vec![],
         };
 
         let result = config.validate();
@@ -369,11 +443,13 @@ mod tests {
                 dimension: 8,
                 metric: DistanceMetric::Cosine,
                 storage_mode: StorageMode::Full,
+                graph_collection: None,
             },
             options: MigrationOptions {
                 batch_size: 0,
                 ..MigrationOptions::default()
             },
+            relations: vec![],
         };
 
         let result = config.validate();
@@ -395,11 +471,13 @@ mod tests {
                 dimension: 8,
                 metric: DistanceMetric::Cosine,
                 storage_mode: StorageMode::Full,
+                graph_collection: None,
             },
             options: MigrationOptions {
                 workers: 0,
                 ..MigrationOptions::default()
             },
+            relations: vec![],
         };
 
         let result = config.validate();

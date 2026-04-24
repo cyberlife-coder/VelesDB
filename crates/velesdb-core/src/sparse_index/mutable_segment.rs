@@ -58,7 +58,7 @@ impl MutableSegment {
         is_new
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Called from inverted_index::insert_batch_chunk via deref chain
     pub(super) fn merge_batch_postings(
         entries: &mut Vec<PostingEntry>,
         mut updates: Vec<PostingEntry>,

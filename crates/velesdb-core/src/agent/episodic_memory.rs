@@ -47,8 +47,6 @@ impl EpisodicMemory {
             Arc::new(TemporalIndex::new()),
         )
     }
-
-    #[allow(deprecated)]
     pub(crate) fn new(
         db: Arc<Database>,
         dimension: usize,
@@ -60,8 +58,8 @@ impl EpisodicMemory {
             memory_helpers::open_or_create_collection(&db, &collection_name, dimension)?;
 
         if temporal_index.is_empty() {
-            if let Some(collection) = db.get_collection(&collection_name) {
-                Self::rebuild_temporal_index(&collection, &temporal_index);
+            if let Some(collection) = db.get_vector_collection(&collection_name) {
+                Self::rebuild_temporal_index(&collection.inner, &temporal_index);
             }
         }
 
@@ -73,9 +71,10 @@ impl EpisodicMemory {
             temporal_index,
         })
     }
-
-    #[allow(deprecated)] // Uses legacy Collection internally.
-    fn rebuild_temporal_index(collection: &crate::Collection, temporal_index: &TemporalIndex) {
+    fn rebuild_temporal_index(
+        collection: &crate::collection::Collection,
+        temporal_index: &TemporalIndex,
+    ) {
         let all_ids = collection.all_ids();
         let points = collection.get(&all_ids);
         for point in points.into_iter().flatten() {
@@ -99,7 +98,6 @@ impl EpisodicMemory {
     ///
     /// Returns an error when the embedding dimension is invalid, when the collection
     /// is unavailable, or when storage upsert fails.
-    #[allow(deprecated)]
     pub fn record(
         &self,
         event_id: u64,
@@ -148,7 +146,6 @@ impl EpisodicMemory {
     /// # Errors
     ///
     /// Returns an error when the collection is unavailable.
-    #[allow(deprecated)]
     pub fn recent(
         &self,
         limit: usize,
@@ -171,7 +168,6 @@ impl EpisodicMemory {
     /// # Errors
     ///
     /// Returns an error when the collection is unavailable.
-    #[allow(deprecated)]
     pub fn older_than(
         &self,
         timestamp: i64,
@@ -223,7 +219,6 @@ impl EpisodicMemory {
     /// # Errors
     ///
     /// Returns an error when the collection is unavailable.
-    #[allow(deprecated)]
     pub fn get_with_embedding(
         &self,
         id: u64,
@@ -261,7 +256,6 @@ impl EpisodicMemory {
     /// # Errors
     ///
     /// Returns an error when the collection is unavailable or delete fails.
-    #[allow(deprecated)]
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         memory_helpers::delete_from_collection(&collection, &[id])?;
@@ -276,7 +270,6 @@ impl EpisodicMemory {
     /// # Errors
     ///
     /// Returns an error when the collection is unavailable or JSON encoding fails.
-    #[allow(deprecated)]
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let all_ids = self.temporal_index.all_ids();
@@ -289,7 +282,6 @@ impl EpisodicMemory {
     ///
     /// Returns an error when JSON decoding fails, collection access fails, or
     /// persistence operations fail.
-    #[allow(deprecated)]
     pub fn deserialize(&self, data: &[u8]) -> Result<(), AgentMemoryError> {
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         if let Some(points) = memory_helpers::deserialize_into_collection(data, &collection)? {
@@ -299,12 +291,11 @@ impl EpisodicMemory {
     }
 
     /// Fetches temporal events with progressive widening, filtering expired entries.
-    #[allow(deprecated)]
     fn fetch_temporal_events(
         &self,
         limit: usize,
         id_fetcher: impl Fn(usize) -> Vec<u64>,
-        collection: &crate::Collection,
+        collection: &crate::collection::Collection,
     ) -> Vec<(u64, String, i64)> {
         let mut events = Vec::with_capacity(limit);
         let mut fetch_limit = limit * 2;
@@ -329,10 +320,9 @@ impl EpisodicMemory {
     }
 
     /// Fetches points by IDs, filters expired ones, and extracts event fields.
-    #[allow(deprecated)]
     fn filter_live_events(
         ttl: &MemoryTtl,
-        collection: &crate::Collection,
+        collection: &crate::collection::Collection,
         ids: &[u64],
         limit: usize,
     ) -> Vec<(u64, String, i64)> {

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// DDL statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DdlStatement {
     /// CREATE COLLECTION statement.
     CreateCollection(CreateCollectionStatement),
@@ -34,6 +35,7 @@ pub struct CreateCollectionStatement {
 
 /// Kind of collection to create.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum CreateCollectionKind {
     /// Vector collection (default).
     Vector(VectorCollectionParams),
@@ -71,6 +73,7 @@ pub struct GraphCollectionParams {
 
 /// Graph schema mode.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum GraphSchemaMode {
     /// No schema enforcement.
     Schemaless,
@@ -80,6 +83,7 @@ pub enum GraphSchemaMode {
 
 /// A single schema definition (node type or edge type).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SchemaDefinition {
     /// Node type with properties.
     Node {

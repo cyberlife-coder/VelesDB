@@ -23,9 +23,14 @@
 //! # Features
 //!
 //! - **In-memory vector store**: Fast vector storage and retrieval
-//! - **SIMD-optimized**: Uses WASM SIMD128 for distance calculations
 //! - **Multiple metrics**: Cosine, Euclidean, Dot Product
 //! - **Half-precision**: f16/bf16 support for 50% memory reduction
+//!
+//! Distance kernels run on the scalar code paths of `velesdb-core` under
+//! `wasm32-unknown-unknown`. Explicit WASM SIMD128 intrinsics are not wired
+//! in this crate; the `wasm-opt` post-processing stage may emit SIMD128
+//! opportunistically when safe, but that is an optimizer choice and is not
+//! part of the public API contract.
 //!
 //! # Usage (JavaScript)
 //!
@@ -46,17 +51,18 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 mod agent;
+mod database;
 mod filter;
 mod fusion;
 mod graph;
 mod graph_persistence;
-mod graph_worker;
+mod graph_store;
+mod graph_worker_hints;
 mod hybrid_quantized;
 mod idb_helpers;
 mod parsing;
 mod persistence;
 mod serialization;
-mod simd;
 pub mod sparse;
 mod store_get;
 mod store_insert;
@@ -67,9 +73,32 @@ mod vector_ops;
 mod vector_store;
 mod vector_store_persistence;
 mod velesql;
+mod velesql_admin;
+mod velesql_aggregate;
+mod velesql_ddl;
+mod velesql_delete;
+mod velesql_exec;
+mod velesql_explain;
+mod velesql_fusion;
+mod velesql_graph;
 mod velesql_helpers;
+mod velesql_insert;
+mod velesql_introspection;
+mod velesql_join;
+mod velesql_logic;
+mod velesql_match;
+mod velesql_orderby;
+mod velesql_result;
+mod velesql_scan;
+mod velesql_select;
+mod velesql_setops;
+mod velesql_similarity;
+mod velesql_update;
+mod velesql_value;
+mod velesql_where;
 
 pub use agent::SemanticMemory;
+pub use database::{WasmCollectionHandle, WasmDatabase};
 pub use graph::{GraphEdge, GraphNode, GraphStore};
 pub use vector_store::VectorStore;
 pub use velesdb_core::DistanceMetric;
@@ -135,3 +164,27 @@ macro_rules! console_log {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_tests.rs"]
+mod velesql_exec_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_aggregate_tests.rs"]
+mod velesql_exec_aggregate_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_setops_tests.rs"]
+mod velesql_exec_setops_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_join_tests.rs"]
+mod velesql_exec_join_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_hybrid_tests.rs"]
+mod velesql_exec_hybrid_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_graph_tests.rs"]
+mod velesql_exec_graph_tests;

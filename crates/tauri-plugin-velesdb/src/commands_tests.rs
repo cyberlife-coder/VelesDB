@@ -98,6 +98,99 @@ fn test_create_collection_request_deserialize() {
     assert_eq!(request.dimension, 768);
     assert_eq!(request.metric, "cosine");
     assert_eq!(request.storage_mode, "full");
+    // Advanced params default to None (backward compatibility)
+    assert!(request.hnsw_m.is_none());
+    assert!(request.hnsw_ef_construction.is_none());
+    assert!(request.hnsw_alpha.is_none());
+    assert!(request.hnsw_max_elements.is_none());
+    assert!(request.pq_rescore_oversampling.is_none());
+}
+
+#[test]
+fn test_create_collection_request_with_all_hnsw_params() {
+    let json = r#"{
+        "name": "custom",
+        "dimension": 384,
+        "metric": "euclidean",
+        "storageMode": "sq8",
+        "hnswM": 48,
+        "hnswEfConstruction": 600,
+        "hnswAlpha": 1.5,
+        "hnswMaxElements": 500000,
+        "pqRescoreOversampling": 8
+    }"#;
+    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+
+    assert_eq!(request.name, "custom");
+    assert_eq!(request.dimension, 384);
+    assert_eq!(request.metric, "euclidean");
+    assert_eq!(request.storage_mode, "sq8");
+    assert_eq!(request.hnsw_m, Some(48));
+    assert_eq!(request.hnsw_ef_construction, Some(600));
+    assert!((request.hnsw_alpha.unwrap() - 1.5).abs() < f32::EPSILON);
+    assert_eq!(request.hnsw_max_elements, Some(500_000));
+    assert_eq!(request.pq_rescore_oversampling, Some(8));
+}
+
+#[test]
+fn test_create_collection_request_with_partial_hnsw_params() {
+    let json = r#"{"name": "partial", "dimension": 128, "hnswM": 16}"#;
+    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+
+    assert_eq!(request.hnsw_m, Some(16));
+    assert!(request.hnsw_ef_construction.is_none());
+    assert!(request.hnsw_alpha.is_none());
+    assert!(request.hnsw_max_elements.is_none());
+    assert!(request.pq_rescore_oversampling.is_none());
+}
+
+#[test]
+fn test_build_hnsw_params_uses_auto_defaults() {
+    use crate::commands::build_hnsw_params;
+
+    let json = r#"{"name": "test", "dimension": 768}"#;
+    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+    let params = build_hnsw_params(&request, velesdb_core::StorageMode::Full);
+
+    let auto = velesdb_core::HnswParams::auto(768);
+    assert_eq!(params.max_connections, auto.max_connections);
+    assert_eq!(params.ef_construction, auto.ef_construction);
+    assert_eq!(params.max_elements, auto.max_elements);
+    assert!((params.alpha - auto.alpha).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_build_hnsw_params_overrides_selectively() {
+    use crate::commands::build_hnsw_params;
+
+    let json = r#"{"name": "test", "dimension": 128, "hnswM": 64, "hnswAlpha": 1.0}"#;
+    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+    let params = build_hnsw_params(&request, velesdb_core::StorageMode::SQ8);
+
+    let auto = velesdb_core::HnswParams::auto(128);
+    assert_eq!(params.max_connections, 64);
+    assert_eq!(params.ef_construction, auto.ef_construction);
+    assert_eq!(params.max_elements, auto.max_elements);
+    assert!((params.alpha - 1.0).abs() < f32::EPSILON);
+    assert_eq!(params.storage_mode, velesdb_core::StorageMode::SQ8);
+}
+
+#[test]
+fn test_has_advanced_params_false_when_all_none() {
+    use crate::commands::has_advanced_params;
+
+    let json = r#"{"name": "test", "dimension": 768}"#;
+    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+    assert!(!has_advanced_params(&request));
+}
+
+#[test]
+fn test_has_advanced_params_true_when_any_set() {
+    use crate::commands::has_advanced_params;
+
+    let json = r#"{"name": "test", "dimension": 768, "pqRescoreOversampling": 4}"#;
+    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+    assert!(has_advanced_params(&request));
 }
 
 #[test]
@@ -108,6 +201,45 @@ fn test_search_request_deserialize() {
     assert_eq!(request.collection, "docs");
     assert_eq!(request.vector, vec![0.1, 0.2, 0.3]);
     assert_eq!(request.top_k, 10);
+    assert!(request.quality.is_none(), "quality should default to None");
+}
+
+#[test]
+fn test_search_request_with_quality() {
+    let json = r#"{"collection": "docs", "vector": [0.1, 0.2], "quality": "fast"}"#;
+    let request: SearchRequest = serde_json::from_str(json).unwrap();
+
+    assert_eq!(request.quality, Some("fast".to_string()));
+}
+
+#[test]
+fn test_search_request_with_quality_camel_case() {
+    // Verify camelCase deserialization for the quality field
+    let json = r#"{"collection": "docs", "vector": [0.1], "topK": 5, "quality": "accurate"}"#;
+    let request: SearchRequest = serde_json::from_str(json).unwrap();
+
+    assert_eq!(request.top_k, 5);
+    assert_eq!(request.quality, Some("accurate".to_string()));
+}
+
+#[test]
+fn test_individual_search_request_with_quality() {
+    use crate::types::IndividualSearchRequest;
+
+    let json = r#"{"vector": [0.1, 0.2], "quality": "balanced"}"#;
+    let request: IndividualSearchRequest = serde_json::from_str(json).unwrap();
+
+    assert_eq!(request.quality, Some("balanced".to_string()));
+}
+
+#[test]
+fn test_individual_search_request_quality_defaults_none() {
+    use crate::types::IndividualSearchRequest;
+
+    let json = r#"{"vector": [0.1, 0.2]}"#;
+    let request: IndividualSearchRequest = serde_json::from_str(json).unwrap();
+
+    assert!(request.quality.is_none());
 }
 
 #[test]
@@ -137,7 +269,7 @@ fn test_search_result_serialize() {
     };
     let json = serde_json::to_string(&result).unwrap();
 
-    assert!(json.contains("\"id\":42"));
+    assert!(json.contains("\"id\":\"42\""));
     assert!(json.contains("\"score\":0.95"));
     assert!(json.contains("\"title\":\"Test\""));
 }
@@ -417,6 +549,7 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "get_collection",
     "is_empty",
     "flush",
+    "scroll_collection",
     // Point operations
     "upsert",
     "upsert_metadata",
@@ -429,15 +562,28 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "hybrid_search",
     "multi_query_search",
     "query",
-    // AgentMemory (semantic)
+    // AgentMemory (semantic, episodic, procedural)
     "semantic_store",
     "semantic_query",
+    "episodic_record",
+    "episodic_recent",
+    "procedural_learn",
+    "procedural_recall",
     // Knowledge Graph
+    "create_graph_collection",
     "add_edge",
     "get_edges",
     "traverse_graph",
     "get_node_degree",
     "traverse_graph_parallel",
+    // Sparse vector operations
+    "sparse_search",
+    "hybrid_sparse_search",
+    "sparse_upsert",
+    // PQ training
+    "train_pq",
+    // Streaming insert (persistence only)
+    "stream_insert",
     // Secondary Indexes
     "create_index",
     "drop_index",
@@ -546,4 +692,158 @@ fn test_build_rs_commands_match_registered() {
              Add '\"{cmd}\"' to the COMMANDS array in build.rs to generate its permission file."
         );
     }
+}
+
+// ============================================================================
+// Scroll DTO Tests
+// ============================================================================
+
+#[test]
+fn test_scroll_request_deserialize() {
+    use crate::types::ScrollRequest;
+    let json = r#"{"collection": "docs"}"#;
+    let req: ScrollRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(req.collection, "docs");
+    assert!(req.cursor.is_none());
+    assert_eq!(req.batch_size, 100); // default
+    assert!(req.filter.is_none());
+}
+
+#[test]
+fn test_scroll_request_with_cursor() {
+    use crate::types::ScrollRequest;
+    let json = r#"{"collection": "docs", "cursor": 42, "batchSize": 50}"#;
+    let req: ScrollRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(req.cursor, Some(42));
+    assert_eq!(req.batch_size, 50);
+}
+
+#[test]
+fn test_scroll_response_serialize() {
+    use crate::types::{PointOutput, ScrollResponse};
+    let resp = ScrollResponse {
+        points: vec![PointOutput {
+            id: 1,
+            vector: vec![0.1, 0.2],
+            payload: None,
+        }],
+        next_cursor: Some(2),
+    };
+    let json = serde_json::to_string(&resp).unwrap();
+    assert!(json.contains("\"nextCursor\":2"));
+    assert!(json.contains("\"id\":1"));
+}
+
+// ============================================================================
+// AgentMemory DTO Deserialization Tests (episodic + procedural)
+// ============================================================================
+
+#[test]
+fn test_episodic_record_request_deserialize() {
+    use crate::types::EpisodicRecordRequest;
+    let json = r#"{"eventId": 42, "content": "found key", "timestamp": 1700000000, "embedding": [0.1, 0.2]}"#;
+    let req: EpisodicRecordRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(req.event_id, 42);
+    assert_eq!(req.content, "found key");
+    assert_eq!(req.timestamp, 1_700_000_000);
+    assert_eq!(req.embedding.len(), 2);
+}
+
+#[test]
+fn test_episodic_recent_request_defaults() {
+    use crate::types::EpisodicRecentRequest;
+    let json = r"{}";
+    let req: EpisodicRecentRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(req.limit, 10); // default_top_k
+    assert!(req.since_timestamp.is_none());
+}
+
+#[test]
+fn test_episodic_recent_request_with_since_timestamp() {
+    use crate::types::EpisodicRecentRequest;
+    let json = r#"{"limit": 5, "sinceTimestamp": 1700000000}"#;
+    let req: EpisodicRecentRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(req.limit, 5);
+    assert_eq!(req.since_timestamp, Some(1_700_000_000));
+}
+
+#[test]
+fn test_procedural_learn_request_deserialize() {
+    use crate::types::ProceduralLearnRequest;
+    let json = r#"{"procedureId": 1, "name": "login", "steps": ["open app", "enter creds"], "embedding": [0.5], "confidence": 0.9}"#;
+    let req: ProceduralLearnRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(req.procedure_id, 1);
+    assert_eq!(req.name, "login");
+    assert_eq!(req.steps.len(), 2);
+    assert!((req.confidence - 0.9).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_procedural_learn_request_default_confidence() {
+    use crate::types::ProceduralLearnRequest;
+    let json = r#"{"procedureId": 1, "name": "test", "steps": [], "embedding": [0.1]}"#;
+    let req: ProceduralLearnRequest = serde_json::from_str(json).unwrap();
+    assert!((req.confidence - 1.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_procedural_recall_request_deserialize() {
+    use crate::types::ProceduralRecallRequest;
+    let json = r#"{"embedding": [0.1, 0.2], "topK": 5, "minConfidence": 0.5}"#;
+    let req: ProceduralRecallRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(req.top_k, 5);
+    assert!((req.min_confidence - 0.5).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_procedural_recall_request_defaults() {
+    use crate::types::ProceduralRecallRequest;
+    let json = r#"{"embedding": [0.1]}"#;
+    let req: ProceduralRecallRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(req.top_k, 10); // default_top_k
+    assert!((req.min_confidence - 0.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_episodic_result_serialize() {
+    use crate::types::EpisodicResult;
+    let result = EpisodicResult {
+        id: 42,
+        content: "found key".to_string(),
+        timestamp: 1_700_000_000,
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    assert!(json.contains("\"id\":42"));
+    assert!(json.contains("\"content\":\"found key\""));
+    assert!(json.contains("\"timestamp\":1700000000"));
+}
+
+#[test]
+fn test_procedural_match_result_serialize() {
+    use crate::types::ProceduralMatchResult;
+    let result = ProceduralMatchResult {
+        id: 1,
+        name: "login".to_string(),
+        steps: vec!["open app".to_string(), "enter creds".to_string()],
+        confidence: 0.9,
+        score: 0.85,
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    assert!(json.contains("\"id\":1"));
+    assert!(json.contains("\"name\":\"login\""));
+    assert!(json.contains("\"steps\""));
+    assert!(json.contains("\"confidence\":0.9"));
+    assert!(json.contains("\"score\":0.85"));
+}
+
+#[test]
+fn test_scroll_response_no_next_cursor() {
+    use crate::types::ScrollResponse;
+    let resp = ScrollResponse {
+        points: vec![],
+        next_cursor: None,
+    };
+    let json = serde_json::to_string(&resp).unwrap();
+    // next_cursor should be skipped when None
+    assert!(!json.contains("nextCursor"));
 }

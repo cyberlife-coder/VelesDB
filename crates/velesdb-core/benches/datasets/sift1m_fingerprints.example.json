@@ -1,0 +1,6 @@
+{
+  "_comment": "EXAMPLE ONLY — do not use these hashes. Generate the real sift1m_fingerprints.json via: cargo bench -p velesdb-core --features bench-sift1m --bench capture_sift1m_fingerprints. The capture bench downloads SIFT1M (once, ~168 MB), hashes the three files, and writes the real sidecar in this directory. Commit the real sidecar to pin strict verification.",
+  "sift_base_fvecs_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "sift_query_fvecs_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "sift_groundtruth_ivecs_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

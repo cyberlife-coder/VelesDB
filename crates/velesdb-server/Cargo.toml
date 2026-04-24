@@ -36,6 +36,10 @@ clap = { version = "4.4", features = ["derive", "env"] }
 toml = { workspace = true }
 parking_lot = "0.12"
 
+# Rate limiting
+tower_governor = "0.8"
+governor = "0.10"
+
 # TLS support via rustls
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 tokio-rustls = "0.26"
@@ -48,7 +52,8 @@ utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 
 [features]
-default = ["velesdb-core/default", "update-check"]
+default = ["velesdb-core/default", "persistence", "update-check"]
+bench-sift1m = ["velesdb-core/bench-sift1m"]
 gpu = ["velesdb-core/gpu"]
 internal-bench = ["velesdb-core/internal-bench"]
 loom = ["velesdb-core/loom"]
@@ -57,6 +62,10 @@ persistence = ["velesdb-core/persistence"]
 prometheus = []
 update-check = ["velesdb-core/update-check"]
 swagger-ui = ["dep:utoipa-swagger-ui"]
+## Forwards `velesdb-core/test-fault-injection`. Only enable for
+## integration tests that exercise rollback paths via
+## `SaveConfigFaultGuard`. Never include in production builds.
+test-fault-injection = ["velesdb-core/test-fault-injection"]
 
 [dev-dependencies]
 # Use native-tls to avoid ring compilation issues on aarch64-apple-darwin

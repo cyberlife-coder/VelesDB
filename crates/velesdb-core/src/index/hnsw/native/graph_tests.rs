@@ -1,11 +1,9 @@
 //! Tests for `graph` module - Native HNSW graph implementation.
 
-#![allow(deprecated)] // SimdDistance deprecated in favor of CachedSimdDistance
-
 use super::graph::NativeHnsw;
 use super::layer::NodeId;
 use crate::distance::DistanceMetric;
-use crate::index::hnsw::native::distance::CpuDistance;
+use crate::index::hnsw::native::distance::{CachedSimdDistance, CpuDistance};
 
 #[allow(clippy::cast_precision_loss)]
 #[test]
@@ -166,9 +164,8 @@ fn test_heuristic_fills_quota_with_closest_if_needed() {
 #[test]
 fn test_recall_with_heuristic_selection() {
     // Test that heuristic selection maintains good recall
-    use crate::index::hnsw::native::distance::SimdDistance;
 
-    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 128);
     let hnsw = NativeHnsw::new(engine, 32, 200, 1000);
 
     // Insert 500 random-ish vectors
@@ -464,4 +461,139 @@ fn test_no_mutex_field_exists() {
     let query: Vec<f32> = (0..32).map(|j| j as f32).collect();
     let results = hnsw.search(&query, 10, 50);
     assert!(!results.is_empty(), "test: search must return results");
+}
+
+// ============================================================================
+// GPU snapshot invalidation version counter (PR-B of #634)
+// ============================================================================
+
+/// The snapshot version must bump once per insert (single and parallel
+/// paths alike) so GPU caches re-read fresh vectors after every mutation.
+#[cfg(feature = "gpu")]
+#[test]
+fn test_gpu_snapshot_version_bumps_on_every_mutation() {
+    use std::sync::atomic::Ordering;
+
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 8);
+    let hnsw = NativeHnsw::new_with_dimension_and_alpha(engine, 16, 100, 1000, 8, 1.2)
+        .expect("test: index creation should succeed");
+
+    let v0 = hnsw.gpu_snapshot_version.load(Ordering::Acquire);
+    assert_eq!(v0, 0, "fresh index starts at version 0");
+
+    let vec_a: Vec<f32> = (0..8).map(|i| i as f32 / 10.0).collect();
+    hnsw.insert(&vec_a).expect("test: insert succeeds");
+    let v1 = hnsw.gpu_snapshot_version.load(Ordering::Acquire);
+    assert!(v1 > v0, "single insert must bump the snapshot version");
+
+    // Parallel insert path (big enough batch to actually go parallel —
+    // `parallel_insert` falls back to sequential under 100 entries).
+    let batch: Vec<Vec<f32>> = (0..120)
+        .map(|seed| (0..8).map(|j| (seed + j) as f32 / 100.0).collect())
+        .collect();
+    let batch_refs: Vec<(&[f32], usize)> =
+        batch.iter().enumerate().map(|(i, v)| (&v[..], i)).collect();
+    hnsw.parallel_insert(&batch_refs)
+        .expect("test: parallel_insert succeeds");
+    let v2 = hnsw.gpu_snapshot_version.load(Ordering::Acquire);
+    assert!(v2 > v1, "parallel insert path must also bump the version");
+}
+
+/// `reorder_for_locality` rewrites both the vector buffer AND every
+/// neighbour list in place. Devin flagged on PR-B that the pre-existing
+/// reorder path never invalidated GPU caches, so any snapshot / CSR
+/// built from the pre-reorder topology would silently be served after
+/// reorder. This test locks in the contract: the snapshot version must
+/// bump once per reorder pass that actually runs (above the threshold).
+#[cfg(feature = "gpu")]
+#[test]
+fn test_reorder_for_locality_bumps_snapshot_version() {
+    use std::sync::atomic::Ordering;
+
+    // The reorder threshold is 1000 in reorder.rs; we need enough vectors
+    // for the code path to actually execute the permutation.
+    const N: usize = 1024;
+    const DIM: usize = 8;
+
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, DIM);
+    let hnsw = NativeHnsw::new_with_dimension_and_alpha(engine, 16, 100, 2048, DIM, 1.2)
+        .expect("test: index creation");
+
+    let vectors: Vec<Vec<f32>> = (0..N)
+        .map(|i| (0..DIM).map(|j| (i * DIM + j) as f32 / 1000.0).collect())
+        .collect();
+    let refs: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (&v[..], i))
+        .collect();
+    hnsw.parallel_insert(&refs)
+        .expect("test: bulk insert for reorder");
+    let before = hnsw.gpu_snapshot_version.load(Ordering::Acquire);
+
+    hnsw.reorder_for_locality().expect("test: reorder succeeds");
+    let after = hnsw.gpu_snapshot_version.load(Ordering::Acquire);
+
+    assert!(
+        after > before,
+        "reorder_for_locality must bump the snapshot version \
+         (before={before}, after={after})"
+    );
+    // Snapshot mutex must be cleared too (belt-and-suspenders).
+    assert!(
+        hnsw.gpu_vectors_snapshot.lock().is_none(),
+        "reorder_for_locality must clear the snapshot mutex"
+    );
+}
+
+/// Regression for the snapshot-cache-keyed-on-count bug: a hypothetical
+/// delete-then-insert that returns to the same count must still
+/// invalidate the cache. With the version counter introduced by PR-B
+/// (issue #634), any call to `invalidate_gpu_caches` bumps the version —
+/// so a future delete path that forgets the explicit `None`-clear is
+/// still safe.
+///
+/// We simulate the worst-case "future delete forgets to clear" by
+/// manually populating the snapshot with a stale entry keyed at the
+/// **current** version (mimicking a snapshot installed just before
+/// a delete), then calling `invalidate_gpu_caches` and checking that
+/// the next read observes staleness via the version.
+#[cfg(feature = "gpu")]
+#[test]
+fn test_snapshot_version_detects_staleness_without_explicit_clear() {
+    use std::sync::atomic::Ordering;
+
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 4);
+    let hnsw = NativeHnsw::new_with_dimension_and_alpha(engine, 16, 100, 1000, 4, 1.2)
+        .expect("test: index creation should succeed");
+
+    // Drive the index past its fresh state so there is a real snapshot
+    // to populate.
+    let v: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4];
+    hnsw.insert(&v).expect("test: insert succeeds");
+
+    // Install a fake "stale" snapshot keyed at the current version.
+    let current_version = hnsw.gpu_snapshot_version.load(Ordering::Acquire);
+    let fake_arc: std::sync::Arc<[f32]> = vec![9.9_f32; 4].into();
+    *hnsw.gpu_vectors_snapshot.lock() = Some((current_version, 4, fake_arc.clone()));
+
+    // Invalidate via the helper but DO NOT touch the snapshot mutex
+    // manually — this mirrors a future delete path that forgets the
+    // explicit `None`-clear. The version bump inside the helper must be
+    // enough to detect staleness on the next read.
+    hnsw.invalidate_gpu_caches();
+
+    let post_version = hnsw.gpu_snapshot_version.load(Ordering::Acquire);
+    assert!(
+        post_version > current_version,
+        "invalidate_gpu_caches must bump the version"
+    );
+
+    // Belt-and-suspenders: the helper also clears the mutex. Verify both
+    // safety nets are in place — either one alone is sufficient for
+    // correctness, but both together fail-close.
+    assert!(
+        hnsw.gpu_vectors_snapshot.lock().is_none(),
+        "invalidate_gpu_caches must also clear the snapshot mutex (belt-and-suspenders)"
+    );
 }

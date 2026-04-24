@@ -157,11 +157,11 @@ fn test_truncate_then_insert() {
 }
 
 // ============================================================================
-// ALTER COLLECTION — nominal
+// ALTER COLLECTION — execution returns feature-gap error (US-300)
 // ============================================================================
 
 #[test]
-fn test_alter_collection_set_option() {
+fn test_alter_collection_set_option_returns_feature_gap_error() {
     let (_dir, db) = create_test_db();
 
     execute_sql(
@@ -170,20 +170,21 @@ fn test_alter_collection_set_option() {
     )
     .expect("create");
 
-    let results = execute_sql(&db, "ALTER COLLECTION alter_test SET (auto_reindex = true)")
-        .expect("ALTER COLLECTION should succeed");
+    // `ALTER COLLECTION SET` execution is tracked under US-300 and not
+    // currently implemented. The grammar still parses the statement so
+    // documentation examples remain valid; the execution path returns a
+    // diagnostic error that names the tracking ticket.
+    let err = execute_sql(&db, "ALTER COLLECTION alter_test SET (auto_reindex = true)")
+        .expect_err("ALTER COLLECTION SET must return a feature-gap error");
 
-    // ALTER now returns one result per option with a warning payload
-    // explaining that the option is validated but not yet persisted (US-300).
-    assert_eq!(results.len(), 1, "ALTER returns one result per option");
-    let payload = results[0].point.payload.as_ref().expect("payload");
-    assert_eq!(payload["status"], "accepted");
+    let err_msg = err.to_string();
     assert!(
-        payload["warning"]
-            .as_str()
-            .expect("warning string")
-            .contains("US-300"),
-        "warning must reference the tracking ticket"
+        err_msg.contains("US-300"),
+        "error must reference US-300: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("not yet implemented"),
+        "error must state feature is not implemented: {err_msg}"
     );
 }
 

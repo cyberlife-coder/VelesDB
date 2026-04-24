@@ -20,7 +20,9 @@ pub use limits::{
     DEFAULT_CIRCUIT_RECOVERY_SECONDS, DEFAULT_MAX_CARDINALITY, DEFAULT_MAX_DEPTH,
     DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_RATE_LIMIT_QPS,
 };
-pub use resilience::{CircuitBreaker, CircuitState, RateLimiter};
+#[allow(unused_imports)] // Re-exported for test access
+pub(crate) use resilience::CircuitState;
+pub use resilience::{CircuitBreaker, RateLimiter};
 
 /// Global guard-rails manager (EPIC-048).
 ///

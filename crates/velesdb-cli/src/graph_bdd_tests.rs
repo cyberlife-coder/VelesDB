@@ -239,10 +239,10 @@ fn test_search_graph_with_embeddings_returns_results() {
     // GIVEN: a graph collection with embeddings and upserted nodes
     let (_dir, path) = setup_graph_db_with_embeddings();
 
-    // Insert points via Database's underlying collection
+    // Insert points via VectorCollection::open (wraps the inner Collection 1:1)
     let db = Database::open(&path).expect("test: open db");
-    #[allow(deprecated)]
-    let col = db.get_collection("kg").expect("test: get collection");
+    let col = velesdb_core::VectorCollection::open(db.data_dir().join("kg"))
+        .expect("test: open collection");
     use velesdb_core::Point;
     col.upsert(vec![
         Point::new(1, vec![1.0, 0.0, 0.0, 0.0], None),
@@ -288,8 +288,8 @@ fn test_search_graph_top_k_larger_than_collection() {
     // GIVEN: a graph with 2 nodes
     let (_dir, path) = setup_graph_db_with_embeddings();
     let db = Database::open(&path).expect("test: open db");
-    #[allow(deprecated)]
-    let col = db.get_collection("kg").expect("test: get collection");
+    let col = velesdb_core::VectorCollection::open(db.data_dir().join("kg"))
+        .expect("test: open collection");
     use velesdb_core::Point;
     col.upsert(vec![
         Point::new(1, vec![1.0, 0.0, 0.0, 0.0], None),

@@ -55,10 +55,71 @@ impl VectorCollection {
         self.inner.all_ids()
     }
 
+    /// Returns the next batch of points for scroll iteration.
+    ///
+    /// Delegates to [`Collection::scroll_batch`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `batch_size` is 0.
+    pub fn scroll_batch(
+        &self,
+        cursor: Option<u64>,
+        batch_size: usize,
+        filter: Option<&crate::filter::Filter>,
+    ) -> crate::error::Result<crate::collection::ScrollBatch> {
+        self.inner.scroll_batch(cursor, batch_size, filter)
+    }
+
     /// Returns the current collection config.
     #[must_use]
     pub fn config(&self) -> CollectionConfig {
         self.inner.config()
+    }
+
+    /// Rebuilds the HNSW index of this collection from the vector
+    /// storage, reclaiming memory occupied by tombstoned entries.
+    /// Returns the number of entries compacted.
+    ///
+    /// Used by the server admin endpoint
+    /// `POST /collections/{name}/index/rebuild` (finding F-21).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the vacuum fails (for instance, when
+    /// vector storage is disabled on the HNSW index).
+    pub fn rebuild_index(&self) -> crate::error::Result<usize> {
+        self.inner.vacuum_hnsw_index()
+    }
+
+    /// Applies post-creation overrides to the advanced configuration
+    /// fields (`pq_rescore_oversampling`, `deferred_indexing`,
+    /// `async_index_builder`) and persists the updated `config.json`.
+    ///
+    /// Each parameter is wrapped in an outer `Option` that expresses
+    /// "leave unchanged" (`None`) versus "set to this value" (`Some(_)`).
+    /// Passing `Some(None)` explicitly clears the inner field. A local
+    /// clippy allow is applied because the three-state semantics are
+    /// the intended contract here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the updated config cannot be written to disk.
+    #[allow(clippy::option_option)]
+    pub fn apply_advanced_config(
+        &self,
+        pq_rescore_oversampling: Option<Option<u32>>,
+        #[cfg(feature = "persistence")] deferred_indexing: Option<
+            Option<crate::collection::streaming::DeferredIndexerConfig>,
+        >,
+        async_index_builder: Option<Option<crate::collection::streaming::AsyncIndexBuilderConfig>>,
+    ) -> crate::error::Result<()> {
+        self.inner.apply_advanced_config(
+            pq_rescore_oversampling,
+            #[cfg(feature = "persistence")]
+            deferred_indexing,
+            async_index_builder,
+        )
     }
 
     /// Returns CBO statistics.
@@ -116,5 +177,74 @@ impl VectorCollection {
     #[must_use]
     pub fn indexes_memory_usage(&self) -> usize {
         self.inner.indexes_memory_usage()
+    }
+
+    /// Attaches an [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)
+    /// to this collection as a runtime-only hook.
+    ///
+    /// The attachment is **not persisted** to `config.json` — callers must
+    /// re-attach after every [`Database::open`](crate::Database::open).
+    /// This intentional design avoids the `Duration` serde round-trip and
+    /// keeps the collection schema version stable.
+    ///
+    /// Once attached, the manager is consulted by the bulk upsert hot
+    /// path after every successful `upsert_bulk` call. When the manager
+    /// reports that index parameters have diverged from the optimal
+    /// configuration for the current dataset size, a `tracing::info!`
+    /// event is emitted. Automatic index reconstruction is NOT performed
+    /// — that decision is left to the caller.
+    ///
+    /// External consumers can register their own reindex pipeline via
+    /// the manager's event callback ([`AutoReindexManager::on_event`]) or
+    /// poll the divergence state via
+    /// [`Self::check_auto_reindex_divergence`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use velesdb_core::{VectorCollection, DistanceMetric, StorageMode};
+    /// # use velesdb_core::collection::auto_reindex::{AutoReindexConfig, AutoReindexManager};
+    /// # let coll = VectorCollection::create("./data/docs".into(), "docs", 768, DistanceMetric::Cosine, StorageMode::Full)?;
+    /// let manager = Arc::new(AutoReindexManager::new(AutoReindexConfig::default()));
+    /// coll.attach_auto_reindex(manager);
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
+    pub fn attach_auto_reindex(
+        &self,
+        manager: std::sync::Arc<crate::collection::auto_reindex::AutoReindexManager>,
+    ) {
+        self.inner.attach_auto_reindex(manager);
+    }
+
+    /// Detaches the currently attached auto-reindex manager, returning it
+    /// so callers can drop or reuse it. Returns `None` when no manager
+    /// was attached.
+    #[must_use = "detach_auto_reindex returns the previously attached manager — ignore only when you intend to drop it"]
+    pub fn detach_auto_reindex(
+        &self,
+    ) -> Option<std::sync::Arc<crate::collection::auto_reindex::AutoReindexManager>> {
+        self.inner.detach_auto_reindex()
+    }
+
+    /// Returns a clone of the currently attached auto-reindex manager,
+    /// or `None` if none is attached.
+    #[must_use]
+    pub fn auto_reindex_manager(
+        &self,
+    ) -> Option<std::sync::Arc<crate::collection::auto_reindex::AutoReindexManager>> {
+        self.inner.auto_reindex_manager()
+    }
+
+    /// Returns a [`DivergenceCheck`](crate::collection::auto_reindex::DivergenceCheck)
+    /// computed from the attached manager against the collection's current
+    /// state, or `None` when no manager is attached.
+    ///
+    /// Read-only — does not mutate the manager state.
+    #[must_use]
+    pub fn check_auto_reindex_divergence(
+        &self,
+    ) -> Option<crate::collection::auto_reindex::DivergenceCheck> {
+        self.inner.check_auto_reindex_divergence()
     }
 }

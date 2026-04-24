@@ -128,6 +128,10 @@ pub fn print_help() {
         ".explain <query>".yellow()
     );
     println!(
+        "  {} Scroll with cursor pagination",
+        ".scroll <name> [batch_size] [cursor]".yellow()
+    );
+    println!(
         "  {}    Analyze collection statistics",
         ".analyze <name>".yellow()
     );

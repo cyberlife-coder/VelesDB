@@ -67,6 +67,7 @@ pub(crate) enum WriteMode {
 
 /// Error returned when the streaming channel cannot accept a point.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum BackpressureError {
     /// The ingestion buffer is full; the caller should retry after a short delay.
     #[error("streaming buffer is full (backpressure)")]
@@ -108,7 +109,7 @@ impl StreamIngester {
     /// Spawns a background drain task that accumulates points and flushes
     /// micro-batches via `Collection::upsert`.
     #[must_use]
-    pub fn new(collection: Collection, config: StreamingConfig) -> Self {
+    pub(crate) fn new(collection: Collection, config: StreamingConfig) -> Self {
         let (tx, rx) = mpsc::channel(config.buffer_size);
         let shutdown = Arc::new(Notify::new());
 

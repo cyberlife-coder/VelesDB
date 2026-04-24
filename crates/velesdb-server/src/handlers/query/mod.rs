@@ -123,7 +123,20 @@ pub async fn query(
 /// Extract the collection name targeted by a mutation/DDL/introspection query.
 ///
 /// Returns `"_system"` for global operations that do not target a specific
-/// collection (SHOW COLLECTIONS, EXPLAIN, FLUSH without collection).
+/// collection (SHOW COLLECTIONS, EXPLAIN, FLUSH without collection). This
+/// function is used exclusively for telemetry tagging — it is NOT on the
+/// HTTP routing path. The actual query execution goes through
+/// [`Database::execute_query`] which enforces its own dispatch rules.
+///
+/// # Forward compatibility
+///
+/// The four VelesQL statement enums (`IntrospectionStatement`,
+/// `AdminStatement`, `DdlStatement`, `DmlStatement`) are annotated
+/// `#[non_exhaustive]` so a wildcard `_` arm is mandatory here. To prevent
+/// silent telemetry degradation when a new core variant is added without
+/// an accompanying handler update, every wildcard arm now logs a
+/// `tracing::warn!` with a stable target so it is visible in CI logs and
+/// production observability.
 fn extract_mutation_collection_name(parsed: &Query) -> String {
     if let Some(name) = extract_ddl_collection(parsed) {
         return name;
@@ -137,14 +150,17 @@ fn extract_mutation_collection_name(parsed: &Query) -> String {
             IntrospectionStatement::ShowCollections | IntrospectionStatement::Explain(_) => {
                 "_system".to_string()
             }
+            other => warn_unknown_velesql_variant("IntrospectionStatement", other),
         };
     }
     if let Some(ref admin) = parsed.admin {
-        let velesdb_core::velesql::AdminStatement::Flush(f) = admin;
-        return f
-            .collection
-            .clone()
-            .unwrap_or_else(|| "_system".to_string());
+        return match admin {
+            velesdb_core::velesql::AdminStatement::Flush(f) => f
+                .collection
+                .clone()
+                .unwrap_or_else(|| "_system".to_string()),
+            other => warn_unknown_velesql_variant("AdminStatement", other),
+        };
     }
     if let Some(ref train) = parsed.train {
         return train.collection.clone();
@@ -154,28 +170,59 @@ fn extract_mutation_collection_name(parsed: &Query) -> String {
 
 /// Extract collection name from a DDL statement.
 fn extract_ddl_collection(parsed: &Query) -> Option<String> {
-    parsed.ddl.as_ref().map(|ddl| match ddl {
-        DdlStatement::CreateCollection(s) => s.name.clone(),
-        DdlStatement::DropCollection(s) => s.name.clone(),
-        DdlStatement::CreateIndex(s) => s.collection.clone(),
-        DdlStatement::DropIndex(s) => s.collection.clone(),
-        DdlStatement::Analyze(s) => s.collection.clone(),
-        DdlStatement::Truncate(s) => s.collection.clone(),
-        DdlStatement::AlterCollection(s) => s.collection.clone(),
+    parsed.ddl.as_ref().and_then(|ddl| match ddl {
+        DdlStatement::CreateCollection(s) => Some(s.name.clone()),
+        DdlStatement::DropCollection(s) => Some(s.name.clone()),
+        DdlStatement::CreateIndex(s) => Some(s.collection.clone()),
+        DdlStatement::DropIndex(s) => Some(s.collection.clone()),
+        DdlStatement::Analyze(s) => Some(s.collection.clone()),
+        DdlStatement::Truncate(s) => Some(s.collection.clone()),
+        DdlStatement::AlterCollection(s) => Some(s.collection.clone()),
+        other => {
+            warn_unknown_velesql_variant("DdlStatement", other);
+            None
+        }
     })
 }
 
 /// Extract collection name from a DML statement.
 fn extract_dml_collection(parsed: &Query) -> Option<String> {
-    parsed.dml.as_ref().map(|dml| match dml {
-        DmlStatement::Insert(s) | DmlStatement::Upsert(s) => s.table.clone(),
-        DmlStatement::Update(s) => s.table.clone(),
-        DmlStatement::InsertEdge(s) => s.collection.clone(),
-        DmlStatement::Delete(s) => s.table.clone(),
-        DmlStatement::DeleteEdge(s) => s.collection.clone(),
-        DmlStatement::SelectEdges(s) => s.collection.clone(),
-        DmlStatement::InsertNode(s) => s.collection.clone(),
+    parsed.dml.as_ref().and_then(|dml| match dml {
+        DmlStatement::Insert(s) | DmlStatement::Upsert(s) => Some(s.table.clone()),
+        DmlStatement::Update(s) => Some(s.table.clone()),
+        DmlStatement::InsertEdge(s) => Some(s.collection.clone()),
+        DmlStatement::Delete(s) => Some(s.table.clone()),
+        DmlStatement::DeleteEdge(s) => Some(s.collection.clone()),
+        DmlStatement::SelectEdges(s) => Some(s.collection.clone()),
+        DmlStatement::InsertNode(s) => Some(s.collection.clone()),
+        other => {
+            warn_unknown_velesql_variant("DmlStatement", other);
+            None
+        }
     })
+}
+
+/// Logs a structured warning when an unknown VelesQL statement variant is
+/// encountered on the telemetry extraction path and returns the
+/// `"_system"` sentinel string. The structured `target` `velesql.dispatch`
+/// is stable so CI log aggregators and production observability can alert
+/// when a new core variant slips past the handler mapper without an
+/// accompanying update.
+///
+/// Note: this fallback only affects the collection-name tag attached to
+/// request telemetry. The HTTP response is still produced by the
+/// downstream `Database::execute_query` call which rejects truly
+/// unsupported statements with a proper error.
+fn warn_unknown_velesql_variant<T: std::fmt::Debug>(kind: &'static str, variant: &T) -> String {
+    tracing::warn!(
+        target: "velesql.dispatch",
+        enum_kind = kind,
+        variant = ?variant,
+        "unknown VelesQL statement variant on telemetry extraction path; \
+         routing collection tag to _system — add the new variant to \
+         extract_mutation_collection_name in handlers/query/mod.rs"
+    );
+    "_system".to_string()
 }
 
 /// Execute a DDL, graph/delete DML, introspection, admin, or TRAIN query.

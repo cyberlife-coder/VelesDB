@@ -4,14 +4,20 @@ use axum::{extract::State, response::IntoResponse, Json};
 use std::sync::Arc;
 use velesdb_core::velesql::{Condition, SelectColumns};
 
-use crate::types::{ExplainCost, ExplainFeatures, ExplainRequest, ExplainResponse, ExplainStep};
+use crate::types::{
+    ActualStatsResponse, ExplainCost, ExplainFeatures, ExplainRequest, ExplainResponse,
+    ExplainStep, NodeStatsResponse,
+};
 use crate::AppState;
 
-use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found};
+use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
+use axum::http::StatusCode;
+use velesdb_core::Error as CoreError;
 
-/// Explain a VelesQL query without executing it (EPIC-058 US-002).
+/// Explain a VelesQL query, optionally executing it with instrumentation.
 ///
-/// Returns the query plan, estimated costs, and detected features.
+/// When `analyze` is false (default), returns the estimated plan only.
+/// When `analyze` is true, executes the query and returns actual statistics.
 #[utoipa::path(
     post,
     path = "/query/explain",
@@ -20,10 +26,11 @@ use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found};
     responses(
         (status = 200, description = "Query plan", body = ExplainResponse),
         (status = 400, description = "Query syntax error", body = crate::types::QueryErrorResponse),
+        (status = 422, description = "Query validation/execution error", body = crate::types::VelesqlErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
-#[allow(clippy::unused_async, deprecated)]
+#[allow(clippy::unused_async)]
 pub async fn explain(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ExplainRequest>,
@@ -35,29 +42,46 @@ pub async fn explain(
 
     let select = &parsed.select;
 
-    let collection_exists = state.db.get_collection(&select.from).is_some();
+    let collection_exists = state.db.get_any_collection(&select.from).is_some();
     if !collection_exists && !select.from.is_empty() {
         return velesql_collection_not_found(&select.from);
     }
 
-    let features = detect_explain_features(select);
-    let plan = build_explain_plan(select, &features);
-    let estimated_cost = estimate_cost(features.has_vector_search);
+    if req.analyze {
+        return explain_with_analyze(&state, &req, &parsed);
+    }
 
+    explain_plan_only(&state, &req, &parsed)
+}
+
+/// Build an EXPLAIN-only response (no execution).
+fn explain_plan_only(
+    state: &AppState,
+    req: &ExplainRequest,
+    parsed: &velesdb_core::velesql::Query,
+) -> axum::response::Response {
+    let select = &parsed.select;
+    let features = detect_explain_features(select);
+    let mut plan = build_explain_plan(select, &features);
+    let estimated_cost = estimate_cost(features.has_vector_search);
     let query_type = if parsed.is_match_query() {
         "MATCH"
     } else {
         "SELECT"
     };
 
-    let (cache_hit, plan_reuse_count) = state
-        .db
-        .explain_query(&parsed)
-        .ok()
-        .map_or((None, None), |qp| (qp.cache_hit, qp.plan_reuse_count));
+    let (cache_hit, plan_reuse_count) =
+        state
+            .db
+            .explain_query(parsed)
+            .ok()
+            .map_or((None, None), |qp| {
+                merge_core_estimation(&mut plan, &qp);
+                (qp.cache_hit, qp.plan_reuse_count)
+            });
 
     Json(ExplainResponse {
-        query: req.query,
+        query: req.query.clone(),
         query_type: query_type.to_string(),
         collection: select.from.clone(),
         plan,
@@ -65,8 +89,103 @@ pub async fn explain(
         features,
         cache_hit,
         plan_reuse_count,
+        estimated_cost_ms: None,
+        actual_time_ms: None,
+        actual_stats: None,
+        node_stats: None,
     })
     .into_response()
+}
+
+/// Build an EXPLAIN ANALYZE response (with execution and actual stats).
+fn explain_with_analyze(
+    state: &AppState,
+    req: &ExplainRequest,
+    parsed: &velesdb_core::velesql::Query,
+) -> axum::response::Response {
+    let select = &parsed.select;
+    let features = detect_explain_features(select);
+    let mut plan = build_explain_plan(select, &features);
+    let estimated_cost = estimate_cost(features.has_vector_search);
+    let query_type = if parsed.is_match_query() {
+        "MATCH"
+    } else {
+        "SELECT"
+    };
+
+    let output = match run_analyze_query(state, parsed, &req.params) {
+        Ok(o) => o,
+        Err(resp) => return *resp,
+    };
+
+    // Merge core estimation metadata into server plan (graceful: already have output).
+    merge_core_estimation(&mut plan, &output.plan);
+
+    let (actual_stats_resp, actual_time, node_stats_resp) = extract_analyze_stats(&output);
+
+    Json(ExplainResponse {
+        query: req.query.clone(),
+        query_type: query_type.to_string(),
+        collection: select.from.clone(),
+        plan,
+        estimated_cost,
+        features,
+        cache_hit: output.plan.cache_hit,
+        plan_reuse_count: output.plan.plan_reuse_count,
+        estimated_cost_ms: Some(output.plan.estimated_cost_ms),
+        actual_time_ms: actual_time,
+        actual_stats: actual_stats_resp,
+        node_stats: node_stats_resp,
+    })
+    .into_response()
+}
+
+/// Runs the core `explain_analyze_query` call, mapping core errors to the
+/// matching HTTP responses. Returns `Ok(output)` on success or `Err(response)`
+/// with the error already rendered.
+fn run_analyze_query(
+    state: &AppState,
+    parsed: &velesdb_core::velesql::Query,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+) -> std::result::Result<velesdb_core::velesql::ExplainOutput, Box<axum::response::Response>> {
+    match state.db.explain_analyze_query(parsed, params) {
+        Ok(o) => Ok(o),
+        Err(CoreError::CollectionNotFound(name)) => {
+            Err(Box::new(velesql_collection_not_found(&name)))
+        }
+        Err(e) => Err(Box::new(velesql_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "VELESQL_EXPLAIN_ANALYZE_ERROR",
+            &e.to_string(),
+            "Validate query semantics and parameter types against the target collection",
+            None,
+        ))),
+    }
+}
+
+/// Splits the optional `actual_stats` + `node_stats` of an EXPLAIN ANALYZE
+/// output into the three response-side options consumed by
+/// [`ExplainResponse`].
+fn extract_analyze_stats(
+    output: &velesdb_core::velesql::ExplainOutput,
+) -> (
+    Option<ActualStatsResponse>,
+    Option<f64>,
+    Option<Vec<NodeStatsResponse>>,
+) {
+    let Some(ref stats) = output.actual_stats else {
+        return (None, None, None);
+    };
+    let ns: Vec<NodeStatsResponse> = output
+        .node_stats
+        .iter()
+        .map(NodeStatsResponse::from)
+        .collect();
+    (
+        Some(ActualStatsResponse::from(stats)),
+        Some(stats.actual_time_ms),
+        Some(ns),
+    )
 }
 
 /// Detect query features from a SELECT statement for EXPLAIN output.
@@ -123,6 +242,7 @@ fn build_source_step(
             operation: "VectorSearch".to_string(),
             description: "ANN search using HNSW index with NEAR clause".to_string(),
             estimated_rows: select.limit.map(|l| l as usize),
+            estimation_method: None,
         }
     } else {
         ExplainStep {
@@ -130,6 +250,7 @@ fn build_source_step(
             operation: "FullScan".to_string(),
             description: format!("Scan collection '{}'", select.from),
             estimated_rows: None,
+            estimation_method: None,
         }
     }
 }
@@ -146,6 +267,7 @@ fn append_filter_and_join_steps(
             operation: "Filter".to_string(),
             description: "Apply WHERE clause predicates".to_string(),
             estimated_rows: None,
+            estimation_method: None,
         });
         *step_num += 1;
     }
@@ -156,6 +278,7 @@ fn append_filter_and_join_steps(
             operation: format!("{:?}Join", join.join_type),
             description: format!("Join with '{}'", join.table),
             estimated_rows: None,
+            estimation_method: None,
         });
         *step_num += 1;
     }
@@ -172,6 +295,7 @@ fn append_aggregation_steps(
             operation: "GroupBy".to_string(),
             description: "Group rows by specified columns".to_string(),
             estimated_rows: None,
+            estimation_method: None,
         });
         *step_num += 1;
     }
@@ -182,6 +306,7 @@ fn append_aggregation_steps(
             operation: "Aggregate".to_string(),
             description: "Compute aggregate functions (COUNT, SUM, etc.)".to_string(),
             estimated_rows: None,
+            estimation_method: None,
         });
         *step_num += 1;
     }
@@ -192,6 +317,7 @@ fn append_aggregation_steps(
             operation: "Sort".to_string(),
             description: "Sort results by ORDER BY clause".to_string(),
             estimated_rows: None,
+            estimation_method: None,
         });
         *step_num += 1;
     }
@@ -212,6 +338,7 @@ fn append_pagination_step(
                 select.offset.unwrap_or(0)
             ),
             estimated_rows: select.limit.map(|l| l as usize),
+            estimation_method: None,
         });
     }
 }
@@ -240,11 +367,45 @@ pub(super) fn condition_has_vector_search(cond: &Condition) -> bool {
     match cond {
         Condition::VectorSearch(_)
         | Condition::VectorFusedSearch { .. }
+        | Condition::SparseVectorSearch(_)
         | Condition::Similarity(_) => true,
         Condition::And(left, right) | Condition::Or(left, right) => {
             condition_has_vector_search(left) || condition_has_vector_search(right)
         }
         Condition::Group(inner) | Condition::Not(inner) => condition_has_vector_search(inner),
         _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Core plan merge helpers (Task 2.2)
+// ---------------------------------------------------------------------------
+
+/// Recursively extracts the first `FilterPlan` from a core `PlanNode` tree.
+fn extract_filter_plan(
+    node: &velesdb_core::velesql::PlanNode,
+) -> Option<&velesdb_core::velesql::FilterPlan> {
+    match node {
+        velesdb_core::velesql::PlanNode::Filter(fp) => Some(fp),
+        velesdb_core::velesql::PlanNode::Sequence(nodes) => {
+            nodes.iter().find_map(extract_filter_plan)
+        }
+        _ => None,
+    }
+}
+
+/// Merges core `FilterPlan` estimation data into server `ExplainStep` entries.
+///
+/// Copies `estimated_rows` and `estimation_method` from the core plan's
+/// `FilterPlan` into every server step whose `operation` is `"Filter"`.
+#[allow(clippy::cast_possible_truncation)]
+fn merge_core_estimation(plan: &mut [ExplainStep], core_plan: &velesdb_core::velesql::QueryPlan) {
+    if let Some(fp) = extract_filter_plan(&core_plan.root) {
+        for step in plan.iter_mut() {
+            if step.operation == "Filter" {
+                step.estimated_rows = fp.estimated_rows.map(|r| r as usize);
+                step.estimation_method = fp.estimation_method.clone();
+            }
+        }
     }
 }

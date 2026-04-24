@@ -34,6 +34,9 @@ on:
         default: 300
 
 # Pas de concurrency cancel - ces tests sont importants
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -88,7 +91,6 @@ jobs:
             storage::vector_bytes:: --test-threads=1
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
-        continue-on-error: true
 
   # ===========================================================================
   # Loom Concurrency Tests - Détecte deadlocks et data races
@@ -136,7 +138,6 @@ jobs:
         env:
           RUSTFLAGS: "--cfg loom"
           LOOM_MAX_PREEMPTIONS: 3
-        continue-on-error: true
 
   # ===========================================================================
   # Fuzzing - Robustesse des parsers et APIs exposées
@@ -167,7 +168,7 @@ jobs:
           cd fuzz
           cargo +nightly fuzz run fuzz_velesql_parser \
             -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
-        continue-on-error: true
+        continue-on-error: true  # Fuzz may timeout without finding bugs; not a failure
 
       # Distance metrics - données vectorielles
       - name: Fuzz distance metrics
@@ -175,7 +176,7 @@ jobs:
           cd fuzz
           cargo +nightly fuzz run fuzz_distance_metrics \
             -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
-        continue-on-error: true
+        continue-on-error: true  # Fuzz may timeout without finding bugs; not a failure
 
       # Snapshot parser - fichiers de persistance
       - name: Fuzz snapshot parser
@@ -183,7 +184,7 @@ jobs:
           cd fuzz
           cargo +nightly fuzz run fuzz_snapshot_parser \
             -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
-        continue-on-error: true
+        continue-on-error: true  # Fuzz may timeout without finding bugs; not a failure
 
       # Upload crash artifacts si trouvés
       - name: Upload crash artifacts

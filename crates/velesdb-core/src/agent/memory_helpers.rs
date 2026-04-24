@@ -6,19 +6,19 @@
 //! These helpers are ready for adoption by memory submodules.
 //! Currently tested directly; callers will migrate in a follow-up.
 
+use crate::collection::Collection;
 use crate::{Database, DistanceMetric, Point};
 use parking_lot::RwLock;
 use std::collections::HashSet;
 
 use super::error::AgentMemoryError;
 
-/// Looks up a legacy `Collection` by name, returning an `AgentMemoryError` if absent.
-#[allow(deprecated)]
-pub(super) fn get_collection(
-    db: &Database,
-    name: &str,
-) -> Result<crate::Collection, AgentMemoryError> {
-    db.get_collection(name)
+/// Looks up a `Collection` by name, returning an `AgentMemoryError` if absent.
+pub(super) fn get_collection(db: &Database, name: &str) -> Result<Collection, AgentMemoryError> {
+    db.get_vector_collection(name)
+        .map(|vc| vc.inner)
+        .or_else(|| db.get_graph_collection(name).map(|gc| gc.inner))
+        .or_else(|| db.get_metadata_collection(name).map(|mc| mc.inner))
         .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))
 }
 
@@ -34,13 +34,12 @@ pub(super) fn validate_dimension(expected: usize, actual: usize) -> Result<(), A
 ///
 /// If the collection already exists, verifies that dimensions match and returns
 /// the existing dimension. If it does not exist, creates it with `dimension`.
-#[allow(deprecated)]
 pub(super) fn open_or_create_collection(
     db: &Database,
     collection_name: &str,
     dimension: usize,
 ) -> Result<usize, AgentMemoryError> {
-    if let Some(collection) = db.get_collection(collection_name) {
+    if let Some(collection) = db.get_vector_collection(collection_name) {
         let existing_dim = collection.config().dimension;
         if existing_dim != dimension {
             return Err(AgentMemoryError::DimensionMismatch {
@@ -56,16 +55,14 @@ pub(super) fn open_or_create_collection(
 }
 
 /// Loads all IDs from an existing collection into a `HashSet`.
-#[allow(deprecated)]
 pub(super) fn load_stored_ids(db: &Database, collection_name: &str) -> HashSet<u64> {
-    db.get_collection(collection_name)
+    db.get_vector_collection(collection_name)
         .map(|c| c.all_ids().into_iter().collect())
         .unwrap_or_default()
 }
 
 /// Removes all existing points from a collection.
-#[allow(deprecated)]
-pub(super) fn clear_collection(collection: &crate::Collection) -> Result<(), AgentMemoryError> {
+pub(super) fn clear_collection(collection: &Collection) -> Result<(), AgentMemoryError> {
     let existing_ids = collection.all_ids();
     if !existing_ids.is_empty() {
         collection
@@ -85,9 +82,8 @@ pub(super) fn rebuild_stored_ids(stored_ids: &RwLock<HashSet<u64>>, points: &[Po
 }
 
 /// Serializes points from a collection using the given ID set.
-#[allow(deprecated)]
 pub(super) fn serialize_points(
-    collection: &crate::Collection,
+    collection: &Collection,
     ids: &[u64],
 ) -> Result<Vec<u8>, AgentMemoryError> {
     let points: Vec<_> = collection.get(ids).into_iter().flatten().collect();
@@ -97,10 +93,9 @@ pub(super) fn serialize_points(
 /// Deserializes points from bytes and replaces the collection contents.
 ///
 /// Returns the deserialized points so callers can rebuild their own indexes.
-#[allow(deprecated)]
 pub(super) fn deserialize_into_collection(
     data: &[u8],
-    collection: &crate::Collection,
+    collection: &Collection,
 ) -> Result<Option<Vec<Point>>, AgentMemoryError> {
     if data.is_empty() {
         return Ok(None);
@@ -116,9 +111,8 @@ pub(super) fn deserialize_into_collection(
 }
 
 /// Deletes points by ID from a collection.
-#[allow(deprecated)]
 pub(super) fn delete_from_collection(
-    collection: &crate::Collection,
+    collection: &Collection,
     ids: &[u64],
 ) -> Result<(), AgentMemoryError> {
     collection
@@ -127,9 +121,8 @@ pub(super) fn delete_from_collection(
 }
 
 /// Upserts points into a collection.
-#[allow(deprecated)]
 pub(super) fn upsert_points(
-    collection: &crate::Collection,
+    collection: &Collection,
     points: Vec<Point>,
 ) -> Result<(), AgentMemoryError> {
     collection
@@ -138,9 +131,8 @@ pub(super) fn upsert_points(
 }
 
 /// Searches a collection by vector similarity.
-#[allow(deprecated)]
 pub(super) fn search_collection(
-    collection: &crate::Collection,
+    collection: &Collection,
     query: &[f32],
     k: usize,
 ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
@@ -154,7 +146,6 @@ pub(super) fn search_collection(
 ///
 /// This is the common delete pattern shared by `SemanticMemory` and
 /// `ProceduralMemory`. `EpisodicMemory` has additional temporal-index cleanup.
-#[allow(deprecated)]
 pub(super) fn delete_tracked_point(
     db: &Database,
     collection_name: &str,
@@ -173,7 +164,6 @@ pub(super) fn delete_tracked_point(
 ///
 /// Shared by `SemanticMemory` and `ProceduralMemory`.
 /// `EpisodicMemory` uses temporal-index IDs instead.
-#[allow(deprecated)]
 pub(super) fn serialize_tracked_points(
     db: &Database,
     collection_name: &str,
@@ -189,7 +179,6 @@ pub(super) fn serialize_tracked_points(
 ///
 /// Shared by `SemanticMemory` and `ProceduralMemory`.
 /// `EpisodicMemory` rebuilds its temporal index instead.
-#[allow(deprecated)]
 pub(super) fn deserialize_tracked_points(
     db: &Database,
     collection_name: &str,
@@ -210,7 +199,6 @@ pub(super) fn deserialize_tracked_points(
 /// `EpisodicMemory::recall_similar`, and `ProceduralMemory::recall`. Each
 /// caller then maps the returned `SearchResult` items into its own return
 /// type.
-#[allow(deprecated)]
 pub(super) fn search_filtered(
     db: &Database,
     collection_name: &str,
@@ -290,7 +278,6 @@ pub(super) fn resolve_embedding(
 ///
 /// Returns `AgentMemoryError::CollectionError` if the collection is not found,
 /// or `AgentMemoryError::DatabaseError` if the query fails to parse or execute.
-#[allow(deprecated)]
 pub(super) fn execute_velesql(
     db: &Database,
     collection_name: &str,
@@ -413,7 +400,6 @@ mod tests {
     // --- open_or_create_collection (requires persistence + tempdir) ---
 
     #[cfg(feature = "persistence")]
-    #[allow(deprecated)]
     mod persistence_tests {
         use super::*;
         use tempfile::TempDir;
@@ -427,7 +413,7 @@ mod tests {
             assert_eq!(dim, 64);
 
             // Collection should now be retrievable.
-            assert!(db.get_collection("test_coll").is_some());
+            assert!(db.get_vector_collection("test_coll").is_some());
         }
 
         #[test]

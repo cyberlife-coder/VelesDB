@@ -27,14 +27,12 @@
 //!   using Hierarchical Navigable Small World graphs" (Malkov & Yashunin, 2016)
 //! - arXiv: <https://arxiv.org/abs/1603.09320>
 
-// Native implementation internals - keep warning policy permissive for low-level code
-#![allow(dead_code)]
-#![allow(unused_imports)]
+// Low-level HNSW internals: precision-loss casts are validated, doc_markdown
+// flags false positives on algorithm names (HNSW, RaBitQ, VAMANA).
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
-#![allow(clippy::unused_self)]
 
 mod backend_adapter;
 mod batch_schedule;
@@ -44,6 +42,7 @@ mod distance;
 mod dual_precision;
 mod graph;
 mod graph_io;
+mod int8_traversal;
 pub(crate) mod layer;
 mod ordered_float;
 mod quantization;
@@ -52,14 +51,23 @@ mod rabitq_traversal;
 mod search;
 
 pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
-#[allow(deprecated)]
-// F-06: SimdDistance/NativeSimdDistance are deprecated but re-exported for compat
-pub use distance::{
-    AdaptiveSimdDistance, CachedSimdDistance, CpuDistance, DistanceEngine, NativeSimdDistance,
-    SimdDistance,
-};
+pub use distance::{CachedSimdDistance, CpuDistance, DistanceEngine};
 pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
 pub use graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
+// Re-exported so sibling modules (notably `crate::gpu::gpu_csr` and its
+// tests) can document and assert the caller contract of rebuilders that
+// depend on a held layers lock, without widening `mod graph` itself to
+// `pub(crate)`.
+#[cfg(feature = "gpu")]
+pub(crate) use graph::locking::{holds_lock as hnsw_holds_lock, LockRank as HnswLockRank};
+// Test-only re-exports: only `gpu_csr` tests need to synthesise a held
+// layers rank. Production code inside `native/` acquires ranks through
+// the `with_*` helpers, never via these symbols directly.
+#[cfg(all(test, feature = "gpu"))]
+pub(crate) use graph::locking::{
+    record_lock_acquire as hnsw_record_lock_acquire,
+    record_lock_release as hnsw_record_lock_release,
+};
 pub use layer::{Layer, NodeId};
 pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};
 pub use rabitq_precision::{RaBitQPrecisionConfig, RaBitQPrecisionHnsw};

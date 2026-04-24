@@ -1,7 +1,8 @@
-//! Query execution: `execute_query`, `explain_query`, plan caching, and DML dispatch.
+//! Query execution: `execute_query`, `explain_query`, `explain_analyze_query`, plan caching, and DML dispatch.
 
 use crate::velesql::{
-    AdminStatement, DdlStatement, DmlStatement, IntrospectionStatement, Query, TrainStatement,
+    ActualStats, AdminStatement, DdlStatement, DmlStatement, ExplainOutput, IntrospectionStatement,
+    Query, TrainStatement,
 };
 use crate::{Error, Result, SearchResult};
 
@@ -41,7 +42,6 @@ fn classify_statement(query: &Query) -> StatementType<'_> {
     StatementType::Select
 }
 
-#[allow(deprecated)] // Methods in this block use the deprecated Collection type for query execution.
 impl Database {
     /// Produces a canonical JSON string for a `serde_json::Value`.
     ///
@@ -116,10 +116,19 @@ impl Database {
             .map(|name| self.collection_write_generation(name).unwrap_or(0))
             .collect();
 
+        // Issue #608: parallel vector of analyze generations so that running
+        // ANALYZE alone (no data mutation) still flips the cache key and
+        // rebuilds plans with the fresh calibrated cost estimates.
+        let analyze_generations: smallvec::SmallVec<[u64; 4]> = collection_names
+            .iter()
+            .map(|name| self.collection_analyze_generation(name).unwrap_or(0))
+            .collect();
+
         crate::cache::PlanKey {
             query_hash,
             schema_version,
             collection_generations,
+            analyze_generations,
         }
     }
 
@@ -160,10 +169,71 @@ impl Database {
             return Ok(plan);
         }
 
-        let mut plan = crate::velesql::QueryPlan::from_select(&query.select);
+        let mut plan = self.build_plan_with_stats(query);
         plan.cache_hit = Some(false);
         plan.plan_reuse_count = Some(0);
         Ok(plan)
+    }
+
+    /// Builds a query plan, resolving calibrated collection statistics AND
+    /// the registered secondary index set from the registry when available
+    /// (#471 — EXPLAIN real costs, #607 — `IndexLookup` wiring).
+    ///
+    /// The returned plan's `estimated_cost_ms` and `filter_strategy` are
+    /// calibrated via `CostEstimator` when stats exist for the query's
+    /// primary collection. Falls back to heuristics otherwise. The
+    /// `indexed_fields` argument is populated from
+    /// `Database::indexed_fields_for` so that `IndexLookup` nodes appear
+    /// in the EXPLAIN tree for WHERE clauses targeting indexed columns.
+    fn build_plan_with_stats(&self, query: &crate::velesql::Query) -> crate::velesql::QueryPlan {
+        let primary = &query.select.from;
+        let core_stats = self.get_collection_stats(primary).ok().flatten();
+        let indexed = self.indexed_fields_for(primary);
+        crate::velesql::QueryPlan::from_query_with_stats(query, &indexed, core_stats.as_ref())
+    }
+
+    /// Executes a query with instrumentation and returns both plan and actual stats.
+    ///
+    /// Unlike `explain_query` (plan only) and `execute_query` (results only),
+    /// this method returns the full [`ExplainOutput`] with measured statistics.
+    /// The normal `execute_query` path is untouched — zero overhead on
+    /// non-ANALYZE queries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is invalid or execution fails.
+    pub fn explain_analyze_query(
+        &self,
+        query: &Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<ExplainOutput> {
+        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
+
+        let plan = self.explain_query(query)?;
+        let start = std::time::Instant::now();
+        let results = self.execute_query(query, params)?;
+        let elapsed = start.elapsed();
+
+        let actual_rows = results.len() as u64;
+        let actual_time_ms = elapsed.as_secs_f64() * 1000.0;
+        let is_match = query.is_match_query();
+        let (nodes_visited, edges_traversed) = if is_match {
+            (actual_rows, actual_rows)
+        } else {
+            (0, 0)
+        };
+
+        let stats = ActualStats {
+            actual_rows,
+            actual_time_ms,
+            loops: 1,
+            nodes_visited,
+            edges_traversed,
+        };
+
+        let node_stats =
+            crate::velesql::build_leaf_node_stats(&plan.root, actual_rows, actual_time_ms);
+        Ok(ExplainOutput::with_stats(plan, stats, node_stats))
     }
 
     /// Executes a `VelesQL` query with database-level JOIN resolution.
@@ -332,7 +402,6 @@ impl Database {
     ///
     /// Priority: vector collections first, then graph, then metadata.
     /// Returns the inner `Collection` for query execution.
-    #[allow(deprecated)]
     pub(super) fn resolve_collection(&self, name: &str) -> Result<crate::collection::Collection> {
         if let Some(vc) = self.get_vector_collection(name) {
             return Ok(vc.inner);
@@ -350,7 +419,6 @@ impl Database {
     ///
     /// Checks vector, graph, and metadata collections. Metadata-only collections
     /// support INSERT/UPDATE for metadata fields (no vectors).
-    #[allow(deprecated)]
     pub(super) fn resolve_writable_collection(
         &self,
         name: &str,
@@ -368,6 +436,12 @@ impl Database {
     }
 
     /// Executes a single SELECT (no compound), resolving JOINs if present.
+    ///
+    /// Orchestrates filter pushdown and join strategy selection:
+    /// 1. Analyze WHERE for pushdown-eligible conditions
+    /// 2. Strip pushed conditions from base query
+    /// 3. For each JOIN: lookup, filtered, or full `ColumnStore` path
+    /// 4. Apply post-join filters (cross-source predicates)
     fn execute_single_select(
         &self,
         query: &crate::velesql::Query,
@@ -375,10 +449,6 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         let base_collection = self.resolve_collection(&query.select.from)?;
 
-        // Strip compound from the query before delegating to Collection::execute_query,
-        // because compound handling is done by execute_select_query (our caller).
-        // Without this, the set operation would be applied twice (once at Collection
-        // level, once here) — causing e.g. UNION ALL to duplicate right-side results.
         let mut single_query = query.clone();
         single_query.compound = None;
 
@@ -386,26 +456,43 @@ impl Database {
             return base_collection.execute_query(&single_query, params);
         }
 
+        let analysis = Self::analyze_join_pushdown_for_select(&query.select);
+
+        let pushed = analysis.column_store_filters.clone();
+
         single_query.select.joins.clear();
+        if !pushed.is_empty() {
+            single_query.select.where_clause =
+                Self::strip_pushed_conditions(query.select.where_clause.as_ref(), &pushed);
+        }
 
         let mut results = base_collection.execute_query(&single_query, params)?;
         for join in &query.select.joins {
-            let join_collection = self.resolve_collection(&join.table)?;
-            let column_store = Self::build_join_column_store(&join_collection)?;
-            let joined = crate::collection::search::query::join::execute_join(
-                &results,
-                join,
-                &column_store,
-            )?;
-            results = crate::collection::search::query::join::joined_to_search_results(joined);
+            results = self.execute_single_join(&results, join, &pushed)?;
         }
+
+        // Apply post-join filters: cross-source predicates that reference
+        // columns from both the base collection and joined ColumnStore tables.
+        if !analysis.post_join_filters.is_empty() {
+            results = Self::apply_post_join_filters(
+                &base_collection,
+                results,
+                &analysis.post_join_filters,
+                params,
+                &query.select.from_alias,
+            )?;
+        }
+
         Ok(results)
     }
+
+    // NOTE: analyze_join_pushdown_for_select, apply_post_join_filters
+    // moved to join_pushdown.rs (NLOC/file reduction)
 
     /// Inserts a compiled plan into the cache after a cache miss (CACHE-02).
     fn populate_plan_cache(&self, query: &crate::velesql::Query) {
         let compiled = std::sync::Arc::new(crate::cache::CompiledPlan {
-            plan: crate::velesql::QueryPlan::from_select(&query.select),
+            plan: self.build_plan_with_stats(query),
             referenced_collections: Self::referenced_collection_names(query),
             compiled_at: std::time::Instant::now(),
             reuse_count: std::sync::atomic::AtomicU64::new(0),

@@ -35,7 +35,7 @@ pub fn validate_dimension(dimension: usize) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::DimensionMismatch`] if `actual != expected`.
+/// Returns [`crate::error::Error::DimensionMismatch`] if `actual != expected`.
 pub fn validate_dimension_match(expected: usize, actual: usize) -> Result<()> {
     if actual != expected {
         return Err(Error::DimensionMismatch { expected, actual });

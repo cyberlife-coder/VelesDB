@@ -3,13 +3,13 @@
 //! Manages session-level settings that can be modified with `\set` and viewed with `\show`.
 
 use std::collections::HashMap;
-use velesdb_core::config::SearchMode;
+use velesdb_core::SearchQuality;
 
 /// Session settings for the REPL.
 #[derive(Debug, Clone)]
 pub struct SessionSettings {
     /// Current search mode.
-    mode: SearchMode,
+    mode: SearchQuality,
     /// Override ef_search (None = use mode default).
     ef_search: Option<usize>,
     /// Query timeout in milliseconds.
@@ -27,7 +27,7 @@ pub struct SessionSettings {
 impl Default for SessionSettings {
     fn default() -> Self {
         Self {
-            mode: SearchMode::Balanced,
+            mode: SearchQuality::Balanced,
             ef_search: None,
             timeout_ms: 30000,
             rerank: true,
@@ -47,15 +47,17 @@ impl SessionSettings {
 
     /// Gets the current search mode.
     #[must_use]
-    pub fn mode(&self) -> SearchMode {
+    pub fn mode(&self) -> SearchQuality {
         self.mode
     }
 
     /// Gets the effective ef_search value.
+    ///
+    /// Uses a default `k=10` for the quality profile's ef calculation.
     #[must_use]
     #[allow(dead_code)] // Reason: public API for session-aware query execution (used in tests)
     pub fn effective_ef_search(&self) -> usize {
-        self.ef_search.unwrap_or_else(|| self.mode.ef_search())
+        self.ef_search.unwrap_or_else(|| self.mode.ef_search(10))
     }
 
     /// Gets the query timeout in milliseconds.
@@ -150,7 +152,7 @@ impl SessionSettings {
                 *self = Self::default();
             }
             Some(k) => match k.to_lowercase().as_str() {
-                "mode" => self.mode = SearchMode::Balanced,
+                "mode" => self.mode = SearchQuality::Balanced,
                 "ef_search" => self.ef_search = None,
                 "timeout_ms" | "timeout" => self.timeout_ms = 30000,
                 "rerank" => self.rerank = true,
@@ -167,14 +169,11 @@ impl SessionSettings {
     #[must_use]
     pub fn all_settings(&self) -> Vec<(String, String)> {
         let mut settings = vec![
-            (
-                "mode".to_string(),
-                format!("{:?}", self.mode).to_lowercase(),
-            ),
+            ("mode".to_string(), format_quality(self.mode)),
             (
                 "ef_search".to_string(),
                 self.ef_search.map_or_else(
-                    || format!("auto ({})", self.mode.ef_search()),
+                    || format!("auto ({})", self.mode.ef_search(10)),
                     |v| v.to_string(),
                 ),
             ),
@@ -200,9 +199,9 @@ impl SessionSettings {
     #[must_use]
     pub fn get(&self, key: &str) -> Option<String> {
         match key.to_lowercase().as_str() {
-            "mode" => Some(format!("{:?}", self.mode).to_lowercase()),
+            "mode" => Some(format_quality(self.mode)),
             "ef_search" => Some(self.ef_search.map_or_else(
-                || format!("auto ({})", self.mode.ef_search()),
+                || format!("auto ({})", self.mode.ef_search(10)),
                 |v| v.to_string(),
             )),
             "timeout_ms" | "timeout" => Some(self.timeout_ms.to_string()),
@@ -218,17 +217,59 @@ impl SessionSettings {
     }
 }
 
-fn parse_mode(value: &str) -> Result<SearchMode, String> {
-    match value.to_lowercase().as_str() {
-        "fast" => Ok(SearchMode::Fast),
-        "balanced" => Ok(SearchMode::Balanced),
-        "accurate" => Ok(SearchMode::Accurate),
-        "perfect" => Ok(SearchMode::Perfect),
-        _ => Err(format!(
-            "Invalid mode '{}'. Valid: fast, balanced, accurate, perfect",
-            value
-        )),
+/// Formats a `SearchQuality` for display in session settings.
+fn format_quality(q: SearchQuality) -> String {
+    match q {
+        SearchQuality::Fast => "fast".to_string(),
+        SearchQuality::Balanced => "balanced".to_string(),
+        SearchQuality::Accurate => "accurate".to_string(),
+        SearchQuality::Perfect => "perfect".to_string(),
+        SearchQuality::AutoTune => "autotune".to_string(),
+        SearchQuality::Custom(ef) => format!("custom:{ef}"),
+        SearchQuality::Adaptive { min_ef, max_ef } => {
+            format!("adaptive:{min_ef}:{max_ef}")
+        }
+        _ => format!("{q:?}").to_lowercase(),
     }
+}
+
+fn parse_mode(value: &str) -> Result<SearchQuality, String> {
+    let lower = value.to_lowercase();
+    match lower.as_str() {
+        "fast" => Ok(SearchQuality::Fast),
+        "balanced" => Ok(SearchQuality::Balanced),
+        "accurate" => Ok(SearchQuality::Accurate),
+        "perfect" => Ok(SearchQuality::Perfect),
+        "autotune" => Ok(SearchQuality::AutoTune),
+        _ => parse_parameterized_mode(&lower),
+    }
+}
+
+/// Parses `custom:<ef>` and `adaptive:<min>:<max>` mode strings.
+fn parse_parameterized_mode(value: &str) -> Result<SearchQuality, String> {
+    if let Some(ef_str) = value.strip_prefix("custom:") {
+        let ef = ef_str
+            .parse::<usize>()
+            .map_err(|_| format!("Invalid ef value in 'custom:{ef_str}'"))?;
+        return Ok(SearchQuality::Custom(ef));
+    }
+    if let Some(rest) = value.strip_prefix("adaptive:") {
+        let parts: Vec<&str> = rest.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            return Err("adaptive format: adaptive:<min_ef>:<max_ef>".to_string());
+        }
+        let min_ef = parts[0]
+            .parse::<usize>()
+            .map_err(|_| format!("Invalid min_ef in '{value}'"))?;
+        let max_ef = parts[1]
+            .parse::<usize>()
+            .map_err(|_| format!("Invalid max_ef in '{value}'"))?;
+        return Ok(SearchQuality::Adaptive { min_ef, max_ef });
+    }
+    Err(format!(
+        "Invalid mode '{value}'. Valid: fast, balanced, accurate, \
+         perfect, autotune, custom:<ef>, adaptive:<min>:<max>"
+    ))
 }
 
 fn parse_bool(value: &str) -> Result<bool, String> {
@@ -249,7 +290,7 @@ mod tests {
     #[test]
     fn test_session_defaults() {
         let session = SessionSettings::new();
-        assert_eq!(session.mode(), SearchMode::Balanced);
+        assert_eq!(session.mode(), SearchQuality::Balanced);
         assert_eq!(session.effective_ef_search(), 160);
         assert_eq!(session.timeout_ms(), 30000);
         assert!(session.rerank());
@@ -261,7 +302,7 @@ mod tests {
     fn test_set_mode() {
         let mut session = SessionSettings::new();
         session.set("mode", "fast").unwrap();
-        assert_eq!(session.mode(), SearchMode::Fast);
+        assert_eq!(session.mode(), SearchQuality::Fast);
         assert_eq!(session.effective_ef_search(), 96);
     }
 
@@ -307,7 +348,7 @@ mod tests {
         let mut session = SessionSettings::new();
         session.set("mode", "fast").unwrap();
         session.reset(Some("mode"));
-        assert_eq!(session.mode(), SearchMode::Balanced);
+        assert_eq!(session.mode(), SearchQuality::Balanced);
     }
 
     #[test]
@@ -316,7 +357,7 @@ mod tests {
         session.set("mode", "fast").unwrap();
         session.set("ef_search", "512").unwrap();
         session.reset(None);
-        assert_eq!(session.mode(), SearchMode::Balanced);
+        assert_eq!(session.mode(), SearchQuality::Balanced);
         assert!(session.ef_search.is_none());
     }
 
@@ -340,5 +381,41 @@ mod tests {
         let mut session = SessionSettings::new();
         session.set("custom_key", "custom_value").unwrap();
         assert_eq!(session.get("custom_key"), Some("custom_value".to_string()));
+    }
+
+    #[test]
+    fn test_set_mode_autotune() {
+        let mut session = SessionSettings::new();
+        session.set("mode", "autotune").unwrap();
+        assert_eq!(session.mode(), SearchQuality::AutoTune);
+    }
+
+    #[test]
+    fn test_set_mode_custom() {
+        let mut session = SessionSettings::new();
+        session.set("mode", "custom:256").unwrap();
+        assert_eq!(session.mode(), SearchQuality::Custom(256));
+        assert_eq!(session.effective_ef_search(), 256);
+    }
+
+    #[test]
+    fn test_set_mode_adaptive() {
+        let mut session = SessionSettings::new();
+        session.set("mode", "adaptive:32:512").unwrap();
+        assert_eq!(
+            session.mode(),
+            SearchQuality::Adaptive {
+                min_ef: 32,
+                max_ef: 512
+            }
+        );
+    }
+
+    #[test]
+    fn test_set_mode_invalid() {
+        let mut session = SessionSettings::new();
+        assert!(session.set("mode", "nonexistent").is_err());
+        assert!(session.set("mode", "custom:abc").is_err());
+        assert!(session.set("mode", "adaptive:32").is_err());
     }
 }

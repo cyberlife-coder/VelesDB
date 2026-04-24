@@ -14,8 +14,7 @@
 #[cfg(all(test, feature = "persistence"))]
 mod tests {
     use crate::agent::AgentMemory;
-    #[allow(deprecated)]
-    use crate::Collection;
+    use crate::collection::VectorCollection;
     use crate::Database;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -33,10 +32,9 @@ mod tests {
         (dir, db, memory)
     }
 
-    /// Retrieve the legacy `Collection` by name from the database.
-    #[allow(deprecated)]
-    fn get_collection(db: &Database, name: &str) -> Collection {
-        db.get_collection(name)
+    /// Retrieve a `VectorCollection` by name from the database.
+    fn get_collection(db: &Database, name: &str) -> VectorCollection {
+        db.get_vector_collection(name)
             .unwrap_or_else(|| panic!("collection {name} should exist"))
     }
 

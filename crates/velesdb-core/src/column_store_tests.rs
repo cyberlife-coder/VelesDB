@@ -450,8 +450,8 @@ mod tests {
         let mut store = ColumnStore::new();
 
         // Act
-        store.add_column("price", ColumnType::Int);
-        store.add_column("rating", ColumnType::Float);
+        store.add_column("price", &ColumnType::Int);
+        store.add_column("rating", &ColumnType::Float);
 
         // Assert
         assert!(store.get_column("price").is_some());
@@ -2237,5 +2237,339 @@ mod tests {
             store.delete_by_pk(i);
         }
         assert!(config.should_trigger(store.row_count(), store.deleted_row_count()));
+    }
+}
+
+// =========================================================================
+// Array Column Type Tests (Issue #510)
+// =========================================================================
+
+#[cfg(test)]
+mod array_column_tests {
+    use crate::column_store::*;
+
+    // ---- ColumnType::Array creation and validation ----
+
+    #[test]
+    fn test_column_type_array_of_string() {
+        let ct = ColumnType::Array(Box::new(ColumnType::String));
+        assert_eq!(ct, ColumnType::Array(Box::new(ColumnType::String)));
+    }
+
+    #[test]
+    fn test_column_type_array_of_int() {
+        let ct = ColumnType::Array(Box::new(ColumnType::Int));
+        assert_ne!(ct, ColumnType::Array(Box::new(ColumnType::String)));
+    }
+
+    #[test]
+    fn test_column_type_array_clone() {
+        let ct = ColumnType::Array(Box::new(ColumnType::Float));
+        let cloned = ct.clone();
+        assert_eq!(ct, cloned);
+    }
+
+    #[test]
+    fn test_reject_nested_arrays() {
+        let nested = ColumnType::Array(Box::new(ColumnType::Array(Box::new(ColumnType::Int))));
+        let result = ColumnStore::with_schema_validated(&[("nested", nested)]);
+        assert!(result.is_err(), "Nested arrays should be rejected");
+    }
+
+    // ---- TypedColumn::Array len/is_empty/push ----
+
+    #[test]
+    fn test_typed_column_array_new_is_empty() {
+        let col = TypedColumn::new_array(ColumnType::String, 0);
+        assert!(col.is_empty());
+        assert_eq!(col.len(), 0);
+    }
+
+    #[test]
+    fn test_typed_column_array_push_and_len() {
+        let mut col = TypedColumn::new_array(ColumnType::Int, 0);
+        col.push_typed(&ColumnValue::Array(vec![
+            ColumnValue::Int(1),
+            ColumnValue::Int(2),
+        ]));
+        col.push_null();
+        col.push_typed(&ColumnValue::Array(vec![ColumnValue::Int(3)]));
+
+        assert_eq!(col.len(), 3);
+        assert!(!col.is_empty());
+    }
+
+    // ---- ColumnStore with Array column: insert + get_value_as_json ----
+
+    #[test]
+    fn test_column_store_array_insert_and_get_json() {
+        let mut store = ColumnStore::with_schema_validated(&[
+            ("id", ColumnType::Int),
+            ("tags", ColumnType::Array(Box::new(ColumnType::String))),
+        ])
+        .expect("valid schema");
+
+        let pool_id = store.string_table_mut().intern("pool");
+        let gym_id = store.string_table_mut().intern("gym");
+
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                (
+                    "tags",
+                    ColumnValue::Array(vec![
+                        ColumnValue::String(pool_id),
+                        ColumnValue::String(gym_id),
+                    ]),
+                ),
+            ])
+            .expect("insert row");
+
+        let json = store.get_value_as_json("tags", 0);
+        assert!(json.is_some());
+        let arr = json.unwrap();
+        assert!(arr.is_array());
+        let elements: Vec<&str> = arr
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(elements, vec!["pool", "gym"]);
+    }
+
+    #[test]
+    fn test_column_store_array_null_row() {
+        let mut store = ColumnStore::with_schema_validated(&[
+            ("id", ColumnType::Int),
+            ("tags", ColumnType::Array(Box::new(ColumnType::String))),
+        ])
+        .expect("valid schema");
+
+        store
+            .insert_row(&[("id", ColumnValue::Int(1)), ("tags", ColumnValue::Null)])
+            .expect("insert null array");
+
+        let json = store.get_value_as_json("tags", 0);
+        assert!(json.is_none(), "Null array should return None");
+    }
+
+    #[test]
+    fn test_column_store_array_empty_array() {
+        let mut store = ColumnStore::with_schema_validated(&[
+            ("id", ColumnType::Int),
+            ("tags", ColumnType::Array(Box::new(ColumnType::String))),
+        ])
+        .expect("valid schema");
+
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("tags", ColumnValue::Array(vec![])),
+            ])
+            .expect("insert empty array");
+
+        let json = store.get_value_as_json("tags", 0);
+        assert!(json.is_some());
+        let arr = json.unwrap();
+        assert_eq!(arr.as_array().unwrap().len(), 0);
+    }
+
+    // ---- filter_contains tests ----
+
+    fn make_array_store() -> (ColumnStore, StringId, StringId, StringId, StringId) {
+        let mut store = ColumnStore::with_schema_validated(&[
+            ("id", ColumnType::Int),
+            ("tags", ColumnType::Array(Box::new(ColumnType::String))),
+            ("scores", ColumnType::Array(Box::new(ColumnType::Int))),
+        ])
+        .expect("valid schema");
+
+        let pool = store.string_table_mut().intern("pool");
+        let gym = store.string_table_mut().intern("gym");
+        let spa = store.string_table_mut().intern("spa");
+        let wifi = store.string_table_mut().intern("wifi");
+
+        // Row 0: tags=["pool","gym","spa"], scores=[10,20]
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(0)),
+                (
+                    "tags",
+                    ColumnValue::Array(vec![
+                        ColumnValue::String(pool),
+                        ColumnValue::String(gym),
+                        ColumnValue::String(spa),
+                    ]),
+                ),
+                (
+                    "scores",
+                    ColumnValue::Array(vec![ColumnValue::Int(10), ColumnValue::Int(20)]),
+                ),
+            ])
+            .expect("row 0");
+
+        // Row 1: tags=["wifi"], scores=[30]
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("tags", ColumnValue::Array(vec![ColumnValue::String(wifi)])),
+                ("scores", ColumnValue::Array(vec![ColumnValue::Int(30)])),
+            ])
+            .expect("row 1");
+
+        // Row 2: tags=["pool","wifi"], scores=[10,30]
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(2)),
+                (
+                    "tags",
+                    ColumnValue::Array(vec![ColumnValue::String(pool), ColumnValue::String(wifi)]),
+                ),
+                (
+                    "scores",
+                    ColumnValue::Array(vec![ColumnValue::Int(10), ColumnValue::Int(30)]),
+                ),
+            ])
+            .expect("row 2");
+
+        // Row 3: tags=null, scores=null
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(3)),
+                ("tags", ColumnValue::Null),
+                ("scores", ColumnValue::Null),
+            ])
+            .expect("row 3");
+
+        (store, pool, gym, spa, wifi)
+    }
+
+    #[test]
+    fn test_filter_contains_single_string() {
+        let (store, pool, _gym, _spa, _wifi) = make_array_store();
+        let results = store.filter_contains("tags", &ColumnValue::String(pool));
+        assert_eq!(results, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_filter_contains_single_int() {
+        let (store, ..) = make_array_store();
+        let results = store.filter_contains("scores", &ColumnValue::Int(10));
+        assert_eq!(results, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_filter_contains_no_match() {
+        let (mut store, ..) = make_array_store();
+        let bar_id = store.string_table_mut().intern("bar");
+        let results = store.filter_contains("tags", &ColumnValue::String(bar_id));
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_filter_contains_null_rows_excluded() {
+        let (store, ..) = make_array_store();
+        let results = store.filter_contains("scores", &ColumnValue::Int(10));
+        assert!(!results.contains(&3), "Null row should be excluded");
+    }
+
+    #[test]
+    fn test_filter_contains_nonexistent_column() {
+        let (store, ..) = make_array_store();
+        let results = store.filter_contains("nonexistent", &ColumnValue::Int(1));
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_filter_contains_non_array_column() {
+        let (store, ..) = make_array_store();
+        let results = store.filter_contains("id", &ColumnValue::Int(1));
+        assert!(results.is_empty());
+    }
+
+    // ---- filter_contains_any tests ----
+
+    #[test]
+    fn test_filter_contains_any_multiple_values() {
+        let (store, _pool, _gym, spa, wifi) = make_array_store();
+        let results = store.filter_contains_any(
+            "tags",
+            &[ColumnValue::String(spa), ColumnValue::String(wifi)],
+        );
+        // spa: row 0, wifi: row 1, 2
+        assert_eq!(results, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_filter_contains_any_empty_values() {
+        let (store, ..) = make_array_store();
+        let results = store.filter_contains_any("tags", &[]);
+        assert!(results.is_empty());
+    }
+
+    // ---- filter_contains_all tests ----
+
+    #[test]
+    fn test_filter_contains_all_multiple_values() {
+        let (store, pool, gym, ..) = make_array_store();
+        let results = store.filter_contains_all(
+            "tags",
+            &[ColumnValue::String(pool), ColumnValue::String(gym)],
+        );
+        // Only row 0 has both pool and gym
+        assert_eq!(results, vec![0]);
+    }
+
+    #[test]
+    fn test_filter_contains_all_no_match() {
+        let (store, pool, _gym, spa, wifi) = make_array_store();
+        let results = store.filter_contains_all(
+            "tags",
+            &[
+                ColumnValue::String(pool),
+                ColumnValue::String(wifi),
+                ColumnValue::String(spa),
+            ],
+        );
+        // No row has all three
+        assert!(results.is_empty());
+    }
+
+    // ---- Bitmap variants ----
+
+    #[test]
+    fn test_filter_contains_bitmap_matches_vec() {
+        let (store, pool, ..) = make_array_store();
+
+        let vec_results = store.filter_contains("tags", &ColumnValue::String(pool));
+        let bitmap = store.filter_contains_bitmap("tags", &ColumnValue::String(pool));
+
+        let bitmap_indices: Vec<usize> = bitmap.iter().map(|i| i as usize).collect();
+        assert_eq!(vec_results, bitmap_indices);
+    }
+
+    #[test]
+    fn test_filter_contains_any_bitmap_matches_vec() {
+        let (store, ..) = make_array_store();
+        let values = [ColumnValue::Int(10), ColumnValue::Int(30)];
+
+        let vec_results = store.filter_contains_any("scores", &values);
+        let bitmap = store.filter_contains_any_bitmap("scores", &values);
+
+        let bitmap_indices: Vec<usize> = bitmap.iter().map(|i| i as usize).collect();
+        assert_eq!(vec_results, bitmap_indices);
+    }
+
+    #[test]
+    fn test_filter_contains_all_bitmap_matches_vec() {
+        let (store, ..) = make_array_store();
+        let values = [ColumnValue::Int(10), ColumnValue::Int(20)];
+
+        let vec_results = store.filter_contains_all("scores", &values);
+        let bitmap = store.filter_contains_all_bitmap("scores", &values);
+
+        let bitmap_indices: Vec<usize> = bitmap.iter().map(|i| i as usize).collect();
+        assert_eq!(vec_results, bitmap_indices);
     }
 }

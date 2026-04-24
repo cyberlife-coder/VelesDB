@@ -14,7 +14,8 @@ import shutil
 import math
 
 try:
-    import velesdb
+    import velesdb  # noqa: F401  # pylint: disable=unused-import
+
     VELESDB_AVAILABLE = True
 except ImportError:
     VELESDB_AVAILABLE = False
@@ -22,6 +23,7 @@ except ImportError:
 try:
     from langchain_velesdb import VelesDBVectorStore
     from langchain_core.documents import Document
+
     LANGCHAIN_AVAILABLE = True
 except ImportError:
     LANGCHAIN_AVAILABLE = False
@@ -154,3 +156,264 @@ class TestE2EVelesDB:
         # Directory exists during test
         assert os.path.isdir(temp_dir)
         # Cleanup happens via fixture teardown
+
+
+class TestE2EVelesDBAdvanced:
+    """Advanced E2E tests: hybrid search, metadata filtering, isolation, and edge cases.
+
+    All tests use real VelesDB engine (no mocks). GIVEN/WHEN/THEN structure is
+    documented inline. Tests are deterministic via seeded embeddings.
+    """
+
+    @pytest.fixture()
+    def embeddings(self):
+        """64-dim deterministic embeddings (no API calls)."""
+        return DeterministicEmbeddings(dimension=64)
+
+    @pytest.fixture()
+    def temp_dir(self):
+        """Create and cleanup a temporary directory per test."""
+        d = tempfile.mkdtemp(prefix="velesdb_adv_e2e_")
+        yield d
+        shutil.rmtree(d, ignore_errors=True)
+
+    @pytest.fixture()
+    def temp_dir_b(self):
+        """Second isolated temp directory for multi-collection tests."""
+        d = tempfile.mkdtemp(prefix="velesdb_adv_e2e_b_")
+        yield d
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ------------------------------------------------------------------
+    # Nominal tests
+    # ------------------------------------------------------------------
+
+    def test_hybrid_search_text_plus_vector_scores(self, temp_dir, embeddings):
+        """Hybrid search returns (Document, score) tuples with plausible ranking.
+
+        GIVEN: 8 docs with distinct text and deterministic embeddings.
+        WHEN: hybrid_search is called with a query matching one doc closely.
+        THEN: top-3 results are returned as (Document, float) pairs; all
+              scores are non-negative floats; no exception is raised.
+        """
+        texts = [
+            "vector database high performance search engine",
+            "machine learning neural network deep learning",
+            "python programming language data science",
+            "vector similarity cosine distance embeddings",
+            "distributed systems cloud computing architecture",
+            "natural language processing transformer model",
+            "graph database knowledge representation query",
+            "reinforcement learning policy optimization agent",
+        ]
+        # GIVEN: insert 8 docs
+        _embeddings_cache = embeddings.embed_documents(texts)
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_dir,
+            collection_name="hybrid_adv",
+            metric="cosine",
+            storage_mode="full",
+        )
+        store.add_texts(texts)
+
+        # WHEN: hybrid search combining text relevance + vector similarity
+        results = store.hybrid_search(
+            "vector database search",
+            k=3,
+            vector_weight=0.7,
+        )
+
+        # THEN: exactly 3 (Document, float) tuples, all scores non-negative
+        assert len(results) == 3
+        for doc, score in results:
+            assert isinstance(doc, Document)
+            assert isinstance(score, float)
+            assert score >= 0.0
+
+    def test_metadata_filter_on_similarity_search(self, temp_dir, embeddings):
+        """similarity_search_with_filter returns only docs matching the filter.
+
+        GIVEN: 6 docs split evenly between two metadata categories.
+        WHEN: similarity_search_with_filter is called filtering on 'tech'.
+        THEN: every returned document has category == 'tech'.
+        """
+        tech_docs = [
+            Document(
+                page_content="Rust systems programming language",
+                metadata={"category": "tech"},
+            ),
+            Document(
+                page_content="VelesDB vector database engine",
+                metadata={"category": "tech"},
+            ),
+            Document(
+                page_content="PyO3 Python Rust bindings",
+                metadata={"category": "tech"},
+            ),
+        ]
+        art_docs = [
+            Document(
+                page_content="Impressionist painting oil on canvas",
+                metadata={"category": "art"},
+            ),
+            Document(
+                page_content="Baroque music harpsichord composition",
+                metadata={"category": "art"},
+            ),
+            Document(
+                page_content="Sculpture marble Renaissance masterpiece",
+                metadata={"category": "art"},
+            ),
+        ]
+        # GIVEN: insert 6 docs across two categories
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_dir,
+            collection_name="filter_adv",
+        )
+        store.add_documents(tech_docs + art_docs)
+
+        # WHEN: search with category == 'tech' filter
+        core_filter = {
+            "condition": {"type": "eq", "field": "category", "value": "tech"}
+        }
+        results = store.similarity_search_with_filter(
+            "programming database",
+            k=10,
+            metadata_filter=core_filter,
+        )
+
+        # THEN: all returned docs are in the 'tech' category
+        assert len(results) > 0
+        for doc in results:
+            assert (
+                doc.metadata.get("category") == "tech"
+            ), f"Expected category 'tech', got {doc.metadata.get('category')!r}"
+
+    def test_delete_then_search_excludes_deleted(self, temp_dir, embeddings):
+        """Deleted documents are excluded from subsequent search results.
+
+        GIVEN: 5 docs inserted with explicit IDs.
+        WHEN: 2 docs are deleted, then a similarity_search is run with k=5.
+        THEN: neither deleted doc appears in the results.
+        """
+        texts = [
+            "document alpha stays",
+            "document beta deleted",
+            "document gamma stays",
+            "document delta deleted",
+            "document epsilon stays",
+        ]
+        doc_ids = ["id_alpha", "id_beta", "id_gamma", "id_delta", "id_epsilon"]
+
+        # GIVEN: insert 5 docs
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_dir,
+            collection_name="delete_adv",
+        )
+        store.add_texts(texts, ids=doc_ids)
+
+        # WHEN: delete beta and delta
+        store.delete(["id_beta", "id_delta"])
+        results = store.similarity_search("document", k=5)
+
+        # THEN: deleted docs not in results
+        contents = {doc.page_content for doc in results}
+        assert "document beta deleted" not in contents
+        assert "document delta deleted" not in contents
+
+    # ------------------------------------------------------------------
+    # Edge tests
+    # ------------------------------------------------------------------
+
+    def test_multi_collection_isolation(self, temp_dir, temp_dir_b, embeddings):
+        """Two collections in separate directories do not share documents.
+
+        GIVEN: collection A in temp_dir, collection B in temp_dir_b.
+        WHEN: each has a distinct document and we search in each.
+        THEN: A's search never returns B's document and vice-versa.
+        """
+        # GIVEN: insert different docs in each collection
+        store_a = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_dir,
+            collection_name="isolation_a",
+        )
+        store_b = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_dir_b,
+            collection_name="isolation_b",
+        )
+        store_a.add_texts(["document exclusive to collection A"])
+        store_b.add_texts(["document exclusive to collection B"])
+
+        # WHEN: search in each
+        results_a = store_a.similarity_search("document", k=5)
+        results_b = store_b.similarity_search("document", k=5)
+
+        # THEN: no cross-contamination
+        contents_a = {doc.page_content for doc in results_a}
+        contents_b = {doc.page_content for doc in results_b}
+        assert "document exclusive to collection B" not in contents_a
+        assert "document exclusive to collection A" not in contents_b
+
+    def test_search_with_k_larger_than_corpus(self, temp_dir, embeddings):
+        """Querying with k > corpus size returns all docs without error or duplicates.
+
+        GIVEN: only 3 documents in the store.
+        WHEN: similarity_search is called with k=10.
+        THEN: at most 3 results are returned, no duplicates.
+        """
+        # GIVEN: 3 documents
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_dir,
+            collection_name="small_corpus",
+        )
+        store.add_texts(["alpha", "beta", "gamma"])
+
+        # WHEN: request more than the corpus size
+        results = store.similarity_search("anything", k=10)
+
+        # THEN: at most 3 results, no page_content duplicates
+        assert len(results) <= 3
+        contents = [doc.page_content for doc in results]
+        assert len(contents) == len(set(contents)), "Duplicate documents returned"
+
+    # ------------------------------------------------------------------
+    # Negative tests
+    # ------------------------------------------------------------------
+
+    def test_invalid_collection_raises_clear_error(self, temp_dir, embeddings):
+        """Searching with a dimension mismatch raises DimensionMismatchError.
+
+        GIVEN: a store with 64-dim embeddings already populated.
+        WHEN: the embedding model is swapped to produce 3-dim vectors.
+        THEN: similarity_search raises velesdb.DimensionMismatchError with a
+              clear message — not a generic Exception.
+        """
+        import velesdb as _velesdb
+
+        # GIVEN: insert one doc with 64-dim embeddings
+        store = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_dir,
+            collection_name="dim_mismatch",
+        )
+        store.add_texts(["hello vector database"])
+
+        # WHEN: swap to a 3-dim embedder and search
+        class WrongDimEmbeddings:
+            def embed_documents(self, texts):
+                return [[0.1, 0.2, 0.3] for _ in texts]
+
+            def embed_query(self, text):
+                return [0.1, 0.2, 0.3]
+
+        store._embedding = WrongDimEmbeddings()  # type: ignore[assignment]
+
+        # THEN: a typed DimensionMismatchError is raised
+        with pytest.raises(_velesdb.DimensionMismatchError):
+            store.similarity_search("hello", k=1)

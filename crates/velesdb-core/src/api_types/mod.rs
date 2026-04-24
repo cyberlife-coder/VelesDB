@@ -6,6 +6,8 @@
 
 mod requests;
 mod responses;
+mod responses_explain;
+pub mod serde_id;
 #[cfg(test)]
 mod tests;
 
@@ -79,22 +81,22 @@ pub const fn default_hit_weight() -> f32 {
     0.2
 }
 
+/// Default dense weight for relative score fusion.
+#[must_use]
+pub const fn default_dense_weight() -> f32 {
+    0.5
+}
+
+/// Default sparse weight for relative score fusion.
+#[must_use]
+pub const fn default_sparse_weight() -> f32 {
+    0.5
+}
+
 /// Default index type: hash.
 #[must_use]
 pub fn default_index_type() -> String {
     "hash".to_string()
-}
-
-/// Convert search mode string to `ef_search` value.
-#[must_use]
-pub fn mode_to_ef_search(mode: &str) -> Option<usize> {
-    match mode.to_lowercase().as_str() {
-        "fast" => Some(64),
-        "balanced" => Some(128),
-        "accurate" => Some(512),
-        "perfect" => Some(usize::MAX),
-        _ => None,
-    }
 }
 
 /// Convert search mode string to [`SearchQuality`].

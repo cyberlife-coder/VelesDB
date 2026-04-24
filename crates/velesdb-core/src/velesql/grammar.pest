@@ -295,7 +295,7 @@ select_list = { "*" | select_item_list }
 
 // Mixed select items: columns, aggregations, similarity(), and qualified wildcards
 select_item_list = { select_item ~ ("," ~ select_item)* }
-select_item = { similarity_select | aggregation_item | qualified_wildcard | column }
+select_item = { similarity_select | window_item | aggregation_item | qualified_wildcard | column }
 
 // similarity() zero-arg in SELECT: SELECT similarity() [AS alias]
 similarity_select = { ^"similarity" ~ "(" ~ ")" ~ (^"AS" ~ identifier)? }
@@ -306,8 +306,32 @@ qualified_wildcard = { identifier ~ "." ~ "*" }
 // Aggregate functions: COUNT, SUM, AVG, MIN, MAX
 aggregation_item = { aggregate_function ~ (^"AS" ~ identifier)? }
 aggregate_function = { aggregate_type ~ "(" ~ aggregate_arg ~ ")" }
-aggregate_type = { ^"COUNT" | ^"SUM" | ^"AVG" | ^"MIN" | ^"MAX" }
-aggregate_arg = { "*" | column_name }
+aggregate_type = { ^"FIRST" | ^"COUNT" | ^"SUM" | ^"AVG" | ^"MIN" | ^"MAX" }
+aggregate_arg = { "*" | ^"score" | column_name }
+
+// ──────────────────────────────────────────────────────────────
+// Window functions (Issue #386 Phase 1)
+// ──────────────────────────────────────────────────────────────
+
+// Window function expression in SELECT list
+// Example: ROW_NUMBER() OVER (PARTITION BY source ORDER BY score DESC) AS rn
+window_item = { window_function_call ~ ^"OVER" ~ "(" ~ over_clause ~ ")" ~ (^"AS" ~ identifier)? }
+
+// Window function call (zero-arg for Phase 1 ranking functions)
+window_function_call = { window_function_name ~ "(" ~ ")" }
+window_function_name = { ^"ROW_NUMBER" | ^"DENSE_RANK" | ^"RANK" }
+
+// OVER clause: optional PARTITION BY + optional ORDER BY
+over_clause = { partition_by_clause? ~ window_order_by_clause? }
+
+// PARTITION BY: one or more columns
+partition_by_clause = { ^"PARTITION" ~ ^"BY" ~ partition_by_list }
+partition_by_list = { column_name ~ ("," ~ column_name)* }
+
+// ORDER BY inside OVER(): separate rule to avoid ambiguity with outer ORDER BY
+window_order_by_clause = { ^"ORDER" ~ ^"BY" ~ window_order_by_item ~ ("," ~ window_order_by_item)* }
+window_order_by_item = { window_order_by_expr ~ sort_direction? }
+window_order_by_expr = { order_by_similarity_bare | column_name }
 
 column = { column_name ~ (^"AS" ~ identifier)? }
 // EPIC-052 US-005: Support nested field paths like metadata.source or profile.address.city
@@ -334,6 +358,10 @@ primary_expr = {
     between_expr |
     like_expr |
     is_null_expr |
+    contains_text_expr |
+    contains_expr |
+    geo_distance_expr |
+    geo_bbox_expr |
     compare_expr
 }
 
@@ -397,6 +425,27 @@ between_expr = { where_column ~ ^"BETWEEN" ~ value ~ ^"AND" ~ value }
 // LIKE / ILIKE expression: column LIKE 'pattern' or column ILIKE 'pattern'
 like_expr = { where_column ~ like_op ~ string }
 like_op = { ^"ILIKE" | ^"LIKE" }
+
+// CONTAINS_TEXT expression: strict text substring filter
+contains_text_expr = { where_column ~ ^"CONTAINS_TEXT" ~ string }
+
+// CONTAINS expression: column CONTAINS value | column CONTAINS ANY/ALL (values)
+contains_expr = {
+    where_column ~ ^"CONTAINS" ~ ^"ALL" ~ "(" ~ value_list ~ ")" |
+    where_column ~ ^"CONTAINS" ~ ^"ANY" ~ "(" ~ value_list ~ ")" |
+    where_column ~ ^"CONTAINS" ~ value
+}
+
+// GEO_DISTANCE expression: GEO_DISTANCE(column, lat, lng) op meters
+geo_number = { float | integer }
+geo_distance_expr = {
+    ^"GEO_DISTANCE" ~ "(" ~ column_name ~ "," ~ geo_number ~ "," ~ geo_number ~ ")" ~ compare_op ~ geo_number
+}
+
+// GEO_BBOX expression: GEO_BBOX(column, lat_min, lng_min, lat_max, lng_max)
+geo_bbox_expr = {
+    ^"GEO_BBOX" ~ "(" ~ column_name ~ "," ~ geo_number ~ "," ~ geo_number ~ "," ~ geo_number ~ "," ~ geo_number ~ ")"
+}
 
 // IS NULL / IS NOT NULL
 is_null_expr = { where_column ~ ^"IS" ~ not_kw? ~ ^"NULL" }

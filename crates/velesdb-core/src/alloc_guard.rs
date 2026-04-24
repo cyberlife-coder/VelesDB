@@ -62,7 +62,7 @@ impl AllocGuard {
         // SAFETY: `alloc` requires a valid non-zero layout.
         // - Condition 1: `layout.size() > 0` is checked above.
         // - Condition 2: `Layout` comes from std APIs and is therefore well-formed.
-        // Reason: Raw allocation is required to build a panic-safe RAII guard.
+        // SAFETY: Raw allocation is required to build a panic-safe RAII guard.
         let ptr = unsafe { alloc(layout) };
 
         NonNull::new(ptr).map(|ptr| Self {
@@ -85,7 +85,7 @@ impl AllocGuard {
         // SAFETY: `alloc_zeroed` requires a valid non-zero layout.
         // - Condition 1: `layout.size() > 0` is checked above.
         // - Condition 2: `Layout` comes from std APIs and is therefore well-formed.
-        // Reason: Zero-initialized allocation prevents UB from reading unwritten slots.
+        // SAFETY: Zero-initialized allocation prevents UB from reading unwritten slots.
         let ptr = unsafe { alloc_zeroed(layout) };
 
         NonNull::new(ptr).map(|ptr| Self {
@@ -140,7 +140,7 @@ impl Drop for AllocGuard {
             // SAFETY: `dealloc` requires the original pointer/layout pair.
             // - Condition 1: `self.ptr` was produced by `alloc(self.layout)` in `new`.
             // - Condition 2: `owns_memory` guarantees this path runs at most once.
-            // Reason: Manual deallocation is needed for raw-memory RAII.
+            // SAFETY: Manual deallocation is needed for raw-memory RAII.
             unsafe {
                 dealloc(self.ptr.as_ptr(), self.layout);
             }
@@ -151,7 +151,7 @@ impl Drop for AllocGuard {
 // SAFETY: `AllocGuard` is `Send` because it owns an allocation handle only.
 // - Condition 1: No aliasing references are stored, only pointer + layout metadata.
 // - Condition 2: Mutation requires `&mut self`, preventing cross-thread races on the type.
-// Reason: Heap allocations are not thread-affine; ownership transfer across threads is sound.
+// SAFETY: Heap allocations are not thread-affine; ownership transfer across threads is sound.
 unsafe impl Send for AllocGuard {}
 
 // AllocGuard is NOT Sync - concurrent access to raw memory is unsafe

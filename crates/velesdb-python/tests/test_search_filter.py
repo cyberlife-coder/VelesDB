@@ -11,16 +11,9 @@ correctly end-to-end through the Rust binding.
 Run with: pytest tests/test_search_filter.py -v
 """
 
-import pytest
-
 from conftest import _SKIP_NO_BINDINGS
 
 pytestmark = _SKIP_NO_BINDINGS
-
-try:
-    import velesdb
-except (ImportError, AttributeError):
-    velesdb = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------

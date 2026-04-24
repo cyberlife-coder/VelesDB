@@ -59,9 +59,6 @@ mod graph_pattern_tests;
 mod groupby_tests;
 #[cfg(test)]
 mod having_tests;
-mod hybrid;
-#[cfg(test)]
-mod hybrid_tests;
 #[cfg(test)]
 mod join_extended_tests;
 pub mod json_path;
@@ -88,6 +85,9 @@ mod validation_parity_tests;
 #[cfg(test)]
 mod validation_tests;
 mod validation_types;
+pub mod window_evaluator;
+#[cfg(test)]
+mod window_function_tests;
 
 #[cfg(test)]
 mod aggregation_params_tests;
@@ -169,6 +169,9 @@ pub use ast::{
     CompoundQuery,
     Condition,
     // Values (used by cli, wasm)
+    ContainsCondition,
+    ContainsMode,
+    ContainsTextCondition,
     CorrelatedColumn,
     CreateCollectionKind,
     CreateCollectionStatement,
@@ -188,6 +191,9 @@ pub use ast::{
     FusionClause,
     FusionConfig,
     FusionStrategyType,
+    // Geospatial (Issue #514)
+    GeoBboxCondition,
+    GeoDistanceCondition,
     GraphCollectionParams,
     GraphMatchPredicate,
     GraphSchemaMode,
@@ -212,6 +218,8 @@ pub use ast::{
     LogicalOp,
     MatchCondition,
     OrderByExpr,
+    // Window functions (Issue #386)
+    OverClause,
     // WITH clause
     QuantizationMode,
     Query,
@@ -238,6 +246,9 @@ pub use ast::{
     VectorExpr,
     VectorFusedSearch,
     VectorSearch,
+    WindowFunction,
+    WindowFunctionType,
+    WindowOrderBy,
     WithClause,
     WithOption,
     WithValue,
@@ -247,12 +258,18 @@ pub use graph_pattern::*;
 pub use cache::{CacheStats, QueryCache};
 pub use error::{ParseError, ParseErrorKind};
 #[cfg(feature = "persistence")]
+pub(crate) use explain::strip_vector_predicates;
+#[cfg(feature = "persistence")]
 pub use explain::{
-    FilterPlan, FilterStrategy, IndexLookupPlan, IndexType, LimitPlan, OffsetPlan, PlanNode,
-    QueryPlan, TableScanPlan, VectorSearchPlan,
+    build_leaf_node_stats, fallback_selectivity_threshold, set_fallback_selectivity_threshold,
+    ActualStats, ExplainOutput, FilterPlan, FilterStrategy, FusionInfo, IndexLookupPlan, IndexType,
+    LimitPlan, MatchTraversalPlan, NodeStats, OffsetPlan, PlanNode, QueryPlan, TableScanPlan,
+    VectorSearchPlan, DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD,
 };
 pub use parser::match_clause;
 pub use parser::Parser;
 #[cfg(feature = "persistence")]
-pub use planner::{Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats};
+pub use planner::{
+    Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats, SelectivityMethod,
+};
 pub use validation::{QueryValidator, ValidationConfig, ValidationError, ValidationErrorKind};

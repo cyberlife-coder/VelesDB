@@ -48,6 +48,7 @@ pub fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Com
         ".sample" => repl_collection_cmds::cmd_sample(db, &parts),
         ".browse" => repl_collection_cmds::cmd_browse(db, &parts),
         ".stats" => repl_collection_cmds::cmd_stats(db, &parts),
+        ".scroll" => repl_collection_cmds::cmd_scroll(db, &parts),
         ".bench" | "\\bench" => repl_data_cmds::cmd_bench(db, config, &parts),
         ".export" => repl_data_cmds::cmd_export(db, &parts),
         ".nodes" => repl_collection_cmds::cmd_nodes(db, &parts),
@@ -57,6 +58,7 @@ pub fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Com
         ".clear" => repl_config_cmds::cmd_clear(),
         // Query / index commands
         ".explain" => repl_query_cmds::cmd_explain(db, &parts),
+        ".explain-analyze" => repl_query_cmds::cmd_explain_analyze(db, &parts),
         ".analyze" => repl_query_cmds::cmd_analyze(db, &parts),
         ".indexes" => repl_query_cmds::cmd_indexes(db, &parts),
         ".delete" => repl_query_cmds::cmd_delete(db, &parts),
