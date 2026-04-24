@@ -57,6 +57,10 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
 }
 
 /// Writes all Prometheus metrics to the output buffer.
+///
+/// Aggregates server-level metrics (info, uptime, plan cache) with
+/// core operational metrics (query throughput, connections, guardrails,
+/// traversal stats, query duration histogram).
 fn write_metrics(output: &mut String, state: &AppState) -> std::fmt::Result {
     writeln!(output, "# VelesDB Prometheus Metrics")?;
     writeln!(output)?;
@@ -66,7 +70,25 @@ fn write_metrics(output: &mut String, state: &AppState) -> std::fmt::Result {
 
     let cache_metrics = state.db.plan_cache().metrics();
     let cache_stats = state.db.plan_cache().stats();
-    write_cache_metrics(output, cache_metrics, &cache_stats)
+    write_cache_metrics(output, cache_metrics, &cache_stats)?;
+
+    // Core operational metrics: query throughput, connections, doc counts.
+    output.push_str(&state.operational_metrics.export_prometheus());
+
+    // Guard-rails metrics: rate limiting, resource limits, error counters.
+    // Uses the process-wide singleton (OnceLock) — always available.
+    output.push_str(&velesdb_core::metrics::global_guardrails_metrics().export_prometheus());
+
+    // Graph traversal metrics: nodes visited, depth, edges scanned.
+    output.push_str(&state.traversal_metrics.export_prometheus());
+
+    // Query duration histogram (8-bucket + sum + count).
+    output.push_str(&state.query_duration_histogram.export_prometheus(
+        "velesdb_query_duration_seconds",
+        "Query execution duration in seconds",
+    ));
+
+    Ok(())
 }
 
 /// Writes server version info metric.
@@ -200,6 +222,11 @@ mod tests {
             onboarding_metrics: OnboardingMetrics::default(),
             query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
             ready: std::sync::atomic::AtomicBool::new(true),
+            operational_metrics: velesdb_core::metrics::OperationalMetrics::shared(),
+            traversal_metrics: std::sync::Arc::new(velesdb_core::metrics::TraversalMetrics::new()),
+            query_duration_histogram: std::sync::Arc::new(
+                velesdb_core::metrics::DurationHistogram::new(),
+            ),
         })
     }
 

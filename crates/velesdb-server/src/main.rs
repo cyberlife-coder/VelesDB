@@ -113,6 +113,11 @@ fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
         onboarding_metrics: OnboardingMetrics::default(),
         query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
         ready: std::sync::atomic::AtomicBool::new(false),
+        operational_metrics: velesdb_core::metrics::OperationalMetrics::shared(),
+        traversal_metrics: std::sync::Arc::new(velesdb_core::metrics::TraversalMetrics::new()),
+        query_duration_histogram: std::sync::Arc::new(
+            velesdb_core::metrics::DurationHistogram::new(),
+        ),
     });
     // Database loaded successfully — mark server as ready
     state

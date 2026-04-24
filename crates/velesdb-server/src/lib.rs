@@ -45,20 +45,23 @@ mod types;
 
 use security_addon::SecurityAddon;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use utoipa::OpenApi;
 use velesdb_core::guardrails::QueryLimits;
+use velesdb_core::metrics::{DurationHistogram, OperationalMetrics, TraversalMetrics};
 use velesdb_core::Database;
 
 pub use onboarding::OnboardingMetrics;
 pub use types::*;
 
 pub use handlers::{
-    aggregate, analyze_collection, batch_search, collection_sanity, create_collection,
-    create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
-    get_collection, get_collection_config, get_collection_stats, get_guardrails, get_point,
-    health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
-    multi_query_search, query, readiness_check, rebuild_index, scroll_points, search, search_ids,
-    stream_insert, stream_upsert_points, text_search, update_guardrails, upsert_points,
+    aggregate, analyze_collection, batch_search, bulk_delete_points, collection_sanity,
+    compact_collection, create_collection, create_index, delete_collection, delete_index,
+    delete_point, explain, flush_collection, get_collection, get_collection_config,
+    get_collection_stats, get_guardrails, get_point, health_check, hybrid_search, is_empty,
+    list_collections, list_indexes, match_query, multi_query_search, query, readiness_check,
+    rebuild_index, scroll_points, search, search_ids, stream_insert, stream_upsert_points,
+    text_search, update_guardrails, upsert_points, vacuum_collection,
 };
 
 pub use handlers::graph::{
@@ -153,7 +156,11 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::graph::handlers::get_node_degree,
         handlers::graph::handlers_extended::graph_search,
         handlers::graph::stream::stream_traverse,
-        handlers::match_query::match_query
+        handlers::match_query::match_query,
+        handlers::admin::rebuild_index,
+        handlers::admin::vacuum_collection,
+        handlers::admin::compact_collection,
+        handlers::points::bulk_delete_points
     ),
     components(
         schemas(
@@ -223,7 +230,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             handlers::match_query::MatchQueryResponse,
             handlers::match_query::MatchQueryResultItem,
             handlers::match_query::MatchQueryMeta,
-            handlers::match_query::MatchQueryError
+            handlers::match_query::MatchQueryError,
+            handlers::points::BulkDeleteRequest
         )
     )
 )]
@@ -242,6 +250,12 @@ pub struct AppState {
     pub query_limits: parking_lot::RwLock<QueryLimits>,
     /// Readiness flag — `true` once the database is fully loaded.
     pub ready: AtomicBool,
+    /// Operational metrics: query throughput, connections, doc counts (EPIC-050).
+    pub operational_metrics: Arc<OperationalMetrics>,
+    /// Graph traversal metrics: nodes visited, depth, edges scanned.
+    pub traversal_metrics: Arc<TraversalMetrics>,
+    /// Query duration histogram for Prometheus export.
+    pub query_duration_histogram: Arc<DurationHistogram>,
 }
 
 // ============================================================================
@@ -605,6 +619,9 @@ mod tests {
             onboarding_metrics: OnboardingMetrics::default(),
             query_limits: parking_lot::RwLock::new(QueryLimits::default()),
             ready: AtomicBool::new(true),
+            operational_metrics: velesdb_core::metrics::OperationalMetrics::shared(),
+            traversal_metrics: Arc::new(velesdb_core::metrics::TraversalMetrics::new()),
+            query_duration_histogram: Arc::new(velesdb_core::metrics::DurationHistogram::new()),
         });
         (state, dir)
     }

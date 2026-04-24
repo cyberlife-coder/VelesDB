@@ -33,20 +33,24 @@ pub use batch::batch_search;
 pub use multi::__path_multi_query_search;
 pub use multi::multi_query_search;
 
-/// Shared search preamble: record metric, resolve collection, check guard rails.
+/// Shared search preamble: record onboarding metric and resolve collection.
+///
+/// Does NOT check guard rails — each handler inlines `apply_pre_check`
+/// after recording its query-type counter so that rate-limited requests
+/// are visible in metrics with `status="rate_limited"`.
+///
+/// Does NOT record the query-type counter (vector / hybrid / text) — each
+/// handler calls the appropriate `record_*_query()` method itself so that
+/// BM25 text searches are not miscounted as vector queries.
 ///
 /// Returns `Ok(collection)` or `Err(response)` on failure.
 #[allow(clippy::result_large_err)]
 fn search_preamble(
     state: &AppState,
     name: &str,
-    headers: &axum::http::HeaderMap,
 ) -> Result<VectorCollection, axum::response::Response> {
     state.onboarding_metrics.record_search_request();
-    let collection = get_vector_collection_or_404(state, name)?;
-    let client_id = extract_client_id(headers);
-    apply_pre_check(collection.guard_rails(), &client_id)?;
-    Ok(collection)
+    get_vector_collection_or_404(state, name)
 }
 
 /// Executes the full search pipeline and records circuit-breaker on failure.
@@ -93,10 +97,17 @@ pub async fn search(
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
 
-    let collection = match search_preamble(&state, &name, &headers) {
+    let collection = match search_preamble(&state, &name) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
+    state.operational_metrics.record_vector_query();
+
+    let client_id = extract_client_id(&headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        state.operational_metrics.inc_rate_limited();
+        return resp;
+    }
 
     // F-03: honour the per-request `timeout_ms` budget. The synchronous
     // search runs on a blocking worker so the async runtime stays
@@ -120,8 +131,12 @@ pub async fn search(
 
     let search_result = match execution {
         Ok(Ok(inner)) => inner,
-        Ok(Err(resp)) => return resp,
+        Ok(Err(resp)) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
         Err(workers::TimeoutElapsed) => {
+            state.operational_metrics.inc_errors();
             // Timeout elapsed: record the circuit-breaker failure and
             // return a 408 with the budget echoed back to the caller.
             collection.guard_rails().circuit_breaker.record_failure();
@@ -168,10 +183,18 @@ pub async fn text_search(
     Path(name): Path<String>,
     Json(req): Json<TextSearchRequest>,
 ) -> impl IntoResponse {
-    let collection = match search_preamble(&state, &name, &headers) {
+    let collection = match search_preamble(&state, &name) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
+    // BM25 text search is not a vector query — only count in queries_total.
+    state.operational_metrics.inc_queries();
+
+    let client_id = extract_client_id(&headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        state.operational_metrics.inc_rate_limited();
+        return resp;
+    }
 
     let start = std::time::Instant::now();
 
@@ -202,7 +225,10 @@ pub async fn text_search(
 
     let search_result = match work_result {
         Ok(inner) => inner,
-        Err(resp) => return resp,
+        Err(resp) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
     };
 
     finish_search_with_status(
@@ -237,15 +263,23 @@ pub async fn hybrid_search(
     Path(name): Path<String>,
     Json(req): Json<HybridSearchRequest>,
 ) -> impl IntoResponse {
-    let collection = match search_preamble(&state, &name, &headers) {
+    let collection = match search_preamble(&state, &name) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
+    state.operational_metrics.record_hybrid_query();
+
+    let client_id = extract_client_id(&headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        state.operational_metrics.inc_rate_limited();
+        return resp;
+    }
 
     let start = std::time::Instant::now();
 
     let expected_dimension = collection.config().dimension;
     if let Err(error) = validate_query_dimension(&state, &name, expected_dimension, &req.vector) {
+        state.operational_metrics.inc_errors();
         return (StatusCode::BAD_REQUEST, Json(error)).into_response();
     }
 
@@ -287,7 +321,10 @@ pub async fn hybrid_search(
 
     let search_result = match work_result {
         Ok(inner) => inner,
-        Err(resp) => return resp,
+        Err(resp) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
     };
 
     finish_search_with_cb(&state, &name, start, &collection, search_result)
@@ -321,10 +358,17 @@ pub async fn search_ids(
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
 
-    let collection = match search_preamble(&state, &name, &headers) {
+    let collection = match search_preamble(&state, &name) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
+    state.operational_metrics.record_vector_query();
+
+    let client_id = extract_client_id(&headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        state.operational_metrics.inc_rate_limited();
+        return resp;
+    }
 
     // F-03: honour the per-request `timeout_ms` budget and run the
     // CPU-bound search on a blocking worker so the async runtime stays
@@ -348,8 +392,12 @@ pub async fn search_ids(
 
     let search_result = match execution {
         Ok(Ok(inner)) => inner,
-        Ok(Err(resp)) => return resp,
+        Ok(Err(resp)) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
         Err(workers::TimeoutElapsed) => {
+            state.operational_metrics.inc_errors();
             collection.guard_rails().circuit_breaker.record_failure();
             let ms = timeout_ms.unwrap_or_default();
             return timeout_response(&name, ms);

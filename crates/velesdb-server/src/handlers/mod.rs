@@ -26,8 +26,8 @@ pub mod search;
 pub mod metrics;
 
 pub use admin::{
-    analyze_collection, get_collection_config, get_collection_stats, get_guardrails, rebuild_index,
-    update_guardrails,
+    analyze_collection, compact_collection, get_collection_config, get_collection_stats,
+    get_guardrails, rebuild_index, update_guardrails, vacuum_collection,
 };
 pub use collections::{
     collection_sanity, create_collection, delete_collection, flush_collection, get_collection,
@@ -36,7 +36,8 @@ pub use collections::{
 pub use health::{health_check, readiness_check};
 pub use indexes::{create_index, delete_index, list_indexes};
 pub use points::{
-    delete_point, get_point, scroll_points, stream_insert, stream_upsert_points, upsert_points,
+    bulk_delete_points, delete_point, get_point, scroll_points, stream_insert,
+    stream_upsert_points, upsert_points,
 };
 // EPIC-058 US-007: match_query handler for /collections/{name}/match
 pub use match_query::match_query;
