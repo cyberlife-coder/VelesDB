@@ -57,7 +57,9 @@ impl VectorCollection {
 
     /// Returns the next batch of points for scroll iteration.
     ///
-    /// Delegates to [`Collection::scroll_batch`].
+    /// Delegates to the inner collection's scroll implementation; see also
+    /// the parallel `scroll_batch` on [`crate::GraphCollection`] and
+    /// [`crate::MetadataCollection`].
     ///
     /// # Errors
     ///
@@ -195,8 +197,9 @@ impl VectorCollection {
     /// — that decision is left to the caller.
     ///
     /// External consumers can register their own reindex pipeline via
-    /// the manager's event callback ([`AutoReindexManager::on_event`]) or
-    /// poll the divergence state via
+    /// the manager's event callback
+    /// ([`crate::collection::auto_reindex::AutoReindexManager::on_event`])
+    /// or poll the divergence state via
     /// [`Self::check_auto_reindex_divergence`].
     ///
     /// # Example

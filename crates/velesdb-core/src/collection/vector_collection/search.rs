@@ -68,10 +68,11 @@ impl VectorCollection {
         self.inner.search_with_ef(query, k, ef_search)
     }
 
-    /// Performs kNN search with a specific [`SearchQuality`] profile.
+    /// Performs kNN search with a specific [`crate::SearchQuality`] profile.
     ///
-    /// Use this instead of [`search_with_ef`] when you want named quality
-    /// modes like [`SearchQuality::AutoTune`] that compute ef dynamically.
+    /// Use this instead of [`Self::search_with_ef`] when you want named
+    /// quality modes like [`crate::SearchQuality::AutoTune`] that compute ef
+    /// dynamically.
     ///
     /// # Errors
     ///
@@ -100,7 +101,7 @@ impl VectorCollection {
         self.inner.search_with_filter(query, k, filter)
     }
 
-    /// Returns [`ScoredResult`] pairs without payload hydration.
+    /// Returns [`crate::ScoredResult`] pairs without payload hydration.
     ///
     /// Faster than [`search`](Self::search) when only IDs and scores are needed.
     ///
@@ -404,7 +405,7 @@ impl VectorCollection {
 
     /// Executes a query with instrumentation and returns plan + actual stats.
     ///
-    /// Delegates to [`Database::explain_analyze_query`].
+    /// Delegates to [`crate::Database::explain_analyze_query`].
     ///
     /// # Errors
     ///
@@ -438,7 +439,7 @@ impl VectorCollection {
     ///
     /// Acquires the ingester lock once for the entire batch, eliminating
     /// per-point lock overhead. Returns the number of points successfully
-    /// queued. See [`Collection::stream_insert_batch`] for details.
+    /// queued. Companion to [`Self::stream_insert`] for single-point sends.
     ///
     /// # Errors
     ///

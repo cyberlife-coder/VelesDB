@@ -138,7 +138,7 @@ pub enum CompareOp {
     Lte,
 }
 
-/// IN / NOT IN condition: column [NOT] IN (value1, value2, ...)
+/// IN / NOT IN condition: `column [NOT] IN (value1, value2, ...)`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InCondition {
     /// Column name.

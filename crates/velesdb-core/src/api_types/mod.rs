@@ -99,7 +99,7 @@ pub fn default_index_type() -> String {
     "hash".to_string()
 }
 
-/// Convert search mode string to [`SearchQuality`].
+/// Convert search mode string to [`crate::SearchQuality`].
 ///
 /// Supports all named modes including `"autotune"` which adapts ef
 /// automatically based on collection statistics, plus advanced modes:

@@ -38,6 +38,8 @@ impl ContiguousVectors {
     /// # Errors
     ///
     /// Returns [`Error::AllocationFailed`] if reallocation fails.
+    ///
+    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub fn reserve_additional(&mut self, additional: usize) -> crate::error::Result<()> {
         let required = self.count.saturating_add(additional);
         self.ensure_capacity(required)

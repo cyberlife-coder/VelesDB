@@ -45,7 +45,8 @@ pub fn merge_with_delta(
     merged
 }
 
-/// Merges HNSW search results (as [`ScoredResult`]) with delta buffer results.
+/// Merges HNSW search results (as [`crate::ScoredResult`]) with delta buffer
+/// results.
 ///
 /// Zero-allocation variant that avoids the `ScoredResult` → `(u64, f32)` →
 /// `ScoredResult` round-trip in the search pipeline.

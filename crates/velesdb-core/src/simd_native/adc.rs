@@ -3,8 +3,8 @@
 //! Provides SIMD-accelerated distance computation using precomputed lookup tables.
 //! Dispatches to AVX2 gather, NEON, or scalar path based on runtime detection.
 //!
-//! The public-crate API ([`adc_distances_batch`]) is called from the PQ
-//! rescoring pipeline in [`crate::quantization::pq::pq_adc_batch_rescore`].
+//! The crate-private API (`adc_distances_batch`) is called from the PQ
+//! rescoring pipeline in `crate::quantization::pq::pq_adc_batch_rescore`.
 
 // The sole caller (`pq_adc_batch_rescore`) is persistence-gated, so all items
 // in this module are dead when persistence is disabled.

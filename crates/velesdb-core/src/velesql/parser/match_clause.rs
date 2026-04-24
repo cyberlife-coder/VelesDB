@@ -1,7 +1,7 @@
 //! MATCH clause parser for graph pattern matching.
 //!
 //! Graph pattern parsing (node, relationship, path patterns) lives in the
-//! sibling [`super::match_patterns`] module. This module handles the top-level
+//! sibling `super::match_patterns` (private) module. This module handles the top-level
 //! MATCH clause orchestration, WHERE condition parsing, RETURN clause parsing,
 //! and shared string-scanning utilities.
 

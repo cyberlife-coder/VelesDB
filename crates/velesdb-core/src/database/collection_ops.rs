@@ -190,7 +190,7 @@ impl Database {
     /// Returns the analyze generation for a named collection, if it exists
     /// (issue #608).
     ///
-    /// Parallel to [`collection_write_generation`], but tracks `ANALYZE`
+    /// Parallel to [`Self::collection_write_generation`], but tracks `ANALYZE`
     /// invocations instead of data mutations. Threaded into the compiled plan
     /// cache key so that an `ANALYZE` run alone invalidates cached plans whose
     /// cost estimates pre-date the fresh calibrated statistics.
