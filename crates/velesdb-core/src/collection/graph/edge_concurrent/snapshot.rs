@@ -47,11 +47,31 @@ impl ConcurrentEdgeStore {
     /// On failure the previous snapshot is retained (readers see stale but
     /// structurally valid data).
     ///
-    /// # Note
+    /// # Locking contract (must-read)
     ///
-    /// This method does NOT acquire `edge_ids` — it reads directly from
-    /// shard `EdgeStore`s. This avoids deadlock when called from mutation
-    /// methods that already hold the `edge_ids` write lock.
+    /// The caller **must not** hold a write lock on `edge_ids` **or** any
+    /// `shards[*]` lock (read or write) when invoking this method. The
+    /// method walks every shard and takes a read lock on each one in turn;
+    /// holding a same-shard write lock deadlocks against the reader, and
+    /// holding an `edge_ids` write lock deadlocks against the downstream
+    /// `label_table` / snapshot consumers in the same lock-order chain.
+    ///
+    /// The only two supported call sites are:
+    ///
+    /// * [`build_read_snapshot`](Self::build_read_snapshot) (this file) —
+    ///   acquires `edge_ids` as **read-only** and releases per-shard read
+    ///   locks between loop iterations.
+    /// * The lazy-rebuild path in
+    ///   `collection/graph/edge_concurrent/query.rs::ensure_csr_fresh`
+    ///   (reachable from `get_csr_snapshot`) — runs with no outer locks
+    ///   held.
+    ///
+    /// Mutation methods (`add_edge`, `remove_edge`, `flush`, …) must
+    /// instead call
+    /// [`rebuild_snapshot_best_effort`](Self::rebuild_snapshot_best_effort)
+    /// which only flips the dirty flag and defers the actual rebuild to
+    /// the next reader. Cross-reference: `docs/CONCURRENCY_MODEL.md`
+    /// (graph collection lock-ordering section).
     ///
     /// # Errors
     ///
