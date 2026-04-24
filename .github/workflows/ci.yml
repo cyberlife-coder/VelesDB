@@ -341,7 +341,11 @@ jobs:
           cd crates/velesdb-python
           # Use `build` + `pip install` — `maturin develop` requires an active virtualenv
           # which setup-python does not provide on GitHub runners.
-          maturin build --release --features persistence --out dist
+          # No explicit --features: velesdb-python's default already enables
+          # `velesdb-core/default` which includes `persistence`. Passing
+          # `--features persistence` fails because velesdb-python itself does
+          # not declare a `persistence` feature.
+          maturin build --release --out dist
           pip install dist/*.whl --force-reinstall
 
       - name: Install velesdb-common (local shared package)
