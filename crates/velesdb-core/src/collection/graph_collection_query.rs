@@ -24,7 +24,7 @@ impl GraphCollection {
 
     /// Executes a query with instrumentation and returns plan + actual stats.
     ///
-    /// Delegates to [`Database::explain_analyze_query`].
+    /// Delegates to [`crate::Database::explain_analyze_query`].
     ///
     /// # Errors
     ///

@@ -11,12 +11,12 @@
 //! entry points depending on query shape:
 //!
 //! - Queries carrying `ORDER BY similarity()` go through
-//!   [`QueryPlanner::choose_hybrid_strategy`], which forces `VectorFirst`
-//!   to preserve HNSW's natural similarity ordering and applies a
-//!   selectivity-aware over-fetch factor.
+//!   [`crate::velesql::QueryPlanner::choose_hybrid_strategy`], which forces
+//!   `VectorFirst` to preserve HNSW's natural similarity ordering and applies
+//!   a selectivity-aware over-fetch factor.
 //! - All other SELECT queries go through
-//!   [`QueryPlanner::choose_strategy_with_cbo_and_overfetch`], which
-//!   derives I/O / CPU weights from calibrated `OperationCostFactors`
+//!   [`crate::velesql::QueryPlanner::choose_strategy_with_cbo_and_overfetch`],
+//!   which derives I/O / CPU weights from calibrated `OperationCostFactors`
 //!   (or defaults when the collection was never analyzed).
 //!
 //! Both entry points share the same return shape

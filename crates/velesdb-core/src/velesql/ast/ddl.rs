@@ -16,9 +16,9 @@ pub enum DdlStatement {
     CreateIndex(CreateIndexStatement),
     /// DROP INDEX ON collection (field) -- remove secondary metadata index.
     DropIndex(DropIndexStatement),
-    /// ANALYZE [COLLECTION] name -- compute CBO statistics.
+    /// `ANALYZE [COLLECTION] name` — compute CBO statistics.
     Analyze(AnalyzeStatement),
-    /// TRUNCATE [COLLECTION] name -- delete all rows.
+    /// `TRUNCATE [COLLECTION] name` — delete all rows.
     Truncate(TruncateStatement),
     /// ALTER COLLECTION name SET (options) -- modify collection settings.
     AlterCollection(AlterCollectionStatement),

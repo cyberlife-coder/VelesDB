@@ -88,7 +88,7 @@ impl StorageMode {
     /// Returns the canonical lowercase name for this storage mode.
     ///
     /// This is the single source of truth for string representations,
-    /// used by [`Display`], [`FromStr`], and downstream crates.
+    /// used by [`std::fmt::Display`], [`std::str::FromStr`], and downstream crates.
     #[must_use]
     pub const fn canonical_name(self) -> &'static str {
         match self {

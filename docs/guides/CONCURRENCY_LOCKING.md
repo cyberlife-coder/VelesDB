@@ -342,7 +342,7 @@ let results = db.search("docs", &query, 10)?;
 // Lock released, process results freely
 
 // BAD: Holding a collection guard across async boundaries
-let coll = db.get_collection("docs")?;
+let coll = db.get_vector_collection("docs").expect("collection exists");
 tokio::time::sleep(Duration::from_secs(1)).await; // Lock held!
 let results = coll.search(&query, 10)?;
 ```

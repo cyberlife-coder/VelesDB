@@ -8,8 +8,8 @@
 //! Window evaluation happens **after** DISTINCT and **before** ORDER BY/LIMIT.
 //! This is an intentional deviation from SQL standard (which runs windows
 //! before DISTINCT) tailored to the vector-search use case; see the design
-//! note on [`crate::collection::search::query::select_dispatch::QueryExecutor::apply_select_postprocessing`]
-//! for the full rationale.
+//! note on `Collection::apply_select_postprocessing` (private, in
+//! `collection::search::query::select_dispatch`) for the full rationale.
 //!
 //! ## Design: Global snapshot-first evaluation
 //!

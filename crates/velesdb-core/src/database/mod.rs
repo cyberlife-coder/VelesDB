@@ -168,8 +168,8 @@ impl Database {
         Self::open_impl(path, Some(observer), None)
     }
 
-    /// Opens a database with both an explicit [`VelesConfig`] and a
-    /// [`DatabaseObserver`]. Used by the premium shell that layers
+    /// Opens a database with both an explicit [`crate::VelesConfig`] and a
+    /// [`crate::DatabaseObserver`]. Used by the premium shell that layers
     /// RBAC/audit on top of a tenant-specific config file.
     ///
     /// # Errors

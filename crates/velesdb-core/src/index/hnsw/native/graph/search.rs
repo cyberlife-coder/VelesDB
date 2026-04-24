@@ -30,9 +30,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Returned distances are **raw engine distances** from `D::distance()`.
     /// When `D = CachedSimdDistance`, Euclidean values are squared L2 (no
     /// sqrt). Callers that expose results to users must apply
-    /// [`transform_score()`] to convert to the user-visible metric.
-    ///
-    /// [`transform_score()`]: super::backend_adapter::NativeHnsw::transform_score
+    /// `NativeHnsw::transform_score` (private) to convert to the
+    /// user-visible metric.
     #[inline]
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(NodeId, f32)> {
@@ -97,8 +96,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Multi-entry point search for improved recall on hard queries.
     ///
     /// Normalizes the query for cosine metric before searching. If the query
-    /// is already prepared (e.g., from [`search`]), use
-    /// [`search_multi_entry_prepared`] to avoid double normalization.
+    /// is already prepared (e.g., from [`Self::search`]), use the private
+    /// `search_multi_entry_prepared` companion to avoid double normalization.
     #[must_use]
     pub fn search_multi_entry(
         &self,
@@ -116,7 +115,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Multi-entry point search on an already-prepared query vector.
     ///
     /// Skips the `prepare_query` step — the caller is responsible for
-    /// normalization (cosine). Called internally by [`search`] which
+    /// normalization (cosine). Called internally by [`Self::search`] which
     /// prepares the query once at the top level.
     #[must_use]
     fn search_multi_entry_prepared(

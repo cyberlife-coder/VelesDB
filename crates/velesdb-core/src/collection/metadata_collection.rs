@@ -139,7 +139,8 @@ impl MetadataCollection {
 
     /// Returns the next batch of points for scroll iteration.
     ///
-    /// Delegates to [`Collection::scroll_batch`].
+    /// Delegates to the inner collection's `scroll_batch` (parallel
+    /// implementation to [`VectorCollection::scroll_batch`](crate::VectorCollection::scroll_batch)).
     ///
     /// # Errors
     ///

@@ -32,7 +32,8 @@ use locking::{record_lock_acquire, record_lock_release, LockRank};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-/// Sentinel value for [`NativeHnsw::entry_point`]: indicates no entry point exists.
+/// Sentinel value for `NativeHnsw::entry_point` (private field): indicates no
+/// entry point exists.
 ///
 /// Using `usize::MAX` instead of `Option<NodeId>` behind an `RwLock` allows
 /// lock-free reads on the search hot path (`Ordering::Acquire` load) while
@@ -325,10 +326,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Computes the raw distance between two vectors using this index's distance engine.
     ///
     /// **Note:** For `CachedSimdDistance` with Euclidean metric, this returns
-    /// **squared L2** (no sqrt). Pass the result through [`transform_score`]
-    /// to obtain actual Euclidean distance.
-    ///
-    /// [`transform_score`]: super::backend_adapter::NativeHnsw::transform_score
+    /// **squared L2** (no sqrt). Pass the result through
+    /// `NativeHnsw::transform_score` (private) to obtain actual Euclidean
+    /// distance.
     #[inline]
     #[must_use]
     pub fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {

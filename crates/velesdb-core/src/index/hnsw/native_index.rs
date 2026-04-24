@@ -152,9 +152,10 @@ impl NativeHnswIndex {
 
     /// Searches with a specific quality profile.
     ///
-    /// Uses [`NativeHnswInner::search_auto`] so that when the `gpu` feature is
-    /// enabled and the index is large enough (> 500K vectors, Standard backend),
-    /// layer-0 traversal is offloaded to the GPU. Falls back to CPU otherwise.
+    /// Uses `NativeHnswInner::search_auto` (private) so that when the `gpu`
+    /// feature is enabled and the index is large enough (> 500K vectors,
+    /// Standard backend), layer-0 traversal is offloaded to the GPU. Falls
+    /// back to CPU otherwise.
     #[must_use]
     pub fn search_with_quality(
         &self,
@@ -286,8 +287,8 @@ impl NativeHnswIndex {
     /// Removes the ID from mappings and cleans up stored vector data.
     /// The HNSW graph node becomes a tombstone, filtered out during search.
     ///
-    /// Delegates to [`upsert::soft_delete`], shared with `HnswIndex::remove`
-    /// (#448 Group F).
+    /// Delegates to `upsert::soft_delete` (private), shared with
+    /// `HnswIndex::remove` (#448 Group F).
     pub fn remove(&self, id: u64) -> bool {
         upsert::soft_delete(
             &self.mappings,

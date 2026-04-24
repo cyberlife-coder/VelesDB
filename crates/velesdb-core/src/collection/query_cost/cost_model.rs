@@ -7,9 +7,10 @@
 //!
 //! `OperationCostFactors` holds the per-operation weights used by the CBO.
 //! Since Issue #467, these factors are **calibrated dynamically** from
-//! [`CollectionStats`] during `analyze()` via [`calibrate_cost_factors()`],
-//! replacing the former hard-coded constants. The calibration pipeline
-//! adjusts each factor based on observed collection characteristics:
+//! [`CollectionStats`] during `analyze()` via `calibrate_cost_factors()`
+//! (private to the crate), replacing the former hard-coded constants. The
+//! calibration pipeline adjusts each factor based on observed collection
+//! characteristics:
 //!
 //! - **`seq_page_cost`** — scaled by the page ratio (`total_size_bytes / 8 KB`)
 //! - **`cpu_tuple_cost`** — scaled by average row size (`avg_row_size_bytes / 256`)
@@ -17,9 +18,10 @@
 //! - **`random_page_cost`** — scaled by histogram skew (bucket imbalance)
 //! - **stale penalty** — all factors inflated by 1.2× when any histogram is stale
 //!
-//! All calibrated values are clamped within [`CostFactorBounds`] to prevent
-//! degenerate estimates. Hardware profiles (`ssd_optimized`, `in_memory`,
-//! `hdd_optimized`) serve as the base before calibration adjustments.
+//! All calibrated values are clamped within `CostFactorBounds` (private) to
+//! prevent degenerate estimates. Hardware profiles (`ssd_optimized`,
+//! `in_memory`, `hdd_optimized`) serve as the base before calibration
+//! adjustments.
 
 // Reason: Numeric casts in cost model are intentional:
 // - All casts are for cost estimation/statistics (not user data)

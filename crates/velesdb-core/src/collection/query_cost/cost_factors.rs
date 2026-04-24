@@ -2,9 +2,9 @@
 //!
 //! Defines [`OperationCostFactors`] — the per-operation weights used by the
 //! CBO — along with hardware-profile constructors (`ssd_optimized`,
-//! `in_memory`, `hdd_optimized`), safety bounds ([`CostFactorBounds`]), and
-//! the [`clamp_with_log`] utility. Extracted from `cost_model.rs` to keep
-//! each file under the 500-NLOC limit.
+//! `in_memory`, `hdd_optimized`), safety bounds (`CostFactorBounds`, private),
+//! and the `clamp_with_log` (private) utility. Extracted from `cost_model.rs`
+//! to keep each file under the 500-NLOC limit.
 
 // Reason: Numeric casts in cost model are intentional:
 // - All casts are for cost estimation/statistics (not user data)
@@ -26,7 +26,7 @@ use tracing::debug;
 /// # Bornes de sécurité
 ///
 /// Chaque facteur est borné dans un intervalle pour éviter les estimations
-/// dégénérées (voir [`CostFactorBounds`]).
+/// dégénérées (voir `CostFactorBounds`, privé au crate).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OperationCostFactors {
     /// Coût par accès séquentiel de page (8 KB). Borné dans \[0.01, 10.0\].
@@ -166,7 +166,7 @@ impl OperationCostFactors {
     /// Applies safety bounds to all cost factors.
     ///
     /// Each factor is clamped into its allowed interval defined by
-    /// [`CostFactorBounds`]. Emits a `debug!` log for every clamped field.
+    /// `CostFactorBounds` (private). Emits a `debug!` log for every clamped field.
     #[must_use]
     pub fn clamped(self) -> Self {
         Self {

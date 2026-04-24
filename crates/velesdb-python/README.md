@@ -37,9 +37,11 @@ import velesdb
 # Open or create a database
 db = velesdb.Database("./my_vectors")
 
-# Create a collection for 768-dimensional vectors (e.g., BERT embeddings)
-# Note: create_collection() uses the legacy Collection API. For new projects,
-# prefer create_vector_collection() which returns a typed VectorCollection.
+# Create a collection for 768-dimensional vectors (e.g., BERT embeddings).
+# v1.13: `create_collection` is the recommended Python entry point. It accepts
+# typed dataclasses (`hnsw=HnswOptions(...)`, `auto_reindex=AutoReindexOptions(...)`,
+# `limits=LimitsOptions(...)`) for tuning. The Rust core also exposes
+# `create_vector_collection` for callers who want the explicit typed API.
 collection = db.create_collection(
     name="documents",
     dimension=768,

@@ -281,7 +281,7 @@ impl<'a> CostEstimator<'a> {
     /// finding 4.
     ///
     /// Uses the same `(ef + k) * log2(total)` probe formula as
-    /// [`Self::estimate_vector_search_node_cost`], so callers that have
+    /// `Self::estimate_vector_search_node_cost` (private), so callers that have
     /// `ef_search` / `candidates` available (e.g. pre/post-filter strategy
     /// comparison in `plan_builder`) get a cost that reflects the real query
     /// instead of a fixed `k = 10`.

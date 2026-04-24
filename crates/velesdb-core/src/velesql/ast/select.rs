@@ -340,8 +340,10 @@ pub struct SimilarityOrderBy {
 impl SelectStatement {
     /// Returns an empty `SelectStatement` with all fields at their defaults.
     ///
-    /// Used by [`Query::new_dml`], [`Query::new_train`], and [`Query::new_match`]
-    /// to avoid repeating the 14-field struct literal.
+    /// Used by [`crate::velesql::Query::new_dml`],
+    /// [`crate::velesql::Query::new_train`], and
+    /// [`crate::velesql::Query::new_match`] to avoid repeating the 14-field
+    /// struct literal.
     #[must_use]
     pub fn empty() -> Self {
         Self {

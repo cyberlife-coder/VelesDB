@@ -57,12 +57,11 @@ The legacy `Collection` god-object is being replaced by three focused types. Her
 #### Rust migration
 
 ```rust
-// Before (legacy)
-#[allow(deprecated)]
-let coll = db.get_collection("docs").unwrap();
-coll.search(&query, 10)?;
+// Before (v1.12 and earlier — `Database::get_collection()` was removed in v1.13)
+// let coll = db.get_collection("docs").unwrap();
+// coll.search(&query, 10)?;
 
-// After (typed)
+// After (typed — v1.13+)
 let coll = db.get_vector_collection("docs").unwrap();
 coll.search(&query, 10)?;
 ```
@@ -125,15 +124,22 @@ db.train_pq("docs", m=16, k=128, opq=True)  # OPQ variant
 ### How can I tune HNSW parameters?
 
 ```python
+from velesdb import HnswOptions
+
 # Higher m = more connections = better recall, more memory
 # Higher ef_construction = better index quality, slower build
-coll = db.create_collection("docs", dimension=768, m=48, ef_construction=600)
+# v1.13: typed HnswOptions replaces the old flat kwargs (`m=`, `ef_construction=`).
+coll = db.create_collection(
+    "docs",
+    dimension=768,
+    hnsw=HnswOptions(m=48, ef_construction=600),
+)
 
 # At query time, increase ef_search for better recall
 results = coll.search_with_ef(vector=query, top_k=10, ef_search=256)
 ```
 
-Default values are auto-tuned by dimension: `m=24, ef_construction=300` for dim <= 256, and `m=32, ef_construction=400` for dim >= 257. These work well for most workloads up to 100K vectors. Use `HnswParams::for_dataset_size()` for larger datasets.
+These defaults apply when you omit `hnsw=HnswOptions(...)` on `create_collection`: `m=24, ef_construction=300` for dim <= 256, and `m=32, ef_construction=400` for dim >= 257. They work well for most workloads up to 100K vectors. Use `HnswParams::for_dataset_size()` for larger datasets.
 
 ### How do I use batch and streaming ingestion?
 

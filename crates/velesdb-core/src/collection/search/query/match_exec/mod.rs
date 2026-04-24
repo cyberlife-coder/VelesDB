@@ -99,9 +99,9 @@ pub enum ProjectionItem<'a> {
 ///
 /// Handles four patterns:
 /// - `"*"` → [`ProjectionItem::Wildcard`]
-/// - `"similarity()"` → [`ProjectionItem::FunctionCall("similarity")`]
-/// - `"n.name"` → [`ProjectionItem::PropertyPath { alias: "n", property: "name" }`]
-/// - `"n"` → [`ProjectionItem::BareAlias("n")`]
+/// - `"similarity()"` → `ProjectionItem::FunctionCall("similarity")`
+/// - `"n.name"` → `ProjectionItem::PropertyPath { alias: "n", property: "name" }`
+/// - `"n"` → `ProjectionItem::BareAlias("n")`
 #[must_use]
 pub fn parse_projection_item(expression: &str) -> ProjectionItem<'_> {
     if expression == "*" {
