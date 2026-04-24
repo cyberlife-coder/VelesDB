@@ -195,12 +195,36 @@ impl AnyCollection {
     }
 
     /// Returns `true` if this collection is the [`Graph`](Self::Graph) variant.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use velesdb_core::{Database, GraphSchema};
+    ///
+    /// let db = Database::open("./data")?;
+    /// db.create_graph_collection("edges", GraphSchema::schemaless())?;
+    /// let any = db.get_any_collection("edges").expect("exists");
+    /// assert!(any.is_graph());
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     #[must_use]
     pub fn is_graph(&self) -> bool {
         matches!(self, Self::Graph(_))
     }
 
     /// Returns `true` if this collection is the [`Metadata`](Self::Metadata) variant.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use velesdb_core::Database;
+    ///
+    /// let db = Database::open("./data")?;
+    /// db.create_metadata_collection("catalog")?;
+    /// let any = db.get_any_collection("catalog").expect("exists");
+    /// assert!(any.is_metadata());
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     #[must_use]
     pub fn is_metadata(&self) -> bool {
         matches!(self, Self::Metadata(_))
@@ -246,6 +270,20 @@ impl AnyCollection {
 
     /// Returns a shared reference to the inner [`GraphCollection`] if this is
     /// the [`Graph`](Self::Graph) variant, or `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use velesdb_core::{Database, GraphSchema};
+    ///
+    /// let db = Database::open("./data")?;
+    /// db.create_graph_collection("edges", GraphSchema::schemaless())?;
+    /// let any = db.get_any_collection("edges").expect("exists");
+    /// if let Some(g) = any.as_graph() {
+    ///     let _ = g.edge_count();
+    /// }
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     #[must_use]
     pub fn as_graph(&self) -> Option<&GraphCollection> {
         match self {
@@ -266,6 +304,20 @@ impl AnyCollection {
 
     /// Returns a shared reference to the inner [`MetadataCollection`] if this
     /// is the [`Metadata`](Self::Metadata) variant, or `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use velesdb_core::Database;
+    ///
+    /// let db = Database::open("./data")?;
+    /// db.create_metadata_collection("catalog")?;
+    /// let any = db.get_any_collection("catalog").expect("exists");
+    /// if let Some(m) = any.as_metadata() {
+    ///     let _ = m.is_empty();
+    /// }
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     #[must_use]
     pub fn as_metadata(&self) -> Option<&MetadataCollection> {
         match self {
@@ -330,10 +382,28 @@ impl AnyCollection {
     /// Consumes `self` and returns the inner [`GraphCollection`] if this is
     /// the [`Graph`](Self::Graph) variant.
     ///
+    /// On the wrong variant, returns `Err(self)` so callers can recover
+    /// ownership.
+    ///
     /// # Errors
     ///
     /// Returns the original `AnyCollection` unchanged when the variant is
     /// [`Vector`](Self::Vector) or [`Metadata`](Self::Metadata).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use velesdb_core::{Database, GraphSchema};
+    ///
+    /// let db = Database::open("./data")?;
+    /// db.create_graph_collection("edges", GraphSchema::schemaless())?;
+    /// let any = db.get_any_collection("edges").expect("exists");
+    /// match any.into_graph() {
+    ///     Ok(graph) => { let _ = graph.edge_count(); }
+    ///     Err(_wrong_variant) => unreachable!("edges is a graph collection"),
+    /// }
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     #[allow(clippy::result_large_err)]
     pub fn into_graph(self) -> core::result::Result<GraphCollection, Self> {
         match self {
@@ -345,10 +415,28 @@ impl AnyCollection {
     /// Consumes `self` and returns the inner [`MetadataCollection`] if this
     /// is the [`Metadata`](Self::Metadata) variant.
     ///
+    /// On the wrong variant, returns `Err(self)` so callers can recover
+    /// ownership.
+    ///
     /// # Errors
     ///
     /// Returns the original `AnyCollection` unchanged when the variant is
     /// [`Vector`](Self::Vector) or [`Graph`](Self::Graph).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use velesdb_core::Database;
+    ///
+    /// let db = Database::open("./data")?;
+    /// db.create_metadata_collection("catalog")?;
+    /// let any = db.get_any_collection("catalog").expect("exists");
+    /// match any.into_metadata() {
+    ///     Ok(meta) => assert!(meta.is_empty()),
+    ///     Err(_wrong_variant) => unreachable!("catalog is a metadata collection"),
+    /// }
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     #[allow(clippy::result_large_err)]
     pub fn into_metadata(self) -> core::result::Result<MetadataCollection, Self> {
         match self {
