@@ -35,7 +35,7 @@ version incompatibility, or internal bugs:
 - **Variant**: `CollectionExists(String)`
 - **Message**: `Collection '{name}' already exists`
 - **Cause**: Attempting to create a collection with a name that already exists in the database.
-- **Resolution**: Use a different name, or open the existing collection with `db.get_collection()` / `db.get_vector_collection()`.
+- **Resolution**: Use a different name, or open the existing collection. Python: `db.get_collection(name)` (compat shim returning a unified facade). Rust: pick the typed accessor that matches the kind — `db.get_vector_collection(name)`, `db.get_graph_collection(name)`, or `db.get_metadata_collection(name)` (use `db.get_any_collection(name)` when the kind is unknown).
 - **Recoverable**: Yes
 
 ### VELES-002: CollectionNotFound
