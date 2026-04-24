@@ -5,7 +5,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Window function type (Phase 1: ranking functions).
+///
+/// Marked `#[non_exhaustive]` so future phases (`LAG`, `LEAD`,
+/// `FIRST_VALUE`, `NTILE`, aggregate windows, …) can be added
+/// without a semver break. Downstream crates must include a
+/// wildcard (`_ =>`) arm when matching on this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum WindowFunctionType {
     /// `ROW_NUMBER()` — sequential numbering 1..N within each partition.
     RowNumber,

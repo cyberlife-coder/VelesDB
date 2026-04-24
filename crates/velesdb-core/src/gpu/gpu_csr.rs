@@ -378,12 +378,16 @@ impl CsrCache {
         new_csr
     }
 
-    /// Returns a clone of the cached CSR if available and fresh.
+    /// Returns a clone of the cached CSR if it is available and fresh.
     ///
-    /// Returns `None` if the cache is stale or not yet built.
-    /// Used by non-critical paths that don't want to pay the rebuild cost.
+    /// Returns `None` if the cache is stale or has not been built yet. Used
+    /// by non-critical paths that do not want to pay the rebuild cost.
+    ///
+    /// Aligns with the existing `Snapshot` terminology used throughout
+    /// `velesdb-core` (`Bm25Snapshot`, `HnswSnapshot`, `to_snapshot`,
+    /// `from_snapshot`).
     #[must_use]
-    pub fn get_if_clean(&self) -> Option<CsrGraph> {
+    pub fn clean_snapshot(&self) -> Option<CsrGraph> {
         if self.is_stale() {
             return None;
         }
@@ -530,15 +534,15 @@ mod tests {
     }
 
     #[test]
-    fn test_get_if_clean_returns_none_when_dirty() {
+    fn test_clean_snapshot_returns_none_when_dirty() {
         let cache = CsrCache::new();
-        assert!(cache.get_if_clean().is_none()); // Starts dirty
+        assert!(cache.clean_snapshot().is_none()); // Starts dirty
 
         let layer = Layer::new(1);
         with_layers_rank(|| cache.get_or_rebuild(&layer, 1)); // Build it
-        assert!(cache.get_if_clean().is_some()); // Now clean
+        assert!(cache.clean_snapshot().is_some()); // Now clean
 
         cache.invalidate();
-        assert!(cache.get_if_clean().is_none()); // Dirty again
+        assert!(cache.clean_snapshot().is_none()); // Dirty again
     }
 }

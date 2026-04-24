@@ -12,7 +12,7 @@ mitigation currently in place, and the post-seed remediation plan.
 
 ---
 
-## F2.2 — `AnyCollection::as_vector_collection_unchecked` (god-object cross-cast)
+## F2.2 — `AnyCollection` variant-access API & unchecked cross-cast
 
 **Audit finding**: F2.2 of the pre-seed audit (`AUDIT_VELESDB_CORE.md`).
 
@@ -36,25 +36,31 @@ classes and require a discriminator enum in the public API. The
 unchecked cast was introduced as a short-term convenience so those
 bindings could share a single type.
 
-**Sprint 1 mitigation** (shipped):
+**v1.13.0 resolution** (shipped):
 
-1. The method has been renamed from `into_vector_collection` to
-   `as_vector_collection_unchecked` to make the unchecked contract
-   explicit at the call site.
-2. The rustdoc of the new method carries a `# Safety` section that
-   documents the caller's obligation to either branch on
-   [`AnyCollection::is_vector`] first, or restrict themselves to the
-   methods that all three collection kinds share (`config`, `flush`,
-   `diagnostics`, `name`, `point_count`).
-3. The old `into_vector_collection` name is retained as a
-   `#[deprecated]` alias that delegates to the new method so external
-   consumers do not break at compile time.
-4. The four internal call sites (velesdb-mobile, velesdb-python,
-   tauri-plugin-velesdb, any_collection.rs itself) have been migrated
-   to the new name and each carries an explanatory comment referring
-   to this section.
-5. A new accessor `AnyCollection::is_vector()` is provided so callers
-   can branch defensively before the unchecked cast.
+The API was redesigned to match the std `Result` / `Option` / `Any`
+idiom for enum-variant access:
+
+1. **Safe borrows** — `as_vector(&self) -> Option<&VectorCollection>`,
+   `as_vector_mut(&mut self)`, plus `as_graph*` and `as_metadata*`
+   counterparts. Zero-cost: match + reference, no allocation.
+2. **Safe consuming** — `into_vector(self) -> Result<VectorCollection, Self>`,
+   plus `into_graph` and `into_metadata`. Wrong variant returns
+   `Err(self)` so the caller recovers ownership.
+3. **Variant discriminants** — `is_vector`, `is_graph`, `is_metadata`
+   round out the matrix.
+4. **Unchecked escape hatch** — the previous
+   `as_vector_collection_unchecked` (and its deprecated alias
+   `into_vector_collection`) was replaced by
+   `unsafe fn into_vector_unchecked(self) -> VectorCollection`. The
+   `unsafe` marker makes the logical-soundness contract explicit at
+   every call site, even though violating it does not cause
+   undefined behaviour. Only the Python SDK binding retains this
+   escape hatch (twice), each with a mandatory `// SAFETY:` comment
+   documenting why the shared-surface-only contract holds.
+5. The velesdb-mobile and tauri-plugin-velesdb bindings migrated to
+   the safe `into_vector()` API — the Rust error path already
+   existed in both bindings, so the variant check became free.
 
 **Post-seed resolution** (tracked as the F2.2 EPIC):
 
@@ -71,8 +77,8 @@ The SDK bindings would then expose a sum type (enum) or union
 interface that forces callers to discriminate the kind before
 invoking any operation. This is estimated at 2-4 weeks of core
 refactoring and is deliberately out of scope for the pre-seed
-remediation cycle. The `as_vector_collection_unchecked` method will
-be removed in full as part of the EPIC.
+remediation cycle. The `into_vector_unchecked` method will be
+removed in full as part of the EPIC.
 
 **When to revisit**: post-seed, within the first 4 weeks of the
 architecture cleanup milestone.

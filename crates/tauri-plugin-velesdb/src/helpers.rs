@@ -148,12 +148,9 @@ pub fn require_collection(
     let any_coll = db
         .get_any_collection(name)
         .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?;
-    if !any_coll.is_vector() {
-        return Err(Error::InvalidConfig(format!(
-            "Collection '{name}' is not a vector collection"
-        )));
-    }
-    Ok(any_coll.as_vector_collection_unchecked())
+    any_coll.into_vector().map_err(|_other_variant| {
+        Error::InvalidConfig(format!("Collection '{name}' is not a vector collection"))
+    })
 }
 
 /// Looks up a `VectorCollection` by name, returning a typed error on miss.
