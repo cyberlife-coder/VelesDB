@@ -201,7 +201,7 @@ VelesQL is a SQL-like query language with vector and graph extensions. It suppor
 | `INSERT` / `UPDATE` | Parsed (no runtime execution) | Yes |
 | `DELETE` | Planned | Yes |
 | `CREATE TABLE` / DDL | No | Yes |
-| Window functions | No | Yes |
+| Window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK` with `OVER`, `PARTITION BY`, `ORDER BY`) | Yes (v1.13.0) | Yes |
 | Stored procedures | No | Yes |
 
 ### Where is the full VelesQL specification?

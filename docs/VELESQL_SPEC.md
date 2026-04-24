@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.9.0 | **Last Updated**: 2026-04-07
+**Version**: 3.9.0 | **Last Updated**: 2026-04-23 (VelesDB v1.13.0)
 
 ---
 
@@ -72,6 +72,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | GROUP BY MAX(score) / AVG(score) | Stable | 3.7 |
 | FIRST(column) projection | Stable | 3.7 |
 | CONTAINS_TEXT strict text filter | Stable | 3.8 |
+| Window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK`) with `OVER`, `PARTITION BY`, `ORDER BY` | Stable | 3.9 (VelesDB v1.13.0) |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -107,7 +108,7 @@ The SELECT statement is the primary way to query data from collections.
 
 ```sql
 [LET <name> = <expr> ...]
-SELECT [DISTINCT] <columns>
+SELECT [DISTINCT] <columns> [, <window_fn>() OVER (...) [AS <alias>] ...]
 FROM <collection> [AS <alias>]
 [JOIN <collection2> [AS <alias>] ON <condition> | USING (<column>)]
 [WHERE <conditions>]
@@ -1017,6 +1018,109 @@ ORDER BY AVG(price) DESC
 
 ---
 
+## Window Functions (v1.13.0+)
+
+Window functions compute a value for each row based on a "window" of related rows,
+without collapsing the result set the way `GROUP BY` does. VelesDB supports
+three ranking functions over a `PARTITION BY` / `ORDER BY` window.
+
+### Syntax
+
+```sql
+<function>() OVER ([PARTITION BY <expr> [, <expr> ...]] [ORDER BY <expr> [ASC|DESC] [, <expr> ...]])
+```
+
+Place the window call in the SELECT list, optionally with an alias.
+
+### Supported Functions
+
+| Function | Description |
+|----------|-------------|
+| `ROW_NUMBER()` | Sequential position within the window (1, 2, 3, ...). Ties are broken by input order. |
+| `RANK()` | Rank with gaps after ties. Tied rows share a rank; the next distinct row skips ahead (e.g. 1, 2, 2, 4). |
+| `DENSE_RANK()` | Rank without gaps (e.g. 1, 2, 2, 3). |
+
+All three functions take no arguments; the `OVER (...)` clause is mandatory.
+
+### Semantics
+
+- **`PARTITION BY`** (optional) groups rows into independent windows. Each
+  partition restarts the row counter / rank at 1.
+- **`ORDER BY`** (optional inside `OVER`) defines the ordering within each
+  partition. Without an `ORDER BY`, ranks are assigned in the order rows
+  arrive at the evaluator — deterministic for a given input but not
+  meaningful.
+- **Stability**: when two rows tie on the `ORDER BY` key, relative input
+  order is preserved (stable ordering).
+
+### Evaluation Order
+
+Window functions are evaluated **after** `WHERE`, `GROUP BY`, `HAVING`, and
+`DISTINCT`, and **before** the outer `ORDER BY` / `LIMIT` / `OFFSET`.
+Each window call pre-captures its inputs and emits one output value per
+input row; the outer `ORDER BY` then sees those values as ordinary
+projected columns.
+
+Grammar: `grammar.pest:window_item`, `grammar.pest:over_clause`.
+Evaluator: `crates/velesdb-core/src/velesql/window_evaluator.rs`.
+
+### Examples
+
+```sql
+-- Rank products by price within each category
+SELECT
+  category,
+  name,
+  price,
+  ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC) AS rank
+FROM products
+```
+
+Expected output (shape, not literal rows):
+
+```
+category   name             price   rank
+tech       laptop-pro       1999    1
+tech       laptop-mid       999     2
+tech       laptop-entry     499     3
+books      encyclopedia     120     1
+books      paperback        12      2
+```
+
+```sql
+-- DENSE_RANK on similarity scores inside each department
+SELECT
+  payload.department AS dept,
+  payload.title,
+  similarity() AS score,
+  DENSE_RANK() OVER (PARTITION BY payload.department ORDER BY similarity() DESC) AS r
+FROM docs
+WHERE vector NEAR $query
+LIMIT 100
+```
+
+```sql
+-- Global row numbering, no partition
+SELECT
+  id,
+  payload.title,
+  ROW_NUMBER() OVER (ORDER BY payload.created_at DESC) AS seq
+FROM posts
+LIMIT 50
+```
+
+### Limitations
+
+- Framing clauses (`ROWS BETWEEN ... AND ...`, `RANGE`, `GROUPS`) are **not**
+  supported. All three functions operate on the full partition.
+- Aggregate windows (`SUM() OVER`, `AVG() OVER`, `LAG`, `LEAD`, `NTILE`,
+  `PERCENT_RANK`, `CUME_DIST`, `FIRST_VALUE`, `LAST_VALUE`) are **not** yet
+  supported.
+- A single query may contain multiple window calls, each with its own
+  `OVER (...)` clause.
+
+---
+
 ## ORDER BY Clause (v2.0+)
 
 Sort results by one or more expressions, each with an optional direction.
@@ -1056,6 +1160,17 @@ WHERE vector NEAR $v
 ORDER BY similarity() DESC, created_at DESC
 LIMIT 20
 ```
+
+> **CBO routing (v1.13.0+):** When `ORDER BY` contains `similarity(<col>, $q)`
+> (two-argument form) against a vector column with an HNSW index, the
+> cost-based optimiser (CBO) automatically routes the query through the
+> native HNSW path — even if the query does not contain an explicit `NEAR`
+> clause. The planner rewrites the sort into a top-k vector search and
+> short-circuits when a `LIMIT` is present. The legacy full-scan-then-sort
+> path remains available and is chosen by the CBO when the top-k target is
+> large relative to the collection size or when no HNSW index exists for
+> the column. See `crates/velesdb-core/src/velesql/planner/similarity_route.rs`
+> and `docs/guides/TUNING_GUIDE.md` for the routing heuristics.
 
 ### Order by Aggregate
 
@@ -1598,6 +1713,24 @@ EXPLAIN SELECT * FROM docs LIMIT 10
 -- Explain a complex query
 EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 ```
+
+#### Phase 2A enhancements (v1.13.0)
+
+`EXPLAIN` output is now **stat-aware**: Filter nodes report a cardinality
+estimate derived from column histograms (`ANALYZE` output) rather than a
+hard-coded fallback, and join / sort cost factors are calibrated against
+`CollectionStats::calibrated_cost_factors`. As a result, the `estimated_cost`
+field returned in the plan tracks real execution time closely enough for
+the CBO to decide between HNSW routing, bitmap pre-filter, and full scan
+on the same query shape. Plan-cost consistency fixes (`#607` / `#608` /
+`#609`) ensure a single query produces the same plan whether invoked via
+the REST `/query/explain` endpoint, the CLI `.explain` command, or
+`EXPLAIN ANALYZE`.
+
+When `ORDER BY similarity(<col>, $q)` is present without `NEAR`, the plan
+tree now explicitly surfaces the similarity-as-predicate routing decision
+(see **Order by Similarity** above) — the `VectorSearch` node appears even
+though the SQL text has no `NEAR`.
 
 Returns a single row with:
 
