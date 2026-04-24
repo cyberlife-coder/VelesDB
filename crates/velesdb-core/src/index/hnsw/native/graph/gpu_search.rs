@@ -68,7 +68,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // owns its own cache, preventing cross-collection contamination.
         //
         // **Validity signal** — relies solely on the CsrCache dirty flag
-        // (`get_if_clean`), which is aligned with `gpu_snapshot_version`:
+        // (`clean_snapshot`), which is aligned with `gpu_snapshot_version`:
         // every mutation that bumps `gpu_snapshot_version` also invalidates
         // the CSR cache through `NativeHnsw::invalidate_gpu_caches`, so
         // "cache clean" ⇔ "snapshot version unchanged" ⇔ "topology
@@ -88,7 +88,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             if layers.is_empty() {
                 return None;
             }
-            if let Some(existing) = self.gpu_csr_cache.get_if_clean() {
+            if let Some(existing) = self.gpu_csr_cache.clean_snapshot() {
                 return Some(existing);
             }
             Some(self.gpu_csr_cache.get_or_rebuild(&layers[0], count))
