@@ -121,6 +121,38 @@ output must update.
   by
   `collection::search::query::distinct_tests::tests::test_distinct_mixed_with_qualified_wildcard_dedupes_by_full_payload`.
 
+### Changed — API hardening (v1.13.0 pre-release)
+
+Five HIGH findings from a triple Rust-expert review landed as zero-tech-debt
+fixes during the develop→main rebase window. Public API only; no runtime
+behaviour change.
+
+- **`AnyCollection` variant access redesign.** The previous
+  `as_vector_collection_unchecked(self) -> VectorCollection` (plus its
+  deprecated alias `into_vector_collection`) is replaced by a full std-style
+  matrix: `as_vector / as_vector_mut / into_vector(…) -> Result<…, Self>`
+  (plus `as_graph*`, `as_metadata*`, `into_graph`, `into_metadata`). The
+  unchecked cross-cast survives only as `unsafe fn into_vector_unchecked`
+  so the logical-soundness contract is explicit at every call site. The
+  velesdb-mobile and tauri-plugin-velesdb bindings migrated to the safe
+  `into_vector()` API; the Python SDK keeps `into_vector_unchecked` under
+  a documented `// SAFETY:` block. See
+  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — F2.2.
+
+- **`CsrCache::get_if_clean` renamed to `clean_snapshot`.** Aligns with
+  VelesDB's existing `Snapshot` terminology (`Bm25Snapshot`, `HnswSnapshot`,
+  `to_snapshot`, `from_snapshot`). Option semantics unchanged.
+
+- **`WindowFunctionType` marked `#[non_exhaustive]`.** Future window
+  functions (`LAG`, `LEAD`, `NTILE`, aggregate windows, …) can now be
+  added without a semver break. Downstream crates matching on the enum
+  must include a `_ =>` wildcard arm.
+
+- **`ConcurrentEdgeStore::rebuild_snapshot` locking contract documented.**
+  The `# Note` docstring now explicitly forbids callers from holding an
+  `edge_ids` write lock or any `shards[*]` write lock when invoking this
+  method, and cross-references `docs/CONCURRENCY_MODEL.md`.
+
 ### Added — GPU acceleration
 
 - **GPU HNSW layer-0 traversal** (`#626`, closes `#502`): SONG paper
@@ -199,7 +231,8 @@ stale caches.
 - **CSR cache count-check cleanup** (`#641`, PR-F). Removes the
   redundant `existing.num_nodes == count` secondary check in
   `search_gpu`. Every mutation bumps `gpu_snapshot_version` AND calls
-  `gpu_csr_cache.invalidate()` through the helper, so `get_if_clean`
+  `gpu_csr_cache.invalidate()` through the helper, so `clean_snapshot`
+  (renamed from `get_if_clean` in the v1.13.0 API-hardening pass)
   alone is the authoritative validity signal — "cache clean" ⇔
   "snapshot version unchanged" ⇔ "topology unchanged since last
   build". Removes the code-smell that kept pattern-matching against
