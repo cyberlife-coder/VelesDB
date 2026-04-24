@@ -136,7 +136,7 @@ LIMIT 5
 use velesdb_core::{Database, velesql::Parser};
 
 let db = Database::open("./research_db")?;
-let collection = db.get_collection("research").unwrap();
+let collection = db.get_vector_collection("research").unwrap();
 
 let query = Parser::parse(r#"
     MATCH (d:Document)-[:MENTIONS]->(t:Topic)<-[:IS_EXPERT_IN]-(p:Person)
