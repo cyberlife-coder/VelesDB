@@ -255,7 +255,15 @@ impl Database {
                 // metadata collection returns empty results rather than
                 // raising — the typed split is tracked as a post-seed
                 // EPIC in docs/ARCHITECTURE.md.
-                let vc = any_coll.as_vector_collection_unchecked();
+                //
+                // SAFETY: Python SDK intentionally exposes a single
+                // Collection facade over all variants. Only the shared
+                // surface (config, flush, diagnostics, execute_query_str,
+                // etc.) is guaranteed correct on non-Vector variants; the
+                // Python wrapper and BDD tests cover that contract. See
+                // `AnyCollection::into_vector_unchecked` for full caller
+                // obligations.
+                let vc = unsafe { any_coll.into_vector_unchecked() };
                 Ok(Some(Collection::new(vc, name.to_string())))
             }
             None => Ok(None),
@@ -320,11 +328,15 @@ impl Database {
             .map_err(core_err)?;
 
         // Use get_any_collection to get the registered instance (not a disconnected copy).
-        let collection = self
+        let any = self
             .inner
             .get_any_collection(&name_owned)
-            .map(velesdb_core::AnyCollection::as_vector_collection_unchecked)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
+        // SAFETY: Python SDK intentionally wraps the freshly-created metadata
+        // collection in the single `Collection` facade. Only the shared
+        // surface is exercised on metadata variants. See
+        // `AnyCollection::into_vector_unchecked` for full caller obligations.
+        let collection = unsafe { any.into_vector_unchecked() };
 
         Ok(Collection::new(collection, name_owned))
     }

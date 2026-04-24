@@ -222,19 +222,15 @@ impl VelesDatabase {
     /// (use [`get_graph_collection`](Self::get_graph_collection) for graph collections).
     pub fn get_collection(&self, name: String) -> Result<Option<Arc<VelesCollection>>, VelesError> {
         match self.inner.get_any_collection(&name) {
-            Some(any_coll) => {
-                if !any_coll.is_vector() {
-                    return Err(VelesError::Collection {
-                        message: format!(
-                            "Collection '{}' is not a vector collection. \
-                             Use get_graph_collection() for graph collections.",
-                            name
-                        ),
-                    });
-                }
-                let vc = any_coll.as_vector_collection_unchecked();
-                Ok(Some(Arc::new(VelesCollection { inner: vc })))
-            }
+            Some(any_coll) => match any_coll.into_vector() {
+                Ok(vc) => Ok(Some(Arc::new(VelesCollection { inner: vc }))),
+                Err(_other_variant) => Err(VelesError::Collection {
+                    message: format!(
+                        "Collection '{name}' is not a vector collection. \
+                         Use get_graph_collection() for graph collections."
+                    ),
+                }),
+            },
             None => Ok(None),
         }
     }
