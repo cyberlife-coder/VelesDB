@@ -345,7 +345,10 @@ jobs:
           # `velesdb-core/default` which includes `persistence`. Passing
           # `--features persistence` fails because velesdb-python itself does
           # not declare a `persistence` feature.
-          maturin build --release --out dist
+          # Explicit -i python3.11 matches the setup-python version above.
+          # Without it, maturin cannot locate the interpreter and pyo3-build-config
+          # errors with "abi3-py3* feature must be specified".
+          maturin build --release --out dist -i python3.11
           pip install dist/*.whl --force-reinstall
 
       - name: Install velesdb-common (local shared package)
