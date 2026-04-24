@@ -17,11 +17,11 @@ VelesDB utilise **3 workflows GitHub Actions** :
 ### 1. Bump version (automatisé)
 
 ```powershell
-# Preview changes (dry run)
-.\scripts\bump-version.ps1 -Version "1.11.1" -DryRun
+# Preview changes (dry run) -- replace X.Y.Z with the target version
+.\scripts\bump-version.ps1 -Version "X.Y.Z" -DryRun
 
 # Apply changes to all 9 package files
-.\scripts\bump-version.ps1 -Version "1.11.1"
+.\scripts\bump-version.ps1 -Version "X.Y.Z"
 ```
 
 Le script `bump-version.ps1` met à jour automatiquement :
@@ -42,7 +42,7 @@ Ajouter une section pour la nouvelle version avec les changements.
 
 ```bash
 git add -A
-git commit -m "chore(release): bump version to 1.11.1"
+git commit -m "chore(release): bump version to X.Y.Z"
 git push origin main
 ```
 
@@ -62,8 +62,8 @@ de version n'est nécessaire.
 ### 5. Créer et pusher le tag (après CI vert)
 
 ```bash
-git tag -a v1.11.1 -m "v1.11.1 - Description"
-git push origin v1.11.1
+git tag -a vX.Y.Z -m "vX.Y.Z - Description"
+git push origin vX.Y.Z
 ```
 
 ### 6. Le workflow `release.yml` publie automatiquement
@@ -88,8 +88,8 @@ git push origin v1.11.1
 Pour une pre-release (beta, rc) :
 
 ```bash
-git tag v1.11.1-beta.1
-git push origin v1.11.1-beta.1
+git tag vX.Y.Z-beta.1
+git push origin vX.Y.Z-beta.1
 ```
 
 Le workflow détecte automatiquement les pre-releases et :
@@ -109,10 +109,10 @@ Le workflow détecte automatiquement les pre-releases et :
 ### Le workflow ne se déclenche pas
 
 Vérifier que le tag suit le format `v[0-9]+.[0-9]+.[0-9]+` :
-- ✅ `v1.11.1`
-- ✅ `v1.0.0-beta.1`
-- ❌ `0.8.6` (pas de "v")
-- ❌ `v0.8` (version incomplète)
+- ✅ `vX.Y.Z`
+- ✅ `vX.Y.Z-beta.1`
+- ❌ `X.Y.Z` (pas de "v")
+- ❌ `vX.Y` (version incomplète)
 
 ### Publication déjà existante
 
@@ -121,9 +121,9 @@ Si une version existe déjà sur crates.io/PyPI/npm, le workflow skip cette éta
 ### Force-update un tag
 
 ```bash
-git tag -d v1.11.1
-git tag v1.11.1
-git push origin v1.11.1 --force
+git tag -d vX.Y.Z
+git tag vX.Y.Z
+git push origin vX.Y.Z --force
 ```
 
 ## Workflow manuel

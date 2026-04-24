@@ -74,7 +74,7 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 | **Graph** | Knowledge relationships (BFS/DFS, edge properties) | Native **MATCH** clause |
 | **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning [2] |
 
-> [1] Reproduce: `python benchmarks/velesdb_benchmark.py --recall` (Python SDK path, 10K/384D, WAL fsync on, i9-14900KF reference machine). See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [CHANGELOG v1.11.1](CHANGELOG.md).
+> [1] Reproduce: `python benchmarks/velesdb_benchmark.py --recall` (Python SDK path, 10K/384D, WAL fsync on, i9-14900KF reference machine). See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [CHANGELOG v1.13.0](CHANGELOG.md).
 > [2] Reproduce: `cargo bench -p velesdb-core --bench filter_benchmark`. See [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md) — at 100K rows: ColumnStore 29.5 us vs JSON scan 3.84 ms (integer equality filter).
 
 All three are queried through **VelesQL** — a single SQL-like language with vector, graph, and columnar extensions:
@@ -406,6 +406,8 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | v1.5 — Python SDK, WASM, Mobile bindings | ✅ Shipped |
 | v1.10 — Agent Memory SDK, hybrid search, quantization | ✅ Shipped |
 | v1.11 — Cross-collection MATCH, bitmap pre-filter, CSR graph | ✅ Shipped |
+| v1.12 — Cross-collection MATCH (graph/BM25/HNSW hybrids), Sprint 4 Phase B (TS SDK stability) | ✅ Shipped |
+| v1.13 — Pre-seed remediation: BM25 O(1) cold-start, sparse search 16× speedup, HNSW prefetch, EXPLAIN/CBO routing, VelesQL window functions, SIFT1M standardized harness | ✅ Shipped |
 
 > VelesDB Core is open-source. Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
 

@@ -584,6 +584,78 @@
       "query": "SELECT * FROM docs WHERE count = 9223372036854775808 LIMIT 10",
       "should_parse": true,
       "comment": "Issue #486: large uint64 in WHERE clause"
+    },
+    {
+      "id": "P116",
+      "query": "SELECT id, ROW_NUMBER() OVER () FROM items",
+      "should_parse": true,
+      "comment": "PR #629: ROW_NUMBER with empty OVER (no partition, no order)"
+    },
+    {
+      "id": "P117",
+      "query": "SELECT id, ROW_NUMBER() OVER (ORDER BY score DESC) FROM items",
+      "should_parse": true,
+      "comment": "PR #629: ROW_NUMBER with ORDER BY only"
+    },
+    {
+      "id": "P118",
+      "query": "SELECT id, category, RANK() OVER (PARTITION BY category ORDER BY score DESC) FROM items",
+      "should_parse": true,
+      "comment": "PR #629: RANK with PARTITION BY + ORDER BY"
+    },
+    {
+      "id": "P119",
+      "query": "SELECT id, DENSE_RANK() OVER (PARTITION BY category ORDER BY score) FROM items",
+      "should_parse": true,
+      "comment": "PR #629: DENSE_RANK with default ASC order"
+    },
+    {
+      "id": "P120",
+      "query": "SELECT id, ROW_NUMBER() OVER (PARTITION BY category) FROM items",
+      "should_parse": true,
+      "comment": "PR #629: PARTITION BY without ORDER BY"
+    },
+    {
+      "id": "P121",
+      "query": "SELECT id, ROW_NUMBER() OVER (ORDER BY a, b DESC) FROM items",
+      "should_parse": true,
+      "comment": "PR #629: multi-column ORDER BY inside OVER()"
+    },
+    {
+      "id": "P122",
+      "query": "SELECT id, title, ROW_NUMBER() OVER (ORDER BY score DESC) AS rn FROM items WHERE category = 'tech' LIMIT 10",
+      "should_parse": true,
+      "comment": "PR #629: window fn mixed with regular columns, WHERE and LIMIT"
+    },
+    {
+      "id": "P123",
+      "query": "SELECT id, ROW_NUMBER() OVER (PARTITION BY category ORDER BY score DESC) AS rn, RANK() OVER (PARTITION BY category ORDER BY score DESC) AS rk FROM items",
+      "should_parse": true,
+      "comment": "PR #629: multiple window functions in same SELECT"
+    },
+    {
+      "id": "P124",
+      "query": "SELECT DISTINCT title, ROW_NUMBER() OVER (ORDER BY title ASC) AS rn FROM items LIMIT 10",
+      "should_parse": true,
+      "comment": "PR #629: DISTINCT + window function (pipeline regression pin)"
+    },
+    {
+      "id": "P125",
+      "query": "SELECT id, ROW_NUMBER(x) OVER () FROM items",
+      "should_parse": false,
+      "comment": "PR #629: window function calls must be zero-arg"
+    },
+    {
+      "id": "P126",
+      "query": "SELECT id, ROW_NUMBER() OVER (ORDER BY) FROM items",
+      "should_parse": false,
+      "comment": "PR #629: empty ORDER BY list inside OVER() is invalid"
+    },
+    {
+      "id": "P127",
+      "query": "SELECT id, NTILE() OVER () FROM items",
+      "should_parse": false,
+      "comment": "PR #629: NTILE is not among supported window functions (ROW_NUMBER/RANK/DENSE_RANK only)"
     }
   ]
 }

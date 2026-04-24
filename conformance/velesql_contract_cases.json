@@ -91,6 +91,83 @@
       },
       "expected_status": 422,
       "expected_error_code": "VELESQL_AGGREGATION_ERROR"
+    },
+    {
+      "id": "C008",
+      "description": "PR #629: ROW_NUMBER OVER (ORDER BY ...) executes end-to-end",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "SELECT id, title, ROW_NUMBER() OVER (ORDER BY id DESC) AS rn FROM docs_conformance LIMIT 10",
+        "params": {}
+      },
+      "expected_status": 200,
+      "expect_contract_meta": true
+    },
+    {
+      "id": "C009",
+      "description": "PR #629: RANK OVER (PARTITION BY ... ORDER BY ...) executes end-to-end",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "SELECT id, category, RANK() OVER (PARTITION BY category ORDER BY id DESC) AS rk FROM docs_conformance LIMIT 10",
+        "params": {}
+      },
+      "expected_status": 200,
+      "expect_contract_meta": true
+    },
+    {
+      "id": "C010",
+      "description": "PR #629: DENSE_RANK OVER (ORDER BY ...) executes end-to-end",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "SELECT id, DENSE_RANK() OVER (ORDER BY id ASC) AS drk FROM docs_conformance LIMIT 10",
+        "params": {}
+      },
+      "expected_status": 200,
+      "expect_contract_meta": true
+    },
+    {
+      "id": "C011",
+      "description": "PR #629: ROW_NUMBER OVER (PARTITION BY ...) restarts per partition",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "SELECT id, category, ROW_NUMBER() OVER (PARTITION BY category) AS rn FROM docs_conformance LIMIT 10",
+        "params": {}
+      },
+      "expected_status": 200,
+      "expect_contract_meta": true
+    },
+    {
+      "id": "C012",
+      "description": "PR #629: multiple window functions in same SELECT",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "SELECT id, ROW_NUMBER() OVER (ORDER BY id DESC) AS rn, RANK() OVER (ORDER BY id DESC) AS rk FROM docs_conformance LIMIT 10",
+        "params": {}
+      },
+      "expected_status": 200,
+      "expect_contract_meta": true
+    },
+    {
+      "id": "C013",
+      "description": "PR #629: unsupported window function (NTILE) rejected at parse",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "SELECT id, NTILE() OVER () FROM docs_conformance",
+        "params": {}
+      },
+      "expected_status": 400
     }
   ]
 }
