@@ -326,29 +326,32 @@ jobs:
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo registry and build artefacts
+      # Cargo registry cache only (NOT the velesdb-python/target directory;
+      # half-compiled pyo3 build artefacts from previous CI hotfix attempts
+      # were causing pyo3-build-config to misdetect the interpreter even when
+      # PYO3_PYTHON was set correctly).
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            crates/velesdb-python/target
-          key: ${{ runner.os }}-integ-py-${{ hashFiles('Cargo.lock', 'crates/velesdb-python/Cargo.toml') }}
+          key: ${{ runner.os }}-integ-py-cargo-${{ hashFiles('Cargo.lock') }}
 
-      # Build velesdb-python from source so integrations test the in-tree
-      # version (not a stale PyPI release). PyO3 build.rs needs the Python
-      # interpreter explicitly via PYO3_PYTHON; without it, pyo3-build-config
-      # errors with "abi3-py3* feature must be specified". Setting
-      # PYO3_PYTHON via `which python3.11` resolves the venv-less build.
-      - name: Build velesdb-python from source
+      # Build velesdb-python from source via PEP 517 (pip invokes maturin
+      # through pyproject.toml's `build-backend = "maturin"`). pip activates
+      # the running Python interpreter as the build target automatically,
+      # which is the only path that has worked end-to-end for pyo3 in this
+      # workflow (raw `maturin build` and `PyO3/maturin-action` both fail
+      # with "abi3-py3* feature must be specified", even with PYO3_PYTHON
+      # set explicitly — see hotfix log #649-#655).
+      - name: Build & install velesdb-python from source
+        env:
+          # Force release optimisation for the integration tests
+          MATURIN_PEP517_ARGS: "--release"
         run: |
-          pip install maturin
-          export PYO3_PYTHON="$(which python3.11)"
-          echo "PYO3_PYTHON=$PYO3_PYTHON"
-          "$PYO3_PYTHON" --version
-          cd crates/velesdb-python
-          maturin build --release --out dist
-          pip install dist/*.whl --force-reinstall
+          pip install --upgrade pip maturin
+          pip install ./crates/velesdb-python --force-reinstall
 
       - name: Install velesdb-common (local shared package)
         run: pip install -e integrations/common
