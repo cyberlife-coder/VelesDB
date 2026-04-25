@@ -7,7 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — post-v1.13.0 work lives under feature branches tracked in [#634](https://github.com/cyberlife-coder/VelesDB/issues/634) (GPU hardening PR-C, PR-E) and [#639](https://github.com/cyberlife-coder/VelesDB/issues/639) (ef_search alignment)._
+_Nothing yet — post-v1.13.1 work lives under feature branches tracked in [#634](https://github.com/cyberlife-coder/VelesDB/issues/634) (GPU hardening PR-C, PR-E) and [#639](https://github.com/cyberlife-coder/VelesDB/issues/639) (ef_search alignment)._
+
+## [1.13.1] — 2026-04-25
+
+### Summary
+
+Patch release closing the v1.13.0 release-cut CI debt. Adds the
+`abi3-py39` feature to the `pyo3` dependency in `velesdb-python` so the
+Python wheel can be built from source on standard CI runners without the
+interpreter-discovery dance that took 9 hotfix iterations (#649-#657)
+to bypass at the v1.13.0 tag. The `python-integrations` CI job, which
+was temporarily disabled in #658 to unblock the v1.13.0 tag push, is
+restored to its original guard. Future `develop -> main` release
+cycles therefore exercise the integration tests end-to-end again.
+
+The `abi3-py39` feature also reduces the per-Python-version wheel
+matrix to a single ABI-stable wheel (Python 3.9+) rather than one wheel
+per minor version. Same source code, same behaviour, smaller release
+footprint.
+
+### Changed
+
+- `crates/velesdb-python/Cargo.toml` — pyo3 features now include
+  `abi3-py39` alongside `extension-module` and `multiple-pymethods`.
+  The published wheel is `cp39-abi3-...` instead of `cp310-cp310-...`
+  / `cp311-cp311-...`. Functionally identical from Python users' point
+  of view; the wheel is just compatible with a wider range of Python
+  versions in one binary.
+- `.github/workflows/ci.yml` — `python-integrations` job re-enabled
+  with its original `if: github.event_name == 'push' && github.ref ==
+  'refs/heads/main'` guard.
+
+### Fixed
+
+- The `develop -> main` release CI cycle no longer requires a wheel
+  to be already on PyPI for the integration test job to pass. The
+  abi3 wheel builds from source on the runner without a venv, which
+  was the chicken-and-egg the v1.13.0 release cut hit.
 
 ## [1.13.0] — 2026-04-23
 

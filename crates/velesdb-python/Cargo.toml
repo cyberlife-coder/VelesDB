@@ -19,7 +19,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 velesdb-core = { workspace = true }
-pyo3 = { version = "0.24", features = ["extension-module", "multiple-pymethods"] }
+pyo3 = { version = "0.24", features = ["extension-module", "multiple-pymethods", "abi3-py39"] }
 serde_json = { workspace = true }
 numpy = "0.24"
 parking_lot = "0.12"
