@@ -336,20 +336,19 @@ jobs:
           key: ${{ runner.os }}-integ-py-${{ hashFiles('Cargo.lock', 'crates/velesdb-python/Cargo.toml') }}
 
       # Build velesdb-python from source so integrations test the in-tree
-      # version (not a stale PyPI release). The PyO3 action runs natively
-      # (no manylinux Docker) so it can see the python3.11 from setup-python
-      # — `manylinux: auto` would launch a container where the interpreter
-      # is not on PATH and pyo3-build-config errors out with "abi3-py3*
-      # feature must be specified".
+      # version (not a stale PyPI release). PyO3 build.rs needs the Python
+      # interpreter explicitly via PYO3_PYTHON; without it, pyo3-build-config
+      # errors with "abi3-py3* feature must be specified". Setting
+      # PYO3_PYTHON via `which python3.11` resolves the venv-less build.
       - name: Build velesdb-python from source
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
-        with:
-          working-directory: crates/velesdb-python
-          args: --release --out dist -i python3.11
-          manylinux: 'off'
-
-      - name: Install built velesdb wheel
-        run: pip install crates/velesdb-python/dist/*.whl --force-reinstall
+        run: |
+          pip install maturin
+          export PYO3_PYTHON="$(which python3.11)"
+          echo "PYO3_PYTHON=$PYO3_PYTHON"
+          "$PYO3_PYTHON" --version
+          cd crates/velesdb-python
+          maturin build --release --out dist
+          pip install dist/*.whl --force-reinstall
 
       - name: Install velesdb-common (local shared package)
         run: pip install -e integrations/common
