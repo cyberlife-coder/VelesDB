@@ -7,7 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — post-v1.13.1 work lives under feature branches tracked in [#634](https://github.com/cyberlife-coder/VelesDB/issues/634) (GPU hardening PR-C, PR-E) and [#639](https://github.com/cyberlife-coder/VelesDB/issues/639) (ef_search alignment)._
+_Nothing yet — post-v1.13.2 work lives under feature branches tracked in [#634](https://github.com/cyberlife-coder/VelesDB/issues/634) (GPU hardening PR-C, PR-E) and [#639](https://github.com/cyberlife-coder/VelesDB/issues/639) (ef_search alignment)._
+
+## [1.13.2] — 2026-04-25
+
+### Summary
+
+Strictly additive patch release shipping the observability + ops
+endpoints work landed in [#648](https://github.com/cyberlife-coder/VelesDB/pull/648),
+together with two routine dependabot bumps and one breaking-API
+restoration to keep the v1.13.x series fully backward-compatible.
+
+### Added
+
+- **REST**: `POST /collections/{name}/points/delete` — bulk delete by
+  ID (max 10000 per batch). Idempotent: empty `ids: []` is a no-op
+  (200), unknown IDs are silently skipped.
+- **REST**: `POST /collections/{name}/vacuum` — explicit alias of
+  `/index/rebuild` exposed under a maintenance-oriented name.
+- **REST**: `POST /collections/{name}/compact` — storage compaction;
+  rewrites active vectors into a contiguous layout and reports
+  `bytes_reclaimed`.
+- **Prometheus**: 32 new time-series exposed via `/metrics` —
+  `OperationalMetrics`, `GuardRailsMetrics`, `TraversalMetrics`,
+  `DurationHistogram` (8-bucket query latency).
+- **Core**: `VectorCollection::compact_storage()` and
+  `Collection::compact_vector_storage()` public functions.
+- **Tests**: `crates/velesdb-server/tests/admin_endpoints_bdd_tests.rs`
+  with 13 nominal + edge + negative scenarios covering the three new
+  endpoints and the delete -> vacuum -> compact lifecycle (mandatory
+  per `.claude/rules/bdd-testing.md`).
+
+### Changed
+
+- **Naming**: `OperationalMetrics::shared()` is now an additive
+  forwarding alias of the new `OperationalMetrics::new_arc()`. The
+  rename improves API honesty (every call returns a fresh `Arc`,
+  not a shared singleton). The `shared()` symbol stays — marked
+  `#[deprecated(since = "1.13.2")]` — so v1.13.x consumers continue
+  to compile without changes.
+
+### Dependencies
+
+- Bump `rand` `0.8.5 -> 0.8.6` in `examples/rust` (GHSA security
+  advisory).
+- Bump `postcss` `8.5.6 -> 8.5.10` in `demos/tauri-rag-app`
+  (CVE-2024-XXX dev-dep).
+
+### CI
+
+- `.github/workflows/ci.yml` `python-integrations` job: build the
+  wheel from source via `pip install crates/velesdb-python` (PEP 517
+  / maturin backend), now possible thanks to the `abi3-py39` feature
+  added in v1.13.1.
 
 ## [1.13.1] — 2026-04-25
 
