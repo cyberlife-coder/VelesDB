@@ -48,18 +48,27 @@ pub async fn batch_search(
         Err(resp) => return resp,
     };
 
+    // Record query type only after confirming the collection exists, so
+    // 404s do not inflate queries_total or vector_queries.
+    state.operational_metrics.record_vector_query();
+
     let client_id = extract_client_id(&headers);
     if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        state.operational_metrics.inc_rate_limited();
         return resp;
     }
 
     if let Err(resp) = validate_batch_dimensions(&state, &name, &collection, &req) {
+        state.operational_metrics.inc_errors();
         return resp;
     }
 
     let filters = match parse_batch_filters(&state, &req) {
         Ok(f) => f,
-        Err(resp) => return resp,
+        Err(resp) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
     };
 
     let queries: Vec<&[f32]> = req.searches.iter().map(|s| s.vector.as_slice()).collect();
@@ -71,12 +80,17 @@ pub async fn batch_search(
     let all_results = match batch_result {
         Ok(batch_results) => build_batch_responses(&state, batch_results, &req),
         Err(e) => {
+            state.operational_metrics.inc_errors();
             return (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response();
         }
     };
 
-    let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let elapsed = start.elapsed();
+    let timing_ms = elapsed.as_secs_f64() * 1000.0;
     notify_query_timing(&state, &name, start);
+    state
+        .query_duration_histogram
+        .observe(elapsed.as_secs_f64());
 
     Json(BatchSearchResponse {
         results: all_results,

@@ -26,6 +26,8 @@ pub struct OperationalMetrics {
     pub queries_total: AtomicU64,
     /// Total query errors
     pub query_errors: AtomicU64,
+    /// Queries rejected by guard rails (rate limiting, circuit breaker)
+    pub query_rate_limited: AtomicU64,
     /// Vector search queries
     pub vector_queries: AtomicU64,
     /// Graph traversal queries
@@ -47,9 +49,16 @@ impl OperationalMetrics {
         Self::default()
     }
 
-    /// Creates a shared metrics instance.
+    /// Creates a fresh metrics instance wrapped in an `Arc` for shared
+    /// ownership across handlers.
+    ///
+    /// This is a constructor convenience — every call returns a brand-new
+    /// counter set. Callers that want a single workspace-wide instance
+    /// must hold the returned `Arc` themselves (e.g. in `AppState`) and
+    /// clone it where needed; this method does NOT back the instance with
+    /// a global cache.
     #[must_use]
-    pub fn shared() -> Arc<Self> {
+    pub fn new_arc() -> Arc<Self> {
         Arc::new(Self::new())
     }
 
@@ -61,6 +70,11 @@ impl OperationalMetrics {
     /// Increments the query error counter.
     pub fn inc_errors(&self) {
         self.query_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increments the rate-limited/rejected counter.
+    pub fn inc_rate_limited(&self) {
+        self.query_rate_limited.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Records a vector search query.
@@ -125,7 +139,8 @@ impl OperationalMetrics {
 
         let total = self.queries_total.load(Ordering::Relaxed);
         let errors = self.query_errors.load(Ordering::Relaxed);
-        let success = total.saturating_sub(errors);
+        let rate_limited = self.query_rate_limited.load(Ordering::Relaxed);
+        let success = total.saturating_sub(errors).saturating_sub(rate_limited);
 
         Self::write_metric_header(
             &mut output,
@@ -137,9 +152,10 @@ impl OperationalMetrics {
             output,
             "velesdb_queries_total{{status=\"success\"}} {success}"
         );
+        let _ = writeln!(output, "velesdb_queries_total{{status=\"error\"}} {errors}");
         let _ = writeln!(
             output,
-            "velesdb_queries_total{{status=\"error\"}} {errors}\n"
+            "velesdb_queries_total{{status=\"rate_limited\"}} {rate_limited}\n"
         );
 
         Self::write_metric_header(
@@ -257,8 +273,8 @@ mod tests {
     }
 
     #[test]
-    fn test_operational_metrics_shared() {
-        let metrics = OperationalMetrics::shared();
+    fn test_operational_metrics_new_arc() {
+        let metrics = OperationalMetrics::new_arc();
         metrics.record_vector_query();
 
         // Clone Arc and verify shared state
@@ -266,5 +282,37 @@ mod tests {
         metrics2.record_vector_query();
 
         assert_eq!(metrics.queries_total.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn test_rate_limited_request_increments_status_rate_limited() {
+        let metrics = OperationalMetrics::new();
+
+        // Simulate 3 queries: 1 succeeds, 1 errors, 1 rate-limited
+        metrics.record_vector_query(); // queries_total = 1
+        metrics.record_vector_query(); // queries_total = 2
+        metrics.record_vector_query(); // queries_total = 3
+        metrics.inc_errors(); // 1 error
+        metrics.inc_rate_limited(); // 1 rate-limited
+
+        assert_eq!(metrics.queries_total.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.query_errors.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.query_rate_limited.load(Ordering::Relaxed), 1);
+
+        let output = metrics.export_prometheus();
+
+        // success = total - errors - rate_limited = 3 - 1 - 1 = 1
+        assert!(
+            output.contains("velesdb_queries_total{status=\"success\"} 1"),
+            "expected success=1 in:\n{output}"
+        );
+        assert!(
+            output.contains("velesdb_queries_total{status=\"error\"} 1"),
+            "expected error=1 in:\n{output}"
+        );
+        assert!(
+            output.contains("velesdb_queries_total{status=\"rate_limited\"} 1"),
+            "expected rate_limited=1 in:\n{output}"
+        );
     }
 }

@@ -11,7 +11,7 @@
       "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
-    "version": "1.13.0"
+    "version": "1.13.1"
   },
   "servers": [
     {
@@ -265,6 +265,59 @@
           },
           "500": {
             "description": "Analysis failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/compact": {
+      "post": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Compacts the vector storage of a collection, rewriting active vectors\ninto a contiguous layout and reclaiming disk space from deleted entries.",
+        "description": "This is a blocking operation that may involve significant I/O for\nlarge, fragmented collections.",
+        "operationId": "compact_collection",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Storage compacted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Compaction failed",
             "content": {
               "application/json": {
                 "schema": {
@@ -1242,6 +1295,59 @@
         }
       }
     },
+    "/collections/{name}/index/rebuild": {
+      "post": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Rebuilds the HNSW index of a vector collection, reclaiming memory\noccupied by tombstoned entries and producing a fresh graph from\nthe current vector storage.",
+        "description": "This is a blocking operation: for large collections it may take\nseveral seconds. The response includes the number of entries that\nwere compacted during the rebuild.",
+        "operationId": "rebuild_index",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Index rebuilt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Rebuild failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{name}/indexes": {
       "get": {
         "tags": [
@@ -1528,6 +1634,79 @@
           },
           "404": {
             "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/points/delete": {
+      "post": {
+        "tags": [
+          "points"
+        ],
+        "summary": "Deletes multiple points by ID in a single request.",
+        "description": "Accepts a JSON body with a list of point IDs. All IDs are passed to\nthe underlying `Collection::delete(&[u64])` in one call, which is\nmore efficient than individual deletions.\n\nReturns the number of points that were requested for deletion.\nPoints that do not exist are silently skipped (idempotent delete).\n\n# Empty payload semantics\n\n`{ \"ids\": [] }` is treated as a successful no-op: the response is\n`200 OK` with `deleted_count = 0`. This matches Kubernetes-style\nidempotent batch APIs and lets callers send empty batches without\nspecial-casing on the client side.\n\n# Limits\n\nBatches larger than `MAX_BULK_DELETE_SIZE` (10000) are rejected with\n`400 BAD_REQUEST`.",
+        "operationId": "bulk_delete_points",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Points deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Batch too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Delete failed",
             "content": {
               "application/json": {
                 "schema": {
@@ -2293,6 +2472,59 @@
         }
       }
     },
+    "/collections/{name}/vacuum": {
+      "post": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Vacuums the HNSW index of a vector collection, removing tombstoned\nentries and rebuilding the graph from current vectors.",
+        "description": "Semantically equivalent to `POST /collections/{name}/index/rebuild`\nbut exposed under a more intuitive maintenance-oriented name.\n\nThis is a blocking operation: for large collections it may take\nseveral seconds.",
+        "operationId": "vacuum_collection",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Index vacuumed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Vacuum failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/guardrails": {
       "get": {
         "tags": [
@@ -2659,6 +2891,24 @@
             "type": "number",
             "format": "double",
             "description": "Total time in milliseconds."
+          }
+        }
+      },
+      "BulkDeleteRequest": {
+        "type": "object",
+        "description": "Request body for bulk point deletion.",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "List of point IDs to delete."
           }
         }
       },

@@ -12,11 +12,11 @@ use velesdb_core::Database;
 use velesdb_server::{
     add_edge, aggregate,
     auth::{auth_middleware, AuthState},
-    batch_search, collection_sanity, create_collection, delete_collection, delete_point, explain,
-    get_collection, get_collection_config, get_edges, get_node_degree, get_point, health_check,
-    hybrid_search, list_collections, multi_query_search, query, readiness_check, rebuild_index,
-    search, search_ids, stream_upsert_points, text_search, traverse_graph, upsert_points, AppState,
-    OnboardingMetrics,
+    batch_search, bulk_delete_points, collection_sanity, compact_collection, create_collection,
+    delete_collection, delete_point, explain, get_collection, get_collection_config, get_edges,
+    get_node_degree, get_point, health_check, hybrid_search, list_collections, multi_query_search,
+    query, readiness_check, rebuild_index, search, search_ids, stream_upsert_points, text_search,
+    traverse_graph, upsert_points, vacuum_collection, AppState, OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -61,6 +61,13 @@ fn base_routes() -> Router<Arc<AppState>> {
             "/collections/{name}/graph/nodes/{node_id}/degree",
             get(get_node_degree),
         )
+        // Maintenance + bulk endpoints (PR #648)
+        .route(
+            "/collections/{name}/points/delete",
+            post(bulk_delete_points),
+        )
+        .route("/collections/{name}/vacuum", post(vacuum_collection))
+        .route("/collections/{name}/compact", post(compact_collection))
 }
 
 fn create_app_state(temp_dir: &TempDir) -> Arc<AppState> {
@@ -70,6 +77,11 @@ fn create_app_state(temp_dir: &TempDir) -> Arc<AppState> {
         onboarding_metrics: OnboardingMetrics::default(),
         query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
         ready: std::sync::atomic::AtomicBool::new(true),
+        operational_metrics: velesdb_core::metrics::OperationalMetrics::new_arc(),
+        traversal_metrics: std::sync::Arc::new(velesdb_core::metrics::TraversalMetrics::new()),
+        query_duration_histogram: std::sync::Arc::new(
+            velesdb_core::metrics::DurationHistogram::new(),
+        ),
     })
 }
 

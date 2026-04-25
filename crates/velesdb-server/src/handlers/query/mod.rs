@@ -83,10 +83,14 @@ pub async fn query(
     Json(req): Json<QueryRequest>,
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
+    state.operational_metrics.inc_queries();
 
     let parsed = match parse_and_validate(&req.query) {
         Ok(q) => q,
-        Err(resp) => return resp,
+        Err(resp) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
     };
 
     // DDL/Introspection/Admin/graph-mutation bypass: these extract collection from
@@ -98,7 +102,10 @@ pub async fn query(
 
     let collection_name = match resolve_collection_name(&parsed, &req) {
         Ok(name) => name,
-        Err(resp) => return resp,
+        Err(resp) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
     };
 
     // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
@@ -108,7 +115,10 @@ pub async fn query(
 
     let results = match execute_standard_query(&state, &parsed, &collection_name, &req) {
         Ok(r) => r,
-        Err(resp) => return resp,
+        Err(resp) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
     };
 
     build_query_response(
@@ -246,10 +256,14 @@ fn execute_mutation_query(
         Ok(results) => {
             let coll_name = extract_mutation_collection_name(parsed);
             notify_query_timing(state, &coll_name, start);
-            let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let elapsed = start.elapsed();
+            let timing_ms = elapsed.as_secs_f64() * 1000.0;
             #[allow(clippy::cast_possible_truncation)]
             // Reason: timing_ms is always < u64::MAX (query durations < 585 millennia)
             let took_ms = timing_ms.round() as u64;
+            state
+                .query_duration_histogram
+                .observe(elapsed.as_secs_f64());
             let projected = projection::project_results(&results, &parsed.select.columns);
             let rows_returned = projected.len();
             Json(QueryResponse {
@@ -264,13 +278,16 @@ fn execute_mutation_query(
             })
             .into_response()
         }
-        Err(e) => velesql_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "VELESQL_MUTATION_ERROR",
-            &e.to_string(),
-            "Check collection name, statement syntax, and target existence",
-            None,
-        ),
+        Err(e) => {
+            state.operational_metrics.inc_errors();
+            velesql_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "VELESQL_MUTATION_ERROR",
+                &e.to_string(),
+                "Check collection name, statement syntax, and target existence",
+                None,
+            )
+        }
     }
 }
 
@@ -349,11 +366,15 @@ fn build_query_response(
     results: Vec<velesdb_core::SearchResult>,
     select_columns: &SelectColumns,
 ) -> axum::response::Response {
-    let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let elapsed = start.elapsed();
+    let timing_ms = elapsed.as_secs_f64() * 1000.0;
     #[allow(clippy::cast_possible_truncation)]
     // Reason: timing_ms is always < u64::MAX (query durations < 585 millennia)
     let took_ms = timing_ms.round() as u64;
     notify_query_timing(state, collection_name, start);
+    state
+        .query_duration_histogram
+        .observe(elapsed.as_secs_f64());
     let projected = projection::project_results(&results, select_columns);
     let rows_returned = projected.len();
 

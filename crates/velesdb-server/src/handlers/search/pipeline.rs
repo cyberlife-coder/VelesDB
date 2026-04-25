@@ -367,12 +367,17 @@ fn record_search_metrics(state: &AppState, name: &str, start: std::time::Instant
     if is_empty {
         state.onboarding_metrics.record_empty_search_results();
     }
-    let duration_us = start.elapsed().as_micros();
+    let elapsed = start.elapsed();
+    let duration_us = elapsed.as_micros();
     #[allow(clippy::cast_possible_truncation)]
     // Reason: value is clamped to u64::MAX above, so the truncation is lossless.
     state
         .db
         .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);
+    // Record into Prometheus histogram (seconds).
+    state
+        .query_duration_histogram
+        .observe(elapsed.as_secs_f64());
 }
 
 /// Core search result handler: records metrics, delegates success to `on_ok`,
@@ -390,7 +395,10 @@ fn finish_search_core(
             record_search_metrics(state, name, start, results.is_empty());
             on_ok(results)
         }
-        Err(e) => (error_status, Json(actionable_search_error(&e))).into_response(),
+        Err(e) => {
+            state.operational_metrics.inc_errors();
+            (error_status, Json(actionable_search_error(&e))).into_response()
+        }
     }
 }
 
