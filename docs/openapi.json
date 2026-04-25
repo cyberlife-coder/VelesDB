@@ -11,7 +11,7 @@
       "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
-    "version": "1.13.0"
+    "version": "1.13.1"
   },
   "servers": [
     {
@@ -1651,7 +1651,7 @@
           "points"
         ],
         "summary": "Deletes multiple points by ID in a single request.",
-        "description": "Accepts a JSON body with a list of point IDs. All IDs are passed to\nthe underlying `Collection::delete(&[u64])` in one call, which is\nmore efficient than individual deletions.\n\nReturns the number of points that were requested for deletion.\nPoints that do not exist are silently skipped.",
+        "description": "Accepts a JSON body with a list of point IDs. All IDs are passed to\nthe underlying `Collection::delete(&[u64])` in one call, which is\nmore efficient than individual deletions.\n\nReturns the number of points that were requested for deletion.\nPoints that do not exist are silently skipped (idempotent delete).\n\n# Empty payload semantics\n\n`{ \"ids\": [] }` is treated as a successful no-op: the response is\n`200 OK` with `deleted_count = 0`. This matches Kubernetes-style\nidempotent batch APIs and lets callers send empty batches without\nspecial-casing on the client side.\n\n# Limits\n\nBatches larger than `MAX_BULK_DELETE_SIZE` (10000) are rejected with\n`400 BAD_REQUEST`.",
         "operationId": "bulk_delete_points",
         "parameters": [
           {

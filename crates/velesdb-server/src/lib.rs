@@ -619,7 +619,7 @@ mod tests {
             onboarding_metrics: OnboardingMetrics::default(),
             query_limits: parking_lot::RwLock::new(QueryLimits::default()),
             ready: AtomicBool::new(true),
-            operational_metrics: velesdb_core::metrics::OperationalMetrics::shared(),
+            operational_metrics: velesdb_core::metrics::OperationalMetrics::new_arc(),
             traversal_metrics: Arc::new(velesdb_core::metrics::TraversalMetrics::new()),
             query_duration_histogram: Arc::new(velesdb_core::metrics::DurationHistogram::new()),
         });

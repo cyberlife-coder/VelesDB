@@ -49,9 +49,16 @@ impl OperationalMetrics {
         Self::default()
     }
 
-    /// Creates a shared metrics instance.
+    /// Creates a fresh metrics instance wrapped in an `Arc` for shared
+    /// ownership across handlers.
+    ///
+    /// This is a constructor convenience — every call returns a brand-new
+    /// counter set. Callers that want a single workspace-wide instance
+    /// must hold the returned `Arc` themselves (e.g. in `AppState`) and
+    /// clone it where needed; this method does NOT back the instance with
+    /// a global cache.
     #[must_use]
-    pub fn shared() -> Arc<Self> {
+    pub fn new_arc() -> Arc<Self> {
         Arc::new(Self::new())
     }
 
@@ -266,8 +273,8 @@ mod tests {
     }
 
     #[test]
-    fn test_operational_metrics_shared() {
-        let metrics = OperationalMetrics::shared();
+    fn test_operational_metrics_new_arc() {
+        let metrics = OperationalMetrics::new_arc();
         metrics.record_vector_query();
 
         // Clone Arc and verify shared state

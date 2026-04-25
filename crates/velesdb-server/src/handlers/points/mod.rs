@@ -313,7 +313,19 @@ pub struct BulkDeleteRequest {
 /// more efficient than individual deletions.
 ///
 /// Returns the number of points that were requested for deletion.
-/// Points that do not exist are silently skipped.
+/// Points that do not exist are silently skipped (idempotent delete).
+///
+/// # Empty payload semantics
+///
+/// `{ "ids": [] }` is treated as a successful no-op: the response is
+/// `200 OK` with `deleted_count = 0`. This matches Kubernetes-style
+/// idempotent batch APIs and lets callers send empty batches without
+/// special-casing on the client side.
+///
+/// # Limits
+///
+/// Batches larger than `MAX_BULK_DELETE_SIZE` (10000) are rejected with
+/// `400 BAD_REQUEST`.
 #[utoipa::path(
     post,
     path = "/collections/{name}/points/delete",
