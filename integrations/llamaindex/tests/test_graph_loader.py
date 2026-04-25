@@ -377,22 +377,24 @@ class TestGraphLoaderNativeGraph:
 
 
 class TestGraphRetriever:
-    def test_fetch_node_uses_get_nodes(self):
+    def test_fetch_node_uses_get_nodes_by_int_ids(self):
         from llamaindex_velesdb import GraphRetriever
         from llama_index.core.schema import TextNode
 
         mock_vector_store = MagicMock()
         expected = TextNode(text="Neighbor", id_="42")
-        mock_vector_store.get_nodes.return_value = [expected]
+        # `_fetch_node` deliberately uses `get_nodes_by_int_ids`, NOT
+        # `get_nodes`, because the latter re-hashes the int's string form
+        # and returns nothing — see graph_retriever.py:483 docstring.
+        mock_vector_store.get_nodes_by_int_ids.return_value = [expected]
 
         mock_index = MagicMock()
         mock_index._vector_store = mock_vector_store
 
-        # Use REST mode so the constructor does not require `graph_collection_name`
-        # (a `db_path` is also required for native mode). The unit test only
-        # exercises `_fetch_node` which delegates to the mocked vector store.
+        # mode='rest' avoids the native-mode requirement for `graph_collection_name`.
+        # The unit test only exercises `_fetch_node` against the mocked vector store.
         retriever = GraphRetriever(index=mock_index, mode="rest")
         node = retriever._fetch_node(42)
 
-        mock_vector_store.get_nodes.assert_called_once_with(["42"])
+        mock_vector_store.get_nodes_by_int_ids.assert_called_once_with([42])
         assert node == expected
