@@ -187,7 +187,7 @@ impl HnswIndex {
     ///
     /// This is the single inherent implementation shared by the
     /// [`VectorIndex::remove`](crate::index::VectorIndex::remove) trait impl
-    /// and delegates to [`upsert::soft_delete`] (also used by
+    /// and delegates to `upsert::soft_delete` (private; also used by
     /// `NativeHnswIndex::remove`).
     pub fn remove(&self, id: u64) -> bool {
         upsert::soft_delete(

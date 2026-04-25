@@ -3,7 +3,8 @@
 //! The [`DeltaBuffer`] holds recently inserted vectors that have not yet been
 //! indexed into the HNSW graph (e.g., because a rebuild is in progress).
 //! The search pipeline brute-force scans this buffer and merges results with
-//! HNSW results for immediate searchability via [`merge_with_delta`].
+//! HNSW results for immediate searchability via
+//! [`super::delta_merge::merge_with_delta`].
 //!
 //! # State machine
 //!
@@ -45,7 +46,8 @@ const DRAINING: u8 = 2;
 ///
 /// Accumulates `(point_id, vector)` pairs that are in storage but not yet in
 /// the HNSW index. When active, search methods brute-force scan the buffer
-/// and merge results with HNSW results via [`merge_with_delta`].
+/// and merge results with HNSW results via
+/// [`super::delta_merge::merge_with_delta`].
 pub struct DeltaBuffer {
     /// Buffered `(point_id, vector)` pairs awaiting index insertion.
     points: RwLock<Vec<(u64, Vec<f32>)>>,

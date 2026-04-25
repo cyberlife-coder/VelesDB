@@ -600,7 +600,7 @@ SearchQuality::Accurate
 ### Rust
 
 ```rust
-use velesdb_core::Collection;
+use velesdb_core::VectorCollection;
 
 // Méthode 1: Mode par défaut (Balanced, ef_search=128)
 let results = collection.search(&query_vector, 10)?;

@@ -154,14 +154,17 @@ For even higher performance, VelesDB includes a **dual-precision HNSW** implemen
 ```rust
 use velesdb_core::index::hnsw::native::DualPrecisionHnsw;
 
-let mut hnsw = DualPrecisionHnsw::new(distance, 768, 32, 200, 100000);
+// `new` returns `Result` — propagation with `?` is mandatory.
+let mut hnsw = DualPrecisionHnsw::new(distance, 768, 32, 200, 100_000)?;
 
-// Insert vectors (quantizer trains automatically after 1000 vectors)
-for (id, vec) in vectors {
-    hnsw.insert(vec);
+// Insert vectors (quantizer trains automatically after 1000 vectors).
+// `insert` returns `Result<NodeId>`.
+for (_id, vec) in vectors {
+    let _node_id = hnsw.insert(&vec)?;
 }
 
-// Search with dual-precision (graph traversal + exact rerank)
+// Search with dual-precision (graph traversal + exact rerank).
+// `search` returns `Vec<(NodeId, f32)>` — no `Result`.
 let results = hnsw.search(&query, 10, 128);
 ```
 
@@ -197,16 +200,24 @@ enum HnswBackend {
 Set `StorageMode::RaBitQ` when creating a collection:
 
 ```rust
-use velesdb_core::{Database, StorageMode};
+use velesdb_core::{Database, DistanceMetric, StorageMode};
 
 let db = Database::open("./data")?;
-db.create_collection_with_storage("documents", 768, "cosine", StorageMode::RaBitQ)?;
+db.create_collection_with_options(
+    "documents",
+    768,
+    DistanceMetric::Cosine,
+    StorageMode::RaBitQ,
+)?;
 ```
 
 **CLI**:
 
 ```bash
-velesdb-cli create --name documents --dim 768 --metric cosine --storage rabitq
+velesdb-cli collection create ./data documents \
+  --dimension 768 \
+  --metric cosine \
+  --storage rabitq
 ```
 
 **REST API**:

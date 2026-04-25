@@ -505,7 +505,7 @@ flushing and backpressure signaling.
 ### Basic usage
 
 ```rust,no_run
-use velesdb_core::collection::streaming::{StreamIngester, StreamingConfig};
+use velesdb_core::collection::streaming::StreamingConfig;
 use velesdb_core::Point;
 
 // Configure the pipeline
@@ -515,18 +515,18 @@ let config = StreamingConfig {
     flush_interval_ms: 50,   // or every 50ms, whichever comes first
 };
 
-// `collection` is a Collection obtained from db.get_vector_collection(...)
-let ingester = StreamIngester::new(collection, config);
+// `collection` is a `VectorCollection` obtained from
+// `db.get_vector_collection(name).expect("collection exists")` — the handle
+// is cheap to clone (Arc-backed inside). Activate the streaming pipeline:
+collection.enable_streaming(config);
 
-// Send points — returns immediately
+// Send points — returns immediately. `BackpressureError::BufferFull` signals
+// the bounded channel is saturated; retry or drop.
 let point = Point::new(1, vec![0.1; 384], None);
-match ingester.try_send(point) {
+match collection.stream_insert(point) {
     Ok(()) => { /* accepted */ }
     Err(e) => eprintln!("Backpressure: {e}"),
 }
-
-// Gracefully drain remaining points before shutdown
-ingester.shutdown().await;
 ```
 
 ### Backpressure
@@ -762,14 +762,18 @@ println!("Hits: {}, Misses: {}", metrics.hits(), metrics.misses());
 ## Public API Reference
 
 ```rust
-// Core types
+// Core types — v1.13: typed collection split (Collection is `pub(crate)`,
+// use one of VectorCollection / GraphCollection / MetadataCollection instead)
 use velesdb_core::{
-    Database,           // Database instance
-    Collection,         // Vector collection
-    Point,              // Vector with metadata
-    DistanceMetric,     // Cosine, Euclidean, DotProduct, Hamming, Jaccard
-    StorageMode,        // Full, SQ8, Binary, ProductQuantization, RaBitQ
-    Error, Result,      // Error types
+    Database,            // Database instance
+    VectorCollection,    // Vector collection (typed handle)
+    GraphCollection,     // Graph collection (typed handle)
+    MetadataCollection,  // Metadata-only collection (typed handle)
+    AnyCollection,       // Type-erased handle returned by Database::get_any_collection
+    Point,               // Vector with metadata
+    DistanceMetric,      // Cosine, Euclidean, DotProduct, Hamming, Jaccard
+    StorageMode,         // Full, SQ8, Binary, ProductQuantization, RaBitQ
+    Error, Result,       // Error types
 };
 
 // Sparse vectors and fusion

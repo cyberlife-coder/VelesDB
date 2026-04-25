@@ -43,7 +43,7 @@ response.results.forEach(r => {
 use velesdb_core::{Database, velesql::Parser};
 
 let db = Database::open("./data")?;
-let collection = db.get_collection("documents").unwrap();
+let collection = db.get_vector_collection("documents").unwrap();
 
 let query = Parser::parse("MATCH (d:Doc) WHERE vector NEAR $q LIMIT 20")?;
 let params = [("q".to_string(), serde_json::json!(query_vector))].into();

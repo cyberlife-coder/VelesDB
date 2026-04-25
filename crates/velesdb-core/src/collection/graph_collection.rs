@@ -213,7 +213,8 @@ impl GraphCollection {
 
     /// Returns the next batch of points for scroll iteration.
     ///
-    /// Delegates to [`Collection::scroll_batch`].
+    /// Delegates to the inner collection's `scroll_batch` (parallel
+    /// implementation to [`VectorCollection::scroll_batch`](crate::VectorCollection::scroll_batch)).
     ///
     /// # Errors
     ///
@@ -366,7 +367,7 @@ impl GraphCollection {
 
     /// Alias for [`search_by_embedding`](Self::search_by_embedding).
     ///
-    /// Provided for API parity with [`VectorCollection::search`].
+    /// Provided for API parity with [`crate::VectorCollection::search`].
     ///
     /// # Errors
     ///
