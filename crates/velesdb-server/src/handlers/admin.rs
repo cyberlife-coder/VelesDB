@@ -131,6 +131,101 @@ pub async fn rebuild_index(
     }
 }
 
+/// Vacuums the HNSW index of a vector collection, removing tombstoned
+/// entries and rebuilding the graph from current vectors.
+///
+/// Semantically equivalent to `POST /collections/{name}/index/rebuild`
+/// but exposed under a more intuitive maintenance-oriented name.
+///
+/// This is a blocking operation: for large collections it may take
+/// several seconds.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/vacuum",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Index vacuumed", body = Object),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 500, description = "Vacuum failed", body = ErrorResponse)
+    )
+)]
+pub async fn vacuum_collection(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    let result = tokio::task::spawn_blocking(move || collection.rebuild_index()).await;
+    match result {
+        Ok(Ok(compacted)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": "Index vacuumed",
+                "collection": name,
+                "compacted_entries": compacted
+            })),
+        )
+            .into_response(),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(join_err) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("vacuum task panicked: {join_err}"),
+        ),
+    }
+}
+
+/// Compacts the vector storage of a collection, rewriting active vectors
+/// into a contiguous layout and reclaiming disk space from deleted entries.
+///
+/// This is a blocking operation that may involve significant I/O for
+/// large, fragmented collections.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/compact",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Storage compacted", body = Object),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 500, description = "Compaction failed", body = ErrorResponse)
+    )
+)]
+pub async fn compact_collection(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    let result = tokio::task::spawn_blocking(move || collection.compact_storage()).await;
+    match result {
+        Ok(Ok(bytes_reclaimed)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": "Storage compacted",
+                "collection": name,
+                "bytes_reclaimed": bytes_reclaimed
+            })),
+        )
+            .into_response(),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(join_err) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("compact task panicked: {join_err}"),
+        ),
+    }
+}
+
 /// Analyze a collection, computing and persisting statistics.
 #[utoipa::path(
     post,

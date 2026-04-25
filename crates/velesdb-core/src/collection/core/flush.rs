@@ -343,6 +343,21 @@ impl Collection {
             .map_err(|e| Error::Index(format!("HNSW vacuum failed: {e}")))
     }
 
+    /// Compacts the vector storage, rewriting active vectors into a
+    /// contiguous layout and reclaiming disk space from deleted entries.
+    ///
+    /// Returns the number of bytes reclaimed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the compaction I/O fails.
+    pub(crate) fn compact_vector_storage(&self) -> Result<usize> {
+        self.vector_storage
+            .write()
+            .compact()
+            .map_err(|e| Error::Storage(format!("storage compaction failed: {e}")))
+    }
+
     /// Applies post-creation overrides to the advanced configuration
     /// fields and persists the updated `config.json` atomically.
     ///

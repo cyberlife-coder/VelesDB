@@ -44,8 +44,13 @@ pub async fn multi_query_search(
             Err(resp) => return resp,
         };
 
+    // Record query type only after confirming the collection exists, so
+    // 404s do not inflate queries_total or vector_queries.
+    state.operational_metrics.record_vector_query();
+
     let client_id = extract_client_id(&headers);
     if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        state.operational_metrics.inc_rate_limited();
         return resp;
     }
 
@@ -63,6 +68,7 @@ pub async fn multi_query_search(
             sparse_weight: req.sparse_weight,
         },
         _ => {
+            state.operational_metrics.inc_errors();
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -74,13 +80,14 @@ pub async fn multi_query_search(
                     code: None,
                 }),
             )
-                .into_response()
+                .into_response();
         }
     };
 
     let expected_dimension = collection.config().dimension;
     for (idx, vector) in req.vectors.iter().enumerate() {
         if let Err(error) = validate_query_dimension(&state, &name, expected_dimension, vector) {
+            state.operational_metrics.inc_errors();
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -102,7 +109,10 @@ pub async fn multi_query_search(
     let filter = match req.filter.as_ref() {
         Some(filter_json) => match parse_filter_or_400(filter_json, &state.onboarding_metrics) {
             Ok(f) => Some(f),
-            Err(resp) => return resp,
+            Err(resp) => {
+                state.operational_metrics.inc_errors();
+                return resp;
+            }
         },
         None => None,
     };
@@ -128,7 +138,10 @@ pub async fn multi_query_search(
 
     let search_result = match work_result {
         Ok(inner) => inner,
-        Err(resp) => return resp,
+        Err(resp) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
     };
 
     finish_search_with_cb(&state, &name, start, &collection, search_result)

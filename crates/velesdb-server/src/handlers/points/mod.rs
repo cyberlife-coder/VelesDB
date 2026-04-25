@@ -295,3 +295,97 @@ fn build_scroll_response(batch: velesdb_core::ScrollBatch) -> axum::response::Re
     })
     .into_response()
 }
+
+/// Maximum number of IDs in a single bulk delete request.
+const MAX_BULK_DELETE_SIZE: usize = 10_000;
+
+/// Request body for bulk point deletion.
+#[derive(serde::Deserialize, utoipa::ToSchema)]
+pub struct BulkDeleteRequest {
+    /// List of point IDs to delete.
+    pub ids: Vec<u64>,
+}
+
+/// Deletes multiple points by ID in a single request.
+///
+/// Accepts a JSON body with a list of point IDs. All IDs are passed to
+/// the underlying `Collection::delete(&[u64])` in one call, which is
+/// more efficient than individual deletions.
+///
+/// Returns the number of points that were requested for deletion.
+/// Points that do not exist are silently skipped (idempotent delete).
+///
+/// # Empty payload semantics
+///
+/// `{ "ids": [] }` is treated as a successful no-op: the response is
+/// `200 OK` with `deleted_count = 0`. This matches Kubernetes-style
+/// idempotent batch APIs and lets callers send empty batches without
+/// special-casing on the client side.
+///
+/// # Limits
+///
+/// Batches larger than `MAX_BULK_DELETE_SIZE` (10000) are rejected with
+/// `400 BAD_REQUEST`.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/points/delete",
+    tag = "points",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = BulkDeleteRequest,
+    responses(
+        (status = 200, description = "Points deleted", body = Object),
+        (status = 400, description = "Batch too large", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 500, description = "Delete failed", body = ErrorResponse)
+    )
+)]
+pub async fn bulk_delete_points(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<BulkDeleteRequest>,
+) -> impl IntoResponse {
+    if req.ids.is_empty() {
+        return Json(serde_json::json!({
+            "message": "No points to delete",
+            "collection": name,
+            "deleted_count": 0
+        }))
+        .into_response();
+    }
+
+    if req.ids.len() > MAX_BULK_DELETE_SIZE {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Batch too large: {} IDs (max {MAX_BULK_DELETE_SIZE})",
+                req.ids.len()
+            ),
+        );
+    }
+
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    let ids = req.ids;
+    let count = ids.len();
+    let coll_name = name.clone();
+
+    let result = tokio::task::spawn_blocking(move || collection.delete(&ids)).await;
+    match result {
+        Ok(Ok(())) => Json(serde_json::json!({
+            "message": "Points deleted",
+            "collection": coll_name,
+            "deleted_count": count
+        }))
+        .into_response(),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(join_err) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("bulk_delete task panicked: {join_err}"),
+        ),
+    }
+}

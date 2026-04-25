@@ -262,8 +262,11 @@ impl DurationHistogram {
                 return;
             }
         }
-        // Value exceeds all buckets - count in last bucket
-        self.buckets[7].fetch_add(1, Ordering::Relaxed);
+        // Value exceeds all buckets — only the +Inf bucket (derived from
+        // `count`) captures it.  Do NOT increment buckets[7] here: the
+        // Prometheus export accumulates buckets cumulatively, so adding to
+        // the last named bucket would make le="5.0" include observations
+        // >5.0s, violating histogram semantics.
     }
 
     /// Exports histogram in Prometheus format.

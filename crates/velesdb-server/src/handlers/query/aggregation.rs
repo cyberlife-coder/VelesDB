@@ -62,24 +62,30 @@ pub(crate) fn execute_aggregation_query(
     } else if let Some(any) = state.db.get_any_collection(collection_name) {
         any.execute_aggregate(parsed, params)
     } else {
+        state.operational_metrics.inc_errors();
         return velesql_collection_not_found(collection_name);
     };
 
     let result = match result {
         Ok(r) => r,
         Err(e) => {
+            state.operational_metrics.inc_errors();
             return velesql_error(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "VELESQL_AGGREGATION_ERROR",
                 &e.to_string(),
                 "Verify GROUP BY/HAVING clauses and aggregate function arguments",
                 None,
-            )
+            );
         }
     };
 
-    let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let elapsed = start.elapsed();
+    let timing_ms = elapsed.as_secs_f64() * 1000.0;
     notify_query_timing(state, collection_name, start);
+    state
+        .query_duration_histogram
+        .observe(elapsed.as_secs_f64());
     let count = aggregation_result_count(&result);
 
     Json(AggregationResponse {
@@ -141,13 +147,18 @@ pub async fn aggregate(
     Json(req): Json<QueryRequest>,
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
+    state.operational_metrics.inc_queries();
 
     let parsed = match parse_and_validate(&req.query) {
         Ok(q) => q,
-        Err(resp) => return resp,
+        Err(resp) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
     };
 
     if parsed.is_match_query() || !is_aggregation_query(&parsed.select) {
+        state.operational_metrics.inc_errors();
         return velesql_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "VELESQL_AGGREGATION_ERROR",
@@ -160,7 +171,10 @@ pub async fn aggregate(
     let collection_name = resolve_aggregate_collection(&parsed, &req);
     let collection_name = match collection_name {
         Ok(name) => name,
-        Err(resp) => return resp,
+        Err(resp) => {
+            state.operational_metrics.inc_errors();
+            return resp;
+        }
     };
 
     execute_aggregation_query(&state, &collection_name, &parsed, &req.params, start)

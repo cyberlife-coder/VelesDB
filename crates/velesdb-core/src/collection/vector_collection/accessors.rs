@@ -94,6 +94,23 @@ impl VectorCollection {
         self.inner.vacuum_hnsw_index()
     }
 
+    /// Compacts the underlying vector storage, rewriting active vectors
+    /// into a contiguous layout and reclaiming disk space occupied by
+    /// deleted entries.
+    ///
+    /// Returns the number of bytes reclaimed.
+    ///
+    /// Used by the server admin endpoint
+    /// `POST /collections/{name}/compact`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the compaction I/O fails (e.g. disk full,
+    /// file lock contention).
+    pub fn compact_storage(&self) -> crate::error::Result<usize> {
+        self.inner.compact_vector_storage()
+    }
+
     /// Applies post-creation overrides to the advanced configuration
     /// fields (`pq_rescore_oversampling`, `deferred_indexing`,
     /// `async_index_builder`) and persists the updated `config.json`.
