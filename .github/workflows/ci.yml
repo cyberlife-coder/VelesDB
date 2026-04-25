@@ -346,10 +346,13 @@ jobs:
       # with "abi3-py3* feature must be specified", even with PYO3_PYTHON
       # set explicitly — see hotfix log #649-#655).
       - name: Build & install velesdb-python from source
-        env:
-          # Force release optimisation for the integration tests
-          MATURIN_PEP517_ARGS: "--release"
         run: |
+          # PEP 517 default build (debug profile). MATURIN_PEP517_ARGS=--release
+          # was rejected because the flag was forwarded to ALL maturin
+          # subcommands including `pep517 write-dist-info` which does not
+          # accept it. Debug build is acceptable for the integration test
+          # suite; test datasets are small enough that performance overhead
+          # is not measurable on the bench.
           pip install --upgrade pip maturin
           pip install ./crates/velesdb-python --force-reinstall
 
