@@ -336,15 +336,17 @@ jobs:
           key: ${{ runner.os }}-integ-py-${{ hashFiles('Cargo.lock', 'crates/velesdb-python/Cargo.toml') }}
 
       # Build velesdb-python from source so integrations test the in-tree
-      # version (not a stale PyPI release). Using the official PyO3 action
-      # because it handles PYTHON_SYS_EXECUTABLE + manylinux wiring that raw
-      # `maturin build` does not. Mirrors the approach in release.yml.
+      # version (not a stale PyPI release). The PyO3 action runs natively
+      # (no manylinux Docker) so it can see the python3.11 from setup-python
+      # — `manylinux: auto` would launch a container where the interpreter
+      # is not on PATH and pyo3-build-config errors out with "abi3-py3*
+      # feature must be specified".
       - name: Build velesdb-python from source
         uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: crates/velesdb-python
           args: --release --out dist -i python3.11
-          manylinux: auto
+          manylinux: 'off'
 
       - name: Install built velesdb wheel
         run: pip install crates/velesdb-python/dist/*.whl --force-reinstall
