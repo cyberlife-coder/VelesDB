@@ -62,6 +62,18 @@ impl OperationalMetrics {
         Arc::new(Self::new())
     }
 
+    /// Deprecated alias of [`OperationalMetrics::new_arc`].
+    ///
+    /// The original name implied a global singleton, but the
+    /// implementation always returned a fresh `Arc::new(Self::new())`.
+    /// Kept as a forwarding alias to preserve the v1.13.1 public API
+    /// surface; callers should migrate to `new_arc`.
+    #[must_use]
+    #[deprecated(since = "1.13.2", note = "use `OperationalMetrics::new_arc` instead")]
+    pub fn shared() -> Arc<Self> {
+        Self::new_arc()
+    }
+
     /// Increments the total query counter.
     pub fn inc_queries(&self) {
         self.queries_total.fetch_add(1, Ordering::Relaxed);
