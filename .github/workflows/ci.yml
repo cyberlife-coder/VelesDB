@@ -335,21 +335,19 @@ jobs:
             crates/velesdb-python/target
           key: ${{ runner.os }}-integ-py-${{ hashFiles('Cargo.lock', 'crates/velesdb-python/Cargo.toml') }}
 
-      - name: Build velesdb-python from source (ensures integrations test the in-tree version, not a stale PyPI release)
-        run: |
-          pip install maturin
-          cd crates/velesdb-python
-          # Use `build` + `pip install` — `maturin develop` requires an active virtualenv
-          # which setup-python does not provide on GitHub runners.
-          # No explicit --features: velesdb-python's default already enables
-          # `velesdb-core/default` which includes `persistence`. Passing
-          # `--features persistence` fails because velesdb-python itself does
-          # not declare a `persistence` feature.
-          # Explicit -i python3.11 matches the setup-python version above.
-          # Without it, maturin cannot locate the interpreter and pyo3-build-config
-          # errors with "abi3-py3* feature must be specified".
-          maturin build --release --out dist -i python3.11
-          pip install dist/*.whl --force-reinstall
+      # Build velesdb-python from source so integrations test the in-tree
+      # version (not a stale PyPI release). Using the official PyO3 action
+      # because it handles PYTHON_SYS_EXECUTABLE + manylinux wiring that raw
+      # `maturin build` does not. Mirrors the approach in release.yml.
+      - name: Build velesdb-python from source
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        with:
+          working-directory: crates/velesdb-python
+          args: --release --out dist -i python3.11
+          manylinux: auto
+
+      - name: Install built velesdb wheel
+        run: pip install crates/velesdb-python/dist/*.whl --force-reinstall
 
       - name: Install velesdb-common (local shared package)
         run: pip install -e integrations/common
