@@ -73,7 +73,7 @@ class TestGraphLoader:
 
         loader = GraphLoader(mock_store)
         loader.add_edge(
-            id=1,
+            edge_id=1,
             source=100,
             target=200,
             label="WORKS_AT",
@@ -388,7 +388,10 @@ class TestGraphRetriever:
         mock_index = MagicMock()
         mock_index._vector_store = mock_vector_store
 
-        retriever = GraphRetriever(index=mock_index)
+        # Use REST mode so the constructor does not require `graph_collection_name`
+        # (a `db_path` is also required for native mode). The unit test only
+        # exercises `_fetch_node` which delegates to the mocked vector store.
+        retriever = GraphRetriever(index=mock_index, mode="rest")
         node = retriever._fetch_node(42)
 
         mock_vector_store.get_nodes.assert_called_once_with(["42"])
