@@ -245,31 +245,31 @@ Contributors are recognized in:
 
 ## Release Process
 
-VelesDB utilise **3 workflows GitHub Actions simplifiés** :
+VelesDB uses **3 simplified GitHub Actions workflows**:
 
-| Workflow | Fonction |
-|----------|----------|
+| Workflow | Purpose |
+|----------|---------|
 | `ci.yml` | Tests, lint, security |
-| `release.yml` | Publication complète (binaries, crates.io, PyPI, npm) |
+| `release.yml` | Full publish (binaries, crates.io, PyPI, npm) |
 | `bench-regression.yml` | Benchmarks |
 
-### Publier une release
+### Publishing a release
 
 ```bash
-# 1. Mettre à jour version dans Cargo.toml
-# 2. Commit et tag
+# 1. Update version in Cargo.toml
+# 2. Commit and tag
 git commit -am "release: v1.11.1"
 git tag v1.11.1
 git push origin main v1.11.1
 ```
 
-Le workflow `release.yml` publie automatiquement sur :
+The `release.yml` workflow automatically publishes to:
 - GitHub Releases (binaries)
 - crates.io
 - PyPI
 - npm
 
-📖 Guide complet : [docs/contributing/RELEASE.md](docs/contributing/RELEASE.md)
+📖 Full guide: [docs/contributing/RELEASE.md](docs/contributing/RELEASE.md)
 
 ---
 
