@@ -188,6 +188,25 @@ class Collection:
         """Return the number of points in the collection."""
         ...
 
+    def __contains__(self, point_id: int) -> bool:
+        """Membership test: ``id in collection``."""
+        ...
+
+    def __enter__(self) -> "Collection":
+        """Context manager entry — returns ``self``."""
+        ...
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        """Context manager exit — calls :py:meth:`close` and propagates exceptions."""
+        ...
+
+    def close(self) -> None:
+        """Graceful shutdown: full durability flush including ``vectors.idx``.
+
+        Idempotent — safe to call multiple times.
+        """
+        ...
+
     def upsert(self, points: List[Dict[str, Any]]) -> int:
         """Insert or update vectors in the collection.
 
@@ -1389,6 +1408,25 @@ class PyGraphCollection:
 
         Returns:
             True if the edge existed and was removed
+        """
+        ...
+
+    def __contains__(self, node_id: int) -> bool:
+        """Membership test: ``node_id in graph`` (true if node has a payload)."""
+        ...
+
+    def __enter__(self) -> "PyGraphCollection":
+        """Context manager entry — returns ``self``."""
+        ...
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        """Context manager exit — calls :py:meth:`close` and propagates exceptions."""
+        ...
+
+    def close(self) -> None:
+        """Graceful shutdown: full durability flush including WAL serialization.
+
+        Idempotent — safe to call multiple times.
         """
         ...
 

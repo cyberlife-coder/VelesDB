@@ -511,6 +511,50 @@ impl PyGraphCollection {
             self.inner.has_embeddings(),
         )
     }
+
+    /// Membership test: ``node_id in graph``.
+    ///
+    /// Args:
+    ///     node_id: The node ID to look up
+    ///
+    /// Returns:
+    ///     bool: True if a node with that ID has a stored payload
+    ///
+    /// Note: signature must omit ``py: Python<'_>`` so PyO3 installs this
+    /// as the ``sq_contains`` slot. Uses ``get_node_payload`` because
+    /// graph nodes are payload-addressed (not vector-addressed like
+    /// :py:class:`Collection`).
+    fn __contains__(&self, node_id: u64) -> bool {
+        matches!(self.inner.get_node_payload(node_id), Ok(Some(_)))
+    }
+
+    /// Graceful shutdown: full durability flush including WAL serialization.
+    ///
+    /// Idempotent — safe to call multiple times. Equivalent to
+    /// :py:meth:`flush_full` but named so graph collections can be used
+    /// as a context manager.
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+    }
+
+    /// Context manager entry — returns ``self``.
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    /// Context manager exit — calls :py:meth:`close` and re-raises any
+    /// exception raised inside the ``with`` block.
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __exit__(
+        &self,
+        py: Python<'_>,
+        _exc_type: Option<PyObject>,
+        _exc_value: Option<PyObject>,
+        _traceback: Option<PyObject>,
+    ) -> PyResult<bool> {
+        self.close(py)?;
+        Ok(false)
+    }
 }
 
 // ---------------------------------------------------------------------------

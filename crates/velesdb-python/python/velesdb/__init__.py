@@ -137,6 +137,26 @@ class Collection:
     def __len__(self) -> int:
         return self._inner.__len__()
 
+    # Pythonic protocols (#426) — must live on the wrapper class because
+    # CPython resolves dunder methods via slot lookup on type(obj),
+    # bypassing __getattr__ delegation.
+    def __contains__(self, point_id: int) -> bool:
+        return self._inner.__contains__(int(point_id))
+
+    def __enter__(self) -> "Collection":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_value: Any, _traceback: Any) -> bool:
+        self._inner.close()
+        return False
+
+    def close(self) -> None:
+        """Graceful shutdown: full durability flush including ``vectors.idx``.
+
+        Idempotent — safe to call multiple times.
+        """
+        self._inner.close()
+
     def upsert(
         self,
         points_or_id: Any,
