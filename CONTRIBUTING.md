@@ -230,11 +230,17 @@ docs(readme): update quick start guide
 - Keep README focused on getting started
 - Put detailed docs in the `/docs` folder
 
+## Contributor License Agreement (CLA)
+
+By submitting a pull request, you agree to the VelesDB CLA: you grant cyberlife-coder a perpetual, worldwide, non-exclusive, royalty-free license to use, modify, and distribute your contribution under the terms of the [Elastic License 2.0](LICENSE) or any future license chosen by the project.
+
+This is required to allow VelesDB to offer commercial licensing alongside the source-available version. All past contributions are covered retroactively.
+
 ## Recognition
 
-Contributors will be recognized in:
-- The project's README
-- Release notes for significant contributions
+Contributors are recognized in:
+- [CONTRIBUTORS.md](CONTRIBUTORS.md) — full list with PR links
+- Release notes for each version they contributed to
 - Our Discord community
 
 ## Release Process
