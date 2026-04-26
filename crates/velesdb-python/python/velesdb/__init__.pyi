@@ -260,6 +260,25 @@ class Collection:
         The numpy array must be C-contiguous (row-major). If not,
         a ValueError is raised.
 
+        Performance ranking (fresh collection, 384D, i9-class CPU)::
+
+            upsert (list of dicts)       ~5 000 vec/s
+            upsert_bulk (list of dicts)  ~12 000 vec/s
+            upsert_bulk_numpy            ~17 000 vec/s   <-- this method
+
+        Best practices:
+            * Always pass float32 numpy arrays (float64 forces a conversion).
+            * Use C-contiguous arrays (the default; ``np.ascontiguousarray()``
+              to fix non-contiguous slices).
+            * Chunk batches into 5 000-row sub-batches when ``n > 50 000`` to
+              keep peak RSS bounded by ``~5 000 * dim * 4 bytes``.
+            * For payload-heavy data, prefer :py:meth:`upsert_bulk_numpy_json`
+              (pre-serialized payloads) over passing payload dicts here.
+
+        See ``docs/guides/PYTHON_PERFORMANCE.md`` (Section 1, "Choose the
+        right insert method") for the full comparison table and memory
+        profile.
+
         Args:
             vectors: numpy.ndarray of shape (n, dimension), dtype float32, C-contiguous
             ids: list of int or numpy uint64 array (length n)
