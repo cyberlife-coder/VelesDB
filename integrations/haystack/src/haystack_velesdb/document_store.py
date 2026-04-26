@@ -22,7 +22,10 @@ __all__ = ["VelesDBDocumentStore"]
 _DEFAULT_COLLECTION = "haystack_documents"
 _DEFAULT_DIMENSION = 768
 _DEFAULT_METRIC = "cosine"
+_DEFAULT_SCROLL_LIMIT = 10_000
 _INT63_MASK = (1 << 63) - 1
+# Reserved keys stored by this integration in the VelesDB payload.
+_RESERVED_PAYLOAD_KEYS = frozenset({"_doc_id", "content"})
 
 
 def _str_id_to_int(doc_id: str) -> int:
@@ -31,12 +34,23 @@ def _str_id_to_int(doc_id: str) -> int:
 
 
 def _doc_to_point(doc: Document) -> dict:
-    """Convert a Haystack Document to a VelesDB point dict."""
-    payload: dict = {"_doc_id": doc.id}
+    """Convert a Haystack Document to a VelesDB point dict.
+
+    Reserved payload keys (``_doc_id``, ``content``) are always written from
+    the document's canonical fields, not from ``doc.meta``.  Any meta entry
+    that shares a reserved name is silently dropped from the payload to
+    prevent round-trip corruption.
+    """
+    payload: dict = {}
+    # Merge meta first; reserved keys are excluded so they cannot
+    # clobber the canonical doc identity written below.
+    if doc.meta:
+        for k, v in doc.meta.items():
+            if k not in _RESERVED_PAYLOAD_KEYS:
+                payload[k] = v
+    payload["_doc_id"] = doc.id
     if doc.content is not None:
         payload["content"] = doc.content
-    if doc.meta:
-        payload.update(doc.meta)
     point: dict = {"id": _str_id_to_int(doc.id), "payload": payload}
     if doc.embedding is not None:
         point["vector"] = list(doc.embedding)
@@ -48,7 +62,7 @@ def _result_to_doc(result: dict, *, scale_score: bool = False) -> Document:
     payload = result.get("payload", {})
     doc_id = payload.get("_doc_id", str(result.get("id", "")))
     content = payload.get("content")
-    meta = {k: v for k, v in payload.items() if k not in {"_doc_id", "content"}}
+    meta = {k: v for k, v in payload.items() if k not in _RESERVED_PAYLOAD_KEYS}
     raw_score: Optional[float] = result.get("score")
     if scale_score and raw_score is not None:
         # Normalise cosine similarity from [-1, 1] to [0, 1].
@@ -70,6 +84,8 @@ class VelesDBDocumentStore:
         collection_name: Name of the VelesDB collection to use.
         embedding_dim: Dimensionality of the embedding vectors.
         metric: Distance metric: ``"cosine"``, ``"dot"``, or ``"l2"``.
+        scroll_limit: Maximum documents returned by :meth:`filter_documents`.
+            Increase this value when your collection exceeds 10 000 documents.
     """
 
     def __init__(
@@ -78,11 +94,13 @@ class VelesDBDocumentStore:
         collection_name: str = _DEFAULT_COLLECTION,
         embedding_dim: int = _DEFAULT_DIMENSION,
         metric: str = _DEFAULT_METRIC,
+        scroll_limit: int = _DEFAULT_SCROLL_LIMIT,
     ) -> None:
         self._path = path
         self._collection_name = collection_name
         self._embedding_dim = embedding_dim
         self._metric = metric
+        self._scroll_limit = scroll_limit
         self._db: Optional[Any] = None
         self._collection: Optional[Any] = None
 
@@ -120,9 +138,14 @@ class VelesDBDocumentStore:
     ) -> List[Document]:
         """Return documents matching *filters*, or all documents when *None*.
 
-        Passes *filters* directly to VelesDB's scroll operation.
+        Passes *filters* directly to VelesDB's scroll operation.  At most
+        ``self._scroll_limit`` documents are returned per call; set
+        ``scroll_limit`` on the constructor for collections larger than the
+        default 10 000.
         """
-        raw: List[dict] = self._get_collection().scroll(filter=filters, limit=10_000)
+        raw: List[dict] = self._get_collection().scroll(
+            filter=filters, limit=self._scroll_limit
+        )
         return [_result_to_doc(r) for r in raw]
 
     def write_documents(
@@ -191,6 +214,7 @@ class VelesDBDocumentStore:
             collection_name=self._collection_name,
             embedding_dim=self._embedding_dim,
             metric=self._metric,
+            scroll_limit=self._scroll_limit,
         )
 
     @classmethod

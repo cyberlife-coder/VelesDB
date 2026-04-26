@@ -166,7 +166,6 @@ def test_scale_score_normalises_cosine() -> None:
     store.write_documents([Document(id="y", content="world", embedding=[1.0, 0.0])])
     scaled = store.embedding_retrieval([1.0, 0.0], scale_score=True)
     raw = store.embedding_retrieval([1.0, 0.0], scale_score=False)
-    # Fake collection always returns score=0.9
     assert scaled[0].score == (0.9 + 1.0) / 2.0
     assert raw[0].score == 0.9
 
@@ -177,8 +176,17 @@ def test_filter_documents_returns_all_when_none() -> None:
         Document(id="p", content="foo", embedding=[0.1, 0.2]),
         Document(id="q", content="bar", embedding=[0.7, 0.8]),
     ])
-    all_docs = store.filter_documents()
-    assert len(all_docs) == 2
+    assert len(store.filter_documents()) == 2
+
+
+def test_scroll_limit_is_respected() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_limit", scroll_limit=1)
+    store.write_documents([
+        Document(id="r", content="one", embedding=[0.1]),
+        Document(id="s", content="two", embedding=[0.2]),
+    ])
+    # With scroll_limit=1 the fake scroll caps at 1 result.
+    assert len(store.filter_documents()) == 1
 
 
 def test_delete_documents() -> None:
@@ -203,16 +211,39 @@ def test_document_metadata_round_trips() -> None:
     assert docs[0].meta.get("source") == "wiki"
 
 
+def test_reserved_meta_keys_do_not_corrupt_payload() -> None:
+    """doc.meta containing reserved keys must not overwrite canonical fields."""
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_reserved")
+    # A user accidentally sets meta keys that clash with our reserved names.
+    store.write_documents([
+        Document(
+            id="safe",
+            content="real content",
+            embedding=[0.1],
+            meta={"_doc_id": "evil_id", "content": "evil content"},
+        )
+    ])
+    docs = store.filter_documents()
+    assert docs[0].id == "safe", "_doc_id must come from doc.id, not meta"
+    assert docs[0].content == "real content", "content must come from doc.content, not meta"
+    # Reserved keys should not leak back into meta on retrieval.
+    assert "_doc_id" not in docs[0].meta
+    assert "content" not in docs[0].meta
+
+
 def test_serialisation_round_trip() -> None:
     store = _MOD.VelesDBDocumentStore(
         path="/tmp/hs_serial",
         collection_name="serial",
         embedding_dim=384,
         metric="l2",
+        scroll_limit=5_000,
     )
     d = store.to_dict()
     assert d["init_parameters"]["embedding_dim"] == 384
     assert d["init_parameters"]["metric"] == "l2"
+    assert d["init_parameters"]["scroll_limit"] == 5_000
     restored = _MOD.VelesDBDocumentStore.from_dict(d)
     assert restored._embedding_dim == 384
     assert restored._metric == "l2"
+    assert restored._scroll_limit == 5_000
