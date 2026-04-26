@@ -20,12 +20,12 @@ jobs:
        github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA')
     steps:
       - name: CLA Assistant
-        uses: contributor-assistant/github-action@v2.6.1
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           path-to-signatures: signatures/cla.json
-          path-to-document: https://github.com/cyberlife-coder/velesdb/blob/main/CONTRIBUTING.md#contributor-license-agreement-cla
+          path-to-document: https://github.com/cyberlife-coder/velesdb/blob/develop/CONTRIBUTING.md#contributor-license-agreement-cla
           branch: develop
           allowlist: cyberlife-coder,dependabot[bot],github-actions[bot]
           lock-pullrequest-aftermerge: false
