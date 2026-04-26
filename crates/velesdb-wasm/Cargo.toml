@@ -25,14 +25,18 @@ serde-wasm-bindgen = "0.6"
 velesdb-core = { workspace = true, default-features = false }
 
 # getrandom must use the JS backend on wasm32-unknown-unknown.
-# rand (used by velesdb-core for HNSW level selection) depends on getrandom 0.2
-# via rand_core. Without "js", getrandom refuses to compile for this target.
-# Declaring it here as a target-specific direct dependency forces Cargo to
-# activate the "js" feature in the dependency graph for this crate only,
-# leaving native (non-WASM) builds of all other crates unaffected.
+# rand 0.9 (used by velesdb-core for HNSW level selection) depends on
+# getrandom 0.3 via rand_core. Without "wasm_js" feature AND the
+# `getrandom_backend="wasm_js"` cfg flag, getrandom refuses to compile
+# for this target. The cfg flag is set globally in
+# .cargo/config.toml [target.wasm32-unknown-unknown].
+# Declaring the dep here as a target-specific direct dependency forces
+# Cargo to activate the "wasm_js" feature in the dependency graph for
+# this crate only, leaving native (non-WASM) builds of all other crates
+# unaffected.
 [target.'cfg(target_arch = "wasm32")'.dependencies.getrandom]
-version = "0.2"
-features = ["js"]
+version = "0.3"
+features = ["wasm_js"]
 
 [dependencies.js-sys]
 version = "0.3"
