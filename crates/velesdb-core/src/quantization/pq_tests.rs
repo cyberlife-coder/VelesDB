@@ -72,7 +72,7 @@ fn generate_clustered_vectors(
         let cluster = i % num_clusters;
         let v: Vec<f32> = centers[cluster]
             .iter()
-            .map(|&c| c + (rng.gen::<f32>() - 0.5) * 1.0)
+            .map(|&c| c + (rng.random::<f32>() - 0.5) * 1.0)
             .collect();
         vectors.push(v);
     }
@@ -461,7 +461,7 @@ fn generate_offset_clustered_vectors(
             let cluster = i % num_clusters;
             centers[cluster]
                 .iter()
-                .map(|&c| c + (rng.gen::<f32>() - 0.5) * noise)
+                .map(|&c| c + (rng.random::<f32>() - 0.5) * noise)
                 .collect()
         })
         .collect()
@@ -731,7 +731,7 @@ fn generate_directional_clustered_vectors(
 
         let dirs: Vec<Vec<f32>> = (0..3)
             .map(|_| {
-                let dir: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect();
+                let dir: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() - 0.5).collect();
                 let norm: f32 = dir.iter().map(|&x| x * x).sum::<f32>().sqrt();
                 dir.iter().map(|&x| x / norm).collect()
             })
@@ -746,9 +746,9 @@ fn generate_directional_clustered_vectors(
                 .map(|d| {
                     let mut val = cluster_centers[cluster][d];
                     for dir in &cluster_dirs[cluster] {
-                        val += (rng.gen::<f32>() - 0.5) * 15.0 * dir[d];
+                        val += (rng.random::<f32>() - 0.5) * 15.0 * dir[d];
                     }
-                    val += (rng.gen::<f32>() - 0.5) * 0.5;
+                    val += (rng.random::<f32>() - 0.5) * 0.5;
                     val
                 })
                 .collect()

@@ -120,7 +120,7 @@ fn run_insert(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..args.count {
         // Generate deterministic vector
         let vector: Vec<f32> = (0..args.dimension)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
 
         // Generate deterministic payload with checksum
@@ -159,7 +159,7 @@ fn run_query(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..check_count {
         // Regenerate the same vector
         let vector: Vec<f32> = (0..args.dimension)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
 
         // recall@5: HNSW is approximate — top-1 exact match is not guaranteed

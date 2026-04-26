@@ -132,7 +132,7 @@ fn init_random_orthonormal_matrix(d: usize, n: usize) -> Vec<Vec<f64>> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(init_seed);
 
     let mut cols: Vec<Vec<f64>> = (0..d)
-        .map(|_| (0..d).map(|_| rng.gen::<f64>() * 2.0 - 1.0).collect())
+        .map(|_| (0..d).map(|_| rng.random::<f64>() * 2.0 - 1.0).collect())
         .collect();
 
     orthonormalize_columns(&mut cols, d);

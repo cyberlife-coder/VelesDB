@@ -254,4 +254,49 @@ impl Collection {
     fn is_delta_active(&self) -> bool {
         self.inner.is_delta_active()
     }
+
+    /// Membership test: ``id in collection``.
+    ///
+    /// Args:
+    ///     id: The point ID to look up
+    ///
+    /// Returns:
+    ///     bool: True if a point with that ID exists in the collection
+    ///
+    /// Note: signature must omit ``py: Python<'_>`` so PyO3 installs this
+    /// as the ``sq_contains`` slot. Otherwise Python falls back to
+    /// ``__iter__`` and raises ``TypeError`` for the ``in`` operator.
+    fn __contains__(&self, id: u64) -> PyResult<bool> {
+        Ok(self.inner.get(&[id]).into_iter().next().flatten().is_some())
+    }
+
+    /// Graceful shutdown: full durability flush including ``vectors.idx``.
+    ///
+    /// Idempotent — safe to call multiple times. Equivalent to
+    /// :py:meth:`flush_full` but named so collections can be used as a
+    /// context manager (``with`` statement).
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        use crate::collection_helpers::core_err;
+        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+    }
+
+    /// Context manager entry — returns ``self`` so the collection can be
+    /// bound by the ``as`` clause in a ``with`` statement.
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    /// Context manager exit — calls :py:meth:`close` and re-raises any
+    /// exception raised inside the ``with`` block.
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __exit__(
+        &self,
+        py: Python<'_>,
+        _exc_type: Option<PyObject>,
+        _exc_value: Option<PyObject>,
+        _traceback: Option<PyObject>,
+    ) -> PyResult<bool> {
+        self.close(py)?;
+        Ok(false)
+    }
 }
