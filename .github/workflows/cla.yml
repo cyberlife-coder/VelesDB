@@ -7,7 +7,6 @@ on:
     types: [opened, closed, synchronize]
 
 permissions:
-  actions: write
   contents: write
   pull-requests: write
   statuses: write
