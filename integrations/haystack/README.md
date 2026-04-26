@@ -106,9 +106,16 @@ print(result["retriever"]["documents"])
 | `delete_documents(document_ids)` | Delete by Haystack string IDs |
 | `to_dict()` / `from_dict()` | Haystack pipeline serialisation |
 
-**Note on `DuplicatePolicy`:** VelesDB uses upsert semantics — a document
-with the same ID always overwrites the previous version regardless of the
-`policy` argument.
+**Note on `DuplicatePolicy`:** `NONE` and `OVERWRITE` use VelesDB upsert semantics
+and always overwrite on collision.  `FAIL` is fully enforced: a pre-scan is
+performed before writing and `DuplicateDocumentError` is raised if any document
+already exists (prefer `OVERWRITE` or `NONE` for bulk loads to skip the scan cost).
+
+**Note on document IDs and SHA-256:** Haystack string IDs are mapped to 63-bit
+integers using the first 8 bytes of SHA-256 (~9.2 × 10¹⁸ slots).  For a
+1 M-document collection the collision probability is roughly 5 × 10⁻¹⁴, which
+is negligible for typical RAG workloads.  A `ValueError` is raised at write time
+if a collision is detected between a new document and an existing one.
 
 **Note on `scale_score`:** When `True` (default), cosine similarity scores
 are normalised from `[-1, 1]` to `[0, 1]` so they behave like probabilities

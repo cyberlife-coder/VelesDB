@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from haystack import default_from_dict, default_to_dict
 from haystack.dataclasses import Document
+from haystack.document_stores.errors import DuplicateDocumentError
 from haystack.document_stores.types import DuplicatePolicy
 
 import velesdb
@@ -29,7 +30,14 @@ _RESERVED_PAYLOAD_KEYS = frozenset({"_doc_id", "content"})
 
 
 def _str_id_to_int(doc_id: str) -> int:
-    """Map a Haystack string document ID to a stable positive 63-bit integer."""
+    """Map a Haystack string document ID to a stable positive 63-bit integer.
+
+    Uses the first 8 bytes of SHA-256, masked to 63 bits (~9.2 × 10¹⁸ slots).
+    Collision probability for a 1 M-document collection is roughly 5 × 10⁻¹⁴ —
+    negligible for typical RAG workloads but not zero.  If two distinct string
+    IDs produce the same integer ID, :meth:`write_documents` raises
+    :class:`ValueError` rather than silently overwriting the existing document.
+    """
     return int.from_bytes(hashlib.sha256(doc_id.encode()).digest()[:8], "big") & _INT63_MASK
 
 
@@ -113,14 +121,18 @@ class VelesDBDocumentStore:
         if self._db is None:
             self._db = velesdb.Database(self._path)
         if self._collection is None:
+            col: Optional[Any] = None
             try:
-                self._collection = self._db.get_collection(self._collection_name)
-            except Exception:
-                self._collection = self._db.create_collection(
+                col = self._db.get_collection(self._collection_name)
+            except KeyError:
+                pass
+            if col is None:
+                col = self._db.create_collection(
                     self._collection_name,
                     dimension=self._embedding_dim,
                     metric=self._metric,
                 )
+            self._collection = col
         return self._collection
 
     # ------------------------------------------------------------------
@@ -155,17 +167,68 @@ class VelesDBDocumentStore:
     ) -> int:
         """Write *documents* to VelesDB and return the number written.
 
-        VelesDB upsert semantics apply regardless of *policy*: an existing
-        point with the same integer ID is always overwritten.
+        VelesDB upsert semantics apply for policies other than ``FAIL``:
+        an existing point with the same integer ID is overwritten.
+
+        When *policy* is ``DuplicatePolicy.FAIL`` this method scans the
+        collection before writing and raises :class:`DuplicateDocumentError`
+        if any incoming document already exists.  For large collections
+        prefer ``OVERWRITE`` or ``NONE`` to avoid the pre-scan cost.
+
+        Raises:
+            DuplicateDocumentError: When *policy* is ``FAIL`` and at least
+                one document already exists in the store.
+            ValueError: When a SHA-256 hash collision is detected — two
+                distinct string IDs that map to the same integer ID.
         """
         if not documents:
             return 0
+
+        # Build int_id → str_id map and detect in-batch hash collisions.
+        int_id_map: Dict[int, str] = {}
+        for doc in documents:
+            iid = _str_id_to_int(doc.id)
+            if iid in int_id_map and int_id_map[iid] != doc.id:
+                raise ValueError(
+                    f"SHA-256 collision in write batch: '{int_id_map[iid]}' and "
+                    f"'{doc.id}' map to the same integer ID {iid}. "
+                    f"Rename one of the documents."
+                )
+            int_id_map[iid] = doc.id
+
+        col = self._get_collection()
+
+        if policy == DuplicatePolicy.FAIL:
+            # Pre-scan existing points that share an integer ID with an
+            # incoming document to detect duplicates and cross-ID collisions.
+            existing: Dict[int, str] = {
+                r["id"]: r.get("payload", {}).get("_doc_id", str(r["id"]))
+                for r in col.scroll(limit=self._scroll_limit)
+                if r.get("id") in int_id_map
+            }
+            conflicts: List[str] = []
+            for iid, str_id in int_id_map.items():
+                existing_str = existing.get(iid)
+                if existing_str is None:
+                    continue
+                if existing_str != str_id:
+                    raise ValueError(
+                        f"SHA-256 collision on write: incoming document '{str_id}' "
+                        f"maps to the same integer ID {iid} as existing document "
+                        f"'{existing_str}'. Rename one of the documents."
+                    )
+                conflicts.append(str_id)
+            if conflicts:
+                raise DuplicateDocumentError(
+                    f"Documents already exist (policy=FAIL): {conflicts}"
+                )
+
         points = []
         for doc in documents:
             if doc.embedding is None:
                 logger.warning("Document '%s' has no embedding; stored without vector.", doc.id)
             points.append(_doc_to_point(doc))
-        result = self._get_collection().upsert(points)
+        result = col.upsert(points)
         return result if isinstance(result, int) else len(points)
 
     def delete_documents(

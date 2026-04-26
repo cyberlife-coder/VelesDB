@@ -34,6 +34,10 @@ class DuplicatePolicy(Enum):
     FAIL = "fail"
 
 
+class DuplicateDocumentError(Exception):
+    pass
+
+
 # ---------------------------------------------------------------------------
 # Fake VelesDB objects — deterministic, no I/O
 # ---------------------------------------------------------------------------
@@ -112,6 +116,9 @@ def _load_module() -> types.ModuleType:
     types_mod = types.ModuleType("haystack.document_stores.types")
     types_mod.DuplicatePolicy = DuplicatePolicy  # type: ignore[attr-defined]
     sys.modules["haystack.document_stores.types"] = types_mod
+    errors_mod = types.ModuleType("haystack.document_stores.errors")
+    errors_mod.DuplicateDocumentError = DuplicateDocumentError  # type: ignore[attr-defined]
+    sys.modules["haystack.document_stores.errors"] = errors_mod
 
     sys.modules["velesdb"] = types.SimpleNamespace(Database=_FakeDatabase)  # type: ignore
 
@@ -229,6 +236,35 @@ def test_reserved_meta_keys_do_not_corrupt_payload() -> None:
     # Reserved keys should not leak back into meta on retrieval.
     assert "_doc_id" not in docs[0].meta
     assert "content" not in docs[0].meta
+
+
+def test_get_collection_catches_key_error_and_creates_collection() -> None:
+    """_get_collection catches KeyError from get_collection and falls back to create_collection."""
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_key_error_path")
+    # The fake raises KeyError for unknown collections; _get_collection should
+    # catch it and call create_collection instead of letting the error propagate.
+    assert store.count_documents() == 0
+    assert store._collection is not None
+
+
+def test_write_documents_fail_policy_raises_on_duplicate() -> None:
+    """DuplicatePolicy.FAIL raises DuplicateDocumentError when a document already exists."""
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_fail_dup")
+    doc = Document(id="dup1", content="original", embedding=[0.1, 0.2])
+    store.write_documents([doc])
+
+    import pytest
+    with pytest.raises(DuplicateDocumentError):
+        store.write_documents([doc], policy=DuplicatePolicy.FAIL)
+
+
+def test_write_documents_fail_policy_succeeds_for_new_docs() -> None:
+    """DuplicatePolicy.FAIL succeeds when none of the documents already exist."""
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_fail_new")
+    doc = Document(id="new_only", content="fresh", embedding=[0.5])
+    result = store.write_documents([doc], policy=DuplicatePolicy.FAIL)
+    assert result == 1
+    assert store.count_documents() == 1
 
 
 def test_serialisation_round_trip() -> None:
