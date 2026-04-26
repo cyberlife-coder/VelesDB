@@ -123,7 +123,7 @@ impl Collection {
         );
         let _ = dict.set_item(
             PyString::intern(py, "storage_mode"),
-            format!("{:?}", config.storage_mode).to_lowercase(),
+            config.storage_mode.canonical_name(),
         );
         let _ = dict.set_item(PyString::intern(py, "point_count"), config.point_count);
         let _ = dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only);
@@ -161,10 +161,11 @@ impl Collection {
     /// Get the storage mode of this collection.
     ///
     /// Returns:
-    ///     str: The storage mode (e.g. "full", "sq8", "binary")
+    ///     str: The canonical storage mode name (e.g. "full", "sq8", "binary",
+    ///          "pq", "rabitq").
     #[getter]
     fn storage_mode(&self) -> String {
-        format!("{:?}", self.inner.storage_mode()).to_lowercase()
+        self.inner.storage_mode().canonical_name().to_owned()
     }
 
     /// Get the number of points in the collection.
