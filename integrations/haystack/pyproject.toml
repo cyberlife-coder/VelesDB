@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "haystack-velesdb"
+version = "1.0.0"
+description = "Haystack 2.x DocumentStore for VelesDB: The Local AI Memory Database."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "VelesDB Team", email = "contact@wiscale.fr"}
+]
+keywords = ["haystack", "velesdb", "vector-database", "embeddings", "rag", "local-first", "semantic-search"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "haystack-ai>=2.0.0",
+    "velesdb>=1.12.0",
+    "velesdb-common>=1.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0,<9.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/cyberlife-coder/VelesDB"
+Documentation = "https://velesdb.com/docs/integrations/haystack"
+Repository = "https://github.com/cyberlife-coder/VelesDB"
+
+[tool.setuptools.packages.find]
+where = ["src"]
