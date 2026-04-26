@@ -3,10 +3,54 @@
 High-performance vector database with native Python bindings.
 """
 
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, overload
+from typing import Any, Dict, Iterator, List, Optional, Tuple, TypedDict, Union, overload
 import numpy as np
 
 __version__: str
+
+
+# ---------------------------------------------------------------------------
+# Structural return types (TypedDict)
+#
+# These describe the shape of dict payloads returned by collection methods so
+# that mypy / IDEs can reason about field access. They are runtime ``dict``
+# objects; ``TypedDict`` only narrows the static surface.
+# ---------------------------------------------------------------------------
+
+
+class SearchResultDict(TypedDict, total=False):
+    """Shape of a search result returned by VelesQL ``query`` and graph search."""
+
+    id: int
+    score: float
+    payload: Optional[Dict[str, Any]]
+
+
+class GraphEdgeDict(TypedDict, total=False):
+    """Shape of an edge dict returned by graph collection methods."""
+
+    id: int
+    source: int
+    target: int
+    label: str
+    properties: Dict[str, Any]
+
+
+class GraphNodeDict(TypedDict, total=False):
+    """Shape of a node dict returned by traversal and lookup methods."""
+
+    id: int
+    payload: Dict[str, Any]
+
+
+class TraversalResultDict(TypedDict, total=False):
+    """Shape of a traversal step (BFS/DFS) returned by ``traverse_*`` methods."""
+
+    node_id: int
+    depth: int
+    parent_id: Optional[int]
+    label: Optional[str]
+    payload: Optional[Dict[str, Any]]
 
 
 class FusionStrategy:
@@ -1043,10 +1087,10 @@ class GraphStore:
         """
         ...
 
-    def get_edges_by_label(self, label: str) -> List[Dict[str, Any]]: ...
-    def get_outgoing(self, node_id: int) -> List[Dict[str, Any]]: ...
-    def get_incoming(self, node_id: int) -> List[Dict[str, Any]]: ...
-    def get_outgoing_by_label(self, node_id: int, label: str) -> List[Dict[str, Any]]: ...
+    def get_edges_by_label(self, label: str) -> List[GraphEdgeDict]: ...
+    def get_outgoing(self, node_id: int) -> List[GraphEdgeDict]: ...
+    def get_incoming(self, node_id: int) -> List[GraphEdgeDict]: ...
+    def get_outgoing_by_label(self, node_id: int, label: str) -> List[GraphEdgeDict]: ...
 
     def traverse_bfs_streaming(
         self, start_node: int, config: StreamingConfig
@@ -1057,8 +1101,35 @@ class GraphStore:
 
 
 class PyGraphSchema:
-    """Schema definition for a graph collection."""
-    ...
+    """Schema definition for a graph collection.
+
+    A schema controls whether arbitrary node/edge labels are accepted
+    (``schemaless``) or restricted to a predefined set (``strict``). Use the
+    static constructors :py:meth:`schemaless` or :py:meth:`strict` rather
+    than instantiating directly.
+
+    Example:
+        >>> schema = GraphSchema.schemaless()
+        >>> schema.is_schemaless
+        True
+    """
+
+    @staticmethod
+    def schemaless() -> "PyGraphSchema":
+        """Create a schemaless graph schema that accepts any node/edge types."""
+        ...
+
+    @staticmethod
+    def strict() -> "PyGraphSchema":
+        """Create a strict graph schema (only predefined types allowed)."""
+        ...
+
+    @property
+    def is_schemaless(self) -> bool:
+        """True if the schema accepts any node/edge types."""
+        ...
+
+    def __repr__(self) -> str: ...
 
 
 class PyGraphCollection:
@@ -1099,15 +1170,15 @@ class PyGraphCollection:
         """
         ...
 
-    def get_edges(self, label: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_edges(self, label: Optional[str] = None) -> List[GraphEdgeDict]:
         """Get edges, optionally filtered by label."""
         ...
 
-    def get_outgoing(self, node_id: int) -> List[Dict[str, Any]]:
+    def get_outgoing(self, node_id: int) -> List[GraphEdgeDict]:
         """Get outgoing edges from a node."""
         ...
 
-    def get_incoming(self, node_id: int) -> List[Dict[str, Any]]:
+    def get_incoming(self, node_id: int) -> List[GraphEdgeDict]:
         """Get incoming edges to a node."""
         ...
 
@@ -1143,7 +1214,7 @@ class PyGraphCollection:
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[TraversalResultDict]:
         """Perform BFS traversal from a source node."""
         ...
 
@@ -1154,7 +1225,7 @@ class PyGraphCollection:
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[TraversalResultDict]:
         """Perform DFS traversal from a source node."""
         ...
 
@@ -1165,7 +1236,7 @@ class PyGraphCollection:
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[TraversalResultDict]:
         """Perform multi-source BFS traversal with deduplication.
 
         Args:
@@ -1181,7 +1252,7 @@ class PyGraphCollection:
         self,
         query: List[float],
         k: Optional[int] = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[SearchResultDict]:
         """Search for similar nodes by embedding vector."""
         ...
 
@@ -1189,7 +1260,7 @@ class PyGraphCollection:
         self,
         query_str: str,
         params: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[SearchResultDict]:
         """Execute a VelesQL query (SELECT or MATCH).
 
         Args:
