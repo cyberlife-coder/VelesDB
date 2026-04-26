@@ -232,7 +232,7 @@ docs(readme): update quick start guide
 
 ## Contributor License Agreement (CLA)
 
-By submitting a pull request, you agree to the VelesDB CLA: you grant cyberlife-coder a perpetual, worldwide, non-exclusive, royalty-free license to use, modify, and distribute your contribution under the terms of the [Elastic License 2.0](LICENSE) or any future license chosen by the project.
+By submitting a pull request, you agree to the VelesDB CLA: you grant cyberlife-coder a perpetual, worldwide, non-exclusive, royalty-free license to use, modify, and distribute your contribution under the terms of the [VelesDB Core License 1.0](LICENSE) or any future license chosen by the project.
 
 This is required to allow VelesDB to offer commercial licensing alongside the source-available version. All past contributions are covered retroactively.
 

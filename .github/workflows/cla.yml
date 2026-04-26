@@ -37,6 +37,6 @@ jobs:
 
             `I have read the CLA Document and I hereby sign the CLA`
 
-            This grants the project a license to use your contribution under the Elastic License 2.0 and future licensing terms.
+            This grants the project a license to use your contribution under the VelesDB Core License 1.0 and future licensing terms.
           custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
           custom-allsigned-prcomment: "All contributors have signed the CLA. Thank you!"
