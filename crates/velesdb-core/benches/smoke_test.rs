@@ -28,7 +28,7 @@ const SMOKE_K: usize = 10;
 
 fn generate_deterministic_vector(dim: usize, seed: u64) -> Vec<f32> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect()
+    (0..dim).map(|_| rng.random::<f32>() * 2.0 - 1.0).collect()
 }
 
 fn generate_deterministic_vectors(count: usize, dim: usize, base_seed: u64) -> Vec<Vec<f32>> {
