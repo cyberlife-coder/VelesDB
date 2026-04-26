@@ -423,6 +423,24 @@ class TestStorageMode:
         info = collection.info()
         assert info["storage_mode"] == expected_mode
 
+    def test_storage_mode_getter_matches_info(self, temp_db):
+        """Regression: collection.storage_mode getter must return the same
+        canonical name as info()['storage_mode'] for every mode.
+
+        Guards against the historical bug where the getter used
+        format!("{:?}", mode).to_lowercase() (yielding "productquantization")
+        while info() correctly used canonical_name() (yielding "pq").
+        """
+        for mode in ["full", "sq8", "binary", "pq", "rabitq"]:
+            coll = temp_db.create_collection(f"getter_{mode}", dimension=4, storage_mode=mode)
+            assert coll.storage_mode == coll.info()["storage_mode"], (
+                f"getter/info mismatch for storage_mode={mode}: "
+                f"getter={coll.storage_mode!r} info={coll.info()['storage_mode']!r}"
+            )
+            assert coll.storage_mode == mode, (
+                f"storage_mode getter must return canonical name {mode!r}, got {coll.storage_mode!r}"
+            )
+
     def test_storage_mode_search_accuracy(self, temp_db):
         """Test that search works correctly with different storage modes."""
         for mode in ["full", "sq8", "binary", "pq", "rabitq"]:
@@ -481,11 +499,16 @@ class TestDistanceMetrics:
         [
             ("cosine", "cosine"),
             ("euclidean", "euclidean"),
-            ("dot", "dotproduct"),   # "dot" is normalized to "dotproduct" internally
+            # The canonical name for DotProduct is "dot" — see
+            # DistanceMetric::canonical_name() in velesdb-core/src/distance.rs.
+            # Aliases like "dotproduct"/"inner"/"ip" are accepted on input
+            # (parse_alias) but always normalised back to "dot" on output.
+            ("dot", "dot"),
+            ("dotproduct", "dot"),
             ("hamming", "hamming"),
             ("jaccard", "jaccard"),
         ],
-        ids=["cosine", "euclidean", "dot", "hamming", "jaccard"],
+        ids=["cosine", "euclidean", "dot", "dot-alias", "hamming", "jaccard"],
     )
     def test_all_metrics_create(self, temp_db, metric, expected):
         """Test creating collections with all supported metrics."""
@@ -493,6 +516,30 @@ class TestDistanceMetrics:
         assert collection is not None
         info = collection.info()
         assert info["metric"] == expected
+
+    def test_metric_getter_matches_info(self, temp_db):
+        """Regression: collection.metric getter must return the same canonical
+        name as info()['metric'] for every metric, even when an alias was used
+        on input."""
+        for input_metric, canonical in [
+            ("cosine", "cosine"),
+            ("euclidean", "euclidean"),
+            ("dot", "dot"),
+            ("dotproduct", "dot"),  # alias normalised to canonical
+            ("hamming", "hamming"),
+            ("jaccard", "jaccard"),
+        ]:
+            coll = temp_db.create_collection(
+                f"metric_getter_{input_metric}", dimension=4, metric=input_metric
+            )
+            assert coll.metric == coll.info()["metric"], (
+                f"getter/info mismatch for metric={input_metric}: "
+                f"getter={coll.metric!r} info={coll.info()['metric']!r}"
+            )
+            assert coll.metric == canonical, (
+                f"metric getter must return canonical name {canonical!r} for input "
+                f"{input_metric!r}, got {coll.metric!r}"
+            )
 
 
 class TestMetadataOnlyCollections:
