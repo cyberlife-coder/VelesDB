@@ -27,6 +27,9 @@
 <p align="center">
   <a href="https://github.com/cyberlife-coder/VelesDB/releases/latest">Download latest release</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
+  <a href="ARCHITECTURE.md">Architecture</a> &bull;
+  <a href="ROADMAP.md">Roadmap</a> &bull;
+  <a href="QUALITY_BAR.md">Quality Bar</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
 </p>
