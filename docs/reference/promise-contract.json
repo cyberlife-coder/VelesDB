@@ -1,12 +1,13 @@
 {
-  "last_updated": "2026-04-23",
+  "last_updated": "2026-04-27",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
       "file": "README.md",
-      "must_contain": "HNSW Search (5K/768D, k=10)",
+      "must_contain": "HNSW Search index-only (5K/768D, k=10)",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
-      "source": "benchmarks/results/pr363_365_comparison.md (47-56µs measured)"
+      "source": "benchmarks/results/pr363_365_comparison.md (47-56µs measured) — relabeled as 'index-only' for transparency vs the canonical 450µs end-to-end number",
+      "last_updated": "2026-04-27"
     },
     {
       "id": "root_readme_simd_dot",
@@ -109,10 +110,10 @@
     {
       "id": "readme_sparse_search_latency",
       "file": "README.md",
-      "must_contain": "BM25 Sparse Search (10K docs, top-10)",
+      "must_contain": "BM25 Sparse Search index-only (10K docs, top-10)",
       "validation_command": "cargo bench -p velesdb-core --bench sparse_benchmark -- top10_10k_corpus",
-      "source": "PR #621 (commit f4999a74, Phase 4.2 pre-seed remediation): 956us baseline (v1.12) -> 57.6us after linear_scan_dense + k-way merge dedup for corpus <= 100K",
-      "last_updated": "2026-04-21"
+      "source": "PR #621 (commit f4999a74, Phase 4.2 pre-seed remediation): 956us baseline (v1.12) -> 57.6us after linear_scan_dense + k-way merge dedup for corpus <= 100K. Relabeled 'index-only' for transparency.",
+      "last_updated": "2026-04-27"
     }
   ]
 }
