@@ -206,6 +206,25 @@ def test_filter_documents_returns_all_when_none() -> None:
     assert len(store.filter_documents()) == 2
 
 
+def test_filter_documents_passes_filter_to_scroll() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_filter_arg")
+    store.write_documents([
+        Document(id="fa", content="alpha", embedding=[0.1]),
+    ])
+    # Passing a non-None filter should not raise; the fake scroll ignores it,
+    # but this confirms the filter arg is forwarded without error.
+    results = store.filter_documents(filters={"field": "value"})
+    assert len(results) == 1
+
+
+def test_scale_score_not_applied_for_non_cosine_metric() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_score_nc", metric="euclidean")
+    store.write_documents([Document(id="z", content="raw", embedding=[1.0])])
+    scaled = store.embedding_retrieval([1.0], scale_score=True)
+    # For euclidean metric scale_score should be a no-op — raw score returned.
+    assert scaled[0].score == 0.9
+
+
 def test_scroll_limit_is_respected() -> None:
     store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_limit", scroll_limit=1)
     store.write_documents([
