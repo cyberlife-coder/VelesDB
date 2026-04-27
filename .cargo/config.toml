@@ -35,21 +35,25 @@ test-all = "test --all-features"
 #   x86-64-v4: AVX-512 (2017+)
 # =============================================================================
 
-# Build profiles
-[profile.release]
-lto = "thin"
-codegen-units = 1
-panic = "abort"
+# Build profiles are defined in Cargo.toml (workspace root).
+#
+# Why here: Cargo merges [profile.release] from .cargo/config.toml and from
+# Cargo.toml, with config.toml values WINNING for matching keys. Having
+# duplicate definitions silently overrode Cargo.toml's `lto = true` (full LTO)
+# with `lto = "thin"` (thin LTO), downgrading release optimization in a way
+# that was invisible to anyone reading Cargo.toml. Removed — see issue #695.
+# Cargo.toml is now the single source of truth for release/bench optimization
+# flags.
+#
+# To override locally without committing (e.g. faster local link time):
+#   CARGO_PROFILE_RELEASE_LTO=thin cargo build --release
 
+# `release-with-debug` lives here because it inherits from the `release`
+# profile defined in Cargo.toml. Inheritance works regardless of which file
+# the parent profile is in.
 [profile.release-with-debug]
 inherits = "release"
 debug = true
-
-# Benchmark profile - optimized but faster compilation
-[profile.bench]
-lto = "thin"
-codegen-units = 1
-opt-level = 3
 
 # === LOCAL PERFORMANCE OPTIMIZATION ===
 # Uncomment ONLY for local development/benchmarking.
