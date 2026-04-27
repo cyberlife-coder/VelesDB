@@ -7,7 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — post-v1.13.3 work lives under feature branches tracked in [#634](https://github.com/cyberlife-coder/VelesDB/issues/634) (GPU hardening PR-C, PR-E) and the v1.14.0 milestone (#349, #379, #429, #469)._
+_Nothing yet — post-v1.13.4 work lives under the v1.14.0 milestone (#349 Haystack, #379 DX, #429 Python DataFrame, #469 CBO calibration)._
+
+## [1.13.4] — 2026-04-27
+
+### Summary
+
+Strictly additive patch release. Two themes:
+
+1. **Devin-flagged technical debt resolutions** — three follow-ups merged from the v1.13.3 review pass: LTO config canonical source, HNSW `search_batch_parallel` ef_search alignment, and the remaining `ef_search` call sites alignment.
+2. **Dependency hygiene batch** — seven Dependabot bumps validated and merged (one upload-artifact GH Action, two npm dev deps, four cargo deps including `roaring 0.11.4` for upstream bugfixes and `sha2 0.11.0`).
+
+This release is fully backward-compatible — no API breakage, no behavioural change in the canonical end-to-end performance path (450 µs p50 preserved).
+
+### Fixed
+
+- **HNSW batch search**: `HnswIndex::search_batch_parallel` now uses `ef_search_for_scale()` consistently with the single-search path, ensuring identical recall behaviour across batch and individual queries ([#698](https://github.com/cyberlife-coder/VelesDB/pull/698), closes [#695](https://github.com/cyberlife-coder/VelesDB/issues/695)).
+- **HNSW remaining call sites**: aligned all remaining `ef_search` invocations with `ef_search_for_scale` per Devin finding, completing the consistency pass started in v1.13.3 ([#700](https://github.com/cyberlife-coder/VelesDB/pull/700), closes [#699](https://github.com/cyberlife-coder/VelesDB/issues/699)).
+
+### Changed
+
+- **Build profile**: `Cargo.toml` is now the authoritative source for `[profile.release]` and `[profile.bench]` — removed duplicate definitions from per-crate manifests that could drift ([#697](https://github.com/cyberlife-coder/VelesDB/pull/697), closes [#694](https://github.com/cyberlife-coder/VelesDB/issues/694)).
+
+### Dependencies
+
+- **cargo**: `roaring 0.10.12 → 0.11.4` (upstream bugfixes: 32-bit overflow, `advance_back_to` invariant, vector sub zeros) ([#684](https://github.com/cyberlife-coder/VelesDB/pull/684)).
+- **cargo**: `sha2 0.10.9 → 0.11.0` (RustCrypto major; usage limited to standard `Sha256` Digest API, no breakage) ([#682](https://github.com/cyberlife-coder/VelesDB/pull/682)).
+- **cargo**: `indexmap 2.13.0 → 2.14.0` ([#687](https://github.com/cyberlife-coder/VelesDB/pull/687)).
+- **cargo**: `dialoguer 0.11.0 → 0.12.0` ([#686](https://github.com/cyberlife-coder/VelesDB/pull/686)).
+- **npm (dev)**: `@vitest/coverage-v8 4.0.16 → 4.1.5` ([#681](https://github.com/cyberlife-coder/VelesDB/pull/681)).
+- **npm (dev)**: `@types/node 20.19.27 → 25.6.0` ([#679](https://github.com/cyberlife-coder/VelesDB/pull/679)).
+- **GitHub Actions**: `actions/upload-artifact 6.0.0 → 7.0.1` ([#678](https://github.com/cyberlife-coder/VelesDB/pull/678)).
+
+### No-op
+
+- No public API change.
+- No behavioural change in the canonical 450 µs p50 end-to-end path.
+- No SemVer breakage. Workspace SDK versions (Rust crates, Python wheel, npm SDK) all bumped to `1.13.4`.
 
 ## [1.13.3] — 2026-04-27
 
