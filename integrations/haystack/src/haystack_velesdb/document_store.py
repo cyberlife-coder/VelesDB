@@ -104,7 +104,7 @@ class VelesDBDocumentStore:
             Increase this value when your collection exceeds 10 000 documents.
     """
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         path: str = "./velesdb_haystack",
         collection_name: str = _DEFAULT_COLLECTION,
