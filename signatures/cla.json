@@ -1,3 +1,12 @@
 {
-  "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "CrepuscularIRIS",
+      "id": 126939795,
+      "comment_id": 4328359213,
+      "created_at": "2026-04-27T15:41:51Z",
+      "repoId": 1118411810,
+      "pullRequestNo": 672
+    }
+  ]
 }

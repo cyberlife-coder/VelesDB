@@ -25,7 +25,12 @@ impl HnswIndex {
         k: usize,
         rerank_k: usize,
     ) -> crate::error::Result<Vec<ScoredResult>> {
-        let ef_search = SearchQuality::Accurate.ef_search(rerank_k);
+        // Issue #699 follow-up: align with HnswIndex::search_with_quality which
+        // uses ef_search_for_scale. The Accurate quality profile expects a
+        // scaled ef on >10K datasets; without scaling here, the rerank pool was
+        // smaller than what an explicit `search_with_quality(Accurate)` call
+        // would produce.
+        let ef_search = SearchQuality::Accurate.ef_search_for_scale(rerank_k, self.len());
         let adaptive_rerank_k = self
             .should_two_stage_rerank(SearchQuality::Accurate, k, ef_search)
             .unwrap_or(rerank_k.min(self.len().max(k)));

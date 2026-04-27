@@ -52,7 +52,7 @@ version = "1.11"
 version = "2.0"
 
 [dependencies.indexmap]
-version = "2.7"
+version = "2.14"
 
 # Lock-free concurrent HashMap for high-throughput parallel operations
 [dependencies.dashmap]
@@ -329,7 +329,7 @@ optional = true
 
 # Update check dependencies (optional, gated behind update-check feature)
 [dependencies.sha2]
-version = "0.10"
+version = "0.11"
 optional = true
 
 [dependencies.hex]

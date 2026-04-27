@@ -211,14 +211,20 @@ impl HnswIndex {
     ) -> crate::error::Result<Vec<Vec<ScoredResult>>> {
         self.validate_batch_dimensions(queries)?;
 
-        // Perfect, Adaptive, or very small collections: delegate to search_with_quality
-        // per-query to match single-query behavior.
+        // Perfect, Adaptive, AutoTune, or very small collections: delegate to
+        // search_with_quality per-query to match single-query behavior.
         // - Perfect: uses brute-force for 100% recall
         // - Adaptive: uses spread-based two-phase escalation (not batch-compatible)
+        // - AutoTune: computes auto-ef range per dataset/dim/k (issue #699 follow-up)
         // - Small (<=100): uses brute-force for fully-connected graph safety
+        //
+        // Without AutoTune in this list, batch + AutoTune would fall through to the
+        // standard ef_search_for_scale HNSW path below — same fixed quality for every
+        // query — which silently disables the adaptive ef-range mechanism that the
+        // single-query path applies via try_search_special_quality.
         if matches!(
             quality,
-            SearchQuality::Perfect | SearchQuality::Adaptive { .. }
+            SearchQuality::Perfect | SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
         ) || (self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty())
         {
             let results: crate::error::Result<Vec<Vec<ScoredResult>>> = queries
@@ -228,7 +234,13 @@ impl HnswIndex {
             return results;
         }
 
-        let ef_search = quality.ef_search(k);
+        // Aligned with single-query path (search.rs:339): use ef_search_for_scale
+        // so batch and single-query produce the same ef value for the same quality
+        // profile when dataset_size > 10K. Without this, batch queries on large
+        // datasets would silently use a lower ef than equivalent single queries,
+        // breaking the implicit contract that single and batch with the same
+        // quality return the same results. See issue #694.
+        let ef_search = quality.ef_search_for_scale(k, self.len());
 
         // Two-stage GPU/SIMD reranking for Balanced/Accurate/Custom qualities.
         if let Some(rerank_k) = self.should_two_stage_rerank(quality, k, ef_search) {
