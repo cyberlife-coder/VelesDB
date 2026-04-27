@@ -445,7 +445,12 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let metric = self.validate_query_and_read_metric(query)?;
 
-        let ef_search = quality.ef_search(k);
+        // Issue #699 follow-up: align with HnswIndex::search_with_quality which
+        // uses ef_search_for_scale. Without scaling, this no-rerank path produced
+        // a smaller ef than search_with_quality on >10K datasets, breaking the
+        // implicit contract that "no rerank" only suppresses reranking, not the
+        // candidate-pool sizing.
+        let ef_search = quality.ef_search_for_scale(k, self.index.len());
         let index_results = self.index.search_hnsw_only(query, k, ef_search);
         Ok(self.finalize_search_results(query, k, metric, index_results))
     }

@@ -211,14 +211,20 @@ impl HnswIndex {
     ) -> crate::error::Result<Vec<Vec<ScoredResult>>> {
         self.validate_batch_dimensions(queries)?;
 
-        // Perfect, Adaptive, or very small collections: delegate to search_with_quality
-        // per-query to match single-query behavior.
+        // Perfect, Adaptive, AutoTune, or very small collections: delegate to
+        // search_with_quality per-query to match single-query behavior.
         // - Perfect: uses brute-force for 100% recall
         // - Adaptive: uses spread-based two-phase escalation (not batch-compatible)
+        // - AutoTune: computes auto-ef range per dataset/dim/k (issue #699 follow-up)
         // - Small (<=100): uses brute-force for fully-connected graph safety
+        //
+        // Without AutoTune in this list, batch + AutoTune would fall through to the
+        // standard ef_search_for_scale HNSW path below — same fixed quality for every
+        // query — which silently disables the adaptive ef-range mechanism that the
+        // single-query path applies via try_search_special_quality.
         if matches!(
             quality,
-            SearchQuality::Perfect | SearchQuality::Adaptive { .. }
+            SearchQuality::Perfect | SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
         ) || (self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty())
         {
             let results: crate::error::Result<Vec<Vec<ScoredResult>>> = queries
