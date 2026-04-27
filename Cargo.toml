@@ -64,7 +64,7 @@ figment = { version = "0.10", features = ["toml", "env"] }
 toml = "0.8"
 
 # Testing
-criterion = "0.5"
+criterion = "0.8"
 proptest = "1.5"
 tempfile = "3.14"
 rand = "0.9"
