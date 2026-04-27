@@ -52,6 +52,13 @@ class _FakeCollection:
             self._points[p["id"]] = p
         return len(points)
 
+    def get(self, int_ids: list) -> list:
+        return [
+            {"id": iid, "payload": self._points[iid].get("payload", {})}
+            if iid in self._points else None
+            for iid in int_ids
+        ]
+
     def search(self, vector: list, top_k: int = 10, filter: Any = None) -> list:
         return [
             {"id": p["id"], "score": 0.9, "payload": p.get("payload", {})}
@@ -121,6 +128,19 @@ def _load_module() -> types.ModuleType:
     sys.modules["haystack.document_stores.errors"] = errors_mod
 
     sys.modules["velesdb"] = types.SimpleNamespace(Database=_FakeDatabase)  # type: ignore
+
+    # Stub velesdb_common.security with no-op validators (real package has its own tests).
+    def _passthrough(value: Any, *args: Any, **kwargs: Any) -> Any:
+        return value
+
+    vc_mod = types.ModuleType("velesdb_common")
+    sys.modules["velesdb_common"] = vc_mod
+    vc_sec = types.ModuleType("velesdb_common.security")
+    vc_sec.validate_path = _passthrough  # type: ignore[attr-defined]
+    vc_sec.validate_collection_name = _passthrough  # type: ignore[attr-defined]
+    vc_sec.validate_metric = _passthrough  # type: ignore[attr-defined]
+    vc_sec.SecurityError = ValueError  # type: ignore[attr-defined]
+    sys.modules["velesdb_common.security"] = vc_sec
 
     pkg = types.ModuleType("haystack_velesdb")
     pkg.__path__ = [str(root)]  # type: ignore[attr-defined]
@@ -272,14 +292,40 @@ def test_serialisation_round_trip() -> None:
         path="/tmp/hs_serial",
         collection_name="serial",
         embedding_dim=384,
-        metric="l2",
+        metric="euclidean",
         scroll_limit=5_000,
     )
     d = store.to_dict()
     assert d["init_parameters"]["embedding_dim"] == 384
-    assert d["init_parameters"]["metric"] == "l2"
+    assert d["init_parameters"]["metric"] == "euclidean"
     assert d["init_parameters"]["scroll_limit"] == 5_000
     restored = _MOD.VelesDBDocumentStore.from_dict(d)
     assert restored._embedding_dim == 384
-    assert restored._metric == "l2"
+    assert restored._metric == "euclidean"
     assert restored._scroll_limit == 5_000
+
+
+def test_get_collection_returns_none_and_creates_collection() -> None:
+    """_get_collection handles SDK returning None (the production SDK behavior)."""
+    class _FakeDatabaseReturnsNone:
+        def __init__(self, path: str) -> None:
+            self._collections: dict = {}
+
+        def get_collection(self, name: str) -> Optional[_FakeCollection]:
+            return None  # Real VelesDB SDK returns None for unknown collections.
+
+        def create_collection(
+            self, name: str, dimension: int, metric: str
+        ) -> _FakeCollection:
+            col = _FakeCollection()
+            self._collections[name] = col
+            return col
+
+    original_velesdb = _MOD.velesdb
+    try:
+        _MOD.velesdb = types.SimpleNamespace(Database=_FakeDatabaseReturnsNone)  # type: ignore
+        store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_none_path")
+        assert store.count_documents() == 0
+        assert store._collection is not None
+    finally:
+        _MOD.velesdb = original_velesdb

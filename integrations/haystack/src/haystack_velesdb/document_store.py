@@ -15,6 +15,11 @@ from haystack.document_stores.errors import DuplicateDocumentError
 from haystack.document_stores.types import DuplicatePolicy
 
 import velesdb
+from velesdb_common.security import (
+    validate_collection_name,
+    validate_metric,
+    validate_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +70,18 @@ def _doc_to_point(doc: Document) -> dict:
     return point
 
 
-def _result_to_doc(result: dict, *, scale_score: bool = False) -> Document:
+def _result_to_doc(
+    result: dict, *, scale_score: bool = False, metric: str = "cosine"
+) -> Document:
     """Convert a VelesDB search or scroll result to a Haystack Document."""
     payload = result.get("payload", {})
     doc_id = payload.get("_doc_id", str(result.get("id", "")))
     content = payload.get("content")
     meta = {k: v for k, v in payload.items() if k not in _RESERVED_PAYLOAD_KEYS}
     raw_score: Optional[float] = result.get("score")
-    if scale_score and raw_score is not None:
+    if scale_score and raw_score is not None and metric == "cosine":
         # Normalise cosine similarity from [-1, 1] to [0, 1].
+        # Only meaningful for cosine; l2 and dot scores have different ranges.
         score: Optional[float] = (raw_score + 1.0) / 2.0
     else:
         score = raw_score
@@ -91,7 +99,7 @@ class VelesDBDocumentStore:
         path: Directory path where VelesDB persists data.
         collection_name: Name of the VelesDB collection to use.
         embedding_dim: Dimensionality of the embedding vectors.
-        metric: Distance metric: ``"cosine"``, ``"dot"``, or ``"l2"``.
+        metric: Distance metric: ``"cosine"``, ``"euclidean"``, or ``"dot"``.
         scroll_limit: Maximum documents returned by :meth:`filter_documents`.
             Increase this value when your collection exceeds 10 000 documents.
     """
@@ -104,10 +112,10 @@ class VelesDBDocumentStore:
         metric: str = _DEFAULT_METRIC,
         scroll_limit: int = _DEFAULT_SCROLL_LIMIT,
     ) -> None:
-        self._path = path
-        self._collection_name = collection_name
+        self._path = validate_path(path)
+        self._collection_name = validate_collection_name(collection_name)
         self._embedding_dim = embedding_dim
-        self._metric = metric
+        self._metric = validate_metric(metric)
         self._scroll_limit = scroll_limit
         self._db: Optional[Any] = None
         self._collection: Optional[Any] = None
@@ -199,18 +207,16 @@ class VelesDBDocumentStore:
         col = self._get_collection()
 
         if policy == DuplicatePolicy.FAIL:
-            # Pre-scan existing points that share an integer ID with an
-            # incoming document to detect duplicates and cross-ID collisions.
-            existing: Dict[int, str] = {
-                r["id"]: r.get("payload", {}).get("_doc_id", str(r["id"]))
-                for r in col.scroll(limit=self._scroll_limit)
-                if r.get("id") in int_id_map
-            }
+            # Point-by-point lookup: O(batch_size), not O(collection_size).
+            # Avoids the scroll_limit blind spot of the old scroll approach.
+            existing_points: List[Any] = col.get(list(int_id_map.keys()))
             conflicts: List[str] = []
-            for iid, str_id in int_id_map.items():
-                existing_str = existing.get(iid)
-                if existing_str is None:
+            for point in existing_points:
+                if point is None:
                     continue
+                iid = point["id"]
+                existing_str = point.get("payload", {}).get("_doc_id", str(iid))
+                str_id = int_id_map[iid]
                 if existing_str != str_id:
                     raise ValueError(
                         f"SHA-256 collision on write: incoming document '{str_id}' "
@@ -255,15 +261,16 @@ class VelesDBDocumentStore:
             query_embedding: Dense query vector.
             top_k: Maximum number of documents to return.
             filters: Optional VelesDB filter dict to restrict the search space.
-            scale_score: When ``True`` cosine scores are normalised from
-                ``[-1, 1]`` to ``[0, 1]``.
+            scale_score: When ``True`` and ``metric="cosine"``, scores are
+                normalised from ``[-1, 1]`` to ``[0, 1]``. Ignored for other
+                metrics, where raw scores are returned unchanged.
         """
         results: List[dict] = self._get_collection().search(
             vector=query_embedding,
             top_k=top_k,
             filter=filters,
         )
-        return [_result_to_doc(r, scale_score=scale_score) for r in results]
+        return [_result_to_doc(r, scale_score=scale_score, metric=self._metric) for r in results]
 
     # ------------------------------------------------------------------
     # Haystack pipeline serialisation
