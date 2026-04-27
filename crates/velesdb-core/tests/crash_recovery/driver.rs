@@ -95,7 +95,7 @@ impl CrashTestDriver {
         for i in 0..self.config.count {
             // Generate deterministic vector
             let vector: Vec<f32> = (0..self.config.dimension)
-                .map(|_| rng.gen_range(-1.0..1.0))
+                .map(|_| rng.random_range(-1.0..1.0))
                 .collect();
 
             // Generate deterministic payload
@@ -169,7 +169,7 @@ impl CrashTestDriver {
         for i in 0..self.config.count.min(100) {
             // Regenerate the same vector
             let vector: Vec<f32> = (0..self.config.dimension)
-                .map(|_| rng.gen_range(-1.0..1.0))
+                .map(|_| rng.random_range(-1.0..1.0))
                 .collect();
 
             // Query should find the vector

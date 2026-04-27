@@ -139,7 +139,7 @@ tempfile = { workspace = true }
 tokio-test = "0.4"
 serial_test = "3.1"
 clap = { version = "4.5", features = ["derive"] }
-rand_distr = "0.4"
+rand_distr = "0.5"
 
 # Loom for concurrency testing (EPIC-023) - optional dependency, not dev-dependency
 [dependencies.loom]
@@ -302,10 +302,15 @@ harness = false
 # Target-specific dependencies (WASM compatibility)
 # ============================================================================
 
-# getrandom requires the "js" feature to compile on wasm32-unknown-unknown
+# getrandom requires the "wasm_js" feature AND the
+# `getrandom_backend="wasm_js"` rustflag to compile on
+# wasm32-unknown-unknown. rand 0.9 pulls in getrandom 0.3 (transitively
+# via rand_core) which renamed the v0.2 "js" feature to "wasm_js" and
+# additionally requires the cfg flag to be set globally — see
+# .cargo/config.toml [target.wasm32-unknown-unknown].
 [target.'cfg(target_arch = "wasm32")'.dependencies.getrandom]
-version = "0.2"
-features = ["js"]
+version = "0.3"
+features = ["wasm_js"]
 
 # ============================================================================
 # Optional deps for persistence feature (not WASM-compatible)

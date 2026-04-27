@@ -58,3 +58,17 @@ opt-level = 3
 # rustflags = ["-C", "target-cpu=native"]
 # [target.x86_64-pc-windows-msvc]
 # rustflags = ["-C", "target-cpu=native"]
+
+# === WASM TARGET ===
+# getrandom 0.3+ (pulled in by rand 0.9) requires BOTH the `wasm_js` cargo
+# feature AND the `getrandom_backend="wasm_js"` cfg flag to compile for
+# wasm32-unknown-unknown. The feature is declared per-crate in
+# velesdb-core/Cargo.toml and velesdb-wasm/Cargo.toml; the cfg flag must
+# be set globally via rustflags here so every transitive build of
+# getrandom on this target sees it.
+#
+# Without this, CI fails with:
+#   "The wasm32-unknown-unknown targets are not supported by default;
+#    you may need to enable the 'wasm_js' configuration flag."
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

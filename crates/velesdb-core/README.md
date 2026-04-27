@@ -9,7 +9,7 @@ High-performance vector database engine written in Rust.
 
 ## Features
 
-- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (55µs search at 768D, 21.7ns dot product 768D — aligned with root README; see `docs/BENCHMARKS.md` for measurement context)
+- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD — 450µs p50 end-to-end (10K/384D, WAL ON, recall>=96%); 55µs HNSW index-only micro-benchmark (5K/768D, k=10); 21.7ns dot product (768D AVX2). See `docs/BENCHMARKS.md` for measurement context.
 - **Adaptive Search**: Two-phase ef_search that auto-escalates only for hard queries (2-4x faster median)
 - **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
 - **Sparse Vectors**: Named sparse vector indexes with DAAT MaxScore search and RRF/RSF fusion
@@ -213,20 +213,27 @@ db.create_collection_with_options(
 
 *Aligned with root README canonical numbers. See `docs/BENCHMARKS.md` for full methodology (i9-14900KF, 64GB DDR5, Rust 1.94.1, AVX2, `--release`, `target-cpu=native`, sequential on idle machine).*
 
-### System Benchmarks (10K vectors, 768D)
+### Headline number (canonical, full path)
 
-| Benchmark | Result |
+**450 µs p50** end-to-end vector search (10K/384D, WAL ON, recall>=96%). See root README and `benchmarks/velesdb_benchmark.py --recall`.
+
+### Index-only micro-benchmarks (10K vectors, 768D)
+
+> These measure individual components in isolation (no WAL, no metadata fetch, hot cache). They are not directly comparable to end-to-end latency above.
+
+| Component micro-benchmark | Result |
 |-----------|--------|
-| **HNSW Search** | **55 µs** (k=10, Balanced mode — aligned with root README) |
+| **HNSW Search index-only** | **55 µs** (k=10, Balanced mode) |
 | **VelesQL Cache Hit** | **1.08 µs** (~926K QPS) |
-| **Sparse Search (top-10)** | **57.6 µs** (v1.13.0, PR #621 — 16x speedup from v1.12) |
+| **Sparse Search index-only (top-10)** | **57.6 µs** (v1.13.0, PR #621 — 16x speedup from v1.12) |
 | **Recall@10 (Accurate)** | **100%** |
 
 *Measured on Intel Core i9-14900KF, 64GB DDR5, Rust 1.94.1, AVX2, `--release`, `target-cpu=native`, sequential on idle machine. See `docs/BENCHMARKS.md` for full methodology.*
 
 ### Key Performance Features
 
-- Search latency: **~55 µs** for 10K/768D vectors (k=10, Balanced mode)
+- End-to-end search latency: **450 µs p50** (10K/384D, WAL ON, recall>=96%) — canonical full-path number
+- HNSW index-only micro-benchmark: **~55 µs** (10K/768D, k=10, Balanced mode)
 - Insert throughput: **3.8-7x faster** than pgvector (10K-100K vectors, Docker benchmark v0.7.3, [benchmark](../../benchmarks/README.md))
 - ColumnStore filtering: up to 130x faster than JSON scanning at scale (integer equality, 100K rows)
 
@@ -239,7 +246,7 @@ db.create_collection_with_options(
 | **10K/128D** | Perfect (ef=4096) | 4096 | **100%** | 200µs | ✅ |
 | **10K/128D** | Adaptive | 32-512 | **95%+** | ~40µs (easy) | ✅ |
 
-> *Latency P50 = median over 100 queries. The headline "~55 µs" (from the root README) is for 10K/768D Balanced — higher dimensions use SIMD more efficiently. 128D benchmarks above are worst-case for recall measurement.*
+> *Latency P50 = median over 100 queries. The "55 µs" index-only micro-benchmark is for 10K/768D Balanced — higher dimensions use SIMD more efficiently. 128D benchmarks above are worst-case for recall measurement. The canonical end-to-end latency is **450 µs p50** (see headline above).*
 
 > 📊 **Benchmark kit:** See [benchmarks/](../../benchmarks/) for reproducible tests.
 

@@ -46,14 +46,14 @@ fn generate_clustered_data(
 
     // Generate random centroids in [-1, 1]^dim
     let centroids: Vec<Vec<f32>> = (0..n_clusters)
-        .map(|_| (0..dim).map(|_| rng.gen_range(-1.0_f32..1.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(-1.0_f32..1.0)).collect())
         .collect();
 
     let normal = Normal::new(0.0_f32, sigma).expect("valid normal distribution");
 
     (0..n)
         .map(|_| {
-            let cluster_idx = rng.gen_range(0..n_clusters);
+            let cluster_idx = rng.random_range(0..n_clusters);
             let centroid = &centroids[cluster_idx];
             centroid
                 .iter()
@@ -69,7 +69,13 @@ fn generate_binary_data(n: usize, dim: usize, density: f64, seed: u64) -> Vec<Ve
     (0..n)
         .map(|_| {
             (0..dim)
-                .map(|_| if rng.gen_bool(density) { 1.0_f32 } else { 0.0 })
+                .map(|_| {
+                    if rng.random_bool(density) {
+                        1.0_f32
+                    } else {
+                        0.0
+                    }
+                })
                 .collect()
         })
         .collect()
@@ -79,7 +85,7 @@ fn generate_binary_data(n: usize, dim: usize, density: f64, seed: u64) -> Vec<Ve
 fn generate_random_data(n: usize, dim: usize, seed: u64) -> Vec<Vec<f32>> {
     let mut rng = StdRng::seed_from_u64(seed);
     (0..n)
-        .map(|_| (0..dim).map(|_| rng.gen_range(-1.0_f32..1.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(-1.0_f32..1.0)).collect())
         .collect()
 }
 
