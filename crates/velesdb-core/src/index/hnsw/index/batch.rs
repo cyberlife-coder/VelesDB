@@ -228,7 +228,13 @@ impl HnswIndex {
             return results;
         }
 
-        let ef_search = quality.ef_search(k);
+        // Aligned with single-query path (search.rs:339): use ef_search_for_scale
+        // so batch and single-query produce the same ef value for the same quality
+        // profile when dataset_size > 10K. Without this, batch queries on large
+        // datasets would silently use a lower ef than equivalent single queries,
+        // breaking the implicit contract that single and batch with the same
+        // quality return the same results. See issue #694.
+        let ef_search = quality.ef_search_for_scale(k, self.len());
 
         // Two-stage GPU/SIMD reranking for Balanced/Accurate/Custom qualities.
         if let Some(rerank_k) = self.should_two_stage_rerank(quality, k, ef_search) {
