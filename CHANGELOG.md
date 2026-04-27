@@ -7,7 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — post-v1.13.2 work lives under feature branches tracked in [#634](https://github.com/cyberlife-coder/VelesDB/issues/634) (GPU hardening PR-C, PR-E) and [#639](https://github.com/cyberlife-coder/VelesDB/issues/639) (ef_search alignment)._
+_Nothing yet — post-v1.13.3 work lives under feature branches tracked in [#634](https://github.com/cyberlife-coder/VelesDB/issues/634) (GPU hardening PR-C, PR-E) and the v1.14.0 milestone (#349, #379, #429, #469)._
+
+## [1.13.3] — 2026-04-27
+
+### Summary
+
+Strictly additive patch release. Two themes:
+
+1. **Operational excellence pack** — three new top-level documents (`ARCHITECTURE.md`, `ROADMAP.md`, `QUALITY_BAR.md`) and a clarified README to make the project's discipline visible in technical due diligence. No code changes for this theme.
+2. **Internal feature additions** — Python Pythonic protocols (`__contains__`, context manager, `close()`), TypedDict return-type stubs, CBO `indexed_fields` cardinality wiring, HNSW `search_with_quality` alignment, WASM getrandom 0.3 fix, and the `rand 0.8 -> 0.9` migration.
+
+This release is fully backward-compatible — no API breakage, no behavioural change in the canonical end-to-end performance path (450 µs p50 preserved).
+
+### Added
+
+- **`ARCHITECTURE.md`** at repo root (15-minute narrative gateway): TL;DR, three engines, layered diagram, crate map, anatomy of a query walkthrough, concurrency model, storage on disk, what's NOT in scope, soundness summary, canonical 450 µs perf number disambiguation ([#692](https://github.com/cyberlife-coder/VelesDB/pull/692)).
+- **`ROADMAP.md`** at repo root: 3/6/12-month horizons with explicit OKRs, governance section, hierarchy of decisions ([#690](https://github.com/cyberlife-coder/VelesDB/pull/690)).
+- **`QUALITY_BAR.md`** at repo root: seven non-negotiable shipping gates (recall, latency, unwrap, unsafe, cyclomatic, NLOC, duplication) with enforcement scripts referenced ([#691](https://github.com/cyberlife-coder/VelesDB/pull/691)).
+- **GitHub milestone v1.14.0** with four focused issues (#349 Haystack, #379 DX, #469 CBO calibration, #429 Python DataFrame).
+- **Python**: Pythonic protocols `__contains__`, context manager (`with db:`), `close()` on `Database` and collection types ([#426](https://github.com/cyberlife-coder/VelesDB/pull/426)).
+- **Python**: TypedDict return-type stubs and complete `PyGraphSchema` stub for IDE completion and `mypy` ([#428](https://github.com/cyberlife-coder/VelesDB/pull/428)).
+- **VelesQL CBO**: `indexed_fields` cardinality wiring for the cost estimator ([#607](https://github.com/cyberlife-coder/VelesDB/pull/607)).
+- **CONTRIBUTORS.md**: contributor recognition, plus a CLA Assistant GitHub Action ([#676](https://github.com/cyberlife-coder/VelesDB/pull/676)).
+
+### Changed
+
+- **README.md**: top navigation bar now links to `ARCHITECTURE.md` / `ROADMAP.md` / `QUALITY_BAR.md`. The "Why VelesDB?" comparison table now uses the canonical 450 µs end-to-end number (replacing the 55 µs index-only micro-benchmark that was juxtaposed with the end-to-end number, creating a small ambiguity flagged in the 2026-04-27 pre-seed audit). The "System Benchmarks" deep-dive table is now explicitly labeled *Index-only micro-benchmarks* with a headline pointing back to the canonical 450 µs number ([#688](https://github.com/cyberlife-coder/VelesDB/pull/688)).
+- **`crates/velesdb-core/README.md`**: same disambiguation pattern applied.
+- **`docs/ARCHITECTURE.md`**: clarifying banner stating it's a tech-debt registry, not the architecture overview, with explicit pointer to the new top-level `ARCHITECTURE.md`.
+- **`docs/reference/promise-contract.json`**: `must_contain` substrings updated to match the disambiguated wording.
+- **`CONTRIBUTING.md`**: Release Process section translated from French to English for consistency.
+- **HNSW**: `NativeHnswIndex::search_with_quality` aligned with `ef_search_for_scale` ([#639](https://github.com/cyberlife-coder/VelesDB/pull/639)).
+- **velesdb-server**: deduplicated batch search response building ([#453](https://github.com/cyberlife-coder/VelesDB/pull/453)).
+- **velesdb-python**: `storage_mode` returns canonical names matching the core enum ([PR #674](https://github.com/cyberlife-coder/VelesDB/pull/674)).
+
+### Fixed
+
+- **WASM**: configure `getrandom 0.3` for `wasm32` after `rand 0.9` migration ([#645](https://github.com/cyberlife-coder/VelesDB/pull/645)).
+- **velesdb-python**: dot metric test correctness.
+
+### Dependencies
+
+- Migrate `rand 0.8 -> 0.9` workspace-wide ([#645](https://github.com/cyberlife-coder/VelesDB/pull/645)).
+- Bump `postcss` `8.5.6 -> 8.5.12` in `sdks/typescript` ([#675](https://github.com/cyberlife-coder/VelesDB/pull/675)).
+
+### Documentation
+
+- New Python `upsert_bulk_numpy()` performance best-practices guide ([#409](https://github.com/cyberlife-coder/VelesDB/pull/409)).
+
+### Internal
+
+- Closed seven SIMD/GPU roadmap issues (#498, #499, #500, #501, #503, #504, #505) into a single tracking issue [#689 — Hardware accelerator backlog (deferred)](https://github.com/cyberlife-coder/VelesDB/issues/689), reducing the visible roadmap from 21 to 15 issues to make focus visible to investors and to the community.
+
+### Migration notes
+
+No migration needed. All changes are additive.
 
 ## [1.13.2] — 2026-04-25
 
