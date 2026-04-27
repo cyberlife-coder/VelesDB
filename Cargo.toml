@@ -52,7 +52,7 @@ postcard = { version = "1", features = ["alloc", "use-std"] }
 # Indexing
 # Note: hnsw_rs is defined per-crate with target-specific features
 # (simdeez_f on x86_64 only). See crates/velesdb-core/Cargo.toml
-roaring = { version = "0.10", features = ["serde"] }
+roaring = { version = "0.11", features = ["serde"] }
 
 # API
 axum = "0.8"
