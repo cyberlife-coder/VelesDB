@@ -10,9 +10,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 TARGETS = {
     "crates/velesdb-python/pyproject.toml": "toml",
+    "crates/tauri-plugin-velesdb/guest-js/package.json": "json",
+    "integrations/common/pyproject.toml": "toml",
     "integrations/langchain/pyproject.toml": "toml",
     "integrations/llamaindex/pyproject.toml": "toml",
+    "demos/rag-pdf-demo/pyproject.toml": "toml",
     "sdks/typescript/package.json": "json",
+    "docs/openapi.json": "json_openapi",
 }
 
 
@@ -45,6 +49,23 @@ def _read_json_version(path: Path) -> str:
     return str(version)
 
 
+def _read_openapi_version(path: Path) -> str:
+    """OpenAPI specs put the version under .info.version, not at the root."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    info = data.get("info") or {}
+    version = info.get("version")
+    if version is None:
+        raise RuntimeError(f"No '.info.version' key in OpenAPI spec {path}")
+    return str(version)
+
+
+_READERS = {
+    "toml": _read_toml_version,
+    "json": _read_json_version,
+    "json_openapi": _read_openapi_version,
+}
+
+
 def main() -> int:
     expected = _read_cargo_version()
     print(f"Workspace version (Cargo.toml): {expected}")
@@ -55,7 +76,10 @@ def main() -> int:
         if not path.exists():
             print(f"  SKIP  {rel_path} (file not found)")
             continue
-        actual = _read_json_version(path) if fmt == "json" else _read_toml_version(path)
+        reader = _READERS.get(fmt)
+        if reader is None:
+            raise RuntimeError(f"Unknown format '{fmt}' for {rel_path}")
+        actual = reader(path)
         status = "OK   " if actual == expected else "MISMATCH"
         print(f"  {status}  {rel_path}: {actual}")
         if actual != expected:
