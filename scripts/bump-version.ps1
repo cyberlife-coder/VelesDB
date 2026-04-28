@@ -112,44 +112,16 @@ $FilesToUpdate = @(
         Pattern = '    "version": "\d+\.\d+\.\d+"'
         Replacement = "    `"version`": `"$Version`""
         Description = "OpenAPI spec (.info.version)"
-    },
-    # Inter-crate dependencies (velesdb-core version in other crates)
-    @{
-        Path = "crates/velesdb-server/Cargo.toml"
-        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
-        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
-        Description = "velesdb-server -> core dep"
-    },
-    @{
-        Path = "crates/velesdb-python/Cargo.toml"
-        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
-        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
-        Description = "velesdb-python -> core dep"
-    },
-    @{
-        Path = "crates/velesdb-cli/Cargo.toml"
-        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
-        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
-        Description = "velesdb-cli -> core dep"
-    },
-    @{
-        Path = "crates/velesdb-migrate/Cargo.toml"
-        Pattern = 'velesdb-core = \{ version = "\d+\.\d+\.\d+", path = "\.\./velesdb-core" \}'
-        Replacement = "velesdb-core = { version = `"$Version`", path = `"../velesdb-core`" }"
-        Description = "velesdb-migrate -> core dep"
-    },
-    @{
-        Path = "crates/velesdb-mobile/Cargo.toml"
-        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
-        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
-        Description = "velesdb-mobile -> core dep"
-    },
-    @{
-        Path = "crates/tauri-plugin-velesdb/Cargo.toml"
-        Pattern = 'velesdb-core = \{ path = "\.\./\.\./crates/velesdb-core", version = "\d+\.\d+\.\d+" \}'
-        Replacement = "velesdb-core = { path = `"../../crates/velesdb-core`", version = `"$Version`" }"
-        Description = "tauri-plugin -> core dep"
     }
+    # NOTE: per-crate inter-crate dependency entries (velesdb-server -> core,
+    # velesdb-cli -> core, etc.) used to live here. They were removed in v1.13.6
+    # because every workspace member now uses `velesdb-core = { workspace = true }`,
+    # so the path/version pattern they targeted no longer matches anywhere — they
+    # only inflated $ErrorCount and forced the script to exit 1. The single
+    # workspace-level `velesdb-core = { path = ..., version = "..." }` line in the
+    # root Cargo.toml is already covered by the "Cargo workspace" entry above
+    # (the global -replace catches both the workspace.package version and the
+    # workspace.dependencies version line). (Devin finding #705-D, 2026-04-28.)
 )
 
 $UpdatedCount = 0
