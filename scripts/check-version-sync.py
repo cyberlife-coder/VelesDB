@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 TARGETS = {
     "crates/velesdb-python/pyproject.toml": "toml",
+    "integrations/common/pyproject.toml": "toml",
     "integrations/langchain/pyproject.toml": "toml",
     "integrations/llamaindex/pyproject.toml": "toml",
     "sdks/typescript/package.json": "json",

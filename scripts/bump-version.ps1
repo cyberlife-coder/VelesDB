@@ -81,6 +81,12 @@ $FilesToUpdate = @(
         Description = "Tauri plugin JS"
     },
     @{
+        Path = "integrations/common/pyproject.toml"
+        Pattern = 'version = "\d+\.\d+\.\d+"'
+        Replacement = "version = `"$Version`""
+        Description = "VelesDB common integration helpers"
+    },
+    @{
         Path = "integrations/langchain/pyproject.toml"
         Pattern = 'version = "\d+\.\d+\.\d+"'
         Replacement = "version = `"$Version`""
