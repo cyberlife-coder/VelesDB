@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — post-v1.13.4 work lives under the v1.14.0 milestone (#349 Haystack, #379 DX, #429 Python DataFrame, #469 CBO calibration)._
+_Nothing yet — post-v1.13.5 work lives under the v1.14.0 milestone (#349 Haystack, #379 DX, #429 Python DataFrame, #469 CBO calibration)._
+
+## [1.13.5] — 2026-04-28
+
+### Summary
+
+Fix-up patch release for v1.13.4. PyPI and npm packages were published successfully at `1.13.4`, but `cargo publish --locked` to `crates.io` failed because `Cargo.lock` was not regenerated after the version bump (lock file still listed crates at `1.13.3`). v1.13.5 ships the regenerated `Cargo.lock` so all eight workspace crates can be published to `crates.io` consistently with the npm/PyPI packages.
+
+### Fixed
+
+- **crates.io publishing**: `Cargo.lock` regenerated to match the workspace version, unblocking `cargo publish --locked` for all eight workspace crates ([#701](https://github.com/cyberlife-coder/VelesDB/pull/701) follow-up).
+
+### No-op
+
+- No source code change beyond `Cargo.lock` regeneration and version-string bumps from `1.13.4` to `1.13.5`.
+- No public API change.
+- No behavioural change in the canonical 450 µs p50 end-to-end path.
 
 ## [1.13.4] — 2026-04-27
 
