@@ -56,12 +56,12 @@ $FilesToUpdate = @(
         Replacement = "`"version`": `"$Version`""
         Description = "TypeScript SDK"
     },
-    @{
-        Path = "sdks/typescript/package.json"
-        Pattern = '"@wiscale/velesdb-wasm": "\^\d+\.\d+\.\d+"'
-        Replacement = "`"@wiscale/velesdb-wasm`": `"^$Version`""
-        Description = "TypeScript SDK WASM dep"
-    },
+    # NOTE: @wiscale/velesdb-wasm dep in sdks/typescript/package.json is intentionally
+    # NOT auto-bumped here. The WASM package follows its own versioning track (currently
+    # ^1.4.1 stable). Bumping it to the workspace version would target an unpublished
+    # version on npm, breaking 'npm ci' (chicken-and-egg). When you genuinely want to
+    # advance the WASM dep, edit sdks/typescript/package.json manually and regenerate
+    # the lockfile. (Devin finding #705-B, 2026-04-28.)
     @{
         Path = "crates/velesdb-python/pyproject.toml"
         Pattern = 'version = "\d+\.\d+\.\d+"'
@@ -103,6 +103,15 @@ $FilesToUpdate = @(
         Pattern = 'version = "\d+\.\d+\.\d+"'
         Replacement = "version = `"$Version`""
         Description = "RAG demo"
+    },
+    @{
+        Path = "docs/openapi.json"
+        # Match the "version" field inside the .info object. Anchored on the
+        # 4-space indent unique to the .info section in our spec to avoid hitting
+        # any other "version" key elsewhere in the file.
+        Pattern = '    "version": "\d+\.\d+\.\d+"'
+        Replacement = "    `"version`": `"$Version`""
+        Description = "OpenAPI spec (.info.version)"
     },
     # Inter-crate dependencies (velesdb-core version in other crates)
     @{
