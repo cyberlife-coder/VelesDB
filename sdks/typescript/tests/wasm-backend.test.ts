@@ -81,6 +81,34 @@ describe('WasmBackend', () => {
       expect(defaultSpy).toHaveBeenCalledTimes(1);
       expect(backend.isInitialized()).toBe(true);
     });
+
+    it('should not flip back to initialized when close() races an in-flight init()', async () => {
+      // Devin Review on PR #709 round 2 flagged that close() during in-flight
+      // runInit() did not cancel: runInit() would still complete and set
+      // _initialized = true after close() set it false. The fix bumps a
+      // generation counter in close() that runInit() captures at entry and
+      // checks before publishing _initialized. This test simulates the race
+      // by starting init() and calling close() before the awaited promise
+      // resolves, then ensures the backend stays closed.
+      const initPromise = backend.init();
+      await backend.close();
+      await initPromise;
+      expect(backend.isInitialized()).toBe(false);
+    });
+
+    it('should null out wasmModule on close()', async () => {
+      // Devin Review on PR #709 round 2: close() previously left wasmModule
+      // set, so a follow-up init() reused a stale handle. We now clear it
+      // and re-import on the next init().
+      await backend.init();
+      expect(backend.isInitialized()).toBe(true);
+      await backend.close();
+      expect(backend.isInitialized()).toBe(false);
+      // Re-init must succeed (i.e. the cleared module reference does not
+      // break the lifecycle).
+      await backend.init();
+      expect(backend.isInitialized()).toBe(true);
+    });
   });
 
   describe('collection operations', () => {

@@ -123,6 +123,12 @@ export class WasmBackend implements IVelesDBBackend {
   // wasm-bindgen `default()` invocations. Cleared on close() so a fresh
   // backend instance can re-initialize if needed.
   private _initInFlight: Promise<void> | null = null;
+  // Generation token bumped by close(). runInit() captures the token at
+  // entry and refuses to publish its result if close() advanced the
+  // generation while the async work was in flight. Without this, calling
+  // close() during an in-flight init() would let the racy completion of
+  // runInit() flip _initialized back to true after close() set it false.
+  private _initGen = 0;
 
   // ========================================================================
   // Lifecycle
@@ -131,25 +137,35 @@ export class WasmBackend implements IVelesDBBackend {
   async init(): Promise<void> {
     if (this._initialized) { return; }
     if (this._initInFlight) { return this._initInFlight; }
-    this._initInFlight = this.runInit().finally(() => {
-      this._initInFlight = null;
+    const gen = this._initGen;
+    this._initInFlight = this.runInit(gen).finally(() => {
+      // Only clear the in-flight slot if this run is still the active one.
+      // close() may have already cleared it and advanced the generation.
+      if (this._initGen === gen) {
+        this._initInFlight = null;
+      }
     });
     return this._initInFlight;
   }
 
-  private async runInit(): Promise<void> {
+  private async runInit(gen: number): Promise<void> {
     try {
-      this.wasmModule = await import('@wiscale/velesdb-wasm') as unknown as WasmModule;
+      const mod = (await import('@wiscale/velesdb-wasm')) as unknown as WasmModule;
       // The wasm-pack default init() does `fetch(wasmUrl)` to locate the .wasm
       // binary. That works in the browser but Node's undici has no scheme
       // handler for `file://`, so the import explodes with
       // "not implemented... yet..." (see #379 honesty notes).
       // Detect Node and pass an explicit Buffer so init never relies on fetch.
       if (isNodeRuntime()) {
-        await this.wasmModule.default(await loadWasmBytesNode());
+        await mod.default(await loadWasmBytesNode());
       } else {
-        await this.wasmModule.default();
+        await mod.default();
       }
+      // Publish the result only if close() did not advance the generation
+      // while the async work above was running. Otherwise the run is stale
+      // and must not flip _initialized back to true after close() reset it.
+      if (this._initGen !== gen) { return; }
+      this.wasmModule = mod;
       this._initialized = true;
     } catch (error) {
       throw new ConnectionError(
@@ -166,6 +182,12 @@ export class WasmBackend implements IVelesDBBackend {
     this.collections.clear();
     this._initialized = false;
     this._initInFlight = null;
+    // Drop the WASM module reference so a future init() picks up a fresh
+    // import rather than reusing a possibly-stale handle, and bump the
+    // generation so any concurrently in-flight runInit() refuses to
+    // publish its result over our cleared state.
+    this.wasmModule = null;
+    this._initGen += 1;
   }
 
   capabilities(): Readonly<CapabilityMap> { return WASM_CAPABILITIES; }
