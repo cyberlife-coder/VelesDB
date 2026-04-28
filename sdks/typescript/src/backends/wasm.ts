@@ -118,6 +118,11 @@ export class WasmBackend implements IVelesDBBackend {
   private wasmModule: WasmModule | null = null;
   private collections: Map<string, CollectionData> = new Map();
   private _initialized = false;
+  // Memoized single-shot init promise. Subsequent concurrent calls to init()
+  // await the same in-flight initialization instead of racing into duplicate
+  // wasm-bindgen `default()` invocations. Cleared on close() so a fresh
+  // backend instance can re-initialize if needed.
+  private _initInFlight: Promise<void> | null = null;
 
   // ========================================================================
   // Lifecycle
@@ -125,6 +130,14 @@ export class WasmBackend implements IVelesDBBackend {
 
   async init(): Promise<void> {
     if (this._initialized) { return; }
+    if (this._initInFlight) { return this._initInFlight; }
+    this._initInFlight = this.runInit().finally(() => {
+      this._initInFlight = null;
+    });
+    return this._initInFlight;
+  }
+
+  private async runInit(): Promise<void> {
     try {
       this.wasmModule = await import('@wiscale/velesdb-wasm') as unknown as WasmModule;
       // The wasm-pack default init() does `fetch(wasmUrl)` to locate the .wasm
@@ -132,10 +145,7 @@ export class WasmBackend implements IVelesDBBackend {
       // handler for `file://`, so the import explodes with
       // "not implemented... yet..." (see #379 honesty notes).
       // Detect Node and pass an explicit Buffer so init never relies on fetch.
-      const isNode =
-        typeof process !== 'undefined' &&
-        Boolean((process as { versions?: { node?: string } }).versions?.node);
-      if (isNode) {
+      if (isNodeRuntime()) {
         await this.wasmModule.default(await loadWasmBytesNode());
       } else {
         await this.wasmModule.default();
@@ -155,6 +165,7 @@ export class WasmBackend implements IVelesDBBackend {
     for (const [, data] of this.collections) { data.store.free(); }
     this.collections.clear();
     this._initialized = false;
+    this._initInFlight = null;
   }
 
   capabilities(): Readonly<CapabilityMap> { return WASM_CAPABILITIES; }
@@ -400,17 +411,71 @@ export class WasmBackend implements IVelesDBBackend {
 }
 
 /**
- * Read the wasm binary from disk in Node.js, returning a Buffer that the
- * wasm-pack `default()` initializer accepts as a `BufferSource`. Resolved
- * via `createRequire` so it works under both ESM and CJS consumers.
+ * True iff we're running under a Node.js runtime. Centralized so both the
+ * init() branch decision and the bytes-loader use the same signal.
+ */
+function isNodeRuntime(): boolean {
+  return (
+    typeof process !== 'undefined' &&
+    Boolean((process as { versions?: { node?: string } }).versions?.node)
+  );
+}
+
+/**
+ * Read the wasm binary from disk in Node.js, returning a Uint8Array that
+ * the wasm-pack `default()` initializer accepts as a `BufferSource`.
+ *
+ * Robustness against the bundled-package layout:
+ *   - The WASM filename is **discovered** at runtime by reading
+ *     `@wiscale/velesdb-wasm/package.json#files` for any `*.wasm` entry, so
+ *     this code does not break if wasm-pack ever changes its default
+ *     `<crate>_bg.wasm` naming or if `--out-name` is customized.
+ *   - `createRequire(import.meta.url)` is the canonical pattern for module
+ *     resolution under both ESM and CJS Node consumers. The CJS bundle
+ *     produced by tsup rewrites `import.meta.url` to a `__filename`-based
+ *     URL automatically, so this single line works under both module
+ *     systems without per-format branching.
  *
  * Browser callers never hit this path — `init()` only invokes it when
- * `process.versions.node` is set.
+ * {@link isNodeRuntime} is true.
  */
+// Ambient declaration so the TypeScript source can reference Node's CJS
+// `__filename` global without dragging in `@types/node`. The runtime check
+// `typeof __filename !== 'undefined'` keeps ESM bundles safe — the variable
+// only resolves under a CJS module wrapper.
+declare const __filename: string | undefined;
+
 async function loadWasmBytesNode(): Promise<Uint8Array> {
-  const { createRequire } = await import('node:module');
-  const { readFile } = await import('node:fs/promises');
-  const require = createRequire(import.meta.url);
-  const wasmPath = require.resolve('@wiscale/velesdb-wasm/velesdb_wasm_bg.wasm');
-  return readFile(wasmPath);
+  const [{ createRequire }, { readFile }, path] = await Promise.all([
+    import('node:module'),
+    import('node:fs/promises'),
+    import('node:path'),
+  ]);
+  // Pick whichever module identifier is actually defined in this runtime:
+  //   - CJS: `__filename` is wrapped in by Node's CommonJS module loader.
+  //   - ESM: `import.meta.url` is the spec-mandated locator.
+  // We prefer `__filename` first because tsup's CJS output leaves
+  // `import.meta.url` as `undefined`, which would make `createRequire`
+  // throw ERR_INVALID_ARG_VALUE under `require('@wiscale/velesdb-sdk')`.
+  const cjsFilename =
+    typeof __filename !== 'undefined' ? __filename : undefined;
+  const moduleId =
+    typeof cjsFilename === 'string' && cjsFilename.length > 0
+      ? cjsFilename
+      : import.meta.url;
+  const require = createRequire(moduleId);
+  const pkgJsonPath = require.resolve('@wiscale/velesdb-wasm/package.json');
+  const pkgDir = path.dirname(pkgJsonPath);
+
+  const pkgManifest = JSON.parse(
+    await readFile(pkgJsonPath, 'utf8')
+  ) as { files?: string[] };
+  const wasmFile = (pkgManifest.files ?? []).find((f) => f.endsWith('.wasm'));
+  if (!wasmFile) {
+    throw new Error(
+      '@wiscale/velesdb-wasm package.json declares no *.wasm in its `files` field; ' +
+        'cannot locate the WebAssembly binary for Node.js initialization.'
+    );
+  }
+  return readFile(path.join(pkgDir, wasmFile));
 }

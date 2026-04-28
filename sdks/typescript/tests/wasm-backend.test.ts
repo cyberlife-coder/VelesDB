@@ -68,6 +68,19 @@ describe('WasmBackend', () => {
       await backend.init(); // Should not throw
       expect(backend.isInitialized()).toBe(true);
     });
+
+    it('should coalesce concurrent init() calls into one wasm-bindgen invocation', async () => {
+      // Pre-existing TOCTOU race in init() flagged by Devin Review on PR #709:
+      // two callers entering init() before _initialized is set both raced into
+      // wasm-bindgen's default(). The fix memoizes a single in-flight promise.
+      // This test makes sure the wasm `default()` initializer is invoked
+      // exactly once even with three concurrent init() callers.
+      const defaultSpy = mockWasmModule.default;
+      defaultSpy.mockClear();
+      await Promise.all([backend.init(), backend.init(), backend.init()]);
+      expect(defaultSpy).toHaveBeenCalledTimes(1);
+      expect(backend.isInitialized()).toBe(true);
+    });
   });
 
   describe('collection operations', () => {
