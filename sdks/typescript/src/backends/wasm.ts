@@ -51,6 +51,7 @@ import {
   buildWasmContext,
   buildCollectionInfo,
 } from './wasm-helpers';
+import { isNodeRuntime, loadWasmBytesNode } from './wasm-node-loader';
 
 // Search & query delegates
 import {
@@ -432,79 +433,7 @@ export class WasmBackend implements IVelesDBBackend {
   async graphSearch(c: string, r: import('../types').GraphSearchRequest): Promise<import('../types').GraphSearchResponse> { this.ensureInitialized(); return wasmGraphSearch(c, r); }
 }
 
-/**
- * True iff we're running under a Node.js runtime. Centralized so both the
- * init() branch decision and the bytes-loader use the same signal.
- */
-function isNodeRuntime(): boolean {
-  return (
-    typeof process !== 'undefined' &&
-    Boolean((process as { versions?: { node?: string } }).versions?.node)
-  );
-}
-
-/**
- * Read the wasm binary from disk in Node.js, returning a Uint8Array that
- * the wasm-pack `default()` initializer accepts as a `BufferSource`.
- *
- * Robustness against the bundled-package layout:
- *   - The WASM filename is **discovered** at runtime by reading
- *     `@wiscale/velesdb-wasm/package.json#files` for any `*.wasm` entry, so
- *     this code does not break if wasm-pack ever changes its default
- *     `<crate>_bg.wasm` naming or if `--out-name` is customized.
- *   - `createRequire(import.meta.url)` is the canonical pattern for module
- *     resolution under both ESM and CJS Node consumers. The CJS bundle
- *     produced by tsup rewrites `import.meta.url` to a `__filename`-based
- *     URL automatically, so this single line works under both module
- *     systems without per-format branching.
- *
- * Browser callers never hit this path — `init()` only invokes it when
- * {@link isNodeRuntime} is true.
- */
-// Ambient declaration so the TypeScript source can reference Node's CJS
-// `__filename` global without dragging in `@types/node`. The runtime check
-// `typeof __filename !== 'undefined'` keeps ESM bundles safe — the variable
-// only resolves under a CJS module wrapper.
-declare const __filename: string | undefined;
-
-async function loadWasmBytesNode(): Promise<Uint8Array> {
-  const [{ createRequire }, { readFile, readdir }, path] = await Promise.all([
-    import('node:module'),
-    import('node:fs/promises'),
-    import('node:path'),
-  ]);
-  // Pick whichever module identifier is actually defined in this runtime:
-  //   - CJS: `__filename` is wrapped in by Node's CommonJS module loader.
-  //   - ESM: `import.meta.url` is the spec-mandated locator.
-  // We prefer `__filename` first because tsup's CJS output leaves
-  // `import.meta.url` as `undefined`, which would make `createRequire`
-  // throw ERR_INVALID_ARG_VALUE under `require('@wiscale/velesdb-sdk')`.
-  const cjsFilename =
-    typeof __filename !== 'undefined' ? __filename : undefined;
-  const moduleId =
-    typeof cjsFilename === 'string' && cjsFilename.length > 0
-      ? cjsFilename
-      : import.meta.url;
-  const require = createRequire(moduleId);
-  const pkgJsonPath = require.resolve('@wiscale/velesdb-wasm/package.json');
-  const pkgDir = path.dirname(pkgJsonPath);
-
-  // Discover the WASM binary by listing files actually present on disk.
-  // We deliberately do NOT inspect package.json#files because that field is
-  // an npm publish whitelist, not a general manifest — if the publisher
-  // ever switches to .npmignore (or simply forgets to include the wasm in
-  // `files`), the manifest-based lookup would fail even though the binary
-  // is present in the installed package. Reading the directory matches
-  // what wasm-pack actually ships and is resilient to packaging convention
-  // changes upstream.
-  const entries = await readdir(pkgDir);
-  const wasmFile = entries.find((name) => name.endsWith('.wasm'));
-  if (!wasmFile) {
-    throw new Error(
-      `Cannot locate a *.wasm binary in @wiscale/velesdb-wasm at ${pkgDir}. ` +
-        'The Node.js path expects wasm-pack output (e.g. velesdb_wasm_bg.wasm) ' +
-        'to be present alongside package.json.'
-    );
-  }
-  return readFile(path.join(pkgDir, wasmFile));
-}
+// Node-only init helpers (`isNodeRuntime`, `loadWasmBytesNode`) live in
+// `./wasm-node-loader` so this file stays under the .claude/rules
+// code-quality.md 500-NLOC ceiling. Browser bundles never reach the
+// loader because `init()` gates the import on `isNodeRuntime()`.
