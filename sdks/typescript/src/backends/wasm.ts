@@ -127,7 +127,19 @@ export class WasmBackend implements IVelesDBBackend {
     if (this._initialized) { return; }
     try {
       this.wasmModule = await import('@wiscale/velesdb-wasm') as unknown as WasmModule;
-      await this.wasmModule.default();
+      // The wasm-pack default init() does `fetch(wasmUrl)` to locate the .wasm
+      // binary. That works in the browser but Node's undici has no scheme
+      // handler for `file://`, so the import explodes with
+      // "not implemented... yet..." (see #379 honesty notes).
+      // Detect Node and pass an explicit Buffer so init never relies on fetch.
+      const isNode =
+        typeof process !== 'undefined' &&
+        Boolean((process as { versions?: { node?: string } }).versions?.node);
+      if (isNode) {
+        await this.wasmModule.default(await loadWasmBytesNode());
+      } else {
+        await this.wasmModule.default();
+      }
       this._initialized = true;
     } catch (error) {
       throw new ConnectionError(
@@ -385,4 +397,20 @@ export class WasmBackend implements IVelesDBBackend {
   async getNodePayload(c: string, id: number): Promise<import('../types').NodePayloadResponse> { this.ensureInitialized(); return wasmGetNodePayload(c, id); }
   async upsertNodePayload(c: string, id: number, p: Record<string, unknown>): Promise<void> { this.ensureInitialized(); return wasmUpsertNodePayload(c, id, p); }
   async graphSearch(c: string, r: import('../types').GraphSearchRequest): Promise<import('../types').GraphSearchResponse> { this.ensureInitialized(); return wasmGraphSearch(c, r); }
+}
+
+/**
+ * Read the wasm binary from disk in Node.js, returning a Buffer that the
+ * wasm-pack `default()` initializer accepts as a `BufferSource`. Resolved
+ * via `createRequire` so it works under both ESM and CJS consumers.
+ *
+ * Browser callers never hit this path — `init()` only invokes it when
+ * `process.versions.node` is set.
+ */
+async function loadWasmBytesNode(): Promise<Uint8Array> {
+  const { createRequire } = await import('node:module');
+  const { readFile } = await import('node:fs/promises');
+  const require = createRequire(import.meta.url);
+  const wasmPath = require.resolve('@wiscale/velesdb-wasm/velesdb_wasm_bg.wasm');
+  return readFile(wasmPath);
 }
