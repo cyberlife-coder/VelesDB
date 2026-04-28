@@ -794,19 +794,6 @@ dependencies = [
 
 [[package]]
 name = "console"
-version = "0.15.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "054ccb5b10f9f2cbf51eb355ca1d05c2d279ce1804688d0db74b4733a5aeafd8"
-dependencies = [
- "encode_unicode",
- "libc",
- "once_cell",
- "unicode-width 0.2.2",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "console"
 version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d64e8af5551369d19cf50138de61f1c42074ab970f74e99be916646777f8fc87"
@@ -1249,7 +1236,7 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25f104b501bf2364e78d0d3974cbc774f738f5865306ed128e1e0d7499c0ad96"
 dependencies = [
- "console 0.16.3",
+ "console",
  "fuzzy-matcher",
  "shell-words",
  "tempfile",
@@ -2697,14 +2684,14 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.17.11"
+version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "183b3088984b400f4cfac3620d5e076c84da5364016b4f49473de574b2586235"
+checksum = "25470f23803092da7d239834776d653104d551bc4d7eacaf31e6837854b8e9eb"
 dependencies = [
- "console 0.15.11",
- "number_prefix",
+ "console",
  "portable-atomic",
  "unicode-width 0.2.2",
+ "unit-prefix",
  "web-time",
 ]
 
@@ -3408,12 +3395,6 @@ dependencies = [
  "hermit-abi",
  "libc",
 ]
-
-[[package]]
-name = "number_prefix"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "numpy"
@@ -5728,7 +5709,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-velesdb"
-version = "1.13.5"
+version = "1.13.6"
 dependencies = [
  "dirs 5.0.1",
  "parking_lot",
@@ -6556,6 +6537,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7264e107f553ccae879d21fbea1d6724ac785e8c3bfc762137959b5802826ef3"
 
 [[package]]
+name = "unit-prefix"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81e544489bf3d8ef66c953931f56617f423cd4b5494be343d9b9d3dda037b9a3"
+
+[[package]]
 name = "unsafe-libyaml"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6694,7 +6681,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "velesdb-cli"
-version = "1.13.5"
+version = "1.13.6"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -6719,7 +6706,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-core"
-version = "1.13.5"
+version = "1.13.6"
 dependencies = [
  "arc-swap",
  "bytemuck",
@@ -6773,12 +6760,12 @@ dependencies = [
 
 [[package]]
 name = "velesdb-migrate"
-version = "1.13.5"
+version = "1.13.6"
 dependencies = [
  "anyhow",
  "async-trait",
  "clap",
- "console 0.15.11",
+ "console",
  "criterion",
  "dialoguer",
  "indicatif",
@@ -6801,7 +6788,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-mobile"
-version = "1.13.5"
+version = "1.13.6"
 dependencies = [
  "parking_lot",
  "serde_json",
@@ -6815,7 +6802,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-python"
-version = "1.13.5"
+version = "1.13.6"
 dependencies = [
  "numpy",
  "parking_lot",
@@ -6827,7 +6814,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-server"
-version = "1.13.5"
+version = "1.13.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -6860,7 +6847,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-wasm"
-version = "1.13.5"
+version = "1.13.6"
 dependencies = [
  "getrandom 0.3.4",
  "js-sys",
