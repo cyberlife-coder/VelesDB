@@ -137,8 +137,15 @@ export interface WasmVectorStoreConstructor {
 
 /** Typed interface for the @wiscale/velesdb-wasm module. */
 export interface WasmModule {
-  /** WASM initialization function (must be called once before use). */
-  default(): Promise<void>;
+  /** WASM initialization function (must be called once before use).
+   *
+   * Accepts an optional argument that wasm-bindgen forwards to its loader:
+   *  - browser: omit, the loader will fetch the .wasm next to the JS module.
+   *  - Node.js: pass a `BufferSource` (e.g. `await fs.readFile(...)`) because
+   *    Node's stdlib fetch has no `file://` scheme handler. The WasmBackend
+   *    helper does this transparently when running under Node.
+   */
+  default(moduleOrPath?: Uint8Array | URL | string): Promise<void>;
 
   /** VectorStore class constructor. */
   VectorStore: WasmVectorStoreConstructor;
