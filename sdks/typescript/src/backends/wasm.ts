@@ -446,7 +446,7 @@ function isNodeRuntime(): boolean {
 declare const __filename: string | undefined;
 
 async function loadWasmBytesNode(): Promise<Uint8Array> {
-  const [{ createRequire }, { readFile }, path] = await Promise.all([
+  const [{ createRequire }, { readFile, readdir }, path] = await Promise.all([
     import('node:module'),
     import('node:fs/promises'),
     import('node:path'),
@@ -467,14 +467,21 @@ async function loadWasmBytesNode(): Promise<Uint8Array> {
   const pkgJsonPath = require.resolve('@wiscale/velesdb-wasm/package.json');
   const pkgDir = path.dirname(pkgJsonPath);
 
-  const pkgManifest = JSON.parse(
-    await readFile(pkgJsonPath, 'utf8')
-  ) as { files?: string[] };
-  const wasmFile = (pkgManifest.files ?? []).find((f) => f.endsWith('.wasm'));
+  // Discover the WASM binary by listing files actually present on disk.
+  // We deliberately do NOT inspect package.json#files because that field is
+  // an npm publish whitelist, not a general manifest — if the publisher
+  // ever switches to .npmignore (or simply forgets to include the wasm in
+  // `files`), the manifest-based lookup would fail even though the binary
+  // is present in the installed package. Reading the directory matches
+  // what wasm-pack actually ships and is resilient to packaging convention
+  // changes upstream.
+  const entries = await readdir(pkgDir);
+  const wasmFile = entries.find((name) => name.endsWith('.wasm'));
   if (!wasmFile) {
     throw new Error(
-      '@wiscale/velesdb-wasm package.json declares no *.wasm in its `files` field; ' +
-        'cannot locate the WebAssembly binary for Node.js initialization.'
+      `Cannot locate a *.wasm binary in @wiscale/velesdb-wasm at ${pkgDir}. ` +
+        'The Node.js path expects wasm-pack output (e.g. velesdb_wasm_bg.wasm) ' +
+        'to be present alongside package.json.'
     );
   }
   return readFile(path.join(pkgDir, wasmFile));
