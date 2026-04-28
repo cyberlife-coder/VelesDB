@@ -7,7 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — post-v1.13.5 work lives under the v1.14.0 milestone (#349 Haystack, #379 DX, #429 Python DataFrame, #469 CBO calibration)._
+_Nothing yet — post-v1.13.6 work lives under the v1.14.0 milestone (#349 Haystack, #379 DX, #429 Python DataFrame, #469 CBO calibration)._
+
+## [1.13.6] — 2026-04-28
+
+### Summary
+
+Devin findings batch fix-up release. Six concrete corrections derived from Devin Review comments on PRs #701/#702/#703/#704, plus release tooling hardening so the same class of issues cannot recur.
+
+### Fixed
+
+- **`integrations/common/pyproject.toml` version was stuck at 1.13.3** across v1.13.4 and v1.13.5 because `scripts/bump-version.ps1` did not include this file. The package was silently re-uploaded as `1.13.3` (already published) on PyPI, leaving consumers at the stale version. v1.13.6 bumps `velesdb-common` to 1.13.6, adds it to the bump script, and adds it to `scripts/check-version-sync.py` so future releases catch the gap.
+- **`crates/velesdb-migrate` and `crates/velesdb-cli` declared `console = "0.15"` and `indicatif = "0.17"`** while `dialoguer 0.12` (newly bumped) pulls `console 0.16`. Two copies of `console` were being compiled. Bumped both to `console = "0.16"` direct + `indicatif = "0.18"` (which pulls `console 0.16`); `Cargo.lock` now lists a single `console 0.16.3` entry.
+- **`sdks/typescript/package-lock.json` was stale at `1.13.3`** through v1.13.4 and v1.13.5 (not regenerated after each `package.json` bump). Regenerated via `npm install --package-lock-only`; lockfile root now reads `1.13.6`.
+- **`CHANGELOG.md` link references covered only 0.x releases.** Added link references for `[1.13.0]` through `[1.13.6]` and updated `[Unreleased]` to compare against `v1.13.6`. Now matches the [Keep a Changelog](https://keepachangelog.com/) format the file claims to follow.
+
+### Tooling
+
+- `scripts/bump-version.ps1` now bumps `integrations/common/pyproject.toml` (previously missed).
+- `scripts/check-version-sync.py` now verifies `integrations/common/pyproject.toml` (previously missed).
+
+### Devin findings closed
+
+- PR #701 — `console 0.15 vs 0.16 duplication` (701-A) ✅
+- PR #702 — `integrations/common pyproject not bumped` (702-A) ✅
+- PR #702 — `package-lock.json:3 stale` (702-C) ✅
+- PR #703 — `package-lock.json stale across multiple bumps` (703-A) ✅
+- PR #703 — `CHANGELOG link references missing for 1.x` (703-B) ✅
+- PR #704 — `package-lock.json not regenerated` (704-A) ✅ (same fix as 703-A)
+- PR #704 — `common pyproject pre-existing inconsistency` (704-B) ✅ (same fix as 702-A)
+
+The remaining PR #701/#702/#704 findings (701-B, 701-C, 701-D, 702-B, 704-C) were positive findings explicitly validating prior PRs — no action required.
+
+### No-op
+
+- No public API change.
+- No behavioural change. 450 µs p50 end-to-end path preserved.
 
 ## [1.13.5] — 2026-04-28
 
@@ -4390,6 +4425,15 @@ This change ensures VelesDB remains freely available while protecting against cl
 - API Authentication (WIS-69)
 - Starlight documentation site
 
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.13.6...HEAD
+[1.13.6]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.6
+[1.13.5]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.5
+[1.13.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.4
+[1.13.3]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.3
+[1.13.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.2
+[1.13.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.1
+[1.13.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.0
+[0.7.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.7.2
 [0.7.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.7.1
 [0.7.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.7.0
 [0.6.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.6.0
@@ -4406,5 +4450,3 @@ This change ensures VelesDB remains freely available while protecting against cl
 [0.1.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.4
 [0.1.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.2
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.0
-[0.7.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.7.2
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.7.2...HEAD
