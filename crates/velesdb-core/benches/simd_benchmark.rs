@@ -147,7 +147,13 @@ fn bench_cosine_similarity(c: &mut Criterion) {
 
 fn generate_binary_vector(dim: usize, seed: usize) -> Vec<f32> {
     (0..dim)
-        .map(|i| if (i + seed) % 3 == 0 { 1.0 } else { 0.0 })
+        .map(|i| {
+            if (i + seed).is_multiple_of(3) {
+                1.0
+            } else {
+                0.0
+            }
+        })
         .collect()
 }
 

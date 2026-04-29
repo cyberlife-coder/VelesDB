@@ -46,6 +46,12 @@ impl Collection {
     ///
     /// Returns:
     ///     List of dicts with id, score, and payload.
+    // Allowed: every parameter below is a Python keyword argument exposed via
+    // `#[pyo3(signature = ...)]`. PyO3 requires one positional Rust parameter
+    // per Python kwarg, so a `SearchOptions` struct would either break the
+    // public API or require a hand-written `FromPyObject` impl that adds more
+    // code than it saves. The signature is stable and documented.
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None, sparse_index_name=None, include_vectors=false))]
     fn search(
         &self,

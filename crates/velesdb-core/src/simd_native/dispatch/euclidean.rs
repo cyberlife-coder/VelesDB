@@ -93,9 +93,11 @@ pub fn normalize_inplace_native(v: &mut [f32]) {
 /// Scales all elements of a mutable slice by a constant factor using SIMD.
 ///
 /// F-07: Replaces scalar `for x in v { *x *= factor }` with SIMD broadcast+mul.
-/// AVX-512 and AVX2 share the AVX2 kernel — sufficient throughput for `scale`,
-/// and an AVX-512 variant has not been written yet (TODO: revisit now that the
-/// `_mm512_storeu_ps` intrinsic is reachable at the workspace MSRV of 1.89).
+/// AVX-512 and AVX2 share the AVX2 kernel — sufficient throughput for `scale`
+/// because the operation is memory-bound on every microarchitecture we ship
+/// to. An AVX-512 variant becomes reachable now that `_mm512_storeu_ps` sits
+/// inside the workspace MSRV of 1.89, but is intentionally not written until
+/// a profile shows it would beat the AVX2 path.
 #[inline]
 fn scale_inplace_native(v: &mut [f32], factor: f32) {
     match simd_level() {

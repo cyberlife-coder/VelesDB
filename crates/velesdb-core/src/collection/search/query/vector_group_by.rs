@@ -498,7 +498,7 @@ mod tests {
         };
         let grouped = group_search_results(&results, &config);
         assert_eq!(grouped.len(), 1);
-        let expected_avg = (0.5 + 0.9) / 2.0;
+        let expected_avg = 0.5_f32.midpoint(0.9);
         assert!((grouped[0].score - expected_avg).abs() < 0.001);
     }
 }
