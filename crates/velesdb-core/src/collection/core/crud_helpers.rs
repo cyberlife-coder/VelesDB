@@ -54,7 +54,7 @@ impl<'a> QuantizationGuards<'a> {
 
 fn auto_num_subspaces(dimension: usize) -> usize {
     let mut num_subspaces = 8usize;
-    while num_subspaces > 1 && dimension % num_subspaces != 0 {
+    while num_subspaces > 1 && !dimension.is_multiple_of(num_subspaces) {
         num_subspaces /= 2;
     }
     num_subspaces.max(1)

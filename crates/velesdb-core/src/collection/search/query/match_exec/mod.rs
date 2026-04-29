@@ -456,7 +456,7 @@ impl Collection {
         all_results: &[MatchResult],
         reported_cardinality: &mut usize,
     ) -> Result<()> {
-        if iteration_count % 100 != 0 {
+        if !iteration_count.is_multiple_of(100) {
             return Ok(());
         }
         let Some(ctx) = ctx else { return Ok(()) };

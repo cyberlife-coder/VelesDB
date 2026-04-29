@@ -30,7 +30,7 @@ What actually happened instead.
 
 - **OS:** [e.g., Ubuntu 22.04, macOS 14.0, Windows 11]
 - **VelesDB Version:** [e.g., 0.1.0]
-- **Rust Version:** [e.g., 1.83.0]
+- **Rust Version:** [e.g., 1.89.0]
 - **Deployment:** [e.g., Docker, Binary, Cargo]
 
 ## Logs

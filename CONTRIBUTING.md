@@ -143,7 +143,7 @@ Git hooks are provided in `.githooks/` — activate with: `git config core.hooks
 
 ### Prerequisites
 
-- Rust 1.83+ (stable) — enforced as MSRV
+- Rust 1.89+ (stable) — enforced as MSRV (required for `avx512vpopcntdq` `target_feature` stabilized in 1.89; see `crates/velesdb-core/src/simd_native/x86_avx512.rs`)
 - Docker (optional, for integration tests)
 
 ### Building from Source

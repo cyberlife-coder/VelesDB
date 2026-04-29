@@ -93,8 +93,9 @@ pub fn normalize_inplace_native(v: &mut [f32]) {
 /// Scales all elements of a mutable slice by a constant factor using SIMD.
 ///
 /// F-07: Replaces scalar `for x in v { *x *= factor }` with SIMD broadcast+mul.
-/// Note: AVX-512 store intrinsics require Rust 1.89+ (MSRV is 1.83),
-/// so AVX-512 and AVX2 both use the AVX2 kernel (sufficient for scale).
+/// AVX-512 and AVX2 share the AVX2 kernel — sufficient throughput for `scale`,
+/// and an AVX-512 variant has not been written yet (TODO: revisit now that the
+/// `_mm512_storeu_ps` intrinsic is reachable at the workspace MSRV of 1.89).
 #[inline]
 fn scale_inplace_native(v: &mut [f32], factor: f32) {
     match simd_level() {
@@ -147,8 +148,9 @@ unsafe fn scale_inplace_avx2(v: &mut [f32], factor: f32) {
     }
 }
 
-// Note: AVX-512 scale_inplace not implemented — _mm512_storeu_ps requires
-// Rust 1.89+ but MSRV is 1.83. AVX2 kernel handles AVX-512 CPUs (subset).
+// AVX-512 scale_inplace is intentionally not implemented — the AVX2 kernel
+// already saturates memory bandwidth on the typical embedding-size workload,
+// and AVX-512 CPUs hit it via the AVX2 dispatch arm above.
 
 /// Batch squared L2 distance with cross-platform multi-level prefetch hints.
 #[inline]
