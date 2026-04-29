@@ -42,9 +42,9 @@ The orchestrator emits a JSON report at `benchmarks/dx-timing/results-<timestamp
 
 ## Honesty notes (DX friction observed during measurement)
 
-The timing exercise surfaced four real DX frictions: three that the per-scenario scripts had to work around (numpy dependency, Rust MSRV understated, Dockerfile label drift) plus one historical Node WASM init bug fixed in v1.13.7 itself. They are documented here transparently rather than papered over.
+The timing exercise surfaced four real DX frictions. Two were already fixed in their respective releases (Node WASM init in v1.13.7, numpy dependency in v1.13.8), and two are still tracked for follow-up (Rust MSRV understated, Dockerfile label drift). All four are documented here transparently rather than papered over — the per-scenario scripts deliberately keep the legacy work-arounds in place so re-running this harness against any historical wheel/release tag produces a comparable measurement.
 
-### 1. `pip install velesdb` does not declare `numpy` as a runtime dependency
+### 1. `pip install velesdb` does not declare `numpy` as a runtime dependency — **resolved in v1.13.8**
 
 The first attempt at the Python scenario crashed at `import velesdb` with:
 
@@ -52,7 +52,7 @@ The first attempt at the Python scenario crashed at `import velesdb` with:
 Failed to access NumPy array API capsule: ModuleNotFoundError: No module named 'numpy'
 ```
 
-The PyO3 bindings call into the NumPy C API at first use, but the published `velesdb` wheel metadata as of v1.13.7 does not list `numpy` in its `install_requires`. The scenario script therefore runs `pip install velesdb numpy` — works, but it is one extra step the user has to know about. Tracked for follow-up: add `numpy` to the wheel dependencies so a single `pip install velesdb` is sufficient.
+The PyO3 bindings call into the NumPy C API at first use, but the published `velesdb` wheel metadata up to and including v1.13.7 did not list `numpy` in its `install_requires`. The scenario script therefore runs `pip install velesdb numpy` to stay deterministic across pre-1.13.8 wheels and post-1.13.8 wheels. **Resolved in v1.13.8**: `numpy>=1.20` is now declared as a top-level runtime dependency in `crates/velesdb-python/pyproject.toml`, so a single `pip install velesdb` is sufficient. The `[numpy]` extra is kept as a no-op alias for backwards compatibility.
 
 ### 2. `Cargo.toml` advertises `rust-version = "1.83"` but `velesdb-core` actually requires Rust ≥ 1.89
 
