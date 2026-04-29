@@ -118,6 +118,17 @@ export class WasmBackend implements IVelesDBBackend {
   private wasmModule: WasmModule | null = null;
   private collections: Map<string, CollectionData> = new Map();
   private _initialized = false;
+  // Memoized single-shot init promise. Subsequent concurrent calls to init()
+  // await the same in-flight initialization instead of racing into duplicate
+  // wasm-bindgen `default()` invocations. Cleared on close() so a fresh
+  // backend instance can re-initialize if needed.
+  private _initInFlight: Promise<void> | null = null;
+  // Generation token bumped by close(). runInit() captures the token at
+  // entry and refuses to publish its result if close() advanced the
+  // generation while the async work was in flight. Without this, calling
+  // close() during an in-flight init() would let the racy completion of
+  // runInit() flip _initialized back to true after close() set it false.
+  private _initGen = 0;
 
   // ========================================================================
   // Lifecycle
@@ -125,9 +136,43 @@ export class WasmBackend implements IVelesDBBackend {
 
   async init(): Promise<void> {
     if (this._initialized) { return; }
+    if (this._initInFlight) { return this._initInFlight; }
+    const gen = this._initGen;
+    this._initInFlight = this.runInit(gen).finally(() => {
+      // Only clear the in-flight slot if this run is still the active one.
+      // close() may have already cleared it and advanced the generation.
+      if (this._initGen === gen) {
+        this._initInFlight = null;
+      }
+    });
+    return this._initInFlight;
+  }
+
+  private async runInit(gen: number): Promise<void> {
     try {
-      this.wasmModule = await import('@wiscale/velesdb-wasm') as unknown as WasmModule;
-      await this.wasmModule.default();
+      const mod = (await import('@wiscale/velesdb-wasm')) as unknown as WasmModule;
+      // The wasm-pack default init() does `fetch(wasmUrl)` to locate the .wasm
+      // binary. That works in the browser but Node's undici has no scheme
+      // handler for `file://`, so the import explodes with
+      // "not implemented... yet..." (see #379 honesty notes).
+      //
+      // Import the Node-only loader **dynamically** so browser bundlers can
+      // tree-shake the entire `wasm-node-loader` module — including the
+      // `node:module` / `node:fs/promises` / `node:path` references inside
+      // it — out of browser builds. A static `import { ... } from '...'`
+      // would force every bundle (web, react-native, electron-renderer) to
+      // ship those `node:` specifiers, which some bundlers warn on.
+      const nodeLoader = await import('./wasm-node-loader');
+      if (nodeLoader.isNodeRuntime()) {
+        await mod.default(await nodeLoader.loadWasmBytesNode());
+      } else {
+        await mod.default();
+      }
+      // Publish the result only if close() did not advance the generation
+      // while the async work above was running. Otherwise the run is stale
+      // and must not flip _initialized back to true after close() reset it.
+      if (this._initGen !== gen) { return; }
+      this.wasmModule = mod;
       this._initialized = true;
     } catch (error) {
       throw new ConnectionError(
@@ -143,6 +188,13 @@ export class WasmBackend implements IVelesDBBackend {
     for (const [, data] of this.collections) { data.store.free(); }
     this.collections.clear();
     this._initialized = false;
+    this._initInFlight = null;
+    // Drop the WASM module reference so a future init() picks up a fresh
+    // import rather than reusing a possibly-stale handle, and bump the
+    // generation so any concurrently in-flight runInit() refuses to
+    // publish its result over our cleared state.
+    this.wasmModule = null;
+    this._initGen += 1;
   }
 
   capabilities(): Readonly<CapabilityMap> { return WASM_CAPABILITIES; }
@@ -386,3 +438,8 @@ export class WasmBackend implements IVelesDBBackend {
   async upsertNodePayload(c: string, id: number, p: Record<string, unknown>): Promise<void> { this.ensureInitialized(); return wasmUpsertNodePayload(c, id, p); }
   async graphSearch(c: string, r: import('../types').GraphSearchRequest): Promise<import('../types').GraphSearchResponse> { this.ensureInitialized(); return wasmGraphSearch(c, r); }
 }
+
+// Node-only init helpers (`isNodeRuntime`, `loadWasmBytesNode`) live in
+// `./wasm-node-loader` so this file stays under the .claude/rules
+// code-quality.md 500-NLOC ceiling. Browser bundles never reach the
+// loader because `init()` gates the import on `isNodeRuntime()`.

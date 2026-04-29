@@ -7,7 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — post-v1.13.6 work lives under the v1.14.0 milestone (#349 Haystack, #379 DX, #429 Python DataFrame, #469 CBO calibration)._
+_Nothing yet — post-v1.13.7 work lives under the v1.14.0 milestone (#349 Haystack, #379 DX, #429 Python DataFrame, #469 CBO calibration)._
+
+## [1.13.7] — 2026-04-28
+
+### Summary
+
+TypeScript SDK patch release. Fixes a Node.js-specific bug discovered while
+building the dx-timing onboarding scenarios for [#379](https://github.com/cyberlife-coder/VelesDB/issues/379):
+`new VelesDB({ backend: 'wasm' })` followed by `db.init()` crashed 100% of the
+time in Node.js because wasm-pack's default initializer relies on
+`fetch('file://...')`, which Node's stdlib `fetch` (undici) does not support.
+
+The JSDoc on the public `VelesDB` class advertises *"WASM backend (browser/Node.js)"*,
+so the crash was a real DX bug, not a documented limitation. v1.13.7 makes
+that promise true.
+
+### Fixed
+
+- **TS SDK `WasmBackend.init()` now works in Node.js** ([#709](https://github.com/cyberlife-coder/VelesDB/pull/709)). When running under Node, the backend reads the `velesdb_wasm_bg.wasm` bytes from disk via `fs.readFile` and passes them to wasm-pack's initializer as an explicit `Uint8Array`, bypassing the broken `fetch('file://...')` path. Browsers keep the original fetch behaviour unchanged.
+- **TS SDK lifecycle hardening** (same PR). `init()` is now race-free: a memoized in-flight promise coalesces concurrent callers into a single wasm-bindgen invocation, and `close()` bumps a generation counter so a still-running `runInit()` cannot flip `_initialized` back to `true` after the backend has been closed. `close()` also nulls out `wasmModule` so subsequent `init()` calls re-import cleanly.
+
+### Changed
+
+- TS SDK build now emits both ESM and CJS bundles that work end-to-end in Node.js. Verified with `node:20-slim` Docker container (smoke test in [#709](https://github.com/cyberlife-coder/VelesDB/pull/709)).
+- TS SDK gains a new internal module `src/backends/wasm-node-loader.ts` that hosts the Node-only init helpers (`isNodeRuntime`, `loadWasmBytesNode`). Browser bundles never reach this file because `WasmBackend.init()` gates the import on the runtime detection.
+
+### No-op for non-TS consumers
+
+- Rust crates: no source change. Workspace version bumped from 1.13.6 to 1.13.7 to keep all manifests aligned (the release pipeline publishes them in lock-step).
+- Python wheel: no source change.
+- WASM artifact: no source change. The `@wiscale/velesdb-wasm` npm package is unchanged at 1.13.6 — the TS SDK consumes it via the same dependency range.
+- 450 µs p50 end-to-end path preserved.
 
 ## [1.13.6] — 2026-04-28
 
@@ -4425,7 +4456,8 @@ This change ensures VelesDB remains freely available while protecting against cl
 - API Authentication (WIS-69)
 - Starlight documentation site
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.13.6...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.13.7...HEAD
+[1.13.7]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.7
 [1.13.6]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.6
 [1.13.5]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.5
 [1.13.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.4
