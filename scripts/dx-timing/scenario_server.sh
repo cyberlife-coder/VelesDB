@@ -17,13 +17,24 @@ velesdb-server --data-dir "$DATA_DIR" --port 18080 >/tmp/velesdb-server.log 2>&1
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$DATA_DIR"' EXIT
 
-# Wait for /health, bounded.
+# Wait for /health, bounded. Track success explicitly so the loop's
+# silent fall-through cannot hide a server that never came up: if the
+# health probe never succeeds within the 60-second budget, abort with
+# an explicit diagnostic instead of letting the next curl call fail
+# with a cryptic 'connection refused'.
+HEALTH_OK=0
 for _ in $(seq 1 60); do
     if curl -fsS http://127.0.0.1:18080/health >/dev/null 2>&1; then
+        HEALTH_OK=1
         break
     fi
     sleep 1
 done
+if [ "$HEALTH_OK" -ne 1 ]; then
+    echo "velesdb-server did not become healthy within 60 s. Server log:" >&2
+    sed 's/^/  | /' /tmp/velesdb-server.log >&2 || true
+    exit 1
+fi
 
 # Hello-world via REST. Routes confirmed against
 # crates/velesdb-server/src/routes.rs (POST upsert + POST search,

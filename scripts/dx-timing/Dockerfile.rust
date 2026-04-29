@@ -3,7 +3,7 @@
 # Rust toolchain bootstrap (which is a one-off setup, not per-project DX).
 #
 # Pinned to `rust:1-slim` (latest stable 1.x) rather than 1.86 because
-# velesdb-core 1.13.6 uses #[target_feature(enable = "avx512vpopcntdq")]
+# velesdb-core 1.13.7 uses #[target_feature(enable = "avx512vpopcntdq")]
 # which was stabilized in Rust 1.89. The workspace declares
 # rust-version = "1.83" but that is under-stated — see timing-results
 # "Honesty notes" + the dedicated tracking issue for the bump.

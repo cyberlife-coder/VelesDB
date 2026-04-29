@@ -40,17 +40,24 @@ run_in_container() {
         "$img" bash //scenario.sh
 }
 
-# Server scenario runs on the host's Rust image (--network host so the
-# probe binds to localhost). Same image as Rust scenario, reused.
+# Server scenario runs on the host's Rust image. The server and the curl
+# client both live inside the same container so they communicate over
+# the container-local 127.0.0.1 — no `--network host` required, which
+# avoids the inconsistent Docker Desktop semantics (Mac/Windows do not
+# truly share the host network namespace).
+# `set -e` on the inline `bash -c` so a failed apt-get aborts the run
+# instead of silently dropping curl and reporting a confusing scenario
+# failure later.
 # Both apt-get steps redirect stdout/stderr to /dev/null so the captured
 # output stays clean — only the scenario script's final timing line ends
 # up in $out for extract_seconds to parse.
 run_server_scenario() {
-    docker run --rm --network host \
+    docker run --rm \
         -v "$DOCKER_CTX_DIR/scenario_server.sh:/scenario.sh:ro" \
         "velesdb-dx-rust:$TIMING_RUN_ID" bash -c '
-            apt-get update -qq >/dev/null 2>&1 && \
-                apt-get install -y --no-install-recommends curl >/dev/null 2>&1
+            set -e
+            apt-get update -qq >/dev/null 2>&1
+            apt-get install -y --no-install-recommends curl >/dev/null 2>&1
             bash //scenario.sh
         '
 }
