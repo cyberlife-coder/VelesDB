@@ -51,7 +51,6 @@ import {
   buildWasmContext,
   buildCollectionInfo,
 } from './wasm-helpers';
-import { isNodeRuntime, loadWasmBytesNode } from './wasm-node-loader';
 
 // Search & query delegates
 import {
@@ -156,9 +155,16 @@ export class WasmBackend implements IVelesDBBackend {
       // binary. That works in the browser but Node's undici has no scheme
       // handler for `file://`, so the import explodes with
       // "not implemented... yet..." (see #379 honesty notes).
-      // Detect Node and pass an explicit Buffer so init never relies on fetch.
-      if (isNodeRuntime()) {
-        await mod.default(await loadWasmBytesNode());
+      //
+      // Import the Node-only loader **dynamically** so browser bundlers can
+      // tree-shake the entire `wasm-node-loader` module — including the
+      // `node:module` / `node:fs/promises` / `node:path` references inside
+      // it — out of browser builds. A static `import { ... } from '...'`
+      // would force every bundle (web, react-native, electron-renderer) to
+      // ship those `node:` specifiers, which some bundlers warn on.
+      const nodeLoader = await import('./wasm-node-loader');
+      if (nodeLoader.isNodeRuntime()) {
+        await mod.default(await nodeLoader.loadWasmBytesNode());
       } else {
         await mod.default();
       }
