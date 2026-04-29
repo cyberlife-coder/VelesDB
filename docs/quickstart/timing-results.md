@@ -42,7 +42,7 @@ The orchestrator emits a JSON report at `benchmarks/dx-timing/results-<timestamp
 
 ## Honesty notes (DX friction observed during measurement)
 
-The timing exercise surfaced three real DX frictions that the per-scenario scripts had to work around. They are documented here transparently rather than papered over.
+The timing exercise surfaced four real DX frictions: three that the per-scenario scripts had to work around (numpy dependency, Rust MSRV understated, Dockerfile label drift) plus one historical Node WASM init bug fixed in v1.13.7 itself. They are documented here transparently rather than papered over.
 
 ### 1. `pip install velesdb` does not declare `numpy` as a runtime dependency
 
@@ -56,7 +56,7 @@ The PyO3 bindings call into the NumPy C API at first use, but the published `vel
 
 ### 2. `Cargo.toml` advertises `rust-version = "1.83"` but `velesdb-core` actually requires Rust ≥ 1.89
 
-The Rust scenario initially failed to compile with `rust:1.86-slim` (499 errors) because `crates/velesdb-core/src/simd_native/x86_avx512.rs:1428` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilized in Rust 1.89. The workspace `Cargo.toml` declares `rust-version = "1.83"`, which is misleading. The scenario uses `rust:1-slim` (latest stable) and works cleanly. Tracked for follow-up: bump the workspace `rust-version` to the actual minimum (1.89+) so users get a clear MSRV error rather than 499 cryptic feature-flag errors.
+The Rust scenario initially failed to compile with `rust:1.86-slim` (499 errors) because `crates/velesdb-core/src/simd_native/x86_avx512.rs:1428` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilized in Rust 1.89. The workspace `Cargo.toml` declares `rust-version = "1.83"`, which is misleading. The scenario uses `rust:1-slim` (latest stable) and works cleanly. Tracked for follow-up: a dedicated PR will bump the workspace `rust-version` AND `CONTRIBUTING.md` (currently also says "Rust 1.83+ enforced as MSRV") so all three documents agree. Note: this PR's `docs/getting-started.md` callout already states `Rust 1.89+` to match what users actually need today; the manifest + CONTRIBUTING follow as a separate change because bumping `rust-version` is potentially breaking for users on a 1.83-1.88 toolchain who have not noticed they actually do not compile.
 
 ### 3. The repo `Dockerfile` carries a stale `LABEL version="1.12.0"`
 

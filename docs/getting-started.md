@@ -16,7 +16,7 @@ This guide will help you get VelesDB up and running in just a few minutes.
 > | `cargo install velesdb-server` (REST) | **45.84 s** | 46.29 s |
 >
 > All four well under the 300 s "<5 min" goal of [#379](https://github.com/cyberlife-coder/VelesDB/issues/379). Methodology + honesty notes
-> (3 DX frictions documented openly) → [`docs/quickstart/timing-results.md`](quickstart/timing-results.md). Reproduce locally with `bash scripts/dx-timing/run_all.sh`.
+> (4 DX frictions documented openly) → [`docs/quickstart/timing-results.md`](quickstart/timing-results.md). Reproduce locally with `bash scripts/dx-timing/run_all.sh`.
 
 ## Prerequisites
 

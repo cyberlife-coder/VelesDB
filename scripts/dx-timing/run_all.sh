@@ -42,11 +42,15 @@ run_in_container() {
 
 # Server scenario runs on the host's Rust image (--network host so the
 # probe binds to localhost). Same image as Rust scenario, reused.
+# Both apt-get steps redirect stdout/stderr to /dev/null so the captured
+# output stays clean — only the scenario script's final timing line ends
+# up in $out for extract_seconds to parse.
 run_server_scenario() {
     docker run --rm --network host \
         -v "$DOCKER_CTX_DIR/scenario_server.sh:/scenario.sh:ro" \
         "velesdb-dx-rust:$TIMING_RUN_ID" bash -c '
-            apt-get update -qq && apt-get install -y --no-install-recommends curl >/dev/null 2>&1
+            apt-get update -qq >/dev/null 2>&1 && \
+                apt-get install -y --no-install-recommends curl >/dev/null 2>&1
             bash //scenario.sh
         '
 }
@@ -57,9 +61,22 @@ extract_seconds() {
     awk 'END { print $NF }' <<<"$1"
 }
 
+# Median of an arbitrary count of numeric values (one per stdin line).
+# For odd N the middle element is taken; for even N the lower of the two
+# middle elements. Both keep the function dependency-free (no bc/python).
 median() {
-    # Three numeric inputs on three lines, sorted.
-    sort -g | awk 'NR==2 { print }'
+    awk '{ a[NR]=$0 }
+         END {
+             n = NR
+             # Insertion sort — N is small (3 by default).
+             for (i=2; i<=n; i++) {
+                 v = a[i]; j = i - 1
+                 while (j >= 1 && a[j]+0 > v+0) { a[j+1] = a[j]; j-- }
+                 a[j+1] = v
+             }
+             mid = int((n + 1) / 2)
+             print a[mid]
+         }'
 }
 
 run_scenario() {
@@ -81,7 +98,11 @@ run_scenario() {
     done
     local med
     med=$(printf '%s\n' "${results[@]}" | median)
-    SCENARIO_RESULTS+=("{\"name\":\"$name\",\"runs\":[${results[0]},${results[1]},${results[2]}],\"median\":$med}")
+    # Build the runs JSON array dynamically so the report stays correct
+    # regardless of $RUNS_PER_SCENARIO. Avoids the historical 3-run lock-in.
+    local runs_json
+    runs_json=$(printf '%s,' "${results[@]}" | sed 's/,$//')
+    SCENARIO_RESULTS+=("{\"name\":\"$name\",\"runs\":[$runs_json],\"median\":$med}")
     echo "  median: ${med}s"
 
     awk -v m="$med" -v slo="$SLO_SECONDS" 'BEGIN { exit (m+0 > slo+0) ? 1 : 0 }' \
