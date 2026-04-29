@@ -1,0 +1,15 @@
+# Reproducible "developer arrives on a clean Linux box with Node" baseline.
+# Uses official node image so we only measure VelesDB-specific time.
+FROM node:20-slim
+
+ARG TIMING_RUN_ID=unset
+ENV TIMING_RUN_ID=${TIMING_RUN_ID}
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+        time \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
