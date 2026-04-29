@@ -1,0 +1,24 @@
+# Reproducible "developer arrives on a clean Linux box with Rust toolchain" baseline.
+# Uses official rust image so we only measure VelesDB-specific time, not
+# Rust toolchain bootstrap (which is a one-off setup, not per-project DX).
+#
+# Pinned to `rust:1-slim` (latest stable 1.x) rather than 1.86 because
+# velesdb-core 1.13.6 uses #[target_feature(enable = "avx512vpopcntdq")]
+# which was stabilized in Rust 1.89. The workspace declares
+# rust-version = "1.83" but that is under-stated — see timing-results
+# "Honesty notes" + the dedicated tracking issue for the bump.
+FROM rust:1-slim
+
+ARG TIMING_RUN_ID=unset
+ENV TIMING_RUN_ID=${TIMING_RUN_ID}
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+        pkg-config \
+        libssl-dev \
+        time \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work

@@ -2,9 +2,25 @@
 
 This guide will help you get VelesDB up and running in just a few minutes.
 
+> **5-minute onboarding (measured 2026-04-29)**
+>
+> The four supported install paths were timed in fresh Docker containers
+> against the published v1.13.7 packages. Median time from `<install
+> command>` to first vector search result:
+>
+> | Path | Median | Worst case |
+> |------|--------|------------|
+> | `pip install velesdb numpy` (Python) | **4.95 s** | 5.66 s |
+> | `cargo add velesdb-core` (Rust)      | **25.40 s** | 30.25 s |
+> | `npm install @wiscale/velesdb-sdk` (TS WASM) | **0.48 s** | 0.74 s |
+> | `cargo install velesdb-server` (REST) | **45.84 s** | 46.29 s |
+>
+> All four well under the 300 s "<5 min" goal of [#379](https://github.com/cyberlife-coder/VelesDB/issues/379). Methodology + honesty notes
+> (3 DX frictions documented openly) → [`docs/quickstart/timing-results.md`](quickstart/timing-results.md). Reproduce locally with `bash scripts/dx-timing/run_all.sh`.
+
 ## Prerequisites
 
-- Docker (recommended) or Rust 1.83+
+- Docker (recommended) or Rust 1.89+
 - curl or any HTTP client for testing
 
 ## Installation
