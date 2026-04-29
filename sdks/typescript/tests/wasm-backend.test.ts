@@ -49,6 +49,17 @@ const mockWasmModule = {
 // Mock the dynamic import - must match the import path in wasm.ts
 vi.mock('@wiscale/velesdb-wasm', () => mockWasmModule);
 
+// Stub the Node-only loader so the unit suite does not touch the real
+// filesystem. Without this, `WasmBackend.init()` would call into
+// `loadWasmBytesNode()` which uses `createRequire` + `fs.readdir` to
+// locate the real velesdb_wasm package on disk — turning these unit
+// tests into integration tests that depend on `@wiscale/velesdb-wasm`
+// being installed AND containing a `.wasm` binary. (Devin Review PR #710.)
+vi.mock('../src/backends/wasm-node-loader', () => ({
+  isNodeRuntime: () => false,
+  loadWasmBytesNode: vi.fn(() => Promise.resolve(new Uint8Array(0))),
+}));
+
 describe('WasmBackend', () => {
   let backend: WasmBackend;
 

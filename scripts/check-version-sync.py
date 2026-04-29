@@ -16,6 +16,11 @@ TARGETS = {
     "integrations/llamaindex/pyproject.toml": "toml",
     "demos/rag-pdf-demo/pyproject.toml": "toml",
     "sdks/typescript/package.json": "json",
+    # The TS SDK's npm lockfile carries its own root "version" string that
+    # must track package.json. v1.13.4/.5/.6 each shipped with a stale
+    # lockfile because no script policed it; v1.13.7 caught the same drift
+    # via Devin Review (PR #710). Now this checker fails fast if we forget.
+    "sdks/typescript/package-lock.json": "json",
     "docs/openapi.json": "json_openapi",
 }
 

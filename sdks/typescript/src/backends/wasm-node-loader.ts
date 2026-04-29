@@ -71,7 +71,7 @@ export async function loadWasmBytesNode(): Promise<Uint8Array> {
   const pkgDir = path.dirname(pkgJsonPath);
 
   const entries = await readdir(pkgDir);
-  const wasmFile = entries.find((name) => name.endsWith('.wasm'));
+  const wasmFile = pickWasmBinary(entries);
   if (!wasmFile) {
     throw new Error(
       `Cannot locate a *.wasm binary in @wiscale/velesdb-wasm at ${pkgDir}. ` +
@@ -80,4 +80,26 @@ export async function loadWasmBytesNode(): Promise<Uint8Array> {
     );
   }
   return readFile(path.join(pkgDir, wasmFile));
+}
+
+/**
+ * Choose the WASM binary to load when the package directory contains more
+ * than one `.wasm` file. wasm-pack ships a single `<crate>_bg.wasm` by
+ * default, but consumers occasionally publish a debug build alongside the
+ * release build (`<crate>_bg.wasm` + `<crate>_slim.wasm`, or similar). A
+ * naive `entries.find('.wasm')` would depend on filesystem ordering — fine
+ * on most platforms today, fragile in principle.
+ *
+ * Strategy:
+ *   1. Prefer the wasm-pack default `*_bg.wasm` naming.
+ *   2. If no `*_bg.wasm` is present, fall back to the first plain `*.wasm`.
+ *   3. If no `*.wasm` is present at all, return undefined and let the caller
+ *      raise a descriptive error.
+ */
+function pickWasmBinary(entries: string[]): string | undefined {
+  const bg = entries.find((name) => name.endsWith('_bg.wasm'));
+  if (bg !== undefined) {
+    return bg;
+  }
+  return entries.find((name) => name.endsWith('.wasm'));
 }
