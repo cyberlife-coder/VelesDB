@@ -100,6 +100,12 @@ $FilesToUpdate = @(
         Description = "LlamaIndex integration"
     },
     @{
+        Path = "integrations/haystack/pyproject.toml"
+        Pattern = 'version = "\d+\.\d+\.\d+"'
+        Replacement = "version = `"$Version`""
+        Description = "Haystack integration"
+    },
+    @{
         Path = "demos/rag-pdf-demo/pyproject.toml"
         Pattern = 'version = "\d+\.\d+\.\d+"'
         Replacement = "version = `"$Version`""

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet — work toward v1.15.0 lives under feature branches._
+
+## [1.14.1] — 2026-04-30
+
+### Summary
+
+Pipeline-fix patch release. v1.14.0 added the Haystack 2.x DocumentStore source code (PR #672) but the release workflow forgot to publish `haystack-velesdb` to PyPI, so `pip install haystack-velesdb` returned 404 even though the README and `integrations/README.md` directed users to it. v1.14.1 closes that gap.
+
+### Fixed
+
+- **`haystack-velesdb` now published to PyPI** ([release.yml](.github/workflows/release.yml)). Added the package to the `publish-pypi-pure` matrix alongside `langchain-velesdb` and `llamaindex-velesdb`. The trio of Python RAG framework connectors is now actually installable from PyPI.
+- **`integrations/haystack/pyproject.toml` version aligned with the workspace**. Was pinned at `1.0.0` from contributor's initial draft; now lock-step with workspace at `1.14.1` and tracked by `bump-version.ps1` + `check-version-sync.py` (one extra target → 18 total).
+
 ### Added
 
 - **Haystack 2.x DocumentStore connector** (`integrations/haystack/`) — first-party `VelesDBDocumentStore` implementing the Haystack `DocumentStore` protocol (`write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, `delete_documents`). Closes [#349](https://github.com/cyberlife-coder/VelesDB/issues/349). Together with the existing `langchain-velesdb` and `llamaindex-velesdb` connectors, VelesDB now ships first-party support for the three major Python RAG frameworks. Contributed by [@CrepuscularIRIS](https://github.com/CrepuscularIRIS) ([#672](https://github.com/cyberlife-coder/VelesDB/pull/672)).
@@ -4527,7 +4540,8 @@ This change ensures VelesDB remains freely available while protecting against cl
 - API Authentication (WIS-69)
 - Starlight documentation site
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.14.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.14.1...HEAD
+[1.14.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.1
 [1.14.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.0
 [1.13.8]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.8
 [1.13.7]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.7

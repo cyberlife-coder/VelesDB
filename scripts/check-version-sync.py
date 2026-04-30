@@ -14,6 +14,7 @@ TARGETS = {
     "integrations/common/pyproject.toml": "toml",
     "integrations/langchain/pyproject.toml": "toml",
     "integrations/llamaindex/pyproject.toml": "toml",
+    "integrations/haystack/pyproject.toml": "toml",
     "demos/rag-pdf-demo/pyproject.toml": "toml",
     "sdks/typescript/package.json": "json",
     # The TS SDK's npm lockfile carries its own root "version" string that
