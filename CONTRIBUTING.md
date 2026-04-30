@@ -256,11 +256,17 @@ VelesDB uses **3 simplified GitHub Actions workflows**:
 ### Publishing a release
 
 ```bash
-# 1. Update version in Cargo.toml
-# 2. Commit and tag
-git commit -am "release: v1.11.1"
-git tag v1.11.1
-git push origin main v1.11.1
+# 1. Bump every manifest in lock-step
+pwsh -File scripts/bump-version.ps1 -Version <vX.Y.Z>
+python scripts/check-version-sync.py    # 17 targets must align
+python scripts/check-promise-contract.py # 15 claims must pass
+cargo update --workspace                 # refresh Cargo.lock
+
+# 2. Open release/<vX.Y.Z> -> main, wait for ALL CI green on the merge commit
+# 3. Tag from main (NEVER push the tag before CI Success on main HEAD)
+git checkout main && git pull origin main
+git tag -a v<X.Y.Z> -m "v<X.Y.Z> -- <one-line summary>"
+git push origin main --tags
 ```
 
 The `release.yml` workflow automatically publishes to:

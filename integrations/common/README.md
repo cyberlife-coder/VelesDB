@@ -3,13 +3,14 @@
 Shared utilities for [VelesDB](https://github.com/cyberlife-coder/VelesDB) Python integrations.
 
 > **This package is not a public API.** End users should install and import from
-> [`langchain-velesdb`](https://pypi.org/project/langchain-velesdb/) or
-> [`llama-index-vector-stores-velesdb`](https://pypi.org/project/llama-index-vector-stores-velesdb/)
+> [`langchain-velesdb`](https://pypi.org/project/langchain-velesdb/),
+> [`llama-index-vector-stores-velesdb`](https://pypi.org/project/llama-index-vector-stores-velesdb/),
+> or [`haystack-velesdb`](https://pypi.org/project/haystack-velesdb/)
 > directly.
 
 ## What it provides
 
-`velesdb-common` centralizes code shared by both integration packages:
+`velesdb-common` centralizes code shared by all three Python RAG framework integration packages:
 
 - **Security validators** — input sanitization for collection names, dimensions, queries, URLs
 - **ID generation** — deterministic hashing and sequential ID counters
@@ -18,9 +19,9 @@ Shared utilities for [VelesDB](https://github.com/cyberlife-coder/VelesDB) Pytho
 
 ## Public Exports
 
-The following symbols form the stable internal API consumed by `langchain-velesdb`
-and `llama-index-vector-stores-velesdb`. They are not intended for direct use by
-end users.
+The following symbols form the stable internal API consumed by `langchain-velesdb`,
+`llama-index-vector-stores-velesdb`, and `haystack-velesdb`. They are not intended for
+direct use by end users.
 
 | Export | Type | Description |
 |--------|------|-------------|

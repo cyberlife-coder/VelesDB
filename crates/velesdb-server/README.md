@@ -1,7 +1,7 @@
 # VelesDB Server
 
 [![Crates.io](https://img.shields.io/crates/v/velesdb-server.svg)](https://crates.io/crates/velesdb-server)
-[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
 
 REST API server for VelesDB - a high-performance vector database.
 
@@ -560,7 +560,7 @@ curl http://localhost:8080/health
 Response:
 
 ```json
-{"status": "ok", "version": "1.13.0"}
+{"status": "ok", "version": "1.14.0"}
 ```
 
 ### `GET /ready` -- Readiness Probe
@@ -574,13 +574,13 @@ curl http://localhost:8080/ready
 Response (ready):
 
 ```json
-{"status": "ready", "version": "1.13.0"}
+{"status": "ready", "version": "1.14.0"}
 ```
 
 Response (not ready):
 
 ```json
-{"status": "not_ready", "version": "1.13.0"}
+{"status": "not_ready", "version": "1.14.0"}
 ```
 
 ### Kubernetes Example
@@ -678,4 +678,4 @@ export VELESDB_NO_UPDATE_CHECK=1
 
 VelesDB Core License 1.0
 
-See [LICENSE](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE) for details.
+See [LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for details.
