@@ -111,6 +111,73 @@ def _result_to_doc(
     return Document(id=doc_id, content=content, meta=meta, score=score)
 
 
+def _build_int_id_map(documents: List[Document]) -> Dict[int, str]:
+    """Map every document's integer ID back to its string ID, raising on
+    in-batch SHA-256 collisions.
+
+    Two distinct string IDs that hash to the same 63-bit integer would
+    silently overwrite each other on upsert. This helper is the first
+    line of defence: it detects collisions inside a single
+    ``write_documents`` batch before any state hits the collection.
+    """
+    int_id_map: Dict[int, str] = {}
+    for doc in documents:
+        iid = _str_id_to_int(doc.id)
+        if iid in int_id_map and int_id_map[iid] != doc.id:
+            raise ValueError(
+                f"SHA-256 collision in write batch: '{int_id_map[iid]}' and "
+                f"'{doc.id}' map to the same integer ID {iid}. "
+                "Rename one of the documents."
+            )
+        int_id_map[iid] = doc.id
+    return int_id_map
+
+
+def _enforce_fail_policy(col: Any, int_id_map: Dict[int, str]) -> None:
+    """For ``DuplicatePolicy.FAIL``, raise if any incoming integer ID
+    already exists in the collection, or if a stored point points to a
+    different string ID (cross-store SHA-256 collision).
+
+    Uses point-by-point ``col.get(int_ids)`` — O(batch_size) — instead of
+    a full scroll, so collections larger than ``scroll_limit`` are still
+    correctly enforced.
+    """
+    existing_points: List[Any] = col.get(list(int_id_map.keys()))
+    conflicts: List[str] = []
+    for point in existing_points:
+        if point is None:
+            continue
+        iid = point["id"]
+        existing_str = point.get("payload", {}).get("_doc_id", str(iid))
+        str_id = int_id_map[iid]
+        if existing_str != str_id:
+            raise ValueError(
+                f"SHA-256 collision on write: incoming document '{str_id}' "
+                f"maps to the same integer ID {iid} as existing document "
+                f"'{existing_str}'. Rename one of the documents."
+            )
+        conflicts.append(str_id)
+    if conflicts:
+        raise DuplicateDocumentError(
+            f"Documents already exist (policy=FAIL): {conflicts}"
+        )
+
+
+def _documents_to_points(documents: List[Document]) -> List[dict]:
+    """Convert each document to its VelesDB point dict, logging documents
+    that lack an embedding so the caller still gets feedback when the
+    underlying SDK accepts vector-less points.
+    """
+    points: List[dict] = []
+    for doc in documents:
+        if doc.embedding is None:
+            logger.warning(
+                "Document '%s' has no embedding; stored without vector.", doc.id
+            )
+        points.append(_doc_to_point(doc))
+    return points
+
+
 class VelesDBDocumentStore:
     """Haystack 2.x DocumentStore backed by a local VelesDB collection.
 
@@ -219,49 +286,11 @@ class VelesDBDocumentStore:
         """
         if not documents:
             return 0
-
-        # Build int_id → str_id map and detect in-batch hash collisions.
-        int_id_map: Dict[int, str] = {}
-        for doc in documents:
-            iid = _str_id_to_int(doc.id)
-            if iid in int_id_map and int_id_map[iid] != doc.id:
-                raise ValueError(
-                    f"SHA-256 collision in write batch: '{int_id_map[iid]}' and "
-                    f"'{doc.id}' map to the same integer ID {iid}. "
-                    f"Rename one of the documents."
-                )
-            int_id_map[iid] = doc.id
-
+        int_id_map = _build_int_id_map(documents)
         col = self._get_collection()
-
         if policy == DuplicatePolicy.FAIL:
-            # Point-by-point lookup: O(batch_size), not O(collection_size).
-            # Avoids the scroll_limit blind spot of the old scroll approach.
-            existing_points: List[Any] = col.get(list(int_id_map.keys()))
-            conflicts: List[str] = []
-            for point in existing_points:
-                if point is None:
-                    continue
-                iid = point["id"]
-                existing_str = point.get("payload", {}).get("_doc_id", str(iid))
-                str_id = int_id_map[iid]
-                if existing_str != str_id:
-                    raise ValueError(
-                        f"SHA-256 collision on write: incoming document '{str_id}' "
-                        f"maps to the same integer ID {iid} as existing document "
-                        f"'{existing_str}'. Rename one of the documents."
-                    )
-                conflicts.append(str_id)
-            if conflicts:
-                raise DuplicateDocumentError(
-                    f"Documents already exist (policy=FAIL): {conflicts}"
-                )
-
-        points = []
-        for doc in documents:
-            if doc.embedding is None:
-                logger.warning("Document '%s' has no embedding; stored without vector.", doc.id)
-            points.append(_doc_to_point(doc))
+            _enforce_fail_policy(col, int_id_map)
+        points = _documents_to_points(documents)
         result = col.upsert(points)
         return result if isinstance(result, int) else len(points)
 
