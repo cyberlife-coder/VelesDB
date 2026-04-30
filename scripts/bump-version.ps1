@@ -112,6 +112,28 @@ $FilesToUpdate = @(
         Pattern = '    "version": "\d+\.\d+\.\d+"'
         Replacement = "    `"version`": `"$Version`""
         Description = "OpenAPI spec (.info.version)"
+    },
+    # Doc snippets that mirror /health and /ready response bodies — the server
+    # echoes the workspace version, so the example in the docs has to track it
+    # to remain accurate. v1.13.0 -> v1.13.7 drift was caught manually before
+    # v1.13.8 because no tooling policed it; this entry wires it in.
+    @{
+        Path = "docs/getting-started.md"
+        Pattern = '"version":\s*"\d+\.\d+\.\d+"'
+        Replacement = "`"version`": `"$Version`""
+        Description = "getting-started.md /health snippet"
+    },
+    @{
+        Path = "docs/reference/api-reference.md"
+        Pattern = '"version":\s*"\d+\.\d+\.\d+"'
+        Replacement = "`"version`": `"$Version`""
+        Description = "api-reference.md /health snippet"
+    },
+    @{
+        Path = "docs/guides/SERVER_SECURITY.md"
+        Pattern = '"version":\s*"\d+\.\d+\.\d+"'
+        Replacement = "`"version`": `"$Version`""
+        Description = "SERVER_SECURITY.md /health and /ready snippets"
     }
     # NOTE: per-crate inter-crate dependency entries (velesdb-server -> core,
     # velesdb-cli -> core, etc.) used to live here. They were removed in v1.13.6
