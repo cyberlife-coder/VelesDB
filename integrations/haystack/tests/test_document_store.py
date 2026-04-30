@@ -59,13 +59,18 @@ class _FakeCollection:
             for iid in int_ids
         ]
 
-    def search(self, vector: list, top_k: int = 10, filter: Any = None) -> list:
+    # `filter=` mirrors the public velesdb SDK kwarg name on Collection.search /
+    # Collection.scroll; renaming it would break the kwargs contract under test.
+    def search(  # pylint: disable=redefined-builtin
+        self, vector: list, top_k: int = 10, filter: Any = None
+    ) -> list:
+        del vector, filter  # the fake ignores these
         return [
             {"id": p["id"], "score": 0.9, "payload": p.get("payload", {})}
             for p in list(self._points.values())[:top_k]
         ]
 
-    def scroll(
+    def scroll(  # pylint: disable=redefined-builtin
         self,
         *,
         batch_size: int = 100,
