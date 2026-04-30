@@ -2,9 +2,20 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.13.0** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.14.0** | Node.js >= 18 | Browser (WASM) | MIT License
 
-## What's New in v1.13.0
+## What's New in v1.14.0
+
+- **MSRV Rust 1.89** -- workspace and CI now align with the actual SIMD path (`avx512vpopcntdq` target feature). No source change for the SDK; bumps in lock-step with the workspace.
+- **Dockerfile auto-sync** -- release tooling now keeps `LABEL version=` in lock-step across all Dockerfiles. Indirectly improves anyone running `docker build` against a checkout.
+
+### Previous (v1.13.7)
+
+- **Node.js WASM init fix** -- `new VelesDB({ backend: 'wasm' }).init()` now reads `velesdb_wasm_bg.wasm` bytes from disk via `fs.readFile` so Node 20+ no longer crashes on the broken `fetch('file://')` path. Browsers are unchanged.
+- **Lifecycle hardening** -- memoised in-flight init promise + generation token make `close()` race-free.
+- **Dual ESM + CJS bundles** -- TS SDK build emits both formats with `import.meta.url`/`__filename` polyfilled correctly.
+
+### Previous (v1.13.0)
 
 - **WASM VelesQL executor** -- full browser-side VelesQL execution: SELECT/INSERT/UPDATE/DELETE/DDL + aggregations (COUNT/SUM/AVG/MIN/MAX) + GROUP BY/HAVING/UNION/INTERSECT/EXCEPT/JOIN/FUSION/MATCH 1-2 hops + NOT De Morgan distribution
 - **TS SDK coverage raised to 94%** -- 423 tests, per-file thresholds codified in `vitest.config.ts`

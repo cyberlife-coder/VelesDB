@@ -415,6 +415,7 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | v1.11 — Cross-collection MATCH, bitmap pre-filter, CSR graph | ✅ Shipped |
 | v1.12 — Cross-collection MATCH (graph/BM25/HNSW hybrids), Sprint 4 Phase B (TS SDK stability) | ✅ Shipped |
 | v1.13 — Pre-seed remediation: BM25 O(1) cold-start, sparse search 16× speedup, HNSW prefetch, EXPLAIN/CBO routing, VelesQL window functions, SIFT1M standardized harness | ✅ Shipped |
+| v1.14 — DX correctness: MSRV 1.89 alignment, Dockerfile auto-sync; **Haystack 2.x DocumentStore** completes the LangChain + LlamaIndex + Haystack Python RAG trio | ✅ Shipped |
 
 > VelesDB Core is open-source. Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
 

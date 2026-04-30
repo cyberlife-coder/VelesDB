@@ -15,7 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `docs/reference/ECOSYSTEM_PARITY.md` — Haystack integration column added to the 22-row parity matrix and to the action-items list.
-- Root `README.md` — Haystack integration added to the ecosystem table; explicit "Python RAG framework parity" callout below the table.
+- Root `README.md` — Haystack integration added to the ecosystem table; explicit "Python RAG framework parity" callout below the table; v1.14.0 row added to Roadmap.
+
+### Documentation (consistency sweep — post-v1.14.0)
+
+- **Version stamps aligned to v1.14.0** across `docs/BENCHMARKS.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `QUALITY_BAR.md`, `docs/VELESQL_SPEC.md`, `docs/reference/VELESQL_CONFORMANCE_MATRIX.md`, `docs/reference/ARCHITECTURE_DIAGRAMS.md`, `docs/guides/CONFIGURATION.md`, `docs/guides/GRAPH_PATTERNS.md`, `docs/guides/SEARCH_MODES.md`, `crates/velesdb-python/README.md`, `sdks/typescript/README.md`.
+- **Cargo dep examples fixed**: `docs/GPU_ACCELERATION.md` (1.11→1.14), `docs/guides/tutorials/MINI_RECOMMENDER.md` (1.11→1.14), `docs/reference/NATIVE_HNSW.md` (1.0→1.14), `docs/guides/INSTALLATION.md` (1.13→1.14).
+- **Server health JSON snippets** restored to `1.14.0` in `crates/velesdb-server/README.md`.
+- **CDN URLs**: `examples/wasm-browser-demo/README.md` updated to `@wiscale/velesdb-wasm@1.14.0` (npm scope rename + version bump).
+- **`docs/guides/INSTALLATION.md`**: 9 hardcoded `v1.13.0` download URLs replaced with `v1.14.0`.
+- **Integrations**: `integrations/common/README.md` now lists all three (LangChain + LlamaIndex + Haystack) consumers; `integrations/README.md` uses the canonical PyPI name `llama-index-vector-stores-velesdb`.
+- **Examples index** (`examples/README.md`): Haystack example pointer added.
+- **`CONTRIBUTORS.md`**: PR #672 stamped with v1.14.0; lowercase `velesdb/pull` URLs corrected to capital `VelesDB/pull`.
+- **`crates/velesdb-{core,server}/README.md`**: License badge URLs corrected to capital `cyberlife-coder/VelesDB/`.
+- **`CONTRIBUTING.md`**: "Publishing a release" snippet rewritten to reflect the actual v1.14.0 release flow (`bump-version.ps1` + `check-version-sync.py` + tag-after-CI-success rule).
+- **TS SDK `README.md`**: "What's New" sections added for v1.14.0 (MSRV) and v1.13.7 (Node WASM init fix), so the changelog narrative no longer skips four releases.
 
 ### Pending milestone (v1.15.0)
 

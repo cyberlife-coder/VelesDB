@@ -2,7 +2,7 @@
 
 This document is the **15-minute read** an engineer or a technical due-diligence reviewer should start with. It tells you what VelesDB is, how it is shaped, and where to dig deeper.
 
-> **Last updated:** 2026-04-27 — applies to v1.13.x and beyond.
+> **Last updated:** 2026-04-27 — applies to v1.14.x and beyond.
 
 ---
 

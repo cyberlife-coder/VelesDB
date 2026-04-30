@@ -11,7 +11,7 @@ exercise rather than a porting project.
 | Framework | Connector | API surface | Package |
 |-----------|-----------|-------------|---------|
 | **LangChain** | [`langchain-velesdb`](langchain) | `VectorStore` (`add_texts`, `similarity_search`, `similarity_search_with_score`, `delete`) | `pip install langchain-velesdb` |
-| **LlamaIndex** | [`llamaindex-velesdb`](llamaindex) | `VectorStore` (`add`, `query`, `delete_nodes`) | `pip install llamaindex-velesdb` |
+| **LlamaIndex** | [`llama-index-vector-stores-velesdb`](llamaindex) | `VectorStore` (`add`, `query`, `delete_nodes`) | `pip install llama-index-vector-stores-velesdb` |
 | **Haystack 2.x** | [`haystack-velesdb`](haystack) | `DocumentStore` (`write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, `delete_documents`) | `pip install haystack-velesdb` |
 
 All three connectors share the same VelesDB persistence layer

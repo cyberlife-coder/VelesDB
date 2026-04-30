@@ -11,6 +11,7 @@ This directory contains examples demonstrating various VelesDB features and inte
 | [rust/](./rust/) | Rust | Intermediate | Multi-model search (vector + hybrid + text) |
 | [langchain/](./langchain/) | Python | Intermediate | LangChain VectorStore with hybrid search |
 | [llamaindex/](./llamaindex/) | Python | Intermediate | LlamaIndex VectorStore with Product Quantization |
+| [haystack/](../integrations/haystack/examples/) | Python | Intermediate | Haystack 2.x DocumentStore + RAG pipeline (lives under `integrations/haystack/`) |
 | [python/](./python/) | Python | Beginner | SDK usage patterns (fusion, graph, hybrid) |
 | [python_example.py](./python_example.py) | Python | Beginner | REST API client (legacy) |
 | [wasm-browser-demo/](./wasm-browser-demo/) | HTML/JS | Beginner | Browser-based vector search, no server needed |
