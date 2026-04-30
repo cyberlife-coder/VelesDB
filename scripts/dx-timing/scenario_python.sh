@@ -11,10 +11,13 @@ python3 -m venv /tmp/venv
 # shellcheck disable=SC1091
 source /tmp/venv/bin/activate
 
-# numpy is an *implicit* runtime dependency of velesdb (the PyO3 bindings
-# call into the NumPy C API at first use). It is NOT declared in the
-# velesdb wheel metadata as of v1.13.6 — see the timing-results "Honesty
-# notes" for why this is documented as a real DX friction, not hidden.
+# numpy was not declared as a runtime dependency in the velesdb wheel up to
+# and including v1.13.7 (the PyO3 bindings call the NumPy C API capsule at
+# first import). v1.13.8 makes numpy a hard runtime dependency, so a plain
+# `pip install velesdb` is now sufficient. We keep numpy explicit here to
+# stay deterministic across pre-1.13.8 wheels and to preserve the
+# measurement against historical release tags. See timing-results.md
+# "Honesty notes" #1.
 pip install --quiet --no-cache-dir velesdb numpy
 
 python3 - <<'PY'

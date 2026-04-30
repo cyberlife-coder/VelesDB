@@ -25,6 +25,11 @@ Python DX patch release. Resolves the largest friction surfaced by the Phase 6 o
 - TypeScript SDK / WASM: no source change.
 - 450 µs p50 end-to-end search path preserved.
 
+### Known carry-over (closed in v1.14.0)
+
+- `Cargo.toml#workspace.package.rust-version` still declares `1.83`, while `docs/getting-started.md` and `docs/quickstart/timing-results.md` advertise Rust 1.89+ as the actually-required toolchain (the SIMD path uses `avx512vpopcntdq` which only stabilised in 1.89). This 3-way inconsistency was already present in v1.13.7 — v1.13.8 does not fix or worsen it. The dedicated MSRV-bump PR is staged as v1.14.0 (see [#714](https://github.com/cyberlife-coder/VelesDB/pull/714)).
+- `scripts/dx-timing/scenario_rust.sh` and `scenario_server.sh` still pin to `velesdb-core@1.13.7` / `velesdb-server@1.13.7`. They will be bumped to `@1.13.8` in a follow-up commit on `develop` once v1.13.8 is published to crates.io (the bump cannot land in this release branch — the version it pins must already exist in the registry).
+
 ## [1.13.7] — 2026-04-28
 
 ### Summary
