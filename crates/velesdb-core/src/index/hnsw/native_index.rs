@@ -163,7 +163,7 @@ impl NativeHnswIndex {
         k: usize,
         quality: SearchQuality,
     ) -> Vec<ScoredResult> {
-        let ef_search = quality.ef_search(k);
+        let ef_search = quality.ef_search_for_scale(k, self.len());
         let inner = self.inner.read();
         let neighbors = inner.search_auto(query, k, ef_search);
 

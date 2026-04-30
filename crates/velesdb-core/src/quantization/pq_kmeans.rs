@@ -50,7 +50,7 @@ pub(crate) fn kmeans_plusplus_init(
     let mut centroids = Vec::with_capacity(k);
 
     // Step 1: Pick first centroid uniformly at random.
-    let first_idx = rng.gen_range(0..n);
+    let first_idx = rng.random_range(0..n);
     centroids.push(samples[first_idx].clone());
 
     // Distances from each sample to its nearest centroid (initialized to MAX).
@@ -106,7 +106,7 @@ fn pick_weighted_sample(min_dists: &[f32], rng: &mut impl Rng) -> Option<usize> 
         return None;
     }
 
-    let threshold = rng.gen::<f64>() * total;
+    let threshold = rng.random::<f64>() * total;
     let mut cumulative = 0.0_f64;
     for (i, &d) in min_dists.iter().enumerate() {
         cumulative += f64::from(d);
@@ -285,7 +285,7 @@ fn update_centroids(
             let source = old_centroids[largest_cluster_idx].clone();
             new_centroids[cluster] = source
                 .iter()
-                .map(|&v| v + rng.gen::<f32>() * 1e-4)
+                .map(|&v| v + rng.random::<f32>() * 1e-4)
                 .collect();
         } else {
             // `counts[cluster]` is a cluster-member count bounded by

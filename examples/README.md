@@ -207,7 +207,7 @@ GROUP BY category
 
 ## Requirements
 
-- **Rust examples**: Rust 1.83+ with Cargo
+- **Rust examples**: Rust 1.89+ with Cargo
 - **Python examples**: Python 3.9+, `velesdb` package (PyO3 bindings or `pip install velesdb`)
 - **WASM demo**: Modern browser (Chrome, Firefox, Edge, Safari)
 

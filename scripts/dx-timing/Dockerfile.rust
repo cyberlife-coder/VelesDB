@@ -1,0 +1,24 @@
+# Reproducible "developer arrives on a clean Linux box with Rust toolchain" baseline.
+# Uses official rust image so we only measure VelesDB-specific time, not
+# Rust toolchain bootstrap (which is a one-off setup, not per-project DX).
+#
+# Pinned to `rust:1-slim` (latest stable 1.x) so the harness keeps tracking
+# the workspace MSRV (1.89) without us hard-coding a specific patch release.
+# velesdb-core uses `#[target_feature(enable = "avx512vpopcntdq")]`, stabilized
+# in Rust 1.89, hence the MSRV. Older minor releases (1.86 etc.) will not
+# compile the SIMD path.
+FROM rust:1-slim
+
+ARG TIMING_RUN_ID=unset
+ENV TIMING_RUN_ID=${TIMING_RUN_ID}
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+        pkg-config \
+        libssl-dev \
+        time \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work

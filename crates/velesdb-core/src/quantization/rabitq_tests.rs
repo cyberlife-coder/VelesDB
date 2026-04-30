@@ -60,7 +60,11 @@ fn generate_random_clustered_vectors(
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
     let centers: Vec<Vec<f32>> = (0..num_clusters)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 200.0 - 100.0).collect())
+        .map(|_| {
+            (0..dim)
+                .map(|_| rng.random::<f32>() * 200.0 - 100.0)
+                .collect()
+        })
         .collect();
 
     (0..n)
@@ -68,7 +72,7 @@ fn generate_random_clustered_vectors(
             let cluster = i % num_clusters;
             centers[cluster]
                 .iter()
-                .map(|&c| c + (rng.gen::<f32>() - 0.5) * noise)
+                .map(|&c| c + (rng.random::<f32>() - 0.5) * noise)
                 .collect()
         })
         .collect()
@@ -213,8 +217,8 @@ fn rabitq_distance_non_negative() {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
     for _ in 0..50 {
-        let v: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect();
-        let q: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect();
+        let v: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() * 10.0 - 5.0).collect();
+        let q: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() * 10.0 - 5.0).collect();
         let encoded = index.encode(&v).unwrap();
         let dist = index.distance(&q, &encoded);
         assert!(dist >= 0.0, "distance should be non-negative, got {dist}");
@@ -282,9 +286,9 @@ fn rabitq_batch_distance_matches_individual() {
     let mut rng = rand::rngs::StdRng::seed_from_u64(99);
 
     let vectors: Vec<Vec<f32>> = (0..20)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>() * 10.0 - 5.0).collect())
         .collect();
-    let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect();
+    let query: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() * 10.0 - 5.0).collect();
 
     let encoded: Vec<RaBitQVector> = vectors.iter().map(|v| index.encode(v).unwrap()).collect();
 
@@ -326,7 +330,7 @@ fn rabitq_train_rotation_is_orthogonal() {
 
     let dim = 32;
     let vectors: Vec<Vec<f32>> = (0..100)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>() * 10.0 - 5.0).collect())
         .collect();
 
     let index = RaBitQIndex::train(&vectors, 42).unwrap();
@@ -400,7 +404,7 @@ fn rabitq_train_dim_less_than_64_works() {
 
     let dim = 16;
     let vectors: Vec<Vec<f32>> = (0..50)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>()).collect())
         .collect();
 
     let index = RaBitQIndex::train(&vectors, 42).unwrap();
@@ -439,7 +443,7 @@ fn rabitq_save_load_roundtrip() {
 
     let dim = 32;
     let vectors: Vec<Vec<f32>> = (0..50)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>()).collect())
         .collect();
 
     let index = RaBitQIndex::train(&vectors, 42).unwrap();
@@ -470,7 +474,7 @@ fn rabitq_save_uses_atomic_write() {
 
     let dim = 16;
     let vectors: Vec<Vec<f32>> = (0..20)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>()).collect())
         .collect();
 
     let index = RaBitQIndex::train(&vectors, 42).unwrap();
@@ -523,8 +527,8 @@ fn rabitq_simd_dispatch_matches_scalar_reference() {
         let index = identity_index(dim);
 
         for _ in 0..10 {
-            let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect();
-            let vector: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect();
+            let query: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() * 10.0 - 5.0).collect();
+            let vector: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() * 10.0 - 5.0).collect();
 
             let encoded = index.encode(&vector).unwrap();
 
@@ -572,9 +576,9 @@ fn rabitq_simd_dispatch_distance_unchanged() {
     let index = identity_index(dim);
 
     let vectors: Vec<Vec<f32>> = (0..50)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>() * 10.0 - 5.0).collect())
         .collect();
-    let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect();
+    let query: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() * 10.0 - 5.0).collect();
 
     let encoded: Vec<RaBitQVector> = vectors.iter().map(|v| index.encode(v).unwrap()).collect();
 

@@ -31,13 +31,13 @@ fn gen_positive_corpus(n: usize, seed: u64) -> Vec<SparseVector> {
     let mut rng = StdRng::seed_from_u64(seed);
     (0..n)
         .map(|_| {
-            let nnz = rng.gen_range(50..=200);
+            let nnz = rng.random_range(50..=200);
             let mut pairs: Vec<(u32, f32)> = Vec::with_capacity(nnz);
             let mut used: HashSet<u32> = HashSet::new();
             while pairs.len() < nnz {
-                let term_id = rng.gen_range(0..VOCAB_SIZE);
+                let term_id = rng.random_range(0..VOCAB_SIZE);
                 if used.insert(term_id) {
-                    let weight = rng.gen_range(0.01_f32..2.0);
+                    let weight = rng.random_range(0.01_f32..2.0);
                     pairs.push((term_id, weight));
                 }
             }
@@ -50,13 +50,13 @@ fn gen_queries(n: usize, seed: u64) -> Vec<SparseVector> {
     let mut rng = StdRng::seed_from_u64(seed);
     (0..n)
         .map(|_| {
-            let nnz = rng.gen_range(20..=60);
+            let nnz = rng.random_range(20..=60);
             let mut pairs: Vec<(u32, f32)> = Vec::with_capacity(nnz);
             let mut used: HashSet<u32> = HashSet::new();
             while pairs.len() < nnz {
-                let term_id = rng.gen_range(0..VOCAB_SIZE);
+                let term_id = rng.random_range(0..VOCAB_SIZE);
                 if used.insert(term_id) {
-                    let weight = rng.gen_range(0.01_f32..2.0);
+                    let weight = rng.random_range(0.01_f32..2.0);
                     pairs.push((term_id, weight));
                 }
             }
@@ -69,14 +69,14 @@ fn gen_mixed_sign_queries(n: usize, seed: u64) -> Vec<SparseVector> {
     let mut rng = StdRng::seed_from_u64(seed);
     (0..n)
         .map(|_| {
-            let nnz = rng.gen_range(10..=30);
+            let nnz = rng.random_range(10..=30);
             let mut pairs: Vec<(u32, f32)> = Vec::with_capacity(nnz);
             let mut used: HashSet<u32> = HashSet::new();
             while pairs.len() < nnz {
-                let term_id = rng.gen_range(0..VOCAB_SIZE);
+                let term_id = rng.random_range(0..VOCAB_SIZE);
                 if used.insert(term_id) {
-                    let sign = if rng.gen_bool(0.3) { -1.0 } else { 1.0 };
-                    let weight = sign * rng.gen_range(0.1_f32..2.0);
+                    let sign = if rng.random_bool(0.3) { -1.0 } else { 1.0 };
+                    let weight = sign * rng.random_range(0.1_f32..2.0);
                     pairs.push((term_id, weight));
                 }
             }

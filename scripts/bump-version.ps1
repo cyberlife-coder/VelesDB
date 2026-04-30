@@ -12,6 +12,7 @@
     - LangChain integration (pyproject.toml)
     - LlamaIndex integration (pyproject.toml)
     - RAG demo (pyproject.toml)
+    - Dockerfiles (LABEL version="...")
 
 .PARAMETER Version
     The new version number (e.g., "0.8.9")
@@ -56,12 +57,12 @@ $FilesToUpdate = @(
         Replacement = "`"version`": `"$Version`""
         Description = "TypeScript SDK"
     },
-    @{
-        Path = "sdks/typescript/package.json"
-        Pattern = '"@wiscale/velesdb-wasm": "\^\d+\.\d+\.\d+"'
-        Replacement = "`"@wiscale/velesdb-wasm`": `"^$Version`""
-        Description = "TypeScript SDK WASM dep"
-    },
+    # NOTE: @wiscale/velesdb-wasm dep in sdks/typescript/package.json is intentionally
+    # NOT auto-bumped here. The WASM package follows its own versioning track (currently
+    # ^1.4.1 stable). Bumping it to the workspace version would target an unpublished
+    # version on npm, breaking 'npm ci' (chicken-and-egg). When you genuinely want to
+    # advance the WASM dep, edit sdks/typescript/package.json manually and regenerate
+    # the lockfile. (Devin finding #705-B, 2026-04-28.)
     @{
         Path = "crates/velesdb-python/pyproject.toml"
         Pattern = 'version = "\d+\.\d+\.\d+"'
@@ -81,6 +82,12 @@ $FilesToUpdate = @(
         Description = "Tauri plugin JS"
     },
     @{
+        Path = "integrations/common/pyproject.toml"
+        Pattern = 'version = "\d+\.\d+\.\d+"'
+        Replacement = "version = `"$Version`""
+        Description = "VelesDB common integration helpers"
+    },
+    @{
         Path = "integrations/langchain/pyproject.toml"
         Pattern = 'version = "\d+\.\d+\.\d+"'
         Replacement = "version = `"$Version`""
@@ -98,43 +105,75 @@ $FilesToUpdate = @(
         Replacement = "version = `"$Version`""
         Description = "RAG demo"
     },
-    # Inter-crate dependencies (velesdb-core version in other crates)
     @{
-        Path = "crates/velesdb-server/Cargo.toml"
-        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
-        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
-        Description = "velesdb-server -> core dep"
+        Path = "docs/openapi.json"
+        # Match the "version" field inside the .info object. Anchored on the
+        # 4-space indent unique to the .info section in our spec to avoid hitting
+        # any other "version" key elsewhere in the file.
+        Pattern = '    "version": "\d+\.\d+\.\d+"'
+        Replacement = "    `"version`": `"$Version`""
+        Description = "OpenAPI spec (.info.version)"
+    },
+    # Doc snippets that mirror /health and /ready response bodies — the server
+    # echoes the workspace version, so the example in the docs has to track it
+    # to remain accurate. v1.13.0 -> v1.13.7 drift was caught manually before
+    # v1.13.8 because no tooling policed it; this entry wires it in.
+    @{
+        Path = "docs/getting-started.md"
+        Pattern = '"version":\s*"\d+\.\d+\.\d+"'
+        Replacement = "`"version`": `"$Version`""
+        Description = "getting-started.md /health snippet"
     },
     @{
-        Path = "crates/velesdb-python/Cargo.toml"
-        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
-        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
-        Description = "velesdb-python -> core dep"
+        Path = "docs/reference/api-reference.md"
+        Pattern = '"version":\s*"\d+\.\d+\.\d+"'
+        Replacement = "`"version`": `"$Version`""
+        Description = "api-reference.md /health snippet"
     },
     @{
-        Path = "crates/velesdb-cli/Cargo.toml"
-        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
-        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
-        Description = "velesdb-cli -> core dep"
+        Path = "docs/guides/SERVER_SECURITY.md"
+        Pattern = '"version":\s*"\d+\.\d+\.\d+"'
+        Replacement = "`"version`": `"$Version`""
+        Description = "SERVER_SECURITY.md /health and /ready snippets"
+    },
+    # Dockerfile LABEL version drift was undetectable until v1.13.7 — the root
+    # Dockerfile shipped a stale `1.12.0` label across seven patch releases
+    # (see docs/quickstart/timing-results.md honesty note #3). Each Dockerfile
+    # is anchored on `^LABEL version=` so we never accidentally rewrite an
+    # arbitrary version string elsewhere in the file.
+    @{
+        Path = "Dockerfile"
+        Pattern = '(?m)^LABEL version="\d+\.\d+\.\d+"'
+        Replacement = "LABEL version=`"$Version`""
+        Description = "Dockerfile LABEL (root, build + runtime stages)"
     },
     @{
-        Path = "crates/velesdb-migrate/Cargo.toml"
-        Pattern = 'velesdb-core = \{ version = "\d+\.\d+\.\d+", path = "\.\./velesdb-core" \}'
-        Replacement = "velesdb-core = { version = `"$Version`", path = `"../velesdb-core`" }"
-        Description = "velesdb-migrate -> core dep"
+        Path = "benchmarks/Dockerfile.optimized"
+        Pattern = '(?m)^LABEL version="\d+\.\d+\.\d+"'
+        Replacement = "LABEL version=`"$Version`""
+        Description = "benchmarks/Dockerfile.optimized LABEL"
     },
     @{
-        Path = "crates/velesdb-mobile/Cargo.toml"
-        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
-        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
-        Description = "velesdb-mobile -> core dep"
+        Path = "benchmarks/Dockerfile.nightly"
+        Pattern = '(?m)^LABEL version="\d+\.\d+\.\d+"'
+        Replacement = "LABEL version=`"$Version`""
+        Description = "benchmarks/Dockerfile.nightly LABEL"
     },
     @{
-        Path = "crates/tauri-plugin-velesdb/Cargo.toml"
-        Pattern = 'velesdb-core = \{ path = "\.\./\.\./crates/velesdb-core", version = "\d+\.\d+\.\d+" \}'
-        Replacement = "velesdb-core = { path = `"../../crates/velesdb-core`", version = `"$Version`" }"
-        Description = "tauri-plugin -> core dep"
+        Path = "benchmarks/Dockerfile.bench"
+        Pattern = '(?m)^LABEL version="\d+\.\d+\.\d+"'
+        Replacement = "LABEL version=`"$Version`""
+        Description = "benchmarks/Dockerfile.bench LABEL"
     }
+    # NOTE: per-crate inter-crate dependency entries (velesdb-server -> core,
+    # velesdb-cli -> core, etc.) used to live here. They were removed in v1.13.6
+    # because every workspace member now uses `velesdb-core = { workspace = true }`,
+    # so the path/version pattern they targeted no longer matches anywhere — they
+    # only inflated $ErrorCount and forced the script to exit 1. The single
+    # workspace-level `velesdb-core = { path = ..., version = "..." }` line in the
+    # root Cargo.toml is already covered by the "Cargo workspace" entry above
+    # (the global -replace catches both the workspace.package version and the
+    # workspace.dependencies version line). (Devin finding #705-D, 2026-04-28.)
 )
 
 $UpdatedCount = 0

@@ -408,7 +408,7 @@ fn generate_orthogonal_matrix(dim: usize, seed: u64) -> Vec<f32> {
     // Generate random D x D matrix (column-major for easier Gram-Schmidt)
     // columns[j][i] = element at row i, column j
     let mut columns: Vec<Vec<f32>> = (0..dim)
-        .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
+        .map(|_| (0..dim).map(|_| rng.random::<f32>() * 2.0 - 1.0).collect())
         .collect();
 
     // Modified Gram-Schmidt orthogonalization

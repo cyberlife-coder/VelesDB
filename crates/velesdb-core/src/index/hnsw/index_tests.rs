@@ -12,6 +12,99 @@ use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
 
 // =========================================================================
+// Parity test for issue #694
+// HnswIndex::search_batch_parallel must use ef_search_for_scale on the
+// HNSW-only fast path so that single-query and batch-query paths produce
+// the same ef value for the same quality profile when dataset_size > 10K.
+//
+// Note: this test documents and locks in the parity *contract* — that single
+// and batch paths return the same top-k for the same quality. With uniformly
+// random data the contract is mostly upheld even pre-fix because the candidate
+// pool is plentiful at any reasonable ef. Adversarial data (e.g. SIFT1M with
+// many near-equidistant points) would surface the asymmetry more clearly.
+// We accept the limitation here: the fix is a coherence guarantee, not a
+// recall fix; the goal is that future refactors of either path cannot drift
+// out of parity without this assertion failing.
+// =========================================================================
+
+#[test]
+fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    // Arrange: 40K-vector index — strictly above the 10K threshold where
+    // ef_search_for_scale starts boosting the ef value. Below 10K both
+    // ef_search and ef_search_for_scale return the same number, so the
+    // asymmetry only manifests above the threshold.
+    //
+    // Why 40K + Fast quality: at 40K the scale factor is sqrt(4)=2 (capped),
+    // so Fast (base ef=64) becomes 128 with scaling — a 2x change. That gives
+    // the candidate set enough wiggle room for the unscaled batch path
+    // (pre-fix) to return a different top-k from the scaled single-query path.
+    // Below 10K or at smaller scale factors the effect is too small to
+    // produce visible top-k divergence on uniformly random data.
+    let dim = 16_usize;
+    let n = 40_000_usize;
+    let mut rng = StdRng::seed_from_u64(0x00C0_FFEE);
+
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+    let vectors: Vec<(u64, Vec<f32>)> = (0..n)
+        .map(|id| {
+            let v: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() - 0.5).collect();
+            (id as u64, v)
+        })
+        .collect();
+    let refs: Vec<(u64, &[f32])> = vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+    index.insert_batch_parallel(refs);
+    assert_eq!(index.len(), n);
+
+    // 8 random query vectors
+    let queries: Vec<Vec<f32>> = (0..8)
+        .map(|_| (0..dim).map(|_| rng.random::<f32>() - 0.5).collect())
+        .collect();
+    let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
+
+    let k = 10_usize;
+    // Fast quality (ef=64) magnifies the asymmetry: pre-fix batch gets ef=64,
+    // post-fix batch gets ef=128 (scaled). Higher base efs (Balanced=128,
+    // Accurate=512) already saturate the candidate space and hide the bug.
+    let quality = SearchQuality::Fast;
+
+    // Act: run both paths
+    let single: Vec<Vec<u64>> = queries
+        .iter()
+        .map(|q| {
+            let r = index.search_with_quality(q.as_slice(), k, quality).unwrap();
+            r.iter().map(|x| x.id).collect()
+        })
+        .collect();
+
+    let batch_results = index
+        .search_batch_parallel(&query_refs, k, quality)
+        .expect("batch search should succeed");
+    let batch: Vec<Vec<u64>> = batch_results
+        .iter()
+        .map(|r| r.iter().map(|x| x.id).collect())
+        .collect();
+
+    // Assert: result IDs must match per-query.
+    //
+    // Pre-fix (issue #694): batch used ef_search(k), single used
+    // ef_search_for_scale(k, len). At n=12_000 the scale factor was sqrt(1.2)
+    // ≈ 1.095, so single saw ef * 1.09 (rounded) and batch saw ef * 1, giving
+    // mismatched candidate sets and divergent top-k.
+    //
+    // Post-fix: both paths call ef_search_for_scale(k, self.len()), so the
+    // candidate sets are identical and the result lists are identical.
+    for (i, (s, b)) in single.iter().zip(batch.iter()).enumerate() {
+        assert_eq!(
+            s, b,
+            "query {i}: batch and single results must match after #694 fix.\nsingle={s:?}\nbatch={b:?}"
+        );
+    }
+}
+
+// =========================================================================
 // TDD Tests - Written BEFORE implementation (RED phase)
 // =========================================================================
 

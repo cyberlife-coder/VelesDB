@@ -67,7 +67,7 @@ impl FileMutator {
 
         // Flip random bit in each byte
         for byte in &mut buffer {
-            let bit_pos = rng.gen_range(0..8);
+            let bit_pos = rng.random_range(0..8);
             *byte ^= 1 << bit_pos;
         }
 

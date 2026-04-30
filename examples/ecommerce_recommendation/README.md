@@ -41,7 +41,7 @@ Each product has a `related_products` field containing 2-5 random product IDs, s
 
 ## Prerequisites
 
-- **Rust 1.83+** with Cargo
+- **Rust 1.89+** with Cargo
 - **Node.js 18+** and npm (required only for E2E tests)
 
 ## Running the Example

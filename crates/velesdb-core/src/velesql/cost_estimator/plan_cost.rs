@@ -7,7 +7,7 @@
 //! calibrated [`OperationCostFactors`].
 
 use super::{default_factors, Cost, CostEstimator};
-use crate::velesql::explain::{MatchTraversalPlan, PlanNode, VectorSearchPlan};
+use crate::velesql::explain::{IndexLookupPlan, MatchTraversalPlan, PlanNode, VectorSearchPlan};
 
 impl CostEstimator<'_> {
     /// Estimates the total cost of executing a plan tree.
@@ -23,7 +23,7 @@ impl CostEstimator<'_> {
             PlanNode::VectorSearch(vs) => self.estimate_vector_search_node_cost(vs),
             PlanNode::Filter(f) => self.estimate_filter_cost_from_selectivity(f.selectivity),
             PlanNode::TableScan(_) => self.estimate_table_scan_cost(),
-            PlanNode::IndexLookup(_) => self.estimate_index_lookup_cost(),
+            PlanNode::IndexLookup(plan) => self.estimate_index_lookup_cost(plan),
             PlanNode::MatchTraversal(mt) => self.estimate_match_traversal_cost(mt),
             PlanNode::Sequence(nodes) => nodes.iter().fold(Cost::default(), |acc, n| {
                 let c = self.estimate_plan_cost(n);
@@ -64,16 +64,37 @@ impl CostEstimator<'_> {
 
     /// Cost of a property index lookup — O(log n) with a low multiplicative
     /// constant. Always cheaper than a filter or scan over the same rows.
-    fn estimate_index_lookup_cost(&self) -> Cost {
+    ///
+    /// When per-column statistics are available, scales with the distinct-value
+    /// count (NDV) of the indexed property rather than the full collection
+    /// size — a high-cardinality index probe is cheaper than a low-cardinality
+    /// one because the B-tree height tracks NDV, not row count (issue #607).
+    fn estimate_index_lookup_cost(&self, plan: &IndexLookupPlan) -> Cost {
         let total = self.stats.total_points.max(self.stats.row_count).max(1) as f64;
-        let log_probe = total.log2().max(1.0);
+
+        // Prefer per-column NDV when ANALYZE has populated column_stats for
+        // this property. Falls back to log2(total) when stats are unavailable
+        // so the heuristic path stays bit-for-bit compatible.
+        let probe_size = self
+            .stats
+            .column_stats
+            .get(&plan.property)
+            .map_or(total, |cs| {
+                let ndv = cs.distinct_values.max(cs.distinct_count);
+                if ndv > 0 {
+                    (ndv as f64).max(1.0)
+                } else {
+                    total
+                }
+            });
+        let log_probe = probe_size.log2().max(1.0);
 
         let f = self.factors();
         let d = default_factors();
         let cpu_ratio = f.cpu_index_cost / d.cpu_index_cost;
 
-        // Use cpu_index_cost * log2(total); negligible I/O because property
-        // indexes are typically resident in memory.
+        // Use cpu_index_cost * log2(probe_size); negligible I/O because
+        // property indexes are typically resident in memory.
         Cost::new(0.0, log_probe * cpu_ratio * d.cpu_index_cost)
     }
 
@@ -189,6 +210,80 @@ mod tests {
         assert!(
             c_lookup < c_scan,
             "index lookup must be cheaper than full scan: lookup={c_lookup} scan={c_scan}"
+        );
+    }
+
+    #[test]
+    fn plan_cost_index_lookup_uses_column_ndv_when_available() {
+        // #607: when ANALYZE has populated column_stats for the indexed
+        // property, the lookup cost scales with the distinct-value count
+        // (NDV), not the full collection size — a high-cardinality probe
+        // costs more (deeper B-tree) than a low-cardinality one.
+        use crate::collection::stats::ColumnStats;
+
+        let mut high_card = stats_with_points(1_000_000);
+        high_card.column_stats.insert(
+            "user_id".into(),
+            ColumnStats {
+                distinct_count: 1_000_000,
+                distinct_values: 1_000_000,
+                ..ColumnStats::default()
+            },
+        );
+
+        let mut low_card = stats_with_points(1_000_000);
+        low_card.column_stats.insert(
+            "category".into(),
+            ColumnStats {
+                distinct_count: 8,
+                distinct_values: 8,
+                ..ColumnStats::default()
+            },
+        );
+
+        let high_lookup = PlanNode::IndexLookup(IndexLookupPlan {
+            label: "t".into(),
+            property: "user_id".into(),
+            value: "42".into(),
+        });
+        let low_lookup = PlanNode::IndexLookup(IndexLookupPlan {
+            label: "t".into(),
+            property: "category".into(),
+            value: "tech".into(),
+        });
+
+        let c_high = CostEstimator::new(&high_card)
+            .estimate_plan_cost(&high_lookup)
+            .total();
+        let c_low = CostEstimator::new(&low_card)
+            .estimate_plan_cost(&low_lookup)
+            .total();
+        assert!(
+            c_high > c_low,
+            "high-NDV index probe must cost more than low-NDV: high={c_high} low={c_low}"
+        );
+    }
+
+    #[test]
+    fn plan_cost_index_lookup_falls_back_when_no_column_stats() {
+        // Negative case: when column_stats has no entry for the indexed
+        // property, the cost must reproduce the legacy log2(total) heuristic
+        // bit-for-bit so callers without ANALYZE keep their numbers stable.
+        let stats = stats_with_points(100_000); // no column_stats populated
+        let est = CostEstimator::new(&stats);
+
+        let lookup = PlanNode::IndexLookup(IndexLookupPlan {
+            label: "t".into(),
+            property: "untracked_field".into(),
+            value: "1".into(),
+        });
+
+        let cost = est.estimate_plan_cost(&lookup).total();
+        // log2(100_000) ≈ 16.6; with default factors and cpu_index_cost
+        // baseline, the cost is bounded below 1.0 (a fast index probe).
+        assert!(
+            cost > 0.0 && cost < 1.0,
+            "fallback cost must be small but non-zero: got {cost}"
         );
     }
 

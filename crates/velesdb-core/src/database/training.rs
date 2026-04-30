@@ -289,7 +289,7 @@ impl TrainParams {
 
     /// Validates dimension compatibility (dim % m == 0 for PQ/OPQ).
     fn validate_dimension(&self, dim: usize) -> Result<()> {
-        if self.train_type != "rabitq" && dim % self.m != 0 {
+        if self.train_type != "rabitq" && !dim.is_multiple_of(self.m) {
             return Err(Error::InvalidQuantizerConfig(format!(
                 "dimension {dim} is not divisible by m={}",
                 self.m

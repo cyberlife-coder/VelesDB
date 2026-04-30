@@ -8,12 +8,13 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::types::{
-    BatchSearchRequest, BatchSearchResponse, ErrorResponse, SearchResponse, SearchResultResponse,
-};
+use crate::types::{BatchSearchRequest, BatchSearchResponse, ErrorResponse, SearchResponse};
 use crate::AppState;
 
-use super::pipeline::{actionable_search_error, record_circuit_breaker, validate_query_dimension};
+use super::pipeline::{
+    actionable_search_error, build_search_response, record_circuit_breaker,
+    validate_query_dimension,
+};
 use crate::handlers::helpers::{
     apply_pre_check, extract_client_id, get_vector_collection_or_404, notify_query_timing,
 };
@@ -178,16 +179,9 @@ fn build_batch_responses(
     batch_results
         .into_iter()
         .zip(req.searches.iter())
-        .map(|(results, search)| SearchResponse {
-            results: results
-                .into_iter()
-                .take(search.top_k)
-                .map(|r| SearchResultResponse {
-                    id: r.point.id,
-                    score: r.score,
-                    payload: r.point.payload,
-                })
-                .collect(),
+        .map(|(results, search)| {
+            let truncated: Vec<_> = results.into_iter().take(search.top_k).collect();
+            build_search_response(truncated)
         })
         .collect()
 }

@@ -77,6 +77,54 @@ for start in range(0, total, BATCH_SIZE):
     collection.upsert_bulk_numpy(all_vectors[start:end], ids[start:end].tolist())
 ```
 
+### Choose the right insert method
+
+VelesDB exposes three insert paths with different trade-offs. Pick based on how
+your data is shaped, not by intuition.
+
+| Method | Input format | Per-vector copy | When to use |
+|--------|-------------|-----------------|-------------|
+| `upsert([{...}, ...])` | List of point dicts | List + dict + Vec | Small ad-hoc inserts, payload-heavy data, < 100 points |
+| `upsert_bulk([{...}, ...])` | List of point dicts | Vec only (no per-row PyDict→struct) | Medium batches without numpy already in memory |
+| `upsert_bulk_numpy(arr, ids)` | numpy `(n, dim)` float32 + ids | **Zero-copy** flat buffer | Large numpy-native pipelines (embeddings, model output) |
+
+**Throughput rule of thumb on a 384D collection** (i9-class CPU, fresh collection,
+no payload):
+
+| Method | ~10K vec batch | Peak memory overhead per 100K @ 768D |
+|--------|----------------|--------------------------------------|
+| `upsert` (list of dicts) | ~5 000 vec/s | +~600 MB (list + dict + Vec copies) |
+| `upsert_bulk` (list of dicts) | ~12 000 vec/s | +~300 MB (Vec copies only) |
+| `upsert_bulk_numpy` | ~17 000 vec/s | +~7 MB (zero-copy, only the per-batch ids vec) |
+
+For a 100 000-vector batch at 768D, `upsert_bulk_numpy` saves roughly 293 MB of
+intermediate copies compared to the list-of-dicts paths. The savings grow
+linearly with `n × dimension`.
+
+**Memory tuning when batches are very large (> 50 000):** chunk into 5 000-row
+sub-batches. The total throughput is identical (~17 000 vec/s) but peak RSS
+stays bounded by `~5 000 × dimension × 4 bytes` rather than the full batch.
+
+```python
+import numpy as np
+
+# Suppose you have 1M vectors already in a numpy array
+all_vectors: np.ndarray  # shape (1_000_000, 768), dtype float32
+all_ids: np.ndarray       # shape (1_000_000,), dtype uint64
+
+CHUNK = 5_000  # bounds peak RSS to ~15 MB instead of ~3 GB
+for start in range(0, len(all_vectors), CHUNK):
+    end = start + CHUNK
+    collection.upsert_bulk_numpy(all_vectors[start:end], all_ids[start:end])
+```
+
+**When `upsert_bulk_numpy` does NOT help:**
+- Vectors are already individually scattered as Python lists — the numpy
+  conversion eats the gain. Use `upsert_bulk` instead.
+- Payloads are large and arrive as Python dicts — payload conversion dominates.
+  Consider `upsert_bulk_from_json` (pre-serialized payloads) or batch payload-free
+  inserts followed by a separate payload update step.
+
 ---
 
 ## 2. Search Optimization

@@ -24,7 +24,7 @@ use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
 fn generate_vectors(n: usize, dim: usize, seed: u64) -> Vec<Vec<f32>> {
     let mut rng = StdRng::seed_from_u64(seed);
     (0..n)
-        .map(|_| (0..dim).map(|_| rng.gen_range(-1.0_f32..1.0)).collect())
+        .map(|_| (0..dim).map(|_| rng.random_range(-1.0_f32..1.0)).collect())
         .collect()
 }
 

@@ -49,6 +49,17 @@ const mockWasmModule = {
 // Mock the dynamic import - must match the import path in wasm.ts
 vi.mock('@wiscale/velesdb-wasm', () => mockWasmModule);
 
+// Stub the Node-only loader so the unit suite does not touch the real
+// filesystem. Without this, `WasmBackend.init()` would call into
+// `loadWasmBytesNode()` which uses `createRequire` + `fs.readdir` to
+// locate the real velesdb_wasm package on disk — turning these unit
+// tests into integration tests that depend on `@wiscale/velesdb-wasm`
+// being installed AND containing a `.wasm` binary. (Devin Review PR #710.)
+vi.mock('../src/backends/wasm-node-loader', () => ({
+  isNodeRuntime: () => false,
+  loadWasmBytesNode: vi.fn(() => Promise.resolve(new Uint8Array(0))),
+}));
+
 describe('WasmBackend', () => {
   let backend: WasmBackend;
 
@@ -66,6 +77,47 @@ describe('WasmBackend', () => {
     it('should be idempotent', async () => {
       await backend.init();
       await backend.init(); // Should not throw
+      expect(backend.isInitialized()).toBe(true);
+    });
+
+    it('should coalesce concurrent init() calls into one wasm-bindgen invocation', async () => {
+      // Pre-existing TOCTOU race in init() flagged by Devin Review on PR #709:
+      // two callers entering init() before _initialized is set both raced into
+      // wasm-bindgen's default(). The fix memoizes a single in-flight promise.
+      // This test makes sure the wasm `default()` initializer is invoked
+      // exactly once even with three concurrent init() callers.
+      const defaultSpy = mockWasmModule.default;
+      defaultSpy.mockClear();
+      await Promise.all([backend.init(), backend.init(), backend.init()]);
+      expect(defaultSpy).toHaveBeenCalledTimes(1);
+      expect(backend.isInitialized()).toBe(true);
+    });
+
+    it('should not flip back to initialized when close() races an in-flight init()', async () => {
+      // Devin Review on PR #709 round 2 flagged that close() during in-flight
+      // runInit() did not cancel: runInit() would still complete and set
+      // _initialized = true after close() set it false. The fix bumps a
+      // generation counter in close() that runInit() captures at entry and
+      // checks before publishing _initialized. This test simulates the race
+      // by starting init() and calling close() before the awaited promise
+      // resolves, then ensures the backend stays closed.
+      const initPromise = backend.init();
+      await backend.close();
+      await initPromise;
+      expect(backend.isInitialized()).toBe(false);
+    });
+
+    it('should null out wasmModule on close()', async () => {
+      // Devin Review on PR #709 round 2: close() previously left wasmModule
+      // set, so a follow-up init() reused a stale handle. We now clear it
+      // and re-import on the next init().
+      await backend.init();
+      expect(backend.isInitialized()).toBe(true);
+      await backend.close();
+      expect(backend.isInitialized()).toBe(false);
+      // Re-init must succeed (i.e. the cleared module reference does not
+      // break the lifecycle).
+      await backend.init();
       expect(backend.isInitialized()).toBe(true);
     });
   });

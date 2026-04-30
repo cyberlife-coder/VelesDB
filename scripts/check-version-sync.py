@@ -10,9 +10,34 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 TARGETS = {
     "crates/velesdb-python/pyproject.toml": "toml",
+    "crates/tauri-plugin-velesdb/guest-js/package.json": "json",
+    "integrations/common/pyproject.toml": "toml",
     "integrations/langchain/pyproject.toml": "toml",
     "integrations/llamaindex/pyproject.toml": "toml",
+    "demos/rag-pdf-demo/pyproject.toml": "toml",
     "sdks/typescript/package.json": "json",
+    # The TS SDK's npm lockfile carries its own root "version" string that
+    # must track package.json. v1.13.4/.5/.6 each shipped with a stale
+    # lockfile because no script policed it; v1.13.7 caught the same drift
+    # via Devin Review (PR #710). Now this checker fails fast if we forget.
+    "sdks/typescript/package-lock.json": "json",
+    "docs/openapi.json": "json_openapi",
+    # Doc snippets that mirror the /health and /ready REST responses. The
+    # server echoes the workspace version, so the example in the docs has
+    # to track it. v1.13.0 -> v1.13.7 drift was caught manually before
+    # v1.13.8 because no tooling policed it; bump-version.ps1 now patches
+    # them and this checker fails fast on any future drift.
+    "docs/getting-started.md": "doc_health_snippet",
+    "docs/reference/api-reference.md": "doc_health_snippet",
+    "docs/guides/SERVER_SECURITY.md": "doc_health_snippet",
+    # Dockerfile `LABEL version="X.Y.Z"` lines were not policed before
+    # v1.14.0 — the root Dockerfile shipped a stale `1.12.0` label across
+    # seven patch releases. bump-version.ps1 now rewrites them on every
+    # release; this checker fails fast if any drift sneaks in.
+    "Dockerfile": "dockerfile_label",
+    "benchmarks/Dockerfile.optimized": "dockerfile_label",
+    "benchmarks/Dockerfile.nightly": "dockerfile_label",
+    "benchmarks/Dockerfile.bench": "dockerfile_label",
 }
 
 
@@ -45,6 +70,46 @@ def _read_json_version(path: Path) -> str:
     return str(version)
 
 
+def _read_openapi_version(path: Path) -> str:
+    """OpenAPI specs put the version under .info.version, not at the root."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    info = data.get("info") or {}
+    version = info.get("version")
+    if version is None:
+        raise RuntimeError(f"No '.info.version' key in OpenAPI spec {path}")
+    return str(version)
+
+
+def _read_doc_health_snippet(path: Path) -> str:
+    """Pull the version out of the first `"version": "X.Y.Z"` JSON snippet
+    in a docs/ markdown file. These snippets mirror the /health and /ready
+    REST response bodies, which echo the workspace version.
+    """
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'"version":\s*"(\d+\.\d+\.\d+)"', text)
+    if not match:
+        raise RuntimeError(f'No `"version": "..."` snippet in {path}')
+    return match.group(1)
+
+
+def _read_dockerfile_label(path: Path) -> str:
+    """Pull the version out of the first `LABEL version="X.Y.Z"` line."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'^LABEL\s+version="([^"]+)"', text, re.MULTILINE)
+    if not match:
+        raise RuntimeError(f"No `LABEL version=\"...\"` line in {path}")
+    return match.group(1)
+
+
+_READERS = {
+    "toml": _read_toml_version,
+    "json": _read_json_version,
+    "json_openapi": _read_openapi_version,
+    "doc_health_snippet": _read_doc_health_snippet,
+    "dockerfile_label": _read_dockerfile_label,
+}
+
+
 def main() -> int:
     expected = _read_cargo_version()
     print(f"Workspace version (Cargo.toml): {expected}")
@@ -55,7 +120,10 @@ def main() -> int:
         if not path.exists():
             print(f"  SKIP  {rel_path} (file not found)")
             continue
-        actual = _read_json_version(path) if fmt == "json" else _read_toml_version(path)
+        reader = _READERS.get(fmt)
+        if reader is None:
+            raise RuntimeError(f"Unknown format '{fmt}' for {rel_path}")
+        actual = reader(path)
         status = "OK   " if actual == expected else "MISMATCH"
         print(f"  {status}  {rel_path}: {actual}")
         if actual != expected:

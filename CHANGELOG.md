@@ -7,7 +7,225 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — post-v1.13.2 work lives under feature branches tracked in [#634](https://github.com/cyberlife-coder/VelesDB/issues/634) (GPU hardening PR-C, PR-E) and [#639](https://github.com/cyberlife-coder/VelesDB/issues/639) (ef_search alignment)._
+_Nothing yet — v1.15.0 milestone (#349 Haystack pending review, #429 Python DataFrame, #469 CBO calibration, #717 PyO3 SearchOptions builder)._
+
+## [1.14.0] — 2026-04-30
+
+### Summary
+
+DX correctness & release-pipeline hygiene minor release. Closes the two remaining honesty notes from the Phase 6 onboarding harness ([#379](https://github.com/cyberlife-coder/VelesDB/issues/379)): the workspace `rust-version` field now matches what the SIMD path actually requires, and Docker `LABEL version` lines no longer drift between releases.
+
+### Changed
+
+- **MSRV bumped to Rust 1.89** ([#714](https://github.com/cyberlife-coder/VelesDB/pull/714)). Workspace `Cargo.toml`, `.clippy.toml`, `CONTRIBUTING.md`, examples READMEs, and CI workflows now all declare 1.89 as the minimum supported toolchain. The previous `1.83` claim was inaccurate from day one: `crates/velesdb-core/src/simd_native/x86_avx512.rs` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilised only in Rust 1.89 — so builds on toolchains 1.83–1.88 were already failing silently with hundreds of errors. This corrects the manifest to match reality and pulls the CI environment forward to the same minimum. Resolves the `#2` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md).
+- **Docker `LABEL version` lines are now auto-synced with the workspace version** ([#715](https://github.com/cyberlife-coder/VelesDB/pull/715)). The root `Dockerfile` shipped a stale `LABEL version="1.12.0"` across seven patch releases (v1.12.1 → v1.13.7) because no tooling touched it. `scripts/bump-version.ps1` now rewrites the `^LABEL version=` line on every release across `Dockerfile`, `benchmarks/Dockerfile.optimized`, `benchmarks/Dockerfile.nightly`, and `benchmarks/Dockerfile.bench`; `scripts/check-version-sync.py` fails fast if any of them drift. Resolves the `#3` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md).
+
+### Breaking change considerations
+
+Bumping the workspace `rust-version` from 1.83 to 1.89 is a **minor release** per cargo MSRV conventions. Users on a stable Rust 1.83–1.88 toolchain are unaffected in practice because their builds were already failing on the SIMD path; this release simply makes the failure mode honest (`error: package velesdb-core requires rustc 1.89 or newer` from cargo's resolver) instead of producing 499 obscure target-feature errors.
+
+### Tooling
+
+- 17 tracked targets (10 manifests + OpenAPI + 3 doc snippets + 4 Dockerfile labels) are now lock-step bumped by `scripts/bump-version.ps1` and verified by `scripts/check-version-sync.py`. Future drift can no longer slip past CI.
+
+### No-op for runtime consumers
+
+- 450 µs p50 end-to-end search path preserved.
+- crates.io / PyPI / npm artefacts are functionally identical to v1.13.8 — only the `rust-version` claim and Docker label metadata have changed.
+
+## [1.13.8] — 2026-04-30
+
+### Summary
+
+Python DX patch release. Resolves the largest friction surfaced by the Phase 6 onboarding harness ([#379](https://github.com/cyberlife-coder/VelesDB/issues/379)): `pip install velesdb` (without the `[numpy]` extra) crashed at first `import velesdb` because the published wheel did not declare `numpy` as a runtime dependency, even though the PyO3 bindings call the NumPy C API capsule at module load time.
+
+### Fixed
+
+- **Python wheel now declares `numpy>=1.20` as a hard runtime dependency** ([#713](https://github.com/cyberlife-coder/VelesDB/pull/713)). A single `pip install velesdb` is now sufficient. The `[numpy]` extra is preserved as a no-op alias so existing `requirements.txt` files that pin `velesdb[numpy]` keep working. Resolves the `#1` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md).
+
+### No-op for non-Python consumers
+
+- Rust crates: no source change. Workspace version bumped from 1.13.7 to 1.13.8 to keep all manifests aligned (the release pipeline publishes them in lock-step).
+- TypeScript SDK / WASM: no source change.
+- 450 µs p50 end-to-end search path preserved.
+
+### Known carry-over (closed in v1.14.0)
+
+- `Cargo.toml#workspace.package.rust-version` still declares `1.83`, while `docs/getting-started.md` and `docs/quickstart/timing-results.md` advertise Rust 1.89+ as the actually-required toolchain (the SIMD path uses `avx512vpopcntdq` which only stabilised in 1.89). This 3-way inconsistency was already present in v1.13.7 — v1.13.8 does not fix or worsen it. The dedicated MSRV-bump PR is staged as v1.14.0 (see [#714](https://github.com/cyberlife-coder/VelesDB/pull/714)).
+- `scripts/dx-timing/scenario_rust.sh` and `scenario_server.sh` still pin to `velesdb-core@1.13.7` / `velesdb-server@1.13.7`. They will be bumped to `@1.13.8` in a follow-up commit on `develop` once v1.13.8 is published to crates.io (the bump cannot land in this release branch — the version it pins must already exist in the registry).
+
+## [1.13.7] — 2026-04-28
+
+### Summary
+
+TypeScript SDK patch release. Fixes a Node.js-specific bug discovered while
+building the dx-timing onboarding scenarios for [#379](https://github.com/cyberlife-coder/VelesDB/issues/379):
+`new VelesDB({ backend: 'wasm' })` followed by `db.init()` crashed 100% of the
+time in Node.js because wasm-pack's default initializer relies on
+`fetch('file://...')`, which Node's stdlib `fetch` (undici) does not support.
+
+The JSDoc on the public `VelesDB` class advertises *"WASM backend (browser/Node.js)"*,
+so the crash was a real DX bug, not a documented limitation. v1.13.7 makes
+that promise true.
+
+### Fixed
+
+- **TS SDK `WasmBackend.init()` now works in Node.js** ([#709](https://github.com/cyberlife-coder/VelesDB/pull/709)). When running under Node, the backend reads the `velesdb_wasm_bg.wasm` bytes from disk via `fs.readFile` and passes them to wasm-pack's initializer as an explicit `Uint8Array`, bypassing the broken `fetch('file://...')` path. Browsers keep the original fetch behaviour unchanged.
+- **TS SDK lifecycle hardening** (same PR). `init()` is now race-free: a memoized in-flight promise coalesces concurrent callers into a single wasm-bindgen invocation, and `close()` bumps a generation counter so a still-running `runInit()` cannot flip `_initialized` back to `true` after the backend has been closed. `close()` also nulls out `wasmModule` so subsequent `init()` calls re-import cleanly.
+
+### Changed
+
+- TS SDK build now emits both ESM and CJS bundles that work end-to-end in Node.js. Verified with `node:20-slim` Docker container (smoke test in [#709](https://github.com/cyberlife-coder/VelesDB/pull/709)).
+- TS SDK gains a new internal module `src/backends/wasm-node-loader.ts` that hosts the Node-only init helpers (`isNodeRuntime`, `loadWasmBytesNode`). Browser bundles never reach this file because `WasmBackend.init()` gates the import on the runtime detection.
+
+### No-op for non-TS consumers
+
+- Rust crates: no source change. Workspace version bumped from 1.13.6 to 1.13.7 to keep all manifests aligned (the release pipeline publishes them in lock-step).
+- Python wheel: no source change.
+- WASM artifact: no source change. The `@wiscale/velesdb-wasm` npm package is unchanged at 1.13.6 — the TS SDK consumes it via the same dependency range.
+- 450 µs p50 end-to-end path preserved.
+
+## [1.13.6] — 2026-04-28
+
+### Summary
+
+Devin findings batch fix-up release. Six concrete corrections derived from Devin Review comments on PRs #701/#702/#703/#704, plus release tooling hardening so the same class of issues cannot recur.
+
+### Fixed
+
+- **`integrations/common/pyproject.toml` version was stuck at 1.13.3** across v1.13.4 and v1.13.5 because `scripts/bump-version.ps1` did not include this file. The package was silently re-uploaded as `1.13.3` (already published) on PyPI, leaving consumers at the stale version. v1.13.6 bumps `velesdb-common` to 1.13.6, adds it to the bump script, and adds it to `scripts/check-version-sync.py` so future releases catch the gap.
+- **`crates/velesdb-migrate` and `crates/velesdb-cli` declared `console = "0.15"` and `indicatif = "0.17"`** while `dialoguer 0.12` (newly bumped) pulls `console 0.16`. Two copies of `console` were being compiled. Bumped both to `console = "0.16"` direct + `indicatif = "0.18"` (which pulls `console 0.16`); `Cargo.lock` now lists a single `console 0.16.3` entry.
+- **`sdks/typescript/package-lock.json` was stale at `1.13.3`** through v1.13.4 and v1.13.5 (not regenerated after each `package.json` bump). Regenerated via `npm install --package-lock-only`; lockfile root now reads `1.13.6`.
+- **`CHANGELOG.md` link references covered only 0.x releases.** Added link references for `[1.13.0]` through `[1.13.6]` and updated `[Unreleased]` to compare against `v1.13.6`. Now matches the [Keep a Changelog](https://keepachangelog.com/) format the file claims to follow.
+
+### Tooling
+
+- `scripts/bump-version.ps1` now bumps `integrations/common/pyproject.toml` (previously missed).
+- `scripts/check-version-sync.py` now verifies `integrations/common/pyproject.toml` (previously missed).
+
+### Devin findings closed
+
+- PR #701 — `console 0.15 vs 0.16 duplication` (701-A) ✅
+- PR #702 — `integrations/common pyproject not bumped` (702-A) ✅
+- PR #702 — `package-lock.json:3 stale` (702-C) ✅
+- PR #703 — `package-lock.json stale across multiple bumps` (703-A) ✅
+- PR #703 — `CHANGELOG link references missing for 1.x` (703-B) ✅
+- PR #704 — `package-lock.json not regenerated` (704-A) ✅ (same fix as 703-A)
+- PR #704 — `common pyproject pre-existing inconsistency` (704-B) ✅ (same fix as 702-A)
+
+The remaining PR #701/#702/#704 findings (701-B, 701-C, 701-D, 702-B, 704-C) were positive findings explicitly validating prior PRs — no action required.
+
+### No-op
+
+- No public API change.
+- No behavioural change. 450 µs p50 end-to-end path preserved.
+
+## [1.13.5] — 2026-04-28
+
+### Summary
+
+Fix-up patch release for v1.13.4. PyPI and npm packages were published successfully at `1.13.4`, but `cargo publish --locked` to `crates.io` failed because `Cargo.lock` was not regenerated after the version bump (lock file still listed crates at `1.13.3`). v1.13.5 ships the regenerated `Cargo.lock` so all eight workspace crates can be published to `crates.io` consistently with the npm/PyPI packages.
+
+### Fixed
+
+- **crates.io publishing**: `Cargo.lock` regenerated to match the workspace version, unblocking `cargo publish --locked` for all eight workspace crates ([#701](https://github.com/cyberlife-coder/VelesDB/pull/701) follow-up).
+
+### No-op
+
+- No source code change beyond `Cargo.lock` regeneration and version-string bumps from `1.13.4` to `1.13.5`.
+- No public API change.
+- No behavioural change in the canonical 450 µs p50 end-to-end path.
+
+## [1.13.4] — 2026-04-27
+
+### Summary
+
+Strictly additive patch release. Two themes:
+
+1. **Devin-flagged technical debt resolutions** — three follow-ups merged from the v1.13.3 review pass: LTO config canonical source, HNSW `search_batch_parallel` ef_search alignment, and the remaining `ef_search` call sites alignment.
+2. **Dependency hygiene batch** — seven Dependabot bumps validated and merged (one upload-artifact GH Action, two npm dev deps, four cargo deps including `roaring 0.11.4` for upstream bugfixes and `sha2 0.11.0`).
+
+This release is fully backward-compatible — no API breakage, no behavioural change in the canonical end-to-end performance path (450 µs p50 preserved).
+
+### Fixed
+
+- **HNSW batch search**: `HnswIndex::search_batch_parallel` now uses `ef_search_for_scale()` consistently with the single-search path, ensuring identical recall behaviour across batch and individual queries ([#698](https://github.com/cyberlife-coder/VelesDB/pull/698), closes [#695](https://github.com/cyberlife-coder/VelesDB/issues/695)).
+- **HNSW remaining call sites**: aligned all remaining `ef_search` invocations with `ef_search_for_scale` per Devin finding, completing the consistency pass started in v1.13.3 ([#700](https://github.com/cyberlife-coder/VelesDB/pull/700), closes [#699](https://github.com/cyberlife-coder/VelesDB/issues/699)).
+
+### Changed
+
+- **Build profile**: `Cargo.toml` is now the authoritative source for `[profile.release]` and `[profile.bench]` — removed duplicate definitions from per-crate manifests that could drift ([#697](https://github.com/cyberlife-coder/VelesDB/pull/697), closes [#694](https://github.com/cyberlife-coder/VelesDB/issues/694)).
+
+### Dependencies
+
+- **cargo**: `roaring 0.10.12 → 0.11.4` (upstream bugfixes: 32-bit overflow, `advance_back_to` invariant, vector sub zeros) ([#684](https://github.com/cyberlife-coder/VelesDB/pull/684)).
+- **cargo**: `sha2 0.10.9 → 0.11.0` (RustCrypto major; usage limited to standard `Sha256` Digest API, no breakage) ([#682](https://github.com/cyberlife-coder/VelesDB/pull/682)).
+- **cargo**: `indexmap 2.13.0 → 2.14.0` ([#687](https://github.com/cyberlife-coder/VelesDB/pull/687)).
+- **cargo**: `dialoguer 0.11.0 → 0.12.0` ([#686](https://github.com/cyberlife-coder/VelesDB/pull/686)).
+- **npm (dev)**: `@vitest/coverage-v8 4.0.16 → 4.1.5` ([#681](https://github.com/cyberlife-coder/VelesDB/pull/681)).
+- **npm (dev)**: `@types/node 20.19.27 → 25.6.0` ([#679](https://github.com/cyberlife-coder/VelesDB/pull/679)).
+- **GitHub Actions**: `actions/upload-artifact 6.0.0 → 7.0.1` ([#678](https://github.com/cyberlife-coder/VelesDB/pull/678)).
+
+### No-op
+
+- No public API change.
+- No behavioural change in the canonical 450 µs p50 end-to-end path.
+- No SemVer breakage. Workspace SDK versions (Rust crates, Python wheel, npm SDK) all bumped to `1.13.4`.
+
+## [1.13.3] — 2026-04-27
+
+### Summary
+
+Strictly additive patch release. Two themes:
+
+1. **Operational excellence pack** — three new top-level documents (`ARCHITECTURE.md`, `ROADMAP.md`, `QUALITY_BAR.md`) and a clarified README to make the project's discipline visible in technical due diligence. No code changes for this theme.
+2. **Internal feature additions** — Python Pythonic protocols (`__contains__`, context manager, `close()`), TypedDict return-type stubs, CBO `indexed_fields` cardinality wiring, HNSW `search_with_quality` alignment, WASM getrandom 0.3 fix, and the `rand 0.8 -> 0.9` migration.
+
+This release is fully backward-compatible — no API breakage, no behavioural change in the canonical end-to-end performance path (450 µs p50 preserved).
+
+### Added
+
+- **`ARCHITECTURE.md`** at repo root (15-minute narrative gateway): TL;DR, three engines, layered diagram, crate map, anatomy of a query walkthrough, concurrency model, storage on disk, what's NOT in scope, soundness summary, canonical 450 µs perf number disambiguation ([#692](https://github.com/cyberlife-coder/VelesDB/pull/692)).
+- **`ROADMAP.md`** at repo root: 3/6/12-month horizons with explicit OKRs, governance section, hierarchy of decisions ([#690](https://github.com/cyberlife-coder/VelesDB/pull/690)).
+- **`QUALITY_BAR.md`** at repo root: seven non-negotiable shipping gates (recall, latency, unwrap, unsafe, cyclomatic, NLOC, duplication) with enforcement scripts referenced ([#691](https://github.com/cyberlife-coder/VelesDB/pull/691)).
+- **GitHub milestone v1.14.0** with four focused issues (#349 Haystack, #379 DX, #469 CBO calibration, #429 Python DataFrame).
+- **Python**: Pythonic protocols `__contains__`, context manager (`with db:`), `close()` on `Database` and collection types ([#426](https://github.com/cyberlife-coder/VelesDB/pull/426)).
+- **Python**: TypedDict return-type stubs and complete `PyGraphSchema` stub for IDE completion and `mypy` ([#428](https://github.com/cyberlife-coder/VelesDB/pull/428)).
+- **VelesQL CBO**: `indexed_fields` cardinality wiring for the cost estimator ([#607](https://github.com/cyberlife-coder/VelesDB/pull/607)).
+- **CONTRIBUTORS.md**: contributor recognition, plus a CLA Assistant GitHub Action ([#676](https://github.com/cyberlife-coder/VelesDB/pull/676)).
+
+### Changed
+
+- **README.md**: top navigation bar now links to `ARCHITECTURE.md` / `ROADMAP.md` / `QUALITY_BAR.md`. The "Why VelesDB?" comparison table now uses the canonical 450 µs end-to-end number (replacing the 55 µs index-only micro-benchmark that was juxtaposed with the end-to-end number, creating a small ambiguity flagged in the 2026-04-27 pre-seed audit). The "System Benchmarks" deep-dive table is now explicitly labeled *Index-only micro-benchmarks* with a headline pointing back to the canonical 450 µs number ([#688](https://github.com/cyberlife-coder/VelesDB/pull/688)).
+- **`crates/velesdb-core/README.md`**: same disambiguation pattern applied.
+- **`docs/ARCHITECTURE.md`**: clarifying banner stating it's a tech-debt registry, not the architecture overview, with explicit pointer to the new top-level `ARCHITECTURE.md`.
+- **`docs/reference/promise-contract.json`**: `must_contain` substrings updated to match the disambiguated wording.
+- **`CONTRIBUTING.md`**: Release Process section translated from French to English for consistency.
+- **HNSW**: `NativeHnswIndex::search_with_quality` aligned with `ef_search_for_scale` ([#639](https://github.com/cyberlife-coder/VelesDB/pull/639)).
+- **velesdb-server**: deduplicated batch search response building ([#453](https://github.com/cyberlife-coder/VelesDB/pull/453)).
+- **velesdb-python**: `storage_mode` returns canonical names matching the core enum ([PR #674](https://github.com/cyberlife-coder/VelesDB/pull/674)).
+
+### Fixed
+
+- **WASM**: configure `getrandom 0.3` for `wasm32` after `rand 0.9` migration ([#645](https://github.com/cyberlife-coder/VelesDB/pull/645)).
+- **velesdb-python**: dot metric test correctness.
+
+### Dependencies
+
+- Migrate `rand 0.8 -> 0.9` workspace-wide ([#645](https://github.com/cyberlife-coder/VelesDB/pull/645)).
+- Bump `postcss` `8.5.6 -> 8.5.12` in `sdks/typescript` ([#675](https://github.com/cyberlife-coder/VelesDB/pull/675)).
+
+### Documentation
+
+- New Python `upsert_bulk_numpy()` performance best-practices guide ([#409](https://github.com/cyberlife-coder/VelesDB/pull/409)).
+
+### Internal
+
+- Closed seven SIMD/GPU roadmap issues (#498, #499, #500, #501, #503, #504, #505) into a single tracking issue [#689 — Hardware accelerator backlog (deferred)](https://github.com/cyberlife-coder/VelesDB/issues/689), reducing the visible roadmap from 21 to 15 issues to make focus visible to investors and to the community.
+
+### Migration notes
+
+No migration needed. All changes are additive.
 
 ## [1.13.2] — 2026-04-25
 
@@ -4283,6 +4501,18 @@ This change ensures VelesDB remains freely available while protecting against cl
 - API Authentication (WIS-69)
 - Starlight documentation site
 
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.0
+[1.13.8]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.8
+[1.13.7]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.7
+[1.13.6]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.6
+[1.13.5]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.5
+[1.13.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.4
+[1.13.3]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.3
+[1.13.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.2
+[1.13.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.1
+[1.13.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.0
+[0.7.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.7.2
 [0.7.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.7.1
 [0.7.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.7.0
 [0.6.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.6.0
@@ -4299,5 +4529,3 @@ This change ensures VelesDB remains freely available while protecting against cl
 [0.1.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.4
 [0.1.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.2
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.0
-[0.7.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.7.2
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.7.2...HEAD

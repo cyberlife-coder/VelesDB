@@ -98,13 +98,13 @@ fn generate_splade_corpus(n: usize, seed: u64) -> Vec<SparseVector> {
     let mut rng = StdRng::seed_from_u64(seed);
     (0..n)
         .map(|_| {
-            let nnz = rng.gen_range(50..=200);
+            let nnz = rng.random_range(50..=200);
             let mut pairs: Vec<(u32, f32)> = Vec::with_capacity(nnz);
             let mut used = HashSet::new();
             while pairs.len() < nnz {
-                let term_id = rng.gen_range(0..30_000_u32);
+                let term_id = rng.random_range(0..30_000_u32);
                 if used.insert(term_id) {
-                    let weight = rng.gen_range(0.01_f32..2.0);
+                    let weight = rng.random_range(0.01_f32..2.0);
                     pairs.push((term_id, weight));
                 }
             }

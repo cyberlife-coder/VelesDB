@@ -126,8 +126,11 @@ impl HnswIndex {
 
         // If vector storage is disabled, fall back to HNSW graph search.
         // RF-DEDUP: reuse search_hnsw_only instead of duplicating neighbour mapping.
+        // Issue #699 follow-up: ef_search_for_scale aligns this fallback with
+        // HnswIndex::search_with_quality on >10K datasets. The Accurate intent
+        // here (since we can't run brute force) deserves the scaled ef pool.
         if !self.enable_vector_storage || self.vectors.is_empty() {
-            let ef_search = SearchQuality::Accurate.ef_search(k);
+            let ef_search = SearchQuality::Accurate.ef_search_for_scale(k, self.len());
             return Ok(self.search_hnsw_only(query, k, ef_search));
         }
 

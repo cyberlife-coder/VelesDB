@@ -3,10 +3,54 @@
 High-performance vector database with native Python bindings.
 """
 
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, overload
+from typing import Any, Dict, Iterator, List, Optional, Tuple, TypedDict, Union, overload
 import numpy as np
 
 __version__: str
+
+
+# ---------------------------------------------------------------------------
+# Structural return types (TypedDict)
+#
+# These describe the shape of dict payloads returned by collection methods so
+# that mypy / IDEs can reason about field access. They are runtime ``dict``
+# objects; ``TypedDict`` only narrows the static surface.
+# ---------------------------------------------------------------------------
+
+
+class SearchResultDict(TypedDict, total=False):
+    """Shape of a search result returned by VelesQL ``query`` and graph search."""
+
+    id: int
+    score: float
+    payload: Optional[Dict[str, Any]]
+
+
+class GraphEdgeDict(TypedDict, total=False):
+    """Shape of an edge dict returned by graph collection methods."""
+
+    id: int
+    source: int
+    target: int
+    label: str
+    properties: Dict[str, Any]
+
+
+class GraphNodeDict(TypedDict, total=False):
+    """Shape of a node dict returned by traversal and lookup methods."""
+
+    id: int
+    payload: Dict[str, Any]
+
+
+class TraversalResultDict(TypedDict, total=False):
+    """Shape of a traversal step (BFS/DFS) returned by ``traverse_*`` methods."""
+
+    node_id: int
+    depth: int
+    parent_id: Optional[int]
+    label: Optional[str]
+    payload: Optional[Dict[str, Any]]
 
 
 class FusionStrategy:
@@ -144,6 +188,25 @@ class Collection:
         """Return the number of points in the collection."""
         ...
 
+    def __contains__(self, point_id: int) -> bool:
+        """Membership test: ``id in collection``."""
+        ...
+
+    def __enter__(self) -> "Collection":
+        """Context manager entry — returns ``self``."""
+        ...
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        """Context manager exit — calls :py:meth:`close` and propagates exceptions."""
+        ...
+
+    def close(self) -> None:
+        """Graceful shutdown: full durability flush including ``vectors.idx``.
+
+        Idempotent — safe to call multiple times.
+        """
+        ...
+
     def upsert(self, points: List[Dict[str, Any]]) -> int:
         """Insert or update vectors in the collection.
 
@@ -196,6 +259,25 @@ class Collection:
 
         The numpy array must be C-contiguous (row-major). If not,
         a ValueError is raised.
+
+        Performance ranking (fresh collection, 384D, i9-class CPU)::
+
+            upsert (list of dicts)       ~5 000 vec/s
+            upsert_bulk (list of dicts)  ~12 000 vec/s
+            upsert_bulk_numpy            ~17 000 vec/s   <-- this method
+
+        Best practices:
+            * Always pass float32 numpy arrays (float64 forces a conversion).
+            * Use C-contiguous arrays (the default; ``np.ascontiguousarray()``
+              to fix non-contiguous slices).
+            * Chunk batches into 5 000-row sub-batches when ``n > 50 000`` to
+              keep peak RSS bounded by ``~5 000 * dim * 4 bytes``.
+            * For payload-heavy data, prefer :py:meth:`upsert_bulk_numpy_json`
+              (pre-serialized payloads) over passing payload dicts here.
+
+        See ``docs/guides/PYTHON_PERFORMANCE.md`` (Section 1, "Choose the
+        right insert method") for the full comparison table and memory
+        profile.
 
         Args:
             vectors: numpy.ndarray of shape (n, dimension), dtype float32, C-contiguous
@@ -1043,10 +1125,10 @@ class GraphStore:
         """
         ...
 
-    def get_edges_by_label(self, label: str) -> List[Dict[str, Any]]: ...
-    def get_outgoing(self, node_id: int) -> List[Dict[str, Any]]: ...
-    def get_incoming(self, node_id: int) -> List[Dict[str, Any]]: ...
-    def get_outgoing_by_label(self, node_id: int, label: str) -> List[Dict[str, Any]]: ...
+    def get_edges_by_label(self, label: str) -> List[GraphEdgeDict]: ...
+    def get_outgoing(self, node_id: int) -> List[GraphEdgeDict]: ...
+    def get_incoming(self, node_id: int) -> List[GraphEdgeDict]: ...
+    def get_outgoing_by_label(self, node_id: int, label: str) -> List[GraphEdgeDict]: ...
 
     def traverse_bfs_streaming(
         self, start_node: int, config: StreamingConfig
@@ -1057,8 +1139,35 @@ class GraphStore:
 
 
 class PyGraphSchema:
-    """Schema definition for a graph collection."""
-    ...
+    """Schema definition for a graph collection.
+
+    A schema controls whether arbitrary node/edge labels are accepted
+    (``schemaless``) or restricted to a predefined set (``strict``). Use the
+    static constructors :py:meth:`schemaless` or :py:meth:`strict` rather
+    than instantiating directly.
+
+    Example:
+        >>> schema = GraphSchema.schemaless()
+        >>> schema.is_schemaless
+        True
+    """
+
+    @staticmethod
+    def schemaless() -> "PyGraphSchema":
+        """Create a schemaless graph schema that accepts any node/edge types."""
+        ...
+
+    @staticmethod
+    def strict() -> "PyGraphSchema":
+        """Create a strict graph schema (only predefined types allowed)."""
+        ...
+
+    @property
+    def is_schemaless(self) -> bool:
+        """True if the schema accepts any node/edge types."""
+        ...
+
+    def __repr__(self) -> str: ...
 
 
 class PyGraphCollection:
@@ -1099,15 +1208,15 @@ class PyGraphCollection:
         """
         ...
 
-    def get_edges(self, label: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_edges(self, label: Optional[str] = None) -> List[GraphEdgeDict]:
         """Get edges, optionally filtered by label."""
         ...
 
-    def get_outgoing(self, node_id: int) -> List[Dict[str, Any]]:
+    def get_outgoing(self, node_id: int) -> List[GraphEdgeDict]:
         """Get outgoing edges from a node."""
         ...
 
-    def get_incoming(self, node_id: int) -> List[Dict[str, Any]]:
+    def get_incoming(self, node_id: int) -> List[GraphEdgeDict]:
         """Get incoming edges to a node."""
         ...
 
@@ -1143,7 +1252,7 @@ class PyGraphCollection:
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[TraversalResultDict]:
         """Perform BFS traversal from a source node."""
         ...
 
@@ -1154,7 +1263,7 @@ class PyGraphCollection:
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[TraversalResultDict]:
         """Perform DFS traversal from a source node."""
         ...
 
@@ -1165,7 +1274,7 @@ class PyGraphCollection:
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[TraversalResultDict]:
         """Perform multi-source BFS traversal with deduplication.
 
         Args:
@@ -1181,7 +1290,7 @@ class PyGraphCollection:
         self,
         query: List[float],
         k: Optional[int] = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[SearchResultDict]:
         """Search for similar nodes by embedding vector."""
         ...
 
@@ -1189,7 +1298,7 @@ class PyGraphCollection:
         self,
         query_str: str,
         params: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[SearchResultDict]:
         """Execute a VelesQL query (SELECT or MATCH).
 
         Args:
@@ -1318,6 +1427,25 @@ class PyGraphCollection:
 
         Returns:
             True if the edge existed and was removed
+        """
+        ...
+
+    def __contains__(self, node_id: int) -> bool:
+        """Membership test: ``node_id in graph`` (true if node has a payload)."""
+        ...
+
+    def __enter__(self) -> "PyGraphCollection":
+        """Context manager entry — returns ``self``."""
+        ...
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        """Context manager exit — calls :py:meth:`close` and propagates exceptions."""
+        ...
+
+    def close(self) -> None:
+        """Graceful shutdown: full durability flush including WAL serialization.
+
+        Idempotent — safe to call multiple times.
         """
         ...
 
