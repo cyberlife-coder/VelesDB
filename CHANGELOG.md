@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **MSRV bumped to Rust 1.89** (workspace `Cargo.toml`, `.clippy.toml`, `CONTRIBUTING.md`, examples READMEs, CI workflows). The previous `1.83` claim was inaccurate from day one: `crates/velesdb-core/src/simd_native/x86_avx512.rs` uses `#[target_feature(enable = "avx512vpopcntdq")]`, stabilised in Rust 1.89, so builds on toolchains 1.83–1.88 were already failing silently with hundreds of errors. This corrects the manifest to match reality and pulls the CI environment forward to the same minimum. Resolves the `#2` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md). Refs [#379](https://github.com/cyberlife-coder/VelesDB/issues/379).
+- **Docker `LABEL version` lines are now auto-synced with the workspace version**. The root `Dockerfile` shipped a stale `LABEL version="1.12.0"` across seven patch releases (v1.12.1 → v1.13.7) because no tooling touched it. `scripts/bump-version.ps1` now rewrites the `^LABEL version=` line on every release across `Dockerfile`, `benchmarks/Dockerfile.optimized`, `benchmarks/Dockerfile.nightly`, and `benchmarks/Dockerfile.bench`; `scripts/check-version-sync.py` fails fast if any of them drift. Resolves the `#3` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md). Refs [#379](https://github.com/cyberlife-coder/VelesDB/issues/379).
 
 ## [1.13.8] — 2026-04-30
 

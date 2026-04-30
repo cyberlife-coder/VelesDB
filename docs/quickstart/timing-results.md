@@ -58,9 +58,9 @@ The PyO3 bindings call into the NumPy C API at first use, but the published `vel
 
 The Rust scenario initially failed to compile with `rust:1.86-slim` (499 errors) because `crates/velesdb-core/src/simd_native/x86_avx512.rs:1428` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilized in Rust 1.89. Up to and including v1.13.8 the workspace `Cargo.toml` declared `rust-version = "1.83"`, which was misleading: builds on a 1.83–1.88 toolchain were already broken silently. **Resolved in v1.14.0**: the workspace `rust-version` is now `1.89`, `CONTRIBUTING.md` and the examples READMEs say `Rust 1.89+`, and `.clippy.toml` matches. The DX harness pins `rust:1-slim` (latest stable) so it tracks the MSRV automatically.
 
-### 3. The repo `Dockerfile` carries a stale `LABEL version="1.12.0"`
+### 3. The repo `Dockerfile` carried a stale `LABEL version="1.12.0"` — **resolved in v1.14.0**
 
-The `docs/getting-started.md` Docker section instructs users to `docker build -t velesdb .` from the repo root. The resulting image is labelled v1.12.0 even on a v1.13.7 checkout. Not caught by `scripts/check-version-sync.py`. Hence this DX measurement uses the published `velesdb-server` from crates.io rather than the locally-built Docker image — that path is also more honest because no public Docker image is currently published anywhere. Tracked for follow-up: drop the `LABEL version=` line (it cannot stay accurate without tooling) or wire it through `scripts/bump-version.ps1`.
+The `docs/getting-started.md` Docker section instructs users to `docker build -t velesdb .` from the repo root. Up to and including v1.13.7 the resulting image was labelled `1.12.0` (seven patch releases of drift) because `scripts/bump-version.ps1` did not touch the `LABEL version=` line and `scripts/check-version-sync.py` did not verify it. **Resolved in v1.14.0**: `bump-version.ps1` now rewrites the `LABEL version=` line on every release across the root `Dockerfile` and `benchmarks/Dockerfile.{optimized,nightly,bench}`, and `check-version-sync.py` fails fast on any future drift. The DX measurement still uses the published `velesdb-server` binary rather than a locally-built image because no public Docker image is published yet; that is a separate tracker.
 
 ### 4. WASM SDK in Node was broken before v1.13.7
 
