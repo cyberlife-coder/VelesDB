@@ -15,7 +15,7 @@ const DIMENSION: usize = 768;
 
 fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
     (0..dim)
-        .map(|i| ((seed as f32 * 0.1 + i as f32 * 0.01).sin() + 1.0) / 2.0)
+        .map(|i| (seed as f32 * 0.1 + i as f32 * 0.01).sin().midpoint(1.0))
         .collect()
 }
 

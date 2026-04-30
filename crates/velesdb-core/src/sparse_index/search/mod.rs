@@ -361,7 +361,7 @@ mod tests {
         }
 
         let query = make_vector(vec![(1, 1.0)]);
-        let filter = |id: u64| id % 2 == 0;
+        let filter = |id: u64| id.is_multiple_of(2);
         let results = sparse_search_filtered(&index, &query, 5, Some(&filter));
 
         assert_eq!(results.len(), 5);

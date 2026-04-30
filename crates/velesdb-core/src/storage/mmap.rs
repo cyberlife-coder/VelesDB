@@ -322,7 +322,7 @@ impl MmapStorage {
         }
 
         // EPIC-032/US-001: Verify alignment before pointer cast
-        if offset % std::mem::align_of::<f32>() != 0 {
+        if !offset.is_multiple_of(std::mem::align_of::<f32>()) {
             global_guardrails_metrics().record_invalid_offset_read_error();
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

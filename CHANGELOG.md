@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — v1.14.0 milestone (#349 Haystack, #379 DX trackers, #429 Python DataFrame, #469 CBO calibration)._
+### Changed
+
+- **MSRV bumped to Rust 1.89** (workspace `Cargo.toml`, `.clippy.toml`, `CONTRIBUTING.md`, examples READMEs, CI workflows). The previous `1.83` claim was inaccurate from day one: `crates/velesdb-core/src/simd_native/x86_avx512.rs` uses `#[target_feature(enable = "avx512vpopcntdq")]`, stabilised in Rust 1.89, so builds on toolchains 1.83–1.88 were already failing silently with hundreds of errors. This corrects the manifest to match reality and pulls the CI environment forward to the same minimum. Resolves the `#2` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md). Refs [#379](https://github.com/cyberlife-coder/VelesDB/issues/379).
 
 ## [1.13.8] — 2026-04-30
 

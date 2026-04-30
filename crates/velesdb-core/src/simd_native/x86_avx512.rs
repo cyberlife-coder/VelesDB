@@ -1390,8 +1390,9 @@ pub(crate) unsafe fn hamming_binary_avx512(a: &[u64], b: &[u64]) -> u32 {
         let xor = _mm512_xor_si512(va, vb);
 
         // Extract 8 u64 values and count_ones individually.
-        // _mm512_popcnt_epi64 (AVX512-VPOPCNTDQ) is not available at MSRV 1.83
-        // and requires a separate CPU feature beyond AVX-512F.
+        // This kernel targets the AVX-512F-only path (no VPOPCNTDQ); the
+        // hardware-accelerated `_mm512_popcnt_epi64` variant lives in
+        // `hamming_binary_avx512_vpopcntdq` below.
         let mut xor_arr = [0u64; 8];
         // SAFETY: xor_arr is 8 u64 = 64 bytes = exactly __m512i width
         _mm512_storeu_si512(xor_arr.as_mut_ptr().cast(), xor);

@@ -44,7 +44,7 @@ fn generate_vectors(dim: usize, count: usize) -> Vec<Vec<f32>> {
     (0..count)
         .map(|seed| {
             (0..dim)
-                .map(|i| ((seed as f32 * 0.1 + i as f32 * 0.01).sin() + 1.0) / 2.0)
+                .map(|i| (seed as f32 * 0.1 + i as f32 * 0.01).sin().midpoint(1.0))
                 .collect()
         })
         .collect()
@@ -53,7 +53,7 @@ fn generate_vectors(dim: usize, count: usize) -> Vec<Vec<f32>> {
 /// Generates a query vector
 fn generate_query(dim: usize) -> Vec<f32> {
     (0..dim)
-        .map(|i| ((42.0_f32 * 0.1 + i as f32 * 0.01).cos() + 1.0) / 2.0)
+        .map(|i| (42.0_f32 * 0.1 + i as f32 * 0.01).cos().midpoint(1.0))
         .collect()
 }
 

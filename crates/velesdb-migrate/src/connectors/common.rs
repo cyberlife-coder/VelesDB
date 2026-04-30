@@ -141,9 +141,11 @@ fn reject_unsafe_host(host: &url::Host<&str>, input: &str) -> Result<()> {
                      address ({ip})"
                 )));
             }
-            // Detect fe80::/10 (link-local) and fc00::/7 (unique local)
-            // via their IPv6 prefix masks; `std::net::Ipv6Addr` lacks
-            // stable is_unique_local / is_unicast_link_local on MSRV 1.83.
+            // Detect fe80::/10 (link-local) and fc00::/7 (unique local) via
+            // their IPv6 prefix masks: `Ipv6Addr::is_unique_local` and
+            // `is_unicast_link_local` are still nightly-only behind
+            // `feature(ip)` at our MSRV (1.89), so we match the prefixes by
+            // hand to keep the connector buildable on stable.
             let first = ip.segments()[0];
             if (first & 0xffc0) == 0xfe80 {
                 return Err(Error::Config(format!(

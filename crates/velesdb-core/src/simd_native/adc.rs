@@ -40,7 +40,7 @@ pub(crate) fn adc_distances_batch(
             "ADC subspace count m must be > 0".into(),
         ));
     }
-    if lut.len() % m != 0 {
+    if !lut.len().is_multiple_of(m) {
         return Err(crate::error::Error::InvalidVector(format!(
             "ADC lookup table length {} is not divisible by m={}",
             lut.len(),
