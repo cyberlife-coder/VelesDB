@@ -305,6 +305,41 @@ def test_get_collection_catches_key_error_and_creates_collection() -> None:
     assert store._collection is not None
 
 
+def test_write_documents_skip_policy_does_not_overwrite_existing() -> None:
+    """Regression: DuplicatePolicy.SKIP must leave existing documents untouched
+    and only write the genuinely-new subset. Earlier behaviour (v1.14.0/v1.14.1)
+    silently fell through to col.upsert(...) for SKIP, violating the Haystack
+    DocumentStore contract.
+    """
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_skip")
+    original = Document(id="dup", content="original content", embedding=[0.1, 0.2])
+    store.write_documents([original])
+    # Re-write with SKIP — the new document has different content/embedding,
+    # but the contract says SKIP should NOT overwrite the existing one.
+    new = Document(id="dup", content="REPLACED CONTENT", embedding=[0.9, 0.9])
+    fresh = Document(id="brand_new", content="fresh", embedding=[0.5, 0.5])
+    written = store.write_documents([new, fresh], policy=DuplicatePolicy.SKIP)
+    assert written == 1, "SKIP should report only the genuinely-new doc as written"
+    assert store.count_documents() == 2, "collection should now have 2 docs"
+    docs = {d.id: d for d in store.filter_documents()}
+    assert docs["dup"].content == "original content", \
+        "SKIP must NOT overwrite the existing 'dup' document"
+    assert docs["brand_new"].content == "fresh", \
+        "SKIP must still upsert the genuinely-new 'brand_new' document"
+
+
+def test_write_documents_skip_policy_all_existing_returns_zero() -> None:
+    """Regression: when every incoming document is already in the store, SKIP
+    must return 0 and not call col.upsert at all (no spurious side-effects).
+    """
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_skip_all")
+    docs = [Document(id="a", content="1", embedding=[0.1]),
+            Document(id="b", content="2", embedding=[0.2])]
+    store.write_documents(docs)
+    written = store.write_documents(docs, policy=DuplicatePolicy.SKIP)
+    assert written == 0, "SKIP with all-existing batch must report 0 written"
+
+
 def test_write_documents_fail_policy_raises_on_duplicate() -> None:
     """DuplicatePolicy.FAIL raises DuplicateDocumentError when a document already exists."""
     store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_fail_dup")
