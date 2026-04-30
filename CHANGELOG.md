@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — v1.15.0 milestone (#349 Haystack pending review, #429 Python DataFrame, #469 CBO calibration, #717 PyO3 SearchOptions builder)._
+### Added
+
+- **Haystack 2.x DocumentStore connector** (`integrations/haystack/`) — first-party `VelesDBDocumentStore` implementing the Haystack `DocumentStore` protocol (`write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, `delete_documents`). Closes [#349](https://github.com/cyberlife-coder/VelesDB/issues/349). Together with the existing `langchain-velesdb` and `llamaindex-velesdb` connectors, VelesDB now ships first-party support for the three major Python RAG frameworks. Contributed by [@CrepuscularIRIS](https://github.com/CrepuscularIRIS) ([#672](https://github.com/cyberlife-coder/VelesDB/pull/672)).
+- **`integrations/README.md`** — landing page documenting the Python RAG framework parity, shared `velesdb-common` building blocks, and per-framework feature support matrix.
+
+### Changed
+
+- `docs/reference/ECOSYSTEM_PARITY.md` — Haystack integration column added to the 22-row parity matrix and to the action-items list.
+- Root `README.md` — Haystack integration added to the ecosystem table; explicit "Python RAG framework parity" callout below the table.
+
+### Pending milestone (v1.15.0)
+
+- [#429](https://github.com/cyberlife-coder/VelesDB/issues/429) Python DataFrame, [#469](https://github.com/cyberlife-coder/VelesDB/issues/469) CBO calibration, [#717](https://github.com/cyberlife-coder/VelesDB/issues/717) PyO3 SearchOptions builder.
 
 ## [1.14.0] — 2026-04-30
 

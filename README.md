@@ -436,7 +436,10 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | **Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) — Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
 | **LangChain** | [langchain-velesdb](integrations/langchain) — Official VectorStore | [From source](integrations/langchain/README.md) |
 | **LlamaIndex** | [llamaindex-velesdb](integrations/llamaindex) — Document indexing | [From source](integrations/llamaindex/README.md) |
+| **Haystack** | [haystack-velesdb](integrations/haystack) — Haystack 2.x DocumentStore | [From source](integrations/haystack/README.md) |
 | **Migration** | [velesdb-migrate](crates/velesdb-migrate) — From Qdrant, Pinecone, Supabase | `cargo install velesdb-migrate` |
+
+> **Python RAG framework parity**: VelesDB ships a first-party connector for the three major Python RAG frameworks — **LangChain** (`VectorStore`), **LlamaIndex** (`VectorStoreIndex`), and **Haystack 2.x** (`DocumentStore`) — so you can swap VelesDB into any existing RAG pipeline with a single dependency change.
 
 ---
 
