@@ -3,9 +3,9 @@
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-1.13.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
+[![Version](https://img.shields.io/badge/version-1.14.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
-Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.13.0 - a high-performance vector database for AI applications.
+Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) — a high-performance vector database for AI applications. The current published wheel is `velesdb` v1.14.0; `numpy>=1.20` ships as a hard runtime dependency since v1.13.8 so a single `pip install velesdb` is sufficient.
 
 ## Features
 
@@ -38,7 +38,7 @@ import velesdb
 db = velesdb.Database("./my_vectors")
 
 # Create a collection for 768-dimensional vectors (e.g., BERT embeddings).
-# v1.13: `create_collection` is the recommended Python entry point. It accepts
+# `create_collection` is the recommended Python entry point. It accepts
 # typed dataclasses (`hnsw=HnswOptions(...)`, `auto_reindex=AutoReindexOptions(...)`,
 # `limits=LimitsOptions(...)`) for tuning. The Rust core also exposes
 # `create_vector_collection` for callers who want the explicit typed API.

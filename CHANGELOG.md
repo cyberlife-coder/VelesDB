@@ -7,7 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — v1.15.0 milestone (#349 Haystack pending review, #429 Python DataFrame, #469 CBO calibration, #717 PyO3 SearchOptions builder)._
+_Nothing yet — work toward v1.15.0 lives under feature branches._
+
+## [1.14.1] — 2026-04-30
+
+### Summary
+
+Pipeline-fix patch release. v1.14.0 added the Haystack 2.x DocumentStore source code (PR #672) but the release workflow forgot to publish `haystack-velesdb` to PyPI, so `pip install haystack-velesdb` returned 404 even though the README and `integrations/README.md` directed users to it. v1.14.1 closes that gap.
+
+### Fixed
+
+- **`haystack-velesdb` now published to PyPI** ([release.yml](.github/workflows/release.yml)). Added the package to the `publish-pypi-pure` matrix alongside `langchain-velesdb` and `llamaindex-velesdb`. The trio of Python RAG framework connectors is now actually installable from PyPI.
+- **`integrations/haystack/pyproject.toml` version aligned with the workspace**. Was pinned at `1.0.0` from contributor's initial draft; now lock-step with workspace at `1.14.1` and tracked by `bump-version.ps1` + `check-version-sync.py` (one extra target → 18 total).
+
+### Added
+
+- **Haystack 2.x DocumentStore connector** (`integrations/haystack/`) — first-party `VelesDBDocumentStore` implementing the Haystack `DocumentStore` protocol (`write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, `delete_documents`). Closes [#349](https://github.com/cyberlife-coder/VelesDB/issues/349). Together with the existing `langchain-velesdb` and `llamaindex-velesdb` connectors, VelesDB now ships first-party support for the three major Python RAG frameworks. Contributed by [@CrepuscularIRIS](https://github.com/CrepuscularIRIS) ([#672](https://github.com/cyberlife-coder/VelesDB/pull/672)).
+- **`integrations/README.md`** — landing page documenting the Python RAG framework parity, shared `velesdb-common` building blocks, and per-framework feature support matrix.
+
+### Changed
+
+- `docs/reference/ECOSYSTEM_PARITY.md` — Haystack integration column added to the 22-row parity matrix and to the action-items list.
+- Root `README.md` — Haystack integration added to the ecosystem table; explicit "Python RAG framework parity" callout below the table; v1.14.0 row added to Roadmap.
+
+### Documentation (consistency sweep — post-v1.14.0)
+
+- **Version stamps aligned to v1.14.0** across `docs/BENCHMARKS.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `QUALITY_BAR.md`, `docs/VELESQL_SPEC.md`, `docs/reference/VELESQL_CONFORMANCE_MATRIX.md`, `docs/reference/ARCHITECTURE_DIAGRAMS.md`, `docs/guides/CONFIGURATION.md`, `docs/guides/GRAPH_PATTERNS.md`, `docs/guides/SEARCH_MODES.md`, `crates/velesdb-python/README.md`, `sdks/typescript/README.md`.
+- **Cargo dep examples fixed**: `docs/GPU_ACCELERATION.md` (1.11→1.14), `docs/guides/tutorials/MINI_RECOMMENDER.md` (1.11→1.14), `docs/reference/NATIVE_HNSW.md` (1.0→1.14), `docs/guides/INSTALLATION.md` (1.13→1.14).
+- **Server health JSON snippets** restored to `1.14.0` in `crates/velesdb-server/README.md`.
+- **CDN URLs**: `examples/wasm-browser-demo/README.md` updated to `@wiscale/velesdb-wasm@1.14.0` (npm scope rename + version bump).
+- **`docs/guides/INSTALLATION.md`**: 9 hardcoded `v1.13.0` download URLs replaced with `v1.14.0`.
+- **Integrations**: `integrations/common/README.md` now lists all three (LangChain + LlamaIndex + Haystack) consumers; `integrations/README.md` uses the canonical PyPI name `llama-index-vector-stores-velesdb`.
+- **Examples index** (`examples/README.md`): Haystack example pointer added.
+- **`CONTRIBUTORS.md`**: PR #672 stamped with v1.14.0; lowercase `velesdb/pull` URLs corrected to capital `VelesDB/pull`.
+- **`crates/velesdb-{core,server}/README.md`**: License badge URLs corrected to capital `cyberlife-coder/VelesDB/`.
+- **`CONTRIBUTING.md`**: "Publishing a release" snippet rewritten to reflect the actual v1.14.0 release flow (`bump-version.ps1` + `check-version-sync.py` + tag-after-CI-success rule).
+- **TS SDK `README.md`**: "What's New" sections added for v1.14.0 (MSRV) and v1.13.7 (Node WASM init fix), so the changelog narrative no longer skips four releases.
+
+### Pending milestone (v1.15.0)
+
+- [#429](https://github.com/cyberlife-coder/VelesDB/issues/429) Python DataFrame, [#469](https://github.com/cyberlife-coder/VelesDB/issues/469) CBO calibration, [#717](https://github.com/cyberlife-coder/VelesDB/issues/717) PyO3 SearchOptions builder.
 
 ## [1.14.0] — 2026-04-30
 
@@ -4501,7 +4540,8 @@ This change ensures VelesDB remains freely available while protecting against cl
 - API Authentication (WIS-69)
 - Starlight documentation site
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.14.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.14.1...HEAD
+[1.14.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.1
 [1.14.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.0
 [1.13.8]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.8
 [1.13.7]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.7

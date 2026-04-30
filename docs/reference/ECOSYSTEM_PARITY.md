@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-04-18 (v1.13.0)
+Last updated: 2026-04-30 (v1.14.0 — Haystack 2.x DocumentStore added)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -21,42 +21,44 @@ This matrix tracks runtime contract and feature parity across the VelesDB ecosys
 | Python bindings (`velesdb-python`) | core path (non-REST) | core path (non-REST) | core path (non-REST) | n/a REST | n/a REST |
 | LangChain integration | via Python binding | via Python binding | via Python binding | n/a REST | n/a REST |
 | LlamaIndex integration | via Python binding | via Python binding | via Python binding | n/a REST | n/a REST |
+| Haystack integration | via Python binding | via Python binding | via Python binding | n/a REST | n/a REST |
 
-## Feature Parity Matrix (85 features, 10 components)
+## Feature Parity Matrix (85 features, 11 components)
 
 Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A not applicable
 
-| Feature Group | Core | Server | Python | WASM | Mobile | CLI | TS SDK | Tauri | LangChain | LlamaIndex |
-|---------------|------|--------|--------|------|--------|-----|--------|-------|-----------|------------|
-| **Vector CRUD** (insert, upsert, delete, get) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Batch Operations** (batch_insert, batch_upsert) | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Vector Search** (k-NN, filtered, batch) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Multi-Query Fusion** (RRF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Multi-Query Fusion** (RSF / Weighted) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ |
-| **Hybrid Search** (dense+sparse, dense+text) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Text Search BM25** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Sparse Vector Search** (sparse index) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Sparse Vector Search** (named indexes) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| **Graph Operations** (nodes, edges, traversal) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Cross-Collection MATCH** (`@collection`) | ✅ | ✅ | ⚠️ | ❌ | ❌ | ✅ | ⚠️ | ❌ | ❌ | ❌ |
-| **VelesQL** (parser + executor) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ |
-| **Collection Types** (Vector) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Collection Types** (Graph) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Collection Types** (Metadata) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ |
-| **Property Indexes** (secondary, trigram) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Quantization** (SQ8 / Binary / PQ) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Quantization** (RaBitQ) | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
-| **Agent Memory** (semantic, episodic, procedural) | ✅ | ⚠️ | ✅ | ✅ | ✅ | N/A | ✅ | ✅ | ⚠️ | ⚠️ |
-| **Persistence** (WAL / mmap) | ✅ | ✅ | ✅ | ❌ | ✅ | N/A | N/A | N/A | N/A | N/A |
-| **GPU Acceleration** (wgpu) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Feature Group | Core | Server | Python | WASM | Mobile | CLI | TS SDK | Tauri | LangChain | LlamaIndex | Haystack |
+|---------------|------|--------|--------|------|--------|-----|--------|-------|-----------|------------|----------|
+| **Vector CRUD** (insert, upsert, delete, get) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Batch Operations** (batch_insert, batch_upsert) | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Vector Search** (k-NN, filtered, batch) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Multi-Query Fusion** (RRF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
+| **Multi-Query Fusion** (RSF / Weighted) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| **Hybrid Search** (dense+sparse, dense+text) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
+| **Text Search BM25** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
+| **Sparse Vector Search** (sparse index) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Sparse Vector Search** (named indexes) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Graph Operations** (nodes, edges, traversal) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
+| **Cross-Collection MATCH** (`@collection`) | ✅ | ✅ | ⚠️ | ❌ | ❌ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ |
+| **VelesQL** (parser + executor) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| **Collection Types** (Vector) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Collection Types** (Graph) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
+| **Collection Types** (Metadata) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| **Property Indexes** (secondary, trigram) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
+| **Quantization** (SQ8 / Binary / PQ) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Quantization** (RaBitQ) | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+| **Agent Memory** (semantic, episodic, procedural) | ✅ | ⚠️ | ✅ | ✅ | ✅ | N/A | ✅ | ✅ | ⚠️ | ⚠️ | N/A |
+| **Persistence** (WAL / mmap) | ✅ | ✅ | ✅ | ❌ | ✅ | N/A | N/A | N/A | N/A | N/A | N/A |
+| **GPU Acceleration** (wgpu) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 ### Notes
 
 - **Cross-Collection MATCH**: Core and Server support `@collection` annotation on MATCH node patterns. Python bindings support via `_collection` param. CLI supports via `\use`. WASM, Mobile, Tauri, and integrations do not yet expose this feature.
 - **Batch Operations**: WASM and Mobile use streaming chunked inserts instead of single-call bulk to stay within memory constraints.
-- **Multi-Query Fusion (RSF/Weighted)**: WASM supports RRF only; RSF/Weighted fusion is not yet exposed in LangChain/LlamaIndex integrations.
+- **Multi-Query Fusion (RSF/Weighted)**: WASM supports RRF only; RSF/Weighted fusion is not yet exposed in LangChain/LlamaIndex integrations and is unavailable in Haystack (RRF itself is exposed only via the underlying `velesdb` Python wrapper, not through the `DocumentStore` protocol).
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
-- **VelesQL (LangChain/LlamaIndex)**: Pass-through to Python bindings works for simple queries; full parser integration is not surfaced in the integration API.
+- **VelesQL (LangChain/LlamaIndex/Haystack)**: Pass-through to Python bindings works for simple queries; full parser integration is not surfaced in the integration API.
+- **Haystack DocumentStore protocol limits**: The Haystack 2.x `DocumentStore` ABC exposes `write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, and `delete_documents`. BM25 / hybrid retrieval requires a separate `Retriever` component (planned follow-up). Graph collections, agent memory, and sparse-named indexes are intentionally `N/A` because they have no idiomatic mapping in Haystack's protocol and are reachable through the raw `velesdb` Python wrapper if needed.
 - **Collection Types (Metadata)**: WASM and integration SDKs expose metadata collections with reduced column-type support.
 - **Property Indexes (WASM)**: Disabled by design — no persistence layer means indexes cannot survive page reloads.
 - **Quantization (RaBitQ)**: Experimental across all surfaces; API is unstable.
@@ -196,8 +198,8 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 2. Extend WASM conformance from parser-only to executable feature checks where applicable.
 3. Keep docs, fixtures, and examples synchronized on every contract version change.
 4. Promote RaBitQ from experimental to stable once the API is finalized.
-5. Surface RSF/Weighted fusion in LangChain and LlamaIndex integrations.
-6. Expose named sparse indexes in LangChain and LlamaIndex integrations.
-7. Propagate `@collection` cross-collection MATCH to WASM, Mobile, Tauri, LangChain, and LlamaIndex.
+5. Surface RSF/Weighted fusion in LangChain, LlamaIndex, and Haystack integrations.
+6. Expose named sparse indexes in LangChain, LlamaIndex, and Haystack integrations.
+7. Propagate `@collection` cross-collection MATCH to WASM, Mobile, Tauri, LangChain, LlamaIndex, and Haystack.
 8. Add cross-collection vector search (`similarity()` on `@collection`-annotated nodes).
 9. Expose graph collection creation in `velesdb-mobile` (`create_graph_collection`).
