@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — post-v1.13.7 work lives under the v1.14.0 milestone (#349 Haystack, #379 DX, #429 Python DataFrame, #469 CBO calibration)._
+### Fixed
+
+- **Python wheel now declares `numpy>=1.20` as a hard runtime dependency**. The PyO3 bindings call into the NumPy C API capsule at module import time, so `import velesdb` failed without `numpy` already installed. Up to and including v1.13.7 users had to remember `pip install velesdb numpy`; a single `pip install velesdb` is now sufficient. The `[numpy]` extra is preserved as a no-op alias for backwards compatibility. Resolves the `#1` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md). Refs [#379](https://github.com/cyberlife-coder/VelesDB/issues/379).
 
 ## [1.13.7] — 2026-04-28
 
