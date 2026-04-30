@@ -43,7 +43,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  RUST_VERSION: '1.86'
+  RUST_VERSION: '1.89'
 
 jobs:
   # ===========================================================================

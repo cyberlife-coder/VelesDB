@@ -18,7 +18,7 @@ A desktop app that:
 
 ## Prerequisites
 
-- [Rust](https://rustup.rs/) (1.83+)
+- [Rust](https://rustup.rs/) (1.89+)
 - [Node.js](https://nodejs.org/) (18+)
 - [Tauri CLI](https://v2.tauri.app/start/prerequisites/)
 

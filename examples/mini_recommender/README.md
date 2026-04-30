@@ -15,7 +15,7 @@ A self-contained product recommendation engine that demonstrates the core VelesD
 
 ## Prerequisites
 
-- Rust 1.83+ with Cargo
+- Rust 1.89+ with Cargo
 
 ## How to Run
 

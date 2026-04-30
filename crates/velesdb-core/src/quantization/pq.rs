@@ -116,7 +116,7 @@ fn validate_dimension(
             "all vectors must share the same dimension".into(),
         ));
     }
-    if dimension % num_subspaces != 0 {
+    if !dimension.is_multiple_of(num_subspaces) {
         return Err(Error::InvalidQuantizerConfig(
             "dimension must be divisible by num_subspaces".into(),
         ));

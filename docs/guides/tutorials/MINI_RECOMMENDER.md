@@ -14,7 +14,7 @@ This hands-on tutorial walks you through building a product recommendation engin
 
 ## Prerequisites
 
-- Rust 1.83+ with Cargo
+- Rust 1.89+ with Cargo
 - Basic Rust knowledge (or follow along with the provided code)
 
 ---

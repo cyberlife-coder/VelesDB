@@ -30,6 +30,14 @@ TARGETS = {
     "docs/getting-started.md": "doc_health_snippet",
     "docs/reference/api-reference.md": "doc_health_snippet",
     "docs/guides/SERVER_SECURITY.md": "doc_health_snippet",
+    # Dockerfile `LABEL version="X.Y.Z"` lines were not policed before
+    # v1.14.0 — the root Dockerfile shipped a stale `1.12.0` label across
+    # seven patch releases. bump-version.ps1 now rewrites them on every
+    # release; this checker fails fast if any drift sneaks in.
+    "Dockerfile": "dockerfile_label",
+    "benchmarks/Dockerfile.optimized": "dockerfile_label",
+    "benchmarks/Dockerfile.nightly": "dockerfile_label",
+    "benchmarks/Dockerfile.bench": "dockerfile_label",
 }
 
 
@@ -84,11 +92,21 @@ def _read_doc_health_snippet(path: Path) -> str:
     return match.group(1)
 
 
+def _read_dockerfile_label(path: Path) -> str:
+    """Pull the version out of the first `LABEL version="X.Y.Z"` line."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'^LABEL\s+version="([^"]+)"', text, re.MULTILINE)
+    if not match:
+        raise RuntimeError(f"No `LABEL version=\"...\"` line in {path}")
+    return match.group(1)
+
+
 _READERS = {
     "toml": _read_toml_version,
     "json": _read_json_version,
     "json_openapi": _read_openapi_version,
     "doc_health_snippet": _read_doc_health_snippet,
+    "dockerfile_label": _read_dockerfile_label,
 }
 
 

@@ -2,11 +2,11 @@
 # Uses official rust image so we only measure VelesDB-specific time, not
 # Rust toolchain bootstrap (which is a one-off setup, not per-project DX).
 #
-# Pinned to `rust:1-slim` (latest stable 1.x) rather than 1.86 because
-# velesdb-core 1.13.7 uses #[target_feature(enable = "avx512vpopcntdq")]
-# which was stabilized in Rust 1.89. The workspace declares
-# rust-version = "1.83" but that is under-stated — see timing-results
-# "Honesty notes" + the dedicated tracking issue for the bump.
+# Pinned to `rust:1-slim` (latest stable 1.x) so the harness keeps tracking
+# the workspace MSRV (1.89) without us hard-coding a specific patch release.
+# velesdb-core uses `#[target_feature(enable = "avx512vpopcntdq")]`, stabilized
+# in Rust 1.89, hence the MSRV. Older minor releases (1.86 etc.) will not
+# compile the SIMD path.
 FROM rust:1-slim
 
 ARG TIMING_RUN_ID=unset

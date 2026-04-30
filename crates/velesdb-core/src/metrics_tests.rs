@@ -572,7 +572,8 @@ fn test_map_mixed() {
     let map = mean_average_precision(&relevance_lists);
 
     // Assert: should be around 0.666
-    let expected = ((1.0 + 2.0 / 3.0) / 2.0 + 0.5) / 2.0;
+    let q1_ap = 1.0_f64.midpoint(2.0_f64 / 3.0);
+    let expected = q1_ap.midpoint(0.5);
     assert!(
         (map - expected).abs() < 1e-10,
         "Expected {expected}, got {map}"

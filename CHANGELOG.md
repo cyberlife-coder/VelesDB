@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — v1.14.0 milestone (#349 Haystack, #379 DX trackers, #429 Python DataFrame, #469 CBO calibration)._
+_Nothing yet — v1.15.0 milestone (#349 Haystack pending review, #429 Python DataFrame, #469 CBO calibration, #717 PyO3 SearchOptions builder)._
+
+## [1.14.0] — 2026-04-30
+
+### Summary
+
+DX correctness & release-pipeline hygiene minor release. Closes the two remaining honesty notes from the Phase 6 onboarding harness ([#379](https://github.com/cyberlife-coder/VelesDB/issues/379)): the workspace `rust-version` field now matches what the SIMD path actually requires, and Docker `LABEL version` lines no longer drift between releases.
+
+### Changed
+
+- **MSRV bumped to Rust 1.89** ([#714](https://github.com/cyberlife-coder/VelesDB/pull/714)). Workspace `Cargo.toml`, `.clippy.toml`, `CONTRIBUTING.md`, examples READMEs, and CI workflows now all declare 1.89 as the minimum supported toolchain. The previous `1.83` claim was inaccurate from day one: `crates/velesdb-core/src/simd_native/x86_avx512.rs` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilised only in Rust 1.89 — so builds on toolchains 1.83–1.88 were already failing silently with hundreds of errors. This corrects the manifest to match reality and pulls the CI environment forward to the same minimum. Resolves the `#2` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md).
+- **Docker `LABEL version` lines are now auto-synced with the workspace version** ([#715](https://github.com/cyberlife-coder/VelesDB/pull/715)). The root `Dockerfile` shipped a stale `LABEL version="1.12.0"` across seven patch releases (v1.12.1 → v1.13.7) because no tooling touched it. `scripts/bump-version.ps1` now rewrites the `^LABEL version=` line on every release across `Dockerfile`, `benchmarks/Dockerfile.optimized`, `benchmarks/Dockerfile.nightly`, and `benchmarks/Dockerfile.bench`; `scripts/check-version-sync.py` fails fast if any of them drift. Resolves the `#3` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md).
+
+### Breaking change considerations
+
+Bumping the workspace `rust-version` from 1.83 to 1.89 is a **minor release** per cargo MSRV conventions. Users on a stable Rust 1.83–1.88 toolchain are unaffected in practice because their builds were already failing on the SIMD path; this release simply makes the failure mode honest (`error: package velesdb-core requires rustc 1.89 or newer` from cargo's resolver) instead of producing 499 obscure target-feature errors.
+
+### Tooling
+
+- 17 tracked targets (10 manifests + OpenAPI + 3 doc snippets + 4 Dockerfile labels) are now lock-step bumped by `scripts/bump-version.ps1` and verified by `scripts/check-version-sync.py`. Future drift can no longer slip past CI.
+
+### No-op for runtime consumers
+
+- 450 µs p50 end-to-end search path preserved.
+- crates.io / PyPI / npm artefacts are functionally identical to v1.13.8 — only the `rust-version` claim and Docker label metadata have changed.
 
 ## [1.13.8] — 2026-04-30
 
@@ -4477,7 +4501,8 @@ This change ensures VelesDB remains freely available while protecting against cl
 - API Authentication (WIS-69)
 - Starlight documentation site
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.13.8...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.0
 [1.13.8]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.8
 [1.13.7]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.7
 [1.13.6]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.6

@@ -42,7 +42,7 @@ The orchestrator emits a JSON report at `benchmarks/dx-timing/results-<timestamp
 
 ## Honesty notes (DX friction observed during measurement)
 
-The timing exercise surfaced four real DX frictions. Two were already fixed in their respective releases (Node WASM init in v1.13.7, numpy dependency in v1.13.8), and two are still tracked for follow-up (Rust MSRV understated, Dockerfile label drift). All four are documented here transparently rather than papered over — the per-scenario scripts deliberately keep the legacy work-arounds in place so re-running this harness against any historical wheel/release tag produces a comparable measurement.
+The timing exercise surfaced four real DX frictions. Three are already fixed in their respective releases (Node WASM init in v1.13.7, numpy dependency in v1.13.8, Rust MSRV correction in v1.14.0), and one remains tracked for follow-up (Dockerfile label drift). All four are documented here transparently rather than papered over — the per-scenario scripts deliberately keep the legacy work-arounds in place so re-running this harness against any historical wheel/release tag produces a comparable measurement.
 
 ### 1. `pip install velesdb` does not declare `numpy` as a runtime dependency — **resolved in v1.13.8**
 
@@ -54,13 +54,13 @@ Failed to access NumPy array API capsule: ModuleNotFoundError: No module named '
 
 The PyO3 bindings call into the NumPy C API at first use, but the published `velesdb` wheel metadata up to and including v1.13.7 did not list `numpy` in its `install_requires`. The scenario script therefore runs `pip install velesdb numpy` to stay deterministic across pre-1.13.8 wheels and post-1.13.8 wheels. **Resolved in v1.13.8**: `numpy>=1.20` is now declared as a top-level runtime dependency in `crates/velesdb-python/pyproject.toml`, so a single `pip install velesdb` is sufficient. The `[numpy]` extra is kept as a no-op alias for backwards compatibility.
 
-### 2. `Cargo.toml` advertises `rust-version = "1.83"` but `velesdb-core` actually requires Rust ≥ 1.89
+### 2. `Cargo.toml` advertised `rust-version = "1.83"` but `velesdb-core` actually requires Rust ≥ 1.89 — **resolved in v1.14.0**
 
-The Rust scenario initially failed to compile with `rust:1.86-slim` (499 errors) because `crates/velesdb-core/src/simd_native/x86_avx512.rs:1428` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilized in Rust 1.89. The workspace `Cargo.toml` declares `rust-version = "1.83"`, which is misleading. The scenario uses `rust:1-slim` (latest stable) and works cleanly. Tracked for follow-up: a dedicated PR will bump the workspace `rust-version` AND `CONTRIBUTING.md` (currently also says "Rust 1.83+ enforced as MSRV") so all three documents agree. Note: this PR's `docs/getting-started.md` callout already states `Rust 1.89+` to match what users actually need today; the manifest + CONTRIBUTING follow as a separate change because bumping `rust-version` is potentially breaking for users on a 1.83-1.88 toolchain who have not noticed they actually do not compile.
+The Rust scenario initially failed to compile with `rust:1.86-slim` (499 errors) because `crates/velesdb-core/src/simd_native/x86_avx512.rs:1428` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilized in Rust 1.89. Up to and including v1.13.8 the workspace `Cargo.toml` declared `rust-version = "1.83"`, which was misleading: builds on a 1.83–1.88 toolchain were already broken silently. **Resolved in v1.14.0**: the workspace `rust-version` is now `1.89`, `CONTRIBUTING.md` and the examples READMEs say `Rust 1.89+`, and `.clippy.toml` matches. The DX harness pins `rust:1-slim` (latest stable) so it tracks the MSRV automatically.
 
-### 3. The repo `Dockerfile` carries a stale `LABEL version="1.12.0"`
+### 3. The repo `Dockerfile` carried a stale `LABEL version="1.12.0"` — **resolved in v1.14.0**
 
-The `docs/getting-started.md` Docker section instructs users to `docker build -t velesdb .` from the repo root. The resulting image is labelled v1.12.0 even on a v1.13.7 checkout. Not caught by `scripts/check-version-sync.py`. Hence this DX measurement uses the published `velesdb-server` from crates.io rather than the locally-built Docker image — that path is also more honest because no public Docker image is currently published anywhere. Tracked for follow-up: drop the `LABEL version=` line (it cannot stay accurate without tooling) or wire it through `scripts/bump-version.ps1`.
+The `docs/getting-started.md` Docker section instructs users to `docker build -t velesdb .` from the repo root. Up to and including v1.13.7 the resulting image was labelled `1.12.0` (seven patch releases of drift) because `scripts/bump-version.ps1` did not touch the `LABEL version=` line and `scripts/check-version-sync.py` did not verify it. **Resolved in v1.14.0**: `bump-version.ps1` now rewrites the `LABEL version=` line on every release across the root `Dockerfile` and `benchmarks/Dockerfile.{optimized,nightly,bench}`, and `check-version-sync.py` fails fast on any future drift. The DX measurement still uses the published `velesdb-server` binary rather than a locally-built image because no public Docker image is published yet; that is a separate tracker.
 
 ### 4. WASM SDK in Node was broken before v1.13.7
 

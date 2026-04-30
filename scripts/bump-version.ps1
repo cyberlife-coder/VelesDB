@@ -12,6 +12,7 @@
     - LangChain integration (pyproject.toml)
     - LlamaIndex integration (pyproject.toml)
     - RAG demo (pyproject.toml)
+    - Dockerfiles (LABEL version="...")
 
 .PARAMETER Version
     The new version number (e.g., "0.8.9")
@@ -134,6 +135,35 @@ $FilesToUpdate = @(
         Pattern = '"version":\s*"\d+\.\d+\.\d+"'
         Replacement = "`"version`": `"$Version`""
         Description = "SERVER_SECURITY.md /health and /ready snippets"
+    },
+    # Dockerfile LABEL version drift was undetectable until v1.13.7 — the root
+    # Dockerfile shipped a stale `1.12.0` label across seven patch releases
+    # (see docs/quickstart/timing-results.md honesty note #3). Each Dockerfile
+    # is anchored on `^LABEL version=` so we never accidentally rewrite an
+    # arbitrary version string elsewhere in the file.
+    @{
+        Path = "Dockerfile"
+        Pattern = '(?m)^LABEL version="\d+\.\d+\.\d+"'
+        Replacement = "LABEL version=`"$Version`""
+        Description = "Dockerfile LABEL (root, build + runtime stages)"
+    },
+    @{
+        Path = "benchmarks/Dockerfile.optimized"
+        Pattern = '(?m)^LABEL version="\d+\.\d+\.\d+"'
+        Replacement = "LABEL version=`"$Version`""
+        Description = "benchmarks/Dockerfile.optimized LABEL"
+    },
+    @{
+        Path = "benchmarks/Dockerfile.nightly"
+        Pattern = '(?m)^LABEL version="\d+\.\d+\.\d+"'
+        Replacement = "LABEL version=`"$Version`""
+        Description = "benchmarks/Dockerfile.nightly LABEL"
+    },
+    @{
+        Path = "benchmarks/Dockerfile.bench"
+        Pattern = '(?m)^LABEL version="\d+\.\d+\.\d+"'
+        Replacement = "LABEL version=`"$Version`""
+        Description = "benchmarks/Dockerfile.bench LABEL"
     }
     # NOTE: per-crate inter-crate dependency entries (velesdb-server -> core,
     # velesdb-cli -> core, etc.) used to live here. They were removed in v1.13.6
