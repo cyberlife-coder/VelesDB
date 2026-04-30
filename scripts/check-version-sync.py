@@ -22,6 +22,14 @@ TARGETS = {
     # via Devin Review (PR #710). Now this checker fails fast if we forget.
     "sdks/typescript/package-lock.json": "json",
     "docs/openapi.json": "json_openapi",
+    # Doc snippets that mirror the /health and /ready REST responses. The
+    # server echoes the workspace version, so the example in the docs has
+    # to track it. v1.13.0 -> v1.13.7 drift was caught manually before
+    # v1.13.8 because no tooling policed it; bump-version.ps1 now patches
+    # them and this checker fails fast on any future drift.
+    "docs/getting-started.md": "doc_health_snippet",
+    "docs/reference/api-reference.md": "doc_health_snippet",
+    "docs/guides/SERVER_SECURITY.md": "doc_health_snippet",
 }
 
 
@@ -64,10 +72,23 @@ def _read_openapi_version(path: Path) -> str:
     return str(version)
 
 
+def _read_doc_health_snippet(path: Path) -> str:
+    """Pull the version out of the first `"version": "X.Y.Z"` JSON snippet
+    in a docs/ markdown file. These snippets mirror the /health and /ready
+    REST response bodies, which echo the workspace version.
+    """
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'"version":\s*"(\d+\.\d+\.\d+)"', text)
+    if not match:
+        raise RuntimeError(f'No `"version": "..."` snippet in {path}')
+    return match.group(1)
+
+
 _READERS = {
     "toml": _read_toml_version,
     "json": _read_json_version,
     "json_openapi": _read_openapi_version,
+    "doc_health_snippet": _read_doc_health_snippet,
 }
 
 

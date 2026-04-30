@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "velesdb"
-version = "1.13.7"
+version = "1.13.8"
 description = "VelesDB: The Local Vector Database for Python & AI. Microsecond semantic search, zero network latency."
 readme = "README.md"
 license = { text = "MIT" }
@@ -28,9 +28,14 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 requires-python = ">=3.9"
-dependencies = []
+# numpy is a hard runtime requirement: PyO3 bindings call into the NumPy C API
+# capsule at module import time, so `import velesdb` fails without it. Declared
+# at the top level so a single `pip install velesdb` is sufficient.
+dependencies = ["numpy>=1.20"]
 
 [project.optional-dependencies]
+# Kept as a no-op alias for backwards compatibility with earlier installs that
+# wrote `velesdb[numpy]` into their requirements.
 numpy = ["numpy>=1.20"]
 pandas = ["pandas>=1.5"]
 polars = ["polars>=0.19"]

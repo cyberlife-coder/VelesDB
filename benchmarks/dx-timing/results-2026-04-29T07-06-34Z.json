@@ -1,0 +1,8 @@
+{
+  "timestamp": "2026-04-29T07-06-34Z",
+  "timing_run_id": "2026-04-29T07-06-34Z-832",
+  "host": { "os": "MINGW64_NT-10.0-26200", "arch": "x86_64" },
+  "runs_per_scenario": 3,
+  "slo_seconds": 300,
+  "scenarios": [{"name":"python","runs":[4.95,4.56,5.66],"median":4.95},{"name":"rust","runs":[30.25,24.99,25.40],"median":25.40},{"name":"node","runs":[0.74,0.48,0.45],"median":0.48},{"name":"server","runs":[46.29,45.84,42.93],"median":45.84}]
+}
