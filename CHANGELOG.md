@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet — v1.14.0 milestone (#349 Haystack, #379 DX trackers, #429 Python DataFrame, #469 CBO calibration)._
+
+## [1.13.8] — 2026-04-30
+
+### Summary
+
+Python DX patch release. Resolves the largest friction surfaced by the Phase 6 onboarding harness ([#379](https://github.com/cyberlife-coder/VelesDB/issues/379)): `pip install velesdb` (without the `[numpy]` extra) crashed at first `import velesdb` because the published wheel did not declare `numpy` as a runtime dependency, even though the PyO3 bindings call the NumPy C API capsule at module load time.
+
 ### Fixed
 
-- **Python wheel now declares `numpy>=1.20` as a hard runtime dependency**. The PyO3 bindings call into the NumPy C API capsule at module import time, so `import velesdb` failed without `numpy` already installed. Up to and including v1.13.7 users had to remember `pip install velesdb numpy`; a single `pip install velesdb` is now sufficient. The `[numpy]` extra is preserved as a no-op alias for backwards compatibility. Resolves the `#1` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md). Refs [#379](https://github.com/cyberlife-coder/VelesDB/issues/379).
+- **Python wheel now declares `numpy>=1.20` as a hard runtime dependency** ([#713](https://github.com/cyberlife-coder/VelesDB/pull/713)). A single `pip install velesdb` is now sufficient. The `[numpy]` extra is preserved as a no-op alias so existing `requirements.txt` files that pin `velesdb[numpy]` keep working. Resolves the `#1` honesty note in [`docs/quickstart/timing-results.md`](docs/quickstart/timing-results.md).
+
+### No-op for non-Python consumers
+
+- Rust crates: no source change. Workspace version bumped from 1.13.7 to 1.13.8 to keep all manifests aligned (the release pipeline publishes them in lock-step).
+- TypeScript SDK / WASM: no source change.
+- 450 µs p50 end-to-end search path preserved.
 
 ## [1.13.7] — 2026-04-28
 
