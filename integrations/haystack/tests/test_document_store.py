@@ -65,11 +65,25 @@ class _FakeCollection:
             for p in list(self._points.values())[:top_k]
         ]
 
-    def scroll(self, filter: Any = None, limit: int = 10_000) -> list:
-        return [
+    def scroll(
+        self,
+        *,
+        batch_size: int = 100,
+        filter: Any = None,
+        as_dataframe: bool = False,
+        backend: str = "pandas",
+    ) -> Any:
+        """Match the real velesdb SDK signature: kwargs-only, returns
+        Iterator[List[Dict]]. The real SDK has no ``limit`` kwarg — callers
+        drive the iterator and stop themselves.
+        """
+        del filter, as_dataframe, backend  # the fake ignores these
+        all_points = [
             {"id": p["id"], "score": None, "payload": p.get("payload", {})}
-            for p in list(self._points.values())[:limit]
+            for p in self._points.values()
         ]
+        for offset in range(0, len(all_points), batch_size):
+            yield all_points[offset : offset + batch_size]
 
     def delete(self, int_ids: list) -> None:
         for iid in int_ids:
@@ -322,6 +336,37 @@ def test_serialisation_round_trip() -> None:
     assert restored._embedding_dim == 384
     assert restored._metric == "euclidean"
     assert restored._scroll_limit == 5_000
+
+
+def test_filter_documents_drives_scroll_iterator_across_batches() -> None:
+    """Regression: filter_documents must drive the Iterator returned by
+    Collection.scroll() (the real SDK returns Iterator[List[Dict]], it does
+    not return a flat list nor accept a 'limit' kwarg). With batch_size=100
+    in the fake, a 2-document collection yields a single 2-element batch,
+    and the helper must collect both.
+    """
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_iter_drive")
+    store.write_documents(
+        [
+            Document(id="i1", content="one", embedding=[0.1]),
+            Document(id="i2", content="two", embedding=[0.2]),
+        ]
+    )
+    docs = store.filter_documents()
+    assert {d.id for d in docs} == {"i1", "i2"}
+
+
+def test_result_to_doc_raises_on_missing_doc_id() -> None:
+    """Regression: a VelesDB point with no `_doc_id` payload key must raise
+    rather than silently fall back to str(int_id). The previous fallback
+    corrupted delete_documents() because str(int_id) re-hashes via SHA-256
+    to a different integer, so the delete would no-op without raising.
+    """
+    import pytest
+
+    raw = {"id": 12345, "score": 0.9, "payload": {"content": "orphan"}}
+    with pytest.raises(ValueError, match="no '_doc_id'"):
+        _MOD._result_to_doc(raw)
 
 
 def test_get_collection_returns_none_and_creates_collection() -> None:

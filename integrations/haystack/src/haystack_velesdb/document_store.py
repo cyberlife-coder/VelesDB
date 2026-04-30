@@ -73,9 +73,32 @@ def _doc_to_point(doc: Document) -> dict:
 def _result_to_doc(
     result: dict, *, scale_score: bool = False, metric: str = "cosine"
 ) -> Document:
-    """Convert a VelesDB search or scroll result to a Haystack Document."""
+    """Convert a VelesDB search or scroll result to a Haystack Document.
+
+    Requires ``_doc_id`` to be present in the payload. Points written by
+    :meth:`VelesDBDocumentStore.write_documents` always carry that key, so
+    a missing ``_doc_id`` means the underlying VelesDB collection was
+    populated by a different code path (raw ``col.upsert``, migration
+    scripts, mixed tooling). Falling back to the stringified integer ID
+    would silently corrupt :meth:`delete_documents`: the integer-as-string
+    re-hashes through SHA-256 to a *different* integer, so the delete
+    would no-op without raising. We fail fast instead.
+
+    Raises:
+        ValueError: When ``_doc_id`` is missing from the payload.
+    """
     payload = result.get("payload", {})
-    doc_id = payload.get("_doc_id", str(result.get("id", "")))
+    doc_id = payload.get("_doc_id")
+    if doc_id is None:
+        raise ValueError(
+            f"VelesDB point id={result.get('id')} has no '_doc_id' field in "
+            "its payload. VelesDBDocumentStore requires every point in the "
+            "underlying collection to be written via write_documents(); "
+            "points populated by raw col.upsert() or external migration "
+            "scripts cannot be round-tripped because the stringified "
+            "integer ID would re-hash to a different integer and break "
+            "delete_documents()."
+        )
     content = payload.get("content")
     meta = {k: v for k, v in payload.items() if k not in _RESERVED_PAYLOAD_KEYS}
     raw_score: Optional[float] = result.get("score")
@@ -158,15 +181,20 @@ class VelesDBDocumentStore:
     ) -> List[Document]:
         """Return documents matching *filters*, or all documents when *None*.
 
-        Passes *filters* directly to VelesDB's scroll operation.  At most
-        ``self._scroll_limit`` documents are returned per call; set
-        ``scroll_limit`` on the constructor for collections larger than the
-        default 10 000.
+        Passes *filters* directly to VelesDB's scroll operation. The real
+        SDK returns ``Iterator[List[Dict]]`` and has no ``limit`` kwarg, so
+        we drive the iterator ourselves and stop once ``self._scroll_limit``
+        documents have been collected. Increase ``scroll_limit`` on the
+        constructor for collections larger than the default 10 000.
         """
-        raw: List[dict] = self._get_collection().scroll(
-            filter=filters, limit=self._scroll_limit
-        )
-        return [_result_to_doc(r) for r in raw]
+        col = self._get_collection()
+        documents: List[Document] = []
+        for batch in col.scroll(filter=filters):
+            for raw in batch:
+                if len(documents) >= self._scroll_limit:
+                    return documents
+                documents.append(_result_to_doc(raw))
+        return documents
 
     def write_documents(
         self,
