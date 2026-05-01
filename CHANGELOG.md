@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`scripts/check-version-sync.py` now polices the same set as `bump-version.ps1`** (22 targets, was 20). Devin caught the asymmetry on PR #726/#727: v1.14.2 added `crates/velesdb-server/README.md` and `crates/velesdb-python/README.md` to the bump script but forgot to mirror them in the verifier — meaning future drift could land silently. Two new readers added (`doc_health_snippet` reused for the server README, new `doc_version_badge` for the Python README's shields.io banner). The CHANGELOG line for v1.14.2 claiming "21 targets" was off-by-one for the same reason — corrected here.
+- **`scripts/check-version-sync.py` extended to police the README banners** that `bump-version.ps1` already rewrites (22 targets, was 20). Devin caught the gap on PR #726/#727: v1.14.2 added `crates/velesdb-server/README.md` and `crates/velesdb-python/README.md` to the bump script but forgot to mirror them in the verifier — meaning future drift could land silently. Two new readers added (`doc_health_snippet` reused for the server README, new `doc_version_badge` for the Python README's shields.io banner). The two scripts still differ on two intentional entries (`sdks/typescript/package-lock.json` is only in the verifier — `npm install` regenerates it from `package.json`; `crates/velesdb-wasm/pkg/package.json` is only in the bumper — `wasm-pack build` regenerates it on every release), but the manually-tracked set now matches. The CHANGELOG entry for v1.14.2 (which claimed "21 targets") and the `CONTRIBUTING.md` release recipe (which still cited "17 targets must align" since v1.14.0) were both corrected to reflect the real count.
 
 ## [1.14.2] — 2026-05-01
 
@@ -29,7 +29,7 @@ Quality-of-life patch closing the Devin findings on PR #722 (doc consistency swe
 
 ### Changed
 
-- **`scripts/bump-version.ps1` and `scripts/check-version-sync.py` now police 21 targets** (was 17 in v1.14.0, 18 in v1.14.1). The 4 new entries close the version-drift gaps Devin found in this round.
+- **`scripts/bump-version.ps1` now polices 22 manifests** (was 17 in v1.14.0, 18 in v1.14.1). The 4 new entries (`integrations/haystack/__init__.py`, `examples/wasm-browser-demo/index.html`, `docs/guides/CONFIGURATION.md`, `crates/velesdb-server/README.md` + `crates/velesdb-python/README.md`) close the version-drift gaps Devin found in this round. Note: `scripts/check-version-sync.py` was only updated to 20 entries in v1.14.2 — the 2-entry asymmetry against `bump-version.ps1` (22) was caught by Devin on PR #726/#727 and closed in PR #728 (see Unreleased).
 
 ## [1.14.1] — 2026-04-30
 
