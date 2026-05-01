@@ -446,18 +446,33 @@ def test_translate_filter_none_passes_through() -> None:
     assert _MOD._translate_haystack_filter(None) is None
 
 
+def test_translate_filter_wraps_top_level_in_condition() -> None:
+    """The entry point wraps the translated condition under the
+    VelesDB ``Filter`` shape (``{"condition": ...}``); recursive
+    ``_translate_condition()`` returns the inner shape directly.
+    """
+    out = _MOD._translate_haystack_filter(
+        {"field": "meta.x", "operator": "==", "value": 1}
+    )
+    assert out == {"condition": {"type": "eq", "field": "x", "value": 1}}
+
+
 def test_translate_filter_simple_eq_strips_meta_prefix() -> None:
     out = _MOD._translate_haystack_filter(
         {"field": "meta.source", "operator": "==", "value": "wiki"}
     )
-    assert out == {"type": "eq", "field": "source", "value": "wiki"}
+    assert out == {
+        "condition": {"type": "eq", "field": "source", "value": "wiki"}
+    }
 
 
 def test_translate_filter_keeps_field_when_no_meta_prefix() -> None:
     out = _MOD._translate_haystack_filter(
         {"field": "_doc_id", "operator": "==", "value": "doc1"}
     )
-    assert out == {"type": "eq", "field": "_doc_id", "value": "doc1"}
+    assert out == {
+        "condition": {"type": "eq", "field": "_doc_id", "value": "doc1"}
+    }
 
 
 def test_translate_filter_all_comparison_operators() -> None:
@@ -473,14 +488,18 @@ def test_translate_filter_all_comparison_operators() -> None:
         out = _MOD._translate_haystack_filter(
             {"field": "meta.x", "operator": hs_op, "value": 42}
         )
-        assert out == {"type": veles_op, "field": "x", "value": 42}, hs_op
+        assert out == {
+            "condition": {"type": veles_op, "field": "x", "value": 42}
+        }, hs_op
 
 
 def test_translate_filter_in_remaps_value_to_values() -> None:
     out = _MOD._translate_haystack_filter(
         {"field": "meta.tag", "operator": "in", "value": ["a", "b", "c"]}
     )
-    assert out == {"type": "in", "field": "tag", "values": ["a", "b", "c"]}
+    assert out == {
+        "condition": {"type": "in", "field": "tag", "values": ["a", "b", "c"]}
+    }
 
 
 def test_translate_filter_in_rejects_scalar_value() -> None:
@@ -497,8 +516,10 @@ def test_translate_filter_not_in_wraps_in_with_not() -> None:
         {"field": "meta.tag", "operator": "not in", "value": ["x", "y"]}
     )
     assert out == {
-        "type": "not",
-        "condition": {"type": "in", "field": "tag", "values": ["x", "y"]},
+        "condition": {
+            "type": "not",
+            "condition": {"type": "in", "field": "tag", "values": ["x", "y"]},
+        }
     }
 
 
@@ -511,11 +532,13 @@ def test_translate_filter_logical_and() -> None:
         ],
     })
     assert out == {
-        "type": "and",
-        "conditions": [
-            {"type": "eq", "field": "source", "value": "wiki"},
-            {"type": "gt", "field": "score", "value": 0.5},
-        ],
+        "condition": {
+            "type": "and",
+            "conditions": [
+                {"type": "eq", "field": "source", "value": "wiki"},
+                {"type": "gt", "field": "score", "value": 0.5},
+            ],
+        }
     }
 
 
@@ -528,11 +551,13 @@ def test_translate_filter_logical_or() -> None:
         ],
     })
     assert out == {
-        "type": "or",
-        "conditions": [
-            {"type": "eq", "field": "lang", "value": "en"},
-            {"type": "eq", "field": "lang", "value": "fr"},
-        ],
+        "condition": {
+            "type": "or",
+            "conditions": [
+                {"type": "eq", "field": "lang", "value": "en"},
+                {"type": "eq", "field": "lang", "value": "fr"},
+            ],
+        }
     }
 
 
@@ -551,17 +576,19 @@ def test_translate_filter_nested_and_inside_or() -> None:
         ],
     })
     assert out == {
-        "type": "or",
-        "conditions": [
-            {"type": "eq", "field": "a", "value": 1},
-            {
-                "type": "and",
-                "conditions": [
-                    {"type": "gt", "field": "b", "value": 0},
-                    {"type": "lt", "field": "c", "value": 10},
-                ],
-            },
-        ],
+        "condition": {
+            "type": "or",
+            "conditions": [
+                {"type": "eq", "field": "a", "value": 1},
+                {
+                    "type": "and",
+                    "conditions": [
+                        {"type": "gt", "field": "b", "value": 0},
+                        {"type": "lt", "field": "c", "value": 10},
+                    ],
+                },
+            ],
+        }
     }
 
 
@@ -571,8 +598,10 @@ def test_translate_filter_not_wraps_single_condition() -> None:
         "conditions": [{"field": "meta.x", "operator": "==", "value": 1}],
     })
     assert out == {
-        "type": "not",
-        "condition": {"type": "eq", "field": "x", "value": 1},
+        "condition": {
+            "type": "not",
+            "condition": {"type": "eq", "field": "x", "value": 1},
+        }
     }
 
 
@@ -665,10 +694,8 @@ def test_filter_documents_translates_haystack_filter_to_veles_shape() -> None:
             {"field": "meta.source", "operator": "==", "value": "wiki"}
         )
         assert captured["filter"] == {
-            "type": "eq",
-            "field": "source",
-            "value": "wiki",
-        }, "Haystack filter must be translated to VelesDB shape before scroll"
+            "condition": {"type": "eq", "field": "source", "value": "wiki"},
+        }, "Haystack filter must be translated to VelesDB Filter shape before scroll"
     finally:
         _MOD.velesdb = original_velesdb
 
@@ -716,11 +743,13 @@ def test_embedding_retrieval_translates_haystack_filter_to_veles_shape() -> None
             },
         )
         assert captured["filter"] == {
-            "type": "and",
-            "conditions": [
-                {"type": "eq", "field": "lang", "value": "en"},
-                {"type": "gt", "field": "score", "value": 0.5},
-            ],
-        }, "embedding_retrieval must translate Haystack filter to VelesDB shape"
+            "condition": {
+                "type": "and",
+                "conditions": [
+                    {"type": "eq", "field": "lang", "value": "en"},
+                    {"type": "gt", "field": "score", "value": 0.5},
+                ],
+            },
+        }, "embedding_retrieval must translate Haystack filter to VelesDB Filter shape"
     finally:
         _MOD.velesdb = original_velesdb

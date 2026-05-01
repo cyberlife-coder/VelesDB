@@ -67,6 +67,99 @@ def _strip_meta_prefix(field: str) -> str:
     return field
 
 
+def _translate_logical(operator: str, filters: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate a Haystack ``AND`` / ``OR`` / ``NOT`` combinator node.
+
+    ``NOT`` is special: Haystack wraps ``conditions`` (list) just like AND/OR,
+    but VelesDB ``Not`` wraps a single ``condition``. Reject anything other
+    than a one-element list — Haystack itself rejects multi-element NOT.
+    """
+    veles_op = _HAYSTACK_LOGIC_TO_VELES[operator]
+    conditions = filters.get("conditions") or []
+    if veles_op == "not":
+        if len(conditions) != 1:
+            raise ValueError(
+                "Haystack NOT must wrap exactly one condition; got "
+                f"{len(conditions)}"
+            )
+        return {"type": "not", "condition": _translate_condition(conditions[0])}
+    if not conditions:
+        raise ValueError(
+            f"Haystack {operator} requires non-empty 'conditions' list"
+        )
+    return {
+        "type": veles_op,
+        "conditions": [_translate_condition(c) for c in conditions],
+    }
+
+
+def _translate_comparison(operator: str, filters: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate a Haystack comparison leaf (``field``/``operator``/``value``)."""
+    field = filters.get("field")
+    if not isinstance(field, str) or not field:
+        raise ValueError(
+            f"Haystack comparison '{operator}' requires non-empty 'field'"
+        )
+    veles_field = _strip_meta_prefix(field)
+    if operator == "in":
+        values = filters.get("value")
+        if not isinstance(values, list):
+            raise ValueError(
+                "Haystack 'in' operator requires 'value' to be a list"
+            )
+        return {"type": "in", "field": veles_field, "values": values}
+    return {
+        "type": _HAYSTACK_COMPARISON_TO_VELES[operator],
+        "field": veles_field,
+        "value": filters.get("value"),
+    }
+
+
+def _translate_not_in(filters: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate a Haystack ``not in`` leaf to VelesDB ``Not(In(...))``."""
+    field = filters.get("field")
+    if not isinstance(field, str) or not field:
+        raise ValueError("Haystack 'not in' requires non-empty 'field'")
+    values = filters.get("value")
+    if not isinstance(values, list):
+        raise ValueError("Haystack 'not in' requires 'value' to be a list")
+    return {
+        "type": "not",
+        "condition": {
+            "type": "in",
+            "field": _strip_meta_prefix(field),
+            "values": values,
+        },
+    }
+
+
+def _translate_condition(filters: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursive helper: translate ANY Haystack filter node to a VelesDB
+    ``Condition`` shape. The top-level :func:`_translate_haystack_filter`
+    wraps the result in ``{"condition": ...}`` to produce a complete
+    VelesDB ``Filter`` object.
+    """
+    if not isinstance(filters, dict):
+        raise ValueError(
+            f"Haystack filter must be a dict, got {type(filters).__name__}"
+        )
+    operator = filters.get("operator")
+    if operator in _HAYSTACK_LOGIC_TO_VELES:
+        return _translate_logical(operator, filters)
+    if operator in _HAYSTACK_COMPARISON_TO_VELES:
+        return _translate_comparison(operator, filters)
+    if operator == "not in":
+        return _translate_not_in(filters)
+    supported = sorted(
+        set(_HAYSTACK_COMPARISON_TO_VELES)
+        | set(_HAYSTACK_LOGIC_TO_VELES)
+        | {"not in"}
+    )
+    raise NotImplementedError(
+        f"Unsupported Haystack filter operator: {operator!r}. Supported: {supported}"
+    )
+
+
 def _translate_haystack_filter(
     filters: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
@@ -80,7 +173,11 @@ def _translate_haystack_filter(
     VelesDB tags every node with a ``type`` discriminator and uses lowercase
     snake_case operator names (``eq``, ``and``, ``in``, ...). The ``meta.``
     namespace prefix is stripped because the DocumentStore stores metadata
-    flat in the VelesDB payload.
+    flat in the VelesDB payload. The full ``Filter`` JSON object always wraps
+    the translated condition tree under a top-level ``"condition"`` key:
+
+        Haystack:  {"field": "meta.x", "operator": "==", "value": 1}
+        VelesDB:   {"condition": {"type": "eq", "field": "x", "value": 1}}
 
     Returns ``None`` when *filters* is ``None`` (pass-through), so callers can
     forward the result directly to ``Collection.scroll(filter=...)``.
@@ -93,78 +190,7 @@ def _translate_haystack_filter(
     """
     if filters is None:
         return None
-    if not isinstance(filters, dict):
-        raise ValueError(
-            f"Haystack filter must be a dict, got {type(filters).__name__}"
-        )
-    operator = filters.get("operator")
-    # ----- logical combinator (operator + conditions) -----
-    if operator in _HAYSTACK_LOGIC_TO_VELES:
-        veles_op = _HAYSTACK_LOGIC_TO_VELES[operator]
-        if veles_op == "not":
-            # Haystack NOT wraps `conditions` (list) just like AND/OR; VelesDB
-            # NOT wraps a single `condition`. Reject anything other than a
-            # one-element list — Haystack itself rejects multi-element NOT.
-            conditions = filters.get("conditions", [])
-            if len(conditions) != 1:
-                raise ValueError(
-                    "Haystack NOT must wrap exactly one condition; got "
-                    f"{len(conditions)}"
-                )
-            inner = _translate_haystack_filter(conditions[0])
-            assert inner is not None  # nested conditions are never None
-            return {"type": "not", "condition": inner}
-        conditions = filters.get("conditions")
-        if not conditions:
-            raise ValueError(
-                f"Haystack {operator} requires non-empty 'conditions' list"
-            )
-        translated = []
-        for c in conditions:
-            t = _translate_haystack_filter(c)
-            assert t is not None
-            translated.append(t)
-        return {"type": veles_op, "conditions": translated}
-    # ----- comparison leaf (field + operator + value) -----
-    if operator in _HAYSTACK_COMPARISON_TO_VELES:
-        field = filters.get("field")
-        if not isinstance(field, str) or not field:
-            raise ValueError(
-                f"Haystack comparison '{operator}' requires non-empty 'field'"
-            )
-        veles_field = _strip_meta_prefix(field)
-        if operator == "in":
-            values = filters.get("value")
-            if not isinstance(values, list):
-                raise ValueError(
-                    "Haystack 'in' operator requires 'value' to be a list"
-                )
-            return {"type": "in", "field": veles_field, "values": values}
-        return {
-            "type": _HAYSTACK_COMPARISON_TO_VELES[operator],
-            "field": veles_field,
-            "value": filters.get("value"),
-        }
-    if operator == "not in":
-        # Encoded as NOT(IN(...)) in VelesDB.
-        field = filters.get("field")
-        if not isinstance(field, str) or not field:
-            raise ValueError("Haystack 'not in' requires non-empty 'field'")
-        values = filters.get("value")
-        if not isinstance(values, list):
-            raise ValueError("Haystack 'not in' requires 'value' to be a list")
-        return {
-            "type": "not",
-            "condition": {
-                "type": "in",
-                "field": _strip_meta_prefix(field),
-                "values": values,
-            },
-        }
-    raise NotImplementedError(
-        f"Unsupported Haystack filter operator: {operator!r}. Supported: "
-        f"{sorted(set(_HAYSTACK_COMPARISON_TO_VELES) | set(_HAYSTACK_LOGIC_TO_VELES) | {'not in'})}"
-    )
+    return {"condition": _translate_condition(filters)}
 
 
 def _str_id_to_int(doc_id: str) -> int:
