@@ -232,7 +232,10 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let list = vec![1.0_f32, f32::NAN, 3.0];
-            let obj: PyObject = list.into_pyobject(py).unwrap().into();
+            let obj: PyObject = list
+                .into_pyobject(py)
+                .expect("test: convert Vec<f32> to Python list")
+                .into();
             let err = extract_vector(py, &obj).unwrap_err();
             assert!(err.to_string().contains("non-finite"));
         });
@@ -243,11 +246,12 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {
             assert!(matches!(
-                parse_metric("cosine").unwrap(),
+                parse_metric("cosine").expect("test: 'cosine' is a valid metric"),
                 DistanceMetric::Cosine
             ));
             assert!(matches!(
-                parse_metric("COSINE").unwrap(),
+                parse_metric("COSINE")
+                    .expect("test: 'COSINE' is a valid metric (case-insensitive)"),
                 DistanceMetric::Cosine
             ));
         });
@@ -258,11 +262,11 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {
             assert!(matches!(
-                parse_metric("euclidean").unwrap(),
+                parse_metric("euclidean").expect("test: 'euclidean' is a valid metric"),
                 DistanceMetric::Euclidean
             ));
             assert!(matches!(
-                parse_metric("l2").unwrap(),
+                parse_metric("l2").expect("test: 'l2' is an alias for euclidean"),
                 DistanceMetric::Euclidean
             ));
         });
@@ -273,15 +277,15 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {
             assert!(matches!(
-                parse_metric("dot").unwrap(),
+                parse_metric("dot").expect("test: 'dot' is a valid metric"),
                 DistanceMetric::DotProduct
             ));
             assert!(matches!(
-                parse_metric("dotproduct").unwrap(),
+                parse_metric("dotproduct").expect("test: 'dotproduct' is an alias for dot"),
                 DistanceMetric::DotProduct
             ));
             assert!(matches!(
-                parse_metric("ip").unwrap(),
+                parse_metric("ip").expect("test: 'ip' (inner product) is an alias for dot"),
                 DistanceMetric::DotProduct
             ));
         });
@@ -292,7 +296,7 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {
             assert!(matches!(
-                parse_metric("hamming").unwrap(),
+                parse_metric("hamming").expect("test: 'hamming' is a valid metric"),
                 DistanceMetric::Hamming
             ));
         });
@@ -303,7 +307,7 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {
             assert!(matches!(
-                parse_metric("jaccard").unwrap(),
+                parse_metric("jaccard").expect("test: 'jaccard' is a valid metric"),
                 DistanceMetric::Jaccard
             ));
         });
@@ -322,11 +326,11 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {
             assert!(matches!(
-                parse_storage_mode("full").unwrap(),
+                parse_storage_mode("full").expect("test: 'full' is a valid storage mode"),
                 StorageMode::Full
             ));
             assert!(matches!(
-                parse_storage_mode("f32").unwrap(),
+                parse_storage_mode("f32").expect("test: 'f32' is an alias for full"),
                 StorageMode::Full
             ));
         });
@@ -337,11 +341,11 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {
             assert!(matches!(
-                parse_storage_mode("sq8").unwrap(),
+                parse_storage_mode("sq8").expect("test: 'sq8' is a valid storage mode"),
                 StorageMode::SQ8
             ));
             assert!(matches!(
-                parse_storage_mode("int8").unwrap(),
+                parse_storage_mode("int8").expect("test: 'int8' is an alias for sq8"),
                 StorageMode::SQ8
             ));
         });
@@ -352,11 +356,11 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {
             assert!(matches!(
-                parse_storage_mode("binary").unwrap(),
+                parse_storage_mode("binary").expect("test: 'binary' is a valid storage mode"),
                 StorageMode::Binary
             ));
             assert!(matches!(
-                parse_storage_mode("bit").unwrap(),
+                parse_storage_mode("bit").expect("test: 'bit' is an alias for binary"),
                 StorageMode::Binary
             ));
         });
@@ -367,16 +371,17 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {
             assert!(matches!(
-                parse_storage_mode("pq").unwrap(),
+                parse_storage_mode("pq").expect("test: 'pq' is a valid storage mode"),
                 StorageMode::ProductQuantization
             ));
             assert!(matches!(
-                parse_storage_mode("product_quantization").unwrap(),
+                parse_storage_mode("product_quantization")
+                    .expect("test: 'product_quantization' is an alias for pq"),
                 StorageMode::ProductQuantization
             ));
             // Case-insensitive (delegates to core `StorageMode::from_str`).
             assert!(matches!(
-                parse_storage_mode("PQ").unwrap(),
+                parse_storage_mode("PQ").expect("test: 'PQ' is case-insensitive alias for pq"),
                 StorageMode::ProductQuantization
             ));
         });
@@ -387,16 +392,18 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_py| {
             assert!(matches!(
-                parse_storage_mode("rabitq").unwrap(),
+                parse_storage_mode("rabitq").expect("test: 'rabitq' is a valid storage mode"),
                 StorageMode::RaBitQ
             ));
             // Case-insensitive (delegates to core `StorageMode::from_str`).
             assert!(matches!(
-                parse_storage_mode("RaBitQ").unwrap(),
+                parse_storage_mode("RaBitQ")
+                    .expect("test: 'RaBitQ' is case-insensitive alias for rabitq"),
                 StorageMode::RaBitQ
             ));
             assert!(matches!(
-                parse_storage_mode("RABITQ").unwrap(),
+                parse_storage_mode("RABITQ")
+                    .expect("test: 'RABITQ' is case-insensitive alias for rabitq"),
                 StorageMode::RaBitQ
             ));
         });
