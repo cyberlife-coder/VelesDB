@@ -4,7 +4,7 @@ This roadmap commits to **what we are building**, **why**, and **when**. It is u
 
 It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` issues but **not committed** until they reach a milestone here.
 
-> **Last updated:** 2026-05-01 — covers v1.14.2 (current) → v1.16.0 horizon.
+> **Last updated:** 2026-05-01 — covers v1.14.3 (current) → v1.16.0 horizon.
 
 ---
 
@@ -12,7 +12,7 @@ It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` i
 
 ### Theme: Ecosystem credibility & adoption signals
 
-VelesDB v1.14.x has shipped the ecosystem-credibility foundations: the Python RAG framework trio (LangChain + LlamaIndex + Haystack) is complete, MSRV is honestly aligned with the actual SIMD path, and the release pipeline now keeps 18 manifests/snippets/Dockerfile labels in lock-step. The next milestone moves the project from "ecosystem-credible" to "commercially adoptable" via Python DataFrame ergonomics, CBO calibration, and the SearchOptions builder refactor.
+VelesDB v1.14.x has shipped the ecosystem-credibility foundations: the Python RAG framework trio (LangChain + LlamaIndex + Haystack) is complete and Haystack now translates filters to the VelesDB native shape end-to-end, MSRV is honestly aligned with the actual SIMD path, and the release pipeline now keeps **37 manifests/snippets/Dockerfile labels** in lock-step (was 18 at the start of the cycle). The next milestone moves the project from "ecosystem-credible" to "commercially adoptable" via Python DataFrame ergonomics, CBO calibration, and the SearchOptions builder refactor.
 
 **Milestone:** [v1.15.0](https://github.com/cyberlife-coder/VelesDB/milestones)
 
@@ -24,7 +24,7 @@ VelesDB v1.14.x has shipped the ecosystem-credibility foundations: the Python RA
 | 4 | [Python DataFrame + Polars integration (#429)](https://github.com/cyberlife-coder/VelesDB/issues/429) | `upsert_dataframe(df)` + `search().to_polars()` round-trip; one notebook in `examples/python/` | Open (slated for v1.15.0) |
 | 5 | [PyO3 SearchOptions builder (#717)](https://github.com/cyberlife-coder/VelesDB/issues/717) | Replace the wide-kwarg `Collection.search` signature with a builder pattern + deprecation cycle; remove the `clippy::too_many_arguments` allow-list | Open (slated for v1.15.0/v2.0.0) |
 
-**Already shipped in v1.14.x:** MSRV bump 1.83 → 1.89 (#714), Dockerfile auto-sync (#715), full Python RAG framework trio (Haystack via #672), doc consistency sweep (#722), `haystack-velesdb` PyPI publishing (#723).
+**Already shipped in v1.14.x:** MSRV bump 1.83 → 1.89 (#714), Dockerfile auto-sync (#715), full Python RAG framework trio (Haystack via #672), doc consistency sweep (#722), `haystack-velesdb` PyPI publishing (#723), Haystack `DuplicatePolicy.SKIP` contract fix (#726), full v1.14.2 doc alignment + fictional MSI installer removed + 14-entry tooling extension (#730), Haystack runtime gaps closed — `@component` decorator on retriever example + Haystack-filter→VelesDB-filter translator + real-Haystack CI (#731).
 
 ---
 

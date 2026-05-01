@@ -560,7 +560,7 @@ curl http://localhost:8080/health
 Response:
 
 ```json
-{"status": "ok", "version": "1.14.2"}
+{"status": "ok", "version": "1.14.3"}
 ```
 
 ### `GET /ready` -- Readiness Probe
@@ -574,13 +574,13 @@ curl http://localhost:8080/ready
 Response (ready):
 
 ```json
-{"status": "ready", "version": "1.14.2"}
+{"status": "ready", "version": "1.14.3"}
 ```
 
 Response (not ready):
 
 ```json
-{"status": "not_ready", "version": "1.14.2"}
+{"status": "not_ready", "version": "1.14.3"}
 ```
 
 ### Kubernetes Example

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "haystack-velesdb"
-version = "1.14.2"
+version = "1.14.3"
 description = "Haystack 2.x DocumentStore for VelesDB: The Local AI Memory Database."
 readme = "README.md"
 license = {text = "MIT"}
