@@ -1,6 +1,6 @@
 # Agent Memory SDK - Complete Guide
 
-*Version 1.9.1 -- March 2026*
+*Stable since v1.9.1 -- last reviewed v1.14.2 (May 2026)*
 
 Complete guide for using VelesDB's Agent Memory SDK. Covers the three memory subsystems (semantic, episodic, procedural), embedding generation, TTL configuration, snapshots, and production best practices.
 

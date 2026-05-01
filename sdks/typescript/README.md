@@ -2,9 +2,17 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.14.0** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.14.2** | Node.js >= 18 | Browser (WASM) | MIT License
 
-## What's New in v1.14.0
+## What's New in v1.14.2
+
+- **No SDK source change.** v1.14.2 is a workspace patch focused on the Python Haystack `DocumentStore` (`DuplicatePolicy.SKIP` contract fix) and seven version-drift gaps in the release tooling. The TS SDK ships in lock-step with the workspace and is functionally identical to v1.14.1; the version bump only ensures `npm install @wiscale/velesdb-sdk` resolves to the same release line as `pip install velesdb` and `cargo add velesdb-core@1.14.2`.
+
+### Previous (v1.14.1)
+
+- **Pipeline fix only.** v1.14.0 added Haystack 2.x DocumentStore source code on the Python side but the release workflow forgot to publish `haystack-velesdb` to PyPI. v1.14.1 closes that gap. No TS SDK source change.
+
+### Previous (v1.14.0)
 
 - **MSRV Rust 1.89** -- workspace and CI now align with the actual SIMD path (`avx512vpopcntdq` target feature). No source change for the SDK; bumps in lock-step with the workspace.
 - **Dockerfile auto-sync** -- release tooling now keeps `LABEL version=` in lock-step across all Dockerfiles. Indirectly improves anyone running `docker build` against a checkout.

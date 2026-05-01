@@ -258,7 +258,7 @@ VelesDB uses **3 simplified GitHub Actions workflows**:
 ```bash
 # 1. Bump every manifest in lock-step
 pwsh -File scripts/bump-version.ps1 -Version <vX.Y.Z>
-python scripts/check-version-sync.py    # 22 targets must align
+python scripts/check-version-sync.py    # 37 checks must align
 python scripts/check-promise-contract.py # 15 claims must pass
 cargo update --workspace                 # refresh Cargo.lock
 

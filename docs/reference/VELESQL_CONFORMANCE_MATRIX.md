@@ -4,7 +4,7 @@ This document lists every VelesQL feature with its parser and executor status.
 A feature can be **Parsed** (the grammar + AST accept it) without being
 **Executed** (the query engine acts on it at runtime).
 
-> Last updated: 2026-04-30 (v3.9.0 / VelesDB v1.14.0)
+> Last updated: 2026-05-01 (v3.9.0 / VelesDB v1.14.2)
 
 ## Fully Supported (Parsed AND Executed)
 

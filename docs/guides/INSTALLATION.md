@@ -6,10 +6,11 @@ Complete installation instructions for all platforms and deployment methods.
 
 | Platform | Format | Download |
 |----------|--------|----------|
-| **Windows** | `.msi` installer | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) |
-| **Linux** | `.deb` package | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) |
-| **Windows** | `.zip` portable | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) |
-| **Linux** | `.tar.gz` portable | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) |
+| **Windows** | `.zip` portable (`velesdb-x86_64-pc-windows-msvc.zip`) | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) ✅ |
+| **Linux (amd64)** | `.deb` package | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) ✅ |
+| **Linux (amd64)** | `.tar.gz` portable (`velesdb-x86_64-unknown-linux-gnu.tar.gz`) | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) ✅ |
+| **macOS (Intel)** | `.tar.gz` portable (`velesdb-x86_64-apple-darwin.tar.gz`) | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) ✅ |
+| **macOS (Apple Silicon)** | `.tar.gz` portable (`velesdb-aarch64-apple-darwin.tar.gz`) | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) ✅ |
 | **Python** | `pip` | [PyPI](https://pypi.org/project/velesdb/) ✅ |
 | **Rust** | `cargo` | [crates.io](https://crates.io/crates/velesdb-core) ✅ |
 | **npm** | WASM/SDK | [npm @wiscale](https://www.npmjs.com/org/wiscale) ✅ |
@@ -17,65 +18,39 @@ Complete installation instructions for all platforms and deployment methods.
 | **iOS** | XCFramework | [Build from source](#-mobile-iosandroid) |
 | **Android** | AAR/SO | [Build from source](#-mobile-iosandroid) |
 
+> **Note:** A signed MSI Windows installer is on the roadmap but **not yet available**. Until it ships, use the portable `.zip` archive below — it contains the same `velesdb-server.exe` and `velesdb.exe` binaries.
+
 ---
 
 ## 🪟 Windows Installation
 
-### MSI Installer (Recommended)
+The current Windows release ships as a **portable `.zip` archive** containing the
+two binaries (`velesdb-server.exe`, `velesdb.exe`). A signed MSI installer is on
+the roadmap but not yet available; use the steps below in the meantime.
 
-The MSI installer provides the easiest installation experience with:
-- **VelesDB Server** (`velesdb-server.exe`) - REST API server
-- **VelesDB CLI** (`velesdb.exe`) - Command-line interface with REPL
-- **Documentation** - Architecture, benchmarks, API docs
-- **Examples** - Tauri RAG application example
-- **PATH Integration** - Optional system PATH modification
-
-#### Interactive Install
-
-1. Download `velesdb-x.x.x-x86_64.msi` from [Releases](https://github.com/cyberlife-coder/VelesDB/releases)
-2. Double-click to run the installer
-3. Select features:
-   - ✅ **Binaries** (required)
-   - ✅ **Documentation** (recommended)
-   - ✅ **Examples** (recommended)
-   - ✅ **Add to PATH** (recommended)
-4. Complete installation
-
-#### Silent Install
+### Portable ZIP (current method)
 
 ```powershell
-# Install with PATH modification (default)
-msiexec /i velesdb-1.14.0-x86_64.msi /quiet ADDTOPATH=1
+# 1. Download
+Invoke-WebRequest -Uri "https://github.com/cyberlife-coder/VelesDB/releases/download/v1.14.2/velesdb-x86_64-pc-windows-msvc.zip" -OutFile velesdb.zip
 
-# Install without PATH modification
-msiexec /i velesdb-1.14.0-x86_64.msi /quiet ADDTOPATH=0
-
-# Install to custom directory
-msiexec /i velesdb-1.14.0-x86_64.msi /quiet APPLICATIONFOLDER="D:\VelesDB"
-```
-
-#### Uninstall
-
-Via **Control Panel > Programs > Uninstall**, or:
-
-```powershell
-msiexec /x velesdb-1.14.0-x86_64.msi /quiet
-```
-
-### Portable ZIP
-
-For portable installations without admin rights:
-
-```powershell
-# Download and extract
-Invoke-WebRequest -Uri "https://github.com/cyberlife-coder/VelesDB/releases/download/v1.14.0/velesdb-windows-x86_64.zip" -OutFile velesdb.zip
+# 2. Extract anywhere you have write access (no admin required)
 Expand-Archive velesdb.zip -DestinationPath C:\VelesDB
 
-# Add to PATH (optional, current session only)
+# 3. (Optional) Add to PATH for the current session
 $env:PATH += ";C:\VelesDB"
 
-# Or add permanently via System Properties > Environment Variables
+# 4. (Optional) Add permanently via System Properties > Environment Variables,
+#    or for the current user:
+[Environment]::SetEnvironmentVariable("PATH", "$env:PATH;C:\VelesDB", "User")
+
+# 5. Verify
+velesdb --version
+velesdb-server --version
 ```
+
+To uninstall, simply remove the `C:\VelesDB` folder and (if added) the `PATH`
+entry.
 
 ---
 
@@ -85,10 +60,10 @@ $env:PATH += ";C:\VelesDB"
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.14.0/velesdb-1.14.0-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.14.2/velesdb-1.14.2-amd64.deb
 
 # Install
-sudo dpkg -i velesdb-1.14.0-amd64.deb
+sudo dpkg -i velesdb-1.14.2-amd64.deb
 
 # Verify
 velesdb --version
@@ -110,8 +85,9 @@ sudo dpkg -r velesdb
 
 ```bash
 # Download and extract
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.14.0/velesdb-linux-x86_64.tar.gz
-tar -xzf velesdb-linux-x86_64.tar.gz -C /opt/velesdb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.14.2/velesdb-x86_64-unknown-linux-gnu.tar.gz
+sudo mkdir -p /opt/velesdb
+sudo tar -xzf velesdb-x86_64-unknown-linux-gnu.tar.gz -C /opt/velesdb
 
 # Add to PATH
 echo 'export PATH=$PATH:/opt/velesdb' >> ~/.bashrc
