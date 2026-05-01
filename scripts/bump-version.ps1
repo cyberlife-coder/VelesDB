@@ -203,6 +203,115 @@ $FilesToUpdate = @(
         Pattern = '(?m)^LABEL version="\d+\.\d+\.\d+"'
         Replacement = "LABEL version=`"$Version`""
         Description = "benchmarks/Dockerfile.bench LABEL"
+    },
+    # New entries added in v1.14.x -> v1.14.2 audit (2026-05-01) to police
+    # banners and version pins that the previous tooling missed. Each was
+    # found drifting silently across one or more releases and is now tracked.
+    @{
+        Path = "integrations/langchain/src/langchain_velesdb/__init__.py"
+        Pattern = '__version__ = "\d+\.\d+\.\d+"'
+        Replacement = "__version__ = `"$Version`""
+        Description = "LangChain __init__.py __version__"
+    },
+    @{
+        Path = "integrations/llamaindex/src/llamaindex_velesdb/__init__.py"
+        Pattern = '__version__ = "\d+\.\d+\.\d+"'
+        Replacement = "__version__ = `"$Version`""
+        Description = "LlamaIndex __init__.py __version__"
+    },
+    @{
+        Path = "docs/openapi.yaml"
+        # Anchored on the 2-space indent unique to the .info.version key.
+        Pattern = '(?m)^  version:\s*\d+\.\d+\.\d+'
+        Replacement = "  version: $Version"
+        Description = "OpenAPI YAML spec (.info.version)"
+    },
+    @{
+        Path = "sdks/typescript/README.md"
+        # Bold banner directly under the title: `**vX.Y.Z** | Node.js >= 18 | ...`
+        Pattern = '(?m)^\*\*v\d+\.\d+\.\d+\*\*'
+        Replacement = "**v$Version**"
+        Description = "TS SDK README **vX.Y.Z** banner"
+    },
+    @{
+        Path = "ROADMAP.md"
+        Pattern = 'covers v\d+\.\d+\.\d+ \(current\)'
+        Replacement = "covers v$Version (current)"
+        Description = "ROADMAP.md `covers vX.Y.Z (current)` marker"
+    },
+    @{
+        Path = "docs/guides/CLI_REPL.md"
+        # Two occurrences in this guide: header banner + `velesdb X.Y.Z`
+        # in the --version sample output + table cell. Replace-all is safe
+        # because every X.Y.Z in CLI_REPL.md refers to the workspace version.
+        Pattern = '\d+\.\d+\.\d+'
+        Replacement = "$Version"
+        Description = "docs/guides/CLI_REPL.md (banner + sample outputs)"
+    },
+    @{
+        Path = "docs/guides/CONFIGURATION.md"
+        # Markdown header (line 3). The TOML `# Version: X.Y.Z` inside the
+        # code block is policed separately by the existing `doc_toml_header`
+        # entry above — anchored differently to avoid clashes here.
+        Pattern = '(?m)^\*Version \d+\.\d+\.\d+'
+        Replacement = "*Version $Version"
+        Description = "docs/guides/CONFIGURATION.md *Version banner"
+    },
+    @{
+        Path = "docs/guides/GRAPH_PATTERNS.md"
+        Pattern = '(?m)^\*Version \d+\.\d+\.\d+'
+        Replacement = "*Version $Version"
+        Description = "docs/guides/GRAPH_PATTERNS.md *Version banner"
+    },
+    @{
+        Path = "docs/guides/SEARCH_MODES.md"
+        Pattern = '(?m)^\*Version \d+\.\d+\.\d+'
+        Replacement = "*Version $Version"
+        Description = "docs/guides/SEARCH_MODES.md *Version banner"
+    },
+    @{
+        Path = "docs/BENCHMARKS.md"
+        # Anchored on `Last updated:` so we never accidentally rewrite
+        # historical (vX.Y.Z) references elsewhere in the file.
+        Pattern = '(Last updated:[^\n]*?)\(v\d+\.\d+\.\d+\)'
+        Replacement = "`${1}(v$Version)"
+        Description = "docs/BENCHMARKS.md Last updated stamp"
+    },
+    @{
+        Path = "docs/reference/ECOSYSTEM_PARITY.md"
+        # `Last updated: YYYY-MM-DD (vX.Y.Z - ...)` - anchored on
+        # `Last updated:` to skip historical references in the body.
+        Pattern = '(Last updated:[^\n]*?)\(v\d+\.\d+\.\d+'
+        Replacement = "`${1}(v$Version"
+        Description = "docs/reference/ECOSYSTEM_PARITY.md last-updated stamp"
+    },
+    @{
+        Path = "docs/reference/VELESQL_CONFORMANCE_MATRIX.md"
+        # `(v3.9.0 / VelesDB v1.14.2)` - only the trailing VelesDB version
+        # tracks the workspace. Anchored on `Last updated:` to leave
+        # historical "VelesDB v1.13.0 (PR #629)" body references intact.
+        Pattern = '(Last updated:[^\n]*?VelesDB v)\d+\.\d+\.\d+'
+        Replacement = "`${1}$Version"
+        Description = "docs/reference/VELESQL_CONFORMANCE_MATRIX.md last-updated stamp"
+    },
+    @{
+        Path = "docs/reference/ARCHITECTURE_DIAGRAMS.md"
+        # First-line h1 `# VelesDB Architecture Diagrams — vX.Y.Z`
+        Pattern = '— v\d+\.\d+\.\d+'
+        Replacement = "— v$Version"
+        Description = "docs/reference/ARCHITECTURE_DIAGRAMS.md h1 title"
+    },
+    @{
+        Path = "scripts/dx-timing/scenario_rust.sh"
+        Pattern = 'velesdb-core@\d+\.\d+\.\d+'
+        Replacement = "velesdb-core@$Version"
+        Description = "scripts/dx-timing/scenario_rust.sh cargo pin"
+    },
+    @{
+        Path = "scripts/dx-timing/scenario_server.sh"
+        Pattern = 'velesdb-server@\d+\.\d+\.\d+'
+        Replacement = "velesdb-server@$Version"
+        Description = "scripts/dx-timing/scenario_server.sh cargo pin"
     }
     # NOTE: per-crate inter-crate dependency entries (velesdb-server -> core,
     # velesdb-cli -> core, etc.) used to live here. They were removed in v1.13.6

@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: April 30, 2026 (v1.14.0)*
+*Last updated: May 1, 2026 (v1.14.3)*
 
 ---
 

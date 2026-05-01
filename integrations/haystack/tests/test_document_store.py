@@ -230,9 +230,11 @@ def test_filter_documents_passes_filter_to_scroll() -> None:
     store.write_documents([
         Document(id="fa", content="alpha", embedding=[0.1]),
     ])
-    # Passing a non-None filter should not raise; the fake scroll ignores it,
-    # but this confirms the filter arg is forwarded without error.
-    results = store.filter_documents(filters={"field": "value"})
+    # A real Haystack 2.x filter shape — the fake scroll ignores the
+    # translated VelesDB filter, but this exercises the translator end-to-end.
+    results = store.filter_documents(
+        filters={"field": "meta.source", "operator": "==", "value": "wiki"}
+    )
     assert len(results) == 1
 
 
@@ -431,5 +433,323 @@ def test_get_collection_returns_none_and_creates_collection() -> None:
         store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_none_path")
         assert store.count_documents() == 0
         assert store._collection is not None
+    finally:
+        _MOD.velesdb = original_velesdb
+
+
+# ---------------------------------------------------------------------------
+# Haystack-filter -> VelesDB-filter translator tests
+# ---------------------------------------------------------------------------
+
+
+def test_translate_filter_none_passes_through() -> None:
+    assert _MOD._translate_haystack_filter(None) is None
+
+
+def test_translate_filter_wraps_top_level_in_condition() -> None:
+    """The entry point wraps the translated condition under the
+    VelesDB ``Filter`` shape (``{"condition": ...}``); recursive
+    ``_translate_condition()`` returns the inner shape directly.
+    """
+    out = _MOD._translate_haystack_filter(
+        {"field": "meta.x", "operator": "==", "value": 1}
+    )
+    assert out == {"condition": {"type": "eq", "field": "x", "value": 1}}
+
+
+def test_translate_filter_simple_eq_strips_meta_prefix() -> None:
+    out = _MOD._translate_haystack_filter(
+        {"field": "meta.source", "operator": "==", "value": "wiki"}
+    )
+    assert out == {
+        "condition": {"type": "eq", "field": "source", "value": "wiki"}
+    }
+
+
+def test_translate_filter_keeps_field_when_no_meta_prefix() -> None:
+    out = _MOD._translate_haystack_filter(
+        {"field": "_doc_id", "operator": "==", "value": "doc1"}
+    )
+    assert out == {
+        "condition": {"type": "eq", "field": "_doc_id", "value": "doc1"}
+    }
+
+
+def test_translate_filter_all_comparison_operators() -> None:
+    cases = [
+        ("==", "eq"),
+        ("!=", "neq"),
+        (">", "gt"),
+        (">=", "gte"),
+        ("<", "lt"),
+        ("<=", "lte"),
+    ]
+    for hs_op, veles_op in cases:
+        out = _MOD._translate_haystack_filter(
+            {"field": "meta.x", "operator": hs_op, "value": 42}
+        )
+        assert out == {
+            "condition": {"type": veles_op, "field": "x", "value": 42}
+        }, hs_op
+
+
+def test_translate_filter_in_remaps_value_to_values() -> None:
+    out = _MOD._translate_haystack_filter(
+        {"field": "meta.tag", "operator": "in", "value": ["a", "b", "c"]}
+    )
+    assert out == {
+        "condition": {"type": "in", "field": "tag", "values": ["a", "b", "c"]}
+    }
+
+
+def test_translate_filter_in_rejects_scalar_value() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="'in' operator requires"):
+        _MOD._translate_haystack_filter(
+            {"field": "meta.tag", "operator": "in", "value": "scalar"}
+        )
+
+
+def test_translate_filter_not_in_wraps_in_with_not() -> None:
+    out = _MOD._translate_haystack_filter(
+        {"field": "meta.tag", "operator": "not in", "value": ["x", "y"]}
+    )
+    assert out == {
+        "condition": {
+            "type": "not",
+            "condition": {"type": "in", "field": "tag", "values": ["x", "y"]},
+        }
+    }
+
+
+def test_translate_filter_logical_and() -> None:
+    out = _MOD._translate_haystack_filter({
+        "operator": "AND",
+        "conditions": [
+            {"field": "meta.source", "operator": "==", "value": "wiki"},
+            {"field": "meta.score", "operator": ">", "value": 0.5},
+        ],
+    })
+    assert out == {
+        "condition": {
+            "type": "and",
+            "conditions": [
+                {"type": "eq", "field": "source", "value": "wiki"},
+                {"type": "gt", "field": "score", "value": 0.5},
+            ],
+        }
+    }
+
+
+def test_translate_filter_logical_or() -> None:
+    out = _MOD._translate_haystack_filter({
+        "operator": "OR",
+        "conditions": [
+            {"field": "meta.lang", "operator": "==", "value": "en"},
+            {"field": "meta.lang", "operator": "==", "value": "fr"},
+        ],
+    })
+    assert out == {
+        "condition": {
+            "type": "or",
+            "conditions": [
+                {"type": "eq", "field": "lang", "value": "en"},
+                {"type": "eq", "field": "lang", "value": "fr"},
+            ],
+        }
+    }
+
+
+def test_translate_filter_nested_and_inside_or() -> None:
+    out = _MOD._translate_haystack_filter({
+        "operator": "OR",
+        "conditions": [
+            {"field": "meta.a", "operator": "==", "value": 1},
+            {
+                "operator": "AND",
+                "conditions": [
+                    {"field": "meta.b", "operator": ">", "value": 0},
+                    {"field": "meta.c", "operator": "<", "value": 10},
+                ],
+            },
+        ],
+    })
+    assert out == {
+        "condition": {
+            "type": "or",
+            "conditions": [
+                {"type": "eq", "field": "a", "value": 1},
+                {
+                    "type": "and",
+                    "conditions": [
+                        {"type": "gt", "field": "b", "value": 0},
+                        {"type": "lt", "field": "c", "value": 10},
+                    ],
+                },
+            ],
+        }
+    }
+
+
+def test_translate_filter_not_wraps_single_condition() -> None:
+    out = _MOD._translate_haystack_filter({
+        "operator": "NOT",
+        "conditions": [{"field": "meta.x", "operator": "==", "value": 1}],
+    })
+    assert out == {
+        "condition": {
+            "type": "not",
+            "condition": {"type": "eq", "field": "x", "value": 1},
+        }
+    }
+
+
+def test_translate_filter_not_rejects_multi_condition() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="NOT must wrap exactly one"):
+        _MOD._translate_haystack_filter({
+            "operator": "NOT",
+            "conditions": [
+                {"field": "meta.x", "operator": "==", "value": 1},
+                {"field": "meta.y", "operator": "==", "value": 2},
+            ],
+        })
+
+
+def test_translate_filter_unknown_operator_raises() -> None:
+    import pytest
+
+    with pytest.raises(NotImplementedError, match="Unsupported Haystack filter operator"):
+        _MOD._translate_haystack_filter(
+            {"field": "meta.x", "operator": "regex", "value": ".*"}
+        )
+
+
+def test_translate_filter_non_dict_raises() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="must be a dict"):
+        _MOD._translate_haystack_filter("not a dict")  # type: ignore[arg-type]
+
+
+def test_translate_filter_logical_empty_conditions_raises() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="non-empty 'conditions'"):
+        _MOD._translate_haystack_filter({"operator": "AND", "conditions": []})
+
+
+def test_translate_filter_comparison_missing_field_raises() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="non-empty 'field'"):
+        _MOD._translate_haystack_filter({"operator": "==", "value": 1})
+
+
+def test_filter_documents_translates_haystack_filter_to_veles_shape() -> None:
+    """End-to-end: filter_documents accepts a Haystack-shaped filter and
+    forwards a VelesDB-shaped filter to Collection.scroll(...).
+    """
+    captured: dict = {}
+
+    class _CapturingCollection(_FakeCollection):
+        def scroll(  # pylint: disable=redefined-builtin
+            self,
+            *,
+            batch_size: int = 100,
+            filter: Any = None,
+            as_dataframe: bool = False,
+            backend: str = "pandas",
+        ) -> Any:
+            captured["filter"] = filter
+            return super().scroll(
+                batch_size=batch_size,
+                filter=filter,
+                as_dataframe=as_dataframe,
+                backend=backend,
+            )
+
+    class _CapturingDatabase:
+        def __init__(self, path: str) -> None:
+            self._col = _CapturingCollection()
+
+        def get_collection(self, name: str) -> _CapturingCollection:
+            return self._col
+
+        def create_collection(
+            self, name: str, dimension: int, metric: str
+        ) -> _CapturingCollection:
+            return self._col
+
+    original_velesdb = _MOD.velesdb
+    try:
+        _MOD.velesdb = types.SimpleNamespace(Database=_CapturingDatabase)  # type: ignore
+        store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_translate")
+        store.write_documents([
+            Document(id="x", content="hello", embedding=[0.1], meta={"source": "wiki"})
+        ])
+        store.filter_documents(
+            {"field": "meta.source", "operator": "==", "value": "wiki"}
+        )
+        assert captured["filter"] == {
+            "condition": {"type": "eq", "field": "source", "value": "wiki"},
+        }, "Haystack filter must be translated to VelesDB Filter shape before scroll"
+    finally:
+        _MOD.velesdb = original_velesdb
+
+
+def test_embedding_retrieval_translates_haystack_filter_to_veles_shape() -> None:
+    """End-to-end: embedding_retrieval accepts a Haystack-shaped filter and
+    forwards a VelesDB-shaped filter to Collection.search(...).
+    """
+    captured: dict = {}
+
+    class _CapturingCollection(_FakeCollection):
+        def search(  # pylint: disable=redefined-builtin
+            self, vector: list, top_k: int = 10, filter: Any = None
+        ) -> list:
+            captured["filter"] = filter
+            return super().search(vector=vector, top_k=top_k, filter=filter)
+
+    class _CapturingDatabase:
+        def __init__(self, path: str) -> None:
+            self._col = _CapturingCollection()
+
+        def get_collection(self, name: str) -> _CapturingCollection:
+            return self._col
+
+        def create_collection(
+            self, name: str, dimension: int, metric: str
+        ) -> _CapturingCollection:
+            return self._col
+
+    original_velesdb = _MOD.velesdb
+    try:
+        _MOD.velesdb = types.SimpleNamespace(Database=_CapturingDatabase)  # type: ignore
+        store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_search_translate")
+        store.write_documents([
+            Document(id="y", content="world", embedding=[0.5])
+        ])
+        store.embedding_retrieval(
+            [0.5],
+            filters={
+                "operator": "AND",
+                "conditions": [
+                    {"field": "meta.lang", "operator": "==", "value": "en"},
+                    {"field": "meta.score", "operator": ">", "value": 0.5},
+                ],
+            },
+        )
+        assert captured["filter"] == {
+            "condition": {
+                "type": "and",
+                "conditions": [
+                    {"type": "eq", "field": "lang", "value": "en"},
+                    {"type": "gt", "field": "score", "value": 0.5},
+                ],
+            },
+        }, "embedding_retrieval must translate Haystack filter to VelesDB Filter shape"
     finally:
         _MOD.velesdb = original_velesdb
