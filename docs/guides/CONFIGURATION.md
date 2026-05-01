@@ -1,6 +1,6 @@
 # ⚙️ VelesDB Configuration
 
-*Version 1.14.3 — May 2026*
+*Version 1.14.4 — May 2026*
 
 Complete guide for configuring VelesDB via configuration file, environment variables, and runtime parameters.
 
@@ -62,7 +62,7 @@ data_dir = "./data"
 ```toml
 # =============================================================================
 # VelesDB Configuration File
-# Version: 1.14.3
+# Version: 1.14.4
 # =============================================================================
 
 # -----------------------------------------------------------------------------

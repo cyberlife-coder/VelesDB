@@ -80,8 +80,9 @@ jobs:
           SHA="${{ github.sha }}"
           echo "Checking CI status for commit $SHA..."
 
-          # Query check runs for this commit
-          RESULT=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+          # Query check runs for this commit (paginated: a release-track commit can carry 30+ check-runs,
+          # so the default 30/page can omit "CI Success" and silently fail REL-06).
+          RESULT=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100" --paginate \
             --jq '[.check_runs[] | select(.name == "CI Success")] | first')
 
           if [ -z "$RESULT" ] || [ "$RESULT" = "null" ]; then
