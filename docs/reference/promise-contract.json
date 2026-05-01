@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-04-27",
+  "last_updated": "2026-05-01",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
@@ -114,6 +114,38 @@
       "validation_command": "cargo bench -p velesdb-core --bench sparse_benchmark -- top10_10k_corpus",
       "source": "PR #621 (commit f4999a74, Phase 4.2 pre-seed remediation): 956us baseline (v1.12) -> 57.6us after linear_scan_dense + k-way merge dedup for corpus <= 100K. Relabeled 'index-only' for transparency.",
       "last_updated": "2026-04-27"
+    },
+    {
+      "id": "readme_simd_cosine_latency",
+      "file": "README.md",
+      "must_contain": "33 ns",
+      "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
+      "source": "README.md Distance Metrics table (Cosine, 768D SIMD perf). Footnote *² documents methodology (768D AVX2 hot cache, matches table column header).",
+      "last_updated": "2026-05-01"
+    },
+    {
+      "id": "readme_simd_euclidean_latency",
+      "file": "README.md",
+      "must_contain": "20 ns",
+      "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
+      "source": "README.md Distance Metrics table (Euclidean, 768D SIMD perf). Footnote *² documents methodology (768D AVX2 hot cache, matches table column header).",
+      "last_updated": "2026-05-01"
+    },
+    {
+      "id": "readme_simd_dot_product_per_metric_latency",
+      "file": "README.md",
+      "must_contain": "22 ns",
+      "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
+      "source": "README.md Distance Metrics table (Dot Product, 768D SIMD perf). Distinct from readme_simd_dot_product_latency (21.7 ns) which references the standalone Vector Engine summary.",
+      "last_updated": "2026-05-01"
+    },
+    {
+      "id": "readme_columnstore_speedup_baseline_rows",
+      "file": "README.md",
+      "must_contain": "100K rows",
+      "validation_command": "cargo bench -p velesdb-core --bench filter_benchmark",
+      "source": "README.md ColumnStore 130x speedup baseline. Footnote *¹ documents holding range (10K-1M rows within ±5%).",
+      "last_updated": "2026-05-01"
     }
   ]
 }

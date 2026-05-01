@@ -62,9 +62,11 @@ VelesDB removes the US provider from the chain entirely. One Rust binary, local-
 |-------------------------------|------------------------|
 | pgvector for embeddings | **Vector Engine** — 450us p50 end-to-end (10K/384D, WAL ON, recall>=96%) |
 | Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
-| PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows |
+| PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows*¹ |
 | Custom glue code + 3 query languages | **VelesQL** — one language for everything |
 | 3 deployments, 3 configs, 3 backups | **6 MB binary** — works offline, air-gapped |
+
+> *¹ measured on 100K rows; ratio holds within ±5% on 10K–1M rows*
 
 ---
 ## What is VelesDB?
@@ -253,6 +255,8 @@ curl -X POST http://localhost:8080/collections/docs/search \
 
 Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search on modern x86_64 hardware.
 
+### End-to-end search latency (canonical)
+
 | Metric | Value |
 |--------|-------|
 | Search p50 (10K, 384D, WAL ON) | **450 us** |
@@ -265,9 +269,9 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 <details>
 <summary>Detailed benchmarks and search modes</summary>
 
-> **Headline number** (canonical, full path): **450 us p50** end-to-end search (10K/384D, WAL ON, recall>=96%) — see Performance summary above.
->
-> The table below reports **index-only micro-benchmarks** (no WAL, no metadata fetch, hot cache) for components that can be measured in isolation. They are not directly comparable to end-to-end latency.
+### HNSW index-only micro-benchmark (lab-grade)
+
+> The number below is the **index-only** micro-benchmark (no WAL, no metadata fetch, hot cache). For the production-path number, see "End-to-end search latency (canonical)" above — **450µs p50** at 10K/384D, recall ≥ 96%.
 
 | Component micro-benchmark | Result | How to reproduce |
 |-----------|--------|------------------|
@@ -290,13 +294,15 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 
 5 metrics with SIMD acceleration (AVX-512, AVX2, NEON, WASM SIMD128):
 
-| Metric | What it measures | Use case | SIMD perf (768D) |
+| Metric | What it measures | Use case | SIMD perf (768D)*² |
 |--------|-----------------|----------|------------------|
 | **Cosine** | Angle between vectors (direction similarity) | Text embeddings (BERT, OpenAI, Cohere), normalized vectors | 33 ns |
 | **Euclidean** | Straight-line distance (L2 norm) | Image features, spatial data, when magnitude matters | 20 ns |
 | **Dot Product** | Inner product (projection) | Pre-normalized vectors, Maximum Inner Product Search (MIPS) | 22 ns |
 | **Hamming** | Bit differences in binary vectors | Binary embeddings, locality-sensitive hashing (LSH), fingerprints | 36 ns |
 | **Jaccard** | Set overlap (intersection / union) | Sparse vectors, tag similarity, set membership | 35 ns |
+
+> *² 768D vectors, AVX2 hot cache (matches the table column header), see promise-contract.json for the policed claim*
 
 ```sql
 -- Choose metric at collection creation
