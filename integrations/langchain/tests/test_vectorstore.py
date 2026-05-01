@@ -877,10 +877,25 @@ class TestV15Features:
             validate_sparse_vector({True: 1.0})
 
     def test_version_is_current(self):
-        """Test that package version matches workspace version."""
+        """Test that package __version__ matches the installed distribution.
+
+        Compares ``langchain_velesdb.__version__`` with
+        ``importlib.metadata.version("langchain-velesdb")`` — this guarantees
+        the constant stays in lock-step with ``pyproject.toml`` without having
+        to hardcode the workspace version in this file.
+        """
+        from importlib.metadata import PackageNotFoundError, version
+
         from langchain_velesdb import __version__
 
-        assert __version__ == "1.13.0"
+        try:
+            installed = version("langchain-velesdb")
+        except PackageNotFoundError:
+            pytest.skip("langchain-velesdb not installed (running from source)")
+        assert __version__ == installed, (
+            f"__init__.__version__={__version__!r} drifted from "
+            f"installed package version {installed!r}"
+        )
 
 
 class TestServerUrlValidation:
