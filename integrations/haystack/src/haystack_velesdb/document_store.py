@@ -163,6 +163,26 @@ def _enforce_fail_policy(col: Any, int_id_map: Dict[int, str]) -> None:
         )
 
 
+def _filter_skip_policy(
+    col: Any, int_id_map: Dict[int, str], documents: List[Document]
+) -> List[Document]:
+    """For ``DuplicatePolicy.SKIP``: return only the documents whose
+    integer ID does not already exist in the collection.
+
+    Uses point-by-point ``col.get(int_ids)`` — same O(batch_size) shape as
+    :func:`_enforce_fail_policy` — so collections larger than
+    ``scroll_limit`` are still correctly handled.
+    """
+    existing_points: List[Any] = col.get(list(int_id_map.keys()))
+    existing_int_ids: set[int] = {
+        point["id"] for point in existing_points if point is not None
+    }
+    if not existing_int_ids:
+        return documents
+    str_to_int = {v: k for k, v in int_id_map.items()}
+    return [doc for doc in documents if str_to_int[doc.id] not in existing_int_ids]
+
+
 def _documents_to_points(documents: List[Document]) -> List[dict]:
     """Convert each document to its VelesDB point dict, logging documents
     that lack an embedding so the caller still gets feedback when the
@@ -270,13 +290,18 @@ class VelesDBDocumentStore:
     ) -> int:
         """Write *documents* to VelesDB and return the number written.
 
-        VelesDB upsert semantics apply for policies other than ``FAIL``:
-        an existing point with the same integer ID is overwritten.
+        Honours every Haystack ``DuplicatePolicy`` value:
 
-        When *policy* is ``DuplicatePolicy.FAIL`` this method scans the
-        collection before writing and raises :class:`DuplicateDocumentError`
-        if any incoming document already exists.  For large collections
-        prefer ``OVERWRITE`` or ``NONE`` to avoid the pre-scan cost.
+        - ``NONE`` / ``OVERWRITE`` — VelesDB upsert semantics: an existing
+          point with the same integer ID is overwritten by the incoming one.
+        - ``SKIP`` — incoming documents whose integer ID already exists in
+          the collection are dropped silently; only the genuinely-new
+          subset is upserted. The return value reflects the number of new
+          documents actually written.
+        - ``FAIL`` — pre-scans the collection (point-by-point lookup,
+          O(batch_size)) and raises :class:`DuplicateDocumentError` if any
+          incoming document already exists. Prefer ``OVERWRITE`` or
+          ``NONE`` for large batches to avoid the pre-scan cost.
 
         Raises:
             DuplicateDocumentError: When *policy* is ``FAIL`` and at least
@@ -290,7 +315,14 @@ class VelesDBDocumentStore:
         col = self._get_collection()
         if policy == DuplicatePolicy.FAIL:
             _enforce_fail_policy(col, int_id_map)
-        points = _documents_to_points(documents)
+            survivors = documents
+        elif policy == DuplicatePolicy.SKIP:
+            survivors = _filter_skip_policy(col, int_id_map, documents)
+            if not survivors:
+                return 0
+        else:
+            survivors = documents
+        points = _documents_to_points(survivors)
         result = col.upsert(points)
         return result if isinstance(result, int) else len(points)
 

@@ -12,18 +12,19 @@ It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` i
 
 ### Theme: Ecosystem credibility & adoption signals
 
-VelesDB v1.13.x has shipped the technical foundations (3 engines, VelesQL, recall guarantees, GPU pipeline). The next milestone moves the project from "technically credible" to "commercially adoptable". Every item below has an explicit success criterion that we will verify at release.
+VelesDB v1.14.x has shipped the ecosystem-credibility foundations: the Python RAG framework trio (LangChain + LlamaIndex + Haystack) is complete, MSRV is honestly aligned with the actual SIMD path, and the release pipeline now keeps 18 manifests/snippets/Dockerfile labels in lock-step. The next milestone moves the project from "ecosystem-credible" to "commercially adoptable" via Python DataFrame ergonomics, CBO calibration, and the SearchOptions builder refactor.
 
-**Milestone:** [v1.14.0](https://github.com/cyberlife-coder/VelesDB/milestone/1)
+**Milestone:** [v1.15.0](https://github.com/cyberlife-coder/VelesDB/milestones)
 
 | # | Item | Success criterion | Status |
 |---|------|------------------|--------|
-| 1 | [Haystack 2.x DocumentStore integration (#349)](https://github.com/cyberlife-coder/VelesDB/issues/349) | At least one BDD test passing in CI; published in `integrations/haystack/`; first community contribution merged | In review (PR #672) |
-| 2 | [Onboarding time-to-first-search < 5 min (#379)](https://github.com/cyberlife-coder/VelesDB/issues/379) | Measured on clean Ubuntu/macOS/Windows; documented in `QUICKSTART.md`; verified via cold-machine timing video | Open |
-| 3 | [CBO calibration loop (#469)](https://github.com/cyberlife-coder/VelesDB/issues/469) | `COST_UNIT_TO_MS` recalibrated from real query timings; method documented in `BENCHMARKS.md`; removes `KNOWN_LIMITATIONS.md #1` | Open |
-| 4 | [Python DataFrame + Polars integration (#429)](https://github.com/cyberlife-coder/VelesDB/issues/429) | `upsert_dataframe(df)` + `search().to_polars()` round-trip; one notebook in `examples/python/` | Open |
+| 1 | [Haystack 2.x DocumentStore integration (#349)](https://github.com/cyberlife-coder/VelesDB/issues/349) | At least one BDD test passing in CI; published in `integrations/haystack/`; first community contribution merged | ✅ Shipped in v1.14.0 / v1.14.1 — PR [#672](https://github.com/cyberlife-coder/VelesDB/pull/672) by [@CrepuscularIRIS](https://github.com/CrepuscularIRIS); `pip install haystack-velesdb` live on PyPI |
+| 2 | [Onboarding time-to-first-search < 5 min (#379)](https://github.com/cyberlife-coder/VelesDB/issues/379) | Measured on clean Ubuntu/macOS/Windows; documented in `docs/quickstart/timing-results.md`; verified via reproducible Docker harness | ✅ Shipped in v1.13.7 (Phase 6) — median across 4 paths under 26 s; [`scripts/dx-timing/run_all.sh`](scripts/dx-timing/run_all.sh) reproduces it |
+| 3 | [CBO calibration loop (#469)](https://github.com/cyberlife-coder/VelesDB/issues/469) | `COST_UNIT_TO_MS` recalibrated from real query timings; method documented in `BENCHMARKS.md`; removes `KNOWN_LIMITATIONS.md #1` | Open (slated for v1.15.0) |
+| 4 | [Python DataFrame + Polars integration (#429)](https://github.com/cyberlife-coder/VelesDB/issues/429) | `upsert_dataframe(df)` + `search().to_polars()` round-trip; one notebook in `examples/python/` | Open (slated for v1.15.0) |
+| 5 | [PyO3 SearchOptions builder (#717)](https://github.com/cyberlife-coder/VelesDB/issues/717) | Replace the wide-kwarg `Collection.search` signature with a builder pattern + deprecation cycle; remove the `clippy::too_many_arguments` allow-list | Open (slated for v1.15.0/v2.0.0) |
 
-**Patch releases on the way (v1.13.3+):** Internal CBO improvements, Pythonic protocols, dependency bumps, docs refinements. No user-facing API changes.
+**Already shipped in v1.14.x:** MSRV bump 1.83 → 1.89 (#714), Dockerfile auto-sync (#715), full Python RAG framework trio (Haystack via #672), doc consistency sweep (#722), `haystack-velesdb` PyPI publishing (#723).
 
 ---
 

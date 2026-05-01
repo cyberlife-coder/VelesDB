@@ -106,6 +106,39 @@ $FilesToUpdate = @(
         Description = "Haystack integration"
     },
     @{
+        Path = "integrations/haystack/src/haystack_velesdb/__init__.py"
+        Pattern = '__version__ = "\d+\.\d+\.\d+"'
+        Replacement = "__version__ = `"$Version`""
+        Description = "Haystack __init__.py __version__"
+    },
+    # Doc files with hardcoded version banners that must track the workspace.
+    # Discovered as drift in Devin review on PR #723: server README health JSON
+    # and Python README badge stayed at 1.14.0 while workspace bumped to 1.14.1.
+    @{
+        Path = "crates/velesdb-server/README.md"
+        Pattern = '"version": "\d+\.\d+\.\d+"'
+        Replacement = "`"version`": `"$Version`""
+        Description = "velesdb-server README health JSON"
+    },
+    @{
+        Path = "crates/velesdb-python/README.md"
+        Pattern = 'version-\d+\.\d+\.\d+-blue'
+        Replacement = "version-$Version-blue"
+        Description = "velesdb-python README version badge"
+    },
+    @{
+        Path = "examples/wasm-browser-demo/index.html"
+        Pattern = '@wiscale/velesdb-wasm@\d+\.\d+\.\d+/'
+        Replacement = "@wiscale/velesdb-wasm@$Version/"
+        Description = "wasm-browser-demo index.html CDN URLs"
+    },
+    @{
+        Path = "docs/guides/CONFIGURATION.md"
+        Pattern = '# Version: \d+\.\d+\.\d+'
+        Replacement = "# Version: $Version"
+        Description = "CONFIGURATION.md TOML example header"
+    },
+    @{
         Path = "demos/rag-pdf-demo/pyproject.toml"
         Pattern = 'version = "\d+\.\d+\.\d+"'
         Replacement = "version = `"$Version`""

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet — work toward v1.15.0 lives under feature branches._
 
+## [1.14.2] — 2026-05-01
+
+### Summary
+
+Quality-of-life patch closing the Devin findings on PR #722 (doc consistency sweep) and PR #723 (Haystack publish-pipeline fix). One real Haystack contract bug (`DuplicatePolicy.SKIP` was silently overwriting), seven version-drift gaps that the existing tooling didn't yet police, and the ROADMAP horizon body that was left contradicting its own heading.
+
+### Fixed
+
+- **Haystack `DuplicatePolicy.SKIP` now honours the contract** ([`integrations/haystack/src/haystack_velesdb/document_store.py`](integrations/haystack/src/haystack_velesdb/document_store.py)). Earlier behaviour fell through to `col.upsert(points)` for every policy except `FAIL`, so passing `SKIP` silently overwrote existing documents — a violation of the Haystack `DocumentStore` contract that other implementations (e.g. `InMemoryDocumentStore`) honour. Now: `SKIP` filters the incoming batch via point-by-point `col.get(int_ids)` and only upserts the genuinely-new subset; the return value reflects the count actually written. Two regression tests added (`test_write_documents_skip_policy_does_not_overwrite_existing`, `test_write_documents_skip_policy_all_existing_returns_zero`).
+- **`haystack_velesdb.__version__` now tracks the workspace** (`integrations/haystack/src/haystack_velesdb/__init__.py`). Was hardcoded at `1.0.0` from the contributor's initial draft; users calling `haystack_velesdb.__version__` saw `1.0.0` while `pip show haystack-velesdb` showed `1.14.1`. Bumped to `1.14.2` and now tracked by `bump-version.ps1` + `check-version-sync.py` (new `py_init_version` reader type).
+- **Browser demo CDN URLs aligned** ([`examples/wasm-browser-demo/index.html`](examples/wasm-browser-demo/index.html)). Two `unpkg`/`jsdelivr` URLs were pinned at `velesdb-wasm@1.7.0` (un-scoped, seven minors stale) — the demo was loading a wasm module that did not match the workspace at all. Now `@wiscale/velesdb-wasm@1.14.2` and tracked by the bump script (new `wasm_cdn_url` reader type).
+- **Hardcoded version banners** in `crates/velesdb-server/README.md` health JSON examples and `crates/velesdb-python/README.md` shields badge now tracked by `bump-version.ps1`. Both were drifting at `1.14.0` while workspace was `1.14.1`.
+- **`docs/guides/CONFIGURATION.md` TOML example header** (`# Version: 1.13.0`) was missed by the v1.14.0 doc consistency sweep because it lived inside a code block. Now tracked (new `doc_toml_header` reader type).
+- **`ROADMAP.md` Horizon 1 body** brought into sync with its heading. The heading was bumped to `v1.14.x → v1.15.0` in PR #722 but the body still listed Haystack as `In review (PR #672)`, the milestone link as `v1.14.0`, and patch releases as `v1.13.3+`. Body now reflects the shipped state (Haystack in v1.14.0/v1.14.1, items 3-5 marked Open and slated for v1.15.0).
+- **`docs/reference/ECOSYSTEM_PARITY.md` enum tables** now include the Haystack column (the v1.14.0 sweep added it to the main 22-row matrix but missed the `DistanceMetric`, `StorageMode`, `FusionStrategy`, `SearchQuality`, and `CollectionType` per-enum tables). Coverage labels updated from `9/9` to `10/10` where applicable; `CollectionType` shows Haystack as `1/3` (only `Vector` maps idiomatically through the `DocumentStore` protocol).
+
+### Changed
+
+- **`scripts/bump-version.ps1` and `scripts/check-version-sync.py` now police 21 targets** (was 17 in v1.14.0, 18 in v1.14.1). The 4 new entries close the version-drift gaps Devin found in this round.
+
 ## [1.14.1] — 2026-04-30
 
 ### Summary
@@ -4540,7 +4560,8 @@ This change ensures VelesDB remains freely available while protecting against cl
 - API Authentication (WIS-69)
 - Starlight documentation site
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.14.1...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.14.2...HEAD
+[1.14.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.2
 [1.14.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.1
 [1.14.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.0
 [1.13.8]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.13.8

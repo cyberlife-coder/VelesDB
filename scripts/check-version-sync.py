@@ -15,6 +15,18 @@ TARGETS = {
     "integrations/langchain/pyproject.toml": "toml",
     "integrations/llamaindex/pyproject.toml": "toml",
     "integrations/haystack/pyproject.toml": "toml",
+    # Haystack `__init__.py` carries its own `__version__` constant exposed
+    # to users at runtime (`haystack_velesdb.__version__`); must track
+    # pyproject.toml. Devin found this drifting at "1.0.0" while pyproject
+    # was bumped to 1.14.1 — adding it here so the same gap cannot recur.
+    "integrations/haystack/src/haystack_velesdb/__init__.py": "py_init_version",
+    # The browser demo's CDN script tag must track @wiscale/velesdb-wasm. Found
+    # at @1.7.0 in v1.14.1 audit while workspace was 1.14.1 — drift of seven
+    # minor versions because no tooling looked at the file.
+    "examples/wasm-browser-demo/index.html": "wasm_cdn_url",
+    # CONFIGURATION.md TOML example header carries a hardcoded "# Version:" line.
+    # Found drifting at 1.13.0 while the doc body banner was already 1.14.0.
+    "docs/guides/CONFIGURATION.md": "doc_toml_header",
     "demos/rag-pdf-demo/pyproject.toml": "toml",
     "sdks/typescript/package.json": "json",
     # The TS SDK's npm lockfile carries its own root "version" string that
@@ -93,6 +105,40 @@ def _read_doc_health_snippet(path: Path) -> str:
     return match.group(1)
 
 
+def _read_py_init_version(path: Path) -> str:
+    """Pull the version out of a `__version__ = "X.Y.Z"` line in a Python
+    `__init__.py`. These constants are the ones users see at runtime via
+    `package.__version__` and must track pyproject.toml.
+    """
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'__version__\s*=\s*"(\d+\.\d+\.\d+)"', text)
+    if not match:
+        raise RuntimeError(f'No `__version__ = "..."` line in {path}')
+    return match.group(1)
+
+
+def _read_wasm_cdn_url(path: Path) -> str:
+    """Pull the version out of the first `@wiscale/velesdb-wasm@X.Y.Z/` CDN URL.
+    The browser demo's <script type="module"> uses this to load wasm at runtime.
+    """
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"@wiscale/velesdb-wasm@(\d+\.\d+\.\d+)/", text)
+    if not match:
+        raise RuntimeError(f"No `@wiscale/velesdb-wasm@X.Y.Z/` URL in {path}")
+    return match.group(1)
+
+
+def _read_doc_toml_header(path: Path) -> str:
+    """Pull the version out of the first `# Version: X.Y.Z` line in a TOML
+    code block embedded in a markdown doc. Found in CONFIGURATION.md.
+    """
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"^#\s*Version:\s*(\d+\.\d+\.\d+)", text, re.MULTILINE)
+    if not match:
+        raise RuntimeError(f'No `# Version: X.Y.Z` line in {path}')
+    return match.group(1)
+
+
 def _read_dockerfile_label(path: Path) -> str:
     """Pull the version out of the first `LABEL version="X.Y.Z"` line."""
     text = path.read_text(encoding="utf-8")
@@ -108,6 +154,9 @@ _READERS = {
     "json_openapi": _read_openapi_version,
     "doc_health_snippet": _read_doc_health_snippet,
     "dockerfile_label": _read_dockerfile_label,
+    "py_init_version": _read_py_init_version,
+    "wasm_cdn_url": _read_wasm_cdn_url,
+    "doc_toml_header": _read_doc_toml_header,
 }
 
 

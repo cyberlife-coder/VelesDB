@@ -95,26 +95,9 @@ Tracks whether core enums are fully propagated to each ecosystem component.
 
 Legend: ✅ full (all variants) | N/A not applicable (brute-force only, no HNSW)
 
-### DistanceMetric — 9/9 (100%)
+### DistanceMetric — 10/10 (100%)
 
-All 5 variants (`Cosine`, `Euclidean`, `DotProduct`, `Hamming`, `Jaccard`) are supported in all 9 components.
-
-| Component | Status |
-|-----------|--------|
-| Core | ✅ (source of truth) |
-| Server | ✅ |
-| Python | ✅ |
-| WASM | ✅ |
-| Mobile | ✅ |
-| CLI | ✅ |
-| TS SDK | ✅ |
-| Tauri | ✅ |
-| LangChain | ✅ |
-| LlamaIndex | ✅ |
-
-### StorageMode — 9/9 (100%)
-
-All 5 variants (`Full`, `SQ8`, `Binary`, `ProductQuantization`, `RaBitQ`) are supported in all 9 components.
+All 5 variants (`Cosine`, `Euclidean`, `DotProduct`, `Hamming`, `Jaccard`) are supported in all 10 components (Haystack inherits via the Python binding pass-through).
 
 | Component | Status |
 |-----------|--------|
@@ -128,10 +111,11 @@ All 5 variants (`Full`, `SQ8`, `Binary`, `ProductQuantization`, `RaBitQ`) are su
 | Tauri | ✅ |
 | LangChain | ✅ |
 | LlamaIndex | ✅ |
+| Haystack | ✅ |
 
-### FusionStrategy — 9/9 (100%)
+### StorageMode — 10/10 (100%)
 
-All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are supported in all 9 components.
+All 5 variants (`Full`, `SQ8`, `Binary`, `ProductQuantization`, `RaBitQ`) are supported in all 10 components (Haystack inherits via the Python binding pass-through).
 
 | Component | Status |
 |-----------|--------|
@@ -145,8 +129,27 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | Tauri | ✅ |
 | LangChain | ✅ |
 | LlamaIndex | ✅ |
+| Haystack | ✅ |
 
-### SearchQuality — 6/9
+### FusionStrategy — 10/10 (100%)
+
+All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are supported in all 10 components (Haystack reaches them via the underlying `velesdb` Python wrapper, not the `DocumentStore` protocol).
+
+| Component | Status |
+|-----------|--------|
+| Core | ✅ (source of truth) |
+| Server | ✅ |
+| Python | ✅ |
+| WASM | ✅ |
+| Mobile | ✅ |
+| CLI | ✅ |
+| TS SDK | ✅ |
+| Tauri | ✅ |
+| LangChain | ✅ |
+| LlamaIndex | ✅ |
+| Haystack | ✅ |
+
+### SearchQuality — 7/10
 
 4 HNSW presets (`Fast`, `Balanced`, `Accurate`, `Perfect`) plus `Custom(usize)` and `Adaptive`. WASM, Mobile, and Tauri use brute-force search (no HNSW), so `SearchQuality` is not applicable.
 
@@ -162,8 +165,9 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | Tauri | N/A | Brute-force only, no HNSW index |
 | LangChain | ✅ | |
 | LlamaIndex | ✅ | |
+| Haystack | ✅ | |
 
-### CollectionType — 8/9
+### CollectionType — 9/10
 
 3 types (`Vector`, `MetadataOnly`, `Graph`). Mobile does not expose graph collection creation.
 
@@ -179,16 +183,17 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | Tauri | ✅ | |
 | LangChain | ✅ | |
 | LlamaIndex | ✅ | |
+| Haystack | ⚠️ 1/3 | `Vector` only — `Graph` and `MetadataOnly` have no idiomatic mapping in the Haystack DocumentStore protocol |
 
 ### Propagation Summary
 
 | Enum | Coverage | Status |
 |------|----------|--------|
-| `DistanceMetric` | 9/9 | 100% |
-| `StorageMode` | 9/9 | 100% |
-| `FusionStrategy` | 9/9 | 100% |
-| `SearchQuality` | 6/9 | N/A for WASM/Mobile/Tauri (brute-force) |
-| `CollectionType` | 8/9 | Mobile missing graph creation |
+| `DistanceMetric` | 10/10 | 100% |
+| `StorageMode` | 10/10 | 100% |
+| `FusionStrategy` | 10/10 | 100% |
+| `SearchQuality` | 7/10 | N/A for WASM/Mobile/Tauri (brute-force) |
+| `CollectionType` | 9/10 | Mobile missing graph creation; Haystack `Vector` only by protocol |
 
 ---
 
