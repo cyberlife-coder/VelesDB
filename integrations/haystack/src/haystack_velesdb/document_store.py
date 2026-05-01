@@ -33,6 +33,139 @@ _INT63_MASK = (1 << 63) - 1
 # Reserved keys stored by this integration in the VelesDB payload.
 _RESERVED_PAYLOAD_KEYS = frozenset({"_doc_id", "content"})
 
+# Haystack 2.x comparison operator (string) -> VelesDB Condition type tag.
+# Reference: https://docs.haystack.deepset.ai/docs/metadata-filtering
+_HAYSTACK_COMPARISON_TO_VELES: Dict[str, str] = {
+    "==": "eq",
+    "!=": "neq",
+    ">": "gt",
+    ">=": "gte",
+    "<": "lt",
+    "<=": "lte",
+    "in": "in",
+    # `not in` is handled specially: wrapped in a top-level NOT around an `in`.
+}
+
+# Haystack 2.x logical operator -> VelesDB Condition type tag.
+_HAYSTACK_LOGIC_TO_VELES: Dict[str, str] = {
+    "AND": "and",
+    "OR": "or",
+    "NOT": "not",
+}
+
+
+def _strip_meta_prefix(field: str) -> str:
+    """Drop the leading ``meta.`` namespace from a Haystack field path.
+
+    Haystack stores user-supplied metadata under ``Document.meta`` and exposes
+    it through the filter API as ``meta.<key>``. VelesDB stores the same data
+    flat in the payload (alongside the reserved ``_doc_id`` and ``content``
+    keys), so the prefix must be stripped before the filter can match.
+    """
+    if field.startswith("meta."):
+        return field[len("meta."):]
+    return field
+
+
+def _translate_haystack_filter(
+    filters: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Translate a Haystack 2.x filter dict to the VelesDB ``Filter`` JSON shape.
+
+    Haystack 2.x uses two interchangeable filter shapes:
+
+    1. Comparison leaf — ``{"field": "meta.x", "operator": "==", "value": v}``
+    2. Logical combinator — ``{"operator": "AND", "conditions": [<leaf>, ...]}``
+
+    VelesDB tags every node with a ``type`` discriminator and uses lowercase
+    snake_case operator names (``eq``, ``and``, ``in``, ...). The ``meta.``
+    namespace prefix is stripped because the DocumentStore stores metadata
+    flat in the VelesDB payload.
+
+    Returns ``None`` when *filters* is ``None`` (pass-through), so callers can
+    forward the result directly to ``Collection.scroll(filter=...)``.
+
+    Raises:
+        NotImplementedError: When the filter contains an operator VelesDB
+            does not support (e.g. a misspelled operator).
+        ValueError: When the filter dict is structurally invalid (missing
+            required keys, conditions list empty for a logical combinator).
+    """
+    if filters is None:
+        return None
+    if not isinstance(filters, dict):
+        raise ValueError(
+            f"Haystack filter must be a dict, got {type(filters).__name__}"
+        )
+    operator = filters.get("operator")
+    # ----- logical combinator (operator + conditions) -----
+    if operator in _HAYSTACK_LOGIC_TO_VELES:
+        veles_op = _HAYSTACK_LOGIC_TO_VELES[operator]
+        if veles_op == "not":
+            # Haystack NOT wraps `conditions` (list) just like AND/OR; VelesDB
+            # NOT wraps a single `condition`. Reject anything other than a
+            # one-element list — Haystack itself rejects multi-element NOT.
+            conditions = filters.get("conditions", [])
+            if len(conditions) != 1:
+                raise ValueError(
+                    "Haystack NOT must wrap exactly one condition; got "
+                    f"{len(conditions)}"
+                )
+            inner = _translate_haystack_filter(conditions[0])
+            assert inner is not None  # nested conditions are never None
+            return {"type": "not", "condition": inner}
+        conditions = filters.get("conditions")
+        if not conditions:
+            raise ValueError(
+                f"Haystack {operator} requires non-empty 'conditions' list"
+            )
+        translated = []
+        for c in conditions:
+            t = _translate_haystack_filter(c)
+            assert t is not None
+            translated.append(t)
+        return {"type": veles_op, "conditions": translated}
+    # ----- comparison leaf (field + operator + value) -----
+    if operator in _HAYSTACK_COMPARISON_TO_VELES:
+        field = filters.get("field")
+        if not isinstance(field, str) or not field:
+            raise ValueError(
+                f"Haystack comparison '{operator}' requires non-empty 'field'"
+            )
+        veles_field = _strip_meta_prefix(field)
+        if operator == "in":
+            values = filters.get("value")
+            if not isinstance(values, list):
+                raise ValueError(
+                    "Haystack 'in' operator requires 'value' to be a list"
+                )
+            return {"type": "in", "field": veles_field, "values": values}
+        return {
+            "type": _HAYSTACK_COMPARISON_TO_VELES[operator],
+            "field": veles_field,
+            "value": filters.get("value"),
+        }
+    if operator == "not in":
+        # Encoded as NOT(IN(...)) in VelesDB.
+        field = filters.get("field")
+        if not isinstance(field, str) or not field:
+            raise ValueError("Haystack 'not in' requires non-empty 'field'")
+        values = filters.get("value")
+        if not isinstance(values, list):
+            raise ValueError("Haystack 'not in' requires 'value' to be a list")
+        return {
+            "type": "not",
+            "condition": {
+                "type": "in",
+                "field": _strip_meta_prefix(field),
+                "values": values,
+            },
+        }
+    raise NotImplementedError(
+        f"Unsupported Haystack filter operator: {operator!r}. Supported: "
+        f"{sorted(set(_HAYSTACK_COMPARISON_TO_VELES) | set(_HAYSTACK_LOGIC_TO_VELES) | {'not in'})}"
+    )
+
 
 def _str_id_to_int(doc_id: str) -> int:
     """Map a Haystack string document ID to a stable positive 63-bit integer.
@@ -268,15 +401,28 @@ class VelesDBDocumentStore:
     ) -> List[Document]:
         """Return documents matching *filters*, or all documents when *None*.
 
-        Passes *filters* directly to VelesDB's scroll operation. The real
-        SDK returns ``Iterator[List[Dict]]`` and has no ``limit`` kwarg, so
-        we drive the iterator ourselves and stop once ``self._scroll_limit``
-        documents have been collected. Increase ``scroll_limit`` on the
-        constructor for collections larger than the default 10 000.
+        *filters* must follow the standard Haystack 2.x filter dict shape
+        (see https://docs.haystack.deepset.ai/docs/metadata-filtering).
+        It is translated to the VelesDB native filter format before being
+        forwarded to ``Collection.scroll``. The ``meta.<key>`` namespace
+        used by Haystack is stripped because this DocumentStore stores
+        metadata flat in the VelesDB payload.
+
+        The real SDK returns ``Iterator[List[Dict]]`` and has no ``limit``
+        kwarg, so we drive the iterator ourselves and stop once
+        ``self._scroll_limit`` documents have been collected. Increase
+        ``scroll_limit`` on the constructor for collections larger than
+        the default 10 000.
+
+        Raises:
+            NotImplementedError: When *filters* uses an operator VelesDB
+                does not support.
+            ValueError: When *filters* is structurally malformed.
         """
+        veles_filter = _translate_haystack_filter(filters)
         col = self._get_collection()
         documents: List[Document] = []
-        for batch in col.scroll(filter=filters):
+        for batch in col.scroll(filter=veles_filter):
             for raw in batch:
                 if len(documents) >= self._scroll_limit:
                     return documents
@@ -349,15 +495,23 @@ class VelesDBDocumentStore:
         Args:
             query_embedding: Dense query vector.
             top_k: Maximum number of documents to return.
-            filters: Optional VelesDB filter dict to restrict the search space.
+            filters: Optional Haystack 2.x filter dict to restrict the search
+                space. Translated to VelesDB native shape before being
+                forwarded; ``meta.<key>`` is stripped to ``<key>``.
             scale_score: When ``True`` and ``metric="cosine"``, scores are
                 normalised from ``[-1, 1]`` to ``[0, 1]``. Ignored for other
                 metrics, where raw scores are returned unchanged.
+
+        Raises:
+            NotImplementedError: When *filters* uses an operator VelesDB
+                does not support.
+            ValueError: When *filters* is structurally malformed.
         """
+        veles_filter = _translate_haystack_filter(filters)
         results: List[dict] = self._get_collection().search(
             vector=query_embedding,
             top_k=top_k,
-            filter=filters,
+            filter=veles_filter,
         )
         return [_result_to_doc(r, scale_score=scale_score, metric=self._metric) for r in results]
 
