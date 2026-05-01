@@ -73,12 +73,27 @@ indexer.connect("splitter", "embedder")
 indexer.connect("embedder", "writer")
 indexer.run({"converter": {"sources": ["paper.pdf"]}})
 
-# Query pipeline
-from haystack.components.retrievers.in_memory import InMemoryEmbeddingRetriever
+# Query pipeline. `InMemoryEmbeddingRetriever` is bound to `InMemoryDocumentStore`
+# and would NOT work against a custom DocumentStore — wrap `embedding_retrieval`
+# in a thin Haystack component that forwards the call. Full working example in
+# `integrations/haystack/examples/rag_pipeline.py` (`_VelesRetriever`).
+from haystack import component
+from haystack.dataclasses import Document
+from typing import List
+
+@component
+class VelesRetriever:
+    def __init__(self, document_store, top_k: int = 10):
+        self._store = document_store
+        self._top_k = top_k
+
+    @component.output_types(documents=List[Document])
+    def run(self, query_embedding: List[float]):
+        return {"documents": self._store.embedding_retrieval(query_embedding, top_k=self._top_k)}
 
 querier = Pipeline()
 querier.add_component("embedder", SentenceTransformersTextEmbedder(model="all-MiniLM-L6-v2"))
-querier.add_component("retriever", InMemoryEmbeddingRetriever(document_store=store))
+querier.add_component("retriever", VelesRetriever(document_store=store))
 querier.connect("embedder.embedding", "retriever.query_embedding")
 result = querier.run({"embedder": {"text": "What is VelesDB?"}})
 print(result["retriever"]["documents"])
