@@ -8,97 +8,104 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-TARGETS = {
-    "crates/velesdb-python/pyproject.toml": "toml",
-    "crates/tauri-plugin-velesdb/guest-js/package.json": "json",
-    "integrations/common/pyproject.toml": "toml",
-    "integrations/langchain/pyproject.toml": "toml",
-    "integrations/llamaindex/pyproject.toml": "toml",
-    "integrations/haystack/pyproject.toml": "toml",
+# NOTE: TARGETS is a list of (path, format) tuples — NOT a dict — because
+# some files are policed by more than one reader (e.g. docs/guides/CONFIGURATION.md
+# has both a `*Version X.Y.Z` markdown banner AND a `# Version: X.Y.Z` line
+# inside an embedded TOML code block). A dict would silently drop the second
+# entry on duplicate keys (Devin caught this on PR #730).
+TARGETS: "list[tuple[str, str]]" = [
+    ("crates/velesdb-python/pyproject.toml", "toml"),
+    ("crates/tauri-plugin-velesdb/guest-js/package.json", "json"),
+    ("integrations/common/pyproject.toml", "toml"),
+    ("integrations/langchain/pyproject.toml", "toml"),
+    ("integrations/llamaindex/pyproject.toml", "toml"),
+    ("integrations/haystack/pyproject.toml", "toml"),
     # Haystack `__init__.py` carries its own `__version__` constant exposed
     # to users at runtime (`haystack_velesdb.__version__`); must track
     # pyproject.toml. Devin found this drifting at "1.0.0" while pyproject
     # was bumped to 1.14.1 — adding it here so the same gap cannot recur.
-    "integrations/haystack/src/haystack_velesdb/__init__.py": "py_init_version",
+    ("integrations/haystack/src/haystack_velesdb/__init__.py", "py_init_version"),
     # The browser demo's CDN script tag must track @wiscale/velesdb-wasm. Found
     # at @1.7.0 in v1.14.1 audit while workspace was 1.14.1 — drift of seven
     # minor versions because no tooling looked at the file.
-    "examples/wasm-browser-demo/index.html": "wasm_cdn_url",
+    ("examples/wasm-browser-demo/index.html", "wasm_cdn_url"),
     # CONFIGURATION.md TOML example header carries a hardcoded "# Version:" line.
     # Found drifting at 1.13.0 while the doc body banner was already 1.14.0.
-    "docs/guides/CONFIGURATION.md": "doc_toml_header",
+    ("docs/guides/CONFIGURATION.md", "doc_toml_header"),
     # Server README ships /health JSON examples that echo the workspace version;
     # bump-version.ps1 already rewrites them, this entry mirrors that policing
     # in the verifier (Devin found the 1-sided drift gap on PR #726/#727).
-    "crates/velesdb-server/README.md": "doc_health_snippet",
+    ("crates/velesdb-server/README.md", "doc_health_snippet"),
     # Python wheel README carries a shields.io static badge `version-X.Y.Z-blue`
     # that bump-version.ps1 rewrites; mirrored here so drift can't sneak in.
-    "crates/velesdb-python/README.md": "doc_version_badge",
-    "demos/rag-pdf-demo/pyproject.toml": "toml",
-    "sdks/typescript/package.json": "json",
+    ("crates/velesdb-python/README.md", "doc_version_badge"),
+    ("demos/rag-pdf-demo/pyproject.toml", "toml"),
+    ("sdks/typescript/package.json", "json"),
     # The TS SDK's npm lockfile carries its own root "version" string that
     # must track package.json. v1.13.4/.5/.6 each shipped with a stale
     # lockfile because no script policed it; v1.13.7 caught the same drift
     # via Devin Review (PR #710). Now this checker fails fast if we forget.
-    "sdks/typescript/package-lock.json": "json",
-    "docs/openapi.json": "json_openapi",
+    ("sdks/typescript/package-lock.json", "json"),
+    ("docs/openapi.json", "json_openapi"),
     # Doc snippets that mirror the /health and /ready REST responses. The
     # server echoes the workspace version, so the example in the docs has
     # to track it. v1.13.0 -> v1.13.7 drift was caught manually before
     # v1.13.8 because no tooling policed it; bump-version.ps1 now patches
     # them and this checker fails fast on any future drift.
-    "docs/getting-started.md": "doc_health_snippet",
-    "docs/reference/api-reference.md": "doc_health_snippet",
-    "docs/guides/SERVER_SECURITY.md": "doc_health_snippet",
+    ("docs/getting-started.md", "doc_health_snippet"),
+    ("docs/reference/api-reference.md", "doc_health_snippet"),
+    ("docs/guides/SERVER_SECURITY.md", "doc_health_snippet"),
     # Dockerfile `LABEL version="X.Y.Z"` lines were not policed before
     # v1.14.0 — the root Dockerfile shipped a stale `1.12.0` label across
     # seven patch releases. bump-version.ps1 now rewrites them on every
     # release; this checker fails fast if any drift sneaks in.
-    "Dockerfile": "dockerfile_label",
-    "benchmarks/Dockerfile.optimized": "dockerfile_label",
-    "benchmarks/Dockerfile.nightly": "dockerfile_label",
-    "benchmarks/Dockerfile.bench": "dockerfile_label",
+    ("Dockerfile", "dockerfile_label"),
+    ("benchmarks/Dockerfile.optimized", "dockerfile_label"),
+    ("benchmarks/Dockerfile.nightly", "dockerfile_label"),
+    ("benchmarks/Dockerfile.bench", "dockerfile_label"),
     # LangChain / LlamaIndex __init__.py constants — exposed at runtime
     # via `langchain_velesdb.__version__` and `llamaindex_velesdb.__version__`.
     # Both were drifting at "1.13.0" in v1.14.x cycle audit (2026-05-01) — same
     # gap as Haystack which was added in v1.14.2. Adding them here so all three
     # Python RAG framework integrations stay in lock-step with their pyproject.
-    "integrations/langchain/src/langchain_velesdb/__init__.py": "py_init_version",
-    "integrations/llamaindex/src/llamaindex_velesdb/__init__.py": "py_init_version",
+    ("integrations/langchain/src/langchain_velesdb/__init__.py", "py_init_version"),
+    ("integrations/llamaindex/src/llamaindex_velesdb/__init__.py", "py_init_version"),
     # OpenAPI YAML spec mirror of the JSON spec. The JSON variant has been
     # policed since v1.14.0; the YAML variant was missed and was found at
     # 1.13.1 during the v1.14.2 audit.
-    "docs/openapi.yaml": "yaml_openapi",
+    ("docs/openapi.yaml", "yaml_openapi"),
     # TS SDK README ships a `**vX.Y.Z**` banner directly under the package
     # name on npmjs.com. Was drifting at v1.14.0 while npm package itself
     # was already at v1.14.2 — visual mismatch on the package page.
-    "sdks/typescript/README.md": "ts_sdk_banner",
+    ("sdks/typescript/README.md", "ts_sdk_banner"),
     # ROADMAP.md `covers vX.Y.Z (current)` self-reports which release the
     # roadmap text describes. Was at v1.14.0 while v1.14.2 already shipped.
-    "ROADMAP.md": "roadmap_current",
+    ("ROADMAP.md", "roadmap_current"),
     # docs/guides/*.md banners (`*Version X.Y.Z -- Month Year*`). Each guide
     # was independently drifting (CLI_REPL at 1.13.0, CONFIGURATION/
     # GRAPH_PATTERNS/SEARCH_MODES at 1.14.0, AGENT_MEMORY at 1.9.1). Adding
     # them all so the same gap cannot recur on any future release.
-    "docs/guides/CLI_REPL.md": "doc_guide_version_header",
-    "docs/guides/CONFIGURATION.md": "doc_guide_version_header",
-    "docs/guides/GRAPH_PATTERNS.md": "doc_guide_version_header",
-    "docs/guides/SEARCH_MODES.md": "doc_guide_version_header",
+    # NOTE: CONFIGURATION.md has TWO entries (TOML header + markdown banner)
+    # — both readers run independently against the same file.
+    ("docs/guides/CLI_REPL.md", "doc_guide_version_header"),
+    ("docs/guides/CONFIGURATION.md", "doc_guide_version_header"),
+    ("docs/guides/GRAPH_PATTERNS.md", "doc_guide_version_header"),
+    ("docs/guides/SEARCH_MODES.md", "doc_guide_version_header"),
     # `Last updated: <date> (vX.Y.Z ...)` stamps in reference docs. Each was
     # found drifting at v1.14.0 during the v1.14.2 audit even though the
     # underlying content had been patched since.
-    "docs/BENCHMARKS.md": "doc_last_updated_version",
-    "docs/reference/ECOSYSTEM_PARITY.md": "doc_last_updated_version",
-    "docs/reference/VELESQL_CONFORMANCE_MATRIX.md": "doc_last_updated_version",
+    ("docs/BENCHMARKS.md", "doc_last_updated_version"),
+    ("docs/reference/ECOSYSTEM_PARITY.md", "doc_last_updated_version"),
+    ("docs/reference/VELESQL_CONFORMANCE_MATRIX.md", "doc_last_updated_version"),
     # `# VelesDB Architecture Diagrams — vX.Y.Z` h1 title. Was at 1.14.0.
-    "docs/reference/ARCHITECTURE_DIAGRAMS.md": "md_title_version",
+    ("docs/reference/ARCHITECTURE_DIAGRAMS.md", "md_title_version"),
     # DX timing scripts pin the crates.io release the harness measures
     # against. Per the comment inside `scenario_rust.sh`, the pin must
     # track the most recent published version — bump-version.ps1 now
     # rewrites them on every release.
-    "scripts/dx-timing/scenario_rust.sh": "cargo_pin",
-    "scripts/dx-timing/scenario_server.sh": "cargo_pin",
-}
+    ("scripts/dx-timing/scenario_rust.sh", "cargo_pin"),
+    ("scripts/dx-timing/scenario_server.sh", "cargo_pin"),
+]
 
 
 def _read_cargo_version() -> str:
@@ -319,7 +326,7 @@ def main() -> int:
     print(f"Workspace version (Cargo.toml): {expected}")
 
     mismatches: list[str] = []
-    for rel_path, fmt in TARGETS.items():
+    for rel_path, fmt in TARGETS:
         path = REPO_ROOT / rel_path
         if not path.exists():
             print(f"  SKIP  {rel_path} (file not found)")
@@ -329,9 +336,14 @@ def main() -> int:
             raise RuntimeError(f"Unknown format '{fmt}' for {rel_path}")
         actual = reader(path)
         status = "OK   " if actual == expected else "MISMATCH"
-        print(f"  {status}  {rel_path}: {actual}")
+        # Include the format tag so duplicate entries on the same file
+        # (e.g. CONFIGURATION.md TOML header + markdown banner) are
+        # distinguishable in the output.
+        print(f"  {status}  {rel_path} [{fmt}]: {actual}")
         if actual != expected:
-            mismatches.append(f"{rel_path}: expected {expected}, found {actual}")
+            mismatches.append(
+                f"{rel_path} [{fmt}]: expected {expected}, found {actual}"
+            )
 
     if mismatches:
         print("\nVersion mismatch(es) detected:")
