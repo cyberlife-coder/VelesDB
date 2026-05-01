@@ -27,6 +27,13 @@ TARGETS = {
     # CONFIGURATION.md TOML example header carries a hardcoded "# Version:" line.
     # Found drifting at 1.13.0 while the doc body banner was already 1.14.0.
     "docs/guides/CONFIGURATION.md": "doc_toml_header",
+    # Server README ships /health JSON examples that echo the workspace version;
+    # bump-version.ps1 already rewrites them, this entry mirrors that policing
+    # in the verifier (Devin found the 1-sided drift gap on PR #726/#727).
+    "crates/velesdb-server/README.md": "doc_health_snippet",
+    # Python wheel README carries a shields.io static badge `version-X.Y.Z-blue`
+    # that bump-version.ps1 rewrites; mirrored here so drift can't sneak in.
+    "crates/velesdb-python/README.md": "doc_version_badge",
     "demos/rag-pdf-demo/pyproject.toml": "toml",
     "sdks/typescript/package.json": "json",
     # The TS SDK's npm lockfile carries its own root "version" string that
@@ -139,6 +146,17 @@ def _read_doc_toml_header(path: Path) -> str:
     return match.group(1)
 
 
+def _read_doc_version_badge(path: Path) -> str:
+    """Pull the version out of a shields.io static badge of the form
+    `version-X.Y.Z-blue` (used in `crates/velesdb-python/README.md`).
+    """
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"version-(\d+\.\d+\.\d+)-blue", text)
+    if not match:
+        raise RuntimeError(f'No `version-X.Y.Z-blue` badge in {path}')
+    return match.group(1)
+
+
 def _read_dockerfile_label(path: Path) -> str:
     """Pull the version out of the first `LABEL version="X.Y.Z"` line."""
     text = path.read_text(encoding="utf-8")
@@ -157,6 +175,7 @@ _READERS = {
     "py_init_version": _read_py_init_version,
     "wasm_cdn_url": _read_wasm_cdn_url,
     "doc_toml_header": _read_doc_toml_header,
+    "doc_version_badge": _read_doc_version_badge,
 }
 
 

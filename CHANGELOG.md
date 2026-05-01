@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — work toward v1.15.0 lives under feature branches._
+### Fixed
+
+- **`scripts/check-version-sync.py` now polices the same set as `bump-version.ps1`** (22 targets, was 20). Devin caught the asymmetry on PR #726/#727: v1.14.2 added `crates/velesdb-server/README.md` and `crates/velesdb-python/README.md` to the bump script but forgot to mirror them in the verifier — meaning future drift could land silently. Two new readers added (`doc_health_snippet` reused for the server README, new `doc_version_badge` for the Python README's shields.io banner). The CHANGELOG line for v1.14.2 claiming "21 targets" was off-by-one for the same reason — corrected here.
 
 ## [1.14.2] — 2026-05-01
 
