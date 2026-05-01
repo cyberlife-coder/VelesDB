@@ -34,14 +34,14 @@ import pytest
 
 
 def _purge_stub(name: str) -> None:
-    """Remove any stub of *name* (and its sub-modules) from ``sys.modules``.
+    """Remove any *stub* of ``name`` (and sub-modules) from ``sys.modules``.
 
     The unit-test file (``test_document_store.py``) injects lightweight
     stubs such as ``SimpleNamespace(Database=_FakeDatabase)`` into
-    ``sys.modules`` so the offline suite runs without the heavy real
+    ``sys.modules`` so its offline suite runs without the heavy real
     distributions. Those stubs lack a real ``__file__`` (and often
-    ``__spec__``) and would mask any genuine install when both files
-    are collected in the same pytest session.
+    ``__spec__``); identify them by that absence so the real package
+    underneath (if installed) is preserved.
     """
     for mod_name in [
         m for m in list(sys.modules)
@@ -49,6 +49,27 @@ def _purge_stub(name: str) -> None:
     ]:
         if getattr(sys.modules[mod_name], "__file__", None) is None:
             del sys.modules[mod_name]
+
+
+def _purge_module_tree(name: str) -> None:
+    """Unconditionally remove ``name`` and every sub-module from
+    ``sys.modules``, regardless of ``__file__`` presence.
+
+    Used to force a complete re-import of a package whose internal
+    ``import x`` references may have been bound to a stub at the
+    original load time. The stub-loaded ``haystack_velesdb.document_store``
+    is a real-file module (so ``_purge_stub`` would skip it), but its
+    module-level ``import velesdb`` was resolved against the test stub
+    of velesdb, freezing that reference in the module object. The only
+    way to re-bind ``velesdb`` to the real wheel is to drop the entire
+    ``haystack_velesdb`` tree and let the real ``__init__.py`` reload it
+    against the now-real ``sys.modules['velesdb']``.
+    """
+    for mod_name in [
+        m for m in list(sys.modules)
+        if m == name or m.startswith(f"{name}.")
+    ]:
+        del sys.modules[mod_name]
 
 
 def _is_real_install(name: str, *, probe_submodule: str | None = None) -> bool:
@@ -85,12 +106,13 @@ if not _is_real_install("velesdb"):
         allow_module_level=True,
     )
 
-# The unit-test file also injects a stub ``haystack_velesdb`` package into
-# ``sys.modules`` so its hand-loaded module can resolve sibling imports.
-# Purge that stub here so the real editable install resolves the imports
-# below (the ``from haystack_velesdb import VelesDBDocumentStore`` line
-# would otherwise see the stub package which has no such attribute).
-_purge_stub("haystack_velesdb")
+# Force a full re-import of haystack_velesdb so document_store.py's
+# module-level ``import velesdb`` re-resolves against the *real* velesdb
+# now in sys.modules. ``_purge_stub`` is not enough here: the stub-loaded
+# document_store is a real-file module (has __file__) and would survive
+# stub-purging, even though its velesdb reference was frozen against the
+# test stub at original load time.
+_purge_module_tree("haystack_velesdb")
 
 from haystack import Pipeline, component  # noqa: E402
 from haystack.dataclasses import Document  # noqa: E402
