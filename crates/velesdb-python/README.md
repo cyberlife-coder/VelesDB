@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-1.14.2-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
+[![Version](https://img.shields.io/badge/version-1.14.3-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
 Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) — a high-performance vector database for AI applications. The current published wheel is `velesdb` v1.14.0; `numpy>=1.20` ships as a hard runtime dependency since v1.13.8 so a single `pip install velesdb` is sufficient.
 

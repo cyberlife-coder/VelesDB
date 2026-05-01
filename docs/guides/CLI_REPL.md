@@ -1,6 +1,6 @@
 # 💻 CLI & REPL Reference
 
-*Version 1.14.2 — May 2026*
+*Version 1.14.3 — May 2026*
 
 Guide complet pour l'interface en ligne de commande VelesDB et le REPL interactif.
 
@@ -36,7 +36,7 @@ cargo build --release -p velesdb-cli
 
 ```bash
 velesdb --version
-# velesdb 1.14.2
+# velesdb 1.14.3
 ```
 
 ---
@@ -269,7 +269,7 @@ velesdb> \info
 ┌─────────────────────┬────────────────────┐
 │ Property            │ Value              │
 ├─────────────────────┼────────────────────┤
-│ Version             │ 1.14.2              │
+│ Version             │ 1.14.3              │
 │ Data directory      │ ./data             │
 │ Collections         │ 3                  │
 │ Total vectors       │ 125,000            │
@@ -342,7 +342,7 @@ Les settings de session **ne sont pas persistés** entre les sessions REPL. Pour
 ```
 $ velesdb repl ./my_db
 
-VelesDB v1.14.2 - Interactive REPL
+VelesDB v1.14.3 - Interactive REPL
 Type \help for help, \quit to exit.
 
 velesdb> \show
@@ -522,4 +522,4 @@ VelesDB CLI supports both backslash commands (`\help`, `\set`) and dot commands 
 
 ---
 
-*Documentation VelesDB v1.14.2 — Mai 2026*
+*Documentation VelesDB v1.14.3 — Mai 2026*
