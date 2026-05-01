@@ -356,9 +356,9 @@ mod tests {
         // Write to docs/ relative to workspace root
         let docs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .unwrap()
+            .expect("test: CARGO_MANIFEST_DIR has a parent (crates/)")
             .parent()
-            .unwrap()
+            .expect("test: crates/ has a parent (workspace root)")
             .join("docs");
         std::fs::create_dir_all(&docs_dir).expect("Failed to create docs dir");
 
@@ -457,35 +457,40 @@ mod tests {
     #[test]
     fn test_create_collection_request_default_metric() {
         let json = r#"{"name": "test", "dimension": 128}"#;
-        let req: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+        let req: CreateCollectionRequest =
+            serde_json::from_str(json).expect("test: valid CreateCollectionRequest JSON");
         assert_eq!(req.metric, "cosine");
     }
 
     #[test]
     fn test_create_collection_request_with_hamming() {
         let json = r#"{"name": "test", "dimension": 128, "metric": "hamming"}"#;
-        let req: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+        let req: CreateCollectionRequest =
+            serde_json::from_str(json).expect("test: valid CreateCollectionRequest JSON");
         assert_eq!(req.metric, "hamming");
     }
 
     #[test]
     fn test_create_collection_request_with_jaccard() {
         let json = r#"{"name": "test", "dimension": 128, "metric": "jaccard"}"#;
-        let req: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+        let req: CreateCollectionRequest =
+            serde_json::from_str(json).expect("test: valid CreateCollectionRequest JSON");
         assert_eq!(req.metric, "jaccard");
     }
 
     #[test]
     fn test_create_collection_request_with_storage_mode() {
         let json = r#"{"name": "test", "dimension": 128, "storage_mode": "sq8"}"#;
-        let req: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+        let req: CreateCollectionRequest =
+            serde_json::from_str(json).expect("test: valid CreateCollectionRequest JSON");
         assert_eq!(req.storage_mode, "sq8");
     }
 
     #[test]
     fn test_search_request_deserialize() {
         let json = r#"{"vector": [0.1, 0.2, 0.3], "top_k": 5}"#;
-        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        let req: SearchRequest =
+            serde_json::from_str(json).expect("test: valid SearchRequest JSON");
         assert_eq!(req.vector, vec![0.1, 0.2, 0.3]);
         assert_eq!(req.top_k, 5);
     }
@@ -493,7 +498,8 @@ mod tests {
     #[test]
     fn test_batch_search_request_deserialize() {
         let json = r#"{"searches": [{"vector": [0.1, 0.2], "top_k": 3}]}"#;
-        let req: BatchSearchRequest = serde_json::from_str(json).unwrap();
+        let req: BatchSearchRequest =
+            serde_json::from_str(json).expect("test: valid BatchSearchRequest JSON");
         assert_eq!(req.searches.len(), 1);
         assert_eq!(req.searches[0].top_k, 3);
     }
@@ -501,7 +507,8 @@ mod tests {
     #[test]
     fn test_text_search_request_deserialize() {
         let json = r#"{"query": "machine learning", "top_k": 10}"#;
-        let req: TextSearchRequest = serde_json::from_str(json).unwrap();
+        let req: TextSearchRequest =
+            serde_json::from_str(json).expect("test: valid TextSearchRequest JSON");
         assert_eq!(req.query, "machine learning");
         assert_eq!(req.top_k, 10);
     }
@@ -509,7 +516,8 @@ mod tests {
     #[test]
     fn test_hybrid_search_request_deserialize() {
         let json = r#"{"vector": [0.1, 0.2], "query": "test", "top_k": 5}"#;
-        let req: HybridSearchRequest = serde_json::from_str(json).unwrap();
+        let req: HybridSearchRequest =
+            serde_json::from_str(json).expect("test: valid HybridSearchRequest JSON");
         assert_eq!(req.vector, vec![0.1, 0.2]);
         assert_eq!(req.query, "test");
         assert_eq!(req.top_k, 5);
@@ -518,7 +526,8 @@ mod tests {
     #[test]
     fn test_upsert_points_request_deserialize() {
         let json = r#"{"points": [{"id": 1, "vector": [0.1, 0.2]}]}"#;
-        let req: UpsertPointsRequest = serde_json::from_str(json).unwrap();
+        let req: UpsertPointsRequest =
+            serde_json::from_str(json).expect("test: valid UpsertPointsRequest JSON");
         assert_eq!(req.points.len(), 1);
         assert_eq!(req.points[0].id, 1);
     }
@@ -532,7 +541,7 @@ mod tests {
             storage_mode: "full".to_string(),
             point_count: 100,
         };
-        let json = serde_json::to_string(&resp).unwrap();
+        let json = serde_json::to_string(&resp).expect("test: serialize CollectionResponse");
         assert!(json.contains("\"name\":\"test\""));
         assert!(json.contains("\"dimension\":128"));
         assert!(json.contains("\"metric\":\"cosine\""));
@@ -549,7 +558,7 @@ mod tests {
                 payload: None,
             }],
         };
-        let json = serde_json::to_string(&resp).unwrap();
+        let json = serde_json::to_string(&resp).expect("test: serialize SearchResponse");
         assert!(json.contains("\"results\""));
         // IDs are serialized as strings to prevent JavaScript precision loss (WP-0D).
         assert!(json.contains("\"id\":\"1\""));
@@ -561,7 +570,7 @@ mod tests {
             error: "Test error".to_string(),
             code: None,
         };
-        let json = serde_json::to_string(&resp).unwrap();
+        let json = serde_json::to_string(&resp).expect("test: serialize ErrorResponse");
         assert!(json.contains("\"error\":\"Test error\""));
         // code: None is omitted from JSON output
         assert!(!json.contains("\"code\""));

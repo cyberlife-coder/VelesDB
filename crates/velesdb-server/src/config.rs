@@ -441,7 +441,8 @@ api_keys = ["key-alpha", "key-beta"]
 cert = "/etc/ssl/cert.pem"
 key = "/etc/ssl/key.pem"
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides::default();
         let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
 
@@ -463,7 +464,8 @@ key = "/etc/ssl/key.pem"
 host = "0.0.0.0"
 port = 9090
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides {
             port: Some(3000),
             host: Some("10.0.0.1".to_string()),
@@ -484,7 +486,8 @@ port = 9090
 [server]
 port = 4000
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides::default();
         let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
 
@@ -495,7 +498,7 @@ port = 4000
 
     #[test]
     fn test_empty_toml_uses_all_defaults() {
-        let file_cfg: FileConfig = toml::from_str("").unwrap();
+        let file_cfg: FileConfig = toml::from_str("").expect("test: empty TOML parses to default");
         let cli = CliOverrides::default();
         let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
 
@@ -555,17 +558,17 @@ port = 4000
 
     #[test]
     fn test_validate_tls_valid_files() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("test: create temp dir");
         let cert_path = dir.path().join("cert.pem");
         let key_path = dir.path().join("key.pem");
         std::fs::File::create(&cert_path)
-            .unwrap()
+            .expect("test: create cert file")
             .write_all(b"cert")
-            .unwrap();
+            .expect("test: write cert content");
         std::fs::File::create(&key_path)
-            .unwrap()
+            .expect("test: create key file")
             .write_all(b"key")
-            .unwrap();
+            .expect("test: write key content");
 
         let cfg = ServerConfig {
             tls_cert: Some(cert_path.to_string_lossy().to_string()),
@@ -613,7 +616,8 @@ port = 9090
 host = "0.0.0.0"
 data_dir = "/toml/data"
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides {
             port: Some(3000),
             // host not set in CLI → TOML should win
@@ -632,7 +636,8 @@ data_dir = "/toml/data"
 [server]
 rate_limit = 50
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides::default();
         let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
 
@@ -646,7 +651,8 @@ rate_limit = 50
 [server]
 rate_limit = 0
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides::default();
         let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
 
@@ -660,7 +666,8 @@ rate_limit = 0
 [server]
 rate_limit = 50
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides {
             rate_limit: Some(200),
             ..Default::default()
@@ -720,7 +727,8 @@ allowed_headers = ["Content-Type", "Authorization"]
 allow_credentials = true
 max_age_secs = 7200
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides::default();
         let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
 
@@ -744,7 +752,8 @@ max_age_secs = 7200
 [cors]
 allowed_origins = ["https://myapp.com"]
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides::default();
         let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
 
@@ -763,7 +772,8 @@ allowed_origins = ["https://myapp.com"]
 [server]
 port = 9090
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides::default();
         let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
 
@@ -776,7 +786,8 @@ port = 9090
         let toml_content = r#"
 [cors]
 "#;
-        let file_cfg: FileConfig = toml::from_str(toml_content).unwrap();
+        let file_cfg: FileConfig =
+            toml::from_str(toml_content).expect("test: valid FileConfig TOML");
         let cli = CliOverrides::default();
         let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
 
