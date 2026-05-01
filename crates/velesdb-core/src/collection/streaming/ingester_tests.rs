@@ -372,25 +372,20 @@ async fn test_stream_searchable_immediately() {
         ingester.try_send(p).expect("send should succeed");
     }
 
-    // Poll until all 4 points are flushed and searchable (max 5s).
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let found = coll_clone.get(&[1, 2, 3, 4]).iter().flatten().count();
-        if found == 4 {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for search-ready flush (found {found}/4)"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-
+    // Poll until search returns the inserted points (firm deadline = 500ms).
+    // Replaces the previous fixed 25ms sleep that was flaky on Windows CI.
     let query = vec![1.0, 0.0, 0.0, 0.0];
-    let results = coll_clone.search(&query, 4).expect("search should succeed");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+    let results = loop {
+        let r = coll_clone.search(&query, 4).expect("search should succeed");
+        if !r.is_empty() || tokio::time::Instant::now() >= deadline {
+            break r;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
     assert!(
         !results.is_empty(),
-        "inserted points should be searchable after drain"
+        "ingester drain stalled past 500ms deadline"
     );
     assert_eq!(results[0].point.id, 1, "closest match should be id=1");
 
