@@ -33,34 +33,53 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _haystack_is_real() -> bool:
-    """Return True only when the genuine ``haystack-ai`` package is installed.
+def _purge_stub(name: str) -> None:
+    """Remove any stub of *name* (and its sub-modules) from ``sys.modules``.
 
-    Removes any pre-existing stub from ``sys.modules`` so a fresh import
-    actually resolves the installed distribution. If the real package is
-    found, ``haystack.components`` (which the stub never defines) imports
-    cleanly.
+    The unit-test file (``test_document_store.py``) injects lightweight
+    stubs such as ``SimpleNamespace(Database=_FakeDatabase)`` into
+    ``sys.modules`` so the offline suite runs without the heavy real
+    distributions. Those stubs lack a real ``__file__`` (and often
+    ``__spec__``) and would mask any genuine install when both files
+    are collected in the same pytest session.
     """
-    for stub_name in [
-        n for n in list(sys.modules) if n == "haystack" or n.startswith("haystack.")
+    for mod_name in [
+        m for m in list(sys.modules)
+        if m == name or m.startswith(f"{name}.")
     ]:
-        # Only purge entries that lack a real ``__file__`` — those are stubs.
-        if getattr(sys.modules[stub_name], "__file__", None) is None:
-            del sys.modules[stub_name]
+        if getattr(sys.modules[mod_name], "__file__", None) is None:
+            del sys.modules[mod_name]
+
+
+def _is_real_install(name: str, *, probe_submodule: str | None = None) -> bool:
+    """Return True only when *name* resolves to a genuine installed package.
+
+    Detects stubs (no ``__file__``) and missing installs robustly:
+    any stub is purged from ``sys.modules`` before the probe so the
+    decision is made against the real environment, never against the
+    leaked test stub. ``probe_submodule`` lets callers force resolution
+    of a sub-package the stub never defines (e.g. ``haystack.components``).
+    """
+    _purge_stub(name)
     try:
-        importlib.import_module("haystack.components")
+        importlib.import_module(name)
     except ImportError:
         return False
+    if probe_submodule:
+        try:
+            importlib.import_module(f"{name}.{probe_submodule}")
+        except ImportError:
+            return False
     return True
 
 
-if not _haystack_is_real():
+if not _is_real_install("haystack", probe_submodule="components"):
     pytest.skip(
         "haystack-ai not installed; install with `pip install haystack-ai` "
         "to exercise the real integration tests",
         allow_module_level=True,
     )
-if importlib.util.find_spec("velesdb") is None:
+if not _is_real_install("velesdb"):
     pytest.skip(
         "velesdb wheel not installed; required for real integration tests",
         allow_module_level=True,
