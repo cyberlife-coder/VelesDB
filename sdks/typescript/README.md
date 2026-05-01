@@ -82,6 +82,16 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 npm install @wiscale/velesdb-sdk
 ```
 
+### Supported Node.js versions
+
+| Node.js | TS SDK | Browser (WASM) | Notes |
+|---------|--------|----------------|-------|
+| 18 LTS  | ✅      | ✅              | minimum supported |
+| 20 LTS  | ✅ (CI) | ✅              | tested matrix on every PR |
+| 22 LTS  | ✅      | ✅              | latest LTS |
+
+The Node.js WASM `init()` path was fixed in v1.13.7 to read `velesdb_wasm_bg.wasm` bytes from disk via `fs.readFile` instead of the broken `fetch('file://')` URL — Node ≥ 18 now works out-of-the-box. Browsers were never affected.
+
 ## Quick Start
 
 ### WASM Backend (Browser / Node.js)
