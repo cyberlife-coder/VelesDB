@@ -139,6 +139,63 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
           pytest tests/test_core_parity.py -q
+      - name: Haystack stub-based unit tests
+        working-directory: integrations/haystack
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          # The unit suite stubs out haystack + velesdb so it runs offline.
+          # The real-haystack integration file (test_real_haystack_integration.py)
+          # auto-skips here and is exercised in the dedicated job below.
+          pytest tests/ -q
+      - name: Haystack example AST check (VelesRetriever has @component)
+        # Catches the bug class that v1.14.2 audit found: a Pipeline component
+        # missing the @component decorator. Pipeline.add_component() rejects
+        # undecorated classes at runtime; this static check fails fast.
+        run: |
+          python - <<'PY'
+          import ast, sys
+          path = "integrations/haystack/examples/rag_pipeline.py"
+          tree = ast.parse(open(path).read())
+          for node in ast.walk(tree):
+              if isinstance(node, ast.ClassDef) and node.name.endswith("Retriever"):
+                  decos = [ast.unparse(d) for d in node.decorator_list]
+                  if "component" not in decos:
+                      print(
+                          f"::error file={path}::class {node.name} is used as a "
+                          "Haystack Pipeline component but is missing the "
+                          "@component decorator (Pipeline.add_component will reject it)."
+                      )
+                      sys.exit(1)
+          print("OK: every *Retriever class in rag_pipeline.py is @component-decorated")
+          PY
+
+  haystack-real-integration:
+    # Heavyweight job: installs haystack-ai + the published velesdb wheel
+    # and exercises tests/test_real_haystack_integration.py end-to-end. The
+    # stub-based unit suite above (Python Integrations Check) auto-skips
+    # this file; this job is the only place protocol drift between the
+    # connector and the real Haystack 2.x runtime is caught.
+    name: Haystack Real Integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Install haystack-ai + published velesdb wheel + this connector
+        working-directory: integrations/haystack
+        run: |
+          python -m pip install --upgrade pip
+          # Pin velesdb to the workspace floor declared in pyproject (>=1.14.0)
+          # — pip will resolve to the latest published patch on PyPI.
+          pip install "velesdb>=1.14.0" "haystack-ai>=2.0.0"
+          pip install -e ../common
+          pip install -e ".[dev]"
+      - name: Run real Haystack integration suite
+        working-directory: integrations/haystack
+        run: |
+          pytest tests/test_real_haystack_integration.py -v --no-header
 
   demos-examples-smoke:
     name: Demos and Examples Smoke
@@ -165,6 +222,9 @@ jobs:
         run: |
           python -m py_compile examples/python_example.py
           python -m py_compile examples/python/*.py
+          # Integration-level examples — must at least compile cleanly so a
+          # user copying the file into their project doesn't hit a SyntaxError.
+          python -m py_compile integrations/haystack/examples/rag_pipeline.py
       - name: Tauri demo frontend build smoke
         working-directory: demos/tauri-rag-app
         run: |
