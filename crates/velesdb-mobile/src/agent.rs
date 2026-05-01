@@ -151,32 +151,35 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_db() -> (TempDir, std::sync::Arc<VelesDatabase>) {
-        let dir = TempDir::new().unwrap();
-        let db = VelesDatabase::open(dir.path().to_string_lossy().to_string()).unwrap();
+        let dir = TempDir::new().expect("test: create temp dir");
+        let db = VelesDatabase::open(dir.path().to_string_lossy().to_string())
+            .expect("test: open database");
         (dir, db)
     }
 
     #[test]
     fn test_semantic_memory_new() {
         let (_dir, db) = create_test_db();
-        let memory = VelesSemanticMemory::new(&db, 4).unwrap();
+        let memory = VelesSemanticMemory::new(&db, 4).expect("test: construct semantic memory");
         assert_eq!(memory.dimension(), 4);
-        assert!(memory.is_empty().unwrap());
+        assert!(memory.is_empty().expect("test: is_empty on fresh memory"));
     }
 
     #[test]
     fn test_semantic_memory_store_and_query() {
         let (_dir, db) = create_test_db();
-        let memory = VelesSemanticMemory::new(&db, 4).unwrap();
+        let memory = VelesSemanticMemory::new(&db, 4).expect("test: construct semantic memory");
 
         memory
             .store(1, "Test content".to_string(), vec![0.1, 0.2, 0.3, 0.4])
-            .unwrap();
+            .expect("test: store knowledge fact");
 
-        assert_eq!(memory.len().unwrap(), 1);
-        assert!(!memory.is_empty().unwrap());
+        assert_eq!(memory.len().expect("test: read len"), 1);
+        assert!(!memory.is_empty().expect("test: is_empty after store"));
 
-        let results = memory.query(vec![0.1, 0.2, 0.3, 0.4], 5).unwrap();
+        let results = memory
+            .query(vec![0.1, 0.2, 0.3, 0.4], 5)
+            .expect("test: query semantic memory");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, 1);
         assert_eq!(results[0].content, "Test content");
@@ -185,15 +188,15 @@ mod tests {
     #[test]
     fn test_semantic_memory_remove() {
         let (_dir, db) = create_test_db();
-        let memory = VelesSemanticMemory::new(&db, 4).unwrap();
+        let memory = VelesSemanticMemory::new(&db, 4).expect("test: construct semantic memory");
 
         memory
             .store(1, "Content".to_string(), vec![0.1, 0.2, 0.3, 0.4])
-            .unwrap();
-        assert_eq!(memory.len().unwrap(), 1);
+            .expect("test: store knowledge fact");
+        assert_eq!(memory.len().expect("test: read len"), 1);
 
-        let removed = memory.remove(1).unwrap();
+        let removed = memory.remove(1).expect("test: remove knowledge fact");
         assert!(removed);
-        assert!(memory.is_empty().unwrap());
+        assert!(memory.is_empty().expect("test: is_empty after remove"));
     }
 }
