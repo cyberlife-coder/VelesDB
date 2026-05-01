@@ -42,6 +42,7 @@ By v1.15 we want a single sentence pitch: *"VelesDB is the only embedded vector 
 | 2 | [SDK parity: TypeScript/LangChain/LlamaIndex (#380)](https://github.com/cyberlife-coder/VelesDB/issues/380) | Close the cross-language gap so any framework user gets the same API surface |
 | 3 | **Reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector** (Docker Compose) | Pre-seed audit P0: turn marketing claims into proven numbers |
 | 4 | **External `unsafe` audit** (SIMD module, Cure53 / independent Rust safety expert) | Required for "data sovereignty" enterprise positioning |
+| 5 | **`velesdb-migrate` rework decision** (12,108 LOC, 9 connectors) | Workspace inflation without measured user base — decide keep / extract / archive based on crates.io download counts, GitHub stars attributable to migration tooling, opened issues count. See `docs/reference/KNOWN_LIMITATIONS.md` § 4 |
 
 These items need budget commitment (audit ~5-15k€) and are conditional on funding closing.
 

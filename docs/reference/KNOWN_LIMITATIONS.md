@@ -53,6 +53,26 @@ When no calibrated `CollectionStats` is available (collection never analyzed, SD
 
 ---
 
+## Workspace scope
+
+### 4. `velesdb-migrate` (12,108 LOC, 9 connectors) — to be reworked
+
+**Status**: open, scheduled for rework decision in v1.15.0. Source: `crates/velesdb-migrate/` (workspace member).
+
+The `velesdb-migrate` sub-crate ships a migration toolkit covering 9 source databases (Supabase, Qdrant, Pinecone, Weaviate, Milvus, ChromaDB, JSON/CSV, Elasticsearch, Redis). It is currently bundled in the workspace but is identified for **rework or extraction in a future release**: the current scope inflates the workspace surface (12k LOC, 9 third-party API surfaces) without a measured user base, and the connectors evolve at different cadences than the core engine.
+
+**Decision criteria for v1.15.0** (per ROADMAP.md Horizon 2):
+
+- crates.io download counts for `velesdb-migrate` over the last 90 days
+- GitHub stars / watchers attributable to migration tooling
+- Open issues count specifically scoped to migration connectors
+
+**User impact**: until the rework decision lands, the crate is maintained on a best-effort basis. Users depending on it should pin to the v1.14.x line. No migration tooling will be removed or moved during the v1.14.x line — this is purely a forward-looking transparency note.
+
+**Resolution path**: tracked for v1.15.0 evaluation; the candidate outcomes are (a) keep + invest, (b) extract to separate `velesdb-migrate` repository under the same org, or (c) archive with documented sunset window. The decision will be made in a separate planning issue once the criteria above are measurable.
+
+---
+
 ## Reading this document
 
 Each entry states:
