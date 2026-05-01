@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`requires-python` raised from `>=3.9` to `>=3.10`** on all three Python RAG framework integrations (`haystack-velesdb`, `langchain-velesdb`, `llama-index-vector-stores-velesdb`) and their shared `velesdb-common` runtime helpers. Python 3.9 was advertised since the integrations were first published but never actually exercised — CI runs on 3.11 only, and each integration's core dep (`haystack-ai>=2.28.0`, `langchain-core>=1.0`, `llama-index-core>=0.14`) already requires `>=3.10` in its latest version. The previous floor would have silently resolved on Python 3.9 to a stale core package that lacks the API surface our connectors call into. Aligned `Programming Language :: Python :: 3.x` PyPI classifiers (3.9 row dropped). Bumped the runtime `velesdb` and `velesdb-common` dep floors from `>=1.12.0` to `>=1.14.0` (the integrations' filter translation + payload schema have evolved since 1.12). `integrations/README.md` now documents the explicit supported-Python matrix. No code changes — purely metadata + classifier alignment.
+
 ## [1.14.3] — 2026-05-01
 
 ### Summary

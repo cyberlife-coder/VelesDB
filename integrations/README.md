@@ -19,6 +19,20 @@ All three connectors share the same VelesDB persistence layer
 so a collection populated through one framework is readable by the other two
 without re-indexing.
 
+### Supported Python versions
+
+| Python | LangChain | LlamaIndex | Haystack |
+|--------|-----------|------------|----------|
+| 3.10 | ✅ | ✅ | ✅ |
+| 3.11 (CI) | ✅ | ✅ | ✅ |
+| 3.12 | ✅ | ✅ | ✅ |
+
+Python 3.9 is **not supported** since v1.14.4 — the underlying core packages
+(`langchain-core`, `llama-index-core`, `haystack-ai`) all require ≥3.10 in
+their current major versions, and the integration CI only exercises 3.11.
+On Python 3.9 the previous floor would have silently resolved to a stale
+core package that lacked the API surface the connectors call into.
+
 ## Shared building blocks
 
 - [`common/`](common) — `velesdb-common` Python package: payload validation,
