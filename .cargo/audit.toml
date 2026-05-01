@@ -1,9 +1,60 @@
-# Cargo audit configuration
-# https://rustsec.org/advisories/
+# Cargo audit configuration for VelesDB workspace.
+# Reference: https://rustsec.org/advisories/
+#
+# Each advisory below is explicitly accepted with a documented rationale.
+# Adding a new advisory here is a deliberate, reviewable act — the CI Security
+# Audit job runs `cargo audit` (without `--ignore-source`) and will fail on any
+# new advisory not listed.
+#
+# Format: each entry must include a comment explaining WHY this advisory is
+# accepted (root cause, upstream tracker, mitigation if any).
+#
+# Last full review: 2026-05-01 (v1.14.4 pre-tag audit).
 
 [advisories]
-# RUSTSEC-2023-0071: rsa Marvin Attack timing sidechannel
-# Transitive dep: sqlx-macros-core → sqlx-mysql → rsa
-# VelesDB only uses PostgreSQL (never MySQL) — rsa code is never executed.
-# No upstream fix available as of 2026-03-20.
-ignore = ["RUSTSEC-2023-0071"]
+ignore = [
+    # RUSTSEC-2023-0071: rsa Marvin Attack timing sidechannel.
+    # Transitive dep: sqlx-macros-core → sqlx-mysql → rsa.
+    # VelesDB only uses PostgreSQL (never MySQL) — rsa code is never executed.
+    # No upstream fix available as of 2026-03-20.
+    "RUSTSEC-2023-0071",
+
+    # === Tauri 1.x → 2.x: GTK3 bindings unmaintained ===
+    # Linux Tauri builds depend on webkit2gtk 2.0.2 → gtk 0.18 family.
+    # The gtk-rs maintainers archived the gtk3 family when GTK 4 became stable.
+    # Tauri 2.x has not yet migrated to gtk4-rs; tracked by the Tauri roadmap.
+    # Mitigation: VelesDB tauri-plugin only ships through tauri-plugin-velesdb,
+    # which is opt-in and not part of the default workspace surface.
+    "RUSTSEC-2024-0412", # gdk         0.18.2 — gtk-rs GTK3 bindings unmaintained
+    "RUSTSEC-2024-0413", # atk         0.18.2 — gtk-rs GTK3 bindings unmaintained
+    "RUSTSEC-2024-0415", # gtk         0.18.2 — gtk-rs GTK3 bindings unmaintained
+    "RUSTSEC-2024-0416", # atk-sys     0.18.2 — gtk-rs GTK3 bindings unmaintained
+    "RUSTSEC-2024-0418", # gdk-sys     0.18.2 — gtk-rs GTK3 bindings unmaintained
+    "RUSTSEC-2024-0419", # gtk3-macros 0.18.2 — gtk-rs GTK3 bindings unmaintained
+    "RUSTSEC-2024-0420", # gtk-sys     0.18.2 — gtk-rs GTK3 bindings unmaintained
+    "RUSTSEC-2024-0429", # glib        0.18.5 — Iterator unsoundness; gtk-rs GTK3 family
+
+    # === HTML/CSS parsing chain via Tauri devtools (compile-time only) ===
+    # markup5ever / html5ever / cssparser / selectors / kuchikiki are pulled in
+    # by tauri-utils at build time for asset preprocessing. Not in runtime path.
+    "RUSTSEC-2026-0097", # rand 0.7.3 / 0.8.5 — unsound with custom logger via phf chain
+
+    # === Maintenance-only churn (no security impact, no fix available upstream) ===
+    "RUSTSEC-2023-0089", # atomic-polyfill  1.0.3  — replaced by `portable-atomic`; transitive via embedded-hal-derived deps
+    "RUSTSEC-2024-0370", # proc-macro-error 1.0.4  — superseded by proc-macro-error2; transitive via legacy proc-macro tooling
+    "RUSTSEC-2024-0384", # instant          0.1.13 — replaced by `web-time`; transitive via parking_lot cfg path
+    "RUSTSEC-2024-0436", # paste            1.0.15 — author archived the crate; widely used, no breakage
+    "RUSTSEC-2025-0057", # fxhash           0.2.1  — replaced by `rustc-hash` 2.x; transitive
+    "RUSTSEC-2025-0134", # rustls-pemfile   2.2.0  — superseded; transitive via reqwest TLS chain
+    "RUSTSEC-2025-0141", # bincode          1.3.3  — superseded by bincode 2.x; widely transitive
+
+    # === unic-* family (Unicode tables) ===
+    # The `unic-*` crates were the standard Unicode toolkit before `unicode-*`
+    # equivalents stabilized. They are unmaintained but functionally complete.
+    # Replacement requires upstream coordination across many transitive deps.
+    "RUSTSEC-2025-0075", # unic-char-range    0.9.0
+    "RUSTSEC-2025-0080", # unic-common        0.9.0
+    "RUSTSEC-2025-0081", # unic-char-property 0.9.0
+    "RUSTSEC-2025-0098", # unic-ucd-version   0.9.0
+    "RUSTSEC-2025-0100", # unic-ucd-ident    0.9.0
+]
