@@ -85,6 +85,13 @@ if not _is_real_install("velesdb"):
         allow_module_level=True,
     )
 
+# The unit-test file also injects a stub ``haystack_velesdb`` package into
+# ``sys.modules`` so its hand-loaded module can resolve sibling imports.
+# Purge that stub here so the real editable install resolves the imports
+# below (the ``from haystack_velesdb import VelesDBDocumentStore`` line
+# would otherwise see the stub package which has no such attribute).
+_purge_stub("haystack_velesdb")
+
 from haystack import Pipeline, component  # noqa: E402
 from haystack.dataclasses import Document  # noqa: E402
 from haystack.document_stores.types import DuplicatePolicy  # noqa: E402
