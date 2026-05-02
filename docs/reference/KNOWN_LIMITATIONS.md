@@ -71,6 +71,26 @@ The `velesdb-migrate` sub-crate ships a migration toolkit covering 9 source data
 
 **Resolution path**: tracked for v1.15.0 evaluation; the candidate outcomes are (a) keep + invest, (b) extract to separate `velesdb-migrate` repository under the same org, or (c) archive with documented sunset window. The decision will be made in a separate planning issue once the criteria above are measurable.
 
+### 5. No macOS Intel (x86_64) wheel on PyPI
+
+**Status**: open, no ETA. Source: `.github/workflows/release.yml` `publish-pypi-wheels` matrix.
+
+The `macos-13` (Intel x86_64) entry was added briefly in v1.14.4 (PR #738) but the GitHub-hosted `macos-13` runner availability proved unreliable: one v1.14.4 publish attempt left the wheel-build job queued for over 9 hours without a runner being assigned, blocking the rest of the release pipeline. The entry was removed in v1.14.5 to keep the release pipeline reliable.
+
+**User impact**: Intel Mac users have three options.
+
+1. **Recommended**: install via the macOS aarch64 wheel under Rosetta 2 — `arch -arm64 pip install velesdb`. Performance is within ~3-5% of native on Intel Macs running macOS 12+ with Rosetta 2.
+2. **Build from source**: `cargo install velesdb-cli` (or `pip install velesdb --no-binary :all:` with a working Rust toolchain) produces a native x86_64 binary.
+3. Use the Linux x86_64 wheel inside Docker / Lima / Multipass.
+
+**Resolution path**: tracked for v1.15.0+. Candidate outcomes:
+
+- (a) Provision a self-hosted `macos-13` runner via a paid CI provider with reliable Intel-Mac capacity.
+- (b) Wait for GitHub-hosted `macos-13` queue times to stabilize and re-add the matrix entry.
+- (c) Drop x86_64 macOS wheel support officially — Apple stopped shipping new Intel Macs in 2023, and Rosetta 2 covers existing devices.
+
+A measurable decision will be made when one of: download counts on `manylinux2014_x86_64.whl` from macOS user-agents drops below 5%/month, OR a self-hosted runner is funded.
+
 ---
 
 ## Reading this document
