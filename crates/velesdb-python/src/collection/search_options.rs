@@ -107,9 +107,7 @@ impl SearchOptions {
     fn __repr__(&self) -> String {
         format!(
             "SearchOptions(top_k={}, include_vectors={}, sparse_index_name={:?})",
-            self.top_k,
-            self.include_vectors,
-            self.sparse_index_name,
+            self.top_k, self.include_vectors, self.sparse_index_name,
         )
     }
 }
