@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyDeprecationWarning, PyValueError};
 use pyo3::prelude::*;
 use velesdb_core::FusionStrategy as CoreFusionStrategy;
 use velesdb_core::SearchResult;
@@ -67,17 +67,13 @@ impl Collection {
         sparse_index_name: Option<String>,
         include_vectors: bool,
     ) -> PyResult<Vec<PyObject>> {
-        // Emit DeprecationWarning: callers should migrate to search_request().
-        py.run(
-            pyo3::ffi::c_str!(
-                "import warnings; warnings.warn(\
-                'Collection.search() is deprecated since v1.15. \
-                Use Collection.search_request(SearchOptions(...)) instead. \
-                Will be removed in v2.0.', \
-                DeprecationWarning, stacklevel=2)"
-            ),
-            None,
-            None,
+        PyErr::warn(
+            py,
+            &py.get_type::<PyDeprecationWarning>(),
+            c"Collection.search() is deprecated since v1.15. \
+              Use Collection.search_request(SearchOptions(...)) instead. \
+              Will be removed in v2.0.",
+            2,
         )?;
 
         let opts = SearchOptions::new(

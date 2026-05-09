@@ -16,7 +16,7 @@ mod mutation;
 pub(crate) mod query;
 pub(crate) mod scroll;
 mod search;
-pub mod search_options;
+pub(crate) mod search_options;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
