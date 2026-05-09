@@ -35,7 +35,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 
 # HTTP client for API-based sources
 # Use native-tls to avoid ring 0.17.14 compilation issues on aarch64-apple-darwin
-reqwest = { version = "0.13", features = ["json", "native-tls"], default-features = false }
+reqwest = { version = "0.13", features = ["json", "native-tls", "query"], default-features = false }
 
 # Native RESP client for Redis Stack / RediSearch
 redis = { version = "0.26", features = ["tokio-comp", "aio"], optional = true }
