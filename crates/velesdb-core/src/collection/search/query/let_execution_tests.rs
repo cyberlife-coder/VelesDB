@@ -448,8 +448,8 @@ fn test_evaluate_let_bindings_empty() {
 // J. Issue #473: LET bindings appear in SELECT projection
 // ============================================================================
 
-/// `LET hybrid = 0.5 SELECT *, hybrid FROM col LIMIT 5`
-/// Each result must have a "hybrid" field with value 0.5.
+/// `LET hybrid = 0.5 SELECT * FROM docs WHERE vector NEAR $v LIMIT 5`
+/// Each result's payload must contain a "hybrid" field with value 0.5.
 #[test]
 fn test_let_binding_appears_in_select_projection() {
     let (_dir, col) = setup_let_collection();
@@ -470,6 +470,34 @@ fn test_let_binding_appears_in_select_projection() {
         let hybrid_val = payload.get("hybrid").expect("hybrid field should exist");
         let v = hybrid_val.as_f64().expect("hybrid should be a number");
         assert!((v - 0.5).abs() < 1e-5, "hybrid should be 0.5, got {v}");
+    }
+}
+
+/// Issue #473: `LET hybrid = 0.5 SELECT docs.*, hybrid FROM docs`
+/// Tests the qualified-wildcard mixed SELECT case — the LET binding must
+/// appear in results both via wildcard expansion (payload) and explicit column.
+#[test]
+fn test_let_binding_in_qualified_wildcard_mixed_select() {
+    let (_dir, col) = setup_let_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+
+    let results = col
+        .execute_query_str(
+            "LET hybrid = 0.5 \
+             SELECT docs.*, hybrid FROM docs WHERE vector NEAR $v LIMIT 5",
+            &params,
+        )
+        .expect("LET qualified wildcard mixed SELECT query");
+
+    assert_eq!(results.len(), 5);
+    for r in &results {
+        let payload = r.point.payload.as_ref().expect("payload should exist");
+        let hybrid_val = payload.get("hybrid").expect("hybrid must appear in mixed SELECT");
+        let v = hybrid_val.as_f64().expect("hybrid should be f64");
+        assert!((v - 0.5).abs() < 1e-5, "hybrid should be 0.5, got {v}");
+        // Wildcard also expanded other payload fields.
+        assert!(payload.get("idx").is_some(), "idx (from wildcard) should be present");
     }
 }
 

@@ -427,4 +427,39 @@ mod tests {
         let obj = projected.as_object().unwrap();
         assert!(obj["title"].is_null());
     }
+
+    /// Issue #473: LET-injected values in the payload are visible through
+    /// `SelectColumns::Mixed` qualified wildcard expansion.
+    ///
+    /// The execution pipeline injects LET binding values into `point.payload`
+    /// before calling `project_results`. This test verifies that those injected
+    /// keys survive the `project_mixed` path (wildcard expansion + named column).
+    #[test]
+    fn test_project_mixed_wildcard_exposes_let_injected_payload_field() {
+        // Simulate post-LET-injection payload: original fields plus "hybrid" injected
+        // by inject_let_into_payloads in select_dispatch.rs.
+        let result = make_result(
+            3,
+            0.88,
+            serde_json::json!({"title": "Doc", "idx": 7, "hybrid": 0.5}),
+        );
+        let columns = SelectColumns::Mixed {
+            // SELECT docs.*, hybrid — qualified wildcard + explicit named column
+            columns: vec![Column::new("hybrid")],
+            aggregations: vec![],
+            similarity_scores: vec![],
+            qualified_wildcards: vec!["docs".to_string()],
+            window_functions: vec![],
+        };
+        let projected = project_single(&result, &columns);
+        let obj = projected.as_object().unwrap();
+
+        // Wildcard expansion must include original payload fields.
+        assert_eq!(obj["id"], 3);
+        assert_eq!(obj["title"], "Doc");
+        assert_eq!(obj["idx"], 7);
+        // LET-injected value must appear: both via wildcard expansion and explicit column.
+        let hybrid = obj["hybrid"].as_f64().expect("hybrid should be f64");
+        assert!((hybrid - 0.5).abs() < 1e-5, "hybrid should be 0.5, got {hybrid}");
+    }
 }
