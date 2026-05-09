@@ -493,11 +493,16 @@ fn test_let_binding_in_qualified_wildcard_mixed_select() {
     assert_eq!(results.len(), 5);
     for r in &results {
         let payload = r.point.payload.as_ref().expect("payload should exist");
-        let hybrid_val = payload.get("hybrid").expect("hybrid must appear in mixed SELECT");
+        let hybrid_val = payload
+            .get("hybrid")
+            .expect("hybrid must appear in mixed SELECT");
         let v = hybrid_val.as_f64().expect("hybrid should be f64");
         assert!((v - 0.5).abs() < 1e-5, "hybrid should be 0.5, got {v}");
         // Wildcard also expanded other payload fields.
-        assert!(payload.get("idx").is_some(), "idx (from wildcard) should be present");
+        assert!(
+            payload.get("idx").is_some(),
+            "idx (from wildcard) should be present"
+        );
     }
 }
 

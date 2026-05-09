@@ -460,6 +460,9 @@ mod tests {
         assert_eq!(obj["idx"], 7);
         // LET-injected value must appear: both via wildcard expansion and explicit column.
         let hybrid = obj["hybrid"].as_f64().expect("hybrid should be f64");
-        assert!((hybrid - 0.5).abs() < 1e-5, "hybrid should be 0.5, got {hybrid}");
+        assert!(
+            (hybrid - 0.5).abs() < 1e-5,
+            "hybrid should be 0.5, got {hybrid}"
+        );
     }
 }
