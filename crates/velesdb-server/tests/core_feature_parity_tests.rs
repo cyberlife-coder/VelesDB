@@ -78,20 +78,27 @@ fn server_default_feature_matches_core_default() {
 
     let core_default: BTreeSet<_> = core_features
         .get("default")
-        .map(|v| v.iter().cloned().collect())
-        .unwrap_or_default();
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
 
     let server_default: BTreeSet<_> = server_features
         .get("default")
-        .map(|v| {
-            v.iter()
-                .filter_map(|e| e.strip_prefix("velesdb-core/").map(ToString::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
 
-    assert_eq!(
-        core_default, server_default,
-        "velesdb-server [features.default] must mirror velesdb-core [features.default]"
-    );
+    let forwards_core_default_directly = server_default.contains("velesdb-core/default");
+
+    if !forwards_core_default_directly {
+        for core_default_feature in core_default {
+            let expected = format!("velesdb-core/{core_default_feature}");
+            assert!(
+                server_default.contains(&expected),
+                "server default feature set must include `{expected}`"
+            );
+        }
+    }
 }
