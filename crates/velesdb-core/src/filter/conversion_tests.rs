@@ -308,7 +308,10 @@ fn test_in_values_are_sorted_at_conversion() {
     };
     let result: Condition = crate::velesql::Condition::In(inc).into();
     if let Condition::In { values, .. } = result {
-        let strings: Vec<&str> = values.iter().filter_map(serde_json::Value::as_str).collect();
+        let strings: Vec<&str> = values
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
         assert_eq!(strings, vec!["apple", "mango", "zoo"], "must be sorted");
     } else {
         panic!("expected Condition::In");
@@ -353,7 +356,10 @@ fn test_in_integer_values_sorted_numerically() {
     };
     let result: Condition = crate::velesql::Condition::In(inc).into();
     if let Condition::In { values, .. } = result {
-        let nums: Vec<i64> = values.iter().filter_map(serde_json::Value::as_i64).collect();
+        let nums: Vec<i64> = values
+            .iter()
+            .filter_map(serde_json::Value::as_i64)
+            .collect();
         assert_eq!(nums, vec![10, 20, 30], "must be sorted numerically");
     } else {
         panic!("expected Condition::In");
@@ -419,8 +425,14 @@ fn test_in_at_threshold_boundary_linear_scan() {
         negated: false,
     };
     let cond: Condition = crate::velesql::Condition::In(inc).into();
-    assert!(cond.matches(&json!({"code": "v07"})), "v07 must be found at threshold");
-    assert!(!cond.matches(&json!({"code": "v99"})), "v99 must not match at threshold");
+    assert!(
+        cond.matches(&json!({"code": "v07"})),
+        "v07 must be found at threshold"
+    );
+    assert!(
+        !cond.matches(&json!({"code": "v99"})),
+        "v99 must not match at threshold"
+    );
 }
 
 /// GIVEN an IN condition with exactly 17 values (first binary-search case)
