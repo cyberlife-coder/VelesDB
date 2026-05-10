@@ -29,7 +29,8 @@ fn json_type_rank(v: &Value) -> u8 {
 /// Total ordering over `serde_json::Value` used for sorting IN-list values
 /// and binary-searching them at match time (issue #512).
 ///
-/// Within each type: Null = Null, Bool by value, Number by f64, String
+/// Within each type: Null = Null, Bool by value, Number by `f64::total_cmp`
+/// (NaN sorts after +∞, giving a deterministic total order), String
 /// lexicographic, Arrays and Objects by type rank only (equal among themselves,
 /// which is acceptable since they are not used in IN conditions in practice).
 pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
@@ -43,9 +44,7 @@ pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Number(a), Value::Number(b)) => a
             .as_f64()
             .zip(b.as_f64())
-            .map_or(Ordering::Equal, |(fa, fb)| {
-                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-            }),
+            .map_or(Ordering::Equal, |(fa, fb)| fa.total_cmp(&fb)),
         (Value::String(a), Value::String(b)) => a.cmp(b),
         _ => Ordering::Equal,
     }
@@ -55,15 +54,25 @@ pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
 ///
 /// Switches strategy based on list length:
 /// - `values.len() <= IN_BINARY_SEARCH_THRESHOLD`: O(n) linear scan via
-///   `values_equal` (handles f64 epsilon comparison correctly).
-/// - `values.len() > IN_BINARY_SEARCH_THRESHOLD`: O(log n) binary search
-///   via `json_value_cmp` (requires `values` to be pre-sorted, which
-///   `conversion.rs::convert_in` guarantees).
+///   `values_equal` (epsilon-tolerant float equality).
+/// - `values.len() > IN_BINARY_SEARCH_THRESHOLD`: O(log n) lower-bound via
+///   `json_value_cmp` to narrow position, then `values_equal` for the final
+///   check — preserving epsilon semantics on both paths and requiring
+///   `values` to be pre-sorted (`conversion.rs::convert_in` guarantees this).
 fn in_list_matches(field_val: &Value, values: &[Value]) -> bool {
     if values.len() > IN_BINARY_SEARCH_THRESHOLD {
-        values
-            .binary_search_by(|probe| json_value_cmp(probe, field_val))
-            .is_ok()
+        debug_assert!(
+            values
+                .windows(2)
+                .all(|w| json_value_cmp(&w[0], &w[1]) != std::cmp::Ordering::Greater),
+            "Condition::In values must be pre-sorted by json_value_cmp"
+        );
+        // Lower-bound: first position where probe is NOT less than field_val.
+        let pos = values
+            .partition_point(|probe| json_value_cmp(probe, field_val) == std::cmp::Ordering::Less);
+        // Check the candidate at pos and its predecessor for epsilon-equal floats.
+        let check = |i: usize| values.get(i).is_some_and(|v| values_equal(v, field_val));
+        check(pos) || pos > 0 && check(pos - 1)
     } else {
         values.iter().any(|val| values_equal(field_val, val))
     }

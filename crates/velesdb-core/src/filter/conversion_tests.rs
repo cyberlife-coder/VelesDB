@@ -404,6 +404,50 @@ fn test_in_large_list_binary_search_rejects_absent_value() {
     assert!(!cond.matches(&payload), "absent value must not match");
 }
 
+/// GIVEN an IN condition with exactly 16 values (linear-scan boundary)
+/// WHEN matching with a present and an absent value
+/// THEN linear scan returns the correct results
+#[test]
+fn test_in_at_threshold_boundary_linear_scan() {
+    use serde_json::json;
+    let values: Vec<VelesValue> = (0..16)
+        .map(|i| VelesValue::String(format!("v{i:02}")))
+        .collect();
+    let inc = InCondition {
+        column: "code".to_string(),
+        values,
+        negated: false,
+    };
+    let cond: Condition = crate::velesql::Condition::In(inc).into();
+    assert!(cond.matches(&json!({"code": "v07"})), "v07 must be found at threshold");
+    assert!(!cond.matches(&json!({"code": "v99"})), "v99 must not match at threshold");
+}
+
+/// GIVEN an IN condition with exactly 17 values (first binary-search case)
+/// WHEN matching with a present and an absent value
+/// THEN binary search returns the correct results
+#[test]
+fn test_in_just_above_threshold_binary_search() {
+    use serde_json::json;
+    let values: Vec<VelesValue> = (0..17)
+        .map(|i| VelesValue::String(format!("v{i:02}")))
+        .collect();
+    let inc = InCondition {
+        column: "code".to_string(),
+        values,
+        negated: false,
+    };
+    let cond: Condition = crate::velesql::Condition::In(inc).into();
+    assert!(
+        cond.matches(&json!({"code": "v07"})),
+        "v07 must be found just above threshold"
+    );
+    assert!(
+        !cond.matches(&json!({"code": "v99"})),
+        "v99 must not match just above threshold"
+    );
+}
+
 // ============================================================================
 // Issue #486: Value::UnsignedInteger filter conversion
 // ============================================================================
