@@ -345,7 +345,7 @@ version = "1.5"
 optional = true
 
 [dependencies.ndarray]
-version = "0.16"
+version = "0.17"
 default-features = false
 optional = true
 
