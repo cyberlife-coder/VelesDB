@@ -42,6 +42,7 @@ mod utils;
 mod velesql;
 mod velesql_helpers;
 
+pub use collection::search_options::SearchOptions;
 pub use collection::Collection;
 pub use database::Database;
 pub use fusion::FusionStrategy;
@@ -77,6 +78,9 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Collection>()?;
     m.add_class::<SearchResult>()?;
     m.add_class::<FusionStrategy>()?;
+
+    // SearchOptions builder (issue #717 v1.15 additive path)
+    m.add_class::<SearchOptions>()?;
 
     // Scroll iterator (issue #429)
     m.add_class::<collection::scroll::ScrollIterator>()?;
