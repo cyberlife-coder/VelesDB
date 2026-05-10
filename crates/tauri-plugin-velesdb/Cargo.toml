@@ -28,7 +28,7 @@ velesdb-core = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.14"
-toml = "0.8"
+toml = "0.9"
 
 [features]
 default = ["velesdb-core/default"]
