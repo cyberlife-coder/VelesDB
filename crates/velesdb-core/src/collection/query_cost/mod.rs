@@ -42,6 +42,7 @@ use std::fmt;
 pub mod calibration;
 pub mod cost_factors;
 pub mod cost_model;
+pub mod feedback;
 pub mod plan_generator;
 pub mod query_executor;
 
@@ -51,6 +52,7 @@ mod plan_generator_tests;
 mod tests;
 
 pub use cost_model::{CostEstimator, OperationCost, OperationCostFactors};
+pub use feedback::CboFeedbackLoop;
 pub use plan_generator::{CandidatePlan, PlanGenerator, QueryCharacteristics};
 pub use query_executor::{ExecutionContext, PlanCache, QueryOptimizer};
 
