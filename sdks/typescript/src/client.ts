@@ -12,6 +12,8 @@ import type {
   SearchResult,
   IVelesDBBackend,
   MultiQuerySearchOptions,
+  SparseSearchNamedOptions,
+  SparseVector,
   CreateIndexOptions,
   IndexInfo,
   AddEdgeRequest,
@@ -227,6 +229,11 @@ export class VelesDB {
   async multiQuerySearch(collection: string, vectors: Array<number[] | Float32Array>, options?: MultiQuerySearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
     return searchMethods.multiQuerySearch(this.backend, collection, vectors, options);
+  }
+
+  async sparseSearchNamed(collection: string, query: SparseVector, indexName: string, options?: SparseSearchNamedOptions): Promise<SearchResult[]> {
+    this.ensureInitialized();
+    return searchMethods.sparseSearchNamed(this.backend, collection, query, indexName, options);
   }
 
   async query(collection: string, queryString: string, params?: Record<string, unknown>, options?: QueryOptions): Promise<QueryApiResponse> {
