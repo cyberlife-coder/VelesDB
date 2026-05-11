@@ -106,6 +106,7 @@ import {
   wasmGetNodePayload,
   wasmUpsertNodePayload,
   wasmGraphSearch,
+  wasmSparseSearchNamed,
 } from './wasm-wave4-stubs';
 
 /**
@@ -437,6 +438,7 @@ export class WasmBackend implements IVelesDBBackend {
   async getNodePayload(c: string, id: number): Promise<import('../types').NodePayloadResponse> { this.ensureInitialized(); return wasmGetNodePayload(c, id); }
   async upsertNodePayload(c: string, id: number, p: Record<string, unknown>): Promise<void> { this.ensureInitialized(); return wasmUpsertNodePayload(c, id, p); }
   async graphSearch(c: string, r: import('../types').GraphSearchRequest): Promise<import('../types').GraphSearchResponse> { this.ensureInitialized(); return wasmGraphSearch(c, r); }
+  async sparseSearchNamed(c: string, q: import('../types').SparseVector, idx: string, o?: import('../types').SparseSearchNamedOptions): Promise<import('../types').SearchResult[]> { this.ensureInitialized(); return wasmSparseSearchNamed(c, q, idx, o); }
 }
 
 // Node-only init helpers (`isNodeRuntime`, `loadWasmBytesNode`) live in

@@ -15,6 +15,7 @@ import type {
   SearchQuality,
   SearchResult,
   MultiQuerySearchOptions,
+  SparseSearchNamedOptions,
   PqTrainOptions,
   ScrollRequest,
   ScrollResponse,
@@ -31,6 +32,7 @@ import type {
   CollectionSanityResponse,
   StreamUpsertResponse,
 } from '../types';
+import type { SparseVector } from '../types/core';
 import type { FilterInput } from '../filter';
 import { ValidationError } from '../types';
 import {
@@ -95,6 +97,24 @@ export function hybridSearch(
   requireVector(vector, 'Vector');
   requireNonEmptyString(textQuery, 'Text query');
   return backend.hybridSearch(collection, vector, textQuery, options);
+}
+
+/**
+ * Search a named sparse index (issue #380).
+ *
+ * Parity with `Collection::sparse_search_named()` in the Rust core.
+ * Optionally accepts a dense vector for hybrid sparse+dense named search.
+ */
+export function sparseSearchNamed(
+  backend: IVelesDBBackend,
+  collection: string,
+  query: SparseVector,
+  indexName: string,
+  options?: SparseSearchNamedOptions
+): Promise<SearchResult[]> {
+  requireNonEmptyString(collection, 'Collection name');
+  requireNonEmptyString(indexName, 'Index name');
+  return backend.sparseSearchNamed(collection, query, indexName, options);
 }
 
 /** Multi-query fusion search combining results from multiple query vectors. */

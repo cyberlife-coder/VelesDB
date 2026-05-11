@@ -20,8 +20,20 @@ import type {
   NodePayloadResponse,
   GraphSearchRequest,
   GraphSearchResponse,
+  SearchResult,
+  SparseSearchNamedOptions,
 } from '../types';
+import type { SparseVector } from '../types/core';
 import { wasmNotSupported } from './shared';
+
+export function wasmSparseSearchNamed(
+  _c: string,
+  _q: SparseVector,
+  _idx: string,
+  _o?: SparseSearchNamedOptions
+): Promise<SearchResult[]> {
+  return Promise.resolve(wasmNotSupported('Named sparse index search'));
+}
 
 export function wasmRebuildIndex(_c: string): Promise<RebuildIndexResponse> {
   return Promise.resolve(wasmNotSupported('Index rebuild'));
