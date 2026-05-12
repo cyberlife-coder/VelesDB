@@ -799,7 +799,7 @@ class Database:
     def create_collection(
         self,
         name: str,
-        dimension: int,
+        dimension: Optional[int] = None,
         metric: str = "cosine",
         storage_mode: str = "full",
         hnsw: Optional["HnswOptions"] = None,
@@ -809,7 +809,9 @@ class Database:
 
         Args:
             name: Collection name
-            dimension: Vector dimension
+            dimension: Vector dimension (e.g. 768 for BERT). Pass ``None``
+                (default) to auto-detect from the first ``upsert()`` call —
+                no need to know the dimension upfront.
             metric: Distance metric ("cosine", "euclidean", "dot", "hamming", "jaccard")
             storage_mode: "full", "sq8", "binary", "pq", or "rabitq"
             hnsw: Optional typed HNSW parameters (replaces the legacy
@@ -818,7 +820,8 @@ class Database:
                 runtime-only hook on the returned collection
 
         Returns:
-            The created Collection
+            The created Collection (or a deferred Collection when dimension=None
+            that materialises on the first upsert).
 
         Raises:
             RuntimeError: If collection already exists or creation fails
@@ -839,7 +842,7 @@ class Database:
     def get_or_create_collection(
         self,
         name: str,
-        dimension: int,
+        dimension: Optional[int] = None,
         metric: str = "cosine",
         storage_mode: str = "full",
         hnsw: Optional["HnswOptions"] = None,
@@ -849,7 +852,9 @@ class Database:
 
         Args:
             name: Collection name
-            dimension: Vector dimension (used only if creating)
+            dimension: Vector dimension. Pass ``None`` (default) to
+                auto-detect from the first ``upsert()`` call when creating,
+                or to skip dimension validation when opening an existing one.
             metric: Distance metric (used only if creating)
             storage_mode: Storage mode (used only if creating)
             hnsw: Optional typed HNSW parameters (used only if creating)

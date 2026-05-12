@@ -8,6 +8,7 @@ existing SDK consumers.
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any, Iterable
 
 from velesdb.velesdb import (  # type: ignore[attr-defined]
@@ -286,6 +287,122 @@ class Collection:
         return self._graph_store
 
 
+def _extract_dimension(points_or_id: Any, vector: Iterable[float] | None) -> int | None:
+    """Return the vector dimension detectable from upsert arguments, or None."""
+    if vector is not None:
+        try:
+            return len(list(vector))  # type: ignore[arg-type]
+        except TypeError:
+            return None
+    if isinstance(points_or_id, list) and points_or_id:
+        first = points_or_id[0]
+        if isinstance(first, dict):
+            vec = first.get("vector")
+            if vec is not None:
+                try:
+                    return len(vec)
+                except TypeError:
+                    pass
+    return None
+
+
+class _PendingCollection:
+    """Deferred vector collection whose dimension is auto-detected from the first upsert.
+
+    Returned by :meth:`Database.create_collection` when ``dimension=None``.
+    The underlying Rust collection is created lazily on the first call that
+    supplies a vector, ensuring the caller never needs to know the dimension
+    upfront.  All subsequent calls are transparently forwarded to the real
+    :class:`Collection`.
+
+    Thread-safe: a ``threading.Lock`` guards the one-time materialisation.
+    """
+
+    def __init__(
+        self,
+        db: "Database",
+        name: str,
+        metric: str,
+        storage_mode: str,
+        hnsw: Any,
+        auto_reindex: Any,
+    ) -> None:
+        self._db = db
+        self._name = name
+        self._metric = metric
+        self._storage_mode = storage_mode
+        self._hnsw = hnsw
+        self._auto_reindex = auto_reindex
+        self._collection: Collection | None = None
+        self._lock = threading.Lock()
+
+    def _materialize(self, dimension: int) -> "Collection":
+        with self._lock:
+            if self._collection is None:
+                self._collection = self._db._create_collection_with_dim(
+                    self._name,
+                    dimension,
+                    self._metric,
+                    self._storage_mode,
+                    self._hnsw,
+                    self._auto_reindex,
+                )
+        return self._collection  # type: ignore[return-value]
+
+    def upsert(
+        self,
+        points_or_id: Any,
+        vector: Iterable[float] | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> int:
+        # Materialise *before* consuming the iterator so the vector is intact.
+        dim = _extract_dimension(points_or_id, vector)
+        if dim is None:
+            raise ValueError(
+                f"Cannot auto-detect dimension for collection '{self._name}': "
+                "the first upsert must include at least one point with a 'vector' key, "
+                "or pass the 'vector' argument directly."
+            )
+        return self._materialize(dim).upsert(points_or_id, vector, payload)
+
+    def upsert_bulk_numpy(
+        self,
+        vectors: Any,
+        ids: Any,
+        payloads: Any = None,
+    ) -> int:
+        shape = getattr(vectors, "shape", None)
+        dim = shape[1] if shape and len(shape) >= 2 else None
+        if dim is None and vectors:
+            dim = len(vectors[0])
+        if not dim:
+            raise ValueError(
+                f"Cannot auto-detect dimension for collection '{self._name}' "
+                "from upsert_bulk_numpy: vectors array is empty or has no shape."
+            )
+        return self._materialize(dim).upsert_bulk_numpy(vectors, ids, payloads)
+
+    def upsert_from_dataframe(self, df: Any, **kwargs: Any) -> int:
+        vector_col = kwargs.get("vector_column", "vector")
+        try:
+            first_vec = df[vector_col].iloc[0]  # pandas
+        except AttributeError:
+            first_vec = df[vector_col][0]  # polars
+        dim = len(first_vec)
+        return self._materialize(dim).upsert_from_dataframe(df, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        if self._collection is not None:
+            return getattr(self._collection, name)
+        raise AttributeError(
+            f"Collection '{self._name}' has no dimension yet — "
+            f"call upsert() with a vector to auto-detect dimension before calling '{name}'."
+        )
+
+    def __repr__(self) -> str:
+        return f"Collection(name={self._name!r}, dimension=<pending>)"
+
+
 class Database:
     """Compatibility adapter around the Rust Database binding."""
 
@@ -302,17 +419,19 @@ class Database:
     def create_collection(
         self,
         name: str,
-        dimension: int,
+        dimension: int | None = None,
         metric: str = "cosine",
         storage_mode: str = "full",
         hnsw: HnswOptions | None = None,
         auto_reindex: AutoReindexOptions | None = None,
-    ) -> "Collection":
+    ) -> "Collection | _PendingCollection":
         """Create a new vector collection.
 
         Args:
             name: Collection name.
             dimension: Vector dimension (e.g. 768 for BERT embeddings).
+                Pass ``None`` (default) to auto-detect from the first
+                ``upsert()`` call — no need to know the dimension upfront.
             metric: Distance metric (default ``"cosine"``). One of ``"cosine"``,
                 ``"euclidean"``, ``"dot"``, ``"hamming"``, ``"jaccard"``.
             storage_mode: Storage mode (default ``"full"``). Accepted values
@@ -336,8 +455,27 @@ class Database:
                 hook (not persisted — re-attach after every ``Database(path)``).
 
         Returns:
-            Collection instance wrapping the underlying Rust collection.
+            :class:`Collection` when ``dimension`` is known, or a
+            :class:`_PendingCollection` that auto-detects dimension on the
+            first ``upsert()`` call when ``dimension=None``.
         """
+        if dimension is None:
+            return _PendingCollection(
+                self, name, metric, storage_mode, hnsw, auto_reindex
+            )
+        return self._create_collection_with_dim(
+            name, dimension, metric, storage_mode, hnsw, auto_reindex
+        )
+
+    def _create_collection_with_dim(
+        self,
+        name: str,
+        dimension: int,
+        metric: str,
+        storage_mode: str,
+        hnsw: HnswOptions | None,
+        auto_reindex: AutoReindexOptions | None,
+    ) -> "Collection":
         col = self._inner.create_collection(
             name, dimension, metric, storage_mode, hnsw, auto_reindex
         )
@@ -352,43 +490,52 @@ class Database:
     def get_or_create_collection(
         self,
         name: str,
-        dimension: int,
+        dimension: int | None = None,
         metric: str = "cosine",
         storage_mode: str = "full",
         hnsw: HnswOptions | None = None,
         auto_reindex: AutoReindexOptions | None = None,
-    ) -> "Collection":
+    ) -> "Collection | _PendingCollection":
         """Return an existing collection or create it if missing.
 
         When the collection already exists, its ``dimension`` and ``metric``
-        are validated against the requested parameters. A ``ValueError`` is
-        raised on mismatch. Other parameters (``storage_mode``, ``hnsw``,
-        ``auto_reindex``) are ignored for the lookup path.
+        are validated against the requested parameters (when ``dimension`` is
+        provided). A ``ValueError`` is raised on mismatch. Other parameters
+        (``storage_mode``, ``hnsw``, ``auto_reindex``) are ignored for the
+        lookup path.
+
+        Pass ``dimension=None`` to auto-detect from the first ``upsert()``
+        call when creating a new collection, or to skip dimension validation
+        when opening an existing one.
 
         Args and accepted storage modes are identical to :meth:`create_collection`.
 
         Returns:
-            Existing :class:`Collection` if found, otherwise a freshly created one.
+            Existing :class:`Collection` if found, otherwise a freshly created
+            one (or a :class:`_PendingCollection` when ``dimension=None`` and
+            the collection does not yet exist).
 
         Raises:
-            ValueError: If the existing collection has a different dimension or metric.
+            ValueError: If the existing collection has a different dimension
+                or metric (only when ``dimension`` is not ``None``).
         """
         existing = self.get_collection(name)
         if existing is not None:
-            existing_dim = existing._inner.dimension
-            existing_metric = existing._inner.metric
-            if existing_dim != dimension:
-                raise ValueError(
-                    f"Collection '{name}' exists with dimension {existing_dim}, "
-                    f"but requested dimension {dimension}. "
-                    f"Use a different name or matching parameters."
-                )
-            if _normalize_metric(existing_metric) != _normalize_metric(metric):
-                raise ValueError(
-                    f"Collection '{name}' exists with metric '{existing_metric}', "
-                    f"but requested metric '{metric}'. "
-                    f"Use a different name or matching parameters."
-                )
+            if dimension is not None:
+                existing_dim = existing._inner.dimension
+                existing_metric = existing._inner.metric
+                if existing_dim != dimension:
+                    raise ValueError(
+                        f"Collection '{name}' exists with dimension {existing_dim}, "
+                        f"but requested dimension {dimension}. "
+                        f"Use a different name or matching parameters."
+                    )
+                if _normalize_metric(existing_metric) != _normalize_metric(metric):
+                    raise ValueError(
+                        f"Collection '{name}' exists with metric '{existing_metric}', "
+                        f"but requested metric '{metric}'. "
+                        f"Use a different name or matching parameters."
+                    )
             return existing
         return self.create_collection(
             name,
