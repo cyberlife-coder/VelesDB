@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use super::error::AgentMemoryError;
 use super::memory_helpers;
-use super::reinforcement::{power_law_decay, FixedRate, ReinforcementContext, ReinforcementStrategy};
+use super::reinforcement::{
+    power_law_decay, FixedRate, ReinforcementContext, ReinforcementStrategy,
+};
 use super::ttl::MemoryTtl;
 
 struct ProcedureState {
@@ -256,7 +258,10 @@ impl ProceduralMemory {
             .filter_map(|r| {
                 let mut pm = extract_procedure_match(&r.point, r.score)?;
                 if let Some(exponent) = self.activation_decay_exponent {
-                    let last_used = r.point.payload.as_ref()
+                    let last_used = r
+                        .point
+                        .payload
+                        .as_ref()
                         .and_then(|p| p.get("last_used_at"))
                         .and_then(serde_json::Value::as_i64)
                         .unwrap_or(0);

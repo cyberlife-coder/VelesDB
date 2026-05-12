@@ -100,7 +100,10 @@ mod tests {
 
         let d0 = strategy.update_confidence(0.5, true, &ctx0) - 0.5;
         let d10 = strategy.update_confidence(0.5, true, &ctx10) - 0.5;
-        assert!(d10 < d0, "delta should decrease with practice: {d10} < {d0}");
+        assert!(
+            d10 < d0,
+            "delta should decrease with practice: {d10} < {d0}"
+        );
     }
 
     #[test]
@@ -154,7 +157,7 @@ mod tests {
     fn test_power_law_decay_monotone_decreasing() {
         let d = 0.5;
         let c = 1.0;
-        let r1d = power_law_decay(c, 86_400, d);    // 1 day
+        let r1d = power_law_decay(c, 86_400, d); // 1 day
         let r4d = power_law_decay(c, 4 * 86_400, d); // 4 days
         let r16d = power_law_decay(c, 16 * 86_400, d); // 16 days
         assert!(r1d >= r4d, "decay should increase with time");
