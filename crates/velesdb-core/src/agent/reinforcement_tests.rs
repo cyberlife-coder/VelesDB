@@ -89,6 +89,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn test_diminishing_returns_decreases_with_practice() {
         let strategy = DiminishingReturns::default();
         let mut ctx0 = ReinforcementContext::new();
@@ -154,6 +155,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn test_power_law_decay_monotone_decreasing() {
         let d = 0.5;
         let c = 1.0;
