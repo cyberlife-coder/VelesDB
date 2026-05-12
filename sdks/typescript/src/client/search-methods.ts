@@ -31,8 +31,8 @@ import type {
   ExplainResponse,
   CollectionSanityResponse,
   StreamUpsertResponse,
+  SparseVector,
 } from '../types';
-import type { SparseVector } from '../types/core';
 import type { FilterInput } from '../filter';
 import { ValidationError } from '../types';
 import {

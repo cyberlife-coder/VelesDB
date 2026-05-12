@@ -27,7 +27,11 @@
 
 // Reason: u64 bit-casting and f64/u64 conversions are intentional for
 // lock-free atomic EMA. Values are bounded by MAX_MS_PER_UNIT and safe.
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -74,7 +78,7 @@ impl CboFeedbackLoop {
             return;
         }
 
-        let estimated_cost = self.estimate_cost(dataset_size, ef_search);
+        let estimated_cost = Self::estimate_cost(dataset_size, ef_search);
         if estimated_cost <= 0.0 {
             return;
         }
@@ -131,7 +135,7 @@ impl CboFeedbackLoop {
     ///
     /// Uses the O(log n) × ef_search component only (no top-k, no filter),
     /// which is the dominant term for the feedback signal.
-    fn estimate_cost(&self, dataset_size: usize, ef_search: usize) -> f64 {
+    fn estimate_cost(dataset_size: usize, ef_search: usize) -> f64 {
         let n_factor = (dataset_size as f64 + 1.0).log2();
         let ef_factor = ef_search as f64 / 100.0;
         n_factor * ef_factor
@@ -191,7 +195,7 @@ mod tests {
         assert!(adjusted.is_some(), "should return Some after MIN_SAMPLES");
         let v = adjusted.unwrap();
         assert!(
-            v >= MIN_MS_PER_UNIT && v <= MAX_MS_PER_UNIT,
+            (MIN_MS_PER_UNIT..=MAX_MS_PER_UNIT).contains(&v),
             "adjusted value {v} out of bounds"
         );
     }

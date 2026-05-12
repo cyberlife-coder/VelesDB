@@ -22,8 +22,8 @@ import type {
   GraphSearchResponse,
   SearchResult,
   SparseSearchNamedOptions,
+  SparseVector,
 } from '../types';
-import type { SparseVector } from '../types/core';
 import { wasmNotSupported } from './shared';
 
 export function wasmSparseSearchNamed(
