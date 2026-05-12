@@ -30,6 +30,7 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     GraphSchema as PyGraphSchema,
     PyProceduralMemory,
     PySemanticMemory,
+    SearchOptions,
     SearchResult,
     StreamingConfig,
     TraversalResult,
@@ -189,6 +190,19 @@ class Collection:
         if sparse_index_name is not None:
             kwargs["sparse_index_name"] = sparse_index_name
         return self._inner.search(**kwargs)
+
+    def search_request(self, opts: SearchOptions) -> list[dict[str, Any]]:
+        """Search using a :py:class:`SearchOptions` builder (v1.15+).
+
+        Preferred over :py:meth:`search` for new code.
+
+        Args:
+            opts: Populated :py:class:`SearchOptions` instance.
+
+        Returns:
+            List of dicts with ``id``, ``score``, and ``payload`` keys.
+        """
+        return self._inner.search_request(opts)
 
     def batch_search(
         self,

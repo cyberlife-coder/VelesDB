@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyDeprecationWarning, PyValueError};
 use pyo3::prelude::*;
 use velesdb_core::FusionStrategy as CoreFusionStrategy;
 use velesdb_core::SearchResult;
@@ -14,6 +14,7 @@ use crate::collection_helpers::{
 use crate::utils::extract_vector;
 use crate::FusionStrategy;
 
+use super::search_options::SearchOptions;
 use super::Collection;
 
 /// Default fusion strategy when none is specified by the caller.
@@ -29,6 +30,10 @@ struct ParsedSearch {
 #[pymethods]
 impl Collection {
     /// Search for similar vectors (dense, sparse, or hybrid).
+    ///
+    /// .. deprecated:: 1.15.0
+    ///    Use :py:meth:`search_request` with a :py:class:`SearchOptions` object
+    ///    instead.  This method will be removed in v2.0.0.
     ///
     /// Supports three modes depending on which arguments are provided:
     /// - Dense only: `search(vector, top_k=10)` (backward compatible)
@@ -46,11 +51,10 @@ impl Collection {
     ///
     /// Returns:
     ///     List of dicts with id, score, and payload.
-    // Allowed: every parameter below is a Python keyword argument exposed via
-    // `#[pyo3(signature = ...)]`. PyO3 requires one positional Rust parameter
-    // per Python kwarg, so a `SearchOptions` struct would either break the
-    // public API or require a hand-written `FromPyObject` impl that adds more
-    // code than it saves. The signature is stable and documented.
+    // The too_many_arguments allow is preserved here because this legacy method
+    // retains its original 6-kwarg signature for backward compatibility until
+    // v2.0.  New callers should use search_request(SearchOptions) instead
+    // (issue #717 v1.15 path).
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None, sparse_index_name=None, include_vectors=false))]
     fn search(
@@ -63,13 +67,60 @@ impl Collection {
         sparse_index_name: Option<String>,
         include_vectors: bool,
     ) -> PyResult<Vec<PyObject>> {
+        PyErr::warn(
+            py,
+            &py.get_type::<PyDeprecationWarning>(),
+            c"Collection.search() is deprecated since v1.15. \
+              Use Collection.search_request(SearchOptions(...)) instead. \
+              Will be removed in v2.0.",
+            2,
+        )?;
+
+        let opts = SearchOptions::new(
+            vector,
+            sparse_vector,
+            top_k,
+            filter,
+            sparse_index_name,
+            include_vectors,
+        );
+        self.search_request(py, &opts)
+    }
+
+    /// Search for similar vectors using a :py:class:`SearchOptions` builder.
+    ///
+    /// This is the v1.15+ canonical search entry point.  It accepts all search
+    /// parameters as a single ``SearchOptions`` object, eliminating the
+    /// ``too_many_arguments`` lint suppression required by the legacy
+    /// ``search()`` method (issue #717).
+    ///
+    /// Args:
+    ///     opts: A :py:class:`SearchOptions` instance with all search parameters.
+    ///
+    /// Returns:
+    ///     List of dicts with ``id``, ``score``, and ``payload`` keys.
+    ///
+    /// Example:
+    ///     >>> opts = SearchOptions(vector=my_emb, top_k=20, filter={"lang": "en"})
+    ///     >>> results = collection.search_request(opts)
+    #[pyo3(signature = (opts))]
+    fn search_request(&self, py: Python<'_>, opts: &SearchOptions) -> PyResult<Vec<PyObject>> {
         // Phase 1: Parse Python args (GIL held — required for PyObject access)
-        let dense = vector.as_ref().map(|v| extract_vector(py, v)).transpose()?;
-        let sparse = sparse_vector
+        let dense = opts
+            .vector
+            .as_ref()
+            .map(|v| extract_vector(py, v))
+            .transpose()?;
+        let sparse = opts
+            .sparse_vector
             .as_ref()
             .map(|sv| parse_sparse_vector(py, sv))
             .transpose()?;
-        let filter_obj = parse_optional_filter(py, filter)?;
+        let filter_obj = parse_optional_filter(py, opts.filter.as_ref().map(|f| f.clone_ref(py)))?;
+
+        let top_k = opts.top_k;
+        let sparse_index_name = opts.sparse_index_name.clone();
+        let include_vectors = opts.include_vectors;
 
         // Phase 2: Release GIL during Rust computation
         let results = py.allow_threads(|| {
