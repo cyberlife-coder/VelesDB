@@ -437,6 +437,109 @@ impl ReinforcementStrategy for CompositeStrategy {
     }
 }
 
+/// Rescorla-Wagner diminishing-returns reinforcement strategy (ACT-R Phase 2).
+///
+/// Adjusts the confidence delta based on practice history, giving early
+/// reinforcements maximal impact while later ones taper off:
+///
+/// `Δ = base_delta / (1 + k × success_count)` on success,
+/// `Δ = base_delta / (1 + k × failure_count)` on failure.
+///
+/// Reference: Rescorla & Wagner (1972), "A Theory of Pavlovian Conditioning",
+/// in *Classical Conditioning II: Current Research and Theory*, pp. 64-99.
+#[derive(Debug, Clone)]
+pub struct DiminishingReturns {
+    /// Base confidence delta on success.
+    pub base_success_delta: f32,
+    /// Base confidence delta on failure (positive value; subtracted).
+    pub base_failure_delta: f32,
+    /// Diminishing-returns coefficient k (default 0.1).
+    /// Higher values compress the learning curve more aggressively.
+    pub k: f32,
+}
+
+impl Default for DiminishingReturns {
+    fn default() -> Self {
+        Self {
+            base_success_delta: 0.1,
+            base_failure_delta: 0.05,
+            k: 0.1,
+        }
+    }
+}
+
+impl DiminishingReturns {
+    /// Creates a new strategy with custom base deltas and coefficient.
+    #[must_use]
+    pub fn new(base_success_delta: f32, base_failure_delta: f32, k: f32) -> Self {
+        Self {
+            base_success_delta,
+            base_failure_delta,
+            k,
+        }
+    }
+
+    fn effective_delta(base: f32, count: f32, k: f32) -> f32 {
+        base / (1.0 + k * count)
+    }
+}
+
+impl ReinforcementStrategy for DiminishingReturns {
+    #[allow(clippy::cast_possible_truncation)]
+    // Reason: success/failure counts are bounded by practical usage limits (<10^6);
+    // f64→f32 truncation is operationally irrelevant for confidence heuristics.
+    fn update_confidence(
+        &self,
+        old_confidence: f32,
+        success: bool,
+        context: &ReinforcementContext,
+    ) -> f32 {
+        // Use success_count/failure_count from custom context if available,
+        // otherwise approximate from usage_count × recent_success_rate.
+        let (s_count, f_count) = if let (Some(&sc), Some(&fc)) = (
+            context.custom.get("success_count"),
+            context.custom.get("failure_count"),
+        ) {
+            (sc as f32, fc as f32)
+        } else {
+            let rate = context.recent_success_rate.unwrap_or(0.5);
+            let uses = context.usage_count as f32;
+            (uses * rate, uses * (1.0 - rate))
+        };
+
+        let delta = if success {
+            Self::effective_delta(self.base_success_delta, s_count, self.k)
+        } else {
+            -Self::effective_delta(self.base_failure_delta, f_count, self.k)
+        };
+
+        (old_confidence + delta).clamp(0.0, 1.0)
+    }
+
+    fn name(&self) -> &'static str {
+        "DiminishingReturns"
+    }
+}
+
+/// Applies ACT-R base-level power-law activation decay.
+///
+/// Returns `confidence × max(1, t_days)^(-d)` where:
+/// - `t_days` is time since last use in days
+/// - `d` is the decay exponent (ACT-R default ≈ 0.5, Anderson 1996)
+///
+/// Use this during recall (not reinforce) to dynamically reduce the
+/// *effective* confidence of long-unused procedures without modifying
+/// the stored value.
+///
+/// Reference: Anderson (1996), "ACT-R: A Theory of Higher Level Cognition",
+/// *Human-Computer Interaction* 12(4), 439-462.
+#[must_use]
+pub fn power_law_decay(confidence: f32, time_since_last_use_secs: u64, decay_exponent: f32) -> f32 {
+    let days = time_since_last_use_secs as f32 / 86_400.0;
+    let multiplier = days.max(1.0).powf(-decay_exponent);
+    (confidence * multiplier).clamp(0.0, 1.0)
+}
+
 /// Default strategy factory.
 ///
 /// Returns the default reinforcement strategy (`FixedRate`).

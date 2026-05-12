@@ -65,8 +65,8 @@ pub use memory::{
     SemanticMemory, DEFAULT_DIMENSION,
 };
 pub use reinforcement::{
-    AdaptiveLearningRate, CompositeStrategy, ContextualReinforcement, FixedRate,
-    ReinforcementContext, ReinforcementStrategy, TemporalDecay,
+    power_law_decay, AdaptiveLearningRate, CompositeStrategy, ContextualReinforcement,
+    DiminishingReturns, FixedRate, ReinforcementContext, ReinforcementStrategy, TemporalDecay,
 };
 pub use snapshot::{
     load_snapshot, load_snapshot_from_file, save_snapshot_to_file, MemoryState, SnapshotManager,
