@@ -121,6 +121,35 @@ describe('search', () => {
     expect(body.sparse_vector).toBeDefined();
   });
 
+  it('forwards sparseIndexName as sparse_index', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { results: [] },
+    });
+
+    await search(transport, 'docs', [0.1], {
+      sparseVector: { 1: 0.9 },
+      sparseIndexName: 'splade_v2',
+    });
+
+    const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
+      .calls[0]![2] as Record<string, unknown>;
+    expect(body.sparse_index).toBe('splade_v2');
+  });
+
+  it('omits sparse_index when sparseIndexName is not set', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { results: [] },
+    });
+
+    await search(transport, 'docs', [0.1]);
+
+    const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
+      .calls[0]![2] as Record<string, unknown>;
+    expect(body.sparse_index).toBeUndefined();
+  });
+
   it('returns [] when data.results is missing', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
@@ -362,6 +391,24 @@ describe('multiQuerySearch', () => {
     expect(body.hit_weight).toBe(0.5);
     expect(body.filter).toEqual({ a: 1 });
     expect(result).toEqual([{ id: 1, score: 1 }]);
+  });
+
+  it('forwards denseWeight and sparseWeight for relative_score fusion', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { results: [] },
+    });
+
+    await multiQuerySearch(transport, 'docs', [[0.1], [0.2]], {
+      fusion: 'relative_score',
+      fusionParams: { denseWeight: 0.7, sparseWeight: 0.3 },
+    });
+
+    const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
+      .calls[0]![2] as Record<string, unknown>;
+    expect(body.strategy).toBe('relative_score');
+    expect(body.dense_weight).toBe(0.7);
+    expect(body.sparse_weight).toBe(0.3);
   });
 
   it('returns [] when data.results is missing', async () => {
