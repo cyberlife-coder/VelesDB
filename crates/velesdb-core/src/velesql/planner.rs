@@ -59,7 +59,7 @@ pub struct QueryPlanner {
     /// Runtime statistics for adaptive planning.
     stats: QueryStats,
     /// CBO calibration feedback loop (issue #469).
-    pub(crate) cbo_feedback: crate::collection::query_cost::CboFeedbackLoop,
+    cbo_feedback: crate::collection::query_cost::CboFeedbackLoop,
     /// Selectivity threshold for GraphFirst strategy.
     graph_first_threshold: f64,
     /// Selectivity threshold for VectorFirst strategy.

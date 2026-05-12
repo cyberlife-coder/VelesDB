@@ -168,7 +168,7 @@ impl Collection {
                 .stmt
                 .with_clause
                 .as_ref()
-                .and_then(|w| w.get_ef_search())
+                .and_then(crate::velesql::WithClause::get_ef_search)
                 .unwrap_or(100);
             self.query_planner
                 .record_cbo_feedback(dataset_size, ef_search, actual_ms);
