@@ -497,4 +497,28 @@ impl VectorCollection {
     ) -> Result<Vec<SearchResult>> {
         self.inner.execute_query_str(sql, params)
     }
+
+    /// Reorders HNSW graph nodes in BFS traversal order for improved cache locality.
+    ///
+    /// After bulk insertion, nodes are stored in insertion order. Calling this
+    /// method once after loading vectors reorders both the vector buffer and all
+    /// adjacency lists so nodes traversed together during search are close in
+    /// memory, reducing L2/L3 cache misses by 15–30% on collections with ≥ 1 000
+    /// vectors (issue #377).
+    ///
+    /// Also builds a PDX block-columnar layout for SIMD-parallel distance
+    /// computation when the columnar search path is enabled.
+    ///
+    /// # When to call
+    ///
+    /// After [`Self::upsert`] bulk-loading for a new collection, before the
+    /// collection is opened for queries. No-op for collections with fewer than
+    /// 1 000 vectors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage reordering fails.
+    pub fn reorder_for_locality(&self) -> Result<()> {
+        self.inner.reorder_for_locality()
+    }
 }
