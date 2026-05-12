@@ -114,6 +114,47 @@ class FusionStrategy:
         ...
 
 
+class SearchOptions:
+    """Options for a vector search request (v1.15+).
+
+    Use with :py:meth:`Collection.search_request` as the canonical replacement
+    for the deprecated multi-kwarg :py:meth:`Collection.search` signature.
+
+    All fields are keyword-only.  At least one of ``vector`` or
+    ``sparse_vector`` must be set before calling ``search_request``.
+
+    Attributes:
+        vector: Dense query vector (list or numpy array).
+        sparse_vector: Sparse query as dict[int, float] or scipy sparse.
+        top_k: Max results to return (default: 10).
+        filter: Metadata pre-filter dict.
+        sparse_index_name: Named sparse index to query.
+        include_vectors: Include raw vectors in results (default: False).
+
+    Example:
+        >>> opts = SearchOptions(vector=my_embedding, top_k=20, filter={"lang": "en"})
+        >>> results = collection.search_request(opts)
+    """
+
+    vector: Optional[Union[List[float], "np.ndarray"]]
+    sparse_vector: Optional[Dict[int, float]]
+    top_k: int
+    filter: Optional[Dict[str, Any]]
+    sparse_index_name: Optional[str]
+    include_vectors: bool
+
+    def __init__(
+        self,
+        vector: Optional[Union[List[float], "np.ndarray"]] = None,
+        *,
+        sparse_vector: Optional[Dict[int, float]] = None,
+        top_k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+        sparse_index_name: Optional[str] = None,
+        include_vectors: bool = False,
+    ) -> None: ...
+
+
 class SearchResult:
     """A single search result from a vector search.
 
@@ -343,6 +384,10 @@ class Collection:
     ) -> List[Dict[str, Any]]:
         """Search for similar vectors (dense, sparse, or hybrid).
 
+        .. deprecated:: 1.15.0
+            Use :py:meth:`search_request` with a :py:class:`SearchOptions` object.
+            This method will be removed in v2.0.0.
+
         Modes:
         - Dense only: ``search(vector, top_k=10)``
         - Sparse only: ``search(sparse_vector={0: 1.5}, top_k=10)``
@@ -357,6 +402,24 @@ class Collection:
 
         Returns:
             List of dicts with id, score, and payload.
+        """
+        ...
+
+    def search_request(self, opts: "SearchOptions") -> List[Dict[str, Any]]:
+        """Search for similar vectors using a :py:class:`SearchOptions` builder (v1.15+).
+
+        Preferred over :py:meth:`search` for new code; avoids the long
+        parameter list warning and is the sole canonical entry point from v2.0.
+
+        Args:
+            opts: A populated :py:class:`SearchOptions` instance.
+
+        Returns:
+            List of dicts with ``id``, ``score``, and ``payload`` keys.
+
+        Example:
+            >>> opts = SearchOptions(vector=my_embedding, top_k=20)
+            >>> results = collection.search_request(opts)
         """
         ...
 

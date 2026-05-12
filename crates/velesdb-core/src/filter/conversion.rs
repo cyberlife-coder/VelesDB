@@ -1,5 +1,6 @@
 //! Conversion from `VelesQL` conditions to filter conditions.
 
+use super::matching::json_value_cmp;
 use super::Condition;
 use serde_json::Value;
 
@@ -69,10 +70,18 @@ fn convert_comparison(
 }
 
 /// Converts an IN condition, optionally negated via NOT.
+///
+/// Values are sorted by [`json_value_cmp`] so that large IN lists can use
+/// O(log n) binary search in `matching.rs::in_list_matches` instead of a
+/// linear scan (issue #512). Exact duplicates are removed after sorting to
+/// avoid redundant comparisons.
 fn convert_in(inc: crate::velesql::InCondition) -> Condition {
+    let mut values: Vec<Value> = inc.values.into_iter().map(velesql_value_to_json).collect();
+    values.sort_by(json_value_cmp);
+    values.dedup_by(|a, b| a == b);
     let in_cond = Condition::In {
         field: inc.column,
-        values: inc.values.into_iter().map(velesql_value_to_json).collect(),
+        values,
     };
     if inc.negated {
         Condition::Not {

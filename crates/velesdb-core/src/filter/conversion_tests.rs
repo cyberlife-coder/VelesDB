@@ -289,6 +289,178 @@ fn test_like_case_insensitive() {
 }
 
 // ============================================================================
+// Issue #512: IN list pre-sorting and deduplication
+// ============================================================================
+
+/// GIVEN an IN condition with unordered string values
+/// WHEN converted to Condition::In
+/// THEN values are sorted lexicographically (enables binary search in matching.rs)
+#[test]
+fn test_in_values_are_sorted_at_conversion() {
+    let inc = InCondition {
+        column: "tag".to_string(),
+        values: vec![
+            VelesValue::String("zoo".to_string()),
+            VelesValue::String("apple".to_string()),
+            VelesValue::String("mango".to_string()),
+        ],
+        negated: false,
+    };
+    let result: Condition = crate::velesql::Condition::In(inc).into();
+    if let Condition::In { values, .. } = result {
+        let strings: Vec<&str> = values
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        assert_eq!(strings, vec!["apple", "mango", "zoo"], "must be sorted");
+    } else {
+        panic!("expected Condition::In");
+    }
+}
+
+/// GIVEN an IN condition with duplicate string values
+/// WHEN converted to Condition::In
+/// THEN exact duplicates are removed
+#[test]
+fn test_in_values_are_deduplicated_at_conversion() {
+    let inc = InCondition {
+        column: "cat".to_string(),
+        values: vec![
+            VelesValue::String("a".to_string()),
+            VelesValue::String("b".to_string()),
+            VelesValue::String("a".to_string()),
+        ],
+        negated: false,
+    };
+    let result: Condition = crate::velesql::Condition::In(inc).into();
+    if let Condition::In { values, .. } = result {
+        assert_eq!(values.len(), 2, "duplicate 'a' must be removed");
+    } else {
+        panic!("expected Condition::In");
+    }
+}
+
+/// GIVEN an IN condition with integer values out of order
+/// WHEN converted to Condition::In
+/// THEN values are sorted numerically
+#[test]
+fn test_in_integer_values_sorted_numerically() {
+    let inc = InCondition {
+        column: "id".to_string(),
+        values: vec![
+            VelesValue::Integer(30),
+            VelesValue::Integer(10),
+            VelesValue::Integer(20),
+        ],
+        negated: false,
+    };
+    let result: Condition = crate::velesql::Condition::In(inc).into();
+    if let Condition::In { values, .. } = result {
+        let nums: Vec<i64> = values
+            .iter()
+            .filter_map(serde_json::Value::as_i64)
+            .collect();
+        assert_eq!(nums, vec![10, 20, 30], "must be sorted numerically");
+    } else {
+        panic!("expected Condition::In");
+    }
+}
+
+/// GIVEN an IN condition with > 16 values (binary search threshold)
+/// WHEN matching against a payload containing one of the values
+/// THEN the match succeeds (binary search correctness)
+#[test]
+fn test_in_large_list_binary_search_finds_value() {
+    use serde_json::json;
+
+    // Build IN list with 20 string values (> IN_BINARY_SEARCH_THRESHOLD=16)
+    let values: Vec<VelesValue> = (0..20)
+        .map(|i| VelesValue::String(format!("val_{i:02}")))
+        .collect();
+    let inc = InCondition {
+        column: "code".to_string(),
+        values,
+        negated: false,
+    };
+    let cond: Condition = crate::velesql::Condition::In(inc).into();
+    let payload = json!({"code": "val_07"});
+    assert!(
+        cond.matches(&payload),
+        "val_07 must be found via binary search"
+    );
+}
+
+/// GIVEN an IN condition with > 16 values
+/// WHEN matching against a payload with a value NOT in the list
+/// THEN the match fails (binary search correctness for non-members)
+#[test]
+fn test_in_large_list_binary_search_rejects_absent_value() {
+    use serde_json::json;
+
+    let values: Vec<VelesValue> = (0..20)
+        .map(|i| VelesValue::String(format!("val_{i:02}")))
+        .collect();
+    let inc = InCondition {
+        column: "code".to_string(),
+        values,
+        negated: false,
+    };
+    let cond: Condition = crate::velesql::Condition::In(inc).into();
+    let payload = json!({"code": "absent"});
+    assert!(!cond.matches(&payload), "absent value must not match");
+}
+
+/// GIVEN an IN condition with exactly 16 values (linear-scan boundary)
+/// WHEN matching with a present and an absent value
+/// THEN linear scan returns the correct results
+#[test]
+fn test_in_at_threshold_boundary_linear_scan() {
+    use serde_json::json;
+    let values: Vec<VelesValue> = (0..16)
+        .map(|i| VelesValue::String(format!("v{i:02}")))
+        .collect();
+    let inc = InCondition {
+        column: "code".to_string(),
+        values,
+        negated: false,
+    };
+    let cond: Condition = crate::velesql::Condition::In(inc).into();
+    assert!(
+        cond.matches(&json!({"code": "v07"})),
+        "v07 must be found at threshold"
+    );
+    assert!(
+        !cond.matches(&json!({"code": "v99"})),
+        "v99 must not match at threshold"
+    );
+}
+
+/// GIVEN an IN condition with exactly 17 values (first binary-search case)
+/// WHEN matching with a present and an absent value
+/// THEN binary search returns the correct results
+#[test]
+fn test_in_just_above_threshold_binary_search() {
+    use serde_json::json;
+    let values: Vec<VelesValue> = (0..17)
+        .map(|i| VelesValue::String(format!("v{i:02}")))
+        .collect();
+    let inc = InCondition {
+        column: "code".to_string(),
+        values,
+        negated: false,
+    };
+    let cond: Condition = crate::velesql::Condition::In(inc).into();
+    assert!(
+        cond.matches(&json!({"code": "v07"})),
+        "v07 must be found just above threshold"
+    );
+    assert!(
+        !cond.matches(&json!({"code": "v99"})),
+        "v99 must not match just above threshold"
+    );
+}
+
+// ============================================================================
 // Issue #486: Value::UnsignedInteger filter conversion
 // ============================================================================
 
