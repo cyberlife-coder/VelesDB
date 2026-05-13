@@ -162,7 +162,8 @@ impl CboFeedbackLoop {
                         * u128::from(ALPHA_DENOMINATOR - ALPHA_NUMERATOR);
                 // Result ≤ max(new_scaled, old_scaled) ≤ 50_000_000 — fits in u64.
                 #[allow(clippy::cast_possible_truncation)]
-                (num / u128::from(ALPHA_DENOMINATOR)) as u64
+                let result = (num / u128::from(ALPHA_DENOMINATOR)) as u64;
+                result
             };
             if self
                 .ema_scaled
