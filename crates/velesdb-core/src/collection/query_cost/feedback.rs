@@ -25,14 +25,6 @@
 //! compare-and-swap loop identical to the one in
 //! [`crate::velesql::query_stats`].
 
-// Reason: u64 bit-casting and f64/u64 conversions are intentional for
-// lock-free atomic EMA. Values are bounded by MAX_MS_PER_UNIT and safe.
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
-
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Minimum observations before the EMA value influences the planner.
@@ -124,7 +116,11 @@ impl CboFeedbackLoop {
     /// Returns the current EMA value (for monitoring/EXPLAIN).
     #[must_use]
     pub fn current_ema(&self) -> f64 {
-        self.ema_scaled.load(Ordering::Relaxed) as f64 / SCALE
+        // u64 → f64: values are bounded by MAX_MS_PER_UNIT × SCALE = 50_000_000,
+        // well within f64's exact integer range (2^53 ≈ 9 × 10^15).
+        #[allow(clippy::cast_precision_loss)]
+        let scaled = self.ema_scaled.load(Ordering::Relaxed) as f64;
+        scaled / SCALE
     }
 
     // -------------------------------------------------------------------------
@@ -136,22 +132,37 @@ impl CboFeedbackLoop {
     /// Uses the O(log n) × ef_search component only (no top-k, no filter),
     /// which is the dominant term for the feedback signal.
     fn estimate_cost(dataset_size: usize, ef_search: usize) -> f64 {
+        // usize → f64: realistic collection sizes fit within f64's exact integer range.
+        #[allow(clippy::cast_precision_loss)]
         let n_factor = (dataset_size as f64 + 1.0).log2();
+        #[allow(clippy::cast_precision_loss)]
         let ef_factor = ef_search as f64 / 100.0;
         n_factor * ef_factor
     }
 
-    /// CAS-loop EMA update with α=ALPHA_NUMERATOR/ALPHA_DENOMINATOR.
+    /// CAS-loop EMA update with α = `ALPHA_NUMERATOR` / `ALPHA_DENOMINATOR`.
     fn ema_update(&self, new_value: f64) {
-        let new_scaled = (new_value * SCALE) as u64;
+        // Clamp to [0, MAX_MS_PER_UNIT] before scaling so the cast is always safe:
+        // after clamp, max value = MAX_MS_PER_UNIT × SCALE = 50_000_000 << u64::MAX.
+        let clamped = new_value.clamp(0.0, MAX_MS_PER_UNIT);
+        // f64 → u64: safe — value is clamped, finite, and non-negative.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let new_scaled = (clamped * SCALE) as u64;
+
         loop {
             let old_scaled = self.ema_scaled.load(Ordering::Relaxed);
             let new_ema_scaled = if old_scaled == 0 {
                 new_scaled
             } else {
-                // EMA: new = α × new + (1-α) × old
-                (new_scaled * ALPHA_NUMERATOR + old_scaled * (ALPHA_DENOMINATOR - ALPHA_NUMERATOR))
-                    / ALPHA_DENOMINATOR
+                // EMA: result = α × new + (1−α) × old.
+                // Use u128 intermediates to make overflow impossibility self-evident:
+                // max product = 50_000_000 × 95 = 4.75 × 10^9 << u128::MAX.
+                let num = u128::from(new_scaled) * u128::from(ALPHA_NUMERATOR)
+                    + u128::from(old_scaled)
+                        * u128::from(ALPHA_DENOMINATOR - ALPHA_NUMERATOR);
+                // Result ≤ max(new_scaled, old_scaled) ≤ 50_000_000 — fits in u64.
+                #[allow(clippy::cast_possible_truncation)]
+                (num / u128::from(ALPHA_DENOMINATOR)) as u64
             };
             if self
                 .ema_scaled
@@ -268,5 +279,21 @@ mod tests {
         }
         let v = fb.adjusted_ms_per_cost_unit().unwrap();
         assert!(v >= MIN_MS_PER_UNIT, "should be clamped to minimum");
+    }
+
+    #[test]
+    fn test_large_value_clamped_before_cast() {
+        let fb = CboFeedbackLoop::new();
+        // A ratio much larger than MAX_MS_PER_UNIT must be clamped before the
+        // u64 cast so we never produce an overflowed or truncated scaled value.
+        for _ in 0..MIN_SAMPLES {
+            fb.record(1, 1, 1e10);
+        }
+        if let Some(v) = fb.adjusted_ms_per_cost_unit() {
+            assert!(
+                v <= MAX_MS_PER_UNIT,
+                "value must be clamped to MAX_MS_PER_UNIT, got {v}"
+            );
+        }
     }
 }
