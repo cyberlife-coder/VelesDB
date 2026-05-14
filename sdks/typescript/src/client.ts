@@ -231,6 +231,12 @@ export class VelesDB {
     return searchMethods.multiQuerySearch(this.backend, collection, vectors, options);
   }
 
+  /**
+   * Pure sparse search against a named sparse index.
+   *
+   * @see {@link SparseSearchNamedOptions} for the full pure-sparse vs hybrid comparison.
+   * @see {@link VelesDB.search} for dense + sparse hybrid against a named index.
+   */
   async sparseSearchNamed(collection: string, query: SparseVector, indexName: string, options?: SparseSearchNamedOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
     return searchMethods.sparseSearchNamed(this.backend, collection, query, indexName, options);
