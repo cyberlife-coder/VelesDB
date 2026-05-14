@@ -525,7 +525,7 @@ Each `.vamm` file contains:
 
 ## Reinforcement Strategies
 
-Procedural memory confidence scores can be updated with 4 strategies:
+Procedural memory confidence scores can be updated with one of six strategies:
 
 | Strategy | Behavior | Best For |
 |----------|----------|----------|
@@ -533,6 +533,8 @@ Procedural memory confidence scores can be updated with 4 strategies:
 | **AdaptiveLearningRate** | Learning rate decays with usage | Stable procedures |
 | **TemporalDecay** | Confidence decays over time (30-day half-life) | Perishable knowledge |
 | **ContextualReinforcement** | Mix: 30% success rate + 30% usage + 40% recency | Sophisticated evaluation |
+| **DiminishingReturns** | `delta = base / (1 + k · count)` — early reinforcements weigh more than later ones (Rescorla-Wagner 1972; ACT-R Phase 2) | Fast convergence on novel procedures |
+| **CompositeStrategy** | Weighted average of any combination of the strategies above | Tuning a custom blend |
 
 The default strategy is `FixedRate`. Advanced strategies are available via the Rust API:
 
@@ -542,6 +544,39 @@ use velesdb_core::agent::reinforcement::AdaptiveLearningRate;
 let strategy = AdaptiveLearningRate::new(0.1, 10); // lr=0.1, half-life=10 uses
 memory.procedural().reinforce_with_strategy(proc_id, true, &strategy)?;
 ```
+
+```rust
+use velesdb_core::agent::reinforcement::{CompositeStrategy, FixedRate, TemporalDecay};
+
+// 70% fixed-rate + 30% temporal decay
+let strategy = CompositeStrategy::new()
+    .add_strategy(FixedRate::default(), 0.7)
+    .add_strategy(TemporalDecay::new(30), 0.3);
+memory.procedural().reinforce_with_strategy(proc_id, true, &strategy)?;
+```
+
+### Apply activation decay at recall time
+
+Procedural memory also supports **base-level activation decay** (ACT-R
+Phase 1, Anderson 1996): the confidence returned by `recall()` is
+multiplied by `max(1, t_days)^(-d)` where `t_days` is days since the
+procedure was last reinforced and `d` is the decay exponent (≈ 0.5 in
+ACT-R). The stored confidence is **not** modified — decay is a
+read-side modulation only.
+
+```rust
+use velesdb_core::agent::ProceduralMemory;
+
+let procedural = ProceduralMemory::new_from_db(db, 384)?
+    .with_activation_decay(0.5);
+let matches = procedural.recall(&query_emb, 5, 0.3)?;
+// matches[i].confidence reflects passive decay; storage is untouched.
+```
+
+Decay is opt-in (`None` by default), so existing data and behaviour are
+backward-compatible. The knob is Rust-only today; the Python and
+TypeScript bindings expose the rest of the procedural API but not the
+decay setting yet.
 
 ---
 

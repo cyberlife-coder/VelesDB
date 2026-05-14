@@ -8,7 +8,20 @@
 import type { FilterInput } from '../filter';
 import type { SearchQuality, SparseVector } from './core';
 
-/** Options for named sparse index search (issue #380). */
+/**
+ * Options for `db.sparseSearchNamed()` — **pure sparse** query against a
+ * named sparse index (issue #380).
+ *
+ * Use this when you have only a sparse vector and want to query a specific
+ * named sparse index directly. The query carries no dense component.
+ *
+ * For **dense + sparse hybrid** against a named index, use
+ * `db.search(..., { sparseVector, sparseIndexName })` instead
+ * (see {@link SearchOptions.sparseIndexName}).
+ *
+ * **Backend support:** REST only. The WASM backend has no concept of named
+ * sparse indexes; this method throws `wasmNotSupported` on WASM.
+ */
 export interface SparseSearchNamedOptions {
   /** Number of results to return (default: 10) */
   k?: number;
@@ -31,8 +44,15 @@ export interface SearchOptions {
   /** Optional sparse vector for hybrid sparse+dense search */
   sparseVector?: SparseVector;
   /**
-   * Named sparse index to query (when the collection has multiple sparse indexes).
-   * When omitted the default sparse index is used.
+   * Named sparse index to combine with the dense query for **hybrid** search
+   * (when the collection has multiple sparse indexes). When omitted, the
+   * default sparse index is used.
+   *
+   * For a **pure sparse** query against a named index (no dense vector),
+   * call `db.sparseSearchNamed()` instead — see {@link SparseSearchNamedOptions}.
+   *
+   * **Backend support:** REST only. The WASM backend silently ignores this
+   * field and uses the collection's single sparse index regardless.
    */
   sparseIndexName?: string;
   /** Search quality preset (default: 'balanced'). */

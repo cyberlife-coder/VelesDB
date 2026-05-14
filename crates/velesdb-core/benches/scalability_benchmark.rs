@@ -76,7 +76,11 @@ fn get_memory_usage() -> usize {
         fn GetCurrentProcess() -> isize;
     }
 
-    // SAFETY: FFI call to Windows GetProcessMemoryInfo — struct is zeroed and cb is set correctly.
+    // SAFETY: FFI call to Windows GetProcessMemoryInfo.
+    // - ProcessMemoryCounters has no Drop and is valid byte-zero.
+    // - cb is set to the correct size before the call (Win32 contract).
+    // - GetCurrentProcess returns a pseudo-handle requiring no release.
+    // Reason: benchmark needs current process RSS.
     unsafe {
         let mut pmc = MaybeUninit::<ProcessMemoryCounters>::zeroed().assume_init();
         pmc.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
@@ -124,6 +128,11 @@ fn get_memory_usage() -> usize {
         fn getrusage(who: i32, usage: *mut Rusage) -> i32;
     }
 
+    // SAFETY: FFI call to libc `getrusage(2)`.
+    // - Rusage matches the macOS C ABI layout above.
+    // - usage is fully zeroed via MaybeUninit::zeroed before the call.
+    // - who=0 (RUSAGE_SELF) is a valid value per the man page.
+    // Reason: benchmark needs peak RSS.
     unsafe {
         let mut usage = MaybeUninit::<Rusage>::zeroed().assume_init();
         if getrusage(0, &mut usage) == 0 {

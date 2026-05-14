@@ -188,6 +188,9 @@ pub(super) fn gather_unvisited_neighbors<'a>(
                 vectors.len()
             );
             // SAFETY: neighbor < vectors.len() — verified by debug_assert above.
+            // - neighbor was just inserted into `visited` after originating from
+            //   a layer neighbor list, so it is a valid NodeId already in storage.
+            // Reason: per-iteration distance batch accumulation.
             let vec = unsafe { vectors.get_unchecked(neighbor) };
             batch.push((neighbor, vec));
         }
