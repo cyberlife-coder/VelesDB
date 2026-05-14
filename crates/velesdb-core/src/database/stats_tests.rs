@@ -116,6 +116,34 @@ fn get_collection_stats_loads_from_disk() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// analyze triggers BFS reorder (issue #377)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `analyze_collection` must complete without error on a collection that
+/// exceeds the BFS reorder threshold (1 000 vectors). Verifies that the
+/// reorder_for_locality() call wired into the analyze path doesn't
+/// introduce a failure mode for large collections.
+#[test]
+#[cfg(feature = "persistence")]
+fn analyze_collection_reorders_large_collection() {
+    let (_dir, db) = temp_database();
+    // Use 1 100 vectors so we exceed the REORDER_THRESHOLD of 1 000.
+    setup_collection(&db, "reorder_test", 4, 1_100);
+
+    // Should succeed and return valid stats — reorder is a no-error side effect.
+    let stats = db
+        .analyze_collection("reorder_test")
+        .expect("analyze should succeed after reorder");
+    assert_eq!(stats.total_points, 1_100);
+
+    // A second analyze should also succeed (reorder is idempotent).
+    let stats2 = db
+        .analyze_collection("reorder_test")
+        .expect("second analyze should also succeed");
+    assert_eq!(stats2.total_points, 1_100);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Task 8.1: Histogram persistence in collection.stats.json
 // ─────────────────────────────────────────────────────────────────────────────
 
