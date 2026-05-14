@@ -157,6 +157,28 @@ pub struct FusionInfo {
     pub weights: Option<String>,
 }
 
+/// Runtime-observed CBO calibration from the EMA feedback loop (issue #469).
+///
+/// Populated in EXPLAIN ANALYZE output once the feedback loop has seen at
+/// least `MIN_SAMPLES` (10) vector queries on this collection.  Absent for
+/// plain EXPLAIN (no execution) and for collections that have not yet been
+/// queried enough to warm the EMA.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeedbackCalibration {
+    /// EMA-adjusted milliseconds per cost unit observed at runtime.
+    ///
+    /// Compares against the static default of `0.1 ms/unit` in
+    /// `CostCalibration::default()`.  Values consistently below `0.1`
+    /// indicate the cost model is over-estimating latency; values above
+    /// indicate under-estimation.
+    pub ms_per_cost_unit: f64,
+    /// Number of vector query samples that produced this estimate.
+    ///
+    /// Low counts (< ~50) mean the EMA is still in warm-up; higher counts
+    /// indicate a stable, deployment-specific calibration.
+    pub sample_count: u64,
+}
+
 /// EXPLAIN output with optional ANALYZE stats and cost model metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExplainOutput {
@@ -176,6 +198,12 @@ pub struct ExplainOutput {
     /// `None` when EXPLAIN is called without ANALYZE.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibration_source: Option<String>,
+    /// Runtime CBO calibration from the EMA feedback loop (issue #469 Phase 2).
+    ///
+    /// Present only in EXPLAIN ANALYZE output once the feedback loop is warm
+    /// (≥ 10 vector query samples on this collection).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback_calibration: Option<FeedbackCalibration>,
 }
 
 impl ExplainOutput {
@@ -188,6 +216,7 @@ impl ExplainOutput {
             node_stats: vec![],
             cost_factors: None,
             calibration_source: None,
+            feedback_calibration: None,
         }
     }
 
@@ -204,7 +233,23 @@ impl ExplainOutput {
             node_stats,
             cost_factors: None,
             calibration_source: None,
+            feedback_calibration: None,
         }
+    }
+
+    /// Attaches CBO feedback calibration (issue #469 Phase 2).
+    ///
+    /// Populates `feedback_calibration` with the EMA-adjusted
+    /// `ms_per_cost_unit` and the sample count from the feedback loop.
+    /// Call this after `with_stats` when the collection's `QueryPlanner`
+    /// has accumulated enough samples for a stable EMA.
+    #[must_use]
+    pub fn with_feedback_calibration(mut self, ms_per_cost_unit: f64, sample_count: u64) -> Self {
+        self.feedback_calibration = Some(FeedbackCalibration {
+            ms_per_cost_unit,
+            sample_count,
+        });
+        self
     }
 
     /// Populates cost factors and calibration source from collection stats.

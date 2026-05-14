@@ -312,6 +312,15 @@ impl Collection {
         };
 
         let node_stats = build_leaf_node_stats(&plan.root, actual_rows, actual_time_ms);
-        Ok(ExplainOutput::with_stats(plan, stats, node_stats))
+        let mut output = ExplainOutput::with_stats(plan, stats, node_stats);
+
+        // Issue #469 Phase 2: attach EMA-calibrated ms_per_cost_unit if the
+        // feedback loop is warm (≥ MIN_SAMPLES observations on this collection).
+        if let Some(ms_per_unit) = self.query_planner.adjusted_ms_per_cost_unit() {
+            output = output
+                .with_feedback_calibration(ms_per_unit, self.query_planner.cbo_sample_count());
+        }
+
+        Ok(output)
     }
 }
