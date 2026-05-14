@@ -1,29 +1,88 @@
-# VelesDB-Core - Cargo Make Tasks
+# VelesDB — Cargo Make Tasks
 # Usage: cargo make <task>
+#
+# Source of truth for the invocations below: CONTRIBUTING.md §"Pre-Push Validation"
+# and QUALITY_BAR.md §"Pre-release final checklist". Keep aligned with those files
+# if either is changed.
 
-[tasks.check]
-description = "Run all checks"
-dependencies = ["fmt-check", "clippy", "test"]
+[env]
+# Shared across clippy + test; keep one definition to prevent drift.
+WORKSPACE_FEATURES = "persistence,gpu,update-check"
+# velesdb-python has special build constraints — exclude from workspace-level
+# clippy/test (mirrors CONTRIBUTING.md §"Pre-Push Validation").
+EXCLUDED_CRATE = "velesdb-python"
+# Features used by the velesdb-core-only iteration tasks.
+CORE_FEATURES = "persistence"
 
 [tasks.fmt]
+description = "Format the workspace"
 command = "cargo"
 args = ["fmt", "--all"]
 
 [tasks.fmt-check]
+description = "Check formatting (CI-equivalent)"
 command = "cargo"
 args = ["fmt", "--all", "--", "--check"]
 
 [tasks.clippy]
+description = "Strict workspace lint — mirrors CI (pedantic, -D warnings, velesdb-python excluded)"
 command = "cargo"
-args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
+args = [
+    "clippy",
+    "--workspace",
+    "--all-targets",
+    "--features", "${WORKSPACE_FEATURES}",
+    "--exclude", "${EXCLUDED_CRATE}",
+    "--",
+    "-D", "warnings",
+    "-D", "clippy::pedantic",
+]
 
 [tasks.test]
+description = "Workspace tests, single-threaded (file-system isolation — MANDATORY per CONTRIBUTING.md)"
 command = "cargo"
-args = ["test", "--all-features"]
+args = [
+    "test",
+    "--workspace",
+    "--features", "${WORKSPACE_FEATURES}",
+    "--exclude", "${EXCLUDED_CRATE}",
+    "--",
+    "--test-threads=1",
+]
+
+[tasks.test-core]
+description = "velesdb-core tests only, single-threaded (fast iteration loop)"
+command = "cargo"
+args = ["test", "-p", "velesdb-core", "--features", "${CORE_FEATURES}", "--", "--test-threads=1"]
+
+[tasks.test-recall]
+description = "Recall@10 gate (Gate 1 of QUALITY_BAR.md) — required if search path was touched"
+command = "cargo"
+args = ["test", "-p", "velesdb-core", "--features", "${CORE_FEATURES}", "test_recall", "--", "--test-threads=1"]
+
+[tasks.feature-gates-default]
+description = "Sanity: workspace builds with --no-default-features"
+command = "cargo"
+args = ["check", "--no-default-features"]
+
+[tasks.feature-gates-wasm]
+description = "Sanity: velesdb-wasm builds for wasm32-unknown-unknown with --no-default-features"
+command = "cargo"
+args = ["check", "-p", "velesdb-wasm", "--no-default-features", "--target", "wasm32-unknown-unknown"]
+
+[tasks.feature-gates]
+description = "Feature-gate sanity: no-default-features build + wasm32 target check"
+dependencies = ["feature-gates-default", "feature-gates-wasm"]
 
 [tasks.audit]
+description = "RUSTSEC advisory check"
 command = "cargo"
 args = ["audit"]
 
+[tasks.check]
+description = "Local validation: fmt-check + clippy + test (mirrors CI strictness)"
+dependencies = ["fmt-check", "clippy", "test"]
+
 [tasks.ci]
-dependencies = ["fmt-check", "clippy", "test", "audit"]
+description = "Full local-CI gate (mirrors GitHub Actions pre-merge)"
+dependencies = ["fmt-check", "clippy", "test", "feature-gates", "audit"]
