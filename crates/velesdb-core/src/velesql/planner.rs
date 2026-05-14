@@ -224,6 +224,14 @@ impl QueryPlanner {
         self.cbo_feedback.adjusted_ms_per_cost_unit()
     }
 
+    /// Returns the total number of CBO feedback samples recorded.
+    ///
+    /// Used by EXPLAIN ANALYZE to surface confidence of the calibration.
+    #[must_use]
+    pub fn cbo_sample_count(&self) -> u64 {
+        self.cbo_feedback.sample_count()
+    }
+
     /// Estimates selectivity based on label and relationship type counts.
     ///
     /// This is a heuristic based on the principle that:
