@@ -1062,6 +1062,8 @@ fn test_backward_pruning_preserves_diversity_across_clusters() {
         let mut clusters_seen = std::collections::HashSet::new();
         for &n in &neighbors {
             // SAFETY: test code — all node IDs were just inserted.
+            // - n iterates over `neighbors`, populated from this test's own inserts.
+            // Reason: mirror production indexing style.
             let vec = unsafe { vectors.get_unchecked(n) };
             let cluster_id = vec[..4]
                 .iter()

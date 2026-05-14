@@ -555,6 +555,7 @@ fn test_explain_output_struct() {
         node_stats: vec![],
         cost_factors: None,
         calibration_source: None,
+        feedback_calibration: None,
     };
 
     assert_eq!(output.actual_stats.as_ref().unwrap().actual_rows, 100);
@@ -1112,5 +1113,103 @@ fn test_explain_not_in_indexed_shows_prefilter() {
         matches!(plan.root, PlanNode::Sequence(ref nodes) if nodes.iter().any(|n| matches!(n, PlanNode::IndexLookup(_)))),
         "Expected IndexLookup node for NOT IN on indexed field, got: {:?}",
         plan.root
+    );
+}
+
+// --- CBO feedback calibration (issue #469 Phase 2) ---
+
+#[test]
+fn test_explain_output_feedback_calibration_absent_by_default() {
+    let output = ExplainOutput::plan_only(QueryPlan {
+        root: PlanNode::TableScan(TableScanPlan {
+            collection: "c".to_string(),
+        }),
+        estimated_cost_ms: 1.0,
+        index_used: None,
+        filter_strategy: FilterStrategy::None,
+        with_options: vec![],
+        let_bindings: vec![],
+        fusion_info: None,
+        cache_hit: None,
+        plan_reuse_count: None,
+    });
+    assert!(output.feedback_calibration.is_none());
+}
+
+#[test]
+fn test_explain_output_with_feedback_calibration_roundtrip() {
+    let output = ExplainOutput::plan_only(QueryPlan {
+        root: PlanNode::TableScan(TableScanPlan {
+            collection: "c".to_string(),
+        }),
+        estimated_cost_ms: 1.0,
+        index_used: None,
+        filter_strategy: FilterStrategy::None,
+        with_options: vec![],
+        let_bindings: vec![],
+        fusion_info: None,
+        cache_hit: None,
+        plan_reuse_count: None,
+    })
+    .with_feedback_calibration(0.07, 42);
+
+    let fb = output
+        .feedback_calibration
+        .as_ref()
+        .expect("should be Some");
+    assert!((fb.ms_per_cost_unit - 0.07).abs() < f64::EPSILON);
+    assert_eq!(fb.sample_count, 42);
+}
+
+#[test]
+fn test_explain_output_feedback_calibration_serde_roundtrip() {
+    let output = ExplainOutput::plan_only(QueryPlan {
+        root: PlanNode::TableScan(TableScanPlan {
+            collection: "c".to_string(),
+        }),
+        estimated_cost_ms: 1.0,
+        index_used: None,
+        filter_strategy: FilterStrategy::None,
+        with_options: vec![],
+        let_bindings: vec![],
+        fusion_info: None,
+        cache_hit: None,
+        plan_reuse_count: None,
+    })
+    .with_feedback_calibration(0.12, 100);
+
+    let json = serde_json::to_string(&output).expect("serialize");
+    assert!(json.contains("feedback_calibration"));
+    assert!(json.contains("ms_per_cost_unit"));
+
+    let decoded: ExplainOutput = serde_json::from_str(&json).expect("deserialize");
+    let fb = decoded
+        .feedback_calibration
+        .expect("should survive roundtrip");
+    assert!((fb.ms_per_cost_unit - 0.12).abs() < f64::EPSILON);
+    assert_eq!(fb.sample_count, 100);
+}
+
+#[test]
+fn test_query_cost_estimator_with_feedback_overrides_ms_per_unit() {
+    use crate::collection::query_cost::{QueryCostEstimator, QueryParams};
+
+    let params = QueryParams::new(10_000, 100, 10);
+
+    let default_est = QueryCostEstimator::default().estimate(&params);
+    let feedback_est = QueryCostEstimator::default()
+        .with_feedback(0.05)
+        .estimate(&params);
+
+    // 0.05 ms/unit is half of the 0.1 default → latency should be roughly halved.
+    assert!(
+        feedback_est.estimated_latency_ms < default_est.estimated_latency_ms,
+        "feedback-calibrated latency ({}) should be lower than default ({})",
+        feedback_est.estimated_latency_ms,
+        default_est.estimated_latency_ms
+    );
+    assert!(
+        (default_est.estimated_latency_ms / feedback_est.estimated_latency_ms - 2.0).abs() < 0.01,
+        "ratio should be 2.0 (0.1/0.05)"
     );
 }

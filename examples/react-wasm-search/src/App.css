@@ -1,0 +1,110 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+}
+
+.page {
+  max-width: 720px;
+  width: 100%;
+  padding: 2.5rem 1.5rem 4rem;
+}
+
+header h1 {
+  font-size: 1.6rem;
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+}
+
+.status {
+  margin: 0 0 2rem;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.query {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.85rem 1rem;
+  font-size: 1rem;
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  background: #1e293b;
+  color: inherit;
+}
+.query:focus {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+.query:disabled {
+  opacity: 0.6;
+}
+
+.latency {
+  margin: 1rem 0 0.5rem;
+  color: #38bdf8;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hits {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.hits li {
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  padding: 0.85rem 1rem;
+  background: #1e293b;
+}
+
+.hit-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.hit-title {
+  font-weight: 600;
+}
+
+.hit-score {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hit-desc {
+  margin: 0.4rem 0 0;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.empty {
+  margin-top: 1rem;
+  color: #94a3b8;
+}
+
+footer {
+  margin-top: 3rem;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+footer a {
+  color: #38bdf8;
+}

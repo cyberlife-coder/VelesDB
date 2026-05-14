@@ -21,7 +21,7 @@
 
 use clap::Parser;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::path::PathBuf;
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::point::Point;

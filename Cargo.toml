@@ -17,7 +17,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.14.4"
+version = "1.15.0"
 edition = "2021"
 rust-version = "1.89"
 license-file = "LICENSE"
@@ -61,13 +61,13 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Configuration
 figment = { version = "0.10", features = ["toml", "env"] }
-toml = "0.8"
+toml = "0.9"
 
 # Testing
 criterion = "0.5"
 proptest = "1.5"
 tempfile = "3.14"
-rand = "0.9"
+rand = "0.10"
 
 # Cryptography (for license validation)
 ed25519-dalek = "2.1"

@@ -42,6 +42,7 @@ use std::fmt;
 pub mod calibration;
 pub mod cost_factors;
 pub mod cost_model;
+pub(crate) mod feedback;
 pub mod plan_generator;
 pub mod query_executor;
 
@@ -51,6 +52,7 @@ mod plan_generator_tests;
 mod tests;
 
 pub use cost_model::{CostEstimator, OperationCost, OperationCostFactors};
+pub(crate) use feedback::CboFeedbackLoop;
 pub use plan_generator::{CandidatePlan, PlanGenerator, QueryCharacteristics};
 pub use query_executor::{ExecutionContext, PlanCache, QueryOptimizer};
 
@@ -255,6 +257,21 @@ impl QueryCostEstimator {
     #[must_use]
     pub fn max_cost(&self) -> Option<f64> {
         self.max_cost
+    }
+
+    /// Applies a runtime-observed `ms_per_cost_unit` from the CBO feedback
+    /// loop (issue #469 Phase 2).
+    ///
+    /// Overrides the static `calibration.ms_per_cost_unit` so that cost-guard
+    /// checks and EXPLAIN latency estimates reflect actual observed performance
+    /// rather than the compile-time default (`0.1 ms/unit`).
+    ///
+    /// Only call this when `CboFeedbackLoop::adjusted_ms_per_cost_unit`
+    /// returns `Some`, i.e., after ≥ `MIN_SAMPLES` observations.
+    #[must_use]
+    pub fn with_feedback(mut self, ms_per_cost_unit: f64) -> Self {
+        self.calibration.ms_per_cost_unit = ms_per_cost_unit;
+        self
     }
 
     /// Estimates the cost of a query

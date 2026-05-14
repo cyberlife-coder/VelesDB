@@ -30,7 +30,7 @@ use crate::index::VectorIndex;
 #[test]
 fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     // Arrange: 40K-vector index — strictly above the 10K threshold where
     // ef_search_for_scale starts boosting the ef value. Below 10K both

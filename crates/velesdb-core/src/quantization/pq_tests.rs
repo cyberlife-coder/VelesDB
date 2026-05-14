@@ -48,7 +48,7 @@ fn generate_clustered_vectors(
     num_clusters: usize,
     seed: u64,
 ) -> Vec<Vec<f32>> {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
     // Generate cluster centers spread far apart.
@@ -439,7 +439,7 @@ fn generate_offset_clustered_vectors(
     noise: f32,
     seed: u64,
 ) -> Vec<Vec<f32>> {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
     let centers: Vec<Vec<f32>> = (0..num_clusters)
@@ -712,7 +712,7 @@ fn generate_directional_clustered_vectors(
     num_clusters: usize,
     seed: u64,
 ) -> Vec<Vec<f32>> {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
     let mut cluster_dirs: Vec<Vec<Vec<f32>>> = Vec::new();

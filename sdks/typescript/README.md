@@ -2,7 +2,7 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.14.4** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.15.0** | Node.js >= 18 | Browser (WASM) | MIT License
 
 ## What's New in v1.14.2
 
@@ -429,6 +429,37 @@ const results = await db.multiQuerySearch('docs', [emb1, emb2], {
 ```
 
 > **Note:** WASM supports `rrf`, `average`, `maximum`. The `weighted` and `relative_score` strategies are REST-only.
+
+#### Named sparse indexes — `sparseIndexName` vs `sparseSearchNamed()`
+
+A collection can carry multiple sparse indexes (e.g. `splade_v2`, `bm25_titles`). The TypeScript SDK exposes two distinct APIs depending on whether you want a dense + sparse hybrid query or a pure sparse query against a named index.
+
+| API | Shape | Use when |
+|---|---|---|
+| `db.search(coll, denseVec, { sparseVector, sparseIndexName })` | dense + sparse hybrid against the named sparse index | You already have a dense embedding and want to combine it with a specific named sparse index in a single search call. The dense vector drives the primary candidate set; the named sparse index re-ranks. |
+| `db.sparseSearchNamed(coll, sparseVec, indexName, options?)` | pure sparse against a named index | You have only a sparse vector (e.g. SPLADE expansion, lexical query) and want to query a specific named sparse index directly. No dense component. |
+
+```typescript
+// Hybrid: dense + sparse via the splade_v2 named index
+const hybrid = await db.search('docs', denseEmbedding, {
+  k: 10,
+  sparseVector: { 42: 0.8, 99: 0.3 },
+  sparseIndexName: 'splade_v2',
+});
+
+// Pure sparse against the same named index
+const sparseOnly = await db.sparseSearchNamed(
+  'docs',
+  { 42: 0.8, 99: 0.3 },
+  'splade_v2',
+  { k: 10 },
+);
+```
+
+When the collection has only one (default) sparse index, omit `sparseIndexName` on `db.search()`; the server picks the default. For named indexes, both APIs require the explicit name.
+
+> **Note:** Both APIs are REST-only when a named index is required.
+> The WASM backend has no concept of named sparse indexes — `sparseIndexName` is silently ignored on `db.search()` (the collection's single sparse index is used), and `db.sparseSearchNamed()` throws `wasmNotSupported`. Tracked as a follow-up to either surface a `wasmNotSupported` throw on `sparseIndexName` or implement named-sparse support in WASM.
 
 ---
 

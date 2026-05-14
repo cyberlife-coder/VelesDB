@@ -19,7 +19,7 @@
 use std::collections::HashSet;
 
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 use super::super::inverted_index::{SparseInvertedIndex, FREEZE_THRESHOLD};
 use super::super::types::{ScoredDoc, SparseVector};

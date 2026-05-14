@@ -53,4 +53,4 @@ if _HAS_MEMORY:
         "VelesDBSemanticMemory",
         "VelesDBProceduralMemory",
     ])
-__version__ = "1.14.4"
+__version__ = "1.15.0"

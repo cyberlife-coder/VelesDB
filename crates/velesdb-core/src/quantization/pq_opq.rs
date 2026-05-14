@@ -124,7 +124,7 @@ fn build_rotation_matrix(cov: &[f64], d: usize, n: usize, power_iterations: usiz
 /// Seeded from dimension and sample count for reproducibility.
 #[cfg(feature = "persistence")]
 fn init_random_orthonormal_matrix(d: usize, n: usize) -> Vec<Vec<f64>> {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     #[allow(clippy::cast_possible_truncation)]
     let init_seed = (d as u64).wrapping_mul(6_364_136_223_846_793_005)

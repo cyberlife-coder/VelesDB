@@ -58,6 +58,8 @@ const GRAPH_TO_VECTOR_SCALING: f64 = 100.0;
 pub struct QueryPlanner {
     /// Runtime statistics for adaptive planning.
     stats: QueryStats,
+    /// CBO calibration feedback loop (issue #469).
+    cbo_feedback: crate::collection::query_cost::CboFeedbackLoop,
     /// Selectivity threshold for GraphFirst strategy.
     graph_first_threshold: f64,
     /// Selectivity threshold for VectorFirst strategy.
@@ -70,6 +72,7 @@ impl QueryPlanner {
     pub fn new() -> Self {
         Self {
             stats: QueryStats::new(),
+            cbo_feedback: crate::collection::query_cost::CboFeedbackLoop::new(),
             graph_first_threshold: 0.01,  // <1% → GraphFirst
             vector_first_threshold: 0.50, // >50% → VectorFirst
         }
@@ -80,6 +83,7 @@ impl QueryPlanner {
     pub fn with_thresholds(graph_first: f64, vector_first: f64) -> Self {
         Self {
             stats: QueryStats::new(),
+            cbo_feedback: crate::collection::query_cost::CboFeedbackLoop::new(),
             graph_first_threshold: graph_first,
             vector_first_threshold: vector_first,
         }
@@ -200,6 +204,32 @@ impl QueryPlanner {
     #[must_use]
     pub fn stats(&self) -> &QueryStats {
         &self.stats
+    }
+
+    /// Records a CBO feedback observation (issue #469).
+    ///
+    /// Called after each vector query with the dataset size, ef_search used,
+    /// and the actual wall-clock duration. The feedback loop adjusts
+    /// `ms_per_cost_unit` via EMA with α=0.05 after [`MIN_SAMPLES`] observations.
+    pub fn record_cbo_feedback(&self, dataset_size: usize, ef_search: usize, actual_ms: f64) {
+        self.cbo_feedback.record(dataset_size, ef_search, actual_ms);
+    }
+
+    /// Returns the feedback-adjusted `ms_per_cost_unit`, if available.
+    ///
+    /// Returns `None` until the feedback loop has seen enough observations.
+    /// The planner falls back to the static calibration default in that case.
+    #[must_use]
+    pub fn adjusted_ms_per_cost_unit(&self) -> Option<f64> {
+        self.cbo_feedback.adjusted_ms_per_cost_unit()
+    }
+
+    /// Returns the total number of CBO feedback samples recorded.
+    ///
+    /// Used by EXPLAIN ANALYZE to surface confidence of the calibration.
+    #[must_use]
+    pub fn cbo_sample_count(&self) -> u64 {
+        self.cbo_feedback.sample_count()
     }
 
     /// Estimates selectivity based on label and relationship type counts.

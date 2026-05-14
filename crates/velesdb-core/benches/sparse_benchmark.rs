@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 use velesdb_core::index::sparse::{sparse_search, ScoredDoc, SparseInvertedIndex, SparseVector};
 #[cfg(feature = "internal-bench")]

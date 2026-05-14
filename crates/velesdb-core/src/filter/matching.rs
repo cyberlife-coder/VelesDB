@@ -7,6 +7,77 @@ use serde_json::Value;
 const LIKE_MAX_PATTERN_BYTES: usize = 4096;
 const LIKE_MAX_DYN_OPS: usize = 2_000_000;
 
+/// List length above which IN matching switches from O(n) linear scan to
+/// O(log n) binary search. Values must be pre-sorted by [`json_value_cmp`]
+/// at `Condition::In` construction time (done in `conversion.rs::convert_in`).
+const IN_BINARY_SEARCH_THRESHOLD: usize = 16;
+
+/// Assigns a numeric rank to a JSON value type for consistent total ordering.
+///
+/// Type rank: Null(0) < Bool(1) < Number(2) < String(3) < Array(4) < Object(5).
+fn json_type_rank(v: &Value) -> u8 {
+    match v {
+        Value::Null => 0,
+        Value::Bool(_) => 1,
+        Value::Number(_) => 2,
+        Value::String(_) => 3,
+        Value::Array(_) => 4,
+        Value::Object(_) => 5,
+    }
+}
+
+/// Total ordering over `serde_json::Value` used for sorting IN-list values
+/// and binary-searching them at match time (issue #512).
+///
+/// Within each type: Null = Null, Bool by value, Number by `f64::total_cmp`
+/// (NaN sorts after +∞, giving a deterministic total order), String
+/// lexicographic, Arrays and Objects by type rank only (equal among themselves,
+/// which is acceptable since they are not used in IN conditions in practice).
+pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let rank = json_type_rank(a).cmp(&json_type_rank(b));
+    if rank != Ordering::Equal {
+        return rank;
+    }
+    match (a, b) {
+        (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+        (Value::Number(a), Value::Number(b)) => a
+            .as_f64()
+            .zip(b.as_f64())
+            .map_or(Ordering::Equal, |(fa, fb)| fa.total_cmp(&fb)),
+        (Value::String(a), Value::String(b)) => a.cmp(b),
+        _ => Ordering::Equal,
+    }
+}
+
+/// Returns whether `field_val` appears in `values`.
+///
+/// Switches strategy based on list length:
+/// - `values.len() <= IN_BINARY_SEARCH_THRESHOLD`: O(n) linear scan via
+///   `values_equal` (epsilon-tolerant float equality).
+/// - `values.len() > IN_BINARY_SEARCH_THRESHOLD`: O(log n) lower-bound via
+///   `json_value_cmp` to narrow position, then `values_equal` for the final
+///   check — preserving epsilon semantics on both paths and requiring
+///   `values` to be pre-sorted (`conversion.rs::convert_in` guarantees this).
+fn in_list_matches(field_val: &Value, values: &[Value]) -> bool {
+    if values.len() > IN_BINARY_SEARCH_THRESHOLD {
+        debug_assert!(
+            values
+                .windows(2)
+                .all(|w| json_value_cmp(&w[0], &w[1]) != std::cmp::Ordering::Greater),
+            "Condition::In values must be pre-sorted by json_value_cmp"
+        );
+        // Lower-bound: first position where probe is NOT less than field_val.
+        let pos = values
+            .partition_point(|probe| json_value_cmp(probe, field_val) == std::cmp::Ordering::Less);
+        // Check the candidate at pos and its predecessor for epsilon-equal floats.
+        let check = |i: usize| values.get(i).is_some_and(|v| values_equal(v, field_val));
+        check(pos) || pos > 0 && check(pos - 1)
+    } else {
+        values.iter().any(|val| values_equal(field_val, val))
+    }
+}
+
 /// Evaluates array-level conditions (single, any, all).
 fn match_array_condition(payload: &Value, field: &str, values: &[Value], mode: ArrayMode) -> bool {
     get_field(payload, field).is_some_and(|v| match v {
@@ -96,8 +167,9 @@ impl Condition {
             Self::Lte { field, value } => {
                 get_field(payload, field).is_some_and(|v| compare_values(v, value) <= 0)
             }
-            Self::In { field, values } => get_field(payload, field)
-                .is_some_and(|v| values.iter().any(|val| values_equal(v, val))),
+            Self::In { field, values } => {
+                get_field(payload, field).is_some_and(|v| in_list_matches(v, values))
+            }
             Self::Contains { field, value } => get_field(payload, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| s.contains(value.as_str()))),
             Self::IsNull { field } => get_field(payload, field).is_none_or(Value::is_null),

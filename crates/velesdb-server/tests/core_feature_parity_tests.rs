@@ -10,8 +10,7 @@ fn parse_features(manifest_path: &Path) -> BTreeMap<String, Vec<String>> {
     let manifest = fs::read_to_string(manifest_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", manifest_path.display()));
 
-    let parsed: Value = manifest
-        .parse()
+    let parsed: Value = toml::from_str(&manifest)
         .unwrap_or_else(|e| panic!("failed to parse {} as TOML: {e}", manifest_path.display()));
 
     let features = parsed

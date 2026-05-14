@@ -175,7 +175,7 @@ mod tests {
     use super::super::types::SparseVector;
     use super::*;
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     fn make_vector(pairs: Vec<(u32, f32)>) -> SparseVector {
         SparseVector::new(pairs)

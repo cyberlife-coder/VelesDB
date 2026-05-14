@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use tempfile::{tempdir, TempDir};
 use velesdb_core::velesql::Parser;
 use velesdb_core::{Database, DistanceMetric, Point, StorageMode, VectorCollection};
