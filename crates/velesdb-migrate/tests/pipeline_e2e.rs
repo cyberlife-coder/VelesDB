@@ -25,10 +25,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// variable once per process — tests in this file run single-threaded
 /// under `cargo test -- --test-threads=1`, so there is no race.
 async fn start_mock_server() -> MockServer {
-    // SAFETY: set_var is `unsafe` on newer Rust editions because setting
-    // environment variables is not thread-safe. These integration tests
-    // run under `--test-threads=1`, so no other thread can observe an
-    // inconsistent state.
+    // SAFETY: set_var is `unsafe` (env mutation is not thread-safe).
+    // - Integration tests run under `cargo test -- --test-threads=1`
+    //   (CONTRIBUTING.md §"Concurrency Rules").
+    // - No other thread reads the variable between this write and the wiremock start.
+    // Reason: enable the SSRF escape hatch for wiremock's loopback URL.
     unsafe {
         std::env::set_var("VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS", "1");
     }

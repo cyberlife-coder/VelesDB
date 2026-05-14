@@ -422,6 +422,9 @@ fn build_context_parts(
     data_file.set_len(file_size)?;
 
     // SAFETY: File is open read/write and sized via set_len.
+    // - data_file was just opened with `.write(true).create(true)`.
+    // - set_len(file_size) succeeded above, so the file has the expected length.
+    // Reason: exclusive access to a temp file for the block's lifetime.
     let mut mmap = unsafe { MmapMut::map_mut(&data_file)? };
 
     let index = ShardedIndex::new();
