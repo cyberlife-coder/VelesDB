@@ -66,7 +66,7 @@ Expected response:
 ```json
 {
   "status": "ok",
-  "version": "1.14.4"
+  "version": "1.15.0"
 }
 ```
 
