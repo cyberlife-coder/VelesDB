@@ -163,6 +163,92 @@ fn bench_hnsw_search_latency(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark HNSW search latency after BFS graph reordering (issue #377).
+///
+/// Measures 10K/768D/k=10 latency after calling `reorder_for_locality()`, which
+/// reorders nodes in BFS traversal order so frequently co-traversed nodes are
+/// adjacent in memory.  Compare against `hnsw_search_latency` (unordered) to
+/// measure the cache-locality improvement.
+///
+/// Reference: "Graph Reordering for Cache-Efficient Near Neighbor Search"
+/// (`arXiv:2104.03221`, `NeurIPS` 2022).  Expected improvement: 10–30 %.
+///
+/// Hardware note: measurements on an i9-14900KF are the canonical baseline for
+/// issue #377 (<30 µs target).  See `ARCHITECTURE.md` §*Canonical performance
+/// number* for the disambiguation between index-only and end-to-end numbers.
+fn bench_hnsw_search_latency_reordered(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hnsw_search_latency_reordered");
+
+    let dim = 768;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    for i in 0..10_000 {
+        let vector = generate_vector(dim, i);
+        index.insert(i, &vector);
+    }
+
+    // BFS reorder: nodes close in the graph become close in memory.
+    index
+        .reorder_for_locality()
+        .expect("reorder_for_locality should not fail on a valid index");
+
+    let query = generate_vector(dim, 99999);
+
+    for &k in &[10_usize, 50, 100] {
+        group.bench_with_input(BenchmarkId::new("top_k", k), &k, |b, &k| {
+            b.iter(|| {
+                let results = index.search(&query, k);
+                black_box(results)
+            });
+        });
+    }
+
+    group.finish();
+}
+
+/// Benchmark Collection search latency after BFS graph reordering (issue #377).
+///
+/// Same dataset as `bench_collection_search` (10K/768D/k=10, `StorageMode::Full`)
+/// but with `reorder_for_locality()` applied after bulk upsert, measuring the
+/// combined benefit of cache-friendly traversal at the Collection level.
+fn bench_collection_search_reordered(c: &mut Criterion) {
+    let mut group = c.benchmark_group("collection_search_reordered");
+
+    let dim = 768;
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let path = temp_dir.path().join("bench_collection_reordered");
+
+    let collection = VectorCollection::create(
+        path,
+        "bench",
+        dim,
+        DistanceMetric::Cosine,
+        velesdb_core::StorageMode::Full,
+    )
+    .expect("Failed to create collection");
+
+    let points: Vec<Point> = (0..10_000u64)
+        .map(|i| Point::without_payload(i, generate_vector(dim, i)))
+        .collect();
+
+    collection.upsert(points).expect("Failed to upsert");
+
+    collection
+        .reorder_for_locality()
+        .expect("reorder_for_locality should not fail");
+
+    let query = generate_vector(dim, 99999);
+
+    group.bench_function("search_10k_top10", |b| {
+        b.iter(|| {
+            let results = collection.search(&query, 10);
+            black_box(results)
+        });
+    });
+
+    group.finish();
+}
+
 /// Benchmark HNSW search throughput (queries per second).
 fn bench_hnsw_search_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("hnsw_search_throughput");
@@ -348,8 +434,10 @@ criterion_group!(
     bench_hnsw_insert_parallel,
     bench_hnsw_insert_fast,
     bench_hnsw_search_latency,
+    bench_hnsw_search_latency_reordered,
     bench_hnsw_search_throughput,
     bench_collection_search,
+    bench_collection_search_reordered,
     bench_distance_metrics,
     bench_recall_validation
 );

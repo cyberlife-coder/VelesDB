@@ -471,4 +471,28 @@ impl Collection {
         let range_mem = self.range_index.read().memory_usage();
         prop_mem + range_mem
     }
+
+    /// Reorders HNSW graph nodes in BFS traversal order for improved cache locality.
+    ///
+    /// After bulk insertion, nodes are stored in insertion order. Calling this
+    /// method reorders both the vector buffer and all adjacency lists so nodes
+    /// that are close in the graph are also close in memory, reducing L2/L3
+    /// cache misses during search traversal by 15–30% on indices ≥ 1 000 vectors.
+    ///
+    /// Also builds a PDX block-columnar layout for SIMD-parallel distance
+    /// computation (see `reorder_for_locality` in `ARCHITECTURE.md`).
+    ///
+    /// # When to call
+    ///
+    /// Call once after bulk-loading vectors into a new collection, before the
+    /// collection is opened for queries. Incremental inserts invalidate the
+    /// locality benefit; re-call after the next compaction if latency regresses.
+    /// No-op for collections with fewer than 1 000 vectors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage reordering fails.
+    pub fn reorder_for_locality(&self) -> Result<()> {
+        self.index.reorder_for_locality()
+    }
 }

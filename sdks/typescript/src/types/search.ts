@@ -8,6 +8,18 @@
 import type { FilterInput } from '../filter';
 import type { SearchQuality, SparseVector } from './core';
 
+/** Options for named sparse index search (issue #380). */
+export interface SparseSearchNamedOptions {
+  /** Number of results to return (default: 10) */
+  k?: number;
+  /** Filter expression */
+  filter?: FilterInput;
+  /** Optional dense vector to combine with sparse for hybrid named search */
+  vector?: number[] | Float32Array;
+  /** Search quality preset */
+  quality?: SearchQuality;
+}
+
 /** Search options */
 export interface SearchOptions {
   /** Number of results to return (default: 10) */

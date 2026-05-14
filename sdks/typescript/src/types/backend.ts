@@ -12,12 +12,14 @@ import type {
   Collection,
   VectorDocument,
   SearchQuality,
+  SparseVector,
   PqTrainOptions,
 } from './core';
 import type {
   SearchOptions,
   SearchResult,
   MultiQuerySearchOptions,
+  SparseSearchNamedOptions,
 } from './search';
 import type {
   GraphEdge,
@@ -205,6 +207,23 @@ export interface IVelesDBBackend {
   getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse>;
 
   // Sparse / PQ / Streaming (v1.5)
+
+  /**
+   * Search a named sparse index (issue #380).
+   *
+   * Sends `sparse_vectors: { [indexName]: query }` and `sparse_index: indexName`
+   * to the `/search` endpoint. When `options.vector` is provided, the request
+   * also includes a dense vector for hybrid sparse+dense search against the
+   * named index.
+   *
+   * WASM backend: not supported (throws `VelesDB-WASM-NOT-SUPPORTED`).
+   */
+  sparseSearchNamed(
+    collection: string,
+    query: SparseVector,
+    indexName: string,
+    options?: SparseSearchNamedOptions
+  ): Promise<SearchResult[]>;
 
   /** Train Product Quantization on a collection */
   trainPq(collection: string, options?: PqTrainOptions): Promise<string>;

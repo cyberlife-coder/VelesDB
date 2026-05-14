@@ -153,12 +153,25 @@ impl Collection {
 
         // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
         if fctx.extracted.vector_search.is_some() {
+            let elapsed = fctx.ctx.elapsed();
             // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
             #[allow(clippy::cast_possible_truncation)]
-            let vector_latency_us = fctx.ctx.elapsed().as_micros() as u64;
+            let vector_latency_us = elapsed.as_micros() as u64;
             self.query_planner
                 .stats()
                 .update_vector_latency(vector_latency_us);
+
+            // Issue #469: CBO calibration feedback — record actual ms vs cost estimate.
+            let actual_ms = elapsed.as_secs_f64() * 1000.0;
+            let dataset_size = self.len();
+            let ef_search = fctx
+                .stmt
+                .with_clause
+                .as_ref()
+                .and_then(crate::velesql::WithClause::get_ef_search)
+                .unwrap_or(100);
+            self.query_planner
+                .record_cbo_feedback(dataset_size, ef_search, actual_ms);
         }
         self.guard_rails.circuit_breaker.record_success();
         Ok(())

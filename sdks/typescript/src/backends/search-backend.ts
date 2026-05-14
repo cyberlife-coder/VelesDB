@@ -11,6 +11,7 @@ import type {
   SearchResult,
   MultiQuerySearchOptions,
   SparseVector,
+  SparseSearchNamedOptions,
   SearchQuality,
 } from '../types';
 import type { FilterInput } from '../filter';
@@ -161,6 +162,38 @@ export async function multiQuerySearch(
       sparse_weight: options?.fusionParams?.sparseWeight,
       filter: options?.filter,
     }
+  );
+
+  throwOnError(response, `Collection '${collection}'`);
+
+  return response.data?.results ?? [];
+}
+
+/** Search a named sparse index, optionally combined with a dense vector. */
+export async function sparseSearchNamed(
+  transport: SearchTransport,
+  collection: string,
+  query: SparseVector,
+  indexName: string,
+  options?: SparseSearchNamedOptions
+): Promise<SearchResult[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const body: Record<string, any> = {
+    sparse_vectors: { [indexName]: transport.sparseToRest(query) },
+    sparse_index: indexName,
+    top_k: options?.k ?? 10,
+    filter: options?.filter,
+    ...searchQualityToMode(options?.quality),
+  };
+
+  if (options?.vector) {
+    body.vector = Array.from(options.vector);
+  }
+
+  const response = await transport.requestJson<{ results: SearchResult[] }>(
+    'POST',
+    `${collectionPath(collection)}/search`,
+    body
   );
 
   throwOnError(response, `Collection '${collection}'`);

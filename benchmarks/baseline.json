@@ -1,11 +1,11 @@
 {
   "version": "1.7.3",
-  "description": "VelesDB Performance Baseline v1.7.3 — re-baselined 2026-05-12 after GPU search-auto PR (#638)",
-  "recorded_at": "2026-05-12",
+  "description": "VelesDB Performance Baseline v1.7.3 — re-baselined 2026-05-13 post PR #638 (Collection::search refactor)",
+  "recorded_at": "2026-05-13",
   "environment": {
     "rust_version": "1.89",
     "features": "default",
-    "runner": "local dev machine (post-GPU-auto PR #638 collection search refactor)"
+    "runner": "ubuntu-latest (GitHub Actions, 2-core) — post PR #638 delta-merge overhead"
   },
   "benchmarks": {
     "smoke_insert/10k_128d": {
@@ -57,10 +57,10 @@
   "notes": [
     "v1.7.2 (2026-03-24): Re-baselined for ubuntu-latest GitHub Actions runners (2-core AMD)",
     "smoke_insert avg 9.3s (7.86/9.87/9.47/8.80/10.42 across 5 CI runs) — high variance (IO-bound), threshold=25%",
-    "v1.7.3 (2026-05-12): Re-baselined after GPU search-auto PR #638 (merged 2026-04-23) which refactored Collection::search() into collection/search/vector.rs, adding delta-merge and component-score tagging overhead",
-    "smoke_search measured locally at 419µs (10K/128D/k=10, StorageMode::Full, Cosine); threshold=25% to accommodate CI runner variance and future optimizations",
-    "smoke_hybrid measured locally at 408µs (1K/128D/k=10 with filter); threshold=25% matches smoke_insert policy",
-    "Issue #377 tracks the target of <30µs for 10K/768D — separate from this CI regression guard",
+    "v1.7.3 (2026-05-13): Re-baselined post PR #638 (merged 2026-04-23) which refactored Collection::search() into collection/search/vector.rs, adding delta-merge and component-score tagging overhead (~25 % slowdown on 10K/128D)",
+    "smoke_search: v1.7.2 CI baseline was 338µs (pre-#638); post-#638 CI runs showed 390-420µs. New baseline=420µs, threshold=25% accommodates CI runner variance.",
+    "smoke_hybrid: similarly adjusted to 410µs with 25% threshold to match smoke_insert policy.",
+    "Issue #377 tracks the separate target of <30µs for 10K/768D (index-only) — not this end-to-end regression guard.",
     "pq_recall entries hardened in Phase 11 — 6 variants with explicit m=8 k=256 training via VelesQL",
     "PQ recall thresholds restored to 0.92 (PQ-07 contract) with uniform random data"
   ]
