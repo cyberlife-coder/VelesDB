@@ -45,8 +45,11 @@ const MAX_MS_PER_UNIT: f64 = 50.0;
 const SCALE: f64 = 1_000_000.0;
 
 /// Lock-free EMA-based feedback loop for CBO cost-unit calibration.
+///
+/// Crate-internal: instantiated by [`crate::velesql::planner::QueryPlanner`] and
+/// fed by the query pipeline. Not part of the public crate API.
 #[derive(Debug, Default)]
-pub struct CboFeedbackLoop {
+pub(crate) struct CboFeedbackLoop {
     /// EMA of observed ms-per-cost-unit (stored as u64 = value × SCALE).
     ema_scaled: AtomicU64,
     /// Total samples recorded.
@@ -56,7 +59,7 @@ pub struct CboFeedbackLoop {
 impl CboFeedbackLoop {
     /// Creates a new, empty feedback loop.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -65,7 +68,7 @@ impl CboFeedbackLoop {
     /// `dataset_size` — number of indexed vectors (used to estimate cost).
     /// `ef_search`    — effective ef_search used for this query.
     /// `actual_ms`    — wall-clock duration of the query in milliseconds.
-    pub fn record(&self, dataset_size: usize, ef_search: usize, actual_ms: f64) {
+    pub(crate) fn record(&self, dataset_size: usize, ef_search: usize, actual_ms: f64) {
         if actual_ms <= 0.0 || dataset_size == 0 {
             return;
         }
@@ -95,7 +98,7 @@ impl CboFeedbackLoop {
     /// Returns `None` until at least [`MIN_SAMPLES`] observations have been
     /// recorded, so the planner falls back to the static default during warm-up.
     #[must_use]
-    pub fn adjusted_ms_per_cost_unit(&self) -> Option<f64> {
+    pub(crate) fn adjusted_ms_per_cost_unit(&self) -> Option<f64> {
         if self.sample_count.load(Ordering::Relaxed) < MIN_SAMPLES {
             return None;
         }
@@ -109,13 +112,14 @@ impl CboFeedbackLoop {
 
     /// Returns the total number of samples recorded.
     #[must_use]
-    pub fn sample_count(&self) -> u64 {
+    pub(crate) fn sample_count(&self) -> u64 {
         self.sample_count.load(Ordering::Relaxed)
     }
 
-    /// Returns the current EMA value (for monitoring/EXPLAIN).
+    /// Returns the current EMA value (used internally for outlier rejection and
+    /// surfaced via [`Self::adjusted_ms_per_cost_unit`]).
     #[must_use]
-    pub fn current_ema(&self) -> f64 {
+    fn current_ema(&self) -> f64 {
         // u64 → f64: values are bounded by MAX_MS_PER_UNIT × SCALE = 50_000_000,
         // well within f64's exact integer range (2^53 ≈ 9 × 10^15).
         #[allow(clippy::cast_precision_loss)]
