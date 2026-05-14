@@ -80,7 +80,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     #[inline]
     #[allow(clippy::unused_self)] // Reason: method receiver accesses graph config in future adaptive tuning
     fn adaptive_num_probes(&self, count: usize, ef_search: usize, k: usize) -> usize {
-        if count < 10_000 || ef_search <= (k * 4).max(64) {
+        if count <= 10_000 || ef_search <= (k * 4).max(64) {
             return 1;
         }
 
@@ -540,5 +540,52 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // If the thread-local already has a buffer (e.g., concurrent
             // reentrant use), silently drop the extra one.
         });
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::super::super::distance::CpuDistance;
+    use super::*;
+    use crate::distance::DistanceMetric;
+
+    fn empty_hnsw() -> NativeHnsw<CpuDistance> {
+        let dist = CpuDistance::new(DistanceMetric::Euclidean);
+        NativeHnsw::new(dist, 16, 200, 0)
+    }
+
+    /// Exactly 10 000 vectors must use 1 probe (boundary fix, issue #377).
+    ///
+    /// Before the fix `count < 10_000` excluded the 10K case, causing the
+    /// Balanced preset (ef=160, k=10) benchmark to execute 2 probes.
+    #[test]
+    fn single_probe_at_exactly_10k() {
+        let hnsw = empty_hnsw();
+        assert_eq!(hnsw.adaptive_num_probes(10_000, 160, 10), 1);
+    }
+
+    #[test]
+    fn single_probe_below_10k() {
+        let hnsw = empty_hnsw();
+        assert_eq!(hnsw.adaptive_num_probes(9_999, 160, 10), 1);
+    }
+
+    #[test]
+    fn two_probes_above_10k_balanced() {
+        let hnsw = empty_hnsw();
+        assert_eq!(hnsw.adaptive_num_probes(10_001, 160, 10), 2);
+    }
+
+    #[test]
+    fn single_probe_for_small_ef() {
+        let hnsw = empty_hnsw();
+        // ef_search=40 <= max(k*4=40, 64)=64 → single probe at any scale
+        assert_eq!(hnsw.adaptive_num_probes(100_000, 40, 10), 1);
+    }
+
+    #[test]
+    fn four_probes_for_large_ef_at_scale() {
+        let hnsw = empty_hnsw();
+        assert_eq!(hnsw.adaptive_num_probes(50_000, 1024, 10), 4);
     }
 }
