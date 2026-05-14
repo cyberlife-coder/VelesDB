@@ -1,0 +1,37 @@
+services:
+  velesdb:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: velesdb-server
+    environment:
+      VELESDB_HOST: 0.0.0.0
+      VELESDB_PORT: "8080"
+      VELESDB_DATA_DIR: /data
+    ports:
+      - "8080:8080"
+    volumes:
+      - velesdb-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: node-express-rag
+    environment:
+      VELESDB_URL: http://velesdb:8080
+      PORT: "3000"
+    depends_on:
+      velesdb:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+volumes:
+  velesdb-data:
