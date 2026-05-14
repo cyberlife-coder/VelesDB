@@ -4,7 +4,7 @@ This roadmap commits to **what we are building**, **why**, and **when**. It is u
 
 It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` issues but **not committed** until they reach a milestone here.
 
-> **Last updated:** 2026-05-01 — covers v1.14.4 (current) → v1.16.0 horizon.
+> **Last updated:** 2026-05-14 — covers v1.14.4 (current) → v1.16.0 horizon.
 
 ---
 
@@ -62,7 +62,30 @@ By v1.16 we want VelesDB to be deployable in production at small-team scale (5-5
 - **Distributed replication** (Raft) — premium, long horizon
 - **Query result caching with auth tags** — premium
 
-The deferred [Hardware Accelerator backlog (#689)](https://github.com/cyberlife-coder/VelesDB/issues/689) (CUDA, AVX-512-VNNI, SVE, FP16, etc.) will be re-evaluated at this horizon based on customer requests.
+The [Deferred — Hardware accelerator backlog](#deferred--hardware-accelerator-backlog) will be re-evaluated at this horizon based on customer requests.
+
+---
+
+## Deferred — Hardware accelerator backlog
+
+SIMD and GPU items that are part of the long-term roadmap but **explicitly on hold** until VelesDB has clearer signal on hardware-target priorities (cloud GPUs vs ARM vs legacy x86). Consolidated from individual issues during the 2026-04-27 pre-seed audit to keep the active roadmap visible vs the long-tail wishlist.
+
+| Item | Rationale to defer |
+|------|-------------------|
+| `perf(gpu)`: CUDA/cuBLAS backend for NVIDIA GPUs | Existing wgpu pipeline (PR #626) covers cross-vendor GPU; CUDA-specific only valuable for NVIDIA-tied datacenter customers, defer until first such request |
+| `perf(simd)`: SSE4.2 fallback kernels for legacy x86_64 | AVX2 covers ~99% of CPUs from 2013+, SSE4.2-only fallback ROI is minimal |
+| `perf(simd)`: FP16 native SIMD kernels (AVX-512FP16, NEON fp16) | Niche compute; SQ8 quantization already covers most memory-bound use cases |
+| `perf(gpu)`: batch Hamming & Jaccard distance compute shaders (WGSL) | Existing GPU SONG pipeline covers L2/cosine; binary metrics defer until user demand |
+| `perf(simd)`: AVX-512-VNNI kernels for INT8 quantized distance | Niche; SQ8 + AVX2 already gives 4× compression at acceptable speed |
+| `perf(gpu)`: async CPU/GPU pipelining with double buffering | Optimization on existing GPU path; defer until profiling shows it as a top bottleneck |
+| `perf(simd)`: SVE kernels for AWS Graviton3/4 | NEON covers ARM today; SVE valuable only for AWS-Graviton-specific workloads |
+
+**Re-activation criteria** — any of:
+- A paying customer / design partner requests a specific item
+- Profiling on a real workload identifies one as a top-3 bottleneck
+- A community contributor opens a draft PR for one
+
+**What is NOT deferred** (already shipped in v1.13.x): AVX-512 / AVX2 / NEON kernels for f32/f16 cosine·dot·euclidean, WASM SIMD128, GPU SONG 3-stage pipeline (PR #626), GPU `search_auto` wiring (PR #638). Current SIMD coverage matrix in [`docs/reference/NATIVE_HNSW.md`](docs/reference/NATIVE_HNSW.md).
 
 ---
 
