@@ -49,6 +49,9 @@ export async function search(
   if (options?.sparseVector) {
     body.sparse_vector = transport.sparseToRest(options.sparseVector);
   }
+  if (options?.sparseIndexName) {
+    body.sparse_index = options.sparseIndexName;
+  }
 
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
@@ -155,6 +158,8 @@ export async function multiQuerySearch(
       avg_weight: options?.fusionParams?.avgWeight,
       max_weight: options?.fusionParams?.maxWeight,
       hit_weight: options?.fusionParams?.hitWeight,
+      dense_weight: options?.fusionParams?.denseWeight,
+      sparse_weight: options?.fusionParams?.sparseWeight,
       filter: options?.filter,
     }
   );
