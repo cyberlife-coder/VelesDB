@@ -2,7 +2,7 @@
 
 This document is the **15-minute read** an engineer or a technical due-diligence reviewer should start with. It tells you what VelesDB is, how it is shaped, and where to dig deeper.
 
-> **Last updated:** 2026-04-27 — applies to v1.14.x and beyond.
+> **Last updated:** 2026-05-14 — applies to v1.14.x and beyond.
 
 ---
 
@@ -182,7 +182,7 @@ The areas where VelesDB uses `unsafe` are:
 | FFI for UniFFI mobile bindings | C ABI boundary | `crates/velesdb-mobile/` |
 | Compute shader buffer mapping (GPU) | wgpu buffer lifetime | `crates/velesdb-core/src/gpu/` |
 
-Every `unsafe` block has a `// SAFETY: <reason>` comment, enforced by `scripts/verify_unsafe_safety_template.py` in CI. As of v1.13.2: 129 unsafe blocks, 431 SAFETY comments. The full audit narrative is in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md) (964 lines).
+Every `unsafe` block has a `// SAFETY: <reason>` comment, enforced by `scripts/verify_unsafe_safety_template.py` in CI. Live counts (unsafe sites and `// SAFETY:` comments) are reported by the script on every push and tracked release-over-release in `CHANGELOG.md`. The full audit narrative is in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md).
 
 External soundness audit (Cure53 / independent Rust safety expert) is in the v1.15 horizon, conditional on funding. See ROADMAP.md.
 
