@@ -18,6 +18,11 @@ export interface SearchOptions {
   includeVectors?: boolean;
   /** Optional sparse vector for hybrid sparse+dense search */
   sparseVector?: SparseVector;
+  /**
+   * Named sparse index to query (when the collection has multiple sparse indexes).
+   * When omitted the default sparse index is used.
+   */
+  sparseIndexName?: string;
   /** Search quality preset (default: 'balanced'). */
   quality?: SearchQuality;
 }
