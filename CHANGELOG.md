@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.0] — 2026-05-14
+
+### Summary
+
+First **minor** bump of the v1.14 line — additive features across the agent-memory, query-cost, and SDK surfaces, plus a full dependency refresh including two ecosystem majors (`rand 0.9 → 0.10`, `toml 0.8 → 0.9`) absorbed without API breakage. No user-facing breaking change in the public Rust, Python, TypeScript, or WASM SDK APIs. The release also closes the first two RAG-stack example demos (`examples/react-wasm-search` standalone Vite+WASM, `examples/node-express-rag` containerized REST backend), the Python auto-dimension inference long-requested in #379, and the ACT-R Phase 1 procedural learning module behind `feat(agent)`.
+
+The CI gate cleanup work (45 commits since v1.14.4) is the largest of any minor release on this line: SAFETY-template strict-mode verifier now polices every `unsafe` block, the makefile cargo-make tasks now mirror the strict pre-push sequence byte-for-byte, and the v1.13.2-frozen architecture snapshots in `QUALITY_BAR.md` / `ARCHITECTURE.md` were dereferenced to live CI references that auto-refresh.
+
+### Added
+
+- **ACT-R Phase 1 — procedural learning** ([#780](https://github.com/cyberlife-coder/VelesDB/pull/780), [#796](https://github.com/cyberlife-coder/VelesDB/pull/796), closes [#433](https://github.com/cyberlife-coder/VelesDB/issues/433)). Power-law decay, diminishing-returns rescaling, and a `CompositeStrategy` combining the two are now exposed on `AgentMemory`. Opt-in via the new strategy enum — existing behaviour unchanged.
+- **CBO feedback calibration in `EXPLAIN ANALYZE`** ([#784](https://github.com/cyberlife-coder/VelesDB/pull/784), Phase 2 of [#469](https://github.com/cyberlife-coder/VelesDB/issues/469)). The planner now reports its empirical `ms_per_cost_unit` EMA in `EXPLAIN ANALYZE` output, letting users see how the optimizer's cost model drifts against real wall-clock for their workload.
+- **Python: auto-detect vector dimension from first upsert** ([#778](https://github.com/cyberlife-coder/VelesDB/pull/778), closes [#379](https://github.com/cyberlife-coder/VelesDB/issues/379)). Calling `Collection.upsert(points)` on a collection created without `dim=N` now infers the dimension from `points[0]` and locks the collection to that shape — the previous "dim required at create time" friction is gone.
+- **Python: `SearchOptions` builder** ([#761](https://github.com/cyberlife-coder/VelesDB/pull/761), closes [#717](https://github.com/cyberlife-coder/VelesDB/issues/717)). Fluent builder for assembling complex search queries (`SearchOptions.with_fusion(...).with_payload_filter(...).with_quality(...)`) — additive, the kwargs API still works.
+- **TypeScript SDK: `sparseIndexName` and RSF weights in the REST backend** ([#779](https://github.com/cyberlife-coder/VelesDB/pull/779), closes [#380](https://github.com/cyberlife-coder/VelesDB/issues/380)). Brings the REST backend to parity with the WASM backend for named sparse indexes (the WASM backend still silently drops `sparseIndexName` — documented in [#793](https://github.com/cyberlife-coder/VelesDB/pull/793) below).
+- **Standalone React + Vite + WASM vector-search demo** ([#794](https://github.com/cyberlife-coder/VelesDB/pull/794), closes [#348](https://github.com/cyberlife-coder/VelesDB/issues/348)) under `examples/react-wasm-search/`. Zero-backend, pure browser vector search with a UMAP scatterplot and a payload filter form. CSP-clean, COOP/COEP-clean.
+- **Express.js + Docker RAG backend example** ([#795](https://github.com/cyberlife-coder/VelesDB/pull/795), closes [#350](https://github.com/cyberlife-coder/VelesDB/issues/350)) under `examples/node-express-rag/`. Containerized reference for "drop VelesDB into an existing Node REST API".
+
+### Changed
+
+- **`rand` ecosystem bumped from 0.9 to 0.10** ([#797](https://github.com/cyberlife-coder/VelesDB/pull/797)). Workspace `rand` and `rand_distr` both moved to their latest majors. Trait-import migration applied: `Rng::random()` / `Rng::random_range()` moved to the new `RngExt` trait — 16 source files updated. Side effect: `rand 0.10` pulls `getrandom 0.4` directly (instead of 0.3 transitively), so `velesdb-wasm` and `velesdb-core` now declare both `getrandom_03` and `getrandom_04` with `wasm_js` feature, ensuring the WASM target builds cleanly regardless of which version any dependency resolves to.
+- **`toml` bumped from 0.8 to 0.9** ([#755](https://github.com/cyberlife-coder/VelesDB/pull/755)). Internal absorption of the 0.8 → 0.9 breaking change in `core_feature_parity_tests`. No user-facing API surface affected.
+- **`tauri` bumped 2.10 → 2.11**, **`reqwest` 0.12 → 0.13**, **`hyper` 1.8 → 1.9**, **`ndarray` 0.16 → 0.17**, **`uniffi` 0.28 → 0.31** ([#759](https://github.com/cyberlife-coder/VelesDB/pull/759), [#753](https://github.com/cyberlife-coder/VelesDB/pull/753), [#754](https://github.com/cyberlife-coder/VelesDB/pull/754), [#757](https://github.com/cyberlife-coder/VelesDB/pull/757), [#773](https://github.com/cyberlife-coder/VelesDB/pull/773)). All internal, no public-API impact.
+- **TS SDK dev tooling bumped to 2026 floors** ([#752](https://github.com/cyberlife-coder/VelesDB/pull/752), [#748](https://github.com/cyberlife-coder/VelesDB/pull/748), [#770](https://github.com/cyberlife-coder/VelesDB/pull/770)): `eslint 8.57 → 10.3`, `typescript 5.9 → 6.0`, `eslint-config-prettier 9 → 10`. Dev-only — does not affect the published package.
+- **`Makefile.toml` cargo-make tasks aligned with the strict pre-push sequence** ([#788](https://github.com/cyberlife-coder/VelesDB/pull/788)). `cargo make ci` now exactly mirrors what the `CI` workflow runs, so a green local `cargo make ci` predicts a green PR check.
+- **`CboFeedbackLoop` visibility tightened from `pub` to `pub(crate)`** ([#791](https://github.com/cyberlife-coder/VelesDB/pull/791)). The struct was never re-exported from `velesdb-core::lib` and was always intended to be crate-internal; this is a tightening of accidental over-exposure, not a breaking change for any known user.
+- **`docs/sdk/ts/README.md` clarifies `sparseIndexName` vs `sparseSearchNamed`** ([#793](https://github.com/cyberlife-coder/VelesDB/pull/793)). REST backend supports both; WASM silently drops `sparseIndexName` and throws `wasmNotSupported` on `sparseSearchNamed`. Previously implicit; now explicit in JSDoc and README.
+- **`QUALITY_BAR.md` and `ARCHITECTURE.md` v1.13.2-frozen snapshots dereferenced** ([#789](https://github.com/cyberlife-coder/VelesDB/pull/789)). Counts of `unsafe` blocks, lock sites, etc. now point at the live CI verifier output instead of being hand-edited per release.
+- **`CONTRIBUTING.md` quickstart fixed** ([#787](https://github.com/cyberlife-coder/VelesDB/pull/787)): leaked WSL local path removed, placeholder clone URL replaced with the real `cyberlife-coder/VelesDB` URL.
+- **`CLAUDE.md` and `.claude/` gitignored** ([#786](https://github.com/cyberlife-coder/VelesDB/pull/786)). Author-local maintainer config no longer surfaces in the public repo.
+- **Roadmap consolidated** ([#792](https://github.com/cyberlife-coder/VelesDB/pull/792), closes [#689](https://github.com/cyberlife-coder/VelesDB/issues/689)). Hardware-accelerator backlog (GPU expansion beyond CUDA, FPGA exploration, Apple Neural Engine) collapsed into a single Horizon-3 entry with measurable decision criteria.
+
+### Fixed
+
+- **All `unsafe` blocks now satisfy `verify_unsafe_safety_template.py --strict`** ([#790](https://github.com/cyberlife-coder/VelesDB/pull/790)). 15 SAFETY templates across 8 files completed: `// SAFETY:` headline, `// - bullet` invariant list, `// Reason:` paragraph (or a second `// SAFETY:` block). Gate 4 of `QUALITY_BAR.md` now enforced in strict mode.
+- **ESLint 10 + sparseSearchNamed + CBO feedback + HNSW reorder fixes** ([#783](https://github.com/cyberlife-coder/VelesDB/pull/783), supersedes [#782](https://github.com/cyberlife-coder/VelesDB/pull/782)). Combined remediation PR for the post-v1.14.4 audit findings on the TS SDK and core query-cost path.
+- **`LET` execution projection test docstring** ([#763](https://github.com/cyberlife-coder/VelesDB/pull/763)). Corrected an overclaiming comment that did not match the test's actual coverage.
+
+### Performance
+
+- **HNSW: auto-reorder on `ANALYZE`** ([#785](https://github.com/cyberlife-coder/VelesDB/pull/785), closes [#377](https://github.com/cyberlife-coder/VelesDB/issues/377)). `ANALYZE <collection>` now triggers an in-place HNSW node reordering if fragmentation exceeds threshold; the 10K probe-boundary off-by-one that caused recall@10 to dip below 0.95 on the upper bound of the local-recall gate is fixed.
+- **`IN` filter: O(log n) binary search for large value sets** ([#765](https://github.com/cyberlife-coder/VelesDB/pull/765), closes [#512](https://github.com/cyberlife-coder/VelesDB/issues/512)). Switching from linear scan to sorted-vec + `binary_search` removes the O(n·m) cliff on `WHERE x IN (...)` clauses with hundreds of values.
+
+### CI / Tooling
+
+- **Bumped GitHub Actions versions**: `actions/checkout 5 → 6` ([#751](https://github.com/cyberlife-coder/VelesDB/pull/751)), `actions/setup-node 6.3 → 6.4` ([#767](https://github.com/cyberlife-coder/VelesDB/pull/767)), `Swatinem/rust-cache 2.8.2 → 2.9.1` ([#769](https://github.com/cyberlife-coder/VelesDB/pull/769)), `softprops/action-gh-release 2.2 → 3.0` ([#771](https://github.com/cyberlife-coder/VelesDB/pull/771)), `pypa/gh-action-pypi-publish 1.12 → 1.14` ([#749](https://github.com/cyberlife-coder/VelesDB/pull/749)).
+- **CLA Assistant: claude bot added to signed contributors** ([12931cec](https://github.com/cyberlife-coder/VelesDB/commit/12931cec)) — unblocks future automated review comments.
+- **`examples/react-wasm-search` Vite 7.3 + esbuild CVE remediation** ([#800](https://github.com/cyberlife-coder/VelesDB/pull/800)). Closes the moderate `GHSA-67mh-4wv8-2f99` esbuild dev-server CVE on the example toolchain; dropped the unused `vite-plugin-top-level-await` plugin (-30% bundle size). Supersedes Dependabot's [#798](https://github.com/cyberlife-coder/VelesDB/pull/798) / [#799](https://github.com/cyberlife-coder/VelesDB/pull/799) (Vite 8 incompatible with `@vitejs/plugin-react` v4).
+
+### Refactor
+
+- **CboFeedbackLoop is now `pub(crate)`** — see *Changed* above ([#791](https://github.com/cyberlife-coder/VelesDB/pull/791)).
+
+### Notes on Migration
+
+This release is **drop-in for every public API**. The only user-observable changes are additive (new opt-in features). Internal refactors (`CboFeedbackLoop` visibility, `rand 0.10` trait migration, `getrandom 0.4` dual-version declaration) are absorbed inside the workspace and do not surface to SDK users.
+
+If you depend on `velesdb-core` directly as a Rust library AND you used the (always-unintended) public access to `CboFeedbackLoop`, vendor the file or open an issue describing your use case — the type is feedback-loop internal and not part of the planned public surface.
+
 ## [1.14.4] — 2026-05-01
 
 ### Summary
