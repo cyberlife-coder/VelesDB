@@ -131,8 +131,9 @@ cargo test -p velesdb-core --features persistence test_recall -- --test-threads=
 cargo check --no-default-features
 cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
 
-# 6. (Optional) Codacy CLI via WSL
-wsl -- bash -c "cd /mnt/d/Projets-dev/velesDB/velesdb-core && codacy-cli analyze 2>&1"
+# 6. (Optional) Codacy CLI — run from the repo root
+codacy-cli analyze
+# Windows: prefix with `wsl -- bash -c "cd $(wslpath -a .) && ..."` if the CLI runs under WSL.
 ```
 
 Or use the local CI script: `.\scripts\local-ci.ps1` (Full) or `.\scripts\local-ci.ps1 -Quick` (fmt + clippy only).
@@ -149,9 +150,9 @@ Git hooks are provided in `.githooks/` — activate with: `git config core.hooks
 ### Building from Source
 
 ```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/velesdb.git
-cd velesdb
+# Clone the repository (replace cyberlife-coder with your fork if contributing via PR)
+git clone https://github.com/cyberlife-coder/VelesDB.git
+cd VelesDB
 
 # Build the project
 cargo build --workspace
