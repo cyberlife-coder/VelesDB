@@ -36,7 +36,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                     vectors.len()
                 );
                 // SAFETY: candidate_id < vectors.len() — verified by debug_assert above.
-                // candidate_id comes from search results (only successfully inserted nodes).
+                // - candidate_id comes from search results (only successfully inserted nodes).
+                // Reason: neighbor-selection hot path; bounds check elided after assert.
                 let candidate_vec = unsafe { vectors.get_unchecked(candidate_id) };
 
                 let is_diverse = selected.iter().all(|&selected_id| {
@@ -46,6 +47,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                         vectors.len()
                     );
                     // SAFETY: selected_id < vectors.len() — verified by debug_assert above.
+                    // - selected_id was previously inserted via the same code path as candidate_id.
+                    // Reason: diversity inner loop; bounds check elided after assert.
                     let selected_vec = unsafe { vectors.get_unchecked(selected_id) };
                     let dist_to_selected = self.distance.distance(candidate_vec, selected_vec);
                     self.alpha * candidate_dist <= dist_to_selected
@@ -136,6 +139,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             vectors.len()
         );
         // SAFETY: neighbor < vectors.len() — verified by debug_assert above.
+        // - neighbor is a NodeId already returned by the layer's neighbor list.
+        // Reason: backward-connection write path; bounds check elided after assert.
         let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
 
         let _ = layers[layer].with_neighbors_mut(neighbor, |neighbors| {
@@ -154,6 +159,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 vectors.len()
             );
             // SAFETY: new_node < vectors.len() — verified by debug_assert above.
+            // - new_node was just inserted into the vectors store by the caller.
+            // Reason: pruning loop distance computation.
             let new_node_vec = unsafe { vectors.get_unchecked(new_node) };
             let new_dist = self.distance.distance(neighbor_vec, new_node_vec);
 
@@ -183,6 +190,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             vectors.len()
         );
         // SAFETY: new_node < vectors.len() — verified by debug_assert above.
+        // - new_node was just inserted into the vectors store by the caller.
+        // Reason: anchor distance for redundancy eviction.
         let new_vec = unsafe { vectors.get_unchecked(new_node) };
 
         let mut worst_idx = 0;
@@ -197,6 +206,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 vectors.len()
             );
             // SAFETY: n < vectors.len() — verified by debug_assert above.
+            // - n iterates over an existing neighbor list whose entries were inserted previously.
+            // Reason: O(M) eviction scan inner loop.
             let n_vec = unsafe { vectors.get_unchecked(n) };
             let d_to_anchor = self.distance.distance(anchor_vec, n_vec);
             let d_to_new = self.distance.distance(new_vec, n_vec);

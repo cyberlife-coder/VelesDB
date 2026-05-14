@@ -256,13 +256,12 @@ impl Database {
                 // raising — the typed split is tracked as a post-seed
                 // EPIC in docs/ARCHITECTURE.md.
                 //
-                // SAFETY: Python SDK intentionally exposes a single
-                // Collection facade over all variants. Only the shared
-                // surface (config, flush, diagnostics, execute_query_str,
-                // etc.) is guaranteed correct on non-Vector variants; the
-                // Python wrapper and BDD tests cover that contract. See
-                // `AnyCollection::into_vector_unchecked` for full caller
-                // obligations.
+                // SAFETY: Python SDK exposes a single Collection facade over all variants.
+                // - any_coll comes from `get_any_collection`, returned Some, so the
+                //   underlying `AnyCollection` is registered and valid.
+                // - Only the shared surface is guaranteed correct on non-Vector variants;
+                //   vector-only methods return empty results by design.
+                // Reason: single-Collection Python ergonomic facade.
                 let vc = unsafe { any_coll.into_vector_unchecked() };
                 Ok(Some(Collection::new(vc, name.to_string())))
             }
@@ -332,10 +331,12 @@ impl Database {
             .inner
             .get_any_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
-        // SAFETY: Python SDK intentionally wraps the freshly-created metadata
-        // collection in the single `Collection` facade. Only the shared
-        // surface is exercised on metadata variants. See
-        // `AnyCollection::into_vector_unchecked` for full caller obligations.
+        // SAFETY: Python SDK wraps the freshly-created metadata collection in the
+        // single Collection facade (mirrors `get_collection` above).
+        // - any was just registered by `create_metadata_collection` and retrieved
+        //   via `get_any_collection`, so it is a valid registered handle.
+        // - Only the shared surface is exercised on metadata variants.
+        // Reason: single-Collection Python ergonomic facade.
         let collection = unsafe { any.into_vector_unchecked() };
 
         Ok(Collection::new(collection, name_owned))
