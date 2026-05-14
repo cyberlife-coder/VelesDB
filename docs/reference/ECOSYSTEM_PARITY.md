@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-05-01 (v1.14.4 — Haystack 2.x DocumentStore SKIP-policy contract fix)
+Last updated: 2026-05-01 (v1.15.0 — Haystack 2.x DocumentStore SKIP-policy contract fix)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
