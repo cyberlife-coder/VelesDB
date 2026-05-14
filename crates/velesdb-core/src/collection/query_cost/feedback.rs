@@ -158,8 +158,7 @@ impl CboFeedbackLoop {
                 // Use u128 intermediates to make overflow impossibility self-evident:
                 // max product = 50_000_000 × 95 = 4.75 × 10^9 << u128::MAX.
                 let num = u128::from(new_scaled) * u128::from(ALPHA_NUMERATOR)
-                    + u128::from(old_scaled)
-                        * u128::from(ALPHA_DENOMINATOR - ALPHA_NUMERATOR);
+                    + u128::from(old_scaled) * u128::from(ALPHA_DENOMINATOR - ALPHA_NUMERATOR);
                 // Result ≤ max(new_scaled, old_scaled) ≤ 50_000_000 — fits in u64.
                 #[allow(clippy::cast_possible_truncation)]
                 let result = (num / u128::from(ALPHA_DENOMINATOR)) as u64;
