@@ -3,7 +3,7 @@
   "description": "VelesDB Performance Baseline v1.7.3 — re-baselined 2026-05-13 post PR #638 (Collection::search refactor)",
   "recorded_at": "2026-05-13",
   "environment": {
-    "rust_version": "stable",
+    "rust_version": "1.89",
     "features": "default",
     "runner": "ubuntu-latest (GitHub Actions, 2-core) — post PR #638 delta-merge overhead"
   },

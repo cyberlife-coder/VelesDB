@@ -4,7 +4,7 @@ This document specifies the **explicit, enforceable thresholds** below which Vel
 
 These gates are not aspirational. They are enforced via CI workflows, scripts, and explicit pre-merge protocols. Each gate listed here links to its enforcement mechanism so that the gate can be inspected, contested, or extended publicly.
 
-> **Last updated:** 2026-04-30 — applies to v1.14.x and onward.
+> **Last updated:** 2026-05-14 — applies to v1.14.x and onward.
 
 ---
 
@@ -89,7 +89,7 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 **Enforcement:**
 
 - **CI script:** `scripts/check_prod_unwraps.py` — runs on every push, blocks merge if non-zero.
-- **Status:** **PASSED** as of v1.13.2.
+- **Status:** **PASSED** — re-verified per push; the script exits 0 on the current workspace.
 
 **Approved alternatives** (in order of preference):
 
@@ -114,9 +114,9 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 
 **Enforcement:**
 
-- **CI script:** `scripts/verify_unsafe_safety_template.py` — runs on every push, blocks merge if any `unsafe {` is not preceded or annotated with `// SAFETY:`.
-- **Coverage:** 129 unsafe blocks workspace-wide, 431 SAFETY comments (ratio > 3:1, well-documented).
-- **Audit trail:** [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md) documents invariants for every unsafe pattern in the codebase (964 lines).
+- **CI script:** `scripts/verify_unsafe_safety_template.py` — runs on every push, blocks merge if any `unsafe { … }` / `unsafe impl …` site is not preceded by a `// SAFETY:` comment.
+- **Coverage:** every unsafe site in the workspace is annotated; live counts (unsafe sites and `// SAFETY:` comments) are reported by the script in CI logs and tracked release-over-release in `CHANGELOG.md`.
+- **Audit trail:** [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md) documents invariants for every unsafe pattern in the codebase.
 
 **External audit:** Planned in v1.15 horizon (Cure53 / independent Rust safety expert), conditional on funding.
 
@@ -173,7 +173,7 @@ These are tracked but do not block release because they are SIMD intrinsics bloc
 - **Local:** `npx jscpd --min-tokens 50 --reporters console --format rust crates/` — integrated in `scripts/local-ci.ps1`.
 - **Codacy Cloud:** server-side check, blocking.
 
-**Status:** Within budget across all crates as of v1.13.2.
+**Status:** enforced by Codacy Cloud on every PR; falling below the threshold blocks merge.
 
 **See also:** [`.claude/rules/no-duplication.md`](.claude/rules/no-duplication.md).
 
