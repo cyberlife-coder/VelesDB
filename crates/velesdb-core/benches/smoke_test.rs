@@ -17,7 +17,7 @@
 //! ```
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use tempfile::TempDir;
 use velesdb_core::{DistanceMetric, Point, VectorCollection};
 

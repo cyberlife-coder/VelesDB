@@ -401,7 +401,7 @@ impl RaBitQIndex {
 /// rotations are required, consider Householder QR or double-precision MGS.
 #[cfg(feature = "persistence")]
 fn generate_orthogonal_matrix(dim: usize, seed: u64) -> Vec<f32> {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
