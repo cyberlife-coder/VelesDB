@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use super::error::AgentMemoryError;
 use super::memory_helpers;
-use super::reinforcement::{FixedRate, ReinforcementContext, ReinforcementStrategy};
+use super::reinforcement::{
+    power_law_decay, FixedRate, ReinforcementContext, ReinforcementStrategy,
+};
 use super::ttl::MemoryTtl;
 
 struct ProcedureState {
@@ -31,6 +33,7 @@ struct ProcedureState {
     confidence: f32,
     usage_count: u64,
     created_at: i64,
+    last_used_at: i64,
     success_count: u64,
     failure_count: u64,
 }
@@ -43,13 +46,16 @@ impl ProcedureState {
         } else {
             0.5
         };
+        let mut custom = std::collections::HashMap::new();
+        custom.insert("success_count".to_string(), self.success_count as f64);
+        custom.insert("failure_count".to_string(), self.failure_count as f64);
         ReinforcementContext {
             usage_count: self.usage_count,
             created_at: self.created_at as u64,
-            last_used: now as u64,
+            last_used: self.last_used_at as u64,
             current_time: now as u64,
             recent_success_rate: Some(success_rate),
-            custom: std::collections::HashMap::new(),
+            custom,
         }
     }
 }
@@ -73,6 +79,14 @@ pub struct ProcedureMatch {
 ///
 /// Stores procedures as embedding vectors with associated metadata.
 /// Supports confidence-based recall, reinforcement learning, and TTL expiration.
+///
+/// ### ACT-R activation decay
+///
+/// When built with [`with_activation_decay`](Self::with_activation_decay), the
+/// confidence returned by [`recall`](Self::recall) is modulated by the ACT-R
+/// base-level power-law formula: `c × max(1, t_days)^(-d)` where `d` is the
+/// decay exponent (Anderson 1996, default ≈ 0.5).  The stored value is
+/// unchanged — decay is applied read-only at retrieval time.
 pub struct ProceduralMemory {
     collection_name: String,
     db: Arc<Database>,
@@ -80,6 +94,9 @@ pub struct ProceduralMemory {
     ttl: Arc<MemoryTtl>,
     reinforcement_strategy: Arc<dyn ReinforcementStrategy>,
     stored_ids: RwLock<HashSet<u64>>,
+    /// ACT-R decay exponent `d` for passive confidence decay at recall time.
+    /// `None` disables decay (default — backward-compatible behaviour).
+    activation_decay_exponent: Option<f32>,
 }
 
 impl ProceduralMemory {
@@ -121,6 +138,7 @@ impl ProceduralMemory {
             ttl,
             reinforcement_strategy: Arc::new(FixedRate::default()),
             stored_ids,
+            activation_decay_exponent: None,
         })
     }
 
@@ -128,6 +146,20 @@ impl ProceduralMemory {
     #[must_use]
     pub fn with_reinforcement_strategy(mut self, strategy: Arc<dyn ReinforcementStrategy>) -> Self {
         self.reinforcement_strategy = strategy;
+        self
+    }
+
+    /// Enables ACT-R base-level activation decay at recall time.
+    ///
+    /// When set, the confidence returned by [`recall`](Self::recall) is
+    /// multiplied by `max(1, t_days)^(-decay_exponent)` where `t_days` is the
+    /// number of days since the procedure was last reinforced.
+    ///
+    /// The stored confidence is **not** modified — decay is applied read-only.
+    /// ACT-R recommends `decay_exponent ≈ 0.5` (Anderson 1996).
+    #[must_use]
+    pub fn with_activation_decay(mut self, decay_exponent: f32) -> Self {
+        self.activation_decay_exponent = Some(decay_exponent.clamp(0.0, 2.0));
         self
     }
 
@@ -193,6 +225,11 @@ impl ProceduralMemory {
 
     /// Recalls matching procedures by vector similarity.
     ///
+    /// When ACT-R activation decay is configured via
+    /// [`with_activation_decay`](Self::with_activation_decay), the returned
+    /// `confidence` reflects power-law decay since last use without modifying
+    /// the stored value.
+    ///
     /// # Errors
     ///
     /// Returns an error when embedding dimension is invalid, collection access fails,
@@ -212,10 +249,25 @@ impl ProceduralMemory {
             &self.ttl,
         )?;
 
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+
         Ok(results
             .into_iter()
             .filter_map(|r| {
-                let pm = extract_procedure_match(&r.point, r.score)?;
+                let mut pm = extract_procedure_match(&r.point, r.score)?;
+                if let Some(exponent) = self.activation_decay_exponent {
+                    let last_used = r
+                        .point
+                        .payload
+                        .as_ref()
+                        .and_then(|p| p.get("last_used_at"))
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or(0);
+                    let elapsed_secs = (now_secs as i64).saturating_sub(last_used).max(0) as u64;
+                    pm.confidence = power_law_decay(pm.confidence, elapsed_secs, exponent);
+                }
                 if pm.confidence < min_confidence {
                     return None;
                 }
@@ -317,6 +369,10 @@ impl ProceduralMemory {
                 .unwrap_or(0),
             created_at: payload
                 .get("created_at")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0),
+            last_used_at: payload
+                .get("last_used_at")
                 .and_then(serde_json::Value::as_i64)
                 .unwrap_or(0),
             success_count: payload
