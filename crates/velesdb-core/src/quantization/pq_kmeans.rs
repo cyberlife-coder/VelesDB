@@ -3,7 +3,7 @@
 //! Contains k-means++ initialization, the main k-means loop with GPU fallback,
 //! and shared distance utilities used across PQ modules.
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 /// Squared L2 distance between two slices of equal length.
 pub(crate) fn l2_squared(a: &[f32], b: &[f32]) -> f32 {

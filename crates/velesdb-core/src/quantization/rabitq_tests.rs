@@ -56,7 +56,7 @@ fn generate_random_clustered_vectors(
     noise: f32,
     seed: u64,
 ) -> Vec<Vec<f32>> {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
     let centers: Vec<Vec<f32>> = (0..num_clusters)
@@ -210,7 +210,7 @@ fn rabitq_xor_popcount_correct_on_known_patterns() {
 
 #[test]
 fn rabitq_distance_non_negative() {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let dim = 128;
     let index = identity_index(dim);
 
@@ -279,7 +279,7 @@ fn rabitq_recall_at_10_identity_rotation() {
 
 #[test]
 fn rabitq_batch_distance_matches_individual() {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let dim = 64;
     let index = identity_index(dim);
 
@@ -325,7 +325,7 @@ fn rabitq_train_computes_centroid_as_mean() {
 #[cfg(feature = "persistence")]
 #[test]
 fn rabitq_train_rotation_is_orthogonal() {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(77);
 
     let dim = 32;
@@ -399,7 +399,7 @@ fn rabitq_train_empty_returns_error() {
 #[cfg(feature = "persistence")]
 #[test]
 fn rabitq_train_dim_less_than_64_works() {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(99);
 
     let dim = 16;
@@ -438,7 +438,7 @@ fn rabitq_trained_recall_at_10_on_clustered_data() {
 #[cfg(feature = "persistence")]
 #[test]
 fn rabitq_save_load_roundtrip() {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(55);
 
     let dim = 32;
@@ -469,7 +469,7 @@ fn rabitq_load_returns_none_when_missing() {
 #[cfg(feature = "persistence")]
 #[test]
 fn rabitq_save_uses_atomic_write() {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(66);
 
     let dim = 16;
@@ -518,7 +518,7 @@ fn xor_popcount_ip_scalar_reference(
 
 #[test]
 fn rabitq_simd_dispatch_matches_scalar_reference() {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(7777);
 
     // Test across multiple dimensions including non-64-aligned
@@ -569,7 +569,7 @@ fn rabitq_simd_dispatch_matches_scalar_reference() {
 #[test]
 fn rabitq_simd_dispatch_distance_unchanged() {
     // Verify end-to-end distance results are identical before/after SIMD wiring.
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(8888);
 
     let dim = 128;
