@@ -382,29 +382,21 @@ async fn test_enable_streaming_sends_and_searches() {
         coll.stream_insert(p).expect("test: stream_insert ok");
     }
 
-    // Poll until all 4 points are flushed and searchable (max 5s).
+    // Poll directly on search() until the streamed points are indexed and
+    // the closest match (id=1) is returned first (max 5s).  Polling on
+    // get() only confirms storage visibility but not HNSW index readiness;
+    // using search() as the gate removes that race entirely.
+    let query = [1.0_f32, 0.0, 0.0, 0.0];
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let found = coll
-            .get(&[1, 2, 3, 4])
-            .iter()
-            .filter(|p| p.is_some())
-            .count();
-        if found == 4 {
-            break;
+    let results = loop {
+        let r = coll.search(&query, 4).expect("search should succeed");
+        let ready = r.first().is_some_and(|top| top.point.id == 1);
+        if ready || tokio::time::Instant::now() >= deadline {
+            break r;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for stream flush (found {found}/4)"
-        );
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-
-    let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 4).unwrap();
-    assert!(
-        !results.is_empty(),
-        "streamed points should be searchable after drain"
-    );
+    };
+    assert!(!results.is_empty(), "streamed points should be searchable after drain");
     assert_eq!(results[0].point.id, 1, "closest match should be id=1");
 }
 
