@@ -4,26 +4,33 @@
 
 Runnable examples demonstrating the VelesDB Python SDK (PyO3 bindings).
 
-## Prerequisites
+## Start here — `hello_velesdb.py` (≈ 5 seconds)
+
+```bash
+pip install velesdb
+python hello_velesdb.py
+```
+
+A self-contained ~25-line script: open a database, store five tiny documents, run two searches, print results. No NumPy import needed, no server, no embedding model. If this works, your VelesDB install is healthy.
+
+## Prerequisites (other examples)
 
 - Python 3.9+
-- Rust toolchain (for building the SDK from source)
-- maturin (`pip install maturin`)
+- The other scripts below import NumPy directly (already a transitive dependency of `velesdb`, but they use it explicitly).
+- For `graphrag_*.py`: an OpenAI API key and a running `velesdb-server`.
 
 ## Installation
 
-### Option 1: Build from source (recommended for development)
+```bash
+pip install velesdb
+```
+
+Or, if you are hacking on the SDK itself and want to rebuild from source:
 
 ```bash
 cd crates/velesdb-python
 pip install maturin
 maturin develop
-```
-
-### Option 2: Install from wheel (when published)
-
-```bash
-pip install velesdb
 ```
 
 ### Install example dependencies
@@ -36,10 +43,11 @@ pip install -r requirements.txt
 
 All examples use synthetic data (random vectors via NumPy) and create temporary
 directories that are cleaned up automatically. No external embedding models or
-API keys are needed.
+API keys are needed (except for the GraphRAG examples).
 
 | File | Description |
 |---|---|
+| `hello_velesdb.py` | **Start here.** 25-line first-search example, no NumPy required. |
 | `fusion_strategies.py` | Multi-query search with RRF, Average, Maximum, Weighted, and Relative Score fusion strategies |
 | `graph_traversal.py` | Persistent GraphCollection: edges, BFS/DFS traversal, node payloads, degree analysis |
 | `hybrid_queries.py` | Dense vector search, VelesQL queries, batch search, EXPLAIN plans, CRUD operations |

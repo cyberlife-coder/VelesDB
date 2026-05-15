@@ -18,7 +18,37 @@ This guide will help you get VelesDB up and running in just a few minutes.
 > All four well under the 300 s "<5 min" goal of [#379](https://github.com/cyberlife-coder/VelesDB/issues/379). Methodology + honesty notes
 > (4 DX frictions documented openly) → [`docs/quickstart/timing-results.md`](quickstart/timing-results.md). Reproduce locally with `bash scripts/dx-timing/run_all.sh`.
 
-## Prerequisites
+## Fastest path: Python (≈ 5 seconds)
+
+If you just want to see VelesDB work, you only need Python ≥ 3.9.
+
+```bash
+pip install velesdb
+curl -O https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/examples/python/hello_velesdb.py
+python hello_velesdb.py
+```
+
+Expected output:
+
+```
+Query: "tech"
+  score=1.000  Rust 1.89 release notes
+  score=0.600  AI-generated jazz: the new wave
+  score=0.000  Best ramen in Tokyo
+
+Query: "tech + music"
+  score=0.990  AI-generated jazz: the new wave
+  score=0.707  Rust 1.89 release notes
+  score=0.707  Miles Davis discography
+```
+
+No server, no JSON, no embedding model. The full script is [`examples/python/hello_velesdb.py`](../examples/python/hello_velesdb.py) — read it, it is ~25 lines.
+
+Want to keep going in Python? See [`examples/python/`](../examples/python/) for fusion, graph traversal, VelesQL, and hybrid queries.
+
+The rest of this page is the **REST API** path — useful if you want to drive VelesDB from a non-Python language, or run it as a shared service.
+
+## Prerequisites (REST API path)
 
 - Docker (recommended) or Rust 1.89+
 - curl or any HTTP client for testing
