@@ -1,0 +1,155 @@
+name: Perf Gate (E2E)
+
+# Enforces the recall and order-of-magnitude latency claims that
+# QUALITY_BAR.md Gates 1 & 2 advertise. Until this workflow existed, both
+# claims were validated only by local runs of `benchmarks/velesdb_benchmark.py`.
+#
+# CI hardware vs. the contract:
+#   - The canonical 450 µs p50 is measured on the i9-14900KF reference
+#     machine (see QUALITY_BAR.md §Gate 2). GitHub-hosted ubuntu-latest
+#     runners are ~3-4× slower and noisier, so this job gates p50 at a
+#     deliberately loose 1500 µs (an order-of-magnitude sanity floor).
+#     The intent is to catch real algorithmic regressions (HNSW reorder
+#     loops, WAL fsync stalls, missing SIMD codepath, etc.) without
+#     producing false positives from runner variance. The full 450 µs
+#     contract is validated locally and in release engineering.
+#   - Recall@10 (Gate 1) is hardware-independent and gated at the
+#     contract threshold of 0.95.
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - "crates/velesdb-core/src/index/**"
+      - "crates/velesdb-core/src/simd_native/**"
+      - "crates/velesdb-core/src/quantization/**"
+      - "crates/velesdb-core/src/fusion/**"
+      - "crates/velesdb-core/src/wal/**"
+      - "crates/velesdb-core/src/storage/**"
+      - "crates/velesdb-python/**"
+      - "benchmarks/velesdb_benchmark.py"
+      - ".github/workflows/perf-gate-e2e.yml"
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - "crates/velesdb-core/src/index/**"
+      - "crates/velesdb-core/src/simd_native/**"
+      - "crates/velesdb-core/src/quantization/**"
+      - "crates/velesdb-core/src/fusion/**"
+      - "crates/velesdb-core/src/wal/**"
+      - "crates/velesdb-core/src/storage/**"
+      - "crates/velesdb-python/**"
+      - "benchmarks/velesdb_benchmark.py"
+      - ".github/workflows/perf-gate-e2e.yml"
+
+concurrency:
+  group: perf-gate-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Loose order-of-magnitude floor — see header comment.
+  P50_MAX_US: 1500
+  RECALL_MIN: 0.95
+
+jobs:
+  perf-gate:
+    name: Recall ≥ 0.95 + p50 sanity floor (10K/384D)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: "1.86"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: "velesdb-perf-gate"
+
+      - name: Build velesdb-python (release wheel)
+        run: |
+          python -m pip install --upgrade pip "maturin>=1.7,<2" numpy
+          # Release build is mandatory for a perf gate — debug builds are
+          # 10×+ slower and force a meaningless threshold. We build a
+          # release wheel and pip-install it; `maturin develop` would
+          # complain about installing into the system interpreter in CI,
+          # and pip's PEP 517 path does not currently forward `--release`
+          # cleanly (see commentary in ci.yml §test for the history).
+          cd crates/velesdb-python
+          maturin build --release --interpreter python3.11
+          pip install --force-reinstall ../../target/wheels/velesdb-*.whl
+
+      - name: Run benchmark (10K vectors, 384D, --recall, --json)
+        run: |
+          python benchmarks/velesdb_benchmark.py \
+            --datasets 10000 \
+            --dimension 384 \
+            --recall \
+            --json \
+            --output perf-report.json
+
+      - name: Gate report on recall and p50 floor
+        id: gate
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          with open("perf-report.json") as f:
+              report = json.load(f)
+
+          p50_max_us = int(os.environ["P50_MAX_US"])
+          recall_min = float(os.environ["RECALL_MIN"])
+
+          # Find the 10K result block.
+          ten_k = next(
+              (r for r in report["results"] if r.get("num_vectors") == 10_000),
+              None,
+          )
+          if ten_k is None:
+              sys.exit("FAIL: no 10K result block in report")
+
+          p50 = ten_k["search_p50_us"]
+          p99 = ten_k["search_p99_us"]
+          recall = report.get("recall", {}).get("recall_at_10_mean", 0.0)
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          lines = [
+              "## Perf Gate (E2E) — 10K / 384D / WAL ON",
+              "",
+              f"- search p50: **{p50} µs** (CI floor: {p50_max_us} µs, contract on i9-14900KF: 450 µs)",
+              f"- search p99: {p99} µs",
+              f"- recall@10: **{recall:.4f}** (gate: ≥ {recall_min})",
+              "",
+          ]
+          if summary_path:
+              with open(summary_path, "a") as s:
+                  s.write("\n".join(lines) + "\n")
+          for line in lines:
+              print(line)
+
+          failed = []
+          if recall < recall_min:
+              failed.append(f"recall@10 {recall:.4f} < {recall_min}")
+          if p50 > p50_max_us:
+              failed.append(f"p50 {p50} µs > CI floor {p50_max_us} µs")
+          if failed:
+              sys.exit("FAIL: " + "; ".join(failed))
+          print("PASS")
+          PY
+
+      - name: Upload perf report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: perf-report-${{ github.sha }}
+          path: perf-report.json
+          retention-days: 30
