@@ -215,6 +215,8 @@ jobs:
           cache-dependency-path: |
             demos/tauri-rag-app/package-lock.json
             sdks/typescript/package-lock.json
+            examples/react-wasm-search/package-lock.json
+            examples/node-express-rag/package-lock.json
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Rust examples compile smoke
         run: cargo check --manifest-path examples/rust/Cargo.toml
@@ -227,6 +229,16 @@ jobs:
           python -m py_compile integrations/haystack/examples/rag_pipeline.py
       - name: Tauri demo frontend build smoke
         working-directory: demos/tauri-rag-app
+        run: |
+          npm ci
+          npm run build
+      - name: React WASM example build smoke
+        working-directory: examples/react-wasm-search
+        run: |
+          npm ci
+          npm run build
+      - name: Node Express RAG example typecheck smoke
+        working-directory: examples/node-express-rag
         run: |
           npm ci
           npm run build
