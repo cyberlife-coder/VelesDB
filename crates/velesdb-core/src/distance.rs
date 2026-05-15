@@ -102,7 +102,7 @@ impl DistanceMetric {
             Self::Cosine => simd_native::cosine_similarity_native(a, b),
             Self::Euclidean => simd_native::euclidean_native(a, b),
             Self::DotProduct => simd_native::dot_product_native(a, b),
-            Self::Hamming => simd_native::hamming_distance_native(a, b) as f32,
+            Self::Hamming => simd_native::hamming_distance_native(a, b),
             Self::Jaccard => simd_native::jaccard_similarity_native(a, b),
         }
     }
