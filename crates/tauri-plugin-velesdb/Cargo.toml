@@ -12,7 +12,7 @@ categories = ["database", "gui"]
 links = "tauri-plugin-velesdb"
 
 [build-dependencies]
-tauri-plugin = { version = "2.0", features = ["build"] }
+tauri-plugin = { version = "2.6", features = ["build"] }
 
 [dependencies]
 tauri = { version = "2.11", default-features = false }

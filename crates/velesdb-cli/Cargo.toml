@@ -20,7 +20,7 @@ path = "src/main.rs"
 velesdb-core = { workspace = true }
 
 # CLI
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 clap_complete = "4.6"
 
 # REPL
@@ -64,7 +64,7 @@ loom = ["velesdb-core/loom"]
 
 [dev-dependencies]
 tempfile = "3.10"
-assert_cmd = "2.0"
+assert_cmd = "2.2"
 predicates = "3.1"
 
 [lints]
