@@ -276,7 +276,10 @@ fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
     }
 
     if case_insensitive {
-        like_match_impl(text.to_lowercase().as_bytes(), pattern.to_lowercase().as_bytes())
+        like_match_impl(
+            text.to_lowercase().as_bytes(),
+            pattern.to_lowercase().as_bytes(),
+        )
     } else {
         like_match_impl(text.as_bytes(), pattern.as_bytes())
     }

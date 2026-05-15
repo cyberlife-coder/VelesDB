@@ -396,7 +396,10 @@ async fn test_enable_streaming_sends_and_searches() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     };
-    assert!(!results.is_empty(), "streamed points should be searchable after drain");
+    assert!(
+        !results.is_empty(),
+        "streamed points should be searchable after drain"
+    );
     assert_eq!(results[0].point.id, 1, "closest match should be id=1");
 }
 
