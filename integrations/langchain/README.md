@@ -82,6 +82,7 @@ VelesDBVectorStore(
 **Core Operations:**
 - `add_texts(texts, metadatas=None, ids=None)` - Add texts to the store
 - `add_texts_bulk(texts, metadatas=None, ids=None)` - Bulk insert (2-3x faster for large batches)
+- `add_texts_streaming(texts, metadatas=None, ids=None, ...)` - Stream-insert via the bounded-channel ingestion pipeline (returns backpressure status)
 - `delete(ids)` - Delete documents by ID
 - `get_by_ids(ids)` - Retrieve documents by their IDs
 - `flush()` - Flush pending changes to disk
@@ -274,6 +275,25 @@ for row in results:
 - **Metadata Filtering**: Filter results by document attributes
 - **Simple Setup**: Self-contained single binary, no external services required
 - **Full LangChain Compatibility**: Works with all LangChain chains and agents
+
+## Agent Memory (optional)
+
+`langchain-velesdb` also re-exports three agent-memory wrappers around VelesDB's
+native memory subsystems. They are imported lazily — if the underlying
+`langchain` extras aren't installed, the import becomes a no-op and the
+symbols are exposed as `None`.
+
+```python
+from langchain_velesdb import (
+    VelesDBChatMemory,           # short-term conversational buffer
+    VelesDBSemanticMemory,       # long-term knowledge store
+    VelesDBProceduralMemory,     # learned action patterns with reinforcement
+)
+```
+
+See `langchain_velesdb/memory.py` for the full per-class API (chat history
+buffer with optional embedding, semantic recall with score, procedural
+reinforcement). Tests under `integrations/langchain/tests/` exercise each.
 
 ## License
 

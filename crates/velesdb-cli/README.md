@@ -120,7 +120,7 @@ History is persisted across sessions in `~/.local/share/.velesdb_history` (Linux
 | `.count <name>` | | Show record/edge/item count |
 | `.sample <name> [n]` | | Show first N records (default: 5). Works for Vector, Graph, and Metadata collections. |
 | `.browse <name> [page]` | | Paginated record browsing (10 per page). Works for Vector, Graph, and Metadata collections. |
-| `.nodes <name> [page]` | | Paginated node browsing for Graph collections (10 per page, includes payload). |
+| `.nodes <name> [page]` | | Paginated node browsing for Graph collections (20 per page, includes payload). |
 
 ### Data Operations
 
