@@ -1,37 +1,64 @@
 [advisories]
 version = 2
 db-path = "~/.cargo/advisory-db"
+# Review cadence: walk this list every 90 days. For each entry, either
+# (a) confirm the upstream constraint still holds (transitive still
+# present, no fix released), and bump the "Last reviewed" date in the
+# block-level comment below, or (b) remove the ignore if the transitive
+# is gone or the advisory has been patched. The current pass landed on
+# 2026-05-15 (see PR #811).
+#
+# Last reviewed: 2026-05-15
 ignore = [
-    # Tauri transitive dependencies - waiting for upstream fixes
-    # GTK3 bindings (Linux only) - no fix available, Tauri uses these
-    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: tauri transitive" },
-    { id = "RUSTSEC-2024-0384", reason = "instant: velesdb-cli transitive" },
-    { id = "RUSTSEC-2024-0412", reason = "gdk: tauri Linux GTK3" },
-    { id = "RUSTSEC-2024-0413", reason = "atk: tauri Linux GTK3" },
-    { id = "RUSTSEC-2024-0415", reason = "gtk: tauri Linux GTK3" },
-    { id = "RUSTSEC-2024-0416", reason = "atk-sys: tauri Linux GTK3" },
-    { id = "RUSTSEC-2024-0418", reason = "gdk-sys: tauri Linux GTK3" },
-    { id = "RUSTSEC-2024-0419", reason = "gtk3-macros: tauri Linux GTK3" },
-    { id = "RUSTSEC-2024-0420", reason = "gtk-sys: tauri Linux GTK3" },
-    { id = "RUSTSEC-2024-0429", reason = "glib unsound: tauri Linux GTK3" },
-    { id = "RUSTSEC-2024-0436", reason = "paste: simdeez transitive" },
-    { id = "RUSTSEC-2025-0057", reason = "fxhash: tauri transitive" },
-    { id = "RUSTSEC-2025-0075", reason = "unic-char-range: tauri transitive" },
-    { id = "RUSTSEC-2025-0080", reason = "unic-common: tauri transitive" },
-    { id = "RUSTSEC-2025-0081", reason = "unic-char-property: tauri transitive" },
-    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: tauri transitive" },
-    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: tauri transitive" },
-    { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill: postcard -> heapless transitive, unmaintained, no fix in postcard 1.x" },
-    { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif transitive, unmaintained, no fix available" },
-    # bincode removed from velesdb-core; remains as transitive dep via uniffi -> velesdb-mobile
-    { id = "RUSTSEC-2025-0141", reason = "bincode: uniffi transitive (velesdb-mobile), awaiting uniffi upgrade" },
-    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: unmaintained, transitive dep, no vulnerability" },
-    # RUSTSEC-2026-0097 (rand thread_rng unsound with custom logger) —
-    # production `rand` is on 0.9.3 (patched) via `cargo update`.
-    # Remaining unpatched versions (0.7.3, 0.8.5) are Tauri build-time
-    # transitives via phf → kuchikiki → tauri-utils; upgrading them
-    # requires a full Tauri refresh which is out of scope here.
-    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 + 0.8.5: phf/tauri build transitives, production rand is on 0.9.3 (patched)" },
+    # ── Tauri Linux GTK3 transitives ──────────────────────────────────
+    # These travel with the GTK3 desktop backend that Tauri 2.x still
+    # pulls on Linux. No upstream fixes are available; replacing them
+    # requires a Tauri migration to GTK4 / webkit2gtk-6 which is on the
+    # Tauri 3 roadmap (not before 2026 Q4).
+    { id = "RUSTSEC-2024-0412", reason = "gdk: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
+    { id = "RUSTSEC-2024-0413", reason = "atk: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
+    { id = "RUSTSEC-2024-0415", reason = "gtk: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
+    { id = "RUSTSEC-2024-0416", reason = "atk-sys: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
+    { id = "RUSTSEC-2024-0418", reason = "gdk-sys: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
+    { id = "RUSTSEC-2024-0419", reason = "gtk3-macros: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
+    { id = "RUSTSEC-2024-0420", reason = "gtk-sys: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
+    { id = "RUSTSEC-2024-0429", reason = "glib unsound: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
+
+    # ── Tauri non-GTK3 transitives ────────────────────────────────────
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: tauri build-time transitive, unmaintained" },
+    { id = "RUSTSEC-2025-0057", reason = "fxhash: tauri transitive, unmaintained" },
+    { id = "RUSTSEC-2025-0075", reason = "unic-char-range: tauri transitive, unmaintained" },
+    { id = "RUSTSEC-2025-0080", reason = "unic-common: tauri transitive, unmaintained" },
+    { id = "RUSTSEC-2025-0081", reason = "unic-char-property: tauri transitive, unmaintained" },
+    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: tauri transitive, unmaintained" },
+    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: tauri transitive, unmaintained" },
+    # rand 0.7.3 + 0.8.5 enter the graph via phf → kuchikiki → tauri-utils
+    # (build-time). Production rand is on 0.9.3, already patched, so the
+    # runtime path is not affected.
+    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 + 0.8.5: phf/tauri build transitives — production rand is 0.9.3" },
+
+    # ── velesdb-cli transitive ────────────────────────────────────────
+    { id = "RUSTSEC-2024-0384", reason = "instant: velesdb-cli transitive (clap/indicatif chain), unmaintained" },
+
+    # ── SIMD / quantization transitive ────────────────────────────────
+    { id = "RUSTSEC-2024-0436", reason = "paste: simdeez transitive, unmaintained" },
+
+    # ── Embedded / heapless transitive (postcard 1.x) ─────────────────
+    # postcard 1.x is a load-bearing serializer in velesdb-core; postcard 2.x
+    # drops atomic-polyfill but is API-breaking — migration is tracked in
+    # the storage format v2 backlog (not before 2026 Q3).
+    { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill: postcard 1.x → heapless transitive — no fix in postcard 1.x" },
+
+    # ── indicatif transitive ──────────────────────────────────────────
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif transitive, unmaintained" },
+
+    # ── uniffi / velesdb-mobile transitive ────────────────────────────
+    # bincode was dropped from velesdb-core directly but re-enters via
+    # uniffi (velesdb-mobile only). Tracked in the uniffi 0.32 upgrade.
+    { id = "RUSTSEC-2025-0141", reason = "bincode: uniffi transitive (velesdb-mobile only) — awaiting uniffi upgrade" },
+
+    # ── rustls-pemfile (no live vulnerability) ────────────────────────
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: unmaintained marker only, no active CVE" },
 ]
 
 [licenses]
