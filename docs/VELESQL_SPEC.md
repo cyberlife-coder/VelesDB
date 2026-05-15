@@ -3095,6 +3095,51 @@ DESCRIBE documents
 
 -- View query execution plan without running
 EXPLAIN SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
+
+-- Run with instrumentation: get the plan + actual rows / time / per-node stats
+-- (v1.15.0+: also returns feedback_calibration once the EMA loop is warm)
+EXPLAIN ANALYZE SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
+```
+
+### Window Functions
+
+```sql
+-- Rank top-3 results per category by vector similarity
+SELECT id, title, category, similarity() AS score,
+       ROW_NUMBER() OVER (PARTITION BY category ORDER BY similarity() DESC) AS rank_in_cat
+FROM articles
+WHERE vector NEAR $query
+LIMIT 50
+
+-- Dense rank by an aggregated metric per author
+SELECT author, year, COUNT(*) AS papers,
+       DENSE_RANK() OVER (PARTITION BY author ORDER BY COUNT(*) DESC) AS productivity_rank
+FROM publications
+GROUP BY author, year
+```
+
+### Agent Memory
+
+```sql
+-- Recall the 5 facts most similar to a query embedding (semantic memory)
+SELECT * FROM _semantic_memory
+WHERE vector NEAR $query
+ORDER BY similarity() DESC
+LIMIT 5
+
+-- Recent events from the last day (episodic memory)
+SELECT * FROM _episodic_memory
+WHERE timestamp > NOW() - INTERVAL '1 day'
+ORDER BY timestamp DESC
+LIMIT 50
+
+-- Recall high-confidence procedures matching a goal embedding.
+-- With v1.15.0 ACT-R decay enabled (`with_activation_decay(0.5)`),
+-- `confidence` here is the time-decayed effective confidence.
+SELECT * FROM _procedural_memory
+WHERE vector NEAR $goal AND confidence > 0.6
+ORDER BY confidence DESC
+LIMIT 10
 ```
 
 ### Administration
