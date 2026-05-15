@@ -10,7 +10,7 @@ Switch to VelesDB in minutes, not days. `velesdb-migrate` handles the heavy lift
 
 > **Why migrate to VelesDB?**
 > 
-> - ⚡ **Microsecond latency** — 47.0µs search (10K/768D), no network round-trip
+> - ⚡ **Microsecond latency** — ~55 µs HNSW search index-only (10K/768D Balanced k=10) and ~450 µs end-to-end p50 (10K/384D, WAL ON, recall ≥ 96%) — no network round-trip; see [`docs/reference/promise-contract.json`](../../docs/reference/promise-contract.json)
 > - 🎯 **SQL-native queries** — Use familiar VelesQL syntax, no new APIs to learn
 > - 💾 **4-32x compression** — SQ8 and Binary quantization built-in
 > - 🔒 **Self-hosted** — Your data stays on your infrastructure
@@ -761,7 +761,7 @@ velesdb-server --port 8080
 
 ### Why developers choose VelesDB:
 
-- ✅ **47.0µs local search** — no network overhead
+- ✅ **~55 µs HNSW search (index-only)** / **~450 µs end-to-end p50** — no network overhead (see promise-contract)
 - ✅ **SQL syntax** you already know  
 - ✅ **Self-contained** — single 6 MB binary, no external services
 - ✅ **Self-hosted**, your data stays private
