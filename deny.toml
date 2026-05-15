@@ -6,7 +6,7 @@ db-path = "~/.cargo/advisory-db"
 # present, no fix released), and bump the "Last reviewed" date in the
 # block-level comment below, or (b) remove the ignore if the transitive
 # is gone or the advisory has been patched. The current pass landed on
-# 2026-05-15 (see PR #813).
+# 2026-05-15 (see PR #811).
 #
 # Last reviewed: 2026-05-15
 ignore = [
