@@ -66,6 +66,13 @@ impl Collection {
         for id in ids {
             Self::backfill_single_payload(&*payload_storage, id, field_name, &mut tree_guard);
         }
+        // Deduplicate each bucket in one O(k log k) pass rather than checking
+        // contains() per-insertion (was O(k) per insert → O(k²) total for a
+        // bucket of k IDs, e.g. low-cardinality fields like status/category).
+        for ids_vec in tree_guard.values_mut() {
+            ids_vec.sort_unstable();
+            ids_vec.dedup();
+        }
         if !is_new {
             tracing::debug!(
                 field = field_name,
@@ -75,6 +82,8 @@ impl Collection {
     }
 
     /// Indexes a single payload entry for the given field, if present.
+    ///
+    /// Callers are responsible for deduplication (see `backfill_secondary_index`).
     fn backfill_single_payload(
         payload_storage: &dyn crate::storage::PayloadStorage,
         id: u64,
@@ -84,10 +93,7 @@ impl Collection {
         if let Ok(Some(payload)) = payload_storage.retrieve(id) {
             if let Some(val) = payload.get(field_name) {
                 if let Some(key) = JsonValue::from_json(val) {
-                    let ids_vec = tree_guard.entry(key).or_default();
-                    if !ids_vec.contains(&id) {
-                        ids_vec.push(id);
-                    }
+                    tree_guard.entry(key).or_default().push(id);
                 }
             }
         }
