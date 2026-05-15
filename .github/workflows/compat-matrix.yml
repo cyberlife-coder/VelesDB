@@ -84,9 +84,12 @@ jobs:
         run: cargo check -p velesdb-core -p velesdb-wasm --target wasm32-unknown-unknown --no-default-features
 
   loom-check:
-    name: Loom check (nightly optional)
+    # This is a compile check (no test run), so it's deterministic — no
+    # flake risk to weigh against making the gate required. Loom is also
+    # how we catch concurrency-model drift between the `loom` and non-loom
+    # builds; silencing this gate would let breakage land for free.
+    name: Loom check (nightly)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
