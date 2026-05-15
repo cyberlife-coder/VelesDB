@@ -227,6 +227,12 @@ jobs:
           # Integration-level examples — must at least compile cleanly so a
           # user copying the file into their project doesn't hit a SyntaxError.
           python -m py_compile integrations/haystack/examples/rag_pipeline.py
+          # rag-pdf-demo had no CI coverage at all until 2026-05-15; a
+          # syntax smoke catches the most common breakage class for a
+          # demo that's frequently copy-pasted by RAG users.
+          python -m py_compile demos/rag-pdf-demo/src/*.py
+          python -m py_compile demos/rag-pdf-demo/benchmark_latency.py
+          python -m py_compile demos/rag-pdf-demo/benchmark_layers.py
       - name: Tauri demo frontend build smoke
         working-directory: demos/tauri-rag-app
         run: |
