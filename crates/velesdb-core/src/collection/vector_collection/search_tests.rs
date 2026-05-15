@@ -388,17 +388,24 @@ async fn test_enable_streaming_sends_and_searches() {
     // using search() as the gate removes that race entirely.
     let query = [1.0_f32, 0.0, 0.0, 0.0];
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut timed_out = false;
     let results = loop {
         let r = coll.search(&query, 4).expect("search should succeed");
-        let ready = r.first().is_some_and(|top| top.point.id == 1);
-        if ready || tokio::time::Instant::now() >= deadline {
+        if r.first().is_some_and(|top| top.point.id == 1) {
+            break r;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            timed_out = true;
             break r;
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     };
     assert!(
-        !results.is_empty(),
-        "streamed points should be searchable after drain"
+        !timed_out,
+        "timed out waiting for streamed points to be searchable \
+         (got {} results, top id = {:?})",
+        results.len(),
+        results.first().map(|h| h.point.id),
     );
     assert_eq!(results[0].point.id, 1, "closest match should be id=1");
 }
