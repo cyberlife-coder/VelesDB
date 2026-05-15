@@ -20,8 +20,8 @@ VelesDB Mobile brings microsecond vector search to edge devices - perfect for on
 ```swift
 import VelesDB
 
-// Open database (UniFFI constructor)
-let db = try VelesDatabase(path: documentsPath + "/velesdb")
+// Open database (UniFFI named constructor — Rust `#[uniffi::constructor] open` becomes a Swift static method, not a default init)
+let db = try VelesDatabase.open(path: documentsPath + "/velesdb")
 
 // Create collection (768D for MiniLM, 384D for all-MiniLM-L6-v2)
 try db.createCollection(name: "documents", dimension: 384, metric: .cosine)
@@ -51,8 +51,8 @@ for result in results {
 ```kotlin
 import com.velesdb.mobile.*
 
-// Open database (UniFFI constructor)
-val db = VelesDatabase("${context.filesDir}/velesdb")
+// Open database (UniFFI named constructor — Rust `#[uniffi::constructor] open` becomes a Kotlin companion-object factory, not a default constructor)
+val db = VelesDatabase.open("${context.filesDir}/velesdb")
 
 // Create collection
 db.createCollection("documents", 384u, DistanceMetric.COSINE)
