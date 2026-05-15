@@ -31,7 +31,7 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # CLI
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 
 # HTTP client for API-based sources
 # Use native-tls to avoid ring 0.17.14 compilation issues on aarch64-apple-darwin
@@ -54,7 +54,7 @@ console = "0.16"
 async-trait = "0.1"
 
 # UUID for point IDs
-uuid = { version = "1.11", features = ["v4", "serde"] }
+uuid = { version = "1.23", features = ["v4", "serde"] }
 
 # URL parsing for SSRF-resistant validate_url
 url = "2.5"
