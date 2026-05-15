@@ -276,6 +276,26 @@ Source: `benchmarks/baseline.json`.
 | Hybrid (vector + filter) | ~0.27 ms | Filtered vector search |
 | Batch insert (10K / 128D) | ~9 s total | Sequential HNSW build |
 
+## Agent Memory (optional)
+
+`llamaindex-velesdb` re-exports three agent-memory wrappers around VelesDB's
+native memory subsystems. They are imported lazily — if the underlying
+`velesdb` native extension isn't installed, the import becomes a no-op and
+the symbols are exposed as `None`.
+
+```python
+from llamaindex_velesdb import (
+    VelesDBSemanticMemory,       # long-term knowledge store
+    VelesDBEpisodicMemory,       # time-sequenced event recall
+    VelesDBProceduralMemory,     # learned procedures with reinforcement
+)
+```
+
+See `llamaindex_velesdb/memory.py` for the full per-class API. The
+companion `GraphLoader`, `GraphRetriever`, and `GraphQARetriever` exports
+(top of the public namespace) are documented in the Graph Retrieval
+section above.
+
 ## Comparison with Other Stores
 
 | Feature | VelesDB | Chroma | Pinecone |
