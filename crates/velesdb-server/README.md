@@ -470,11 +470,14 @@ The following endpoints bypass authentication even when API keys are configured:
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /health` | Liveness probe |
-| `GET /ready` | Readiness probe |
-| `GET /metrics` | Prometheus metrics (if enabled) |
+| `GET /health`, `GET /v1/health` | Liveness probe |
+| `GET /ready`, `GET /v1/ready` | Readiness probe |
 
-This allows load balancers and orchestrators to probe the server without credentials.
+This allows load balancers and orchestrators to probe the server without
+credentials. `GET /metrics` (Prometheus) is **gated by the API key** when
+auth is enabled — see `src/auth.rs::is_public_path` and finding F-02 in
+the auth audit; the metrics endpoint can leak collection names and
+write rates, so it is intentionally not in the public list.
 
 ## TLS / HTTPS
 
@@ -613,10 +616,14 @@ readinessProbe:
 
 ## Performance
 
-- **Cosine similarity**: ~33.1 ns per operation (768d)
-- **Dot product**: ~19.8 ns per operation (768d)
-- **Search latency**: 47.0 µs for 10K vectors (768D, Balanced mode)
-- **Throughput**: 38.8 Gelem/s (dot product, 768D)
+Numbers match the canonical contract in
+[`docs/reference/promise-contract.json`](../../docs/reference/promise-contract.json)
+(i9-14900KF, AVX2, `--release`, `target-cpu=native`):
+
+- **Cosine similarity**: ~33 ns per operation (768D)
+- **Dot product**: ~21.7 ns per operation (768D), ~35 Gelem/s
+- **HNSW search (index-only)**: ~55 µs (10K vectors, 768D, Balanced mode, k=10)
+- **End-to-end search p50**: ~450 µs (10K/384D, WAL ON, recall ≥ 96%)
 
 ## Configuration Reference
 
