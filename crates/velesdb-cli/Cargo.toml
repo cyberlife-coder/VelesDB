@@ -24,7 +24,7 @@ clap = { version = "4.6", features = ["derive", "env"] }
 clap_complete = "4.6"
 
 # REPL
-rustyline = { version = "14.0", features = ["derive"] }
+rustyline = { version = "18.0", features = ["derive"] }
 
 # Table formatting
 comfy-table = "7.1"
