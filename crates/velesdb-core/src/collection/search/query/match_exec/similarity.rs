@@ -294,7 +294,8 @@ impl Collection {
     /// ascending for distance metrics.
     pub(super) fn sort_by_score(results: &mut [MatchResult], higher_is_better: bool) {
         if higher_is_better {
-            results.sort_unstable_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+            results
+                .sort_unstable_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
         } else {
             results.sort_unstable_by(|a, b| {
                 a.score
