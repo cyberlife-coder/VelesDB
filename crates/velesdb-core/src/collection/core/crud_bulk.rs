@@ -179,7 +179,7 @@ impl Collection {
 
         self.store_vectors_and_payloads_inner(vector_refs, points, fsync)?;
 
-        let inserted = self.bulk_index_or_defer(vector_refs.to_vec());
+        let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
 
         self.apply_sparse_batch_bulk(sparse_batch)?;

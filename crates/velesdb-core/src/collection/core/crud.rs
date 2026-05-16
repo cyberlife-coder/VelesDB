@@ -91,7 +91,7 @@ impl Collection {
         // Phase 3: Batch HNSW insert
         let vector_refs: Vec<(u64, &[f32])> =
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
-        self.bulk_index_or_defer(vector_refs);
+        self.bulk_index_or_defer(&vector_refs);
 
         Ok((sparse_batch, old_payloads))
     }

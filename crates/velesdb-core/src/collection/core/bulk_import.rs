@@ -90,7 +90,7 @@ impl Collection {
         self.update_label_index_from_raw(ids, payloads);
         self.update_secondary_indexes_from_raw(ids, payloads);
 
-        let inserted = self.bulk_index_or_defer(vector_refs);
+        let inserted = self.bulk_index_or_defer(&vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
 
         self.maintain_histograms_for_raw(ids, payloads, &old_payloads);

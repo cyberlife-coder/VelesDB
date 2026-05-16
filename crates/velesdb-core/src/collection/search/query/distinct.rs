@@ -119,7 +119,7 @@ fn canonical_json_string(value: &serde_json::Value) -> String {
         serde_json::Value::Object(map) => {
             // Sort keys alphabetically for deterministic output
             let mut keys: Vec<_> = map.keys().collect();
-            keys.sort();
+            keys.sort_unstable();
             let pairs: Vec<String> = keys
                 .iter()
                 .map(|k| format!("{}:{}", k, canonical_json_string(&map[*k])))
