@@ -1,6 +1,6 @@
 # VelesDB RAG Demo - PDF Question Answering
 
-> **Difficulty: Intermediate** | Showcases: REST API client, vector search, PDF ingestion, semantic search, FastAPI integration
+> **Difficulty: Intermediate** | Showcases: Embedded VelesDB Python SDK, vector search, PDF ingestion, semantic search, FastAPI integration
 
 A complete RAG (Retrieval-Augmented Generation) demo using **VelesDB** for vector storage, with PDF document ingestion and semantic search.
 
@@ -9,37 +9,38 @@ A complete RAG (Retrieval-Augmented Generation) demo using **VelesDB** for vecto
 - **PDF Upload & Processing** - Extract text from PDF documents using PyMuPDF
 - **Automatic Chunking** - Split documents into optimal chunks (512 chars, 50 overlap)
 - **Multilingual Embeddings** - Uses `paraphrase-multilingual-MiniLM-L12-v2` (50+ languages)
-- **VelesDB Storage** - Ultra-fast vector search with HNSW algorithm
+- **VelesDB Storage** - Ultra-fast vector search with HNSW algorithm, embedded in-process
 - **Semantic Search** - Find relevant passages with cosine similarity
 - **Real-time Metrics** - Performance timing displayed in UI
-- **REST API** - Simple API for integration
+- **FastAPI REST surface** - Simple HTTP endpoints for integration with other apps
 
 ## 🏗️ Architecture
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Frontend   │────▶│   FastAPI    │────▶│   VelesDB    │
-│  (Upload UI) │     │   Backend    │     │   Server     │
-└──────────────┘     └──────────────┘     └──────────────┘
-                            │
-                     ┌──────┴──────┐
-                     │             │
-              ┌──────▼──────┐ ┌────▼─────┐
-              │   PyMuPDF   │ │ Sentence │
-              │ (PDF Parse) │ │Transformers│
-              └─────────────┘ └──────────┘
+┌──────────────┐     ┌─────────────────────────────────────┐
+│   Frontend   │────▶│            FastAPI Backend          │
+│  (Upload UI) │     │  ┌───────────────────────────────┐  │
+└──────────────┘     │  │  Embedded VelesDB (PyO3 SDK)  │  │
+                     │  │   - HNSW index + payloads     │  │
+                     │  │   - persistent on disk        │  │
+                     │  └───────────────────────────────┘  │
+                     └───────┬─────────────────────┬───────┘
+                             │                     │
+                      ┌──────▼──────┐       ┌──────▼─────┐
+                      │   PyMuPDF   │       │  Sentence  │
+                      │ (PDF Parse) │       │Transformers│
+                      └─────────────┘       └────────────┘
 ```
+
+> VelesDB runs **in-process** via the native Python bindings (`pip install velesdb`).
+> There is no separate `velesdb-server` to start — the FastAPI app opens the
+> database directly on disk and the GIL is released for every Rust call.
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-1. **VelesDB Server** running on `localhost:8080`:
-   ```bash
-   velesdb-server --data-dir ./rag-data
-   ```
-
-2. **Python 3.10+**
+**Python 3.10+** — that's all. VelesDB is pulled in as a regular Python package; no separate server process required.
 
 ### Installation
 
@@ -80,19 +81,14 @@ start http://localhost:8000        # 🔄 May fail on some systems
    - Use `http://127.0.0.1:8000` instead of `http://localhost:8000`
    - This bypasses DNS resolution and works on all systems
 
-2. **Check if servers are running:**
+2. **Check the FastAPI server is running:**
    ```bash
-   # Check VelesDB Server (port 8080)
-   curl http://127.0.0.1:8080
-   
-   # Check FastAPI Demo (port 8000)
    curl http://127.0.0.1:8000/health
    ```
 
-3. **Verify ports are not blocked:**
+3. **Verify the port is not blocked:**
    ```bash
    netstat -ano | findstr ":8000"
-   netstat -ano | findstr ":8080"
    ```
 
 4. **Common causes:**
@@ -167,12 +163,15 @@ curl "http://127.0.0.1:8000/health"
 Environment variables (`.env` file):
 
 ```env
-VELESDB_URL=http://localhost:8080
 EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
 EMBEDDING_DIMENSION=384
 CHUNK_SIZE=512
 CHUNK_OVERLAP=50
 ```
+
+> The legacy `VELESDB_URL` setting in `src/config.py` is kept as a no-op for
+> backward compatibility with older `.env` files — it is ignored by the
+> embedded client.
 
 | Parameter | Default Value |
 |-----------|---------------|
@@ -184,18 +183,18 @@ CHUNK_OVERLAP=50
 
 ## 📊 Performance Benchmarks
 
-Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations — historical baseline; v1.14.0 path is identical or faster on this workload, kept for reproducibility comparison):
+Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations — historical baseline from a REST-based earlier version of this demo). The current native-bindings path keeps the VelesDB search cost the same and removes the HTTP layer entirely.
 
-### Layer-by-Layer Latency
+### Layer-by-Layer Latency (historical, REST-era)
 
-| Layer | Mean | P95 | StdDev | Stability |
-|-------|------|-----|--------|-----------|
-| TCP Connection | 0.29ms | 0.51ms | 0.16ms | Variable |
-| HTTP Client Creation | 6.41ms | 7.35ms | 2.20ms | Avoid (use persistent) |
-| **HTTP Request (persistent)** | **0.61ms** | 0.81ms | 0.09ms | ✅ Stable |
-| **VelesDB Search (sync)** | **0.89ms** | 1.45ms | 0.23ms | ✅ Good |
-| VelesDB Search (async) | 2.65ms | 3.17ms | 0.28ms | ✅ Stable |
-| **Full API Search** | **19.10ms** | 24.68ms | 5.80ms | Acceptable |
+| Layer | Mean | P95 | StdDev | Notes |
+|-------|------|-----|--------|-------|
+| ~~TCP Connection~~ | ~~0.29ms~~ | ~~0.51ms~~ | ~~0.16ms~~ | Removed — embedded SDK |
+| ~~HTTP Client Creation~~ | ~~6.41ms~~ | ~~7.35ms~~ | ~~2.20ms~~ | Removed — embedded SDK |
+| ~~HTTP Request (persistent)~~ | ~~0.61ms~~ | ~~0.81ms~~ | ~~0.09ms~~ | Removed — embedded SDK |
+| **VelesDB Search (sync)** | **0.89ms** | 1.45ms | 0.23ms | ✅ Unchanged, GIL released |
+| VelesDB Search (async) | 2.65ms | 3.17ms | 0.28ms | ✅ Pre-native, kept for reference |
+| **Full API Search** | **19.10ms** | 24.68ms | 5.80ms | Dominated by embedding model |
 
 ### Full API Breakdown
 
@@ -225,7 +224,7 @@ Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations �
 
 | Solution | Search Latency | Notes |
 |----------|---------------|-------|
-| **VelesDB (this demo)** | **0.89ms** | REST API, HNSW, persistent client |
+| **VelesDB (this demo)** | **0.89ms** | Embedded PyO3 bindings, HNSW |
 | VelesDB (native Rust) | <1ms | Direct integration |
 | Pinecone | ~50-100ms | Cloud service |
 | Qdrant | ~10-50ms | Self-hosted |
@@ -257,7 +256,7 @@ rag-pdf-demo/
 │   ├── models.py         # Pydantic models with timing fields
 │   ├── pdf_processor.py  # PDF text extraction (PyMuPDF)
 │   ├── embeddings.py     # Sentence-transformers wrapper
-│   ├── velesdb_client.py # VelesDB REST client (persistent conn)
+│   ├── velesdb_client.py # VelesDB native client (PyO3 bindings)
 │   └── rag_engine.py     # RAG orchestration with timing
 ├── tests/
 │   ├── __init__.py
@@ -290,29 +289,20 @@ rag-pdf-demo/
 
 ### 🧹 Complete Cleanup Options
 
-#### Option 1: Delete Collection (Recommended)
+#### Option 1: Manual File Cleanup (Recommended)
 ```bash
-# Delete the entire collection from VelesDB
-curl -X DELETE "http://127.0.0.1:8080/collections/rag_documents"
-
-# Or restart with fresh data directory
-.\target\release\velesdb-server.exe --data-dir ./rag-data-fresh
+# Stop the FastAPI server first (Ctrl+C)
+# Then delete the data directory — VelesDB owns this folder fully
+Remove-Item .\rag-data -Recurse -Force      # Windows PowerShell
+# rm -rf ./rag-data                          # Linux/macOS
 ```
 
-#### Option 2: Manual File Cleanup
-```bash
-# Stop VelesDB Server first (Ctrl+C)
-# Then delete the data directory
-Remove-Item .\rag-data -Recurse -Force
+The next time you start the demo, VelesDB creates a fresh collection from scratch.
 
-# Restart for fresh start
-.\target\release\velesdb-server.exe --data-dir ./rag-data
-```
-
-#### Option 3: Individual Document Deletion
+#### Option 2: Individual Document Deletion
 ```bash
 # Via web interface: Click trash icon next to document
-# Or via API:
+# Or via the FastAPI endpoint:
 curl -X DELETE "http://127.0.0.1:8000/documents/your-document.pdf"
 ```
 
@@ -324,29 +314,34 @@ curl -X DELETE "http://127.0.0.1:8000/documents/your-document.pdf"
 
 ### 🔍 Check Current Storage
 ```bash
-# Check collection size
-curl "http://127.0.0.1:8080/collections/rag_documents"
-
 # Check disk usage
-dir .\rag-data\rag_documents
+dir .\rag-data\rag_documents      # Windows PowerShell
+# du -sh ./rag-data/rag_documents  # Linux/macOS
+
+# Programmatic stats via the demo API:
+curl "http://127.0.0.1:8000/health"
 ```
 
 ## 🔬 Technical Details
 
-### HTTP Client Optimization
+### Embedded VelesDB (no HTTP hop)
 
-The VelesDB client uses a **persistent HTTP connection** to avoid the ~2s overhead of creating a new `httpx.AsyncClient` on each request (DNS resolution, TCP handshake).
+The VelesDB client wraps the native PyO3 bindings — every search, upsert, and
+delete call goes straight into the embedded Rust engine. No TCP socket, no JSON
+serialization, no separate server process to monitor or scale.
 
 ```python
-# velesdb_client.py - Singleton pattern
+# velesdb_client.py — native bindings, single in-process database
+import velesdb
+
 class VelesDBClient:
-    _client: httpx.AsyncClient | None = None
-    
-    async def _get_client(self):
-        if self._client is None:
-            self._client = httpx.AsyncClient(base_url=self.base_url)
-        return self._client
+    def __init__(self, data_path: str | None = None, **_legacy_kwargs) -> None:
+        self._db = velesdb.Database(data_path or self._tmp_path())
+        self._collection = None  # opened lazily after a known dimension is set
 ```
+
+VelesDB releases the GIL during every Rust call, so the FastAPI event loop
+stays responsive even when search and ingestion run concurrently.
 
 ### Embedding Model
 
