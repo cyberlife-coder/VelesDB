@@ -175,7 +175,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // interleaved with other nodes at similar distances.
             all_results.sort_unstable_by_key(|r| r.0);
             all_results.dedup_by_key(|r| r.0);
-            all_results.sort_by(|a, b| a.1.total_cmp(&b.1));
+            all_results.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
             all_results.truncate(k);
             Some(all_results)
         }
