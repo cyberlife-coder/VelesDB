@@ -109,27 +109,23 @@ fn rand_jitter() -> f64 {
 
 /// Determines if an error is retryable.
 pub fn is_retryable_error(error: &Error) -> bool {
-    // Check error message for retryable patterns
-    let error_msg = error.to_string().to_lowercase();
-
-    // Rate limits are always retryable
+    // Check struct-level variants first to avoid the string allocation.
     if matches!(error, Error::RateLimit(_)) {
         return true;
     }
-
-    // IO errors are often transient
     if matches!(error, Error::Io(_)) {
         return true;
     }
 
-    // HTTP errors - check for retryable status codes
+    // Fall back to message inspection — allocate the lowercase string once.
+    let error_msg = error.to_string().to_lowercase();
+
     if matches!(error, Error::Http(_)) {
         return error_msg.contains("timeout")
             || error_msg.contains("connection")
             || error_msg.contains("reset");
     }
 
-    // Check message content for retryable patterns
     let is_rate_limit = error_msg.contains("429")
         || error_msg.contains("rate limit")
         || error_msg.contains("too many requests");
@@ -147,13 +143,7 @@ pub fn is_retryable_error(error: &Error) -> bool {
         || error_msg.contains("bad gateway")
         || error_msg.contains("service unavailable");
 
-    // Source/Extraction errors with retryable messages
-    match error {
-        Error::SourceConnection(_) | Error::Extraction(_) => {
-            is_rate_limit || is_transient || is_server_error
-        }
-        _ => is_rate_limit || is_transient || is_server_error,
-    }
+    is_rate_limit || is_transient || is_server_error
 }
 
 /// Executes an async operation with retry logic.

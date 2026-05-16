@@ -2,6 +2,8 @@
 //!
 //! Extracted from mod.rs to reduce file size and improve modularity.
 
+use std::fmt::Write as _;
+
 use crate::point::SearchResult;
 use crate::velesql::SelectColumns;
 use rustc_hash::FxHashSet;
@@ -103,8 +105,8 @@ pub fn compute_distinct_key(
     };
 
     if include_score {
-        key.push('\x1F');
-        key.push_str(&result.score.to_string());
+        // write! into String is infallible; avoids a temporary String allocation
+        let _ = write!(key, "\x1F{}", result.score);
     }
 
     key

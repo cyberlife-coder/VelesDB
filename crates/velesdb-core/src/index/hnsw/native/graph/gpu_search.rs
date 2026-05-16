@@ -231,7 +231,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // is the declared lock order.
         let (dim, arc) = self.with_vectors_read(|vectors| {
             let d = vectors.dimension();
-            let arc: std::sync::Arc<[f32]> = vectors.as_flat_slice().to_vec().into();
+            let arc: std::sync::Arc<[f32]> = std::sync::Arc::from(vectors.as_flat_slice());
             (d, arc)
         });
         *snapshot = Some((current_version, dim, arc.clone()));
