@@ -211,7 +211,7 @@ impl FusionStrategy {
 
     /// Sorts a fused result set by score descending.
     fn sort_descending(fused: &mut [(u64, f32)]) {
-        fused.sort_by(|a, b| b.1.total_cmp(&a.1));
+        fused.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
     }
 
     /// Average fusion: mean of scores for each document.

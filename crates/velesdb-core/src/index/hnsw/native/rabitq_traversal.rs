@@ -159,7 +159,7 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
 
         let mut result_vec: Vec<(NodeId, f32)> =
             results.into_iter().map(|dn| (dn.node, dn.dist)).collect();
-        result_vec.sort_by(|a, b| a.1.total_cmp(&b.1));
+        result_vec.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         result_vec.truncate(k);
         result_vec
     }
