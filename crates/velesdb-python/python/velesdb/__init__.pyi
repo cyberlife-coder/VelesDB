@@ -44,13 +44,18 @@ class GraphNodeDict(TypedDict, total=False):
 
 
 class TraversalResultDict(TypedDict, total=False):
-    """Shape of a traversal step (BFS/DFS) returned by ``traverse_*`` methods."""
+    """Shape of a traversal step (BFS/DFS) returned by ``traverse_*`` methods.
 
-    node_id: int
+    The keys mirror exactly what the PyO3 binding emits in
+    ``crates/velesdb-python/src/graph.rs::traversal_to_dict``.
+    """
+
+    target_id: int
+    """ID of the node reached at this traversal step."""
+    path: List[int]
+    """Node IDs visited from the source up to and including ``target_id``."""
     depth: int
-    parent_id: Optional[int]
-    label: Optional[str]
-    payload: Optional[Dict[str, Any]]
+    """Number of edges from the source to ``target_id`` (source = depth 0)."""
 
 
 class FusionStrategy:
