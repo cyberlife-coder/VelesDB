@@ -395,9 +395,13 @@ fn build_per_distinct_buckets(sorted: &[f64], distinct: usize) -> Vec<HistogramB
 fn build_equidepth_buckets(sorted: &[f64], num_buckets: usize) -> Vec<HistogramBucket> {
     let chunk_size = sorted.len().div_ceil(num_buckets);
     let mut buckets = Vec::with_capacity(num_buckets);
+    // Track the running start offset of each chunk instead of re-summing existing
+    // bucket counts on every iteration (O(n) per call → O(n²) total without this).
+    let mut offset = 0usize;
     for chunk in sorted.chunks(chunk_size) {
         let lower = chunk[0];
-        let upper = upper_bound_for_chunk(chunk, sorted, &buckets);
+        let upper = upper_bound_for_chunk(chunk, sorted, offset);
+        offset += chunk.len();
         buckets.push(HistogramBucket {
             lower_bound: lower,
             upper_bound: upper,
@@ -461,9 +465,10 @@ pub(crate) fn merge_zero_width_buckets(buckets: Vec<HistogramBucket>) -> Vec<His
 
 /// Computes the upper bound for an equi-depth chunk.
 ///
+/// `offset` is the index in `sorted` where this chunk starts.
 /// Uses the next chunk's first value if available, otherwise last value + epsilon.
-fn upper_bound_for_chunk(chunk: &[f64], sorted: &[f64], existing: &[HistogramBucket]) -> f64 {
-    let chunk_end_offset = existing.iter().map(|b| b.count as usize).sum::<usize>() + chunk.len();
+fn upper_bound_for_chunk(chunk: &[f64], sorted: &[f64], offset: usize) -> f64 {
+    let chunk_end_offset = offset + chunk.len();
     if chunk_end_offset < sorted.len() {
         sorted[chunk_end_offset]
     } else {
