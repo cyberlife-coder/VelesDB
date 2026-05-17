@@ -40,13 +40,15 @@ impl Collection {
             )));
         }
 
-        let dimension = self.config.read().dimension;
+        let (dimension, metric) = {
+            let cfg = self.config.read();
+            (cfg.dimension, cfg.metric)
+        };
         for query in queries {
             validate_dimension_match(dimension, query.len())?;
         }
 
         let candidates_k = k.saturating_mul(4).max(k + 10);
-        let metric = self.config.read().metric;
         let higher_is_better = metric.higher_is_better();
         let index_results =
             self.index
@@ -136,9 +138,10 @@ impl Collection {
         queries: &[&[f32]],
         k: usize,
     ) -> Result<Vec<Vec<SearchResult>>> {
-        let config = self.config.read();
-        let dimension = config.dimension;
-        drop(config);
+        let (dimension, metric) = {
+            let cfg = self.config.read();
+            (cfg.dimension, cfg.metric)
+        };
 
         // Validate all query dimensions first
         for query in queries {
@@ -146,7 +149,6 @@ impl Collection {
         }
 
         // Perf: Use parallel HNSW search (P0 optimization)
-        let metric = self.config.read().metric;
         let index_results =
             self.index
                 .search_batch_parallel(queries, k, SearchQuality::Balanced)?;

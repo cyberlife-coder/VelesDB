@@ -230,7 +230,7 @@ impl Collection {
             .into_iter()
             .map(|Reverse((OrderedFloat(s), id))| (id, s))
             .collect();
-        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
         scored
     }
 
@@ -308,7 +308,7 @@ impl Collection {
         );
 
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
-        scored_ids.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored_ids.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
 
         Ok(
             self.resolve_scored_ids_filtered_with_components(

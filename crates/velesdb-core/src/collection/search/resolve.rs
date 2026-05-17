@@ -65,8 +65,10 @@ pub(crate) fn resolve_scored_results(
 ///
 /// - `higher_is_better = true`: descending (cosine, dot product)
 /// - `higher_is_better = false`: ascending (euclidean distance)
+///
+/// Uses unstable sort: equal-score tie-breaking order is irrelevant for ranking.
 pub(crate) fn sort_results_by_metric(results: &mut [SearchResult], higher_is_better: bool) {
-    results.sort_by(|a, b| {
+    results.sort_unstable_by(|a, b| {
         if higher_is_better {
             b.score
                 .partial_cmp(&a.score)
@@ -80,8 +82,10 @@ pub(crate) fn sort_results_by_metric(results: &mut [SearchResult], higher_is_bet
 }
 
 /// Sorts `ScoredResult` values by score according to metric direction.
+///
+/// Uses unstable sort: equal-score tie-breaking order is irrelevant for ranking.
 pub(crate) fn sort_scored_by_metric(results: &mut [ScoredResult], higher_is_better: bool) {
-    results.sort_by(|a, b| {
+    results.sort_unstable_by(|a, b| {
         if higher_is_better {
             b.score
                 .partial_cmp(&a.score)
@@ -98,9 +102,11 @@ pub(crate) fn sort_scored_by_metric(results: &mut [ScoredResult], higher_is_bett
 ///
 /// Used for BM25 text search, sparse search, and fusion results where
 /// higher scores always indicate better matches.
+///
+/// Uses unstable sort: equal-score tie-breaking order is irrelevant for ranking.
 #[allow(dead_code)]
 pub(crate) fn sort_results_descending(results: &mut [SearchResult]) {
-    results.sort_by(|a, b| {
+    results.sort_unstable_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)

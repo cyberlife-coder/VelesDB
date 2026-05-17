@@ -373,7 +373,7 @@ impl TrigramIndex {
             .collect();
 
         // Sort by score descending
-        results.sort_by(|a, b| b.1.total_cmp(&a.1));
+        results.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
 
         results
     }

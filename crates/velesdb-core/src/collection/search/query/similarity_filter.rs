@@ -409,9 +409,9 @@ impl Collection {
         }
 
         if metric.higher_is_better() {
-            candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+            candidates.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
         } else {
-            candidates.sort_by(|a, b| a.score.total_cmp(&b.score));
+            candidates.sort_unstable_by(|a, b| a.score.total_cmp(&b.score));
         }
 
         candidates.truncate(limit);
