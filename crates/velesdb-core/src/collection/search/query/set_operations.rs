@@ -29,8 +29,7 @@ pub(crate) fn apply_set_operation(
         SetOperator::Except => except(left, &right),
     };
 
-    // Stable sort by score descending.
-    results.sort_by(|a, b| {
+    results.sort_unstable_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)

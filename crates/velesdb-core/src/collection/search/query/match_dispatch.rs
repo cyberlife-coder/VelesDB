@@ -368,13 +368,13 @@ fn sort_match_results_by_score(
     higher_is_better: bool,
 ) {
     if higher_is_better {
-        merged.sort_by(|a, b| {
+        merged.sort_unstable_by(|a, b| {
             let sa = a.score.unwrap_or(f32::NEG_INFINITY);
             let sb = b.score.unwrap_or(f32::NEG_INFINITY);
             sb.total_cmp(&sa)
         });
     } else {
-        merged.sort_by(|a, b| {
+        merged.sort_unstable_by(|a, b| {
             let sa = a.score.unwrap_or(f32::MAX);
             let sb = b.score.unwrap_or(f32::MAX);
             sa.total_cmp(&sb)

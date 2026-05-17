@@ -43,7 +43,7 @@ impl Collection {
             })
             .collect();
 
-        results.sort_by(|a, b| {
+        results.sort_unstable_by(|a, b| {
             for (column, descending) in &sort_columns {
                 let val_a = a.get(column);
                 let val_b = b.get(column);
