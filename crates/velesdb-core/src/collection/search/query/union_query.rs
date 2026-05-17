@@ -68,7 +68,7 @@ impl Collection {
         let mut results: Vec<SearchResult> = results_map.into_values().collect();
 
         // Sort by score descending (similarity matches first)
-        results.sort_by(|a, b| {
+        results.sort_unstable_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
