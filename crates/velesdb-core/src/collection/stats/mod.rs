@@ -259,7 +259,7 @@ impl StatsCollector {
         self.stats
             .column_stats
             .insert(stats.name.clone(), stats.clone());
-        self.stats.field_stats.insert(stats.name.clone(), stats);
+        self.stats.field_stats.insert(stats.name, stats);
     }
 
     /// Adds index statistics
