@@ -75,7 +75,7 @@ pub(crate) fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// SAFETY: `vfmaq_f32` is a non-faulting register operation on aarch64.
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[inline]
 unsafe fn neon_fma_compat(
     a: std::arch::aarch64::float32x4_t,
     b: std::arch::aarch64::float32x4_t,
