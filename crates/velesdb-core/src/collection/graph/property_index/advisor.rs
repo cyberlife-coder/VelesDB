@@ -98,7 +98,7 @@ impl QueryPatternTracker {
     #[must_use]
     pub fn expensive_patterns(&self) -> Vec<(&QueryPattern, &PatternStats)> {
         let mut patterns: Vec<_> = self.patterns.iter().collect();
-        patterns.sort_by_key(|b| std::cmp::Reverse(b.1.total_time_ms));
+        patterns.sort_unstable_by_key(|b| std::cmp::Reverse(b.1.total_time_ms));
         patterns
     }
 
@@ -195,8 +195,7 @@ impl IndexAdvisor {
             });
         }
 
-        // Sort by priority (highest first)
-        suggestions.sort_by(|a, b| {
+        suggestions.sort_unstable_by(|a, b| {
             b.priority_score
                 .partial_cmp(&a.priority_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
