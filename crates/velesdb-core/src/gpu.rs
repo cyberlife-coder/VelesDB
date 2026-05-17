@@ -32,7 +32,7 @@ mod gpu_backend;
 #[path = "gpu/gpu_backend_tests.rs"]
 mod gpu_backend_tests;
 
-#[cfg(all(test, feature = "gpu"))]
+#[cfg(all(test, feature = "gpu", feature = "persistence"))]
 #[path = "gpu/gpu_csr_tests.rs"]
 mod gpu_csr_extended_tests;
 
@@ -40,25 +40,25 @@ mod gpu_csr_extended_tests;
 #[path = "gpu/pq_gpu.rs"]
 pub mod pq_gpu;
 
-#[cfg(feature = "gpu")]
+#[cfg(all(feature = "gpu", feature = "persistence"))]
 #[path = "gpu/gpu_csr.rs"]
 pub mod gpu_csr;
 
-#[cfg(feature = "gpu")]
+#[cfg(all(feature = "gpu", feature = "persistence"))]
 #[path = "gpu/gpu_traversal_buffers.rs"]
 mod gpu_traversal_buffers;
 
-#[cfg(feature = "gpu")]
+#[cfg(all(feature = "gpu", feature = "persistence"))]
 #[path = "gpu/gpu_traversal_pipelines.rs"]
 mod gpu_traversal_pipelines;
 
-#[cfg(feature = "gpu")]
+#[cfg(all(feature = "gpu", feature = "persistence"))]
 #[path = "gpu/gpu_traversal.rs"]
 pub mod gpu_traversal;
 
 #[cfg(feature = "gpu")]
 pub use gpu_backend::GpuAccelerator;
-#[cfg(feature = "gpu")]
+#[cfg(all(feature = "gpu", feature = "persistence"))]
 pub use gpu_traversal::{should_traverse_gpu, GpuTraversalContext, GpuTraversalStats};
 #[cfg(feature = "gpu")]
 pub use pq_gpu::{gpu_kmeans_assign, should_use_gpu, PqGpuContext};
@@ -70,8 +70,8 @@ pub fn should_use_gpu(_n: usize, _k: usize, _subspace_dim: usize) -> bool {
     false
 }
 
-/// Check if GPU traversal is worthwhile (always false without gpu feature).
-#[cfg(not(feature = "gpu"))]
+/// Check if GPU traversal is worthwhile (always false without GPU HNSW traversal support).
+#[cfg(not(all(feature = "gpu", feature = "persistence")))]
 #[must_use]
 pub fn should_traverse_gpu(_num_vectors: usize, _dimension: usize) -> bool {
     false

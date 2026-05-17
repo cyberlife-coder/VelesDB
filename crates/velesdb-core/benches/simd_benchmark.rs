@@ -8,7 +8,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 #[cfg(feature = "internal-bench")]
 use velesdb_core::internal_bench;
-#[cfg(feature = "internal-bench")]
+#[cfg(all(feature = "internal-bench", target_arch = "x86_64"))]
 use velesdb_core::simd_native::SimdLevel;
 use velesdb_core::simd_native::{
     batch_hamming_native, batch_jaccard_native, cosine_similarity_native, dot_product_native,
@@ -94,7 +94,7 @@ fn bench_cosine_similarity(c: &mut Criterion) {
             bencher.iter(|| engine.cosine_similarity(black_box(&a), black_box(&b)));
         });
 
-        #[cfg(feature = "internal-bench")]
+        #[cfg(all(feature = "internal-bench", target_arch = "x86_64"))]
         if matches!(
             internal_bench::detected_simd_level(),
             SimdLevel::Avx2 | SimdLevel::Avx512
@@ -128,7 +128,7 @@ fn bench_cosine_similarity(c: &mut Criterion) {
             );
         }
 
-        #[cfg(feature = "internal-bench")]
+        #[cfg(all(feature = "internal-bench", target_arch = "x86_64"))]
         if matches!(internal_bench::detected_simd_level(), SimdLevel::Avx512) {
             group.bench_with_input(BenchmarkId::new("kernel_avx512", dim), dim, |bencher, _| {
                 warmup(|| {

@@ -345,9 +345,7 @@ fn is_fully_cached(cache_dir: &Path) -> bool {
 }
 
 fn download_allowed() -> bool {
-    std::env::var(ENV_ALLOW_DOWNLOAD)
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(true)
+    std::env::var(ENV_ALLOW_DOWNLOAD).map_or(true, |v| v != "0" && !v.eq_ignore_ascii_case("false"))
 }
 
 fn download_and_extract(cache_dir: &Path) -> Result<(), DatasetError> {

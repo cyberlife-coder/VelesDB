@@ -135,7 +135,7 @@ fn get_memory_usage() -> usize {
     // Reason: benchmark needs peak RSS.
     unsafe {
         let mut usage = MaybeUninit::<Rusage>::zeroed().assume_init();
-        if getrusage(0, &mut usage) == 0 {
+        if getrusage(0, &raw mut usage) == 0 {
             usage.ru_maxrss as usize
         } else {
             0

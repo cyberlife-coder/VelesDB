@@ -175,7 +175,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // interleaved with other nodes at similar distances.
             all_results.sort_unstable_by_key(|r| r.0);
             all_results.dedup_by_key(|r| r.0);
-            all_results.sort_by(|a, b| a.1.total_cmp(&b.1));
+            all_results.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
             all_results.truncate(k);
             Some(all_results)
         }
@@ -231,7 +231,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // is the declared lock order.
         let (dim, arc) = self.with_vectors_read(|vectors| {
             let d = vectors.dimension();
-            let arc: std::sync::Arc<[f32]> = vectors.as_flat_slice().to_vec().into();
+            let arc: std::sync::Arc<[f32]> = std::sync::Arc::from(vectors.as_flat_slice());
             (d, arc)
         });
         *snapshot = Some((current_version, dim, arc.clone()));
