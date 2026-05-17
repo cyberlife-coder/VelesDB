@@ -105,7 +105,7 @@ impl Collection {
         let higher_is_better = self.config.read().metric.higher_is_better();
 
         let mut indices: Vec<usize> = (0..results.len()).collect();
-        indices.sort_by(|&i, &j| {
+        indices.sort_unstable_by(|&i, &j| {
             Self::compare_by_order_columns(
                 i,
                 j,

@@ -90,7 +90,7 @@ impl ParallelTraverser {
             .collect();
 
         // Sort by score descending (highest first), break ties by depth ascending
-        unique.sort_by(|a, b| {
+        unique.sort_unstable_by(|a, b| {
             let score_cmp = b
                 .score
                 .unwrap_or(f32::NEG_INFINITY)
