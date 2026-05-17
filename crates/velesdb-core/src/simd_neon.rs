@@ -277,8 +277,8 @@ mod tests {
     #[test]
     fn test_dot_product_neon_768d() {
         // Test with typical embedding dimension
-        let a: Vec<f32> = (0..768).map(|i| (i as f32) * 0.001).collect();
-        let b: Vec<f32> = (0..768).map(|i| (i as f32) * 0.002).collect();
+        let a: Vec<f32> = (0_u16..768).map(|i| f32::from(i) * 0.001).collect();
+        let b: Vec<f32> = (0_u16..768).map(|i| f32::from(i) * 0.002).collect();
 
         let neon_result = dot_product_neon_safe(&a, &b);
 

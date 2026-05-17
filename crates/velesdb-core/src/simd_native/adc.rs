@@ -239,8 +239,8 @@ unsafe fn adc_single_neon(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 
 
     // Handle tail subspaces with scalar loop
     let tail_start = full_chunks * 4;
-    for subspace in tail_start..tail_start + tail {
-        let idx = subspace * k + usize::from(code[subspace]);
+    for (subspace, &codeword) in code.iter().enumerate().skip(tail_start).take(tail) {
+        let idx = subspace * k + usize::from(codeword);
         total += lut[idx];
     }
 
