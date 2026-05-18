@@ -218,6 +218,18 @@ pub(crate) fn strip_vector_predicates(condition: &Condition) -> Option<Condition
 /// (>=0.5) so the pre-scan does not starve HNSW of good candidates.
 ///
 /// When `stats` is `None`, preserves the historical 0.1 threshold.
+/// Maps selectivity to a strategy using the fallback threshold.
+///
+/// Used in two cases: when no calibrated stats are available, and for
+/// non-vector queries where pre/post-filter is informational only.
+fn threshold_strategy(selectivity: f64) -> FilterStrategy {
+    if selectivity > fallback_selectivity_threshold() {
+        FilterStrategy::PostFilter
+    } else {
+        FilterStrategy::PreFilter
+    }
+}
+
 pub(super) fn resolve_filter_strategy(
     selectivity: f64,
     has_vector_search: bool,
@@ -226,11 +238,7 @@ pub(super) fn resolve_filter_strategy(
     stats: Option<&CoreCollectionStats>,
 ) -> FilterStrategy {
     let Some(s) = stats else {
-        return if selectivity > fallback_selectivity_threshold() {
-            FilterStrategy::PostFilter
-        } else {
-            FilterStrategy::PreFilter
-        };
+        return threshold_strategy(selectivity);
     };
 
     if !has_vector_search {
@@ -250,11 +258,7 @@ pub(super) fn resolve_filter_strategy(
         // field when there is no HNSW stage — but is visible in
         // EXPLAIN output. Kept intentionally: the calibrated answer
         // is the semantically correct one.
-        return if selectivity > fallback_selectivity_threshold() {
-            FilterStrategy::PostFilter
-        } else {
-            FilterStrategy::PreFilter
-        };
+        return threshold_strategy(selectivity);
     }
 
     // Recall guardrail: a loose filter leaves too many candidates in the
@@ -265,41 +269,34 @@ pub(super) fn resolve_filter_strategy(
     }
 
     let est = CostEstimator::new(s);
-    let hnsw_cost = est
+
+    // Pre-filter: full-collection filter scan + HNSW on surviving candidates.
+    // The filter-scan component uses selectivity=1.0 so the CBO does not
+    // under-estimate pre-filter cost by 1/selectivity (Devin finding A on #606).
+    // HNSW on a reduced set scales as (ef + k) * log2(total*sel), not linearly,
+    // hence the dedicated estimate_hnsw_search_cost_with_ef_on_size call
+    // (Devin finding E on #606).
+    let pre_filter = {
+        let total_points = s.total_points.max(s.row_count).max(1);
+        // Reason: cardinality estimate; floor to u64 is acceptable for
+        // the log2(size) probe count inside hnsw cost estimation.
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let reduced_size = ((total_points as f64) * selectivity).max(1.0) as u64;
+        let hnsw_on_reduced = est
+            .estimate_hnsw_search_cost_with_ef_on_size(ef_search, candidates, reduced_size)
+            .total();
+        est.estimate_filter_cost_from_selectivity(1.0).total() + hnsw_on_reduced
+    };
+
+    // Post-filter: full HNSW pass + predicate on the oversampled candidate set
+    // before top-k truncation (max(k, ef_search) — not k alone; issue #609).
+    let post_filter = est
         .estimate_hnsw_search_cost_with_ef(ef_search, candidates)
-        .total();
-    // Pre-filter: evaluate the predicate on **every** row of the
-    // collection (scan proportional to `total`, not `total*sel`) — then
-    // run HNSW on the `sel*total` surviving candidates. HNSW on a
-    // reduced set scales as `(ef + k) * log2(total*sel)`, not linearly
-    // in the reduction factor, hence the dedicated
-    // `estimate_hnsw_search_cost_with_ef_on_size` call (Devin finding E
-    // on #606). The filter-scan component uses selectivity=1.0 so the
-    // CBO does not under-estimate pre-filter cost by `1/selectivity`
-    // (Devin finding A on #606).
-    let total_points = s.total_points.max(s.row_count).max(1);
-    // Reason: `total_points * selectivity` is a cardinality estimate;
-    // floor to u64 is acceptable for a reduced-set size used in
-    // `log2(size)` probe counting.
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    let reduced_size = ((total_points as f64) * selectivity).max(1.0) as u64;
-    let hnsw_on_reduced = est
-        .estimate_hnsw_search_cost_with_ef_on_size(ef_search, candidates, reduced_size)
-        .total();
-    let pre_filter = est.estimate_filter_cost_from_selectivity(1.0).total() + hnsw_on_reduced;
-    // Post-filter: full HNSW pass, then filter evaluation on the HNSW
-    // candidate set **before** top-k truncation. VelesDB's execution
-    // (`search_post_filter` + `filter_and_hydrate`) runs the predicate on
-    // the oversampled candidates and truncates to k afterwards, so the
-    // cardinality of the filter evaluation is `max(k, ef_search)` — not
-    // `k` alone. Modelling on k alone under-estimates the cost in the
-    // typical `ef_search ≫ k` regime (Devin review on PR #612, issue
-    // #609 closure).
-    let post_filter = hnsw_cost
+        .total()
         + est
             .estimate_post_filter_topk_cost(candidates, ef_search)
             .total();
