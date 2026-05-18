@@ -440,7 +440,7 @@ async fn main() -> anyhow::Result<()> {
     let auth_state = AuthState::new(cfg.api_keys.clone());
     let app = build_router(state.clone(), auth_state, cfg.rate_limit, &cfg.cors)?;
 
-    if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
+    if let (Some(cert), Some(key)) = (&cfg.tls.cert, &cfg.tls.key) {
         serve_tls(
             &cfg.host,
             cfg.port,
