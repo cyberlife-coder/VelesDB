@@ -162,11 +162,7 @@ impl SearchOptions {
     }
 
     /// Sets the named sparse index to query and returns `self`.
-    pub fn with_sparse_index_name(
-        slf: Py<Self>,
-        py: Python<'_>,
-        name: Option<String>,
-    ) -> Py<Self> {
+    pub fn with_sparse_index_name(slf: Py<Self>, py: Python<'_>, name: Option<String>) -> Py<Self> {
         slf.bind(py).borrow_mut().sparse_index_name = name;
         slf
     }
