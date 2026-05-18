@@ -30,7 +30,7 @@ rustyline = { version = "18.0", features = ["derive"] }
 comfy-table = "7.1"
 
 # Colors
-colored = "2.1"
+colored = "3.1"
 
 # Serialization
 serde_json = { workspace = true }
