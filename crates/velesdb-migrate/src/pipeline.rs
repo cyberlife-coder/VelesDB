@@ -238,44 +238,7 @@ impl Pipeline {
             progress.set_position(stats.loaded.min(total));
         }
 
-        let db = if self.config.options.dry_run {
-            info!("Dry run mode - not writing to destination");
-            None
-        } else {
-            let db = velesdb_core::Database::open(&self.config.destination.path)
-                .map_err(|e| Error::DestinationConnection(e.to_string()))?;
-
-            let metric = match self.config.destination.metric {
-                crate::config::DistanceMetric::Cosine => velesdb_core::DistanceMetric::Cosine,
-                crate::config::DistanceMetric::Euclidean => velesdb_core::DistanceMetric::Euclidean,
-                crate::config::DistanceMetric::Dot => velesdb_core::DistanceMetric::DotProduct,
-                crate::config::DistanceMetric::Hamming => velesdb_core::DistanceMetric::Hamming,
-                crate::config::DistanceMetric::Jaccard => velesdb_core::DistanceMetric::Jaccard,
-            };
-
-            let storage_mode = match self.config.destination.storage_mode {
-                crate::config::StorageMode::Full => velesdb_core::StorageMode::Full,
-                crate::config::StorageMode::SQ8 => velesdb_core::StorageMode::SQ8,
-                crate::config::StorageMode::Binary => velesdb_core::StorageMode::Binary,
-                crate::config::StorageMode::Pq => velesdb_core::StorageMode::ProductQuantization,
-                crate::config::StorageMode::RaBitQ => velesdb_core::StorageMode::RaBitQ,
-            };
-
-            if db
-                .get_any_collection(&self.config.destination.collection)
-                .is_none()
-            {
-                db.create_collection_with_options(
-                    &self.config.destination.collection,
-                    self.config.destination.dimension,
-                    metric,
-                    storage_mode,
-                )
-                .map_err(|e| Error::DestinationConnection(e.to_string()))?;
-            }
-
-            Some(db)
-        };
+        let db = open_destination_db(&self.config.destination, self.config.options.dry_run).await?;
 
         let batch_size = self.config.options.batch_size;
         let retry_config = crate::retry::RetryConfig::for_transient_errors();
@@ -378,22 +341,8 @@ impl Pipeline {
 
         progress.finish_with_message("Migration complete");
 
-        // Graph migration phase: migrate FK relations as graph edges.
         if let Some(ref db) = db {
-            if self.config.destination.graph_collection.is_some()
-                && !self.config.relations.is_empty()
-            {
-                info!("Starting graph migration phase...");
-                let graph_connector = crate::connectors::create_connector(&self.config.source)?;
-                let mut graph_phase =
-                    crate::pipeline_graph::GraphMigrationPhase::new(&self.config, graph_connector);
-                graph_phase.connect().await?;
-                let graph_stats = graph_phase.run(db).await?;
-                graph_phase.close().await?;
-                stats.edges_created = graph_stats.edges_created;
-                stats.edges_failed = graph_stats.edges_failed;
-                stats.relations_processed = graph_stats.relations_processed;
-            }
+            self.run_graph_phase(db, &mut stats).await?;
         }
 
         self.connector.close().await?;
@@ -414,6 +363,73 @@ impl Pipeline {
 
         Ok(stats)
     }
+
+    async fn run_graph_phase(
+        &self,
+        db: &velesdb_core::Database,
+        stats: &mut MigrationStats,
+    ) -> Result<()> {
+        if self.config.destination.graph_collection.is_none() || self.config.relations.is_empty() {
+            return Ok(());
+        }
+
+        info!("Starting graph migration phase...");
+        let graph_connector = crate::connectors::create_connector(&self.config.source)?;
+        let mut graph_phase =
+            crate::pipeline_graph::GraphMigrationPhase::new(&self.config, graph_connector);
+        graph_phase.connect().await?;
+        let graph_stats = graph_phase.run(db).await?;
+        graph_phase.close().await?;
+        stats.edges_created = graph_stats.edges_created;
+        stats.edges_failed = graph_stats.edges_failed;
+        stats.relations_processed = graph_stats.relations_processed;
+        Ok(())
+    }
+}
+
+fn map_core_metric(m: crate::config::DistanceMetric) -> velesdb_core::DistanceMetric {
+    match m {
+        crate::config::DistanceMetric::Cosine => velesdb_core::DistanceMetric::Cosine,
+        crate::config::DistanceMetric::Euclidean => velesdb_core::DistanceMetric::Euclidean,
+        crate::config::DistanceMetric::Dot => velesdb_core::DistanceMetric::DotProduct,
+        crate::config::DistanceMetric::Hamming => velesdb_core::DistanceMetric::Hamming,
+        crate::config::DistanceMetric::Jaccard => velesdb_core::DistanceMetric::Jaccard,
+    }
+}
+
+fn map_core_storage_mode(m: crate::config::StorageMode) -> velesdb_core::StorageMode {
+    match m {
+        crate::config::StorageMode::Full => velesdb_core::StorageMode::Full,
+        crate::config::StorageMode::SQ8 => velesdb_core::StorageMode::SQ8,
+        crate::config::StorageMode::Binary => velesdb_core::StorageMode::Binary,
+        crate::config::StorageMode::Pq => velesdb_core::StorageMode::ProductQuantization,
+        crate::config::StorageMode::RaBitQ => velesdb_core::StorageMode::RaBitQ,
+    }
+}
+
+async fn open_destination_db(
+    destination: &crate::config::DestinationConfig,
+    dry_run: bool,
+) -> Result<Option<velesdb_core::Database>> {
+    if dry_run {
+        info!("Dry run mode - not writing to destination");
+        return Ok(None);
+    }
+
+    let db = velesdb_core::Database::open(&destination.path)
+        .map_err(|e| Error::DestinationConnection(e.to_string()))?;
+
+    if db.get_any_collection(&destination.collection).is_none() {
+        db.create_collection_with_options(
+            &destination.collection,
+            destination.dimension,
+            map_core_metric(destination.metric),
+            map_core_storage_mode(destination.storage_mode),
+        )
+        .map_err(|e| Error::DestinationConnection(e.to_string()))?;
+    }
+
+    Ok(Some(db))
 }
 
 fn checkpoint_path(config: &MigrationConfig) -> std::path::PathBuf {
