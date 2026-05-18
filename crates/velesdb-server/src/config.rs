@@ -52,6 +52,25 @@ struct CorsSection {
 // Resolved configuration
 // ============================================================================
 
+/// TLS certificate and key paths.
+///
+/// Both fields must be `Some` together or both `None`; a partial pair is
+/// rejected by [`ServerConfig::validate`].
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TlsConfig {
+    /// Path to the PEM-encoded TLS certificate file.
+    pub cert: Option<String>,
+    /// Path to the PEM-encoded TLS private key file.
+    pub key: Option<String>,
+}
+
+impl TlsConfig {
+    /// Returns `true` when both cert and key are configured.
+    pub fn is_enabled(&self) -> bool {
+        self.cert.is_some() && self.key.is_some()
+    }
+}
+
 /// Final resolved server configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServerConfig {
@@ -59,8 +78,8 @@ pub struct ServerConfig {
     pub port: u16,
     pub data_dir: String,
     pub api_keys: Vec<String>,
-    pub tls_cert: Option<String>,
-    pub tls_key: Option<String>,
+    /// TLS certificate and key configuration (both or neither).
+    pub tls: TlsConfig,
     pub shutdown_timeout_secs: u64,
     /// Maximum requests per second per IP address (0 = disabled).
     pub rate_limit: u32,
@@ -129,8 +148,7 @@ impl Default for ServerConfig {
             port: 8080,
             data_dir: "./velesdb_data".to_string(),
             api_keys: Vec::new(),
-            tls_cert: None,
-            tls_key: None,
+            tls: TlsConfig::default(),
             shutdown_timeout_secs: 30,
             rate_limit: DEFAULT_RATE_LIMIT,
             cors: CorsConfig::default(),
@@ -169,8 +187,10 @@ impl ServerConfig {
             .unwrap_or(defaults.shutdown_timeout_secs);
         let rate_limit = server.rate_limit.unwrap_or(defaults.rate_limit);
         let api_keys = auth.api_keys.unwrap_or(defaults.api_keys);
-        let tls_cert = tls.cert.or(defaults.tls_cert);
-        let tls_key = tls.key.or(defaults.tls_key);
+        let tls = TlsConfig {
+            cert: tls.cert.or(defaults.tls.cert),
+            key: tls.key.or(defaults.tls.key),
+        };
         let cors = resolve_cors(defaults.cors, cors_section);
 
         // Layer: CLI/env over TOML (only override when explicitly set)
@@ -178,8 +198,10 @@ impl ServerConfig {
         let port = cli.port.unwrap_or(port);
         let data_dir = cli.data_dir.unwrap_or(data_dir);
         let api_keys = cli.api_keys.unwrap_or(api_keys);
-        let tls_cert = cli.tls_cert.or(tls_cert);
-        let tls_key = cli.tls_key.or(tls_key);
+        let tls = TlsConfig {
+            cert: cli.tls_cert.or(tls.cert),
+            key: cli.tls_key.or(tls.key),
+        };
         let rate_limit = cli.rate_limit.unwrap_or(rate_limit);
 
         Self {
@@ -187,8 +209,7 @@ impl ServerConfig {
             port,
             data_dir,
             api_keys,
-            tls_cert,
-            tls_key,
+            tls,
             shutdown_timeout_secs,
             rate_limit,
             cors,
@@ -205,7 +226,7 @@ impl ServerConfig {
         }
 
         // TLS: both cert and key must be provided together
-        match (&self.tls_cert, &self.tls_key) {
+        match (&self.tls.cert, &self.tls.key) {
             (Some(_), None) => {
                 anyhow::bail!("tls_cert is set but tls_key is missing");
             }
@@ -233,7 +254,7 @@ impl ServerConfig {
 
     /// Returns `true` when TLS is configured.
     pub fn tls_enabled(&self) -> bool {
-        self.tls_cert.is_some() && self.tls_key.is_some()
+        self.tls.is_enabled()
     }
 
     /// Returns `true` when rate limiting is enabled (rate_limit > 0).
@@ -415,8 +436,8 @@ mod tests {
         assert_eq!(cfg.port, 8080);
         assert_eq!(cfg.data_dir, "./velesdb_data");
         assert!(cfg.api_keys.is_empty());
-        assert!(cfg.tls_cert.is_none());
-        assert!(cfg.tls_key.is_none());
+        assert!(cfg.tls.cert.is_none());
+        assert!(cfg.tls.key.is_none());
         assert_eq!(cfg.shutdown_timeout_secs, 30);
         assert_eq!(cfg.rate_limit, 100);
         assert!(!cfg.auth_enabled());
@@ -451,8 +472,8 @@ key = "/etc/ssl/key.pem"
         assert_eq!(cfg.data_dir, "/var/velesdb");
         assert_eq!(cfg.shutdown_timeout_secs, 60);
         assert_eq!(cfg.api_keys, vec!["key-alpha", "key-beta"]);
-        assert_eq!(cfg.tls_cert.as_deref(), Some("/etc/ssl/cert.pem"));
-        assert_eq!(cfg.tls_key.as_deref(), Some("/etc/ssl/key.pem"));
+        assert_eq!(cfg.tls.cert.as_deref(), Some("/etc/ssl/cert.pem"));
+        assert_eq!(cfg.tls.key.as_deref(), Some("/etc/ssl/key.pem"));
         assert!(cfg.auth_enabled());
         assert!(cfg.tls_enabled());
     }
@@ -528,7 +549,7 @@ port = 4000
     #[test]
     fn test_validate_tls_cert_without_key() {
         let cfg = ServerConfig {
-            tls_cert: Some("/tmp/cert.pem".to_string()),
+            tls: TlsConfig { cert: Some("/tmp/cert.pem".to_string()), key: None },
             ..ServerConfig::default()
         };
         let err = cfg.validate().unwrap_err();
@@ -538,7 +559,7 @@ port = 4000
     #[test]
     fn test_validate_tls_key_without_cert() {
         let cfg = ServerConfig {
-            tls_key: Some("/tmp/key.pem".to_string()),
+            tls: TlsConfig { cert: None, key: Some("/tmp/key.pem".to_string()) },
             ..ServerConfig::default()
         };
         let err = cfg.validate().unwrap_err();
@@ -548,8 +569,10 @@ port = 4000
     #[test]
     fn test_validate_tls_missing_cert_file() {
         let cfg = ServerConfig {
-            tls_cert: Some("/nonexistent/cert.pem".to_string()),
-            tls_key: Some("/nonexistent/key.pem".to_string()),
+            tls: TlsConfig {
+                cert: Some("/nonexistent/cert.pem".to_string()),
+                key: Some("/nonexistent/key.pem".to_string()),
+            },
             ..ServerConfig::default()
         };
         let err = cfg.validate().unwrap_err();
@@ -571,8 +594,10 @@ port = 4000
             .expect("test: write key content");
 
         let cfg = ServerConfig {
-            tls_cert: Some(cert_path.to_string_lossy().to_string()),
-            tls_key: Some(key_path.to_string_lossy().to_string()),
+            tls: TlsConfig {
+                cert: Some(cert_path.to_string_lossy().to_string()),
+                key: Some(key_path.to_string_lossy().to_string()),
+            },
             ..ServerConfig::default()
         };
         cfg.validate().expect("valid TLS config should pass");
