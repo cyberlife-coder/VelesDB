@@ -549,7 +549,10 @@ port = 4000
     #[test]
     fn test_validate_tls_cert_without_key() {
         let cfg = ServerConfig {
-            tls: TlsConfig { cert: Some("/tmp/cert.pem".to_string()), key: None },
+            tls: TlsConfig {
+                cert: Some("/tmp/cert.pem".to_string()),
+                key: None,
+            },
             ..ServerConfig::default()
         };
         let err = cfg.validate().unwrap_err();
@@ -559,7 +562,10 @@ port = 4000
     #[test]
     fn test_validate_tls_key_without_cert() {
         let cfg = ServerConfig {
-            tls: TlsConfig { cert: None, key: Some("/tmp/key.pem".to_string()) },
+            tls: TlsConfig {
+                cert: None,
+                key: Some("/tmp/key.pem".to_string()),
+            },
             ..ServerConfig::default()
         };
         let err = cfg.validate().unwrap_err();
