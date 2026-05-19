@@ -114,16 +114,17 @@ impl GpuAccelerator {
     fn init_device_sync() -> Option<(wgpu::Device, wgpu::Queue)> {
         // Avoid probing GLES/EGL on headless Linux where some drivers may abort.
         let backends = Self::preferred_backends();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
-        }))?;
+        }))
+        .ok()?;
 
         pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -165,7 +166,7 @@ impl GpuAccelerator {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&format!("{label} Pipeline Layout")),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[Some(&bind_group_layout)],
             push_constant_ranges: &[],
         });
 
