@@ -110,7 +110,7 @@ pub(super) fn compile_expand_pipeline(device: &wgpu::Device) -> wgpu::ComputePip
     let layout = create_expand_bind_group_layout(device);
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Expand Pipeline Layout"),
-        bind_group_layouts: &[&layout],
+        bind_group_layouts: &[Some(&layout)],
         push_constant_ranges: &[],
     });
 
@@ -140,7 +140,7 @@ pub(super) fn compile_traversal_distance_pipeline(
     let layout = create_traversal_distance_bind_group_layout(device, &format!("{label} BGL"));
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(&format!("{label} PL")),
-        bind_group_layouts: &[&layout],
+        bind_group_layouts: &[Some(&layout)],
         push_constant_ranges: &[],
     });
 
@@ -163,7 +163,7 @@ pub(super) fn compile_select_pipeline(device: &wgpu::Device) -> wgpu::ComputePip
     let layout = create_select_bind_group_layout(device);
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Select Pipeline Layout"),
-        bind_group_layouts: &[&layout],
+        bind_group_layouts: &[Some(&layout)],
         push_constant_ranges: &[],
     });
 
