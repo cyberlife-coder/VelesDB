@@ -107,7 +107,7 @@ impl Collection {
         #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
         let threshold_f32 = sim_threshold as f32;
         let mut results = Vec::new();
-        let all_ids: Vec<u64> = self.vector_storage.read().ids().into_iter().collect();
+        let all_ids = self.vector_storage.read().ids();
 
         for id in all_ids {
             let Some(vector) = self.retrieve_vector_for_scan(id, &sim_field) else {
