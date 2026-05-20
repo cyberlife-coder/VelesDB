@@ -114,7 +114,7 @@ impl GpuAccelerator {
     fn init_device_sync() -> Option<(wgpu::Device, wgpu::Queue)> {
         // Avoid probing GLES/EGL on headless Linux where some drivers may abort.
         let backends = Self::preferred_backends();
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
@@ -126,15 +126,14 @@ impl GpuAccelerator {
         }))
         .ok()?;
 
-        pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("VelesDB GPU"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::Performance,
-            },
-            None,
-        ))
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("VelesDB GPU"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        }))
         .ok()
     }
 
@@ -167,7 +166,7 @@ impl GpuAccelerator {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&format!("{label} Pipeline Layout")),
             bind_group_layouts: &[Some(&bind_group_layout)],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
