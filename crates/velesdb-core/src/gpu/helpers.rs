@@ -82,7 +82,7 @@ pub(super) fn readback_buffer<T: bytemuck::Pod>(
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
         let _ = tx.send(result);
     });
-    device.poll(wgpu::Maintain::Wait);
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
 
     rx.recv().ok().and_then(Result::ok)?;
 

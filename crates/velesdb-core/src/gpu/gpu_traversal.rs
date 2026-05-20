@@ -495,16 +495,18 @@ impl GpuTraversalContext {
         let bind_group =
             buffers.create_select_bind_group(self.gpu.device(), &self.select_pipeline, ef);
 
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Select Pass"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&self.select_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        // SELECT_TOPK_SHADER is `@workgroup_size(1)` and does a serial
-        // insertion-sort over all candidates. Dispatching >1 workgroup
-        // would race on the frontier writes — see shader doc comment.
-        pass.dispatch_workgroups(1, 1, 1);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Select Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.select_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            // SELECT_TOPK_SHADER is `@workgroup_size(1)` and does a serial
+            // insertion-sort over all candidates. Dispatching >1 workgroup
+            // would race on the frontier writes — see shader doc comment.
+            pass.dispatch_workgroups(1, 1, 1);
+        } // pass dropped here — releases mutable borrow on encoder
 
         // Copy selected frontier back to frontier_a for next iteration
         let frontier_bytes = (ef * std::mem::size_of::<u32>()) as u64;
