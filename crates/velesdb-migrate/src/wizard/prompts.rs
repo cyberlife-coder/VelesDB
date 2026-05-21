@@ -7,6 +7,14 @@ use super::{SourceType, WizardConfig};
 use crate::connectors::SourceSchema;
 use crate::error::{Error, Result};
 
+fn input_err(e: impl std::fmt::Display) -> Error {
+    Error::Config(format!("Input cancelled: {e}"))
+}
+
+fn selection_err(e: impl std::fmt::Display) -> Error {
+    Error::Config(format!("Selection cancelled: {e}"))
+}
+
 /// Interactive prompts handler.
 pub struct WizardPrompts {
     theme: ColorfulTheme,
@@ -36,7 +44,7 @@ impl WizardPrompts {
             .items(&items)
             .default(0)
             .interact()
-            .map_err(|e| Error::Config(format!("Selection cancelled: {e}")))?;
+            .map_err(selection_err)?;
 
         Ok(sources[selection])
     }
@@ -87,7 +95,7 @@ impl WizardPrompts {
             .with_prompt(prompt)
             .default(default.to_string())
             .interact_text()
-            .map_err(|e| Error::Config(format!("Input cancelled: {e}")))
+            .map_err(input_err)
     }
 
     /// Prompts for API key.
@@ -96,7 +104,7 @@ impl WizardPrompts {
             let key = Password::with_theme(&self.theme)
                 .with_prompt("API Key")
                 .interact()
-                .map_err(|e| Error::Config(format!("Input cancelled: {e}")))?;
+                .map_err(input_err)?;
 
             if key.is_empty() {
                 return Err(Error::Config("API key is required".to_string()));
@@ -108,13 +116,13 @@ impl WizardPrompts {
                 .with_prompt("Do you have an API key? (optional)")
                 .default(false)
                 .interact()
-                .map_err(|e| Error::Config(format!("Input cancelled: {e}")))?;
+                .map_err(input_err)?;
 
             if has_key {
                 let key = Password::with_theme(&self.theme)
                     .with_prompt("API Key")
                     .interact()
-                    .map_err(|e| Error::Config(format!("Input cancelled: {e}")))?;
+                    .map_err(input_err)?;
 
                 Ok(Some(key))
             } else {
@@ -137,7 +145,7 @@ impl WizardPrompts {
         Input::with_theme(&self.theme)
             .with_prompt(prompt)
             .interact_text()
-            .map_err(|e| Error::Config(format!("Input cancelled: {e}")))
+            .map_err(input_err)
     }
 
     /// Prompts for destination path.
@@ -146,7 +154,7 @@ impl WizardPrompts {
             .with_prompt("VelesDB data path")
             .default("./velesdb_data".to_string())
             .interact_text()
-            .map_err(|e| Error::Config(format!("Input cancelled: {e}")))
+            .map_err(input_err)
     }
 
     /// Prompts for compression option.
@@ -161,7 +169,7 @@ impl WizardPrompts {
             .items(&items)
             .default(0)
             .interact()
-            .map_err(|e| Error::Config(format!("Selection cancelled: {e}")))?;
+            .map_err(selection_err)?;
 
         Ok(selection == 1)
     }
@@ -217,6 +225,6 @@ impl WizardPrompts {
             .with_prompt("Start migration?")
             .default(true)
             .interact()
-            .map_err(|e| Error::Config(format!("Input cancelled: {e}")))
+            .map_err(input_err)
     }
 }

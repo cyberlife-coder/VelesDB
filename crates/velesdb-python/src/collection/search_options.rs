@@ -9,10 +9,19 @@
 //! v1.14 (current)
 //!   `collection.search(vector, top_k=10, filter={"k": "v"})`
 //!
-//! v1.15 (additive — no breaking change):
+//! v1.15 (additive — no breaking change, two equivalent styles):
+//!
+//!   Keyword-constructor style:
 //!   ```python
 //!   opts = SearchOptions(vector=embedding, top_k=10, filter={"k": "v"})
 //!   results = collection.search_request(opts)
+//!   ```
+//!
+//!   Fluent builder style (chains return the same object):
+//!   ```python
+//!   results = collection.search_request(
+//!       SearchOptions().with_vector(embedding).with_top_k(10)
+//!   )
 //!   ```
 //!
 //! v2.0 (breaking): `search()` kwargs path removed, `search_request()` is the
@@ -109,5 +118,58 @@ impl SearchOptions {
             "SearchOptions(top_k={}, include_vectors={}, sparse_index_name={:?})",
             self.top_k, self.include_vectors, self.sparse_index_name,
         )
+    }
+}
+
+/// Fluent builder methods — each mutates `self` in place and returns the same
+/// Python object so calls can be chained:
+///
+/// ```python
+/// opts = SearchOptions().with_vector(emb).with_top_k(20).with_filter({"lang": "en"})
+/// ```
+///
+/// The `Py<Self>` receiver pattern is the idiomatic PyO3 way to implement
+/// builder chains: the Python object is borrowed mutably for the field write,
+/// then returned unchanged so the caller owns the same reference.
+#[pymethods]
+impl SearchOptions {
+    /// Sets the dense query vector and returns `self`.
+    pub fn with_vector(slf: Py<Self>, py: Python<'_>, vector: Option<PyObject>) -> Py<Self> {
+        slf.bind(py).borrow_mut().vector = vector;
+        slf
+    }
+
+    /// Sets the sparse query vector and returns `self`.
+    pub fn with_sparse_vector(
+        slf: Py<Self>,
+        py: Python<'_>,
+        sparse_vector: Option<PyObject>,
+    ) -> Py<Self> {
+        slf.bind(py).borrow_mut().sparse_vector = sparse_vector;
+        slf
+    }
+
+    /// Sets the number of results to return and returns `self`.
+    pub fn with_top_k(slf: Py<Self>, py: Python<'_>, top_k: usize) -> Py<Self> {
+        slf.bind(py).borrow_mut().top_k = top_k;
+        slf
+    }
+
+    /// Sets the metadata filter and returns `self`.
+    pub fn with_filter(slf: Py<Self>, py: Python<'_>, filter: Option<PyObject>) -> Py<Self> {
+        slf.bind(py).borrow_mut().filter = filter;
+        slf
+    }
+
+    /// Sets the named sparse index to query and returns `self`.
+    pub fn with_sparse_index_name(slf: Py<Self>, py: Python<'_>, name: Option<String>) -> Py<Self> {
+        slf.bind(py).borrow_mut().sparse_index_name = name;
+        slf
+    }
+
+    /// Sets whether raw vectors are included in results and returns `self`.
+    pub fn with_include_vectors(slf: Py<Self>, py: Python<'_>, include: bool) -> Py<Self> {
+        slf.bind(py).borrow_mut().include_vectors = include;
+        slf
     }
 }
