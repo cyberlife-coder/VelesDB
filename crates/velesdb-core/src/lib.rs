@@ -214,6 +214,12 @@ pub use column_store::{
     BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStore, ColumnStoreError, ColumnType,
     ColumnValue, ExpireResult, StringId, StringTable, TypedColumn, UpsertResult,
 };
+// Observability and guardrail surfaces (audit-2026q2 H2): these were previously
+// reachable only via deep paths (`velesdb_core::metrics::*`,
+// `velesdb_core::guardrails::limits::QueryLimits`), forcing wrapper crates
+// to depend on the internal module layout. Re-exporting at the crate root
+// applies the Facade pattern so the public API can evolve independently
+// of the internal organisation.
 pub use config::{
     ConfigError, HnswConfig, LimitsConfig, QuantizationConfig, QuantizationType, SearchConfig,
     SearchMode, VelesConfig,
@@ -221,9 +227,13 @@ pub use config::{
 #[cfg(feature = "persistence")]
 pub use config::{LoggingConfig, ServerConfig, StorageConfig};
 pub use fusion::{FusionError, FusionStrategy};
+pub use guardrails::QueryLimits;
 pub use metrics::{
     average_metrics, compute_latency_percentiles, hit_rate, mean_average_precision, mrr, ndcg_at_k,
     precision_at_k, recall_at_k, LatencyStats,
+};
+pub use metrics::{
+    DurationHistogram, GuardRailsMetrics, OperationalMetrics, QueryStats, TraversalMetrics,
 };
 
 #[cfg(feature = "persistence")]
