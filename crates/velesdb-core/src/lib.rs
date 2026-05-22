@@ -227,6 +227,7 @@ pub use config::{
 #[cfg(feature = "persistence")]
 pub use config::{LoggingConfig, ServerConfig, StorageConfig};
 pub use fusion::{FusionError, FusionStrategy};
+#[cfg(feature = "persistence")]
 pub use guardrails::QueryLimits;
 pub use metrics::{
     average_metrics, compute_latency_percentiles, hit_rate, mean_average_precision, mrr, ndcg_at_k,
