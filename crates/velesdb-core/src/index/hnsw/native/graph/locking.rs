@@ -23,6 +23,28 @@
 //! search throughput. Only the atomic violation counter is incremented
 //! (no thread-local stack overhead). In debug builds, full stack-based
 //! tracking with tracing warnings is enabled.
+//!
+//! # Higher-level synchronization layered on top of these ranks
+//!
+//! Some structures sit *above* the lock-rank graph and add their own
+//! ordering contracts. The most important one is
+//! [`crate::gpu::gpu_csr::CsrCache`], which builds and caches a CSR
+//! view of the graph for the GPU dispatch path:
+//!
+//! - `CsrCache::get_or_rebuild` requires the **`Layers` read lock**
+//!   (rank 20) to be held for the entire call so concurrent rebuilders
+//!   observe the same layer topology.
+//! - A monotonic `generation` counter (incremented by every
+//!   `invalidate()`) plus a `built_generation` snapshot solves the ABA
+//!   problem on dirty-flag caches without introducing a new lock rank:
+//!   the rebuild commits only when `generation` has not moved during
+//!   the rebuild window.
+//!
+//! See `gpu_csr.rs` (`CsrCache` rustdoc, "Caller contract" and
+//! "Generation protocol" sections, races #640 and #643) for the
+//! detailed protocol and the regression test
+//! `gpu_csr_tests::test_csr_cache_concurrent_rebuild_safety`.
+//! Audit-2026q2 M5 cross-link.
 
 #[cfg(debug_assertions)]
 use super::safety_counters::HNSW_COUNTERS;
