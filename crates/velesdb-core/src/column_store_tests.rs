@@ -2572,4 +2572,36 @@ mod array_column_tests {
         let bitmap_indices: Vec<usize> = bitmap.iter().map(|i| i as usize).collect();
         assert_eq!(vec_results, bitmap_indices);
     }
+
+    // BDD: behavioural guard for filter_array refactor (audit-2026q2 H1).
+    // GIVEN an array column with values [10, 20] at rows 0 and 2 (per make_array_store),
+    // WHEN filter_contains_any is invoked with more than 8 candidate values (including 10),
+    // THEN the result must match the small-list path: only matching rows are returned,
+    // unrelated candidates do not contaminate the result, and bitmap == vec equivalence holds.
+    //
+    // Before the refactor, >8 values dispatched to a separate `contains_any_hashset`
+    // path that had identical semantics but distinct code; the refactor collapsed both
+    // into a single closure. This test pins the behavioural contract.
+    #[test]
+    fn test_filter_contains_any_with_many_values_matches_small_list() {
+        let (store, ..) = make_array_store();
+        // 10 values: only `10` actually appears in the store; the other 9 are decoys.
+        let many_values: Vec<ColumnValue> = (10..20).map(ColumnValue::Int).collect();
+        assert!(
+            many_values.len() > 8,
+            "test premise: exercises former >8 hashset path"
+        );
+
+        let with_many = store.filter_contains_any("scores", &many_values);
+        let with_small = store.filter_contains_any("scores", &[ColumnValue::Int(10)]);
+        assert_eq!(
+            with_many, with_small,
+            "many-values path must match small-list path when only one value matches"
+        );
+
+        // Bitmap variant must agree with Vec variant on the many-values path too.
+        let bitmap = store.filter_contains_any_bitmap("scores", &many_values);
+        let bitmap_indices: Vec<usize> = bitmap.iter().map(|i| i as usize).collect();
+        assert_eq!(with_many, bitmap_indices);
+    }
 }
