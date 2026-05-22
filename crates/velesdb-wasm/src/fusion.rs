@@ -46,7 +46,6 @@ pub fn fuse_results(
         "weighted" => fuse_weighted(&scores, all_results.len()),
         "relative_score" | "rsf" => fuse_relative_score(all_results),
         "rrf" => fuse_rrf(&ranks, rrf_k),
-        // FIXME(PRE-SEED): New fusion strategies must be added here explicitly.
         _ => {
             return Err(format!(
                 "Unknown fusion strategy '{strategy}'. \
