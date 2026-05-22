@@ -124,15 +124,29 @@ fn parse_adaptive_params(params: &str) -> Result<(), String> {
 }
 
 /// Maps a `velesdb_core::StorageMode` to the local WASM `StorageMode`.
-const fn core_to_wasm_storage_mode(core: velesdb_core::StorageMode) -> StorageMode {
+///
+/// `velesdb_core::StorageMode` is `#[non_exhaustive]`, so the catch-all is
+/// required by the compiler. The fallback to `StorageMode::Full` keeps the
+/// WASM bundle resilient when a future core variant has not yet been
+/// propagated. In debug builds, the `debug_assert!` makes the gap visible
+/// immediately during testing — see `tests::core_to_wasm_storage_mode_*`
+/// for the contract.
+fn core_to_wasm_storage_mode(core: velesdb_core::StorageMode) -> StorageMode {
     match core {
         velesdb_core::StorageMode::Full => StorageMode::Full,
         velesdb_core::StorageMode::SQ8 => StorageMode::SQ8,
         velesdb_core::StorageMode::Binary => StorageMode::Binary,
         velesdb_core::StorageMode::ProductQuantization => StorageMode::ProductQuantization,
         velesdb_core::StorageMode::RaBitQ => StorageMode::RaBitQ,
-        // FIXME(PRE-SEED): New StorageMode variants silently map to Full. Update when core adds variants.
-        _ => StorageMode::Full,
+        other => {
+            debug_assert!(
+                false,
+                "core StorageMode variant `{}` not propagated to WASM; \
+                 update core_to_wasm_storage_mode and the round-trip test",
+                other.canonical_name()
+            );
+            StorageMode::Full
+        }
     }
 }
 
@@ -211,6 +225,42 @@ mod tests {
     #[test]
     fn test_parse_storage_mode_invalid() {
         assert!(parse_storage_mode_inner("unknown").is_err());
+    }
+
+    // BDD (audit-2026q2 H4): pins the round-trip contract between
+    // velesdb_core::StorageMode and the local WASM StorageMode.
+    //
+    // GIVEN every known variant of velesdb_core::StorageMode,
+    // WHEN core_to_wasm_storage_mode is applied,
+    // THEN the result is the matching WASM variant (Full → Full, SQ8 → SQ8, ...).
+    //
+    // If a new variant is added to core::StorageMode without being added here,
+    // the production fallback to Full would silently mask the gap. The
+    // debug_assert!(false) in the catch-all arm now panics in debug builds —
+    // this test ensures the explicit mapping for every known variant remains
+    // correct over time. To add a variant: extend the match in
+    // `core_to_wasm_storage_mode` AND add a row in `CASES` below.
+    #[test]
+    fn core_to_wasm_storage_mode_round_trips_every_known_variant() {
+        use velesdb_core::StorageMode as Core;
+
+        const CASES: &[(Core, StorageMode)] = &[
+            (Core::Full, StorageMode::Full),
+            (Core::SQ8, StorageMode::SQ8),
+            (Core::Binary, StorageMode::Binary),
+            (Core::ProductQuantization, StorageMode::ProductQuantization),
+            (Core::RaBitQ, StorageMode::RaBitQ),
+        ];
+
+        for (core, expected) in CASES {
+            let mapped = core_to_wasm_storage_mode(*core);
+            assert_eq!(
+                mapped,
+                *expected,
+                "core variant `{}` must map to expected WASM variant",
+                core.canonical_name()
+            );
+        }
     }
 
     // =========================================================================

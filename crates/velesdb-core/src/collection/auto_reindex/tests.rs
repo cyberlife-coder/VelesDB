@@ -1,6 +1,8 @@
 //! Tests for auto-reindex module (TDD - US-004)
 
 use super::*;
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 
 // ============================================================================
@@ -157,12 +159,12 @@ fn test_reindex_cannot_start_twice() {
 #[test]
 fn test_reindex_progress_updates() {
     let manager = AutoReindexManager::with_defaults();
-    let progress_values = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let progress_values = Arc::new(Mutex::new(Vec::new()));
     let progress_clone = progress_values.clone();
 
     manager.on_event(move |event| {
         if let ReindexEvent::Progress { percent } = event {
-            progress_clone.lock().unwrap().push(percent);
+            progress_clone.lock().push(percent);
         }
     });
 
@@ -172,7 +174,7 @@ fn test_reindex_progress_updates() {
     manager.report_progress(75);
     manager.report_progress(100);
 
-    let values = progress_values.lock().unwrap();
+    let values = progress_values.lock();
     assert_eq!(*values, vec![25, 50, 75, 100]);
 }
 
@@ -296,19 +298,19 @@ fn test_rollback_preserves_idle_state() {
 #[test]
 fn test_rollback_event_emitted() {
     let manager = AutoReindexManager::with_defaults();
-    let rollback_reason = Arc::new(std::sync::Mutex::new(String::new()));
+    let rollback_reason = Arc::new(Mutex::new(String::new()));
     let reason_clone = rollback_reason.clone();
 
     manager.on_event(move |event| {
         if let ReindexEvent::RolledBack { reason } = event {
-            *reason_clone.lock().unwrap() = reason;
+            *reason_clone.lock() = reason;
         }
     });
 
     manager.trigger_manual_reindex();
     manager.rollback("Test rollback".to_string());
 
-    assert_eq!(*rollback_reason.lock().unwrap(), "Test rollback");
+    assert_eq!(*rollback_reason.lock(), "Test rollback");
 }
 
 // ============================================================================
@@ -340,7 +342,7 @@ fn test_set_auto_reindex_toggle() {
 #[test]
 fn test_events_emitted_correctly() {
     let manager = AutoReindexManager::with_defaults();
-    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
     let events_clone = events.clone();
 
     manager.on_event(move |event| {
@@ -351,7 +353,7 @@ fn test_events_emitted_correctly() {
             ReindexEvent::Completed { .. } => "Completed",
             ReindexEvent::RolledBack { .. } => "RolledBack",
         };
-        events_clone.lock().unwrap().push(event_type.to_string());
+        events_clone.lock().push(event_type.to_string());
     });
 
     // Full successful reindex cycle
@@ -360,7 +362,7 @@ fn test_events_emitted_correctly() {
     manager.start_validation(1000, 900);
     manager.complete_reindex(Duration::from_secs(10));
 
-    let recorded = events.lock().unwrap();
+    let recorded = events.lock();
     assert_eq!(
         *recorded,
         vec!["Started", "Progress", "Validating", "Completed"]
@@ -370,7 +372,7 @@ fn test_events_emitted_correctly() {
 #[test]
 fn test_start_reindex_with_params() {
     let manager = AutoReindexManager::with_defaults();
-    let captured_params = Arc::new(std::sync::Mutex::new(None));
+    let captured_params = Arc::new(Mutex::new(None));
     let params_clone = captured_params.clone();
 
     manager.on_event(move |event| {
@@ -380,7 +382,7 @@ fn test_start_reindex_with_params() {
             new_params,
         } = event
         {
-            *params_clone.lock().unwrap() = Some((reason, old_params, new_params));
+            *params_clone.lock() = Some((reason, old_params, new_params));
         }
     });
 
@@ -394,7 +396,7 @@ fn test_start_reindex_with_params() {
 
     manager.start_reindex(reason.clone(), old, new);
 
-    let captured = captured_params.lock().unwrap();
+    let captured = captured_params.lock();
     assert!(captured.is_some());
     let (r, o, n) = captured.as_ref().unwrap();
     assert_eq!(o.max_connections, 16);
