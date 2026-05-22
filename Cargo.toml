@@ -61,7 +61,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Configuration
 figment = { version = "0.10", features = ["toml", "env"] }
-toml = "0.9"
+toml = "1.1"
 
 # Testing
 criterion = "0.5"
