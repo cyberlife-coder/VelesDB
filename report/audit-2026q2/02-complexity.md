@@ -106,7 +106,7 @@ Lizard unavailable; estimated from manual grep + control-flow analysis:
 | `insert_batch()` | [hnsw/mod.rs:est](crates/velesdb-core/src/index/hnsw/mod.rs:est) | 7 | vectors, ids, layer_assignment_strategy, ef_construction, max_m, skip_entry_update | **Introduce Parameter Object** → `InsertBatchParams { vectors, ids, ... }` |
 | `build_cors_layer()` | [config.rs:315](crates/velesdb-server/src/config.rs:315) | 6 (boundary) | allow_origins, allow_methods, allow_headers, expose_headers, max_age, credentials | **Introduce Parameter Object** → use existing `CorsConfig` throughout |
 
-### Refactoring Impact
+### Parameter Object Refactoring Impact
 
 Each **Introduce Parameter Object** refactor:
 - Reduces function signature from 7–9 params to 1–2 params
@@ -158,7 +158,7 @@ For signatures > 200 chars:
 | `SearchRequest` | [handlers/search.rs:est](crates/velesdb-server/src/handlers/search.rs:est) | **16** (query, k, filter, order_by, limit, offset, with_payloads, similarity_threshold, etc.) | **Can refactor** — split into `SearchCore` (query, k, filter) + `SearchDisplay` (order_by, limit, offset, with_payloads) + `SearchThreshold` (similarity_threshold, ef_search). Reduces to 2 structs × 6–7 fields. |
 | `Database` | [database.rs:est](crates/velesdb-core/src/database.rs:est) | **12** (config, collections, vector_colls, graph_colls, metadata_colls, path, lock, observer, etc.) | **Justified** — Database is the top-level facade and must hold all registries. No refactor. |
 
-### Refactoring Impact
+### God Object Refactoring Impact
 
 - `SearchRequest` refactor: **1 day**, improves API clarity, reduces parameter object size by 40%
 - Others: **No refactor** — justified complexity
