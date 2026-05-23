@@ -276,22 +276,31 @@ def _check_roadmap(root: Path) -> list[str]:
 
 def _audit_crate(
     name: str,
-    lib_rs: Path,
+    actual: set[str],
     readme: Path,
     extra_notes: list[str] | None = None,
 ) -> AuditResult:
-    actual = _parse_rust_public_api(lib_rs)
+    """Build an AuditResult from a precomputed `actual` set and a README path.
+
+    Every per-crate audit funnels through this builder so that a future field
+    added to `AuditResult`, or a cross-cutting concern like logging/telemetry,
+    is wired in one place rather than re-implemented inline at each call site.
+    """
     claimed = _parse_readme(readme)
     notes = list(extra_notes or [])
     return AuditResult(name=name, actual=actual, claimed=claimed, notes=notes)
 
 
+def _audit_core(root: Path) -> AuditResult:
+    lib_rs = root / "crates" / "velesdb-core" / "src" / "lib.rs"
+    readme = root / "crates" / "velesdb-core" / "README.md"
+    return _audit_crate("velesdb-core", _parse_rust_public_api(lib_rs), readme)
+
+
 def _audit_python(root: Path) -> AuditResult:
     src_dir = root / "crates" / "velesdb-python" / "src"
     readme = root / "crates" / "velesdb-python" / "README.md"
-    actual = _scan_rust_src(src_dir)
-    claimed = _parse_readme(readme)
-    return AuditResult(name="velesdb-python", actual=actual, claimed=claimed, notes=[])
+    return _audit_crate("velesdb-python", _scan_rust_src(src_dir), readme)
 
 
 def _audit_wasm(root: Path) -> AuditResult:
@@ -299,53 +308,41 @@ def _audit_wasm(root: Path) -> AuditResult:
     readme = root / "crates" / "velesdb-wasm" / "README.md"
     return _audit_crate(
         "velesdb-wasm",
-        lib_rs,
+        _parse_rust_public_api(lib_rs),
         readme,
         extra_notes=["Note: persistence feature intentionally excluded (WASM target uses IndexedDB)"],
     )
 
 
-def _audit_core(root: Path) -> AuditResult:
-    lib_rs = root / "crates" / "velesdb-core" / "src" / "lib.rs"
-    readme = root / "crates" / "velesdb-core" / "README.md"
-    return _audit_crate("velesdb-core", lib_rs, readme)
-
-
 def _audit_server(root: Path) -> AuditResult:
     src_dir = root / "crates" / "velesdb-server" / "src"
     readme = root / "crates" / "velesdb-server" / "README.md"
-    actual = _scan_rust_src(src_dir)
-    claimed = _parse_readme(readme)
-    return AuditResult(name="velesdb-server", actual=actual, claimed=claimed, notes=[])
+    return _audit_crate("velesdb-server", _scan_rust_src(src_dir), readme)
 
 
 def _audit_typescript(root: Path) -> AuditResult:
     ts_src = root / "sdks" / "typescript" / "src"
     readme = root / "sdks" / "typescript" / "README.md"
-    # Scan all .ts files (backends contain the real API surface)
+    # TS sources use a different glob (.ts not .rs) — inline scan stays here
+    # rather than carving a fourth `_scan_*` helper for a single caller.
     combined = ""
     if ts_src.exists():
         for ts_file in ts_src.glob("**/*.ts"):
             combined += _read_text(ts_file) + "\n"
     actual = _capabilities_from_text(combined, CAPABILITIES)
-    claimed = _parse_readme(readme)
-    return AuditResult(name="typescript-sdk", actual=actual, claimed=claimed, notes=[])
+    return _audit_crate("typescript-sdk", actual, readme)
 
 
 def _audit_langchain(root: Path) -> AuditResult:
     src_dir = root / "integrations" / "langchain" / "src"
     readme = root / "integrations" / "langchain" / "README.md"
-    actual = _parse_integration_src(src_dir)
-    claimed = _parse_readme(readme)
-    return AuditResult(name="langchain-integration", actual=actual, claimed=claimed, notes=[])
+    return _audit_crate("langchain-integration", _parse_integration_src(src_dir), readme)
 
 
 def _audit_llamaindex(root: Path) -> AuditResult:
     src_dir = root / "integrations" / "llamaindex" / "src"
     readme = root / "integrations" / "llamaindex" / "README.md"
-    actual = _parse_integration_src(src_dir)
-    claimed = _parse_readme(readme)
-    return AuditResult(name="llamaindex-integration", actual=actual, claimed=claimed, notes=[])
+    return _audit_crate("llamaindex-integration", _parse_integration_src(src_dir), readme)
 
 
 # ---------------------------------------------------------------------------

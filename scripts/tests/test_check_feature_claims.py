@@ -72,6 +72,20 @@ class ScanRustSrcTests(unittest.TestCase):
         actual = cfc._scan_rust_src(Path("/nonexistent/path/that/does/not/exist"))
         self.assertEqual(actual, set())
 
+    def test_returns_empty_set_when_path_is_a_file(self) -> None:
+        """Defensive: a file path passed as src_dir must not crash with NotADirectoryError.
+
+        Path.glob('**/*.rs') raises NotADirectoryError on a regular file, which
+        would crash the audit instead of yielding an empty set. Real trigger
+        scenarios: a crate src layout change leaves `src` as a stale file
+        during a refactor, or a symlink points to a file.
+        """
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".not_a_dir") as f:
+            actual = cfc._scan_rust_src(Path(f.name))
+            self.assertEqual(actual, set())
+
     def test_aggregates_across_multiple_files(self) -> None:
         import tempfile
 
@@ -152,6 +166,52 @@ class ScanRustSrcTests(unittest.TestCase):
             actual = cfc._scan_rust_src(src)
             self.assertIn("sparse", actual, "production fn before test mod must still register")
             self.assertIn("quantization", actual, "production fn after test mod must still register")
+
+
+class AuditCrateBuilderTests(unittest.TestCase):
+    """`_audit_crate` is the single AuditResult builder for every per-crate audit.
+
+    All four Rust audit helpers (core, python, server, wasm) must route their
+    result construction through it so that a future field added to AuditResult,
+    or a future cross-cutting concern (logging, telemetry), is wired once and
+    inherited by every crate. The previous design rebuilt the result inline in
+    _audit_python and _audit_server, locking in drift.
+    """
+
+    def test_audit_crate_accepts_precomputed_actual_set(self) -> None:
+        """The builder must accept a precomputed `actual` set so the scanner is
+        decoupled from result construction — single-file (lib.rs) and recursive
+        scanners both feed in via the same parameter."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            readme = Path(tmp) / "README.md"
+            # Use phrases that match DOC_CLAIM_KEYWORDS: "knowledge graph" → graph,
+            # "vector search" → search.
+            readme.write_text("Supports knowledge graph traversal and vector search.\n", encoding="utf-8")
+
+            result = cfc._audit_crate("test-crate", {"graph", "search"}, readme)
+
+            self.assertEqual(result.name, "test-crate")
+            self.assertEqual(result.actual, {"graph", "search"})
+            self.assertIn("graph", result.claimed)
+            self.assertIn("search", result.claimed)
+            self.assertEqual(result.notes, [])
+
+    def test_audit_crate_preserves_extra_notes(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            readme = Path(tmp) / "README.md"
+            readme.write_text("test\n", encoding="utf-8")
+
+            result = cfc._audit_crate(
+                "x",
+                set(),
+                readme,
+                extra_notes=["Note: feature X intentionally excluded"],
+            )
+            self.assertEqual(result.notes, ["Note: feature X intentionally excluded"])
 
 
 class AuditPythonOnRealRepoTests(unittest.TestCase):
