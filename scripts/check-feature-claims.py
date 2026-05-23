@@ -109,6 +109,22 @@ def _parse_rust_public_api(src_path: Path) -> set[str]:
     return _capabilities_from_text(text, CAPABILITIES)
 
 
+def _scan_rust_src(src_dir: Path) -> set[str]:
+    """Scan every `.rs` file under *src_dir* and infer capabilities.
+
+    Used for crates whose public-facing API surface is split across sub-modules
+    (e.g. PyO3 method definitions on `Collection`/`Database` types in
+    velesdb-python). Reading only `lib.rs` misses those — `lib.rs` re-exports
+    types but the capability-bearing method names live one level deeper.
+    """
+    if not src_dir.exists():
+        return set()
+    combined = ""
+    for rs_file in src_dir.glob("**/*.rs"):
+        combined += _read_text(rs_file) + "\n"
+    return _capabilities_from_text(combined, CAPABILITIES)
+
+
 def _parse_typescript_exports(entry_path: Path) -> set[str]:
     """Scan a TypeScript entry point for export declarations and infer capabilities."""
     text = _read_text(entry_path)
@@ -213,9 +229,11 @@ def _audit_crate(
 
 
 def _audit_python(root: Path) -> AuditResult:
-    lib_rs = root / "crates" / "velesdb-python" / "src" / "lib.rs"
+    src_dir = root / "crates" / "velesdb-python" / "src"
     readme = root / "crates" / "velesdb-python" / "README.md"
-    return _audit_crate("velesdb-python", lib_rs, readme)
+    actual = _scan_rust_src(src_dir)
+    claimed = _parse_readme(readme)
+    return AuditResult(name="velesdb-python", actual=actual, claimed=claimed, notes=[])
 
 
 def _audit_wasm(root: Path) -> AuditResult:
@@ -236,14 +254,9 @@ def _audit_core(root: Path) -> AuditResult:
 
 
 def _audit_server(root: Path) -> AuditResult:
-    server_src = root / "crates" / "velesdb-server" / "src"
+    src_dir = root / "crates" / "velesdb-server" / "src"
     readme = root / "crates" / "velesdb-server" / "README.md"
-    # Scan all .rs files in the server (handlers contain the real API surface)
-    combined = ""
-    if server_src.exists():
-        for rs_file in server_src.glob("**/*.rs"):
-            combined += _read_text(rs_file) + "\n"
-    actual = _capabilities_from_text(combined, CAPABILITIES)
+    actual = _scan_rust_src(src_dir)
     claimed = _parse_readme(readme)
     return AuditResult(name="velesdb-server", actual=actual, claimed=claimed, notes=[])
 
