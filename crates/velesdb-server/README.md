@@ -5,6 +5,16 @@
 
 REST API server for VelesDB - a high-performance vector database.
 
+## Features
+
+- **Vector + Sparse + Hybrid search** with RRF/RSF fusion
+- **Graph traversal** (BFS/DFS) and Cypher-style MATCH queries via VelesQL
+- **Metadata collections** for schema-free reference data without vector overhead
+- **ColumnStore filtering** — typed columnar metadata with up to 130x faster predicate evaluation than JSON scanning
+- **Streaming inserts** via `/collections/{name}/stream/insert` for backpressure-aware bulk ingestion
+- **Quantization modes** (full, SQ8, binary) selected per collection
+- **Persistent storage** (WAL + mmap) — durable across restarts
+
 ## Installation
 
 ### From crates.io
