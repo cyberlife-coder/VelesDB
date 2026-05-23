@@ -630,7 +630,7 @@ mod tests {
         fn prop_adaptive_iterations_in_range(ef in 0usize..100_000usize) {
             let iters = adaptive_gpu_iterations(ef);
             prop_assert!(
-                iters >= 10 && iters <= 20,
+                (10..=20).contains(&iters),
                 "iterations={iters} out of [10,20] for ef_search={ef}"
             );
         }
@@ -716,7 +716,7 @@ mod tests {
             let w: Vec<f32> = v.iter().map(|x| x * 0.5 + 0.05).collect();
             let d = gpu_distance_cpu_fallback(&v, &w, crate::distance::DistanceMetric::Cosine);
             prop_assert!(
-                d >= -1e-5 && d <= 2.0 + 1e-5,
+                ((-1e-5f32)..=(2.0_f32 + 1e-5)).contains(&d),
                 "Cosine distance must be in [0,2], got {d}"
             );
         }
@@ -726,13 +726,16 @@ mod tests {
         fn prop_cpu_distance_unsupported_metrics_return_max(
             v in proptest::collection::vec(0.1f32..=1.0f32, 1..=16usize),
         ) {
-            prop_assert_eq!(
-                gpu_distance_cpu_fallback(&v, &v, crate::distance::DistanceMetric::Hamming),
-                f32::MAX,
+            // Use bit-exact comparison: f32::MAX is a sentinel, not a computed value.
+            prop_assert!(
+                gpu_distance_cpu_fallback(&v, &v, crate::distance::DistanceMetric::Hamming)
+                    .to_bits() == f32::MAX.to_bits(),
+                "Hamming must return f32::MAX (no GPU shader)"
             );
-            prop_assert_eq!(
-                gpu_distance_cpu_fallback(&v, &v, crate::distance::DistanceMetric::Jaccard),
-                f32::MAX,
+            prop_assert!(
+                gpu_distance_cpu_fallback(&v, &v, crate::distance::DistanceMetric::Jaccard)
+                    .to_bits() == f32::MAX.to_bits(),
+                "Jaccard must return f32::MAX (no GPU shader)"
             );
         }
     }
