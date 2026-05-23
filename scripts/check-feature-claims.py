@@ -11,6 +11,7 @@ Exit codes:
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -174,12 +175,21 @@ def _scan_rust_src(src_dir: Path) -> set[str]:
     `#[cfg(test)]` items are stripped before keyword matching so that test
     fixtures (mock error variants, test-only helpers) do not get counted as
     public API.
+
+    Symlinks are explicitly not followed. `pathlib.Path.glob` defaults to
+    not following symlinks on Python 3.11 but the rewrite in 3.13 follows
+    them; using `os.walk(followlinks=False)` pins the behaviour across
+    interpreter versions and avoids both symlink-cycle hangs and accidental
+    inclusion of code outside the crate's source tree.
     """
-    if not src_dir.exists():
+    if not src_dir.is_dir():
         return set()
     combined = ""
-    for rs_file in src_dir.glob("**/*.rs"):
-        combined += _strip_cfg_test_blocks(_read_text(rs_file)) + "\n"
+    for dirpath, _dirs, filenames in os.walk(src_dir, followlinks=False):
+        for filename in filenames:
+            if filename.endswith(".rs"):
+                rs_file = Path(dirpath) / filename
+                combined += _strip_cfg_test_blocks(_read_text(rs_file)) + "\n"
     return _capabilities_from_text(combined, CAPABILITIES)
 
 

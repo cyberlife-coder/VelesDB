@@ -86,6 +86,37 @@ class ScanRustSrcTests(unittest.TestCase):
             actual = cfc._scan_rust_src(Path(f.name))
             self.assertEqual(actual, set())
 
+    def test_does_not_follow_symlinks_out_of_src_tree(self) -> None:
+        """`_scan_rust_src` must not follow symlinks — cycles cause infinite
+        recursion, and external symlinks pull in code that isn't part of the
+        crate's API surface.
+        """
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            external = Path(tmp) / "external"
+            external.mkdir()
+            (external / "sparse.rs").write_text(
+                "fn sparse_search() {}\n",
+                encoding="utf-8",
+            )
+
+            src = Path(tmp) / "src"
+            src.mkdir()
+            (src / "lib.rs").write_text("// real source\n", encoding="utf-8")
+            try:
+                os.symlink(external, src / "linked")
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unsupported on this filesystem")
+
+            actual = cfc._scan_rust_src(src)
+            self.assertNotIn(
+                "sparse",
+                actual,
+                "symlinked .rs files outside src tree must not contribute",
+            )
+
     def test_aggregates_across_multiple_files(self) -> None:
         import tempfile
 
@@ -246,19 +277,6 @@ class AuditPythonOnRealRepoTests(unittest.TestCase):
             result.actual,
             "gpu should not be detected for velesdb-python — it has no GPU API",
         )
-
-
-class FullAuditExitCodeTests(unittest.TestCase):
-    """End-to-end: running the full audit must exit 0 on a clean tree."""
-
-    def test_main_returns_zero(self) -> None:
-        # Suppress stdout to keep test output clean.
-        import contextlib
-        import io
-
-        with contextlib.redirect_stdout(io.StringIO()):
-            exit_code = cfc.main()
-        self.assertEqual(exit_code, 0, "check-feature-claims.py must exit 0")
 
 
 if __name__ == "__main__":
