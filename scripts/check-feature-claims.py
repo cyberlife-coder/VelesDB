@@ -114,6 +114,31 @@ def _parse_rust_public_api(src_path: Path) -> set[str]:
     return _capabilities_from_text(text, CAPABILITIES)
 
 
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", flags=re.DOTALL)
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+_STRING_LITERAL_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _strip_rust_non_code(text: str) -> str:
+    """Remove comments and string literals from Rust source text.
+
+    Capability keywords that appear only in prose — `///` doc comments,
+    `//` line comments, `/* ... */` block comments, log messages or error
+    strings — are not part of the public API surface. Stripping them keeps
+    keyword detection focused on real identifiers (function names, type
+    names, `pub use` re-exports) so that a future regression that removes
+    a function while leaving its docstring behind does not mask a MISSING
+    gap.
+
+    Order matters: must run before `_strip_cfg_test_blocks` so that braces
+    inside string literals do not confuse the brace-balancing scan.
+    """
+    text = _BLOCK_COMMENT_RE.sub(" ", text)
+    text = _LINE_COMMENT_RE.sub(" ", text)
+    text = _STRING_LITERAL_RE.sub(" ", text)
+    return text
+
+
 def _strip_cfg_test_blocks(text: str) -> str:
     """Remove `#[cfg(test)]`-annotated items from Rust source text.
 
@@ -189,7 +214,12 @@ def _scan_rust_src(src_dir: Path) -> set[str]:
         for filename in filenames:
             if filename.endswith(".rs"):
                 rs_file = Path(dirpath) / filename
-                combined += _strip_cfg_test_blocks(_read_text(rs_file)) + "\n"
+                text = _read_text(rs_file)
+                # Prose stripping first so brace-balancing in cfg(test)
+                # stripping is not confused by `{`/`}` inside string literals.
+                text = _strip_rust_non_code(text)
+                text = _strip_cfg_test_blocks(text)
+                combined += text + "\n"
     return _capabilities_from_text(combined, CAPABILITIES)
 
 

@@ -86,6 +86,64 @@ class ScanRustSrcTests(unittest.TestCase):
             actual = cfc._scan_rust_src(Path(f.name))
             self.assertEqual(actual, set())
 
+    def test_ignores_keywords_in_doc_comments(self) -> None:
+        """Capability keywords appearing only in doc-comments must not register.
+
+        `///` and `//!` doc-comments are prose that *describes* code, not the
+        code itself. A README claim covered solely by a doc-comment mention
+        would otherwise mask a real public-API gap (e.g. a removed function
+        whose `///` docstring remains).
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp)
+            (src / "lib.rs").write_text(
+                "//! This crate handles the edge case for sparse retrieval via bm25.\n"
+                "/// Documents a removed function: train_pq used to live here.\n"
+                "pub fn unrelated_kept_around() {}\n",
+                encoding="utf-8",
+            )
+            actual = cfc._scan_rust_src(src)
+            self.assertNotIn("graph", actual, "edge in doc-comment must not register graph")
+            self.assertNotIn("sparse", actual, "sparse/bm25 in doc-comment must not register")
+            self.assertNotIn("quantization", actual, "train_pq in doc-comment must not register")
+
+    def test_ignores_keywords_in_string_literals(self) -> None:
+        """Capability keywords inside string literals (log messages, errors)
+        are not API surface and must not register."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp)
+            (src / "lib.rs").write_text(
+                'pub fn unrelated() {\n'
+                '    tracing::info!("load complete for storage");\n'
+                '    panic!("hnsw index missing");\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            actual = cfc._scan_rust_src(src)
+            self.assertNotIn("persistence", actual, "load/storage in strings must not register")
+            self.assertNotIn("search", actual, "hnsw in string must not register")
+
+    def test_keeps_keywords_in_real_code_identifiers(self) -> None:
+        """Sanity: prose stripping must not accidentally remove real API names."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp)
+            (src / "lib.rs").write_text(
+                "pub fn sparse_search() {}\n"
+                "pub fn train_pq() {}\n"
+                "pub use crate::wgpu_kernel;\n",
+                encoding="utf-8",
+            )
+            actual = cfc._scan_rust_src(src)
+            self.assertIn("sparse", actual)
+            self.assertIn("quantization", actual)
+            self.assertIn("gpu", actual)
+
     def test_does_not_follow_symlinks_out_of_src_tree(self) -> None:
         """`_scan_rust_src` must not follow symlinks — cycles cause infinite
         recursion, and external symlinks pull in code that isn't part of the
