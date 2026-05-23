@@ -12,6 +12,7 @@ VelesDB vector store integration for [LlamaIndex](https://www.llamaindex.ai/).
 - 🔒 **Local-first** — All data stays on your machine
 - 🧠 **RAG-ready** — Built for Retrieval-Augmented Generation
 - 🔀 **Multi-Query Fusion** — Native MQG support with RRF/Weighted strategies
+- 🌊 **Streaming inserts** — Backpressure-aware streaming ingestion through VelesDB's bounded-channel API
 
 ## Installation
 
