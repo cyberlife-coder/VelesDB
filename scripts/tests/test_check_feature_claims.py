@@ -336,6 +336,38 @@ class AuditPythonOnRealRepoTests(unittest.TestCase):
             "gpu should not be detected for velesdb-python — it has no GPU API",
         )
 
+    def test_real_python_api_capabilities_survive_prose_stripping(self) -> None:
+        """Prose stripping (comments + string literals) must not over-strip
+        real production capabilities.
+
+        Belt-and-suspenders integration check: after stripping doc-comments
+        and string literals from every .rs file in velesdb-python/src, the
+        scanner must still detect every documented capability exposed by
+        real public-API identifiers (`fn sparse_search`, `fn train_pq`,
+        `fn create_metadata_collection`, etc.). If the regex aggression
+        ever increases and accidentally swallows function signatures, this
+        test fires.
+        """
+        result = cfc._audit_python(REPO_ROOT)
+        expected_capabilities = {
+            "search",          # search()
+            "hybrid_search",   # hybrid_search()
+            "sparse",          # sparse_search(), sparse_insert
+            "quantization",    # train_pq()
+            "column_store",    # create_metadata_collection()
+            "graph",           # GraphStore, traverse_bfs
+            "streaming",       # traverse_bfs_streaming
+            "agent_memory",    # AgentMemory, SemanticMemory
+            "velesql",         # VelesQL parser exports
+            "persistence",     # mmap-backed storage
+        }
+        missing = expected_capabilities - result.actual
+        self.assertEqual(
+            missing,
+            set(),
+            f"Prose stripping over-reached and dropped real API: {sorted(missing)}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
