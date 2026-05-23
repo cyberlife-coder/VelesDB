@@ -535,6 +535,7 @@ impl GpuTraversalContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_should_traverse_gpu_threshold() {
@@ -611,6 +612,128 @@ mod tests {
                 crate::distance::DistanceMetric::Hamming,
             );
             assert!(result.is_empty());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Property tests (audit-2026q2 M6) — CPU-side invariants, no GPU required.
+    // Validate: adaptive_gpu_iterations range/monotonicity, should_traverse_gpu
+    // performance gate, and gpu_distance_cpu_fallback distance axioms.
+    // -------------------------------------------------------------------------
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(300))]
+
+        // --- adaptive_gpu_iterations ---
+
+        /// Output is always within [10, 20] for every ef_search value.
+        #[test]
+        fn prop_adaptive_iterations_in_range(ef in 0usize..100_000usize) {
+            let iters = adaptive_gpu_iterations(ef);
+            prop_assert!(
+                iters >= 10 && iters <= 20,
+                "iterations={iters} out of [10,20] for ef_search={ef}"
+            );
+        }
+
+        /// Larger ef_search yields fewer-or-equal iterations (sub-linear convergence).
+        #[test]
+        fn prop_adaptive_iterations_monotone_decreasing(
+            ef_lo in 0usize..=64usize,
+            ef_hi in 65usize..100_000usize,
+        ) {
+            let iters_lo = adaptive_gpu_iterations(ef_lo);
+            let iters_hi = adaptive_gpu_iterations(ef_hi);
+            prop_assert!(
+                iters_lo >= iters_hi,
+                "iters(ef={ef_lo})={iters_lo} must be >= iters(ef={ef_hi})={iters_hi}"
+            );
+        }
+
+        // --- should_traverse_gpu gate ---
+
+        /// Performance gate: n <= 500_000 always returns false regardless of dimension.
+        #[test]
+        fn prop_should_traverse_gpu_small_n_always_false(
+            n in 0usize..=500_000usize,
+            dim in 1usize..=4096usize,
+        ) {
+            prop_assert!(
+                !should_traverse_gpu(n, dim),
+                "n={n} <= 500_000 must return false (perf gate), dim={dim}"
+            );
+        }
+
+        // --- gpu_distance_cpu_fallback axioms ---
+
+        /// Euclidean squared distance from a vector to itself is 0.
+        #[test]
+        fn prop_cpu_distance_euclidean_identity(
+            v in proptest::collection::vec(0.01f32..=1.0f32, 1..=64usize),
+        ) {
+            let d = gpu_distance_cpu_fallback(&v, &v, crate::distance::DistanceMetric::Euclidean);
+            prop_assert!(d.abs() < 1e-5, "Euclidean sq(v,v) must be 0, got {d}");
+        }
+
+        /// Cosine distance from a non-zero vector to itself is ≈0.
+        #[test]
+        fn prop_cpu_distance_cosine_identity(
+            v in proptest::collection::vec(0.01f32..=1.0f32, 1..=64usize),
+        ) {
+            let d = gpu_distance_cpu_fallback(&v, &v, crate::distance::DistanceMetric::Cosine);
+            prop_assert!(d.abs() < 1e-5, "Cosine dist(v,v) must be ~0, got {d}");
+        }
+
+        /// Euclidean squared distance is non-negative for any two vectors.
+        #[test]
+        fn prop_cpu_distance_euclidean_nonneg(
+            v in proptest::collection::vec(-1.0f32..=1.0f32, 1..=32usize),
+        ) {
+            // Build a second same-length vector deterministically.
+            let w: Vec<f32> = v.iter().map(|x| x * 0.7 + 0.1).collect();
+            let d = gpu_distance_cpu_fallback(&v, &w, crate::distance::DistanceMetric::Euclidean);
+            prop_assert!(d >= 0.0, "Euclidean sq must be non-negative, got {d}");
+        }
+
+        /// Euclidean squared distance is symmetric: d(a,b) == d(b,a).
+        #[test]
+        fn prop_cpu_distance_euclidean_symmetric(
+            v in proptest::collection::vec(-1.0f32..=1.0f32, 1..=32usize),
+        ) {
+            let w: Vec<f32> = v.iter().map(|x| -x * 0.8 + 0.2).collect();
+            let d_ab = gpu_distance_cpu_fallback(&v, &w, crate::distance::DistanceMetric::Euclidean);
+            let d_ba = gpu_distance_cpu_fallback(&w, &v, crate::distance::DistanceMetric::Euclidean);
+            prop_assert!(
+                (d_ab - d_ba).abs() < 1e-4,
+                "Euclidean sq must be symmetric: d(a,b)={d_ab} vs d(b,a)={d_ba}"
+            );
+        }
+
+        /// Cosine distance is in [0, 2] for non-zero vectors.
+        #[test]
+        fn prop_cpu_distance_cosine_in_range(
+            v in proptest::collection::vec(0.01f32..=1.0f32, 1..=32usize),
+        ) {
+            let w: Vec<f32> = v.iter().map(|x| x * 0.5 + 0.05).collect();
+            let d = gpu_distance_cpu_fallback(&v, &w, crate::distance::DistanceMetric::Cosine);
+            prop_assert!(
+                d >= -1e-5 && d <= 2.0 + 1e-5,
+                "Cosine distance must be in [0,2], got {d}"
+            );
+        }
+
+        /// Hamming and Jaccard return f32::MAX — no GPU shader for binary metrics.
+        #[test]
+        fn prop_cpu_distance_unsupported_metrics_return_max(
+            v in proptest::collection::vec(0.1f32..=1.0f32, 1..=16usize),
+        ) {
+            prop_assert_eq!(
+                gpu_distance_cpu_fallback(&v, &v, crate::distance::DistanceMetric::Hamming),
+                f32::MAX,
+            );
+            prop_assert_eq!(
+                gpu_distance_cpu_fallback(&v, &v, crate::distance::DistanceMetric::Jaccard),
+                f32::MAX,
+            );
         }
     }
 }
