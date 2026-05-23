@@ -29,7 +29,11 @@ CAPABILITIES: dict[str, list[str]] = {
     "sparse": ["sparse", "bm25", "tfidf", "inverted", "splade", "sparse_insert", "sparse_search"],
     "streaming": ["stream", "streaming", "stream_insert", "stream_upsert", "stream_traverse"],
     "quantization": ["quantization", "pq", "sq8", "binary", "train_pq", "storage_mode"],
-    "gpu": ["gpu", "wgpu", "acceleration"],
+    # `gpu` as a bare substring matches `GpuError` (an error-type variant
+    # propagated from core into bindings that expose no GPU compute API),
+    # producing false positives. Require either the `wgpu` crate, the
+    # `gpu_*` snake_case API prefix, or explicit "acceleration" wording.
+    "gpu": ["wgpu", "gpu_", "acceleration"],
     "persistence": ["persistence", "wal", "mmap", "flush", "storage", "save", "load", "indexeddb"],
     "column_store": ["column_store", "typed_column", "metadata_collection", "column_type"],
 }
@@ -109,6 +113,56 @@ def _parse_rust_public_api(src_path: Path) -> set[str]:
     return _capabilities_from_text(text, CAPABILITIES)
 
 
+def _strip_cfg_test_blocks(text: str) -> str:
+    """Remove `#[cfg(test)]`-annotated items from Rust source text.
+
+    The audit treats source files as API surface. Test modules and test
+    functions are deliberately not part of the API and would otherwise
+    contribute false-positive capability signals — e.g., a `CoreError::GpuError`
+    variant referenced inside `#[cfg(test)] mod tests` would register the
+    crate as exposing GPU acceleration even when no production code does.
+
+    Strategy: scan for each `#[cfg(test)]` attribute, then strip from the
+    attribute through either the matching closing brace (block items like
+    `mod tests {{ ... }}`) or the next `;` (statement items like
+    `#[cfg(test)] use ...;`). Brace counting is naive (no string/comment
+    parsing) but the asymmetric risk favors over-stripping: missing a
+    test-only mention is harmless, while leaking test mentions into the API
+    set hides real doc-vs-API gaps.
+    """
+    attr = "#[cfg(test)]"
+    out_parts: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        idx = text.find(attr, i)
+        if idx == -1:
+            out_parts.append(text[i:])
+            break
+        out_parts.append(text[i:idx])
+        # After the attribute, advance until the item terminates with either
+        # a balanced `{...}` block or a top-level `;`.
+        j = idx + len(attr)
+        while j < n:
+            c = text[j]
+            if c == "{":
+                depth = 1
+                j += 1
+                while j < n and depth > 0:
+                    if text[j] == "{":
+                        depth += 1
+                    elif text[j] == "}":
+                        depth -= 1
+                    j += 1
+                break
+            if c == ";":
+                j += 1
+                break
+            j += 1
+        i = j
+    return "".join(out_parts)
+
+
 def _scan_rust_src(src_dir: Path) -> set[str]:
     """Scan every `.rs` file under *src_dir* and infer capabilities.
 
@@ -116,12 +170,16 @@ def _scan_rust_src(src_dir: Path) -> set[str]:
     (e.g. PyO3 method definitions on `Collection`/`Database` types in
     velesdb-python). Reading only `lib.rs` misses those — `lib.rs` re-exports
     types but the capability-bearing method names live one level deeper.
+
+    `#[cfg(test)]` items are stripped before keyword matching so that test
+    fixtures (mock error variants, test-only helpers) do not get counted as
+    public API.
     """
     if not src_dir.exists():
         return set()
     combined = ""
     for rs_file in src_dir.glob("**/*.rs"):
-        combined += _read_text(rs_file) + "\n"
+        combined += _strip_cfg_test_blocks(_read_text(rs_file)) + "\n"
     return _capabilities_from_text(combined, CAPABILITIES)
 
 
