@@ -104,7 +104,7 @@ pub(crate) fn sort_scored_by_metric(results: &mut [ScoredResult], higher_is_bett
 /// higher scores always indicate better matches.
 ///
 /// Uses unstable sort: equal-score tie-breaking order is irrelevant for ranking.
-#[allow(dead_code)]
+#[allow(dead_code)] // Reason: BM25/sparse search utility — callers exist in test suite; future SDK wiring pending
 pub(crate) fn sort_results_descending(results: &mut [SearchResult]) {
     results.sort_unstable_by(|a, b| {
         b.score

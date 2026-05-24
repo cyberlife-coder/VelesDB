@@ -71,8 +71,7 @@ impl TraversalResult {
     /// public API boundary.
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
-    // Reason: Constructor used by MATCH clause traversal (Wave 6 wiring).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Constructor used by MATCH clause traversal (Wave 6 wiring)
     pub(crate) fn from_smallvec(target_id: u64, path: TraversalPath, depth: u32) -> Self {
         Self {
             target_id,
