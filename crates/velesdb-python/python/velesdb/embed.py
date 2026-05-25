@@ -28,7 +28,11 @@ from typing import Protocol, Sequence, runtime_checkable
 
 @runtime_checkable
 class Embedder(Protocol):
-    """Minimal interface a VelesDB embedding adapter must satisfy."""
+    """Minimal interface a VelesDB embedding adapter must satisfy.
+
+    ``dimension`` is ``0`` until it can be inferred — either by passing it
+    explicitly to the adapter constructor or by calling :meth:`embed` once.
+    """
 
     dimension: int
 
@@ -62,26 +66,18 @@ class OpenAIEmbedder:
 
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
-        self._dimension = dimensions or 0
-
-    @property
-    def dimension(self) -> int:
-        if self._dimension == 0:
-            # Probe once so callers can rely on ``embedder.dimension`` before
-            # the first real embed call (e.g. when sizing a collection).
-            self.embed(["dimension-probe"])
-        return self._dimension
+        self.dimension: int = dimensions or 0
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []
         kwargs: dict[str, object] = {"model": self.model, "input": list(texts)}
-        if self._dimension > 0:
-            kwargs["dimensions"] = self._dimension
+        if self.dimension > 0:
+            kwargs["dimensions"] = self.dimension
         response = self._client.embeddings.create(**kwargs)
         vectors = [list(item.embedding) for item in response.data]
-        if self._dimension == 0 and vectors:
-            self._dimension = len(vectors[0])
+        if self.dimension == 0 and vectors:
+            self.dimension = len(vectors[0])
         return vectors
 
 
@@ -108,7 +104,7 @@ class SentenceTransformerEmbedder:
 
         self._model = SentenceTransformer(model, device=device)
         self._normalize = normalize
-        self.dimension = int(self._model.get_sentence_embedding_dimension())
+        self.dimension: int = int(self._model.get_sentence_embedding_dimension())
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:

@@ -8,7 +8,7 @@
  * @example
  * ```ts
  * import { VelesDB } from '@wiscale/velesdb-sdk';
- * import { OpenAIEmbedder } from '@wiscale/velesdb-sdk/embed';
+ * import { OpenAIEmbedder } from '@wiscale/velesdb-sdk';
  *
  * const embedder = new OpenAIEmbedder({ apiKey: process.env.OPENAI_API_KEY! });
  * const [vec] = await embedder.embed(['hello world']);
@@ -22,7 +22,8 @@
  */
 
 export interface Embedder {
-  readonly dimension: number;
+  /** Output dimension. `0` until inferred (via constructor option or first `embed()` call). */
+  dimension: number;
   embed(texts: string[]): Promise<number[][]>;
 }
 
@@ -43,6 +44,30 @@ interface OpenAIEmbeddingResponse {
   data: Array<{ embedding: number[] }>;
 }
 
+function resolveApiKey(option: string | undefined): string {
+  const envKey =
+    typeof process !== 'undefined' && process.env
+      ? process.env.OPENAI_API_KEY
+      : undefined;
+  const key = option ?? envKey;
+  if (!key) {
+    throw new Error(
+      'OpenAIEmbedder requires an `apiKey` option or OPENAI_API_KEY env var.',
+    );
+  }
+  return key;
+}
+
+function resolveFetch(option: typeof fetch | undefined): typeof fetch {
+  const fn = option ?? globalThis.fetch;
+  if (typeof fn !== 'function') {
+    throw new Error(
+      'No fetch implementation available — pass `options.fetch` (Node < 18 has no global fetch).',
+    );
+  }
+  return fn;
+}
+
 /**
  * OpenAI / Azure-OpenAI embedding adapter.
  *
@@ -52,60 +77,25 @@ interface OpenAIEmbeddingResponse {
  */
 export class OpenAIEmbedder implements Embedder {
   readonly model: string;
+  dimension: number;
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
-  private _dimension: number;
 
   constructor(options: OpenAIEmbedderOptions = {}) {
     this.model = options.model ?? 'text-embedding-3-small';
-
-    const envKey =
-      typeof process !== 'undefined' && process.env
-        ? process.env.OPENAI_API_KEY
-        : undefined;
-    const key = options.apiKey ?? envKey;
-    if (!key) {
-      throw new Error(
-        'OpenAIEmbedder requires an `apiKey` option or OPENAI_API_KEY env var.',
-      );
-    }
-    this.apiKey = key;
-
-    this.baseUrl = (options.baseUrl ?? 'https://api.openai.com/v1').replace(
-      /\/$/,
-      '',
-    );
-
-    const fetchFn = options.fetch ?? globalThis.fetch;
-    if (typeof fetchFn !== 'function') {
-      throw new Error(
-        'No fetch implementation available — pass `options.fetch` (Node < 18 has no global fetch).',
-      );
-    }
-    this.fetchImpl = fetchFn;
-
-    this._dimension = options.dimensions ?? 0;
-  }
-
-  get dimension(): number {
-    if (this._dimension === 0) {
-      throw new Error(
-        'Dimension unknown — pass `dimensions` to the constructor or call `embed()` once first.',
-      );
-    }
-    return this._dimension;
+    this.apiKey = resolveApiKey(options.apiKey);
+    this.baseUrl = (options.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '');
+    this.fetchImpl = resolveFetch(options.fetch);
+    this.dimension = options.dimensions ?? 0;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
 
-    const body: Record<string, unknown> = {
-      model: this.model,
-      input: texts,
-    };
-    if (this._dimension > 0) {
-      body.dimensions = this._dimension;
+    const body: Record<string, unknown> = { model: this.model, input: texts };
+    if (this.dimension > 0) {
+      body.dimensions = this.dimension;
     }
 
     const response = await this.fetchImpl(`${this.baseUrl}/embeddings`, {
@@ -127,11 +117,8 @@ export class OpenAIEmbedder implements Embedder {
     const payload = (await response.json()) as OpenAIEmbeddingResponse;
     const vectors = payload.data.map((item) => item.embedding);
 
-    if (this._dimension === 0 && vectors.length > 0) {
-      const first = vectors[0];
-      if (first) {
-        this._dimension = first.length;
-      }
+    if (this.dimension === 0 && vectors[0]) {
+      this.dimension = vectors[0].length;
     }
 
     return vectors;
