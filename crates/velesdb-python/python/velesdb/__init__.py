@@ -11,6 +11,7 @@ import re
 import threading
 from typing import Any, Iterable
 
+from velesdb import embed as embed
 from velesdb.velesdb import (  # type: ignore[attr-defined]
     AgentMemory,
     AutoReindexOptions,
@@ -676,5 +677,6 @@ __all__ = [
     "LimitsOptions",
     "AutoReindexOptions",
     "VelesConfigOptions",
+    "embed",
     "__version__",
 ]
