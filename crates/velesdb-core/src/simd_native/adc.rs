@@ -206,6 +206,7 @@ unsafe fn adc_single_avx2(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 
 ///   well-defined.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
+#[allow(clippy::wildcard_imports)] // idiomatic for NEON intrinsics
 unsafe fn adc_single_neon(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 {
     use std::arch::aarch64::*;
     debug_assert_eq!(code.len(), m, "code length must equal m");
