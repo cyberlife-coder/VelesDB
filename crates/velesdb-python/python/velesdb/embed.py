@@ -23,7 +23,16 @@ Example::
 
 from __future__ import annotations
 
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Any, Protocol, Sequence, runtime_checkable
+
+_OPENAI_MISSING_HINT = (
+    "OpenAIEmbedder requires the 'openai' package. "
+    "Install with: pip install velesdb[embed-openai]"
+)
+_SENTENCE_TRANSFORMERS_MISSING_HINT = (
+    "SentenceTransformerEmbedder requires 'sentence-transformers'. "
+    "Install with: pip install velesdb[embed-sentence-transformers]"
+)
 
 
 @runtime_checkable
@@ -56,22 +65,15 @@ class OpenAIEmbedder:
         base_url: str | None = None,
         dimensions: int | None = None,
     ) -> None:
-        try:
-            from openai import OpenAI
-        except ImportError as exc:
-            raise ImportError(
-                "OpenAIEmbedder requires the 'openai' package. "
-                "Install with: pip install velesdb[embed-openai]"
-            ) from exc
-
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        openai_module = _load_openai()
+        self._client = openai_module.OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.dimension: int = dimensions or 0
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []
-        kwargs: dict[str, object] = {"model": self.model, "input": list(texts)}
+        kwargs: dict[str, Any] = {"model": self.model, "input": list(texts)}
         if self.dimension > 0:
             kwargs["dimensions"] = self.dimension
         response = self._client.embeddings.create(**kwargs)
@@ -94,15 +96,8 @@ class SentenceTransformerEmbedder:
         device: str | None = None,
         normalize: bool = True,
     ) -> None:
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError as exc:
-            raise ImportError(
-                "SentenceTransformerEmbedder requires 'sentence-transformers'. "
-                "Install with: pip install velesdb[embed-sentence-transformers]"
-            ) from exc
-
-        self._model = SentenceTransformer(model, device=device)
+        sentence_transformers_module = _load_sentence_transformers()
+        self._model = sentence_transformers_module.SentenceTransformer(model, device=device)
         self._normalize = normalize
         dim = self._model.get_sentence_embedding_dimension()
         self.dimension: int = int(dim) if dim is not None else 0
@@ -117,6 +112,22 @@ class SentenceTransformerEmbedder:
             normalize_embeddings=self._normalize,
         )
         return vectors.tolist()
+
+
+def _load_openai() -> Any:
+    try:
+        import openai
+    except ImportError as exc:
+        raise ImportError(_OPENAI_MISSING_HINT) from exc
+    return openai
+
+
+def _load_sentence_transformers() -> Any:
+    try:
+        import sentence_transformers
+    except ImportError as exc:
+        raise ImportError(_SENTENCE_TRANSFORMERS_MISSING_HINT) from exc
+    return sentence_transformers
 
 
 __all__ = [
