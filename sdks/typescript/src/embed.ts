@@ -117,8 +117,9 @@ export class OpenAIEmbedder implements Embedder {
     const payload = (await response.json()) as OpenAIEmbeddingResponse;
     const vectors = payload.data.map((item) => item.embedding);
 
-    if (this.dimension === 0 && vectors[0]) {
-      this.dimension = vectors[0].length;
+    const firstVec = vectors[0];
+    if (this.dimension === 0 && firstVec !== undefined) {
+      this.dimension = firstVec.length;
     }
 
     return vectors;

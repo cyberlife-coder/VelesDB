@@ -104,7 +104,8 @@ class SentenceTransformerEmbedder:
 
         self._model = SentenceTransformer(model, device=device)
         self._normalize = normalize
-        self.dimension: int = int(self._model.get_sentence_embedding_dimension())
+        dim = self._model.get_sentence_embedding_dimension()
+        self.dimension: int = int(dim) if dim is not None else 0
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:

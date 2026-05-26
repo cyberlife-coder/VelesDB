@@ -1,5 +1,7 @@
 # VelesQL Cheat Sheet
 
+> **Last updated: 2026-05-26**
+
 One-page reference for the most common VelesQL statements. For the full
 language reference (grammar, edge cases, conformance), see
 [`docs/VELESQL_SPEC.md`](../VELESQL_SPEC.md).
