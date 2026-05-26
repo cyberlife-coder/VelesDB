@@ -52,7 +52,7 @@ impl Collection {
     ///
     /// Returns `Err` when the condition contains more than one
     /// `SparseVectorSearch` node (ambiguous multi-sparse query).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Query validator guard for multi-sparse disambiguation — wired in future planner
     pub(crate) fn validate_single_sparse_search(condition: &Condition) -> Result<()> {
         fn count(cond: &Condition) -> usize {
             match cond {
@@ -229,7 +229,7 @@ impl Collection {
     ///
     /// Currently only exercised by integration tests; production callers use
     /// [`Self::execute_hybrid_search_with_strategy`] directly.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: Integration-test entry point; production callers use execute_hybrid_search_with_strategy
     pub(crate) fn execute_hybrid_search(
         &self,
         dense_vector: &[f32],
