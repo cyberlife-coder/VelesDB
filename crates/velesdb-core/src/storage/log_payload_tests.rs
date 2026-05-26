@@ -62,11 +62,31 @@ fn test_delete_never_stored_id_is_no_op() {
 
     storage.delete(42).expect("Delete of never-stored id should succeed");
 
+    // No WAL append: confirms the fsync-per-call cost is gone.
     let wal_size_after = std::fs::metadata(&wal_path).expect("WAL exists").len();
     assert_eq!(
         wal_size_before, wal_size_after,
         "delete() on a never-stored id must not append to the WAL"
     );
+
+    // In-memory state matches the WAL: no spurious tombstone, no phantom id.
+    // Catches a future regression that writes a tombstone but truncates the
+    // file, or that marks the id present in the index.
+    assert_eq!(
+        storage
+            .retrieve(42)
+            .expect("Retrieve of never-stored id should succeed"),
+        None,
+        "delete() on a never-stored id must leave retrieve() returning None"
+    );
+    assert!(
+        storage.ids().is_empty(),
+        "delete() on a never-stored id must not introduce an id into the index"
+    );
+
+    // Drop storage before TempDir cleanup so Windows can remove the WAL file
+    // (no-op on Unix, defensive against future test reordering).
+    drop(storage);
 }
 
 #[test]
