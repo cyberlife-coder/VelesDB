@@ -84,16 +84,18 @@ jobs:
           sbom: true
 
       - name: Summary
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           {
             echo "### Published image"
             echo ""
             echo '```'
-            echo "${{ steps.meta.outputs.tags }}"
+            echo "$TAGS"
             echo '```'
             echo ""
             echo "Pull with:"
             echo '```bash'
-            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo "docker pull $REGISTRY/$IMAGE_NAME:latest"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
