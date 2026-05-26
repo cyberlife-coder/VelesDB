@@ -25,6 +25,16 @@ from __future__ import annotations
 
 from typing import Any, Protocol, Sequence, runtime_checkable
 
+try:  # optional backend, gated by `pip install velesdb[embed-openai]`
+    import openai as _openai
+except ImportError:  # pragma: no cover - tested via no-extras install
+    _openai = None  # type: ignore[assignment]
+
+try:  # optional backend, gated by `pip install velesdb[embed-sentence-transformers]`
+    import sentence_transformers as _sentence_transformers
+except ImportError:  # pragma: no cover - tested via no-extras install
+    _sentence_transformers = None  # type: ignore[assignment]
+
 _OPENAI_MISSING_HINT = (
     "OpenAIEmbedder requires the 'openai' package. "
     "Install with: pip install velesdb[embed-openai]"
@@ -78,7 +88,7 @@ class OpenAIEmbedder:
             kwargs["dimensions"] = self.dimension
         response = self._client.embeddings.create(**kwargs)
         vectors = [list(item.embedding) for item in response.data]
-        if self.dimension == 0 and vectors:
+        if not self.dimension and vectors:
             self.dimension = len(vectors[0])
         return vectors
 
@@ -115,19 +125,15 @@ class SentenceTransformerEmbedder:
 
 
 def _load_openai() -> Any:
-    try:
-        import openai
-    except ImportError as exc:
-        raise ImportError(_OPENAI_MISSING_HINT) from exc
-    return openai
+    if _openai is None:
+        raise ImportError(_OPENAI_MISSING_HINT)
+    return _openai
 
 
 def _load_sentence_transformers() -> Any:
-    try:
-        import sentence_transformers
-    except ImportError as exc:
-        raise ImportError(_SENTENCE_TRANSFORMERS_MISSING_HINT) from exc
-    return sentence_transformers
+    if _sentence_transformers is None:
+        raise ImportError(_SENTENCE_TRANSFORMERS_MISSING_HINT)
+    return _sentence_transformers
 
 
 __all__ = [
