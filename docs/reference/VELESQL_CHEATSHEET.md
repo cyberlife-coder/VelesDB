@@ -1,6 +1,6 @@
 # VelesQL Cheat Sheet
 
-> **Last updated: 2026-05-26**
+> _Last updated: 2026-05-26._
 
 One-page reference for the most common VelesQL statements. For the full
 language reference (grammar, edge cases, conformance), see
