@@ -122,8 +122,9 @@ impl LabelTable {
         // Reason: len checked against u32::MAX above, truncation impossible
         #[allow(clippy::cast_possible_truncation)]
         let id = LabelId(len as u32);
-        self.strings.push(s.to_string());
-        self.ids.insert(s.to_string(), id);
+        let owned = s.to_owned();
+        self.strings.push(owned.clone());
+        self.ids.insert(owned, id);
         Ok(id)
     }
 
