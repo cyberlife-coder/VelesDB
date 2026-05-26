@@ -46,11 +46,9 @@ interface OpenAIEmbeddingResponse {
 
 function resolveApiKey(option: string | undefined): string {
   const envKey =
-    typeof process !== 'undefined' && process.env
-      ? process.env.OPENAI_API_KEY
-      : undefined;
+    typeof process !== 'undefined' ? process.env.OPENAI_API_KEY : undefined;
   const key = option ?? envKey;
-  if (!key) {
+  if (key === undefined || key === '') {
     throw new Error(
       'OpenAIEmbedder requires an `apiKey` option or OPENAI_API_KEY env var.',
     );
