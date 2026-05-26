@@ -38,7 +38,7 @@ clap = { version = "4.6", features = ["derive", "env"] }
 reqwest = { version = "0.13", features = ["json", "native-tls", "query"], default-features = false }
 
 # Native RESP client for Redis Stack / RediSearch
-redis = { version = "0.26", features = ["tokio-comp", "aio"], optional = true }
+redis = { version = "1.2", features = ["tokio-comp", "aio"], optional = true }
 
 # Config parsing
 serde_yaml = "0.9"
