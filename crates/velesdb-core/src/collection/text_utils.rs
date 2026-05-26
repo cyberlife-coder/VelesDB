@@ -8,14 +8,14 @@
 ///
 /// Used by BM25 indexing in both `PayloadEngine` and `Collection`.
 pub(crate) fn extract_text(value: &serde_json::Value) -> String {
-    let mut texts = Vec::new();
+    let mut texts: Vec<&str> = Vec::new();
     collect_strings(value, &mut texts);
     texts.join(" ")
 }
 
-fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
+fn collect_strings<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
     match value {
-        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::String(s) => out.push(s.as_str()),
         serde_json::Value::Array(arr) => {
             for item in arr {
                 collect_strings(item, out);
