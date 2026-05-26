@@ -412,6 +412,19 @@ impl PayloadStorage for LogPayloadStorage {
     }
 
     fn delete(&mut self, id: u64) -> io::Result<()> {
+        // If the id is not in the index there is nothing for a tombstone to
+        // shadow on WAL replay. Without this guard, callers that issue
+        // per-entry deletes (e.g. `write_deduped_payloads` with all-None
+        // payloads) pay one fsync per never-stored id.
+        //
+        // SAFETY: `&mut self` serializes all writers, so the read-then-write
+        // gap below cannot race a concurrent `store(id)`. If this signature
+        // is ever relaxed to `&self`, replace this with a single write-lock
+        // acquisition or fold the check inside the existing scoped block.
+        if !self.index.read().contains_key(&id) {
+            return Ok(());
+        }
+
         let crc = compute_delete_crc(id);
 
         // Scoped block: all lock guards are released before the auto-snapshot

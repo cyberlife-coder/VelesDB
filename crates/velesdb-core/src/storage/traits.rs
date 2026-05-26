@@ -87,6 +87,10 @@ pub trait PayloadStorage: Send + Sync {
 
     /// Deletes a payload by ID.
     ///
+    /// Implementations MAY treat a delete of an unknown id as a no-op
+    /// (returning `Ok(())` without producing a durable record). Callers
+    /// must not rely on this method to emit an audit trail for every call.
+    ///
     /// # Errors
     ///
     /// Returns an error if the delete operation fails.
