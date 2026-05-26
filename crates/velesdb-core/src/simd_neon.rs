@@ -3,6 +3,11 @@
 //! This module provides NEON-optimized distance calculations for aarch64 targets.
 //! Performance is comparable to x86_64 AVX2 (≥95% parity).
 
+// Wildcard import of NEON intrinsics is the idiomatic pattern for SIMD kernels.
+// `doc_markdown` is too noisy on intrinsic names (`vfmaq_f32`, etc.) referenced
+// in safety/performance notes.
+#![allow(clippy::wildcard_imports, clippy::doc_markdown)]
+
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
 

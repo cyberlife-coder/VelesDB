@@ -13,6 +13,8 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::missing_panics_doc)]
+// Wildcard import of NEON intrinsics is idiomatic for SIMD kernels.
+#![allow(clippy::wildcard_imports)]
 #![allow(clippy::similar_names)]
 
 // =============================================================================
