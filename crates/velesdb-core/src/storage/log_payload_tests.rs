@@ -50,6 +50,26 @@ fn test_delete_payload() {
 }
 
 #[test]
+fn test_delete_never_stored_id_is_no_op() {
+    // Regression: `write_deduped_payloads` calls `delete()` for every batch
+    // entry with no payload — used to write one tombstone (+ fsync) per
+    // never-stored id, adding O(N × fsync_latency) to fresh upserts.
+    let temp = TempDir::new().expect("Failed to create temp dir");
+    let mut storage = LogPayloadStorage::new_with_durability(temp.path(), DurabilityMode::Fsync)
+        .expect("Create failed");
+    let wal_path = temp.path().join("payloads.log");
+    let wal_size_before = std::fs::metadata(&wal_path).expect("WAL exists").len();
+
+    storage.delete(42).expect("Delete of never-stored id should succeed");
+
+    let wal_size_after = std::fs::metadata(&wal_path).expect("WAL exists").len();
+    assert_eq!(
+        wal_size_before, wal_size_after,
+        "delete() on a never-stored id must not append to the WAL"
+    );
+}
+
+#[test]
 fn test_ids_returns_all_stored_ids() {
     // Arrange
     let (mut storage, _temp) = create_test_storage();
