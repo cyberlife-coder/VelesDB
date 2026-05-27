@@ -1,0 +1,101 @@
+name: Publish Docker image
+
+"on":
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (tag or commit SHA) to build from.'
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  # GHCR requires a lowercase repo name; hardcode rather than relying on
+  # ${{ github.repository }} which preserves the original case (VelesDB).
+  IMAGE_NAME: cyberlife-coder/velesdb
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Build and push to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ !contains(github.ref, '-') }}
+          labels: |
+            org.opencontainers.image.title=VelesDB
+            org.opencontainers.image.description=Single-binary vector + graph + columnar database for local-first AI agents and RAG.
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://velesdb.com
+            org.opencontainers.image.licenses=LicenseRef-VelesDB-Core-1.0
+            org.opencontainers.image.vendor=Wiscale France
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Summary
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### Published image"
+            echo ""
+            echo '```'
+            echo "$TAGS"
+            echo '```'
+            echo ""
+            echo "Pull with:"
+            echo '```bash'
+            echo "docker pull $REGISTRY/$IMAGE_NAME:latest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
