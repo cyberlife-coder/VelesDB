@@ -78,7 +78,7 @@ class OpenAIEmbedder:
         openai_module = _load_openai()
         self._client = openai_module.OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
-        self.dimension: int = dimensions or 0
+        self.dimension: int = 0 if dimensions is None else dimensions
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:

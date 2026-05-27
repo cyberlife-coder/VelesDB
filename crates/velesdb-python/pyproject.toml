@@ -44,8 +44,8 @@ dataframe = ["pandas>=1.5", "polars>=0.19"]
 # lazy-imports its backend, so installing the matching extra is what
 # enables it; plain `pip install velesdb` stays slim.
 embed-openai = ["openai>=1.0"]
-embed-sentence-transformers = ["sentence-transformers>=2.0"]
-embed = ["openai>=1.0", "sentence-transformers>=2.0"]
+embed-sentence-transformers = ["sentence-transformers>=2.2"]
+embed = ["openai>=1.0", "sentence-transformers>=2.2"]
 dev = [
     "pytest>=7.0",
     "numpy>=1.20",
