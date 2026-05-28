@@ -88,7 +88,7 @@ class OpenAIEmbedder:
             kwargs["dimensions"] = self.dimension
         response = self._client.embeddings.create(**kwargs)
         vectors = [list(item.embedding) for item in response.data]
-        if not self.dimension and vectors:
+        if self.dimension == 0 and vectors:
             self.dimension = len(vectors[0])
         return vectors
 

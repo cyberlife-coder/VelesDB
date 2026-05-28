@@ -106,7 +106,8 @@ export class OpenAIEmbedder implements Embedder {
     });
 
     if (!response.ok) {
-      const errorBody = await response.text();
+      const rawBody = await response.text();
+      const errorBody = rawBody.length > 500 ? `${rawBody.slice(0, 500)}…` : rawBody;
       throw new Error(
         `OpenAI embeddings request failed: ${response.status} ${response.statusText} — ${errorBody}`,
       );
