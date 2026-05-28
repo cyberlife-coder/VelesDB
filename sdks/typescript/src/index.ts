@@ -76,3 +76,5 @@ export {
   VELES_ERROR_CODES,
 } from './errors';
 export type { VelesErrorCode } from './errors';
+export { OpenAIEmbedder } from './embed';
+export type { Embedder, OpenAIEmbedderOptions } from './embed';

@@ -60,7 +60,9 @@ fn test_delete_never_stored_id_is_no_op() {
     let wal_path = temp.path().join("payloads.log");
     let wal_size_before = std::fs::metadata(&wal_path).expect("WAL exists").len();
 
-    storage.delete(42).expect("Delete of never-stored id should succeed");
+    storage
+        .delete(42)
+        .expect("Delete of never-stored id should succeed");
 
     // No WAL append: confirms the fsync-per-call cost is gone.
     let wal_size_after = std::fs::metadata(&wal_path).expect("WAL exists").len();

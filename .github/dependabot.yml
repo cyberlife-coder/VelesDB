@@ -27,7 +27,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["dependencies", "typescript"]
+    labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 3
     target-branch: "develop"
     groups:
@@ -43,7 +43,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["dependencies", "javascript", "examples"]
+    labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 3
     target-branch: "develop"
     groups:
@@ -59,7 +59,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["dependencies", "javascript", "examples"]
+    labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 3
     target-branch: "develop"
     groups:
@@ -75,7 +75,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["dependencies", "javascript", "demos"]
+    labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 3
     target-branch: "develop"
     groups:
