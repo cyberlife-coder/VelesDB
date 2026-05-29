@@ -114,16 +114,30 @@ curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
   -d '{"name": "entities", "collection_type": "metadata_only"}'
 
-# Graph collection (labeled nodes + edges). `graph_schema` is optional;
-# omit it for a schemaless graph.
+# Graph collection (labeled nodes + edges). Omit `graph_schema` entirely for a
+# schemaless graph that accepts any node/edge types:
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "kg", "collection_type": "graph"}'
+
+# For a strict schema, pass the full `graph_schema` object. `schemaless` is
+# required; `node_types` / `edge_types` are typed objects (not bare strings),
+# and each `properties` map declares allowed property types ({} for none).
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
   -d '{
         "name": "kg",
         "collection_type": "graph",
         "graph_schema": {
-          "node_types": ["Person", "Company"],
-          "edge_types": ["WORKS_AT", "KNOWS"]
+          "schemaless": false,
+          "node_types": [
+            {"name": "Person",  "properties": {"name": "string"}},
+            {"name": "Company", "properties": {}}
+          ],
+          "edge_types": [
+            {"name": "WORKS_AT", "from_type": "Person", "to_type": "Company", "properties": {}},
+            {"name": "KNOWS",    "from_type": "Person", "to_type": "Person",  "properties": {}}
+          ]
         }
       }'
 ```
