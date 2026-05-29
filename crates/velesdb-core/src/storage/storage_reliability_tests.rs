@@ -694,6 +694,37 @@ fn test_898b_store_offset_overflow_leaves_next_offset_unchanged() {
 }
 
 #[test]
+fn test_898_store_batch_offset_overflow_leaves_next_offset_unchanged() {
+    // Same guarantee as the single-store path, for the batch allocator: an
+    // overflowing batch must be rejected BEFORE next_offset is advanced.
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 3;
+    let vector_size = dim * std::mem::size_of::<f32>();
+
+    let mut storage = MmapStorage::new(&path, dim).unwrap();
+    let poisoned = usize::MAX - (vector_size - 1);
+    storage
+        .next_offset
+        .store(poisoned, std::sync::atomic::Ordering::SeqCst);
+
+    let before = storage
+        .next_offset
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let v = [1.0_f32, 2.0, 3.0];
+    let result = storage.store_batch(&[(999_u64, &v[..])]);
+    let after = storage
+        .next_offset
+        .load(std::sync::atomic::Ordering::SeqCst);
+
+    assert!(result.is_err(), "overflowing batch store must be rejected");
+    assert_eq!(
+        before, after,
+        "next_offset must not advance on the batch overflow error path"
+    );
+}
+
+#[test]
 fn test_898b_torn_tail_crc_fail_at_eof_no_corrupt_metric() {
     // A fully-framed but CRC-failing record that is the LAST record is a normal
     // post-crash torn tail: replay stops cleanly, recovers prior entries, and

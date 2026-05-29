@@ -199,14 +199,19 @@ impl VectorStorage for MmapStorage {
         // 1. Calculate total space needed and prepare batch WAL entry
         // Perf: Use FxHashMap for O(1) lookup instead of Vec with O(n) find
         // EPIC-033/US-004: Use sharded index for reduced contention
-        let (new_vector_offsets, total_new_size) = self.compute_new_offsets(vectors, vector_size);
+        let (new_vector_offsets, total_new_size) = self.compute_new_offsets(vectors, vector_size)?;
 
-        // 2. Pre-allocate space for all new vectors at once
+        // 2. Pre-allocate space for all new vectors at once.
+        // #898 follow-up: validate the new watermark with `checked_add` BEFORE
+        // committing it (mirroring `store()`), so an overflowing batch cannot
+        // leave `next_offset` advanced/wrapped and corrupt allocator state.
         if total_new_size > 0 {
-            // M-2: Acquire/AcqRel ordering for cross-platform visibility
             let start_offset = self.next_offset.load(Ordering::Acquire);
-            self.ensure_capacity(start_offset + total_new_size)?;
-            self.next_offset.fetch_add(total_new_size, Ordering::AcqRel);
+            let end = start_offset.checked_add(total_new_size).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "batch store offset overflow")
+            })?;
+            self.ensure_capacity(end)?;
+            self.next_offset.store(end, Ordering::Release);
         }
 
         // 3. WAL group write: serialize all entries into one buffer, single
@@ -351,21 +356,28 @@ impl MmapStorage {
         &self,
         vectors: &[(u64, &[f32])],
         vector_size: usize,
-    ) -> (FxHashMap<u64, usize>, usize) {
+    ) -> io::Result<(FxHashMap<u64, usize>, usize)> {
         let mut new_vector_offsets: FxHashMap<u64, usize> = FxHashMap::default();
         new_vector_offsets.reserve(vectors.len());
+        // M-2: single Acquire load gives a consistent base under `&mut self`.
+        let base = self.next_offset.load(Ordering::Acquire);
         let mut total_new_size = 0usize;
 
         for &(id, _) in vectors {
             if !self.index.contains_key(id) {
-                // M-2: Acquire ordering for cross-platform visibility
-                let offset = self.next_offset.load(Ordering::Acquire) + total_new_size;
+                // #898 follow-up: checked arithmetic so a pathological batch
+                // cannot wrap an offset/size past the validated allocator state.
+                let offset = base.checked_add(total_new_size).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "batch store offset overflow")
+                })?;
                 new_vector_offsets.insert(id, offset);
-                total_new_size += vector_size;
+                total_new_size = total_new_size.checked_add(vector_size).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "batch store size overflow")
+                })?;
             }
         }
 
-        (new_vector_offsets, total_new_size)
+        Ok((new_vector_offsets, total_new_size))
     }
 
     /// Writes all vectors to the mmap, resolving offsets from the index

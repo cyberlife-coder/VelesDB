@@ -272,9 +272,16 @@ fn replay_one_entry(
     match op[0] {
         1 => replay_store(reader, file_len, index, target, next_offset, vector_size),
         2 => replay_delete(reader, file_len, index),
-        // Unknown opcode mid-stream: framing is no longer trustworthy. Treat as
-        // a torn tail (stop cleanly) rather than fabricating further entries.
-        _ => Ok(EntryOutcome::Stop),
+        // Unknown opcode: framing is no longer trustworthy, so stop cleanly. If
+        // bytes still follow the opcode this is mid-stream corruption — record
+        // it for visibility, mirroring the CRC path; a trailing partial byte is
+        // just a torn tail and stays silent.
+        _ => {
+            if reader.stream_position()? < file_len {
+                crate::metrics::global_guardrails_metrics().record_wal_replay_corrupt_entry();
+            }
+            Ok(EntryOutcome::Stop)
+        }
     }
 }
 
