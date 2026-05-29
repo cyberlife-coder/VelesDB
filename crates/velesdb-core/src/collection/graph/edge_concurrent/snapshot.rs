@@ -30,11 +30,31 @@ impl ConcurrentEdgeStore {
 
     /// Best-effort CSR snapshot rebuild after a mutation.
     ///
-    /// Sets the `csr_dirty` flag so the next read triggers a rebuild.
-    /// This eliminates the O(N+E) rebuild on every `add_edge`/`remove_edge`,
-    /// deferring the cost to the next read.
+    /// Sets the `csr_dirty` flag and increments the pending-write counter so
+    /// the lazy rebuild can be debounced (issue #905). The actual O(N+E)
+    /// rebuild is deferred until either a reader observes
+    /// [`CSR_REBUILD_WRITE_THRESHOLD`](super::CSR_REBUILD_WRITE_THRESHOLD)
+    /// accumulated writes, or a reader that has no per-shard fallback forces
+    /// it. Until then readers fall back to the authoritative per-shard data.
     #[inline]
     pub(super) fn rebuild_snapshot_best_effort(&self) {
+        self.record_pending_writes(1);
+    }
+
+    /// Records `count` accumulated edge mutations toward the CSR rebuild
+    /// debounce threshold and marks the snapshot dirty.
+    ///
+    /// Batch writers (`add_edges_batch`) must report the actual number of
+    /// edges inserted (issue #905 follow-up): reporting a flat `1` per batch
+    /// would let a bulk-loaded graph stay permanently below
+    /// [`CSR_REBUILD_WRITE_THRESHOLD`](super::CSR_REBUILD_WRITE_THRESHOLD),
+    /// so the CSR fast path would never engage.
+    #[inline]
+    pub(super) fn record_pending_writes(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        self.pending_writes.fetch_add(count, Ordering::AcqRel);
         self.csr_dirty.store(true, Ordering::Release);
     }
 
@@ -134,6 +154,13 @@ impl ConcurrentEdgeStore {
 
         // Also rebuild the lock-free CSR snapshot.
         let _ = self.rebuild_snapshot();
+
+        // The freshly built snapshot reflects all edges, so clear the dirty
+        // flag and reset the debounce counter (issue #905). Without this the
+        // next reader would needlessly rebuild again even though the snapshot
+        // is already authoritative.
+        self.pending_writes.store(0, Ordering::Release);
+        self.csr_dirty.store(false, Ordering::Release);
     }
 
     /// Returns `true` if a CSR read snapshot is currently available.

@@ -475,4 +475,244 @@ mod tests {
         let (collection, _temp) = create_test_collection();
         assert!(collection.graph_schema().is_none());
     }
+
+    // =========================================================================
+    // Issue #900 — node delete cascades to edges
+    // =========================================================================
+
+    fn create_graph_test_collection() -> (Collection, TempDir) {
+        use crate::collection::graph::GraphSchema;
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let collection = Collection::create_graph_collection(
+            temp_dir.path().to_path_buf(),
+            "kg",
+            GraphSchema::schemaless(),
+            None,
+            DistanceMetric::Cosine,
+        )
+        .expect("Failed to create graph collection");
+        (collection, temp_dir)
+    }
+
+    #[test]
+    fn test_delete_node_cascades_to_outgoing_edge() {
+        // Insert nodes A=100, B=200 with an edge A -> B, delete A.
+        let (collection, _temp) = create_graph_test_collection();
+        collection
+            .store_node_payload(100, &serde_json::json!({"name": "A"}))
+            .unwrap();
+        collection
+            .store_node_payload(200, &serde_json::json!({"name": "B"}))
+            .unwrap();
+        collection
+            .add_edge(make_edge(1, 100, 200, "KNOWS"))
+            .unwrap();
+        assert_eq!(collection.edge_count(), 1);
+
+        collection.delete(&[100]).unwrap();
+
+        // The edge must be gone: no outgoing from A, no incoming to B, and the
+        // global edge count is zero (no dangling edge).
+        assert_eq!(collection.edge_count(), 0, "edge should be cascaded away");
+        assert!(collection.get_outgoing_edges(100).is_empty());
+        assert!(
+            collection.get_incoming_edges(200).is_empty(),
+            "B must have no incoming edge to the deleted node A"
+        );
+        // Traversal from A returns nothing.
+        let results = collection.traverse_bfs(100, 5, None, 100).unwrap();
+        assert!(
+            results.is_empty(),
+            "traversal from deleted node yields nothing"
+        );
+    }
+
+    #[test]
+    fn test_delete_node_cascades_both_directions() {
+        // A -> B and C -> B; deleting B must remove BOTH edges (outgoing from
+        // others into B, i.e. incoming on the deleted node).
+        let (collection, _temp) = create_graph_test_collection();
+        collection.add_edge(make_edge(1, 100, 200, "OUT")).unwrap();
+        collection.add_edge(make_edge(2, 300, 200, "IN")).unwrap();
+        // Also an outgoing edge from B so we cover both directions on the
+        // deleted node itself.
+        collection.add_edge(make_edge(3, 200, 400, "OUT")).unwrap();
+        assert_eq!(collection.edge_count(), 3);
+
+        collection.delete(&[200]).unwrap();
+
+        assert_eq!(
+            collection.edge_count(),
+            0,
+            "all edges touching the deleted node must be gone"
+        );
+        assert!(collection.get_outgoing_edges(100).is_empty());
+        assert!(collection.get_outgoing_edges(300).is_empty());
+        assert!(collection.get_outgoing_edges(200).is_empty());
+        assert!(collection.get_incoming_edges(400).is_empty());
+    }
+
+    #[test]
+    fn test_delete_node_does_not_touch_unrelated_edges() {
+        let (collection, _temp) = create_graph_test_collection();
+        collection.add_edge(make_edge(1, 100, 200, "A")).unwrap();
+        collection.add_edge(make_edge(2, 300, 400, "B")).unwrap();
+
+        collection.delete(&[100]).unwrap();
+
+        // Only the edge touching node 100 is removed.
+        assert_eq!(collection.edge_count(), 1);
+        assert_eq!(collection.get_outgoing_edges(300).len(), 1);
+    }
+
+    // =========================================================================
+    // Issue #906 — eager traversal is bounded (no unbounded visited/parent map)
+    // =========================================================================
+
+    /// Builds a dense, highly-connected cyclic graph: every node points to the
+    /// next `fanout` nodes (mod `n`), creating many cycles and a large frontier.
+    fn build_dense_cyclic_graph(collection: &Collection, n: u64, fanout: u64) {
+        let mut edge_id = 1u64;
+        for src in 0..n {
+            for step in 1..=fanout {
+                let dst = (src + step) % n;
+                collection
+                    .add_edge(make_edge(edge_id, src, dst, "E"))
+                    .unwrap();
+                edge_id += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn test_eager_dfs_bounded_on_dense_cyclic_graph() {
+        // A dense cyclic graph with an absurdly high depth/limit must still
+        // terminate and stay bounded (visited cap prevents unbounded growth).
+        let (collection, _temp) = create_graph_test_collection();
+        build_dense_cyclic_graph(&collection, 200, 8);
+
+        let config = TraversalConfig {
+            max_depth: u32::MAX,
+            min_depth: 0,
+            rel_types: vec![],
+            limit: usize::MAX,
+        };
+        let results = collection.traverse_dfs_config(0, &config);
+
+        // Bounded by the number of distinct reachable nodes (199 targets, the
+        // source itself is not emitted) and by MAX_VISITED_SIZE. The key
+        // assertion is that the call terminates and never exceeds these bounds.
+        assert!(
+            results.len() <= crate::collection::graph::MAX_VISITED_SIZE,
+            "DFS result must be bounded by the visited cap"
+        );
+        assert!(
+            results.len() <= 199,
+            "cannot exceed distinct reachable nodes"
+        );
+        assert!(
+            !results.is_empty(),
+            "should still traverse the reachable graph"
+        );
+    }
+
+    #[test]
+    fn test_expand_dfs_neighbors_bounds_push_growth() {
+        // Regression (#906): a single high-out-degree hub must not push more
+        // than `max_pending` neighbors into the stack / parent_map at PUSH time.
+        // The pop-time `visited.len()` guard in `traverse_dfs_config` does NOT
+        // cover this, because DFS records neighbors before they are popped.
+        use crate::collection::core::graph_traversal_helpers::{expand_dfs_neighbors, DfsFrontier};
+        use rustc_hash::{FxHashMap, FxHashSet};
+
+        let (collection, _temp) = create_graph_test_collection();
+        // Hub node 0 with 5_000 distinct out-edges.
+        let fanout = 5_000u64;
+        for t in 1..=fanout {
+            collection
+                .add_edge(make_edge(t, 0, t, "E"))
+                .expect("add edge");
+        }
+
+        let rel_filter: FxHashSet<&str> = FxHashSet::default();
+        let visited: FxHashSet<u64> = FxHashSet::default();
+        let mut stack: Vec<(u64, u32)> = Vec::new();
+        let mut parent_map: FxHashMap<u64, (u64, u64)> = FxHashMap::default();
+        let max_pending = 10usize;
+
+        let mut frontier = DfsFrontier {
+            stack: &mut stack,
+            parent_map: &mut parent_map,
+            max_pending,
+        };
+        expand_dfs_neighbors(
+            collection.edge_store.as_ref(),
+            0,
+            0,
+            &rel_filter,
+            &visited,
+            &mut frontier,
+        );
+
+        assert!(
+            parent_map.len() <= max_pending,
+            "parent_map must be capped at max_pending, got {}",
+            parent_map.len()
+        );
+        assert!(
+            stack.len() <= max_pending,
+            "stack must be capped at max_pending, got {}",
+            stack.len()
+        );
+    }
+
+    #[test]
+    fn test_dfs_hub_stays_bounded_and_terminates() {
+        // Regression (#906): DFS from a single very-high-out-degree hub with
+        // min_depth past the graph's reach yields an empty result but must
+        // terminate quickly without OOM. A star graph (hub -> many leaves) has
+        // no depth-2 node, so with min_depth=2 the result is empty even though
+        // the hub queues thousands of neighbors at push time.
+        let (collection, _temp) = create_graph_test_collection();
+        let fanout = 20_000u64;
+        for t in 1..=fanout {
+            collection
+                .add_edge(make_edge(t, 0, t, "E"))
+                .expect("add edge");
+        }
+
+        let config = TraversalConfig {
+            max_depth: u32::MAX,
+            min_depth: 2,
+            rel_types: vec![],
+            limit: usize::MAX,
+        };
+        let results = collection.traverse_dfs_config(0, &config);
+        assert!(
+            results.is_empty(),
+            "star graph has no node at depth >= 2, result must be empty"
+        );
+    }
+
+    #[test]
+    fn test_eager_bfs_frontier_bounded_on_dense_cyclic_graph() {
+        // traverse_bfs (frontier helper) on a dense cyclic graph with high
+        // limit/depth must terminate and stay bounded.
+        let (collection, _temp) = create_graph_test_collection();
+        build_dense_cyclic_graph(&collection, 200, 8);
+
+        let results = collection
+            .traverse_bfs(0, u32::MAX, None, usize::MAX)
+            .unwrap();
+
+        assert!(
+            results.len() <= crate::collection::graph::MAX_VISITED_SIZE,
+            "BFS result must be bounded by the visited cap"
+        );
+        assert!(
+            results.len() <= 199,
+            "cannot exceed distinct reachable nodes"
+        );
+        assert!(!results.is_empty());
+    }
 }

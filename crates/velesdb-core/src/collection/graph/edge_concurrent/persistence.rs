@@ -9,17 +9,29 @@ impl ConcurrentEdgeStore {
     /// Builds a `ConcurrentEdgeStore` from a persisted `EdgeStore`.
     ///
     /// Re-distributes edges across shards based on source node ID.
+    ///
+    /// Issue #905: uses [`add_edges_batch`](Self::add_edges_batch) (one
+    /// `edge_ids` write-lock acquisition for the whole set, snapshot
+    /// invalidated once) instead of a per-edge `add_edge` loop (one lock
+    /// cycle + one snapshot-dirty flip per edge). The single
+    /// [`build_read_snapshot`](Self::build_read_snapshot) at the end performs
+    /// exactly one O(N+E) CSR build for the whole reconstruction.
     #[must_use]
     pub fn from_edge_store(store: &EdgeStore) -> Self {
-        let edges = store.all_edges();
+        let edges: Vec<_> = store.all_edges().into_iter().cloned().collect();
         let concurrent = Self::with_estimated_edges(edges.len());
 
-        for edge in edges {
-            if concurrent.add_edge(edge.clone()).is_err() {
-                #[cfg(debug_assertions)]
-                eprintln!("[velesdb] WARNING: skipped duplicate edge during CES reconstruction");
-            }
+        let expected = edges.len();
+        let added = concurrent.add_edges_batch(edges);
+        #[cfg(debug_assertions)]
+        if added != expected {
+            eprintln!(
+                "[velesdb] WARNING: skipped {} duplicate edge(s) during CES reconstruction",
+                expected - added
+            );
         }
+        #[cfg(not(debug_assertions))]
+        let _ = (expected, added);
 
         concurrent.build_read_snapshot();
         concurrent

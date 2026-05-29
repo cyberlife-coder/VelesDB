@@ -98,6 +98,7 @@ pub use range_index::RangeIndex;
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
 pub use streaming::{
     bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,
+    MAX_VISITED_SIZE,
 };
 pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH};
 pub use traversal_bidir::bfs_traverse_both;

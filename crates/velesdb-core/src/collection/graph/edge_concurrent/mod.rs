@@ -23,7 +23,18 @@ use arc_swap::ArcSwap;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
+
+/// Number of pending edge mutations that may accumulate before the lazy CSR
+/// rebuild is forced (issue #905 debounce).
+///
+/// Below this threshold a dirty CSR snapshot is **not** rebuilt on read;
+/// callers fall back to the always-correct per-shard traversal path instead
+/// (see `traverse_bfs_config`). This amortises the O(N+E) clone-and-rebuild
+/// across many writes rather than paying it on every single read that follows
+/// a write. A pure write-count threshold (no wall-clock) keeps the behaviour
+/// deterministic for single-threaded tests.
+pub(crate) const CSR_REBUILD_WRITE_THRESHOLD: u64 = 64;
 
 /// Default number of shards for concurrent edge store.
 /// Increased from 64 to 256 for better scalability with 10M+ edges (EPIC-019 US-001).
@@ -80,6 +91,14 @@ pub struct ConcurrentEdgeStore {
     /// This eliminates O(N+E) rebuilds on every mutation, deferring the
     /// cost to the next read.
     csr_dirty: AtomicBool,
+    /// Number of edge mutations accumulated since the last CSR rebuild.
+    ///
+    /// Used to debounce the lazy rebuild (issue #905): the next reader only
+    /// pays for a full O(N+E) rebuild once this reaches
+    /// [`CSR_REBUILD_WRITE_THRESHOLD`]. While dirty-but-below-threshold the
+    /// CSR snapshot is intentionally stale and callers must consult the
+    /// authoritative per-shard data (see [`Self::csr_is_authoritative`]).
+    pending_writes: AtomicU64,
     /// Shared label table for interning edge labels during snapshot builds.
     label_table: RwLock<LabelTable>,
 }
@@ -118,6 +137,7 @@ impl ConcurrentEdgeStore {
             clustered_snapshot: RwLock::new(None),
             csr_snapshot: ArcSwap::from_pointee(SnapshotBuilder::empty()),
             csr_dirty: AtomicBool::new(false),
+            pending_writes: AtomicU64::new(0),
             label_table: RwLock::new(LabelTable::new()),
         })
     }
@@ -253,7 +273,11 @@ impl ConcurrentEdgeStore {
 
         if count > 0 {
             self.invalidate_snapshot();
-            self.rebuild_snapshot_best_effort();
+            // Count every inserted edge toward the CSR rebuild debounce
+            // (issue #905 follow-up). Reporting a flat `1` per batch would
+            // keep a bulk-loaded graph permanently below the rebuild
+            // threshold, so the CSR fast path would never engage.
+            self.record_pending_writes(count as u64);
         }
         count
     }

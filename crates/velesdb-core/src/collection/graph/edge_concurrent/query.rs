@@ -258,12 +258,28 @@ impl ConcurrentEdgeStore {
     /// Uses `swap(false, AcqRel)` to atomically clear the flag and check
     /// the previous value. Only one thread performs the rebuild; concurrent
     /// readers see the stale-but-valid snapshot until the swap completes.
+    ///
+    /// This is the **correctness-first** entry point used by CSR consumers
+    /// that have no per-shard fallback (`traverse_bfs_csr`,
+    /// `traverse_bfs_filtered`, `label_count`, `get_csr_snapshot`). It always
+    /// rebuilds when dirty so the returned snapshot reflects every prior
+    /// write. The write-count debounce (issue #905) is applied one level up in
+    /// `traverse_bfs_config`, which prefers the per-shard path while the CSR
+    /// is stale and only reaches this method once a rebuild is actually wanted.
     #[inline]
     fn ensure_csr_fresh(&self) {
         if self
             .csr_dirty
             .swap(false, std::sync::atomic::Ordering::AcqRel)
         {
+            // Snapshot the write count *before* reading the shards. The
+            // rebuild below reflects exactly these writes; any writer that
+            // bumps the counter while we walk the shards must stay counted so
+            // the next reader still rebuilds (issue #905 follow-up — a blind
+            // `store(0)` after the rebuild would silently drop that increment).
+            let observed = self
+                .pending_writes
+                .load(std::sync::atomic::Ordering::Acquire);
             #[allow(unused_variables)]
             if let Err(e) = self.rebuild_snapshot() {
                 // Restore dirty flag so the next caller retries the rebuild.
@@ -271,8 +287,45 @@ impl ConcurrentEdgeStore {
                     .store(true, std::sync::atomic::Ordering::Release);
                 #[cfg(debug_assertions)]
                 eprintln!("[velesdb] WARNING: lazy CSR snapshot rebuild failed: {e}");
+                return;
             }
+            // Rebuild succeeded: subtract only the writes we accounted for, so
+            // a concurrent `fetch_add` between the load above and here is
+            // preserved instead of being clobbered to zero. Saturating at zero
+            // so two concurrent reader-triggered rebuilds cannot underflow the
+            // counter — a plain `fetch_sub` could wrap to ~`u64::MAX` and wedge
+            // `csr_rebuild_due` permanently true (forcing a rebuild on every read).
+            let _ = self.pending_writes.fetch_update(
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+                |cur| Some(cur.saturating_sub(observed)),
+            );
         }
+    }
+
+    /// Returns `true` when the CSR snapshot reflects every committed write,
+    /// i.e. it is safe to traverse without first rebuilding.
+    ///
+    /// A clean snapshot (no pending writes) is always authoritative. When the
+    /// snapshot is dirty this returns `false` **without** triggering a
+    /// rebuild, so callers with an authoritative per-shard fallback (issue
+    /// #905 debounce) can avoid the O(N+E) rebuild on every read after a
+    /// write.
+    #[inline]
+    #[must_use]
+    pub(crate) fn csr_is_authoritative(&self) -> bool {
+        !self.csr_dirty.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Returns `true` when enough writes have accumulated that the next CSR
+    /// read should pay for a rebuild rather than continue serving from the
+    /// per-shard fallback (issue #905 debounce threshold reached).
+    #[inline]
+    #[must_use]
+    pub(crate) fn csr_rebuild_due(&self) -> bool {
+        self.pending_writes
+            .load(std::sync::atomic::Ordering::Acquire)
+            >= super::CSR_REBUILD_WRITE_THRESHOLD
     }
 
     /// Returns the current CSR snapshot (lock-free read).
