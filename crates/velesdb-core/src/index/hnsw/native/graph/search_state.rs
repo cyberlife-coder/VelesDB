@@ -187,10 +187,11 @@ pub(super) fn gather_unvisited_neighbors<'a>(
                 "neighbor {neighbor} out of bounds (len {})",
                 vectors.len()
             );
-            // SAFETY: neighbor < vectors.len() — verified by debug_assert above.
-            // - neighbor was just inserted into `visited` after originating from
-            //   a layer neighbor list, so it is a valid NodeId already in storage.
-            // Reason: per-iteration distance batch accumulation.
+            // SAFETY: `get_unchecked` dereferences `neighbor` without bounds checks.
+            // - Condition 1: `neighbor < vectors.len()` verified by `debug_assert!` above.
+            //   Persisted neighbor IDs are validated `< count` once at load
+            //   time (`graph_io::read_node_neighbors`), so this holds in release.
+            // SAFETY: Skipping the bounds check avoids a branch in the HNSW hot path.
             let vec = unsafe { vectors.get_unchecked(neighbor) };
             batch.push((neighbor, vec));
         }

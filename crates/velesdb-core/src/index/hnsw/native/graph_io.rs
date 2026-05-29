@@ -12,6 +12,21 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
+/// Hard ceiling on layer counts read from an untrusted graph file,
+/// independent of the vector count. Prevents pathological allocations from
+/// a corrupt header. HNSW never builds more than a few dozen layers in
+/// practice.
+const MAX_LAYERS: usize = 4096;
+
+/// Upper bound on neighbors per node accepted from disk. Real indices keep
+/// this below ~1024 (`max_connections_0`); this is a generous safety ceiling.
+const MAX_NEIGHBORS_PER_NODE: usize = 1 << 20;
+
+/// Builds an `InvalidData` I/O error with the given message.
+fn corrupt(msg: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, msg.into())
+}
+
 /// Deserialized HNSW graph structure loaded from disk.
 pub(super) struct LoadedGraph {
     pub(super) layers: Vec<Layer>,
@@ -213,7 +228,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let (vectors, count) = Self::load_vectors_file(&vectors_path)?;
 
         let graph_path = path.join(format!("{basename}.graph"));
-        let graph = Self::load_graph_file(&graph_path)?;
+        let graph = Self::load_graph_file(&graph_path, count)?;
 
         let level_mult = 1.0 / (graph.max_connections as f64).ln();
 
@@ -255,15 +270,47 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     fn load_vectors_file(
         path: &Path,
     ) -> std::io::Result<(Option<crate::perf_optimizations::ContiguousVectors>, usize)> {
-        let mut reader = BufReader::new(File::open(path)?);
+        let file = File::open(path)?;
+        let file_len = file.metadata()?.len();
+        let mut reader = BufReader::new(file);
 
         let (count, dimension) = Self::read_vectors_header(&mut reader)?;
         if count == 0 || dimension == 0 {
             return Ok((None, 0));
         }
 
+        // Validate the declared payload size against the actual file length
+        // BEFORE allocating `count * dimension` floats. A corrupt/malicious
+        // header could otherwise request a multi-gigabyte allocation that the
+        // file cannot possibly back. Header = version(4) + count(8) + dim(4).
+        Self::validate_vectors_file_len(count, dimension, file_len)?;
+
         let storage = Self::read_vector_data(&mut reader, count, dimension)?;
         Ok((Some(storage), count))
+    }
+
+    /// Rejects vector headers whose declared `count * dimension * 4` payload
+    /// cannot fit in the actual file (guards untrusted allocations / OOB).
+    fn validate_vectors_file_len(
+        count: usize,
+        dimension: usize,
+        file_len: u64,
+    ) -> std::io::Result<()> {
+        const HEADER_BYTES: u64 = 16; // version(4) + count(8) + dimension(4)
+        let payload = (count as u64)
+            .checked_mul(dimension as u64)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or_else(|| corrupt("vector payload size overflows u64"))?;
+        let expected = payload
+            .checked_add(HEADER_BYTES)
+            .ok_or_else(|| corrupt("vector file size overflows u64"))?;
+        if file_len < expected {
+            return Err(corrupt(format!(
+                "vector file too short: header declares {count}x{dimension} \
+                 ({expected} bytes) but file is {file_len} bytes"
+            )));
+        }
+        Ok(())
     }
 
     /// Reads and validates the vectors file header, returning `(count, dimension)`.
@@ -294,28 +341,51 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         count: usize,
         dimension: usize,
     ) -> std::io::Result<crate::perf_optimizations::ContiguousVectors> {
-        let mut storage =
-            crate::perf_optimizations::ContiguousVectors::new(dimension, count.max(16))
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-        let mut buf4 = [0u8; 4];
-        let mut buf_vec = vec![0f32; dimension];
-        for _ in 0..count {
-            for slot in &mut buf_vec {
-                reader.read_exact(&mut buf4)?;
-                *slot = f32::from_le_bytes(buf4);
+        // The (count, dimension) here was already validated to fit within the
+        // actual file length by `validate_vectors_file_len`, so this is a real,
+        // legitimately-persisted size — it MUST reload regardless of the
+        // process-wide allocation backstop. Raise the ceiling to at least the
+        // file-backed payload for the duration of the load so a genuine index
+        // built under a looser limit always reloads (#899 follow-up: a fixed
+        // ceiling must never block loading a valid persisted index). The bound is
+        // derived from the file, not a fixed constant: corrupt oversized headers
+        // were already rejected above.
+        let min_bytes = count
+            .checked_mul(dimension)
+            .and_then(|n| n.checked_mul(std::mem::size_of::<f32>()))
+            .ok_or_else(|| corrupt("vector payload size overflows usize"))?;
+
+        crate::alloc_guard::with_min_alloc_byte_limit(min_bytes, || {
+            let mut storage =
+                crate::perf_optimizations::ContiguousVectors::new(dimension, count.max(16))
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+            let mut buf4 = [0u8; 4];
+            let mut buf_vec = vec![0f32; dimension];
+            for _ in 0..count {
+                for slot in &mut buf_vec {
+                    reader.read_exact(&mut buf4)?;
+                    *slot = f32::from_le_bytes(buf4);
+                }
+                storage
+                    .push(&buf_vec)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
             }
-            storage
-                .push(&buf_vec)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-        }
-        Ok(storage)
+            Ok(storage)
+        })
     }
 
-    fn load_graph_file(path: &Path) -> std::io::Result<LoadedGraph> {
-        let mut reader = BufReader::new(File::open(path)?);
+    /// Loads and validates the `.graph` file against the trusted vector
+    /// `count` (read from the `.vectors` file). All node/neighbor IDs and
+    /// header counts are validated ONCE here so the search hot path can rely
+    /// on every stored ID being `< count` and use `get_unchecked` safely.
+    fn load_graph_file(path: &Path, count: usize) -> std::io::Result<LoadedGraph> {
+        let file = File::open(path)?;
+        let file_len = file.metadata()?.len();
+        let mut reader = BufReader::new(file);
 
-        let graph_header = Self::read_graph_header(&mut reader)?;
-        let layers = Self::read_graph_layers(&mut reader, graph_header.num_layers)?;
+        let graph_header = Self::read_graph_header(&mut reader, count)?;
+        let layers =
+            Self::read_graph_layers(&mut reader, graph_header.num_layers, count, file_len)?;
 
         Ok(LoadedGraph {
             layers,
@@ -328,10 +398,59 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         })
     }
 
-    /// Reads and validates the graph file header.
-    fn read_graph_header(reader: &mut BufReader<File>) -> std::io::Result<LoadedGraph> {
+    /// Reads and validates the graph file header against the trusted vector
+    /// `count`.
+    fn read_graph_header(
+        reader: &mut BufReader<File>,
+        count: usize,
+    ) -> std::io::Result<LoadedGraph> {
         Self::validate_graph_version(reader)?;
-        Self::read_graph_header_fields(reader)
+        let header = Self::read_graph_header_fields(reader, count)?;
+        Self::validate_graph_header(&header, count)?;
+        Ok(header)
+    }
+
+    /// Validates header fields read from an untrusted `.graph` file against
+    /// the trusted vector `count`. Rejects out-of-range entry points, absurd
+    /// counts, and degenerate HNSW parameters that would corrupt the graph or
+    /// trigger out-of-bounds reads during search.
+    fn validate_graph_header(header: &LoadedGraph, count: usize) -> std::io::Result<()> {
+        if header.max_connections < 2 {
+            return Err(corrupt(format!(
+                "max_connections {} < 2 (invalid HNSW graph)",
+                header.max_connections
+            )));
+        }
+        if header.max_connections_0 < 2 {
+            return Err(corrupt(format!(
+                "max_connections_0 {} < 2 (invalid HNSW graph)",
+                header.max_connections_0
+            )));
+        }
+        if header.ef_construction < 1 {
+            return Err(corrupt("ef_construction < 1 (invalid HNSW graph)"));
+        }
+        if header.num_layers > MAX_LAYERS {
+            return Err(corrupt(format!(
+                "num_layers {} exceeds cap {MAX_LAYERS}",
+                header.num_layers
+            )));
+        }
+        if header.max_layer >= header.num_layers.max(1) && count > 0 {
+            return Err(corrupt(format!(
+                "max_layer {} out of range for {} layers",
+                header.max_layer, header.num_layers
+            )));
+        }
+        // entry_point indexes into the vectors; it must be < count (when any
+        // vectors exist). For an empty index the caller forces NO_ENTRY_POINT.
+        if count > 0 && header.entry_point >= count {
+            return Err(corrupt(format!(
+                "entry_point {} out of range for {count} vectors",
+                header.entry_point
+            )));
+        }
+        Ok(())
     }
 
     /// Validates the graph file version byte is supported.
@@ -349,14 +468,26 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     }
 
     /// Reads the graph header fields after version validation.
-    fn read_graph_header_fields(reader: &mut BufReader<File>) -> std::io::Result<LoadedGraph> {
+    ///
+    /// `count` is the trusted vector count from the `.vectors` file; the
+    /// header's own `count_check` field must match it, otherwise the two
+    /// files are inconsistent (corruption / mismatched pair).
+    fn read_graph_header_fields(
+        reader: &mut BufReader<File>,
+        count: usize,
+    ) -> std::io::Result<LoadedGraph> {
         let num_layers = read_u32_field(reader)?;
         let max_connections = read_u32_field(reader)?;
         let max_connections_0 = read_u32_field(reader)?;
         let ef_construction = read_u32_field(reader)?;
         let entry_point = read_u64_field(reader)?;
         let max_layer = read_u32_field(reader)?;
-        let _count_check = read_u64_field(reader)?;
+        let count_check = read_u64_field(reader)?;
+        if count_check != count {
+            return Err(corrupt(format!(
+                "graph count {count_check} != vectors count {count} (mismatched files)"
+            )));
+        }
 
         Ok(LoadedGraph {
             layers: Vec::new(), // populated by caller
@@ -369,32 +500,123 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         })
     }
 
-    /// Reads `num_layers` layers from the graph file.
+    /// Reads `num_layers` layers from the graph file, validating every node
+    /// and neighbor ID against the trusted vector `count`.
+    ///
+    /// `num_layers` is already capped by [`Self::validate_graph_header`], so
+    /// the `Vec::with_capacity` here is bounded. A layer's `num_nodes` is the
+    /// slot count of its adjacency table and may legitimately exceed `count`
+    /// (the base layer is over-allocated to `max_elements` at build time), so
+    /// it is NOT bounded by `count`; instead it is bounded by the remaining
+    /// file length (each node serializes at least a 4-byte `num_neighbors`),
+    /// which prevents a corrupt header from driving a huge `Layer::new`
+    /// allocation. Neighbor IDs are still validated `< count`, which is the
+    /// invariant the search hot path relies on.
     fn read_graph_layers(
         reader: &mut BufReader<File>,
         num_layers: usize,
+        count: usize,
+        file_len: u64,
     ) -> std::io::Result<Vec<Layer>> {
-        let mut buf4 = [0u8; 4];
         let mut buf8 = [0u8; 8];
         let mut layers = Vec::with_capacity(num_layers);
+        // Each node costs >= 4 bytes on disk; no layer can declare more nodes
+        // than the file could possibly contain.
+        let max_nodes = (file_len / 4) as usize;
 
         for _ in 0..num_layers {
             reader.read_exact(&mut buf8)?;
             let num_nodes = u64::from_le_bytes(buf8) as usize;
+            if num_nodes > max_nodes {
+                return Err(corrupt(format!(
+                    "layer num_nodes {num_nodes} exceeds file capacity {max_nodes}"
+                )));
+            }
             let layer = Layer::new(num_nodes);
             for node_id in 0..num_nodes {
-                reader.read_exact(&mut buf4)?;
-                let num_neighbors = u32::from_le_bytes(buf4) as usize;
-                let mut neighbors = Vec::with_capacity(num_neighbors);
-                for _ in 0..num_neighbors {
-                    reader.read_exact(&mut buf4)?;
-                    neighbors.push(u32::from_le_bytes(buf4) as usize);
-                }
+                let neighbors = Self::read_node_neighbors(reader, count)?;
                 layer.set_neighbors(node_id, neighbors);
             }
             layers.push(layer);
         }
 
         Ok(layers)
+    }
+
+    /// Reads one node's neighbor list, validating the neighbor count against
+    /// the safety cap and every neighbor ID against `count`.
+    fn read_node_neighbors(
+        reader: &mut BufReader<File>,
+        count: usize,
+    ) -> std::io::Result<Vec<usize>> {
+        let mut buf4 = [0u8; 4];
+        reader.read_exact(&mut buf4)?;
+        let num_neighbors = u32::from_le_bytes(buf4) as usize;
+        if num_neighbors > MAX_NEIGHBORS_PER_NODE {
+            return Err(corrupt(format!(
+                "num_neighbors {num_neighbors} exceeds cap {MAX_NEIGHBORS_PER_NODE}"
+            )));
+        }
+        // Bounded reserve: `num_neighbors` is capped above, never wired
+        // straight from the header into an unbounded `with_capacity`.
+        let mut neighbors = Vec::with_capacity(num_neighbors.min(count.max(1)));
+        for _ in 0..num_neighbors {
+            reader.read_exact(&mut buf4)?;
+            let neighbor = u32::from_le_bytes(buf4) as usize;
+            if neighbor >= count {
+                return Err(corrupt(format!(
+                    "neighbor id {neighbor} out of range for {count} vectors"
+                )));
+            }
+            neighbors.push(neighbor);
+        }
+        Ok(neighbors)
+    }
+}
+
+#[cfg(test)]
+mod load_bound_tests {
+    use super::super::distance::CpuDistance;
+    use super::NativeHnsw;
+
+    type H = NativeHnsw<CpuDistance>;
+
+    /// REGRESSION (#899 follow-up): the persisted-index LOAD bound is the file
+    /// length, NOT a fixed byte ceiling. A realistic large `count` whose
+    /// declared payload fits the actual file length is ACCEPTED — even far above
+    /// the old 16 GiB cap — so a genuine index always reloads.
+    #[test]
+    fn validate_vectors_file_len_accepts_large_file_backed_count() {
+        const HEADER: u64 = 16;
+        // ~6.8M vectors @768D ≈ 20 GiB payload — above the old 16 GiB cap.
+        let dimension = 768usize;
+        let count = (20u64 * 1024 * 1024 * 1024) / (dimension as u64 * 4);
+        let payload = count * dimension as u64 * 4;
+        let file_len = payload + HEADER; // file genuinely holds the data
+        assert!(
+            H::validate_vectors_file_len(count as usize, dimension, file_len).is_ok(),
+            "a file-backed large count must load, regardless of the alloc backstop"
+        );
+    }
+
+    /// A header declaring more data than the file can hold is rejected
+    /// (corrupt/malicious oversized header).
+    #[test]
+    fn validate_vectors_file_len_rejects_short_file() {
+        let dimension = 128usize;
+        let count = 1_000_000usize;
+        // File is only 100 bytes — cannot back the declared payload.
+        let err = H::validate_vectors_file_len(count, dimension, 100)
+            .expect_err("file shorter than declared payload must be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    /// An overflow-class header (count * dimension * 4 wraps u64) is rejected
+    /// rather than wrapping to a small accepted size.
+    #[test]
+    fn validate_vectors_file_len_rejects_overflow_header() {
+        let err = H::validate_vectors_file_len(usize::MAX, usize::MAX, u64::MAX)
+            .expect_err("overflow-class payload must be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }

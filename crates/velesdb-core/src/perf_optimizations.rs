@@ -17,7 +17,7 @@
 //! eliminating null pointer checks and making invariants explicit. Memory is managed
 //! via RAII with `AllocGuard` for panic-safe resize operations.
 
-use crate::validation::validate_dimension_match;
+use crate::validation::{validate_dimension, validate_dimension_match};
 use std::alloc::{alloc_zeroed, Layout};
 use std::fmt;
 use std::ptr::{self, NonNull};
@@ -85,22 +85,25 @@ impl ContiguousVectors {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidDimension`] if `dimension` is 0.
-    /// Returns [`Error::AllocationFailed`] if memory allocation fails.
+    /// Returns [`Error::InvalidDimension`] if `dimension` is 0 or exceeds
+    /// [`MAX_DIMENSION`](crate::validation::MAX_DIMENSION).
+    /// Returns [`Error::AllocationFailed`] if memory allocation fails or exceeds
+    /// the [`AllocGuard`](crate::alloc_guard::AllocGuard) ceiling.
     ///
     /// [`Error::InvalidDimension`]: crate::error::Error::InvalidDimension
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     #[allow(clippy::cast_ptr_alignment)] // Layout is 64-byte aligned
     pub fn new(dimension: usize, capacity: usize) -> crate::error::Result<Self> {
-        if dimension == 0 {
-            return Err(crate::error::Error::InvalidDimension {
-                dimension: 0,
-                min: 1,
-                max: 65_536,
-            });
-        }
+        // Enforce the advertised dimension range (#899): previously `max: 65_536`
+        // was reported in errors but never validated, so an oversized dimension
+        // could drive `dimension * capacity` products toward overflow.
+        validate_dimension(dimension)?;
 
         let capacity = capacity.max(16); // Minimum 16 vectors
+
+        // Reject pathological/attacker-sized allocations before touching the
+        // allocator (#899). Legitimate large indexes stay well under the ceiling.
+        crate::alloc_guard::check_alloc_bound(Self::byte_size(dimension, capacity)?)?;
         let layout = Self::layout(dimension, capacity)?;
 
         // SAFETY: `alloc_zeroed` requires a valid non-zero layout.
@@ -125,6 +128,26 @@ impl ContiguousVectors {
         })
     }
 
+    /// Returns the buffer size in bytes for `dimension * capacity` f32s.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AllocationFailed`] if `dimension * capacity * 4` overflows
+    /// `usize`.
+    ///
+    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
+    pub(crate) fn byte_size(dimension: usize, capacity: usize) -> crate::error::Result<usize> {
+        dimension
+            .checked_mul(capacity)
+            .and_then(|s| s.checked_mul(std::mem::size_of::<f32>()))
+            .ok_or_else(|| {
+                crate::error::Error::AllocationFailed(format!(
+                    "Size overflow: {dimension} * {capacity} * {}",
+                    std::mem::size_of::<f32>()
+                ))
+            })
+    }
+
     /// Returns the memory layout for the given dimension and capacity.
     ///
     /// # Errors
@@ -133,15 +156,7 @@ impl ContiguousVectors {
     ///
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub(crate) fn layout(dimension: usize, capacity: usize) -> crate::error::Result<Layout> {
-        let size = dimension
-            .checked_mul(capacity)
-            .and_then(|s| s.checked_mul(std::mem::size_of::<f32>()))
-            .ok_or_else(|| {
-                crate::error::Error::AllocationFailed(format!(
-                    "Size overflow: {dimension} * {capacity} * {}",
-                    std::mem::size_of::<f32>()
-                ))
-            })?;
+        let size = Self::byte_size(dimension, capacity)?;
         let align = 64; // Cache line alignment for optimal prefetch
         Layout::from_size_align(size.max(64), align)
             .map_err(|e| crate::error::Error::AllocationFailed(format!("Invalid layout: {e}")))
@@ -186,7 +201,9 @@ impl ContiguousVectors {
         if self.count == 0 {
             return &[];
         }
-        let total = self.count * self.dimension;
+        // `count <= capacity` and `capacity * dimension` was validated to fit in
+        // `usize` at allocation time, so this product cannot overflow here.
+        let total = self.count.saturating_mul(self.dimension);
         // SAFETY: All `capacity * dimension` f32s are valid because both initial allocation
         // (`alloc_zeroed`) and resize (`AllocGuard::new_zeroed`) zero-initialize the buffer.
         // `count * dimension <= capacity * dimension`, `data` is non-null per `NonNull`
@@ -212,7 +229,10 @@ impl ContiguousVectors {
     /// will be misattributed to wrong IDs.
     #[must_use]
     pub fn gather_flat(&self, indices: &[usize]) -> Vec<f32> {
-        let mut result = Vec::with_capacity(indices.len() * self.dimension);
+        // Saturating reservation hint: an overflowing `indices.len() * dimension`
+        // would otherwise panic inside `Vec::with_capacity`. `extend_from_slice`
+        // grows on demand, so a clamped hint stays correct (#899).
+        let mut result = Vec::with_capacity(indices.len().saturating_mul(self.dimension));
         for &idx in indices {
             if let Some(vec) = self.get(idx) {
                 result.extend_from_slice(vec);
@@ -222,10 +242,16 @@ impl ContiguousVectors {
     }
 
     /// Returns total memory usage in bytes.
+    ///
+    /// Saturates instead of overflowing; `capacity * dimension * 4` was validated
+    /// to fit in `usize` at allocation time, so saturation is unreachable for a
+    /// live buffer and exists purely as a defensive backstop (#899).
     #[inline]
     #[must_use]
     pub const fn memory_bytes(&self) -> usize {
-        self.capacity * self.dimension * std::mem::size_of::<f32>()
+        self.capacity
+            .saturating_mul(self.dimension)
+            .saturating_mul(std::mem::size_of::<f32>())
     }
 
     /// Inserts a vector at a specific index.
@@ -244,9 +270,22 @@ impl ContiguousVectors {
     pub fn insert_at(&mut self, index: usize, vector: &[f32]) -> crate::error::Result<()> {
         validate_dimension_match(self.dimension, vector.len())?;
 
-        self.ensure_capacity(index + 1)?;
+        // #899: `index == usize::MAX` made `index + 1` wrap to 0, so capacity was
+        // never grown and `index * dimension` overflowed, producing an OOB
+        // `copy_nonoverlapping` write in release builds. Reject overflow instead.
+        let required = index.checked_add(1).ok_or_else(|| {
+            crate::error::Error::AllocationFailed(format!(
+                "insert_at: index {index} + 1 overflows usize"
+            ))
+        })?;
+        self.ensure_capacity(required)?;
 
-        let offset = index * self.dimension;
+        let offset = index.checked_mul(self.dimension).ok_or_else(|| {
+            crate::error::Error::AllocationFailed(format!(
+                "insert_at: offset {index} * {} overflows usize",
+                self.dimension
+            ))
+        })?;
         // SAFETY: We ensured capacity covers index, data is non-null (NonNull invariant)
         // - Condition 1: Capacity was verified to cover the target index.
         // - Condition 2: Both source and destination pointers are valid and properly aligned.
@@ -259,9 +298,10 @@ impl ContiguousVectors {
             );
         }
 
-        // Update count if we're extending the "used" range
+        // Update count if we're extending the "used" range.
+        // `required == index + 1` (checked above), so this cannot overflow.
         if index >= self.count {
-            self.count = index + 1;
+            self.count = required;
         }
         Ok(())
     }
@@ -304,9 +344,18 @@ impl ContiguousVectors {
         for vector in vectors {
             validate_dimension_match(self.dimension, vector.len())?;
         }
-        self.ensure_capacity(self.count + vectors.len())?;
+        let required = self.count.checked_add(vectors.len()).ok_or_else(|| {
+            crate::error::Error::AllocationFailed(format!(
+                "push_batch: count {} + {} overflows usize",
+                self.count,
+                vectors.len()
+            ))
+        })?;
+        self.ensure_capacity(required)?;
         for vector in vectors {
-            let offset = self.count * self.dimension;
+            // `offset < required * dimension`, and `required * dimension` was
+            // validated to fit in `usize` by `ensure_capacity`/`layout` above.
+            let offset = self.count.saturating_mul(self.dimension);
             // SAFETY: ensure_capacity (called above) guarantees room for
             // self.count + vectors.len() elements, and all dimensions were
             // validated above so offset + dimension is within bounds.
