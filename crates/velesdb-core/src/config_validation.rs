@@ -47,6 +47,23 @@ fn range_check_capacity(key: &str, value: usize, cap: usize) -> Result<(), Confi
     Ok(())
 }
 
+/// Range-checks a field where `0` is a valid sentinel (disabled / auto) but any
+/// positive value must not exceed `cap`. Unlike [`range_check_capacity`], `0`
+/// is accepted.
+fn range_check_upper<T: PartialOrd + Copy + std::fmt::Display>(
+    key: &str,
+    value: T,
+    cap: T,
+) -> Result<(), ConfigError> {
+    if value > cap {
+        return Err(ConfigError::InvalidValue {
+            key: key.to_string(),
+            message: format!("value {value} is out of range [0, {cap}]"),
+        });
+    }
+    Ok(())
+}
+
 impl VelesConfig {
     /// Validates the configuration.
     ///
@@ -84,16 +101,11 @@ impl VelesConfig {
 
         // `query_timeout_ms == 0` disables the timeout (see `QueryContext`);
         // any positive value is capped to avoid effectively-unbounded queries.
-        if self.search.query_timeout_ms > QUERY_TIMEOUT_MS_CAP {
-            return Err(ConfigError::InvalidValue {
-                key: "search.query_timeout_ms".to_string(),
-                message: format!(
-                    "value {} is out of range [0, {QUERY_TIMEOUT_MS_CAP}]",
-                    self.search.query_timeout_ms
-                ),
-            });
-        }
-        Ok(())
+        range_check_upper(
+            "search.query_timeout_ms",
+            self.search.query_timeout_ms,
+            QUERY_TIMEOUT_MS_CAP,
+        )
     }
 
     fn validate_hnsw(&self) -> Result<(), ConfigError> {
@@ -117,16 +129,7 @@ impl VelesConfig {
 
         // `max_layers == 0` means "auto" (see `HnswConfig`); a positive value
         // is capped to a sane ceiling.
-        if self.hnsw.max_layers > MAX_LAYERS_CAP {
-            return Err(ConfigError::InvalidValue {
-                key: "hnsw.max_layers".to_string(),
-                message: format!(
-                    "value {} is out of range [0, {MAX_LAYERS_CAP}]",
-                    self.hnsw.max_layers
-                ),
-            });
-        }
-        Ok(())
+        range_check_upper("hnsw.max_layers", self.hnsw.max_layers, MAX_LAYERS_CAP)
     }
 
     fn validate_limits(&self) -> Result<(), ConfigError> {
@@ -164,16 +167,7 @@ impl VelesConfig {
 
         // `workers == 0` means "auto" (derive from CPU count); a positive
         // value is capped so a typo cannot spawn an absurd thread count.
-        if self.server.workers > WORKERS_CAP {
-            return Err(ConfigError::InvalidValue {
-                key: "server.workers".to_string(),
-                message: format!(
-                    "value {} is out of range [0, {WORKERS_CAP}]",
-                    self.server.workers
-                ),
-            });
-        }
-        Ok(())
+        range_check_upper("server.workers", self.server.workers, WORKERS_CAP)
     }
 
     fn validate_storage(&self) -> Result<(), ConfigError> {
