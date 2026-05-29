@@ -379,6 +379,10 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    # Bound the job so a lost/hung runner fails fast (and can be re-run) instead
+    # of hanging toward the 6h default — the full single-threaded suite under
+    # llvm-cov + gpu features runs well within this.
+    timeout-minutes: 45
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
@@ -399,8 +403,13 @@ jobs:
         with:
           shared-key: "velesdb-ci"
 
+      # Prebuilt binary (with built-in download retries) instead of
+      # `cargo install` from source — faster and avoids the compile/network
+      # flakes that lost the runner mid-job on earlier release runs.
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
+        uses: taiki-e/install-action@873c7452cadb7c034694a1282227095d93fbdf92 # v2.79.14
+        with:
+          tool: cargo-llvm-cov
 
       - name: Generate coverage report and enforce threshold
         run: |
