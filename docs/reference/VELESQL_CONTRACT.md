@@ -189,6 +189,20 @@ Current codes:
 
 Syntax errors still use parser-specific payload (`QueryErrorResponse` with `type/message/position/query`).
 
+## Resource Limits (Guard-rails)
+
+These limits are part of the runtime contract and apply to every VelesQL query:
+
+| Limit | Value | Behavior on breach |
+|-------|-------|--------------------|
+| Query length | configurable `max_query_length` | Rejected **before parsing** (pre-scan), parse error. |
+| Bracket / `NOT` nesting depth | 64 | Rejected **before parsing** (pre-scan), parse error. Prevents a parser stack-overflow DoS. |
+| GROUP BY groups | server ceiling 1,000,000 (default 10,000) | `WITH (max_groups = N)` may lower the budget but `N` is clamped down to the ceiling; exceeding the effective budget returns an aggregation error. |
+| `NOT similarity()` scan | 5,000,000 vectors | Rejected with guidance (no index acceleration for `NOT similarity()`). |
+
+Both pre-scan rejections are evaluated before `pest` is invoked, so they fire
+regardless of how the query nests.
+
 ## Syntax Profiles (Frozen)
 
 These syntax profiles are frozen for this contract version:

@@ -88,7 +88,7 @@ The dependency graph is strictly downward: `server`, `python`, `wasm`, `mobile`,
 
 Here is what happens, end-to-end, in roughly the order it happens. This is the path that the canonical 450 µs p50 latency claim measures.
 
-1. **Parse.** The query enters the VelesQL parser (PEG grammar in `crates/velesdb-core/src/velesql/parser/`). Output: a typed AST (`Query`).
+1. **Parse.** The query enters the VelesQL parser (PEG grammar in `crates/velesdb-core/src/velesql/parser/`). A cheap O(n) pre-scan first rejects queries over `max_query_length` or with bracket/`NOT` nesting depth > 64 (guarding against a parser stack-overflow DoS) before `pest` runs. Output: a typed AST (`Query`).
 2. **Validate.** Names, types, dimension, distance metric, and feature gates are checked against the live catalog (`Database` registry).
 3. **Plan.** The cost-based optimizer (CBO) in `crates/velesdb-core/src/velesql/cost_estimator/` picks an execution strategy. For a vector + filter query, the choice is typically between *pre-filter* (apply the WHERE first then NEAR on the remaining points) and *post-filter* (NEAR first then WHERE on the result). Selectivity statistics drive the choice.
 4. **Cache.** A two-tier LRU plan cache (write-generation invalidated) hits or misses. A hit short-circuits steps 1–3 for repeat queries (~1 µs cache hit).

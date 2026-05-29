@@ -93,6 +93,100 @@ A measurable decision will be made when one of: download counts on `manylinux201
 
 ---
 
+## Hardening limits (security / OOM / DoS guard-rails)
+
+These are **intentional hard limits** introduced by the core hardening effort to
+bound resource use against corrupt files and adversarial queries. They are not
+bugs; they are the documented ceilings of the current implementation.
+
+### 6. VelesQL query length and nesting depth
+
+**Status**: resolved (hard limit). Source: `crates/velesdb-core/src/velesql/parser/prescan.rs` (`MAX_NESTING_DEPTH = 64`).
+
+Before a query reaches the `pest` parser, a single O(n) pre-scan rejects any
+query that:
+
+- exceeds the configured `max_query_length`, or
+- has an effective parse-recursion depth (open `()`/`[]` brackets plus a leading
+  `NOT NOT …` run) greater than **64**.
+
+The pre-scan exists because `pest` builds the full recursive parse tree before
+any Rust-level guard runs, so a deeply nested query (~thousands of levels) would
+otherwise overflow the native stack and abort the process. Quoted strings,
+backtick/double-quoted identifiers, and `--` comments are skipped so the guard
+never false-positives on literal bracket content.
+
+**User impact**: legitimate hand-written queries nest a handful of levels and
+are unaffected; programmatically generated queries must keep bracket/NOT nesting
+at or below 64.
+
+### 7. GROUP BY group-count ceiling
+
+**Status**: resolved (server-side hard ceiling). Source: `crates/velesdb-core/src/collection/search/query/aggregation/having.rs` (`DEFAULT_MAX_GROUPS = 10_000`, `SERVER_MAX_GROUPS_CEILING = 1_000_000`).
+
+A GROUP BY query retains at most `DEFAULT_MAX_GROUPS` (10,000) groups by default.
+A query may use `WITH (max_groups = N)` (or `group_limit`) to **lower** its group
+budget, but `N` is always **clamped down** to the server-side ceiling of
+**1,000,000** — a query can never raise the memory ceiling. Exceeding the
+effective limit returns a "Too many groups" error rather than growing unbounded.
+
+### 8. `NOT similarity()` scan cap
+
+**Status**: resolved (hard limit). Source: `crates/velesdb-core/src/collection/search/query/similarity_filter.rs` (`NOT_SIMILARITY_MAX_SCAN = 5_000_000`).
+
+A `NOT similarity(...)` predicate has no index acceleration and must full-scan
+the collection. It is now a hard guard-rail (not just a warning): if the
+collection holds more than **5,000,000** vectors the query is **rejected** with
+guidance to add a selective metadata filter or use a positive `similarity()`
+predicate (which is index-accelerated).
+
+### 9. Bounded query-result materialization
+
+**Status**: resolved (bounded memory). Source: `crates/velesdb-core/src/collection/search/query/` (set_operations, parallel_traversal, similarity_filter), `database/query_engine.rs`, `database/query_join.rs`.
+
+Result materialization for top-k scans, JOIN, parallel graph traversal, and
+set operations (UNION/INTERSECT) is bounded by the effective LIMIT via bounded
+top-k rather than collect-all-then-truncate. Results are identical to the
+unbounded path; only peak memory is bounded. Intermediate operators that can
+legitimately drop rows fall back to the conservative server-side ceiling.
+
+### 10. Configuration range caps
+
+**Status**: resolved (validated in every loader and on open). Source: `crates/velesdb-core/src/config_validation.rs`; called from `Config` loaders and `Database::open_with_config`.
+
+`VelesConfig::validate()` now runs in every config loader (`load`,
+`load_from_path`, `from_toml`) **and** on `open_with_config`. Each capacity/limit
+field is range-checked against a hard ceiling:
+
+| Field | `0` means | Hard ceiling |
+|-------|-----------|--------------|
+| `limits.max_vectors_per_collection` | rejected | 10,000,000,000 |
+| `limits.max_collections` | rejected | 1,000,000 |
+| `limits.max_payload_size` | rejected | 1 GiB (1,073,741,824) |
+| `search.query_timeout_ms` | disabled | 24 h (86,400,000 ms) |
+| `hnsw.max_layers` | auto | 64 |
+| `storage.mmap_cache_mb` | rejected | 1 TiB (1,048,576 MiB) |
+| `server.workers` | auto (CPU count) | 4,096 |
+
+An out-of-range value fails the loader/open with `ConfigError::InvalidValue`
+rather than being silently accepted (which previously allowed `0` = DoS or
+absurdly large = unbounded). The per-client `RateLimiter` map is also bounded
+with sampled eviction so a client cycling `client_id` values cannot OOM the
+limiter.
+
+### 11. `AllocGuard` per-allocation ceiling
+
+**Status**: resolved (backstop). Source: `crates/velesdb-core/src/alloc_guard.rs` (`DEFAULT_ALLOC_BYTE_LIMIT = 1 TiB`).
+
+Every raw aligned allocation is capped at a process-wide per-allocation ceiling
+of **1 TiB**, configurable at runtime via `set_alloc_byte_limit`. This is a
+deliberately high *backstop* against arithmetic-wrapped or pathological sizes; it
+is far above any single contiguous buffer VelesDB legitimately allocates, so it
+never rejects a real index. Primary defense against untrusted sizes is the
+per-artifact load-time validation (file-length-bounded counts).
+
+---
+
 ## Reading this document
 
 Each entry states:

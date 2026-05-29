@@ -131,6 +131,24 @@ Write-Ahead Log for vector durability.
 | STORE | 0x01 | Vector insertion/update |
 | DELETE | 0x02 | Vector deletion |
 
+### CRC32 Framing and Bounded Lengths
+
+The vector WAL is **CRC32-framed**: each record carries a trailing CRC that is
+verified before the record is applied. Length fields read from the WAL (payload
+byte length, vector dimension) are bounded against the remaining file size
+before any buffer is allocated, so a corrupt or malicious length field cannot
+drive an unbounded allocation. A WAL whose *first* record fails CRC is treated
+as the pre-CRC **legacy format** and skipped (the persisted index is
+authoritative for that data).
+
+### Durability (`DurabilityMode`)
+
+| Mode | STORE / DELETE acknowledgement |
+|------|--------------------------------|
+| `Fsync` | The WAL record is written **and `fsync`-ed** before the call returns `Ok`. This now holds for single `store` **and** `delete`: a delete is made durable *before* the destructive on-disk hole-punch, so a crash can never lose a delete and silently resurrect the id on replay. |
+| `FlushOnly` | WAL buffer is flushed (not fsynced); durability is the caller's responsibility via `flush()`. |
+| `None` | WAL is skipped entirely (bulk-import fast path); those writes are not crash-recoverable. |
+
 ## Payload Storage (payloads.log)
 
 Append-only log for JSON payloads.
@@ -225,10 +243,10 @@ All multi-byte integers are stored in **little-endian** format.
 │  3. Load vectors.idx + vectors.bin                               │
 │     │                                                            │
 │     ▼                                                            │
-│  4. Replay vectors.wal                                           │
+│  4. Replay vectors.wal (crash-safe order, see below)             │
 │     │                                                            │
 │     ▼                                                            │
-│  5. Load/rebuild HNSW index                                      │
+│  5. Load/rebuild HNSW index (load-time validation, see below)    │
 │     │                                                            │
 │     ▼                                                            │
 │  6. Gap detection: compare storage IDs vs HNSW IDs               │
@@ -240,6 +258,32 @@ All multi-byte integers are stored in **little-endian** format.
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### Crash-safe WAL replay ordering
+
+Vector WAL replay is ordered so that no acknowledged write can be lost across a
+crash mid-recovery:
+
+1. **Apply** each CRC-valid WAL entry into the in-memory index and mmap.
+2. **`mmap.flush()`** — make the recovered vector bytes durable.
+3. **Persist `vectors.idx`** — write the rebuilt index so recovered state
+   survives even if the mmap flush is later lost.
+4. **Only then truncate the WAL** (`set_len(0)` + `fsync`).
+
+Truncating the WAL before the mmap and index are durable would lose the
+replayed writes on a crash in the window, so the order is strict.
+
+### Torn tail vs mid-stream corruption
+
+Replay distinguishes two failure shapes:
+
+| Shape | Detection | Policy |
+|-------|-----------|--------|
+| **Torn tail** | A short/truncated final record, or a CRC failure at EOF with no validly framed bytes after it (normal after a crash mid-write). | Stop replay cleanly; everything before it is recovered. |
+| **Mid-stream corruption** | A CRC failure followed by further validly framed records (bit-rot / tampering). | Skip the bad record, emit a metric + warning, and continue replaying the later valid entries. |
+
+An unknown opcode mid-stream is treated as a torn tail (framing is no longer
+trustworthy), so replay stops rather than fabricating further entries.
 
 ## Versioning
 
@@ -278,12 +322,34 @@ VelesDB handles corruption gracefully:
 
 | Corruption Type | Behavior |
 |-----------------|----------|
-| Truncated WAL | Replay up to last valid entry |
+| Truncated WAL (torn tail) | Replay up to last valid entry, then stop cleanly |
+| Mid-stream WAL CRC failure | Skip the bad record, emit a metric, continue replaying later valid entries |
 | Invalid snapshot CRC | Fall back to full WAL replay |
 | Missing files | Return explicit error |
 | Bitflip in data | Detected via checksum (if enabled) |
+| Out-of-range length/count field | Rejected at load (`InvalidData`); never used to size an allocation |
 
 See `tests/crash_recovery/corruption.rs` for comprehensive corruption tests.
+
+## Load-time validation of persisted artifacts
+
+Persisted artifacts are treated as **untrusted input** and validated at load
+time so that a corrupt or maliciously crafted file is rejected rather than
+reaching an unchecked memory access. Every count/length/dimension field is
+bounded against the actual file size (and a sane maximum) before it is used to
+size an allocation.
+
+| Artifact | Validation at load |
+|----------|--------------------|
+| **HNSW graph** (`.graph`) | Header `count_check` must equal the trusted vector count; `entry_point < count`; every neighbor ID `< count`; `num_neighbors` capped; node iteration bounded by the file length (not a static ceiling). Any violation returns `InvalidData`, so the search hot path can rely on in-bounds IDs. |
+| **PQ codebook** | Every PQ code must be `< num_centroids` and the OPQ rotation matrix length must equal `dim × dim`. An invalid code is skipped gracefully rather than reaching the SIMD/scalar ADC gather. |
+| **Sparse index** | Version, term count, and per-term offset/length fields bounded; 32-bit offset overflow guarded. |
+| **BM25 snapshot** | `version` must match `BM25_SNAPSHOT_VERSION` or the load is rejected; `doc_count`/`total_doc_length` are recomputed from the **scorable** corpus (documents present in `point_to_doc`) so a tampered counter cannot produce inf/NaN `avgdl`. |
+| **Vector index** (`vectors.idx`) | Every persisted offset is validated against the backing file size. |
+
+A high global allocation backstop (`AllocGuard`, default 1 TiB, configurable via
+`set_alloc_byte_limit`) catches any wrapped/pathological size that slips past a
+local check; it is sized never to reject a legitimately large index.
 
 ## References
 
