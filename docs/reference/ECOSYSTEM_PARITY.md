@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-05-01 (v1.15.0 — Haystack 2.x DocumentStore SKIP-policy contract fix)
+Last updated: 2026-05-29 (v1.15.0 — Mobile graph collection creation parity correction)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -169,7 +169,8 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 
 ### CollectionType — 9/10
 
-3 types (`Vector`, `MetadataOnly`, `Graph`). Mobile does not expose graph collection creation.
+3 types (`Vector`, `MetadataOnly`, `Graph`). All native crates expose graph
+collection creation; only Haystack is limited by its DocumentStore protocol.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -177,7 +178,7 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | Server | ✅ | |
 | Python | ✅ | |
 | WASM | ✅ | |
-| Mobile | ⚠️ 2/3 | `Vector` and `MetadataOnly` only -- graph collection creation not exposed |
+| Mobile | ✅ | `create_graph_collection` / `create_graph_collection_with_embeddings` exposed via `#[uniffi::export]` |
 | CLI | ✅ | |
 | TS SDK | ✅ | |
 | Tauri | ✅ | |
@@ -193,7 +194,7 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | `StorageMode` | 10/10 | 100% |
 | `FusionStrategy` | 10/10 | 100% |
 | `SearchQuality` | 7/10 | N/A for WASM/Mobile/Tauri (brute-force) |
-| `CollectionType` | 9/10 | Mobile missing graph creation; Haystack `Vector` only by protocol |
+| `CollectionType` | 9/10 | Haystack `Vector` only by protocol; all native crates full |
 
 ---
 
@@ -207,4 +208,3 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 6. Expose named sparse indexes in LangChain, LlamaIndex, and Haystack integrations.
 7. Propagate `@collection` cross-collection MATCH to WASM, Mobile, Tauri, LangChain, LlamaIndex, and Haystack.
 8. Add cross-collection vector search (`similarity()` on `@collection`-annotated nodes).
-9. Expose graph collection creation in `velesdb-mobile` (`create_graph_collection`).
