@@ -267,3 +267,67 @@ fn test_compaction_truncates_wal() {
     // WAL should be truncated
     assert_eq!(std::fs::metadata(&wal_path).unwrap().len(), 0);
 }
+
+/// #897: a compacted `sparse.meta` whose `term_count` disagrees with the decoded
+/// term dictionary must be rejected rather than loaded (untrusted-input guard).
+#[test]
+fn test_load_rejects_term_count_mismatch() {
+    let dir = tempdir().unwrap();
+
+    let index = SparseInvertedIndex::new();
+    for i in 0..10u64 {
+        index.insert(i, &make_vector(vec![(i as u32 % 3, 1.0)]));
+    }
+    compact(dir.path(), &index).unwrap();
+
+    // Sanity: the valid index still loads.
+    assert!(load_from_disk(dir.path()).unwrap().is_some());
+
+    // Overwrite the metadata header with an inflated `term_count` that no longer
+    // matches the on-disk term dictionary.
+    let meta_path = dir.path().join("sparse.meta");
+    let meta = super::persistence::SparseMeta {
+        version: 1,
+        doc_count: 10,
+        term_count: u32::MAX,
+    };
+    std::fs::write(&meta_path, postcard::to_allocvec(&meta).unwrap()).unwrap();
+
+    match load_from_disk(dir.path()) {
+        Err(e) => assert!(
+            e.to_string().contains("term count mismatch"),
+            "expected term-count mismatch rejection, got: {e}"
+        ),
+        Ok(_) => panic!("expected term-count mismatch rejection, got Ok"),
+    }
+}
+
+/// #897: a sparse WAL upsert header declaring a huge `nnz` (here `u32::MAX`) but a
+/// truncated body must be skipped without panicking or pre-allocating gigabytes.
+#[test]
+fn test_wal_oversized_nnz_is_rejected() {
+    use std::io::Write;
+
+    let dir = tempdir().unwrap();
+    let wal_path = dir.path().join("sparse.wal");
+
+    // Hand-craft a single upsert entry: [total_len u32][op u8][point_id u64][nnz u32]
+    // with total_len covering only the 13-byte header (no pair payload), but nnz
+    // set to u32::MAX. The body is truncated relative to the declared nnz.
+    let total_len: u32 = 1 + 8 + 4;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&total_len.to_le_bytes());
+    bytes.push(0x01); // WAL_OP_UPSERT
+    bytes.extend_from_slice(&7u64.to_le_bytes()); // point_id
+    bytes.extend_from_slice(&u32::MAX.to_le_bytes()); // crafted nnz
+    {
+        let mut f = std::fs::File::create(&wal_path).unwrap();
+        f.write_all(&bytes).unwrap();
+    }
+
+    let index = SparseInvertedIndex::new();
+    // Must not panic, must not OOM, and the truncated entry is skipped (0 replayed).
+    let replayed = wal_replay(&wal_path, &index).unwrap();
+    assert_eq!(replayed, 0, "crafted oversized-nnz entry must be skipped");
+    assert_eq!(index.doc_count(), 0);
+}

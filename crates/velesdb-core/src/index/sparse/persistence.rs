@@ -345,6 +345,17 @@ fn load_compacted_index(
     let term_entries: Vec<TermEntry> = postcard::from_bytes(&terms_data)
         .map_err(|e| Error::SparseIndexError(format!("load terms deserialize: {e}")))?;
 
+    // Untrusted input: the decoded term dictionary length must match the count
+    // recorded in the metadata header. A mismatch means a corrupt or crafted
+    // file (e.g. a `term_count` that disagrees with the actual postings layout).
+    if term_entries.len() != meta.term_count as usize {
+        return Err(Error::SparseIndexError(format!(
+            "load terms: term count mismatch (meta {} != decoded {})",
+            meta.term_count,
+            term_entries.len()
+        )));
+    }
+
     let idx_path = dir.join(format!("{prefix}.idx"));
     let idx_data = std::fs::read(&idx_path)
         .map_err(|e| Error::SparseIndexError(format!("load idx read: {e}")))?;
@@ -366,18 +377,30 @@ fn build_postings_from_idx(
     let mut postings: FxHashMap<u32, (Vec<PostingEntry>, f32)> = FxHashMap::default();
 
     for te in term_entries {
-        #[allow(clippy::cast_possible_truncation)] // 32-bit target: file offsets won't exceed usize
-        let start = te.offset as usize;
-        let byte_count = (te.len as usize) * POSTING_DISK_SIZE;
-        let end = start + byte_count;
+        // Untrusted lengths/offsets: do ALL bound arithmetic in u64 so a crafted
+        // `offset`/`len` cannot truncate on a 32-bit target and slip past the
+        // check below (which also caps the `Vec::with_capacity` that follows).
+        let byte_count = u64::from(te.len)
+            .checked_mul(POSTING_DISK_SIZE as u64)
+            .ok_or_else(|| {
+                Error::SparseIndexError(format!("load idx: term {} len overflow", te.term_id))
+            })?;
+        let end = te.offset.checked_add(byte_count).ok_or_else(|| {
+            Error::SparseIndexError(format!("load idx: term {} range overflow", te.term_id))
+        })?;
 
-        if end > idx_data.len() {
+        if end > idx_data.len() as u64 {
             return Err(Error::SparseIndexError(format!(
-                "load idx: term {} offset {start}+{byte_count} exceeds file size {}",
+                "load idx: term {} offset {}+{byte_count} exceeds file size {}",
                 te.term_id,
+                te.offset,
                 idx_data.len()
             )));
         }
+        // Safe to narrow now: `end <= idx_data.len() <= usize::MAX`, so `offset` fits.
+        let start = usize::try_from(te.offset).map_err(|_| {
+            Error::SparseIndexError(format!("load idx: term {} offset too large", te.term_id))
+        })?;
 
         let mut entries = Vec::with_capacity(te.len as usize);
         let mut pos = start;
@@ -395,4 +418,31 @@ fn build_postings_from_idx(
     }
 
     Ok(postings)
+}
+
+#[cfg(test)]
+mod offset_bound_tests {
+    use super::*;
+
+    /// #897 follow-up: offset/len bound arithmetic runs in `u64`, so an offset
+    /// that would truncate to a small in-bounds value on a 32-bit target (here
+    /// `0x1_0000_0000`, which is `0` as `u32`) is still rejected against the real
+    /// file length, and a valid entry is accepted.
+    #[test]
+    fn build_postings_rejects_offset_past_file() {
+        let idx = vec![0u8; POSTING_DISK_SIZE]; // exactly one posting
+        let entry = |offset, len| TermEntry {
+            term_id: 1,
+            offset,
+            len,
+            max_weight: 1.0,
+        };
+
+        assert!(build_postings_from_idx(&idx, &[entry(0, 1)]).is_ok());
+        assert!(
+            build_postings_from_idx(&idx, &[entry(0x1_0000_0000, 1)]).is_err(),
+            "offset past file must be rejected via the u64 bound, not 32-bit-truncated"
+        );
+        assert!(build_postings_from_idx(&idx, &[entry(u64::MAX, u32::MAX)]).is_err());
+    }
 }
