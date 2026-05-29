@@ -21,7 +21,7 @@
 export interface Embedder {
   /** Embedding dimension, or `0` if not yet known (determined after first call). */
   readonly dimension: number;
-  embed: (texts: string[]) => Promise<number[][]>;
+  embed(texts: string[]): Promise<number[][]>;
 }
 
 export interface OpenAIEmbedderOptions {

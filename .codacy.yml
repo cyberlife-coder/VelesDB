@@ -364,3 +364,15 @@ engines:
       # LangChain usage" is a self-reference false positive.
       - "integrations/langchain/src/langchain_velesdb/scroll_ops.py"
       - "integrations/langchain/src/langchain_velesdb/multi_query_ops.py"
+
+  eslint:
+    exclude_paths:
+      # Embedding adapter — Codacy runs eslint@8.57.0, which does not load the
+      # SDK's flat `eslint.config.mjs` (flat config requires ESLint 9+) and so
+      # falls back to the *base* `no-unused-vars` rule. With the TS parser that
+      # rule false-positives on parameter names in interface/function-type
+      # signatures (`embed(texts: string[]): …`) — exactly the case
+      # `@typescript-eslint/no-unused-vars` was built to handle and which the
+      # SDK's own flat config (CI `npm run typecheck` + local `eslint src`)
+      # already enforces correctly. opengrep/trivy still scan this file.
+      - "sdks/typescript/src/embed.ts"
