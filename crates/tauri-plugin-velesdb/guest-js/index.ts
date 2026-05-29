@@ -1073,14 +1073,8 @@ export interface HybridSparseSearchRequest {
   topK?: number;
 }
 
-/** A point input carrying an optional sparse vector. */
-export interface SparsePointInput {
-  /** Unique point identifier. */
-  id: number;
-  /** Dense vector data (must match collection dimension). */
-  vector: number[];
-  /** Optional JSON payload with metadata. */
-  payload?: Record<string, unknown>;
+/** A {@link PointInput} carrying an optional sparse vector. */
+export interface SparsePointInput extends PointInput {
   /** Optional sparse vector as `{ "<dimIndex>": weight, ... }`. */
   sparseVector?: Record<string, number>;
 }
