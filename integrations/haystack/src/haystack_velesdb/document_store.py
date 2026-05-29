@@ -368,7 +368,8 @@ class VelesDBDocumentStore:
         path: Directory path where VelesDB persists data.
         collection_name: Name of the VelesDB collection to use.
         embedding_dim: Dimensionality of the embedding vectors.
-        metric: Distance metric: ``"cosine"``, ``"euclidean"``, or ``"dot"``.
+        metric: Distance metric: ``"cosine"``, ``"euclidean"``, ``"dot"``,
+            ``"hamming"``, or ``"jaccard"``.
         scroll_limit: Maximum documents returned by :meth:`filter_documents`.
             Increase this value when your collection exceeds 10 000 documents.
     """
