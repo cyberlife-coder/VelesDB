@@ -1044,3 +1044,248 @@ export async function proceduralLearn(request: ProceduralLearnRequest): Promise<
 export async function proceduralRecall(request: ProceduralRecallRequest): Promise<ProceduralMatchResult[]> {
   return invoke<ProceduralMatchResult[]>('plugin:velesdb|procedural_recall', { request });
 }
+
+// ============================================================================
+// Sparse vectors
+// ============================================================================
+
+/** Request for sparse-only vector search. */
+export interface SparseSearchRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Sparse vector as `{ "<dimIndex>": weight, ... }`. */
+  sparseVector: Record<string, number>;
+  /** Number of results to return. Default: 10. */
+  topK?: number;
+  /** Optional named sparse index to query. */
+  indexName?: string;
+}
+
+/** Request for hybrid dense + sparse search. */
+export interface HybridSparseSearchRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Dense query vector. */
+  vector: number[];
+  /** Sparse vector as `{ "<dimIndex>": weight, ... }`. */
+  sparseVector: Record<string, number>;
+  /** Number of results to return. Default: 10. */
+  topK?: number;
+}
+
+/** A point input carrying an optional sparse vector. */
+export interface SparsePointInput {
+  /** Unique point identifier. */
+  id: number;
+  /** Dense vector data (must match collection dimension). */
+  vector: number[];
+  /** Optional JSON payload with metadata. */
+  payload?: Record<string, unknown>;
+  /** Optional sparse vector as `{ "<dimIndex>": weight, ... }`. */
+  sparseVector?: Record<string, number>;
+}
+
+/** Request to upsert points with optional sparse vectors. */
+export interface SparseUpsertRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Points to insert or update. */
+  points: SparsePointInput[];
+}
+
+/**
+ * Searches a collection using a sparse vector (inverted-index retrieval).
+ *
+ * @param request - Sparse query parameters
+ * @returns Search results ordered by relevance
+ * @throws {CommandError} If the collection does not exist
+ *
+ * @example
+ * ```typescript
+ * const res = await sparseSearch({
+ *   collection: 'docs',
+ *   sparseVector: { '12': 0.8, '57': 0.6 },
+ *   topK: 10,
+ * });
+ * ```
+ */
+export async function sparseSearch(request: SparseSearchRequest): Promise<SearchResponse> {
+  return invoke<SearchResponse>('plugin:velesdb|sparse_search', { request });
+}
+
+/**
+ * Searches a collection using both a dense and a sparse vector, fusing results.
+ *
+ * @param request - Hybrid dense + sparse query parameters
+ * @returns Fused search results ordered by relevance
+ * @throws {CommandError} If the collection does not exist
+ */
+export async function hybridSparseSearch(request: HybridSparseSearchRequest): Promise<SearchResponse> {
+  return invoke<SearchResponse>('plugin:velesdb|hybrid_sparse_search', { request });
+}
+
+/**
+ * Upserts points with optional sparse vectors for hybrid retrieval.
+ *
+ * @param request - Points to insert or update
+ * @returns Number of points written
+ * @throws {CommandError} On dimension mismatch or write failure
+ */
+export async function sparseUpsert(request: SparseUpsertRequest): Promise<number> {
+  return invoke<number>('plugin:velesdb|sparse_upsert', { request });
+}
+
+// ============================================================================
+// Quantization training
+// ============================================================================
+
+/** Request to train a Product Quantizer over a collection's vectors. */
+export interface TrainPqRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Number of sub-quantizers. */
+  m?: number;
+  /** Number of centroids per sub-quantizer. */
+  k?: number;
+  /** Whether to use Optimized Product Quantization (OPQ). */
+  opq?: boolean;
+}
+
+/**
+ * Trains a Product Quantizer on the collection's existing vectors.
+ *
+ * @param request - PQ training parameters
+ * @returns A human-readable training summary
+ * @throws {CommandError} If the collection has too few vectors to train
+ */
+export async function trainPq(request: TrainPqRequest): Promise<string> {
+  return invoke<string>('plugin:velesdb|train_pq', { request });
+}
+
+// ============================================================================
+// Streaming insert (persistence feature only)
+// ============================================================================
+
+/** Request to stream-insert points (requires the `persistence` feature). */
+export interface StreamInsertRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Points to stream-insert. */
+  points: PointInput[];
+}
+
+/**
+ * Streams a batch of points into a collection for high-throughput ingestion.
+ *
+ * Only available when the plugin is built with the `persistence` feature.
+ *
+ * @param request - Points to stream-insert
+ * @returns Number of points written
+ * @throws {CommandError} If persistence is disabled or the write fails
+ */
+export async function streamInsert(request: StreamInsertRequest): Promise<number> {
+  return invoke<number>('plugin:velesdb|stream_insert', { request });
+}
+
+// ============================================================================
+// Secondary indexes
+// ============================================================================
+
+/** Request to create a secondary index on a metadata field. */
+export interface CreateIndexRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Metadata field name to index. */
+  fieldName: string;
+}
+
+/** Request to drop a secondary index on a metadata field. */
+export interface DropIndexRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Metadata field name whose index to drop. */
+  fieldName: string;
+}
+
+/** Request to list secondary indexes on a collection. */
+export interface ListIndexesRequest {
+  /** Target collection name. */
+  collection: string;
+}
+
+/** A single secondary index entry. */
+export interface IndexInfoOutput {
+  /** Node label (or field name for secondary indexes). */
+  label: string;
+  /** Property name. */
+  property: string;
+  /** Index type (`hash`, `range`, or `secondary`). */
+  indexType: string;
+  /** Number of unique values indexed. */
+  cardinality: number;
+  /** Memory usage in bytes. */
+  memoryBytes: number;
+}
+
+/**
+ * Creates a secondary index on a metadata field for faster filtered search.
+ *
+ * @param request - Index target
+ * @throws {CommandError} If the collection does not exist
+ */
+export async function createIndex(request: CreateIndexRequest): Promise<void> {
+  return invoke<void>('plugin:velesdb|create_index', { request });
+}
+
+/**
+ * Drops a secondary index on a metadata field.
+ *
+ * @param request - Index target
+ * @returns `true` if an index was removed, `false` if none existed
+ * @throws {CommandError} If the collection does not exist
+ */
+export async function dropIndex(request: DropIndexRequest): Promise<boolean> {
+  return invoke<boolean>('plugin:velesdb|drop_index', { request });
+}
+
+/**
+ * Lists all secondary indexes on a collection.
+ *
+ * @param request - Target collection
+ * @returns Array of index descriptors
+ * @throws {CommandError} If the collection does not exist
+ */
+export async function listIndexes(request: ListIndexesRequest): Promise<IndexInfoOutput[]> {
+  return invoke<IndexInfoOutput[]>('plugin:velesdb|list_indexes', { request });
+}
+
+// ============================================================================
+// Parallel graph traversal
+// ============================================================================
+
+/** Request for multi-source parallel BFS traversal. */
+export interface TraverseGraphParallelRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Source node IDs to start traversal from. */
+  sources: number[];
+  /** Maximum traversal depth. Default: 3. */
+  maxDepth?: number;
+  /** Maximum results to return. Default: 100. */
+  limit?: number;
+  /** Optional relationship types to follow. */
+  relTypes?: string[];
+}
+
+/**
+ * Runs a multi-source parallel BFS traversal over a graph collection.
+ *
+ * @param request - Parallel traversal parameters
+ * @returns Array of traversal result nodes
+ * @throws {CommandError} If the collection is not a graph collection
+ */
+export async function traverseGraphParallel(
+  request: TraverseGraphParallelRequest,
+): Promise<TraversalOutput[]> {
+  return invoke<TraversalOutput[]>('plugin:velesdb|traverse_graph_parallel', { request });
+}
