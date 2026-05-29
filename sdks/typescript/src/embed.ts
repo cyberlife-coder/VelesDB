@@ -21,7 +21,7 @@
 export interface Embedder {
   /** Embedding dimension, or `0` if not yet known (determined after first call). */
   readonly dimension: number;
-  embed(texts: string[]): Promise<number[][]>;
+  embed: (texts: string[]) => Promise<number[][]>;
 }
 
 export interface OpenAIEmbedderOptions {
@@ -78,9 +78,15 @@ export class OpenAIEmbedder implements Embedder {
 
     const json = (await response.json()) as OpenAIEmbeddingResponse;
     const vectors = json.data.map((item) => item.embedding);
-    const firstVec = vectors[0];
-    if (this.dimension === 0 && firstVec !== undefined) {
-      this.dimension = firstVec.length;
+    if (this.dimension === 0) {
+      // Infer dimension from the first returned vector. `for...of` reads the
+      // first element without index access, so it needs no `| undefined`
+      // guard (which a strict `noUncheckedIndexedAccess` build would force and
+      // a default-config linter would then flag as an unnecessary condition).
+      for (const vec of vectors) {
+        this.dimension = vec.length;
+        break;
+      }
     }
     return vectors;
   }
