@@ -7,7 +7,8 @@ use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
 use std::hash::{BuildHasher, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use super::ast::Query;
 use super::error::ParseError;
@@ -37,21 +38,41 @@ impl CacheStats {
     }
 }
 
-/// LRU cache for parsed `VelesQL` queries.
+/// Bounded query cache for parsed `VelesQL` queries (issue #903).
 ///
 /// Thread-safe implementation using `parking_lot::RwLock`.
 ///
 /// # Design notes
 ///
 /// - Canonical query text is hashed for compact bucketing.
-/// - Hash collisions are handled explicitly via a per-bucket vector.
-/// - A strict equality check on original query text is required before reuse.
-/// - LRU order stores unique cache keys and is kept in sync with entry count.
+/// - Hash collisions are handled explicitly via a per-bucket vector, with a
+///   strict equality check on the original query text before reuse.
+/// - Parsed ASTs are stored behind `Arc<Query>`; a hit returns `Arc::clone`
+///   (a refcount bump) instead of deep-cloning the AST.
+/// - A live `usize` size counter (`AtomicUsize`) gives O(1) `len()` and avoids
+///   re-summing every bucket on each insert/eviction.
+///
+/// # Hot-path concurrency (issue #903)
+///
+/// The previous design took a **global write lock** (`order.write()`) on every
+/// cache hit to promote the entry to the MRU position, serialising all reads.
+/// This implementation replaces strict LRU with a **CLOCK / second-chance**
+/// policy:
+///
+/// - A cache **hit** takes only a shared `read()` lock and sets a per-entry
+///   `referenced` bit via a relaxed atomic store — no write lock, so concurrent
+///   hits run in parallel.
+/// - Eviction (on the cold insert path, under the write lock) sweeps the
+///   insertion-order ring: an entry whose `referenced` bit is set gets a second
+///   chance (bit cleared, moved to the back); an entry with a clear bit is
+///   evicted. This approximates LRU while keeping the hit path lock-light.
 pub struct QueryCache {
-    /// Cache storage: canonical-hash -> collision-safe entries.
-    cache: RwLock<FxHashMap<u64, Vec<CacheEntry>>>,
-    /// LRU order: front = oldest key, back = most recently used.
-    order: RwLock<VecDeque<CacheKey>>,
+    /// Cache storage + CLOCK ring guarded by a single lock so a hit can observe
+    /// both under one `read()` acquisition.
+    inner: RwLock<CacheInner>,
+    /// Live entry count. O(1) `len()`; kept in sync with `inner` under the write
+    /// lock on insert/evict and reset on clear.
+    size: AtomicUsize,
     /// Maximum cache size.
     max_size: usize,
     /// Hash function for canonical query text.
@@ -60,17 +81,30 @@ pub struct QueryCache {
     stats: AtomicCacheStats,
 }
 
+/// Storage + CLOCK ring, guarded together by `QueryCache::inner`.
+struct CacheInner {
+    /// Cache storage: canonical-hash -> collision-safe entries.
+    map: FxHashMap<u64, Vec<CacheEntry>>,
+    /// CLOCK ring of cache keys in insertion order; the eviction hand sweeps
+    /// from the front. Mutated only under the write lock (insert / evict).
+    order: VecDeque<CacheKey>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CacheKey {
     hash: u64,
     original_query: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct CacheEntry {
     original_query: String,
     canonical_query: String,
-    parsed: Query,
+    /// Parsed AST shared via `Arc`; hits return `Arc::clone`, never a deep copy.
+    parsed: Arc<Query>,
+    /// CLOCK second-chance bit. Set on every hit (relaxed atomic under a read
+    /// lock); consulted and cleared by the eviction sweep.
+    referenced: AtomicBool,
 }
 
 #[derive(Debug, Default)]
@@ -108,158 +142,168 @@ impl QueryCache {
     }
 
     fn new_with_hasher(max_size: usize, hash_fn: fn(&str) -> u64) -> Self {
+        let max_size = max_size.max(1);
         Self {
-            cache: RwLock::new(FxHashMap::default()),
-            order: RwLock::new(VecDeque::with_capacity(max_size.max(1))),
-            max_size: max_size.max(1),
+            inner: RwLock::new(CacheInner {
+                map: FxHashMap::default(),
+                order: VecDeque::with_capacity(max_size),
+            }),
+            size: AtomicUsize::new(0),
+            max_size,
             hash_fn,
             stats: AtomicCacheStats::default(),
         }
     }
 
-    /// Parses a query, returning cached AST if available.
+    /// Parses a query, returning a shared (`Arc`) cached AST if available.
     ///
     /// # Errors
     ///
     /// Returns `ParseError` if the query is invalid.
-    pub fn parse(&self, query: &str) -> Result<Query, ParseError> {
+    pub fn parse(&self, query: &str) -> Result<Arc<Query>, ParseError> {
         self.parse_impl(query, true)
     }
 
     #[cfg(feature = "internal-bench")]
-    pub(crate) fn parse_without_stats(&self, query: &str) -> Result<Query, ParseError> {
+    pub(crate) fn parse_without_stats(&self, query: &str) -> Result<Arc<Query>, ParseError> {
         self.parse_impl(query, false)
     }
 
-    fn parse_impl(&self, query: &str, record_stats: bool) -> Result<Query, ParseError> {
+    fn parse_impl(&self, query: &str, record_stats: bool) -> Result<Arc<Query>, ParseError> {
         let canonical_query = canonicalize_query(query);
-        let original_query = query.to_string();
         let hash = (self.hash_fn)(&canonical_query);
 
-        if let Some(cached) =
-            self.try_cache_hit(hash, &original_query, &canonical_query, record_stats)
-        {
+        if let Some(cached) = self.try_cache_hit(hash, query, &canonical_query, record_stats) {
             return Ok(cached);
         }
 
-        let parsed = Parser::parse(query)?;
-        self.insert_into_cache(
-            hash,
-            original_query,
-            canonical_query,
-            query,
-            &parsed,
-            record_stats,
-        );
+        let parsed = Arc::new(Parser::parse(query)?);
+        self.insert_into_cache(hash, canonical_query, query, &parsed, record_stats);
         Ok(parsed)
     }
 
-    /// Attempts to find and return a cached query, promoting it in LRU order.
+    /// Read-only hot path (issue #903): looks up a cached query under a **shared**
+    /// lock and, on a hit, sets the CLOCK `referenced` bit with a relaxed atomic
+    /// store. No write lock is taken, so concurrent hits do not serialise.
     fn try_cache_hit(
         &self,
         hash: u64,
         original_query: &str,
         canonical_query: &str,
         record_stats: bool,
-    ) -> Option<Query> {
-        let cache = self.cache.upgradable_read();
-        let cached = cache.get(&hash).and_then(|entries| {
-            entries
-                .iter()
-                .find(|entry| {
-                    entry.original_query == original_query
-                        && entry.canonical_query == canonical_query
-                })
-                .cloned()
+    ) -> Option<Arc<Query>> {
+        let inner = self.inner.read();
+        let entry = inner.map.get(&hash).and_then(|entries| {
+            entries.iter().find(|entry| {
+                entry.original_query == original_query && entry.canonical_query == canonical_query
+            })
         })?;
 
-        let key = CacheKey {
-            hash,
-            original_query: original_query.to_string(),
-        };
-        // O(n) LRU promotion: VecDeque::remove shifts elements. For L1 cache size
-        // of 1000 entries, this is ~4KB of data movement per hit — acceptable for
-        // the current QPS targets. If cache hit rate becomes a bottleneck at >50k QPS,
-        // replace with an IndexMap or intrusive linked list for O(1) promotion.
-        let mut order = self.order.write();
-        if let Some(pos) = order.iter().position(|existing| existing == &key) {
-            order.remove(pos);
-        }
-        order.push_back(key);
-        drop(order);
+        // Second-chance bit: cheap relaxed store, safe under a shared lock via
+        // interior mutability (AtomicBool). No global write lock on the hit path.
+        entry.referenced.store(true, Ordering::Relaxed);
+        let parsed = Arc::clone(&entry.parsed);
+        drop(inner);
 
         if record_stats {
             self.stats.hits.fetch_add(1, Ordering::Relaxed);
         }
-        Some(cached.parsed)
+        Some(parsed)
     }
 
-    /// Inserts a freshly parsed query into the cache, evicting old entries as needed.
+    /// Inserts a freshly parsed query into the cache, evicting via CLOCK as needed.
     fn insert_into_cache(
         &self,
         hash: u64,
-        original_query: String,
         canonical_query: String,
         raw_query: &str,
-        parsed: &Query,
+        parsed: &Arc<Query>,
         record_stats: bool,
     ) {
-        let mut cache = self.cache.write();
-        let mut order = self.order.write();
+        let mut inner = self.inner.write();
 
         if record_stats {
             self.stats.misses.fetch_add(1, Ordering::Relaxed);
         }
 
-        self.evict_oldest(&mut cache, &mut order, record_stats);
-
         let key = CacheKey {
             hash,
-            original_query: original_query.clone(),
+            original_query: raw_query.to_string(),
         };
 
-        if let Some(pos) = order.iter().position(|existing| existing == &key) {
-            order.remove(pos);
+        // Replacing an existing entry for the same query is not a net size change,
+        // so only evict when inserting a genuinely new key.
+        let is_new_key = !Self::bucket_contains(&inner.map, hash, raw_query);
+        if is_new_key {
+            self.evict_until_below_bound(&mut inner, record_stats);
         }
 
         let new_entry = CacheEntry {
-            original_query,
+            original_query: raw_query.to_string(),
             canonical_query,
-            parsed: parsed.clone(),
+            parsed: Arc::clone(parsed),
+            referenced: AtomicBool::new(false),
         };
 
-        cache
-            .entry(hash)
-            .and_modify(|bucket| {
-                bucket.retain(|entry| entry.original_query != raw_query);
-                bucket.push(new_entry.clone());
-            })
-            .or_insert_with(|| vec![new_entry]);
+        let bucket = inner.map.entry(hash).or_default();
+        bucket.retain(|entry| entry.original_query != raw_query);
+        bucket.push(new_entry);
 
-        order.push_back(key);
-        debug_assert_eq!(Self::entry_count(&cache), order.len());
+        if is_new_key {
+            inner.order.push_back(key);
+            self.size.fetch_add(1, Ordering::Relaxed);
+        }
+        debug_assert_eq!(self.size.load(Ordering::Relaxed), inner.order.len());
     }
 
-    /// Evicts oldest entries until the cache is below `max_size`.
-    fn evict_oldest(
-        &self,
-        cache: &mut FxHashMap<u64, Vec<CacheEntry>>,
-        order: &mut VecDeque<CacheKey>,
-        record_stats: bool,
-    ) {
-        while Self::entry_count(cache) >= self.max_size {
-            if let Some(oldest) = order.pop_front() {
-                if let Some(bucket) = cache.get_mut(&oldest.hash) {
-                    bucket.retain(|entry| entry.original_query != oldest.original_query);
-                    if bucket.is_empty() {
-                        cache.remove(&oldest.hash);
-                    }
-                }
-                if record_stats {
-                    self.stats.evictions.fetch_add(1, Ordering::Relaxed);
-                }
+    /// CLOCK / second-chance eviction: sweep the insertion-order ring until the
+    /// live size is back under `max_size`. An entry whose `referenced` bit is set
+    /// gets a second chance (bit cleared, re-queued at the back); otherwise it is
+    /// evicted. Amortised O(1) per insert — no per-iteration bucket re-sum.
+    fn evict_until_below_bound(&self, inner: &mut CacheInner, record_stats: bool) {
+        while self.size.load(Ordering::Relaxed) >= self.max_size {
+            let Some(candidate) = inner.order.pop_front() else {
+                break;
+            };
+            if Self::take_second_chance(&inner.map, &candidate) {
+                inner.order.push_back(candidate);
+                continue;
+            }
+            Self::remove_entry(&mut inner.map, &candidate);
+            self.size.fetch_sub(1, Ordering::Relaxed);
+            if record_stats {
+                self.stats.evictions.fetch_add(1, Ordering::Relaxed);
             }
         }
+    }
+
+    /// Returns `true` (granting a second chance) if the candidate's entry has its
+    /// `referenced` bit set, clearing the bit as a side effect.
+    fn take_second_chance(map: &FxHashMap<u64, Vec<CacheEntry>>, key: &CacheKey) -> bool {
+        map.get(&key.hash)
+            .and_then(|bucket| {
+                bucket
+                    .iter()
+                    .find(|entry| entry.original_query == key.original_query)
+            })
+            .is_some_and(|entry| entry.referenced.swap(false, Ordering::Relaxed))
+    }
+
+    /// Removes the entry identified by `key` from its bucket, dropping the bucket
+    /// if it becomes empty.
+    fn remove_entry(map: &mut FxHashMap<u64, Vec<CacheEntry>>, key: &CacheKey) {
+        if let Some(bucket) = map.get_mut(&key.hash) {
+            bucket.retain(|entry| entry.original_query != key.original_query);
+            if bucket.is_empty() {
+                map.remove(&key.hash);
+            }
+        }
+    }
+
+    /// Returns `true` if a bucket already holds an entry for `raw_query`.
+    fn bucket_contains(map: &FxHashMap<u64, Vec<CacheEntry>>, hash: u64, raw_query: &str) -> bool {
+        map.get(&hash)
+            .is_some_and(|bucket| bucket.iter().any(|entry| entry.original_query == raw_query))
     }
 
     /// Returns current cache statistics.
@@ -268,10 +312,10 @@ impl QueryCache {
         self.stats.snapshot()
     }
 
-    /// Returns the current number of cached queries.
+    /// Returns the current number of cached queries (O(1)).
     #[must_use]
     pub fn len(&self) -> usize {
-        Self::entry_count(&self.cache.read())
+        self.size.load(Ordering::Relaxed)
     }
 
     /// Returns true if the cache is empty.
@@ -282,16 +326,11 @@ impl QueryCache {
 
     /// Clears all cached queries and resets statistics.
     pub fn clear(&self) {
-        let mut cache = self.cache.write();
-        let mut order = self.order.write();
-
-        cache.clear();
-        order.clear();
+        let mut inner = self.inner.write();
+        inner.map.clear();
+        inner.order.clear();
+        self.size.store(0, Ordering::Relaxed);
         self.stats.clear();
-    }
-
-    fn entry_count(cache: &FxHashMap<u64, Vec<CacheEntry>>) -> usize {
-        cache.values().map(std::vec::Vec::len).sum()
     }
 }
 
@@ -395,7 +434,10 @@ mod tests {
     }
 
     #[test]
-    fn test_query_cache_hit_refreshes_mru_without_duplicates() {
+    fn test_query_cache_hit_keeps_clock_ring_unique() {
+        // Issue #903: a hit no longer rewrites LRU order (CLOCK promotion sets a
+        // referenced bit instead). The ring must still contain each key once and
+        // stay in sync with the O(1) size counter.
         let cache = QueryCache::new(3);
         let q1 = "SELECT * FROM docs LIMIT 1";
         let q2 = "SELECT * FROM docs LIMIT 2";
@@ -404,18 +446,83 @@ mod tests {
         let _ = cache.parse(q1);
         let _ = cache.parse(q2);
         let _ = cache.parse(q3);
-        let _ = cache.parse(q1);
+        let _ = cache.parse(q1); // hit: sets referenced bit, no reordering
 
-        let order = cache.order.read();
-        assert_eq!(order.len(), cache.len());
+        let inner = cache.inner.read();
+        assert_eq!(inner.order.len(), cache.len());
         assert_eq!(
-            order
+            inner
+                .order
                 .iter()
                 .filter(|v| v.original_query.as_str() == q1)
                 .count(),
-            1
+            1,
+            "no duplicate ring entries on hit"
         );
-        assert_eq!(order.back().map(|v| v.original_query.as_str()), Some(q1));
+    }
+
+    #[test]
+    fn test_query_cache_clock_referenced_entry_survives_eviction() {
+        // Issue #903: CLOCK second chance. q1 is referenced (hit) before pressure;
+        // it must survive while an un-referenced entry is evicted instead.
+        let cache = QueryCache::new(2);
+        let q1 = "SELECT * FROM docs LIMIT 1";
+        let q2 = "SELECT * FROM docs LIMIT 2";
+        let q3 = "SELECT * FROM docs LIMIT 3";
+
+        let _ = cache.parse(q1);
+        let _ = cache.parse(q2);
+        let _ = cache.parse(q1); // hit -> q1 gets the referenced bit
+        let _ = cache.parse(q3); // miss -> eviction sweep: q2 evicted, q1 spared
+
+        assert_eq!(cache.len(), 2);
+        // q1 still hits (was spared), q2 should now miss.
+        let hits_before = cache.stats().hits;
+        let _ = cache.parse(q1);
+        assert_eq!(cache.stats().hits, hits_before + 1, "q1 must survive");
+    }
+
+    #[test]
+    fn test_query_cache_hit_path_takes_no_write_lock() {
+        // Issue #903: a hit must not need the write lock. We hold a read guard on
+        // the cache and concurrently issue a hit from another thread; if the hit
+        // tried to take a write lock it would deadlock against our read guard.
+        use std::sync::Arc;
+        use std::thread;
+
+        let cache = Arc::new(QueryCache::new(10));
+        let q = "SELECT * FROM docs LIMIT 1";
+        let _ = cache.parse(q); // populate
+
+        let held = cache.inner.read(); // hold a shared lock for the whole test
+
+        let cache2 = Arc::clone(&cache);
+        let handle = thread::spawn(move || cache2.parse(q).map(|_| ()));
+
+        // If the hit path were write-locking, join() would block forever; the
+        // test harness would hang. A successful join proves the hit is read-only.
+        let res = handle
+            .join()
+            .expect("hit thread must finish without deadlock");
+        assert!(res.is_ok());
+        drop(held);
+    }
+
+    #[test]
+    fn test_query_cache_hit_returns_shared_arc() {
+        // Issue #903: a hit returns Arc::clone of the stored AST, not a deep copy.
+        let cache = QueryCache::new(10);
+        let q = "SELECT * FROM docs LIMIT 1";
+
+        let first = cache.parse(q).expect("parse");
+        let second = cache.parse(q).expect("hit");
+
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "hit must return the same Arc allocation (no deep clone)"
+        );
+        // The cache also retains its own reference, so strong count is >= 3.
+        assert!(Arc::strong_count(&first) >= 3);
     }
 
     #[test]
@@ -447,12 +554,12 @@ mod tests {
             h.join().expect("thread must complete");
         }
 
-        let order = cache.order.read();
+        let inner = cache.inner.read();
         let mut uniq = std::collections::HashSet::new();
-        for key in order.iter() {
-            assert!(uniq.insert(key.clone()), "duplicate query in LRU order");
+        for key in &inner.order {
+            assert!(uniq.insert(key.clone()), "duplicate query in CLOCK ring");
         }
-        assert_eq!(order.len(), cache.len());
+        assert_eq!(inner.order.len(), cache.len());
     }
 
     #[test]

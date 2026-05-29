@@ -15,25 +15,45 @@ use crate::velesql::QueryPlan;
 
 /// Deterministic cache key for compiled query plans.
 ///
-/// Two keys are equal iff the query text is identical AND the database state
-/// (schema version + per-collection write generations) has not changed.
+/// Two keys are equal iff the **canonical query text is byte-for-byte
+/// identical** AND the database state (schema version + per-collection write /
+/// analyze generations) has not changed.
 ///
 /// `collection_generations` must be sorted by collection name before
 /// insertion for deterministic hashing.
 ///
-/// # Correctness invariant (CACHE-01)
+/// # Correctness invariant (CACHE-01, issue #902)
 ///
-/// Cache correctness depends on `query_hash` capturing **all** collection
-/// names referenced by the query (base table + JOIN targets). If two
-/// structurally different queries happened to hash to the same value the cache
-/// would serve a stale plan. This is prevented by using the full canonical
-/// serialization of the `Query` AST — not just the collection name — as the
-/// hash input (see `Database::build_plan_key`). The `collection_generations`
-/// vector is then ordered by collection name so that the same set of
-/// collections always produces the same key regardless of JOIN ordering.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// `query_hash` is a 64-bit `FxHash` of the canonical query text. `FxHash` is a
+/// fast, **non-cryptographic** hash: distinct queries can be engineered to
+/// collide on the same 64-bit value. If equality were decided on `query_hash`
+/// alone, a colliding query would be treated as equal to an unrelated cached
+/// query and the cache could return **another query's compiled plan** (wrong
+/// results).
+///
+/// To make this impossible, `PlanKey` stores the canonical `query_text` and the
+/// hand-written [`PartialEq`]/[`Eq`] impls compare the full text (not the
+/// hash). `query_hash` is retained purely as a [`Hash`] accelerator so that the
+/// `DashMap`/`LruCache` buckets stay cheap to compute; the `Hash` impl
+/// deliberately feeds only `query_hash` (plus the generation fields) into the
+/// hasher rather than re-hashing the whole string on every lookup. This mirrors
+/// the safe pattern used by the `VelesQL` parse cache (`velesql/cache.rs`),
+/// which re-checks query-text equality on every lookup.
+///
+/// `Hash`/`Eq` consistency: equal keys have identical `query_text`, and
+/// `query_hash` is a pure function of `query_text`, so equal keys always hash
+/// identically — the `Hash`/`Eq` contract holds.
+#[derive(Clone, Debug)]
 pub struct PlanKey {
-    /// `FxHash` of canonical query text.
+    /// Canonical serialization of the query AST (see `Database::build_plan_key`).
+    ///
+    /// This is the authoritative query-identity field: equality is decided on
+    /// this string, never on `query_hash` alone. Stored behind `Arc<str>` so
+    /// cloning a `PlanKey` (done on every cache insert / promotion) is a cheap
+    /// refcount bump rather than a full string copy.
+    pub query_text: Arc<str>,
+    /// `FxHash` of `query_text`. Hash accelerator only — **not** an identity
+    /// field. Collisions are resolved by the `query_text` comparison in `Eq`.
     pub query_hash: u64,
     /// Monotonic counter incremented on every DDL operation.
     pub schema_version: u64,
@@ -47,6 +67,33 @@ pub struct PlanKey {
     /// `write_generation` — still invalidates plans whose cost estimates
     /// were derived from pre-analyze heuristics.
     pub analyze_generations: SmallVec<[u64; 4]>,
+}
+
+impl PartialEq for PlanKey {
+    /// Equality compares the **canonical query text** (collision-safe), never
+    /// `query_hash` alone (issue #902). The generation fields gate cache
+    /// invalidation.
+    fn eq(&self, other: &Self) -> bool {
+        self.schema_version == other.schema_version
+            && self.collection_generations == other.collection_generations
+            && self.analyze_generations == other.analyze_generations
+            && self.query_text == other.query_text
+    }
+}
+
+impl Eq for PlanKey {}
+
+impl std::hash::Hash for PlanKey {
+    /// Feeds only the cheap `query_hash` accelerator (plus generation fields)
+    /// into the hasher — never the full `query_text` — so lookups stay fast.
+    /// Equal keys hash identically because `query_hash` is a pure function of
+    /// `query_text`.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.query_hash.hash(state);
+        self.schema_version.hash(state);
+        self.collection_generations.hash(state);
+        self.analyze_generations.hash(state);
+    }
 }
 
 /// A compiled (cached) query execution plan.

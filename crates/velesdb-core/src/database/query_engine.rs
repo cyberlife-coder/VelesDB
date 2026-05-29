@@ -125,6 +125,9 @@ impl Database {
             .collect();
 
         crate::cache::PlanKey {
+            // Issue #902: store the canonical text so PlanKey equality is
+            // collision-safe. query_hash stays a Hash accelerator only.
+            query_text: query_text.into(),
             query_hash,
             schema_version,
             collection_generations,
@@ -343,7 +346,8 @@ impl Database {
         // the set operation sees the full result sets.  The final LIMIT is applied
         // once on the merged output (SQL-standard behaviour).
         // Use MAX_LIMIT (not None) to avoid the default-10 cap downstream.
-        let compound_limit = Some(100_000_u64);
+        const COMPOUND_LIMIT: usize = 100_000;
+        let compound_limit = Some(COMPOUND_LIMIT as u64); // 100_000 fits u64 exactly.
         let left_results = if query.compound.is_some() {
             let mut left_query = query.clone();
             left_query.select.limit = compound_limit;
@@ -363,6 +367,9 @@ impl Database {
                     accumulated,
                     right_results,
                     *operator,
+                    // Intermediate ops keep the server-side ceiling: truncating to the
+                    // user LIMIT here would drop rows a later chained set op still needs.
+                    COMPOUND_LIMIT,
                 );
             }
             // SQL-standard: LIMIT from the left (outer) SELECT applies to the final result.
@@ -466,9 +473,11 @@ impl Database {
                 Self::strip_pushed_conditions(query.select.where_clause.as_ref(), &pushed);
         }
 
+        let row_budget = Self::join_row_budget(&query.select, &analysis);
+
         let mut results = base_collection.execute_query(&single_query, params)?;
         for join in &query.select.joins {
-            results = self.execute_single_join(&results, join, &pushed)?;
+            results = self.execute_single_join(&results, join, &pushed, row_budget)?;
         }
 
         // Apply post-join filters: cross-source predicates that reference
@@ -484,6 +493,39 @@ impl Database {
         }
 
         Ok(results)
+    }
+
+    /// Computes the bound on joined rows to materialize.
+    ///
+    /// When the query has an explicit LIMIT, no post-join filters, and no
+    /// ORDER BY (which could reorder past the window), the bound is the
+    /// effective `LIMIT + OFFSET`. GROUP BY / HAVING / DISTINCT also disqualify
+    /// the bounded shape: SQL LIMIT bounds output *groups/rows*, not input rows,
+    /// so truncating joined input to `LIMIT` would drop rows that belong to
+    /// groups still inside the window. Otherwise downstream stages may reorder or
+    /// drop rows, so we fall back to the conservative server-side ceiling
+    /// [`JOIN_ROW_CEILING`] — still bounding OOM without affecting correctness.
+    pub(super) fn join_row_budget(
+        select: &crate::velesql::SelectStatement,
+        analysis: &crate::collection::search::query::pushdown::PushdownAnalysis,
+    ) -> usize {
+        use crate::collection::search::query::JOIN_ROW_CEILING;
+        use crate::velesql::DistinctMode;
+        let bounded_shape = analysis.post_join_filters.is_empty()
+            && select.order_by.is_none()
+            && select.group_by.is_none()
+            && select.having.is_none()
+            && select.distinct == DistinctMode::None;
+        match select.limit {
+            Some(limit) if bounded_shape => {
+                let limit = usize::try_from(limit).unwrap_or(JOIN_ROW_CEILING);
+                let offset = select
+                    .offset
+                    .map_or(0, |o| usize::try_from(o).unwrap_or(JOIN_ROW_CEILING));
+                limit.saturating_add(offset).min(JOIN_ROW_CEILING)
+            }
+            _ => JOIN_ROW_CEILING,
+        }
     }
 
     // NOTE: analyze_join_pushdown_for_select, apply_post_join_filters

@@ -49,12 +49,14 @@ fn dummy_compiled_plan() -> Arc<CompiledPlan> {
 #[test]
 fn plan_key_equal_fields_are_equal() {
     let a = PlanKey {
+        query_text: "SELECT * FROM a".into(),
         query_hash: 42,
         schema_version: 1,
         collection_generations: smallvec![10, 20],
         analyze_generations: smallvec::SmallVec::new(),
     };
     let b = PlanKey {
+        query_text: "SELECT * FROM a".into(),
         query_hash: 42,
         schema_version: 1,
         collection_generations: smallvec![10, 20],
@@ -71,12 +73,14 @@ fn plan_key_equal_fields_are_equal() {
 #[test]
 fn plan_key_different_generations_are_not_equal() {
     let a = PlanKey {
+        query_text: "SELECT * FROM a".into(),
         query_hash: 42,
         schema_version: 1,
         collection_generations: smallvec![10, 20],
         analyze_generations: smallvec::SmallVec::new(),
     };
     let b = PlanKey {
+        query_text: "SELECT * FROM a".into(),
         query_hash: 42,
         schema_version: 1,
         collection_generations: smallvec![10, 21],
@@ -85,12 +89,63 @@ fn plan_key_different_generations_are_not_equal() {
     assert_ne!(a, b);
 }
 
+/// Issue #902 regression: two distinct queries forced to share the same
+/// `query_hash` (the FxHash accelerator) — but with different canonical
+/// `query_text` — must **not** be treated as the same cache key. Looking up
+/// query B must never return query A's compiled plan.
+///
+/// This is the wrong-plan scenario: `FxHash` is non-cryptographic, so 64-bit
+/// collisions are constructible. The fix decides equality on `query_text`, so a
+/// collision is a guaranteed cache miss, never a wrong hit.
+#[test]
+fn plan_key_hash_collision_does_not_alias_distinct_queries() {
+    // Same query_hash + same generations, different canonical text.
+    let key_a = PlanKey {
+        query_text: "SELECT * FROM users".into(),
+        query_hash: 0xDEAD_BEEF,
+        schema_version: 1,
+        collection_generations: smallvec![7],
+        analyze_generations: smallvec::SmallVec::new(),
+    };
+    let key_b = PlanKey {
+        query_text: "DELETE FROM users".into(),
+        query_hash: 0xDEAD_BEEF, // forced collision
+        schema_version: 1,
+        collection_generations: smallvec![7],
+        analyze_generations: smallvec::SmallVec::new(),
+    };
+
+    // Keys must compare unequal despite the identical hash accelerator.
+    assert_ne!(key_a, key_b, "colliding hash must not make keys equal");
+
+    let cache = CompiledPlanCache::new(100, 1_000);
+    let plan_a = dummy_compiled_plan();
+    cache.insert(key_a.clone(), Arc::clone(&plan_a));
+
+    // Lookup for query B (the colliding key) must MISS — never return A's plan.
+    assert!(
+        cache.get(&key_b).is_none(),
+        "colliding query B must not retrieve query A's cached plan (issue #902)"
+    );
+    assert!(
+        !cache.contains(&key_b),
+        "contains() must also reject the collision"
+    );
+
+    // Sanity: query A still resolves to its own plan.
+    let got_a = cache
+        .get(&key_a)
+        .expect("query A must still hit its own plan");
+    assert_eq!(got_a.plan, plan_a.plan);
+}
+
 // ---- CompiledPlanCache insert + get ----
 
 #[test]
 fn plan_cache_insert_and_get() {
     let cache = CompiledPlanCache::new(100, 1_000);
     let key = PlanKey {
+        query_text: "SELECT 1".into(),
         query_hash: 1,
         schema_version: 0,
         collection_generations: smallvec![0],
@@ -108,6 +163,7 @@ fn plan_cache_insert_and_get() {
 fn plan_cache_miss_on_different_key() {
     let cache = CompiledPlanCache::new(100, 1_000);
     let key = PlanKey {
+        query_text: "SELECT 1".into(),
         query_hash: 1,
         schema_version: 0,
         collection_generations: smallvec![0],
@@ -116,6 +172,7 @@ fn plan_cache_miss_on_different_key() {
     cache.insert(key, dummy_compiled_plan());
 
     let other = PlanKey {
+        query_text: "SELECT 2".into(),
         query_hash: 2,
         schema_version: 0,
         collection_generations: smallvec![0],
@@ -310,6 +367,7 @@ fn write_generation_accessible_from_database() {
 fn plan_cache_reuse_count_increments() {
     let cache = CompiledPlanCache::new(100, 1_000);
     let key = PlanKey {
+        query_text: "SELECT 99".into(),
         query_hash: 99,
         schema_version: 0,
         collection_generations: smallvec![0],

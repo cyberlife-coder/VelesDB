@@ -105,7 +105,22 @@ impl ShardedTraverser {
                 break;
             }
 
-            let shard_results = self.expand_shards(&shard_frontiers, &adjacency, &stats, depth);
+            // Bound each shard's emission to the remaining budget so a wide level
+            // cannot materialize the whole frontier before merge/dedup caps it.
+            // The cap counts only NEW unique nodes (candidates already globally
+            // visited, or duplicated within the shard's level, are filtered
+            // before the cap), so it bounds peak buffering without dropping a
+            // node that would fit inside the limit. `merge_shard_results` stays
+            // the authoritative cross-shard dedup.
+            let remaining = self.config.limit.saturating_sub(all_results.len());
+            let shard_results = self.expand_shards(
+                &shard_frontiers,
+                &adjacency,
+                &stats,
+                depth,
+                remaining,
+                &global_visited,
+            );
 
             shard_frontiers = self.merge_shard_results(
                 shard_results,
@@ -132,6 +147,13 @@ impl ShardedTraverser {
     }
 
     /// Expands all shard frontiers in parallel.
+    ///
+    /// Each shard keeps at most `remaining` genuinely-new unique nodes:
+    /// candidates already in `global_visited` (from prior levels/start nodes) or
+    /// duplicated within this shard's level are skipped before the budget check,
+    /// so the cap counts new results -- not raw candidates -- and never stops a
+    /// shard before it has surfaced reachable unvisited nodes that fit inside the
+    /// limit. `merge_shard_results` remains the authoritative cross-shard dedup.
     #[allow(clippy::type_complexity, clippy::unused_self)]
     fn expand_shards<F>(
         &self,
@@ -139,6 +161,8 @@ impl ShardedTraverser {
         adjacency: &F,
         stats: &TraversalStats,
         depth: u32,
+        remaining: usize,
+        global_visited: &FxHashSet<u64>,
     ) -> Vec<(Vec<TraversalResult>, Vec<(u64, u64, Vec<u64>)>)>
     where
         F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
@@ -148,10 +172,17 @@ impl ShardedTraverser {
             .map(|frontier| {
                 let mut results = Vec::new();
                 let mut next_frontier = Vec::new();
-                for (start_node, current_node, path) in frontier {
+                let mut shard_seen = FxHashSet::default();
+                'frontier: for (start_node, current_node, path) in frontier {
                     let neighbors = adjacency(*current_node);
                     stats.add_edges_traversed(neighbors.len());
                     for (neighbor, edge_id) in neighbors {
+                        if global_visited.contains(&neighbor) || !shard_seen.insert(neighbor) {
+                            continue;
+                        }
+                        if results.len() >= remaining {
+                            break 'frontier;
+                        }
                         let mut new_path = path.clone();
                         new_path.push(edge_id);
                         results.push(TraversalResult::new(
@@ -182,13 +213,15 @@ impl ShardedTraverser {
 
         for (results, next_frontier) in shard_results {
             for result in results {
+                // Stop globally at the limit so merging across shards yields
+                // EXACTLY `limit` results, never overshooting by a shard's worth.
+                if all_results.len() >= self.config.limit {
+                    break;
+                }
                 if global_visited.insert(result.end_node) {
                     stats.add_nodes_visited(1);
                     newly_visited.insert(result.end_node);
                     all_results.push(result);
-                    if all_results.len() >= self.config.limit {
-                        break;
-                    }
                 }
             }
             for (start, node, path) in next_frontier {

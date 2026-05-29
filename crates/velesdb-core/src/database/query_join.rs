@@ -111,11 +111,16 @@ impl Database {
     }
 
     /// Executes a single JOIN using the optimal strategy: lookup, filtered, or full.
+    ///
+    /// `row_budget` bounds how many joined rows are materialized (the query's
+    /// effective `LIMIT + OFFSET`), preventing OOM on RIGHT/FULL joins over large
+    /// stores. It never drops rows within the requested window.
     pub(super) fn execute_single_join(
         &self,
         results: &[SearchResult],
         join: &crate::velesql::JoinClause,
         pushed: &[crate::velesql::Condition],
+        row_budget: usize,
     ) -> Result<Vec<SearchResult>> {
         let join_collection = self.resolve_collection(&join.table)?;
 
@@ -129,8 +134,12 @@ impl Database {
             Self::build_filtered_join_column_store(&join_collection, pushed)?
         };
 
-        let joined =
-            crate::collection::search::query::join::execute_join(results, join, &column_store)?;
+        let joined = crate::collection::search::query::join::execute_join(
+            results,
+            join,
+            &column_store,
+            row_budget,
+        )?;
         Ok(crate::collection::search::query::join::joined_to_search_results(joined))
     }
 }

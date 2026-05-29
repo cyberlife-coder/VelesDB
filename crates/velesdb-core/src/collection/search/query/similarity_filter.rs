@@ -96,7 +96,9 @@ impl Collection {
         let (sim_field, sim_vec, sim_op, sim_threshold) =
             self.extract_not_similarity_condition(condition, params)?;
 
-        Self::warn_large_scan(self.vector_storage.read().ids().len(), limit);
+        let total_count = self.vector_storage.read().ids().len();
+        Self::guard_not_similarity_scan(total_count)?;
+        Self::warn_large_scan(total_count, limit);
 
         let metadata_filter = Self::extract_metadata_filter(condition);
         let filter = metadata_filter
@@ -184,6 +186,29 @@ impl Collection {
         }
     }
 
+    /// Server-side hard ceiling on the number of vectors a single
+    /// `NOT similarity()` query may scan (#901).
+    ///
+    /// A `NOT similarity()` predicate has no index acceleration and may scan
+    /// the entire collection. Beyond this generous ceiling the query is a
+    /// likely DoS vector, so it is **rejected** rather than merely warned.
+    /// This is a SERVER-controlled constant and cannot be raised by the query.
+    const NOT_SIMILARITY_MAX_SCAN: usize = 5_000_000;
+
+    /// Rejects a `NOT similarity()` full scan whose collection size exceeds the
+    /// server-side ceiling [`Self::NOT_SIMILARITY_MAX_SCAN`] (#901).
+    fn guard_not_similarity_scan(total_count: usize) -> Result<()> {
+        if total_count > Self::NOT_SIMILARITY_MAX_SCAN {
+            return Err(crate::error::Error::Config(format!(
+                "NOT similarity() would scan {total_count} vectors, exceeding the \
+                 server scan limit of {}. Add a more selective metadata filter or \
+                 use a positive similarity() predicate (index-accelerated).",
+                Self::NOT_SIMILARITY_MAX_SCAN
+            )));
+        }
+        Ok(())
+    }
+
     /// Emits a performance warning for large NOT-similarity scans.
     fn warn_large_scan(total_count: usize, limit: usize) {
         if total_count > 10_000 && limit > 1000 {
@@ -256,6 +281,19 @@ impl Collection {
             vector_ids
         };
 
+        Self::collect_filtered_scan(&*payload_storage, &*vector_storage, ids, filter, limit)
+    }
+
+    /// Shared scan body: iterates `ids`, hydrates each matching point, and
+    /// stops once `limit` results are collected. Extracted to keep the full
+    /// scan and the candidate-id scan from duplicating the hydration loop.
+    fn collect_filtered_scan(
+        payload_storage: &dyn PayloadStorage,
+        vector_storage: &dyn VectorStorage,
+        ids: impl IntoIterator<Item = u64>,
+        filter: &crate::filter::Filter,
+        limit: usize,
+    ) -> Vec<SearchResult> {
         let mut results = Vec::new();
         for id in ids {
             let payload = payload_storage.retrieve(id).ok().flatten();
@@ -263,7 +301,6 @@ impl Collection {
                 Some(ref p) => filter.matches(p),
                 None => filter.matches(&serde_json::Value::Null),
             };
-
             if matches {
                 let vector = vector_storage
                     .retrieve(id)
@@ -280,12 +317,10 @@ impl Collection {
                     1.0,
                 ));
             }
-
             if results.len() >= limit {
                 break;
             }
         }
-
         results
     }
 
@@ -337,35 +372,13 @@ impl Collection {
     ) -> Vec<SearchResult> {
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
-        let mut results = Vec::new();
-
-        for &id in candidate_ids {
-            let payload = payload_storage.retrieve(id).ok().flatten();
-            let matches = match payload {
-                Some(ref p) => filter.matches(p),
-                None => filter.matches(&serde_json::Value::Null),
-            };
-            if matches {
-                let vector = vector_storage
-                    .retrieve(id)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-                results.push(SearchResult::new(
-                    Point {
-                        id,
-                        vector,
-                        payload,
-                        sparse_vectors: None,
-                    },
-                    1.0,
-                ));
-            }
-            if results.len() >= limit {
-                break;
-            }
-        }
-        results
+        Self::collect_filtered_scan(
+            &*payload_storage,
+            &*vector_storage,
+            candidate_ids.iter().copied(),
+            filter,
+            limit,
+        )
     }
 
     /// Scans all metadata-matching points and rescores them by exact vector similarity.
@@ -378,7 +391,8 @@ impl Collection {
     /// `GraphFirst` inverts the order:
     /// 1. Full-scan filtered by metadata → produces a *small* candidate set.
     /// 2. Exact vector similarity is computed for each candidate using the stored vector.
-    /// 3. Results are sorted by score and truncated to `limit`.
+    /// 3. A bounded top-k heap (#901) retains only the `limit` best results in
+    ///    `O(limit)` memory, yielding the same top-k as a full sort + truncate.
     ///
     /// # Performance characteristic
     ///
@@ -395,26 +409,50 @@ impl Collection {
         query: &[f32],
         limit: usize,
     ) -> Vec<SearchResult> {
-        // MAX_LIMIT inline: same bound as the constant in query/mod.rs.
+        // #901: bound the scored candidate set with a top-k heap instead of
+        // materializing every metadata match and full-sorting. `SCAN_CAP`
+        // caps how many *matches* we score (pathological-query guard); the
+        // heap caps retained memory to O(limit). Results and ordering are
+        // identical to the previous full sort + truncate.
         const SCAN_CAP: usize = 100_000;
 
         let metric = self.config().metric;
+        let higher_is_better = metric.higher_is_better();
 
-        let mut candidates = self.execute_scan_query(metadata_filter, SCAN_CAP);
-
-        for r in &mut candidates {
+        let candidates = self.execute_scan_query(metadata_filter, SCAN_CAP);
+        let mut topk = super::bounded_top_k::BoundedTopK::new(limit, higher_is_better);
+        for mut r in candidates {
             // Exact distance computation using the stored vector.
             // Clamp is mandatory (SecDev) to guard against NaN from zero-norm vectors.
             r.score = metric.calculate(&r.point.vector, query).clamp(-1.0, 1.0);
+            topk.offer(r);
         }
 
-        if metric.higher_is_better() {
-            candidates.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
-        } else {
-            candidates.sort_unstable_by(|a, b| a.score.total_cmp(&b.score));
-        }
+        topk.into_sorted_vec()
+    }
+}
 
-        candidates.truncate(limit);
-        candidates
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #901: a `NOT similarity()` scan within the server ceiling is allowed.
+    #[test]
+    fn test_not_similarity_guard_allows_within_ceiling() {
+        assert!(Collection::guard_not_similarity_scan(Collection::NOT_SIMILARITY_MAX_SCAN).is_ok());
+        assert!(Collection::guard_not_similarity_scan(10_000).is_ok());
+    }
+
+    /// #901: a `NOT similarity()` scan over the server ceiling is REJECTED
+    /// (not merely warned) to block the unbounded-scan DoS vector.
+    #[test]
+    fn test_not_similarity_guard_rejects_above_ceiling() {
+        let err = Collection::guard_not_similarity_scan(Collection::NOT_SIMILARITY_MAX_SCAN + 1)
+            .expect_err("scan above ceiling must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("scan limit") || msg.contains("exceeding"),
+            "error should explain the scan-limit rejection, got: {msg}"
+        );
     }
 }
