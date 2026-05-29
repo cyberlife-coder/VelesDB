@@ -55,7 +55,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 ///
 /// Configurable at runtime via [`set_alloc_byte_limit`] if an operator
 /// legitimately needs an even larger single allocation, or to harden it down.
+///
+/// On 32-bit / WASM targets `usize` tops out at ~4 GiB, so the 1 TiB literal
+/// would overflow at compile time and the ceiling is meaningless anyway (the
+/// allocator caps allocations well below it). There the backstop is disabled
+/// (`usize::MAX`) and the OS allocator is the effective limit.
+#[cfg(target_pointer_width = "64")]
 pub const DEFAULT_ALLOC_BYTE_LIMIT: usize = 1024 * 1024 * 1024 * 1024;
+/// See the 64-bit variant above: disabled on 32-bit / WASM where 1 TiB would
+/// overflow `usize` and the allocator is the effective ceiling.
+#[cfg(not(target_pointer_width = "64"))]
+pub const DEFAULT_ALLOC_BYTE_LIMIT: usize = usize::MAX;
 
 /// Process-wide per-allocation byte ceiling, initialized to
 /// [`DEFAULT_ALLOC_BYTE_LIMIT`]. See [`set_alloc_byte_limit`].
