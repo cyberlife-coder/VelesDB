@@ -7,8 +7,7 @@
  *
  * @example
  * ```typescript
- * import { VelesDB } from '@wiscale/velesdb-sdk';
- * import { OpenAIEmbedder } from '@wiscale/velesdb-sdk/embed';
+ * import { VelesDB, OpenAIEmbedder } from '@wiscale/velesdb-sdk';
  *
  * const embedder = new OpenAIEmbedder({ apiKey: process.env.OPENAI_API_KEY! });
  * const db = new VelesDB({ backend: 'wasm' });

@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.0] — 2026-05-29
+
+### Summary
+
+Second **minor** bump of the v1.1x line. Two themes dominate: a **security/robustness hardening wave** (the `audit-2026q2` campaign — 9 integrated fix PRs across the HNSW loader, WAL, PQ quantization, sparse/BM25 agent path, graph integrity, query/caches, parser, and config layers) and a **developer-experience expansion** (first-party embedding adapters for Python and TypeScript, a VelesQL cheat sheet, and a multi-arch GitHub Container Registry image). Both are **additive** — no breaking change in the public Rust, Python, TypeScript, or WASM SDK surface.
+
+For most users the headline is *zero-friction RAG*: you can now `from velesdb import embed` and wrap OpenAI or `sentence-transformers` without writing glue code, pull a published `ghcr.io` image instead of building the server yourself, and keep the one-page VelesQL cheat sheet open while you query. For operators and library integrators, the hardening wave tightens every untrusted-input boundary (on-disk index/WAL loading, query parsing, rate limiting, config loading) with explicit bounds and validation — defense-in-depth, with no behavior change on well-formed inputs.
+
+This release also folds in a 44-PR dependency refresh (Rust toolchain base image `1.87 → 1.96`, `wgpu 29`, `redis 0.26 → 1.2`, `pyo3-build-config 0.24 → 0.28`, `rustyline 14 → 18`, `dashmap 5 → 6`, `dirs 5 → 6`, plus the demo/CI ecosystem) and a documentation accuracy sweep (factual-accuracy passes, the ecosystem-parity audit, and per-integration docstring corrections).
+
+### Added
+
+- **First-party embedding adapters — Python** ([#917](https://github.com/cyberlife-coder/VelesDB/pull/917)). New `velesdb.embed` module exposing an `Embedder` protocol plus two ready-to-use implementations: `OpenAIEmbedder` (wraps the `openai` client) and `SentenceTransformerEmbedder` (wraps `sentence-transformers`). Both are opt-in — their backing libraries are soft dependencies loaded lazily, so the base `velesdb` wheel stays dependency-light. Lets you go from raw text to a populated collection without hand-writing embedding glue.
+- **First-party embedding adapter — TypeScript** ([#917](https://github.com/cyberlife-coder/VelesDB/pull/917)). New `OpenAIEmbedder` class plus `Embedder` interface and `OpenAIEmbedderOptions` type, exported from the SDK root (`@wiscale/velesdb-sdk`).
+- **VelesQL cheat sheet** ([#917](https://github.com/cyberlife-coder/VelesDB/pull/917)) — `docs/reference/VELESQL_CHEATSHEET.md`, a one-page quick reference of the query surface (search, filter, graph MATCH, fusion, sparse, EXPLAIN).
+- **Multi-arch GitHub Container Registry (GHCR) publish** ([#917](https://github.com/cyberlife-coder/VelesDB/pull/917)) — new `docker-publish.yml` workflow building and pushing a multi-architecture `ghcr.io` image with OIDC build-provenance attestation and a guarded `latest` tag, complementing the existing release-artifact pipeline.
+- **Tauri plugin: typed guest-js wrappers for 9 previously raw-only commands** ([#928](https://github.com/cyberlife-coder/VelesDB/pull/928)). `train_pq`, `stream_insert`, `traverse_graph_parallel`, `create_index`, `drop_index`, `list_indexes`, `sparse_search`, `hybrid_sparse_search`, and `sparse_upsert` were registered in the Rust invoke handler but had no typed JS wrapper, forcing callers into untyped `invoke('plugin:velesdb|<cmd>', …)` calls. Each now has a camelCase request/response interface and an exported async wrapper. No Rust change.
+
+### Security
+
+> The `audit-2026q2` campaign is defense-in-depth hardening of untrusted-input boundaries. There is no known exploit and no behavior change on well-formed inputs; each fix adds explicit bounds/validation where a malformed file or query could previously over-allocate, panic, or skip a check.
+
+- **HNSW on-disk load validation + allocation safety** ([#908](https://github.com/cyberlife-coder/VelesDB/pull/908), integrates [#894](https://github.com/cyberlife-coder/VelesDB/pull/894)/[#899](https://github.com/cyberlife-coder/VelesDB/pull/899)). Loading a persisted HNSW index now validates structural invariants and caps allocations derived from header fields, so a corrupt or hostile index file can no longer trigger an unbounded allocation.
+- **WAL allocation caps, replay ordering & durability** ([#911](https://github.com/cyberlife-coder/VelesDB/pull/911), integrates [#898](https://github.com/cyberlife-coder/VelesDB/pull/898)). Write-ahead-log replay enforces allocation caps and a well-defined ordering, hardening crash-recovery against truncated/oversized records.
+- **PQ quantization hardening** ([#909](https://github.com/cyberlife-coder/VelesDB/pull/909), audit item B).
+- **Parser DoS bounds** ([#910](https://github.com/cyberlife-coder/VelesDB/pull/910), audit item E) — guards against pathological query inputs.
+- **Sparse / BM25 agent-path hardening** ([#912](https://github.com/cyberlife-coder/VelesDB/pull/912), audit item D).
+- **Graph-integrity hardening** ([#913](https://github.com/cyberlife-coder/VelesDB/pull/913), audit item G).
+- **Query & cache hardening** ([#914](https://github.com/cyberlife-coder/VelesDB/pull/914), audit items H, I).
+- **Config validation enforced in loaders + on open; RateLimiter bounded** ([#915](https://github.com/cyberlife-coder/VelesDB/pull/915), integrates [#907](https://github.com/cyberlife-coder/VelesDB/pull/907)). Invalid configuration is now rejected at load time and on database open rather than surfacing later; the rate limiter has an explicit upper bound.
+- **`audit-2026q2` behavior documented** ([#916](https://github.com/cyberlife-coder/VelesDB/pull/916)). The hardening guarantees are written into `docs/SOUNDNESS.md`, `docs/STORAGE_FORMAT.md`, `docs/CONCURRENCY_MODEL.md`, `docs/reference/KNOWN_LIMITATIONS.md`, `docs/reference/NATIVE_HNSW.md`, and the VelesQL spec/contract, so the invariants are discoverable, not folklore.
+- **5-angle code-health audit + targeted fixes** ([#871](https://github.com/cyberlife-coder/VelesDB/pull/871)) and **property-test / dead-code sweep** ([#875](https://github.com/cyberlife-coder/VelesDB/pull/875)).
+
+### Changed
+
+- **Dependency refresh (44 PRs).** Notable majors: Docker base image `rust 1.87 → 1.96-bookworm` ([#918](https://github.com/cyberlife-coder/VelesDB/pull/918)), `wgpu 29` migration ([#869](https://github.com/cyberlife-coder/VelesDB/pull/869)), `redis 0.26 → 1.2` ([#884](https://github.com/cyberlife-coder/VelesDB/pull/884)), `pyo3-build-config 0.24 → 0.28` ([#885](https://github.com/cyberlife-coder/VelesDB/pull/885)), `rustyline 14 → 18` ([#831](https://github.com/cyberlife-coder/VelesDB/pull/831)), `dashmap 5 → 6` ([#830](https://github.com/cyberlife-coder/VelesDB/pull/830)), `dirs 5 → 6` ([#832](https://github.com/cyberlife-coder/VelesDB/pull/832)), `openssl 0.10.78 → 0.10.80`. GitHub Actions majors: `checkout 4 → 6`, `upload-artifact 4 → 7`, `cache 4 → 5`, `sonarqube-scan 2 → 8`, `docker/login` & `docker/setup-buildx 3 → 4`. Demo toolchain: `vite 7 → 8` + `@vitejs/plugin-react 4 → 5` ([#888](https://github.com/cyberlife-coder/VelesDB/pull/888)), `tailwindcss 3 → 4` ([#859](https://github.com/cyberlife-coder/VelesDB/pull/859)). All absorbed without public-API impact.
+- **Dependabot grouping + advisory hygiene** ([#810](https://github.com/cyberlife-coder/VelesDB/pull/810), [#811](https://github.com/cyberlife-coder/VelesDB/pull/811)): non-major bumps are grouped, JS example dirs gained coverage, and `deny.toml` advisory waivers are organized with a review-date marker.
+
+### Fixed
+
+- **CLI: stop advertising a non-existent `.guardrails set` command** ([#936](https://github.com/cyberlife-coder/VelesDB/pull/936)).
+- **Mobile: repaired broken/misleading graph-collection doc references** ([#929](https://github.com/cyberlife-coder/VelesDB/pull/929)).
+- **Python stub: `TraversalResultDict` keys now match the PyO3 binding output** ([#844](https://github.com/cyberlife-coder/VelesDB/pull/844)).
+- **Core: aligned GPU feature gates** ([#847](https://github.com/cyberlife-coder/VelesDB/pull/847)).
+- **TS SDK: `ignoreDeprecations` to unblock npm publish under TypeScript 6.0** ([#802](https://github.com/cyberlife-coder/VelesDB/pull/802)).
+- **WASM build repaired on `develop`** — `DEFAULT_ALLOC_BYTE_LIMIT` (1 TiB) overflowed `usize` on 32-bit/WASM targets; now cfg-gated ([#917](https://github.com/cyberlife-coder/VelesDB/pull/917), regression from #908).
+- **Clippy: allow wildcard SIMD intrinsic imports on aarch64** ([#889](https://github.com/cyberlife-coder/VelesDB/pull/889)).
+- **`scripts/check-version-sync` detects velesdb-python capabilities across all sub-modules** ([#873](https://github.com/cyberlife-coder/VelesDB/pull/873)).
+- **Demo: tauri-rag-app builds on Vite 8 via the oxc minifier** ([#937](https://github.com/cyberlife-coder/VelesDB/pull/937)).
+
+### Performance
+
+- **`fix+perf(core)`: zero-alloc `LIKE` hot path, O(n log n) index backfill, dead-cast removal, robust streaming test** ([#805](https://github.com/cyberlife-coder/VelesDB/pull/805)).
+- **Zero-copy BM25 text extraction + eliminate duplicate allocation in `LabelTable::intern`** ([#887](https://github.com/cyberlife-coder/VelesDB/pull/887)).
+- **Skip WAL fsync when deleting an id that was never stored** ([#890](https://github.com/cyberlife-coder/VelesDB/pull/890)).
+- **`sort_unstable_by` sweep + reduced reindex log allocation** ([#848](https://github.com/cyberlife-coder/VelesDB/pull/848)) and a general code-quality pass ([#841](https://github.com/cyberlife-coder/VelesDB/pull/841)).
+
+### Documentation
+
+- **Factual-accuracy passes against the code** ([#836](https://github.com/cyberlife-coder/VelesDB/pull/836), [#837](https://github.com/cyberlife-coder/VelesDB/pull/837)) — server `/metrics` auth, server perf numbers, mobile UniFFI constructor, CLI `.nodes` duplicate, and more.
+- **Ecosystem-parity audit corrections** ([#927](https://github.com/cyberlife-coder/VelesDB/pull/927)) and per-integration docstring fixes: WASM README VelesQL execution ([#926](https://github.com/cyberlife-coder/VelesDB/pull/926)), Haystack 5 distance metrics ([#930](https://github.com/cyberlife-coder/VelesDB/pull/930)), server `collection_type`/HNSW params/sparse search ([#931](https://github.com/cyberlife-coder/VelesDB/pull/931)), Python secondary-index helpers ([#932](https://github.com/cyberlife-coder/VelesDB/pull/932)), migrate sparse-vector source support ([#933](https://github.com/cyberlife-coder/VelesDB/pull/933)), LangChain RSF `relative_score` ([#934](https://github.com/cyberlife-coder/VelesDB/pull/934)), cross-collection `@collection` MATCH scope ([#935](https://github.com/cyberlife-coder/VelesDB/pull/935)).
+- **VelesQL spec refreshed** ([#838](https://github.com/cyberlife-coder/VelesDB/pull/838)) and a **5-second Python first-search quickstart** ([#839](https://github.com/cyberlife-coder/VelesDB/pull/839)).
+
+### CI / Tooling
+
+- **Perf Gate (E2E) workflow** enforcing recall ≥ 0.95 and a p50 sanity floor ([#808](https://github.com/cyberlife-coder/VelesDB/pull/808)), plus a **Balanced-mode recall contract for Euclidean and DotProduct** ([#809](https://github.com/cyberlife-coder/VelesDB/pull/809)).
+- **Feature-claims audit promoted to a blocking gate** with its test suite wired in ([#874](https://github.com/cyberlife-coder/VelesDB/pull/874)).
+- **Loom check made a required gate** instead of silently skipped ([#823](https://github.com/cyberlife-coder/VelesDB/pull/823)); example/demo smoke jobs extended to the new React/Express examples and the RAG-PDF demo ([#806](https://github.com/cyberlife-coder/VelesDB/pull/806), [#829](https://github.com/cyberlife-coder/VelesDB/pull/829)); heavyweight python-integrations job now also runs on `develop` pushes ([#834](https://github.com/cyberlife-coder/VelesDB/pull/834)).
+
+### Notes on Migration
+
+This release is **drop-in for every public API**. New surfaces (`velesdb.embed`, TS `OpenAIEmbedder`, the 9 Tauri wrappers) are purely additive and opt-in. The `audit-2026q2` hardening changes only the handling of malformed/hostile inputs; well-formed workloads see no behavior change. The dependency refresh is fully internal to the workspace.
+
 ## [1.15.0] — 2026-05-14
 
 ### Summary

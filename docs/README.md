@@ -38,6 +38,7 @@ In-depth technical documentation:
 |-----------|-------------|
 | [Architecture](./reference/ARCHITECTURE.md) | System design and internals |
 | [VelesQL Specification](./VELESQL_SPEC.md) | Query language grammar and syntax (v3.6, canonical) |
+| [VelesQL Cheat Sheet](./reference/VELESQL_CHEATSHEET.md) | One-page quick reference: search, filter, graph MATCH, fusion, sparse, EXPLAIN |
 | [VelesQL Contract](./reference/VELESQL_CONTRACT.md) | Canonical REST contract (`/query`, `/match`, error model) |
 | [VelesQL Conformance](./reference/VELESQL_CONFORMANCE_MATRIX.md) | Cross-ecosystem conformance matrix |
 | [Performance SLO](./reference/PERFORMANCE_SLO.md) | CI-enforced performance objectives and budget gates |

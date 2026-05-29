@@ -312,6 +312,15 @@ $FilesToUpdate = @(
         Pattern = 'velesdb-server@\d+\.\d+\.\d+'
         Replacement = "velesdb-server@$Version"
         Description = "scripts/dx-timing/scenario_server.sh cargo pin"
+    },
+    # Install guide pins the pre-built multi-arch GHCR image (added v1.16.0).
+    # Only the `:X.Y.Z` tag is rewritten; the adjacent `:latest` example is
+    # left untouched (the \d+\.\d+\.\d+ pattern never matches `latest`).
+    @{
+        Path = "docs/guides/INSTALLATION.md"
+        Pattern = 'ghcr\.io/cyberlife-coder/velesdb:\d+\.\d+\.\d+'
+        Replacement = "ghcr.io/cyberlife-coder/velesdb:$Version"
+        Description = "docs/guides/INSTALLATION.md GHCR image pin"
     }
     # NOTE: per-crate inter-crate dependency entries (velesdb-server -> core,
     # velesdb-cli -> core, etc.) used to live here. They were removed in v1.13.6
