@@ -20,6 +20,18 @@ use crate::velesql::{
 };
 use std::collections::HashMap;
 
+/// Default maximum number of groups allowed when the query does not specify one
+/// (memory protection).
+pub(super) const DEFAULT_MAX_GROUPS: usize = 10_000;
+
+/// Server-side hard ceiling on the number of GROUP BY groups (#903).
+///
+/// This is a SERVER-controlled constant. A query may use `WITH (max_groups=N)`
+/// to *lower* its group budget, but `N` is always clamped down to this ceiling
+/// so an untrusted query cannot inflate the per-query memory bound. Bounding
+/// distinct groups is the DoS guard for GROUP BY aggregation.
+pub(super) const SERVER_MAX_GROUPS_CEILING: usize = 1_000_000;
+
 impl Collection {
     /// BUG-3 FIX: Sort aggregation results by ORDER BY clause.
     pub(crate) fn sort_aggregation_results(
@@ -176,12 +188,13 @@ impl Collection {
     /// Extract max_groups limit from WITH clause (EPIC-040 US-004).
     /// Supports both `max_groups` and `group_limit` option names.
     /// Returns `DEFAULT_MAX_GROUPS` if not specified.
+    ///
+    /// #903 (DoS hardening): the value supplied by the (untrusted) query is
+    /// **clamped down** to [`SERVER_MAX_GROUPS_CEILING`]. The query can lower
+    /// the limit but can never raise the server-side memory ceiling above it.
     pub(super) fn extract_max_groups_limit(
         with_clause: Option<&crate::velesql::WithClause>,
     ) -> usize {
-        /// Default maximum number of groups allowed (memory protection).
-        const DEFAULT_MAX_GROUPS: usize = 10000;
-
         let Some(with) = with_clause else {
             return DEFAULT_MAX_GROUPS;
         };
@@ -190,9 +203,10 @@ impl Collection {
             if opt.key == "max_groups" || opt.key == "group_limit" {
                 // Try to parse value as integer
                 if let crate::velesql::WithValue::Integer(n) = &opt.value {
-                    // Ensure positive and reasonable limit
+                    // Ensure positive, then clamp to the server-side ceiling.
+                    // The query CANNOT raise the limit above SERVER_MAX_GROUPS_CEILING.
                     let limit = (*n).max(1) as usize;
-                    return limit.min(1_000_000); // Hard cap at 1M groups
+                    return limit.min(SERVER_MAX_GROUPS_CEILING);
                 }
             }
         }

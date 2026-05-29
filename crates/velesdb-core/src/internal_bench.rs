@@ -80,7 +80,10 @@ pub fn sparse_insert_batch(index: &SparseInvertedIndex, docs: &[(u64, SparseVect
 }
 
 /// Parses a query through the cache without recording stats.
-pub fn velesql_parse_without_stats(cache: &QueryCache, query: &str) -> Result<Query, ParseError> {
+pub fn velesql_parse_without_stats(
+    cache: &QueryCache,
+    query: &str,
+) -> Result<std::sync::Arc<Query>, ParseError> {
     cache.parse_without_stats(query)
 }
 

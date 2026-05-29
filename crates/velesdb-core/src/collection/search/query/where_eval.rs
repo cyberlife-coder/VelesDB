@@ -9,10 +9,18 @@ use crate::point::SearchResult;
 use crate::velesql::{CompareOp, Condition, GraphMatchPredicate};
 use std::collections::HashSet;
 
-/// Cache for graph predicate anchor sets during a single query execution.
+/// Per-query evaluation cache shared across all result rows.
+///
+/// Holds graph-predicate anchor sets and (#904) the `Filter` built for each
+/// metadata-leaf condition node, so neither is recomputed per row.
 #[derive(Default)]
 pub(crate) struct GraphMatchEvalCache {
     entries: Vec<(GraphMatchPredicate, HashSet<u64>)>,
+    /// #904: cached `Filter`s for metadata-leaf conditions, keyed by the leaf
+    /// node's pointer address. The borrowed condition AST is the *same* across
+    /// every row of a single evaluation, so pointer identity is a stable key
+    /// and lets us build each leaf `Filter` exactly once instead of per row.
+    filters: Vec<(usize, crate::filter::Filter)>,
 }
 
 impl GraphMatchEvalCache {
@@ -31,6 +39,25 @@ impl GraphMatchEvalCache {
         self.entries.push((predicate.clone(), ids));
         let idx = self.entries.len() - 1;
         Ok(&self.entries[idx].1)
+    }
+
+    /// Returns the cached `Filter` for a metadata-leaf `condition`, building it
+    /// once on first use (#904).
+    fn metadata_filter(&mut self, condition: &Condition) -> &crate::filter::Filter {
+        let key = std::ptr::from_ref(condition) as usize;
+        if let Some(idx) = self.filters.iter().position(|(k, _)| *k == key) {
+            return &self.filters[idx].1;
+        }
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(condition.clone()));
+        self.filters.push((key, filter));
+        let idx = self.filters.len() - 1;
+        &self.filters[idx].1
+    }
+
+    /// Test seam (#904): number of distinct metadata-leaf `Filter`s built.
+    #[cfg(test)]
+    pub(crate) fn filters_built(&self) -> usize {
+        self.filters.len()
     }
 }
 
@@ -165,7 +192,12 @@ impl Collection {
             Condition::Group(inner) => self.eval_condition(inner, ctx, graph_cache),
             Condition::Similarity(sim) => self.evaluate_similarity(sim, ctx.vector, ctx.params),
             Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => Ok(true),
-            other => Ok(Self::evaluate_metadata_filter(other, ctx.payload)),
+            // #904: reuse the per-query cached `Filter` for this metadata leaf
+            // instead of rebuilding it (and cloning the AST) on every row.
+            other => {
+                let filter = graph_cache.metadata_filter(other);
+                Ok(Self::payload_passes_filter(filter, ctx.payload))
+            }
         }
     }
 
@@ -248,24 +280,63 @@ impl Collection {
             }
         }
     }
-
-    /// Evaluates a metadata-only condition via the filter engine.
-    fn evaluate_metadata_filter(
-        condition: &Condition,
-        payload: Option<&serde_json::Value>,
-    ) -> bool {
-        let filter = crate::filter::Filter::new(crate::filter::Condition::from(condition.clone()));
-        match payload {
-            Some(p) => filter.matches(p),
-            None => filter.matches(&serde_json::Value::Null),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::velesql::{CompareOp, Comparison, Value};
+
+    /// #904: the metadata `Filter` for a leaf condition is built **once** and
+    /// reused across repeated evaluations of the same AST node (one per result
+    /// row), instead of rebuilding + cloning per row. Results are unchanged.
+    #[test]
+    fn test_metadata_filter_built_once_per_leaf() {
+        let cond = Condition::Comparison(Comparison {
+            column: "status".to_string(),
+            operator: CompareOp::Eq,
+            value: Value::String("active".to_string()),
+        });
+
+        let mut cache = GraphMatchEvalCache::default();
+        let active = serde_json::json!({"status": "active"});
+        let inactive = serde_json::json!({"status": "inactive"});
+
+        // Evaluate the SAME borrowed node many times (simulates N result rows).
+        for _ in 0..100 {
+            let f = cache.metadata_filter(&cond);
+            assert!(f.matches(&active));
+            assert!(!f.matches(&inactive));
+        }
+
+        assert_eq!(
+            cache.filters_built(),
+            1,
+            "metadata Filter must be built exactly once, not per row"
+        );
+    }
+
+    /// #904: distinct leaf nodes each get their own cached `Filter`.
+    #[test]
+    fn test_metadata_filter_distinct_leaves_cached_separately() {
+        let cond_a = Condition::Comparison(Comparison {
+            column: "a".to_string(),
+            operator: CompareOp::Eq,
+            value: Value::Integer(1),
+        });
+        let cond_b = Condition::Comparison(Comparison {
+            column: "b".to_string(),
+            operator: CompareOp::Eq,
+            value: Value::Integer(2),
+        });
+
+        let mut cache = GraphMatchEvalCache::default();
+        let _ = cache.metadata_filter(&cond_a);
+        let _ = cache.metadata_filter(&cond_b);
+        let _ = cache.metadata_filter(&cond_a);
+
+        assert_eq!(cache.filters_built(), 2);
+    }
 
     #[test]
     fn test_condition_contains_or_detects_nested_or() {

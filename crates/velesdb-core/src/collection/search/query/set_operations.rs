@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::point::SearchResult;
 use crate::velesql::SetOperator;
 
-/// Applies a set operator to two result sets.
+/// Applies a set operator to two result sets, bounding the output at `limit`.
 ///
 /// Scoring rules per operator:
 /// - **Union**: deduplicate by point ID, keep highest score.
@@ -16,11 +16,16 @@ use crate::velesql::SetOperator;
 /// - **Intersect**: keep only IDs present in both; take the higher score.
 /// - **Except**: keep left-side IDs that do not appear in the right side.
 ///
-/// Results are returned sorted by score descending.
+/// Results are returned sorted by score descending and truncated to `limit`.
+/// Because the final result is score-ranked then capped, only the top `limit`
+/// rows are ever observable — so truncating here drops nothing within the
+/// requested window. Operands are expected to already be capped by the caller
+/// (`MAX_LIMIT`), which bounds buffering on the smaller-side scan for INTERSECT.
 pub(crate) fn apply_set_operation(
     left: Vec<SearchResult>,
     right: Vec<SearchResult>,
     operator: SetOperator,
+    limit: usize,
 ) -> Vec<SearchResult> {
     let mut results = match operator {
         SetOperator::Union => union_dedup(left, right),
@@ -35,6 +40,7 @@ pub(crate) fn apply_set_operation(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    results.truncate(limit);
     results
 }
 
@@ -47,13 +53,16 @@ fn union_dedup(left: Vec<SearchResult>, right: Vec<SearchResult>) -> Vec<SearchR
     }
 
     for result in right {
-        map.entry(result.point.id)
-            .and_modify(|existing| {
-                if result.score > existing.score {
-                    *existing = result.clone();
+        match map.entry(result.point.id) {
+            std::collections::hash_map::Entry::Occupied(mut existing) => {
+                if result.score > existing.get().score {
+                    existing.insert(result);
                 }
-            })
-            .or_insert(result);
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(result);
+            }
+        }
     }
 
     map.into_values().collect()
@@ -92,6 +101,9 @@ mod tests {
     use super::*;
     use crate::point::{Point, SearchResult};
 
+    /// Large bound used by tests that assert full (untruncated) set-op output.
+    const TEST_LIMIT: usize = 100_000;
+
     fn make_result(id: u64, score: f32) -> SearchResult {
         SearchResult::new(Point::new(id, vec![0.0; 3], None), score)
     }
@@ -101,7 +113,7 @@ mod tests {
         let left = vec![make_result(1, 0.9), make_result(2, 0.5)];
         let right = vec![make_result(2, 0.8), make_result(3, 0.7)];
 
-        let results = apply_set_operation(left, right, SetOperator::Union);
+        let results = apply_set_operation(left, right, SetOperator::Union, TEST_LIMIT);
 
         assert_eq!(results.len(), 3);
         let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
@@ -119,7 +131,7 @@ mod tests {
         let left = vec![make_result(1, 0.9), make_result(2, 0.5)];
         let right = vec![make_result(2, 0.8), make_result(3, 0.7)];
 
-        let results = apply_set_operation(left, right, SetOperator::UnionAll);
+        let results = apply_set_operation(left, right, SetOperator::UnionAll, TEST_LIMIT);
 
         assert_eq!(results.len(), 4);
     }
@@ -129,7 +141,7 @@ mod tests {
         let left = vec![make_result(1, 0.9), make_result(2, 0.5)];
         let right = vec![make_result(2, 0.8), make_result(3, 0.7)];
 
-        let results = apply_set_operation(left, right, SetOperator::Intersect);
+        let results = apply_set_operation(left, right, SetOperator::Intersect, TEST_LIMIT);
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].point.id, 2);
@@ -142,7 +154,7 @@ mod tests {
         let left = vec![make_result(1, 0.9), make_result(2, 0.5)];
         let right = vec![make_result(2, 0.8), make_result(3, 0.7)];
 
-        let results = apply_set_operation(left, right, SetOperator::Except);
+        let results = apply_set_operation(left, right, SetOperator::Except, TEST_LIMIT);
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].point.id, 1);
@@ -153,7 +165,7 @@ mod tests {
         let left = vec![make_result(1, 0.3), make_result(2, 0.9)];
         let right = vec![make_result(3, 0.6)];
 
-        let results = apply_set_operation(left, right, SetOperator::UnionAll);
+        let results = apply_set_operation(left, right, SetOperator::UnionAll, TEST_LIMIT);
 
         let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
         for window in scores.windows(2) {
@@ -167,15 +179,70 @@ mod tests {
         let non_empty = vec![make_result(1, 0.5)];
 
         // UNION with empty left.
-        let r = apply_set_operation(Vec::new(), non_empty.clone(), SetOperator::Union);
+        let r = apply_set_operation(
+            Vec::new(),
+            non_empty.clone(),
+            SetOperator::Union,
+            TEST_LIMIT,
+        );
         assert_eq!(r.len(), 1);
 
         // INTERSECT with empty left.
-        let r = apply_set_operation(Vec::new(), non_empty.clone(), SetOperator::Intersect);
+        let r = apply_set_operation(
+            Vec::new(),
+            non_empty.clone(),
+            SetOperator::Intersect,
+            TEST_LIMIT,
+        );
         assert!(r.is_empty());
 
         // EXCEPT with empty right.
-        let r = apply_set_operation(non_empty, empty, SetOperator::Except);
+        let r = apply_set_operation(non_empty, empty, SetOperator::Except, TEST_LIMIT);
         assert_eq!(r.len(), 1);
+    }
+
+    /// Builds a result whose score equals its (small) id, avoiding lossy casts.
+    fn scored(id: u16) -> SearchResult {
+        make_result(u64::from(id), f32::from(id))
+    }
+
+    /// #901: UNION bounded by `limit` keeps the top-scoring rows and truncates.
+    #[test]
+    fn test_union_respects_limit() {
+        let left: Vec<SearchResult> = (1..=100).map(scored).collect();
+        let right: Vec<SearchResult> = (101..=200).map(scored).collect();
+
+        let results = apply_set_operation(left, right, SetOperator::Union, 5);
+
+        // Bounded to 5, and those 5 are the highest scores (196..=200).
+        assert_eq!(results.len(), 5);
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        assert_eq!(ids, vec![200, 199, 198, 197, 196]);
+    }
+
+    /// #901: INTERSECT bounded by `limit` keeps the highest-scoring common rows.
+    #[test]
+    fn test_intersect_respects_limit() {
+        // 0..=99 common to both sides; left scores ascending so common = all 100.
+        let left: Vec<SearchResult> = (0u16..100).map(scored).collect();
+        let right: Vec<SearchResult> = (0u16..100)
+            .map(|i| make_result(u64::from(i), 0.0))
+            .collect();
+
+        let results = apply_set_operation(left, right, SetOperator::Intersect, 3);
+
+        assert_eq!(results.len(), 3);
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        assert_eq!(ids, vec![99, 98, 97]);
+    }
+
+    /// #901: a limit larger than the result set is a no-op (no rows dropped).
+    #[test]
+    fn test_limit_larger_than_results_is_noop() {
+        let left = vec![make_result(1, 0.9), make_result(2, 0.5)];
+        let right = vec![make_result(3, 0.7)];
+
+        let results = apply_set_operation(left, right, SetOperator::Union, 100);
+        assert_eq!(results.len(), 3);
     }
 }

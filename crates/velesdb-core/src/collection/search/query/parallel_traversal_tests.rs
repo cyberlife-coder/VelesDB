@@ -456,3 +456,215 @@ fn test_sharded_traverser_num_shards() {
     let traverser = ShardedTraverser::new(8);
     assert_eq!(traverser.num_shards(), 8);
 }
+
+// ============================================================================
+// #901 follow-up: bounded frontier expansion over wide graphs.
+// ============================================================================
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Two-level wide graph: root has `fan_out` level-1 neighbors, and each level-1
+/// node has one level-2 neighbor. `adjacency_calls` records how many distinct
+/// nodes are expanded, which is the observable seam: bounded expansion stops
+/// pushing the whole level into the next frontier, so far fewer level-1 nodes
+/// get their neighbors queried.
+fn counting_wide_graph(
+    fan_out: u64,
+    adjacency_calls: &AtomicUsize,
+) -> impl Fn(u64) -> Vec<(u64, u64)> + '_ {
+    move |node: u64| -> Vec<(u64, u64)> {
+        adjacency_calls.fetch_add(1, Ordering::Relaxed);
+        if node == 1 {
+            // Level 1: fan_out neighbors (ids 1_000..).
+            (0..fan_out).map(|i| (1_000 + i, 10_000 + i)).collect()
+        } else if (1_000..1_000 + fan_out).contains(&node) {
+            // Level 2: each level-1 node points to a unique deeper node.
+            vec![(node + 100_000, node + 200_000)]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+#[test]
+fn test_frontier_bfs_bounds_wide_level() {
+    // Root with 50_000 neighbors; a limit of 10 must not expand the full level
+    // nor query level-2 neighbors for all 50_000 frontier nodes.
+    let calls = AtomicUsize::new(0);
+    let bfs = FrontierParallelBFS::with_config(
+        ParallelConfig::new()
+            .with_max_depth(3)
+            .with_min_frontier(1)
+            .with_limit(10),
+    );
+
+    let (results, _) = bfs.traverse(1, counting_wide_graph(50_000, &calls));
+
+    // Exactly `limit` results (start node + 9 neighbors), correctly bounded.
+    assert_eq!(results.len(), 10);
+    // Bounded expansion: only the root plus a handful of frontier nodes are
+    // expanded, never all 50_000.
+    assert!(
+        calls.load(Ordering::Relaxed) < 1_000,
+        "expanded too many nodes: {}",
+        calls.load(Ordering::Relaxed)
+    );
+}
+
+#[test]
+fn test_traverse_single_bounds_high_fanout_node() {
+    // A single high-fan-out node: the per-node neighbor loop must break at the
+    // limit instead of pushing all 50_000 neighbors into results in one step.
+    let calls = AtomicUsize::new(0);
+    let traverser = ParallelTraverser::with_config(
+        ParallelConfig::new()
+            .with_max_depth(3)
+            .with_parallel_threshold(100) // sequential single start
+            .with_limit(8),
+    );
+
+    let (results, _) = traverser.bfs_parallel(&[1], counting_wide_graph(50_000, &calls));
+
+    // Result count is bounded -- without the inner-loop break this would be ~50_000.
+    assert_eq!(results.len(), 8);
+}
+
+#[test]
+fn test_sharded_bounds_wide_level() {
+    let calls = AtomicUsize::new(0);
+    let traverser =
+        ShardedTraverser::with_config(4, ParallelConfig::new().with_max_depth(3).with_limit(12));
+
+    let (results, _) = traverser.traverse_parallel(&[1], counting_wide_graph(50_000, &calls));
+
+    assert!(results.len() <= 12, "sharded result exceeded limit");
+    // Each shard caps emission at the remaining budget, so the next frontier --
+    // and thus the number of expanded nodes -- stays far below 50_000.
+    assert!(
+        calls.load(Ordering::Relaxed) < 1_000,
+        "expanded too many nodes: {}",
+        calls.load(Ordering::Relaxed)
+    );
+}
+
+#[test]
+fn test_frontier_bfs_unbounded_matches_full_graph() {
+    // Regression guard: a non-pathological graph still returns the full result.
+    let graph = create_test_graph();
+    let bfs =
+        FrontierParallelBFS::with_config(ParallelConfig::new().with_max_depth(5).with_limit(1000));
+    let get_neighbors =
+        |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
+
+    let (results, _) = bfs.traverse(1, get_neighbors);
+    assert_eq!(results.len(), 6);
+}
+
+/// Cross-edged graph where near-limit candidates are already visited.
+///
+/// `1 -> {2, 3}`; nodes `2` and `3` each emit BACK-edges to the already-visited
+/// `{1, 2, 3}` first, then forward-edges to fresh nodes `{4, 5, 6, 7}`. With a
+/// small limit, the pre-#901-followup cap counted raw candidates: the first
+/// `remaining` candidates were the already-visited back-edges, deduping to zero
+/// new nodes and under-filling. The cap must count NEW unique nodes instead.
+fn back_edge_graph() -> HashMap<u64, Vec<(u64, u64)>> {
+    let mut graph = HashMap::new();
+    graph.insert(1, vec![(2, 12), (3, 13)]);
+    // Back-edges (to visited 1/2/3) precede forward-edges (to fresh 4..7).
+    graph.insert(2, vec![(1, 21), (3, 23), (2, 22), (4, 24), (5, 25)]);
+    graph.insert(3, vec![(1, 31), (2, 32), (3, 33), (6, 36), (7, 37)]);
+    graph.insert(4, vec![]);
+    graph.insert(5, vec![]);
+    graph.insert(6, vec![]);
+    graph.insert(7, vec![]);
+    graph
+}
+
+#[test]
+fn test_frontier_bfs_back_edges_fill_to_limit() {
+    // 7 unique nodes are reachable; limit 5 must return EXACTLY 5, not fewer,
+    // even though the first level-2 candidates are all already-visited.
+    let graph = back_edge_graph();
+    let bfs = FrontierParallelBFS::with_config(
+        ParallelConfig::new()
+            .with_max_depth(5)
+            .with_min_frontier(1)
+            .with_limit(5),
+    );
+    let get_neighbors =
+        |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
+
+    let (results, _) = bfs.traverse(1, get_neighbors);
+    assert_eq!(
+        results.len(),
+        5,
+        "frontier BFS under-filled below the limit"
+    );
+}
+
+#[test]
+fn test_frontier_bfs_back_edges_deterministic_count() {
+    // The parallel frontier path must return a consistent count across runs.
+    let graph = back_edge_graph();
+    let get_neighbors =
+        |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
+    let mut counts = std::collections::HashSet::new();
+    for _ in 0..32 {
+        let bfs = FrontierParallelBFS::with_config(
+            ParallelConfig::new()
+                .with_max_depth(5)
+                .with_min_frontier(1)
+                .with_limit(5),
+        );
+        let (results, _) = bfs.traverse(1, get_neighbors);
+        counts.insert(results.len());
+    }
+    assert_eq!(counts, std::collections::HashSet::from([5]));
+}
+
+#[test]
+fn test_sharded_back_edges_fill_to_limit() {
+    // Same back-edge graph through the sharded path: a shard whose first
+    // candidates are already-visited must not stop before surfacing fresh nodes.
+    let graph = back_edge_graph();
+    let traverser =
+        ShardedTraverser::with_config(4, ParallelConfig::new().with_max_depth(5).with_limit(5));
+    let get_neighbors =
+        |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
+
+    let (results, _) = traverser.traverse_parallel(&[1], get_neighbors);
+    assert_eq!(
+        results.len(),
+        5,
+        "sharded traversal under-filled below the limit"
+    );
+}
+
+#[test]
+fn test_sharded_back_edges_deterministic_count() {
+    // The sharded parallel path must return a consistent count across runs.
+    let graph = back_edge_graph();
+    let get_neighbors =
+        |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
+    let mut counts = std::collections::HashSet::new();
+    for _ in 0..32 {
+        let traverser =
+            ShardedTraverser::with_config(4, ParallelConfig::new().with_max_depth(5).with_limit(5));
+        let (results, _) = traverser.traverse_parallel(&[1], get_neighbors);
+        counts.insert(results.len());
+    }
+    assert_eq!(counts, std::collections::HashSet::from([5]));
+}
+
+#[test]
+fn test_sharded_unbounded_matches_full_graph() {
+    // Regression guard: a non-pathological graph still returns the full result.
+    let graph = create_test_graph();
+    let traverser =
+        ShardedTraverser::with_config(4, ParallelConfig::new().with_max_depth(5).with_limit(1000));
+    let get_neighbors =
+        |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
+
+    let (results, _) = traverser.traverse_parallel(&[1], get_neighbors);
+    assert_eq!(results.len(), 6);
+}

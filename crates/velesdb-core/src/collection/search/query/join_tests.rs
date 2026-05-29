@@ -6,6 +6,9 @@ use crate::point::Point;
 use crate::point::SearchResult;
 use crate::velesql::{ColumnRef, JoinClause, JoinCondition};
 
+/// Effectively unbounded row budget for tests asserting full (unbounded) output.
+const NO_LIMIT: usize = usize::MAX;
+
 fn make_search_result(id: u64, payload_id: i64) -> SearchResult {
     SearchResult::new(
         Point {
@@ -131,7 +134,7 @@ fn test_execute_join_basic() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store).unwrap();
+    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
 
     assert_eq!(joined.len(), 3);
     assert!(joined[0].column_data.contains_key("price"));
@@ -154,7 +157,7 @@ fn test_execute_join_inner_skips_missing() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store).unwrap();
+    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 2);
 }
 
@@ -164,7 +167,7 @@ fn test_joined_to_search_results() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store).unwrap();
+    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
     let search_results = joined_to_search_results(joined);
 
     assert_eq!(search_results.len(), 1);
@@ -291,7 +294,7 @@ fn test_execute_join_validates_pk_column() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &wrong_join, &column_store);
+    let joined = execute_join(&results, &wrong_join, &column_store, NO_LIMIT);
     assert!(
         joined.is_err(),
         "JOIN on non-PK column must return an error"
@@ -320,7 +323,7 @@ fn test_execute_join_correct_pk_column_works() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &correct_join, &column_store).unwrap();
+    let joined = execute_join(&results, &correct_join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 1);
 }
 
@@ -341,7 +344,7 @@ fn test_execute_join_using_single_column_supported() {
         using_columns: Some(vec!["product_id".to_string()]),
     };
 
-    let joined = execute_join(&results, &using_join, &column_store).unwrap();
+    let joined = execute_join(&results, &using_join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 2);
     assert!(joined[0].column_data.contains_key("price"));
 }
@@ -362,7 +365,7 @@ fn test_execute_join_using_rejects_multi_column() {
         using_columns: Some(vec!["product_id".to_string(), "region_id".to_string()]),
     };
 
-    let joined = execute_join(&results, &using_join, &column_store);
+    let joined = execute_join(&results, &using_join, &column_store, NO_LIMIT);
     assert!(
         joined.is_err(),
         "USING with multiple columns must return an error"
@@ -390,7 +393,7 @@ fn test_execute_left_join_keeps_unmatched_left_rows() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &join, &column_store).unwrap();
+    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 2);
     assert!(joined[0].column_data.contains_key("price"));
     assert_eq!(
@@ -420,7 +423,7 @@ fn test_execute_right_join_includes_unmatched_right_rows() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &join, &column_store).unwrap();
+    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 3);
 }
 
@@ -445,11 +448,102 @@ fn test_execute_full_join_combines_left_and_right_unmatched() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &join, &column_store).unwrap();
+    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 4);
     let null_join_count = joined
         .iter()
         .filter(|row| row.column_data.get("price") == Some(&serde_json::Value::Null))
         .count();
     assert_eq!(null_join_count, 1);
+}
+
+/// Builds a ColumnStore with `n` rows keyed `1..=n` on `product_id`.
+fn make_large_column_store(n: i64) -> ColumnStore {
+    let mut store = ColumnStore::with_primary_key(
+        &[
+            ("product_id", ColumnType::Int),
+            ("price", ColumnType::Float),
+        ],
+        "product_id",
+    )
+    .unwrap();
+    for pk in 1..=n {
+        store
+            .insert_row(&[
+                ("product_id", ColumnValue::Int(pk)),
+                ("price", ColumnValue::Float(9.99)),
+            ])
+            .unwrap();
+    }
+    store
+}
+
+/// #901: a RIGHT JOIN with a small budget over a large right side must stop at
+/// the budget instead of materializing one joined row per live ColumnStore row.
+#[test]
+fn test_execute_right_join_respects_row_budget() {
+    // 10_000 right-side rows, only one matches the single left result.
+    let results = vec![make_search_result(1, 1)];
+    let column_store = make_large_column_store(10_000);
+    let join = JoinClause {
+        join_type: crate::velesql::JoinType::Right,
+        table: "prices".to_string(),
+        alias: None,
+        condition: Some(JoinCondition {
+            left: ColumnRef {
+                table: Some("prices".to_string()),
+                column: "product_id".to_string(),
+            },
+            right: ColumnRef {
+                table: Some("products".to_string()),
+                column: "id".to_string(),
+            },
+        }),
+        using_columns: None,
+    };
+
+    // Budget 5: 1 matched row + 4 unmatched-right rows, NOT all 10_000.
+    let joined = execute_join(&results, &join, &column_store, 5).unwrap();
+    assert_eq!(joined.len(), 5, "RIGHT join must stop at the row budget");
+
+    // The matched row (pk=1) is emitted first.
+    assert_eq!(joined[0].search_result.point.id, 1);
+    assert!(joined[0].column_data.contains_key("price"));
+
+    // Unbounded run returns every right row (regression guard on correctness).
+    let full = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
+    assert_eq!(full.len(), 10_000);
+}
+
+/// #901: a LEFT JOIN with a small budget over a large left side stops at the
+/// budget while still emitting matched rows first.
+#[test]
+fn test_execute_left_join_respects_row_budget() {
+    // 50 left results, none match the 3-row store -> all become unmatched-left.
+    let results: Vec<SearchResult> = (1u64..=50)
+        .map(|i| make_search_result(i, 9_000 + i64::try_from(i).unwrap_or(0)))
+        .collect();
+    let column_store = make_column_store();
+    let join = JoinClause {
+        join_type: crate::velesql::JoinType::Left,
+        table: "prices".to_string(),
+        alias: None,
+        condition: Some(JoinCondition {
+            left: ColumnRef {
+                table: Some("prices".to_string()),
+                column: "product_id".to_string(),
+            },
+            right: ColumnRef {
+                table: Some("products".to_string()),
+                column: "id".to_string(),
+            },
+        }),
+        using_columns: None,
+    };
+
+    let joined = execute_join(&results, &join, &column_store, 7).unwrap();
+    assert_eq!(joined.len(), 7, "LEFT join must stop at the row budget");
+
+    let full = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
+    assert_eq!(full.len(), 50);
 }
