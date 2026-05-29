@@ -49,7 +49,7 @@ pub struct QueryResultRow {
     pub data_json: String,
 }
 
-/// Result of executing a VelesQL query via [`VelesDatabase::execute_query`].
+/// Result of executing a VelesQL query via [`crate::VelesDatabase::execute_query`].
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct QueryResult {
     /// What kind of statement produced this result.
