@@ -180,6 +180,12 @@ mod tests {
         }
     }
 
+    impl crate::storage::wal_batcher::WalSink for FailWriter {
+        fn sync(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("simulated sync failure"))
+        }
+    }
+
     #[test]
     fn disabled_mode_propagates_write_error() {
         let batcher = WalBatcher::new(WalBatchConfig::default());
@@ -201,5 +207,39 @@ mod tests {
         // Second entry triggers flush -> writer error
         let result = batcher.submit(b"b", &mut writer);
         assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // #898: group commit fsyncs the batch on flush (file-backed sink)
+    // ========================================================================
+
+    #[test]
+    fn flush_syncs_and_persists_to_file() {
+        use std::io::Read;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("batch.wal");
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open wal");
+
+        let batcher = WalBatcher::new(enabled_config(128));
+        batcher.submit(b"alpha", &mut file).expect("submit");
+        batcher.submit(b"beta", &mut file).expect("submit");
+        // Explicit flush triggers write_all + flush + sync_all (fsync).
+        batcher.flush(&mut file).expect("flush");
+
+        // Re-read the file from a fresh handle: the bytes are durably on disk.
+        let mut on_disk = Vec::new();
+        std::fs::File::open(&path)
+            .expect("reopen")
+            .read_to_end(&mut on_disk)
+            .expect("read");
+        assert_eq!(on_disk, b"alphabeta");
+        assert_eq!(batcher.pending_count(), 0);
     }
 }

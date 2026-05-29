@@ -855,3 +855,69 @@ fn test_crc_entries_survive_snapshot_cycle() {
     let val = storage.retrieve(10).expect("retrieve").expect("exists");
     assert_eq!(val["id"], 10);
 }
+
+// ===========================================================================
+// #898 / #897: OOM caps on untrusted WAL/payload lengths
+// ===========================================================================
+
+#[test]
+fn test_898_replay_rejects_oversized_payload_length_no_huge_alloc() {
+    // Legacy store entry whose declared length is 4 GiB but with no payload:
+    // replay must reject it (not allocate 4 GiB), without panicking.
+    let mut wal = vec![1u8];
+    wal.extend_from_slice(&1u64.to_le_bytes());
+    wal.extend_from_slice(&u32::MAX.to_le_bytes()); // bogus 4 GiB length
+                                                    // no payload bytes follow
+
+    let result = open_storage_with_wal(&wal);
+    assert!(
+        result.is_err(),
+        "oversized declared payload length must be rejected as corrupt"
+    );
+}
+
+#[test]
+fn test_898_replay_rejects_oversized_crc_payload_no_huge_alloc() {
+    // CRC-framed store entry declaring an impossibly large payload length.
+    let mut wal = Vec::new();
+    wal.push(0xC3u8);
+    wal.extend_from_slice(&1u64.to_le_bytes());
+    wal.extend_from_slice(&u32::MAX.to_le_bytes());
+    // no payload / crc follow
+
+    let result = open_storage_with_wal(&wal);
+    assert!(
+        result.is_err(),
+        "oversized CRC payload length must be rejected before allocation"
+    );
+}
+
+#[test]
+fn test_898_retrieve_rejects_corrupt_length_field() {
+    // Defense-in-depth: retrieve() must reject a corrupt on-disk length field
+    // (larger than the file) instead of allocating an unbounded buffer.
+    //
+    // A snapshot is taken so that on reopen the index is loaded from the
+    // snapshot and WAL replay starts past the record — exercising the retrieve
+    // path (not the replay cap) against the corrupted length field.
+    let temp = TempDir::new().expect("temp dir");
+    {
+        let mut storage = LogPayloadStorage::new(temp.path()).expect("create");
+        storage.store(1, &json!({"k": "v"})).expect("store");
+        storage.create_snapshot().expect("snapshot");
+    }
+
+    // Corrupt the length field of the single record. The index stores the
+    // offset of the length field (record_start + 9 = marker(1)+id(8)).
+    let log_path = temp.path().join("payloads.log");
+    let mut bytes = fs::read(&log_path).expect("read log");
+    bytes[9..13].copy_from_slice(&u32::MAX.to_le_bytes());
+    fs::write(&log_path, &bytes).expect("write log");
+
+    let storage = LogPayloadStorage::new(temp.path()).expect("reopen from snapshot");
+    let result = storage.retrieve(1);
+    assert!(
+        result.is_err(),
+        "retrieve must reject a length field larger than the file"
+    );
+}

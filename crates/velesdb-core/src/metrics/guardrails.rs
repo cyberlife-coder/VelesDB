@@ -154,6 +154,8 @@ pub struct GuardRailsMetrics {
     pub invalid_offset_read_errors: AtomicU64,
     /// Query-cache collision fallback counter (reserved for hash-keyed implementations)
     pub cache_collision_fallback_total: AtomicU64,
+    /// Mid-stream corrupt WAL entries skipped during replay (#898)
+    pub wal_replay_corrupt_entries: AtomicU64,
 }
 
 impl GuardRailsMetrics {
@@ -205,6 +207,12 @@ impl GuardRailsMetrics {
     /// Records a cache collision fallback event.
     pub fn record_cache_collision_fallback(&self) {
         self.cache_collision_fallback_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a mid-stream corrupt WAL entry skipped during replay (#898).
+    pub fn record_wal_replay_corrupt_entry(&self) {
+        self.wal_replay_corrupt_entries
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -329,6 +337,20 @@ impl GuardRailsMetrics {
             output,
             "velesdb_cache_collision_fallback_total {}",
             self.cache_collision_fallback_total.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_wal_replay_corrupt_entries_total Mid-stream corrupt WAL entries skipped during replay"
+        );
+        let _ = writeln!(
+            output,
+            "# TYPE velesdb_wal_replay_corrupt_entries_total counter"
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_wal_replay_corrupt_entries_total {}",
+            self.wal_replay_corrupt_entries.load(Ordering::Relaxed)
         );
     }
 }

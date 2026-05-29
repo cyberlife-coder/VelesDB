@@ -141,10 +141,18 @@ impl MmapStorage {
         let wal = Self::open_wal(&wal_path)?;
 
         let index_path = path.join("vectors.idx");
-        let (index, next_offset) = Self::load_index(&index_path, dimension)?;
+        let data_len = data_file.metadata()?.len();
+        let (index, next_offset) = Self::load_index(&index_path, dimension, data_len)?;
 
-        let (mmap, next_offset) =
-            Self::replay_wal(mmap, next_offset, &wal_path, &index, dimension)?;
+        let (mmap, next_offset) = Self::replay_wal(
+            mmap,
+            next_offset,
+            &wal_path,
+            &index_path,
+            &index,
+            dimension,
+            &data_file,
+        )?;
 
         Ok(Self {
             path,
@@ -214,7 +222,16 @@ impl MmapStorage {
     }
 
     /// Loads the sharded index from disk, returning the index and the next write offset.
-    fn load_index(index_path: &Path, dimension: usize) -> io::Result<(ShardedIndex, usize)> {
+    ///
+    /// Validates every persisted offset against the backing file size (#898):
+    /// a corrupt index entry whose `offset + vector_size` overflows or exceeds
+    /// `data_len` would otherwise yield out-of-bounds reads or an inflated
+    /// `next_offset`. Such an index is rejected as corrupt.
+    fn load_index(
+        index_path: &Path,
+        dimension: usize,
+        data_len: u64,
+    ) -> io::Result<(ShardedIndex, usize)> {
         if !index_path.exists() {
             return Ok((ShardedIndex::new(), 0));
         }
@@ -223,35 +240,83 @@ impl MmapStorage {
         let flat_index: FxHashMap<u64, usize> = postcard::from_bytes(&bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        let max_offset = flat_index.values().max().copied().unwrap_or(0);
-        let size = if flat_index.is_empty() {
-            0
-        } else {
-            max_offset + dimension * 4
-        };
+        let vector_size = dimension * std::mem::size_of::<f32>();
+        let mut max_end = 0usize;
+        for &offset in flat_index.values() {
+            let end = offset.checked_add(vector_size).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "index offset arithmetic overflow",
+                )
+            })?;
+            let end_u64 = u64::try_from(end).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "index offset exceeds addressable range",
+                )
+            })?;
+            if end_u64 > data_len {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "index offset exceeds data file size",
+                ));
+            }
+            max_end = max_end.max(end);
+        }
 
-        Ok((ShardedIndex::from_hashmap(flat_index), size))
+        Ok((ShardedIndex::from_hashmap(flat_index), max_end))
     }
 
     /// Replays the WAL to recover writes since the last flush.
+    ///
+    /// Crash-safe ordering (#898): apply WAL entries → flush the recovered mmap
+    /// → persist `vectors.idx` → only then truncate the WAL. Truncating before
+    /// the mmap and index are durable would lose the replayed writes on a crash
+    /// in that window.
     fn replay_wal(
         mut mmap: MmapMut,
         mut next_offset: usize,
         wal_path: &Path,
+        index_path: &Path,
         index: &ShardedIndex,
         dimension: usize,
+        data_file: &File,
     ) -> io::Result<(MmapMut, usize)> {
         let replayed = wal_replay::replay_wal_to_index(
             wal_path,
             index,
             dimension,
             &mut mmap,
+            data_file,
             &mut next_offset,
         )?;
         if replayed > 0 {
+            // 1. Make the recovered vector bytes durable.
             mmap.flush()?;
+            // 2. Persist the rebuilt index so the recovered state survives even
+            //    after the WAL is cleared.
+            Self::persist_index_file(index_path, index)?;
+            // 3. Safe to clear the WAL now that mmap + index are durable.
+            wal_replay::truncate_wal(wal_path)?;
         }
         Ok((mmap, next_offset))
+    }
+
+    /// Serializes the sharded index to `index_path` with fsync.
+    ///
+    /// Shared by [`Self::flush_index`] and WAL replay recovery.
+    fn persist_index_file(index_path: &Path, index: &ShardedIndex) -> io::Result<()> {
+        let file = File::create(index_path)?;
+        let mut writer = io::BufWriter::new(file);
+        let flat_index = index.to_hashmap();
+        let bytes = postcard::to_allocvec(&flat_index).map_err(io::Error::other)?;
+        writer.write_all(&bytes)?;
+        writer.flush()?;
+        writer
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)?
+            .sync_all()?;
+        Ok(())
     }
 
     // ensure_capacity, reserve_capacity, compact, fragmentation_ratio are in mmap_capacity.rs
@@ -350,17 +415,7 @@ impl MmapStorage {
         // EPIC-033/US-004: Convert ShardedIndex to flat HashMap for serialization
         // EPIC-069/US-001: fsync index file for crash recovery on Windows
         let index_path = self.path.join("vectors.idx");
-        let file = File::create(&index_path)?;
-        let mut writer = io::BufWriter::new(file);
-        let flat_index = self.index.to_hashmap();
-        let bytes = postcard::to_allocvec(&flat_index).map_err(io::Error::other)?;
-        writer.write_all(&bytes)?;
-        writer.flush()?;
-        writer
-            .into_inner()
-            .map_err(std::io::IntoInnerError::into_error)?
-            .sync_all()?;
-        Ok(())
+        Self::persist_index_file(&index_path, &self.index)
     }
 
     /// Full durability flush: WAL + mmap + `vectors.idx`.

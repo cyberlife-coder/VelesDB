@@ -207,7 +207,23 @@ pub(crate) fn create_snapshot_file(
     }
     std::fs::rename(&temp_path, &snapshot_path)?;
 
+    // #898: fsync the parent directory so the rename itself is durable. Without
+    // this, a power loss after rename can leave the directory entry pointing at
+    // the old (or no) snapshot even though the file contents were fsynced.
+    sync_parent_dir(dir);
+
     Ok(())
+}
+
+/// Best-effort fsync of a directory so a preceding rename/create is durable.
+///
+/// Errors are intentionally ignored: not all platforms permit opening or
+/// syncing a directory handle, and the snapshot is still recoverable via WAL
+/// replay if the directory entry is lost.
+fn sync_parent_dir(dir: &Path) {
+    if let Ok(handle) = File::open(dir) {
+        let _ = handle.sync_all();
+    }
 }
 
 /// Returns whether a new snapshot should be created based on WAL growth.

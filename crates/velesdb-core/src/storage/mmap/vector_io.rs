@@ -34,15 +34,7 @@ fn write_wal_store_entry(
     data: &[u8],
     buf: &mut Vec<u8>,
 ) -> io::Result<()> {
-    buf.clear();
-    buf.push(1u8);
-    buf.extend_from_slice(&id.to_le_bytes());
-    // Reason: Vector byte length is dimension * 4. With max dimension 65536,
-    // max bytes = 262144 which fits in u32 (max 4,294,967,295).
-    #[allow(clippy::cast_possible_truncation)]
-    let len_u32 = data.len() as u32;
-    buf.extend_from_slice(&len_u32.to_le_bytes());
-    buf.extend_from_slice(data);
+    serialize_wal_store_entry(id, data, buf);
     let crc = crc32_hash(buf);
     wal.write_all(buf)?;
     wal.write_all(&crc.to_le_bytes())
@@ -137,32 +129,51 @@ impl VectorStorage for MmapStorage {
 
         let vector_bytes = vector_to_bytes(vector);
 
-        // 1. Write to WAL with CRC32 framing (Issue #317)
+        // 1. Write to WAL with CRC32 framing (Issue #317).
         // Issue #423: Skip WAL when DurabilityMode::None for bulk imports.
+        // #898: Honor DurabilityMode::Fsync on the single-store path — the
+        // entry must be durable on disk before this call returns Ok. Batched
+        // paths stay deferred and rely on `flush()` for their barrier.
         if self.durability != DurabilityMode::None {
             let mut wal = self.wal.write();
             let mut buf = Vec::with_capacity(1 + 8 + 4 + vector_bytes.len());
             write_wal_store_entry(&mut wal, id, vector_bytes, &mut buf)?;
+            if self.durability == DurabilityMode::Fsync {
+                wal.flush()?;
+                wal.get_ref().sync_all()?;
+            }
         }
 
         // 2. Determine offset (EPIC-033/US-004: Use sharded index)
         let vector_size = vector_bytes.len();
 
-        let (offset, is_new) = if let Some(existing_offset) = self.index.get(id) {
-            (existing_offset, false)
+        // #898 follow-up: validate the new offset with `checked_add` BEFORE
+        // committing the `fetch_add`. Previously the allocator was advanced
+        // first, so on the overflow error path `next_offset` was left
+        // advanced/wrapped — corrupting allocator state for subsequent stores.
+        // We reserve the slot only after the bounds check passes.
+        let (offset, end, is_new) = if let Some(existing_offset) = self.index.get(id) {
+            let end = existing_offset.checked_add(vector_size).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "store offset overflow")
+            })?;
+            (existing_offset, end, false)
         } else {
             // M-2: Use Acquire/AcqRel to ensure mmap writes are visible on ARM/RISC-V.
             let offset = self.next_offset.load(Ordering::Acquire);
-            self.next_offset.fetch_add(vector_size, Ordering::AcqRel);
-            (offset, true)
+            let end = offset.checked_add(vector_size).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "store offset overflow")
+            })?;
+            // Reserve only after validation: `end` is the new watermark.
+            self.next_offset.store(end, Ordering::Release);
+            (offset, end, true)
         };
 
         // Ensure capacity and write
-        self.ensure_capacity(offset + vector_size)?;
+        self.ensure_capacity(end)?;
 
         {
             let mut mmap = self.mmap.write();
-            mmap[offset..offset + vector_size].copy_from_slice(vector_bytes);
+            mmap[offset..end].copy_from_slice(vector_bytes);
         }
 
         // 3. Update Index if new (EPIC-033/US-004: Use sharded index)
@@ -248,12 +259,23 @@ impl VectorStorage for MmapStorage {
     }
 
     fn delete(&mut self, id: u64) -> io::Result<()> {
-        // 1. Write to WAL with CRC32 framing (Issue #317)
+        // 1. Write to WAL with CRC32 framing (Issue #317).
         // Issue #423 Component 4: Skip WAL when DurabilityMode::None.
+        // #898 follow-up: the delete intent MUST reach the WAL before the
+        // destructive `punch_hole` below. The hole-punch zeroes the on-disk
+        // bytes; if we crashed after punching but before the delete record was
+        // durable, replay would never see the delete and would re-insert the id
+        // pointing at now-zeroed data — resurrecting it as a zero vector. So we
+        // flush the BufWriter unconditionally (ordering correctness) and fsync
+        // under Fsync (durability ack), mirroring the single-store path.
         if self.durability != DurabilityMode::None {
             let mut wal = self.wal.write();
             let mut buf = Vec::with_capacity(1 + 8);
             write_wal_delete_entry(&mut wal, id, &mut buf)?;
+            wal.flush()?;
+            if self.durability == DurabilityMode::Fsync {
+                wal.get_ref().sync_all()?;
+            }
         }
 
         // 2. Get offset before removing from index (for hole-punch)
@@ -370,7 +392,10 @@ impl MmapStorage {
                 })?
             };
 
-            mmap[offset..offset + vector_size].copy_from_slice(vector_bytes);
+            let end = offset.checked_add(vector_size).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "batch store offset overflow")
+            })?;
+            mmap[offset..end].copy_from_slice(vector_bytes);
         }
 
         Ok(())

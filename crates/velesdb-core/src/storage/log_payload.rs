@@ -214,7 +214,7 @@ impl LogPayloadStorage {
             let Some(entry) = WalEntry::read(&mut reader_buf, pos)? else {
                 break;
             };
-            pos = entry.apply(&mut index, &mut reader_buf)?;
+            pos = entry.apply(&mut index, &mut reader_buf, end_pos)?;
         }
 
         Ok(index)
@@ -396,11 +396,26 @@ impl PayloadStorage for LogPayloadStorage {
         }
 
         let mut reader = self.reader.write(); // Need write lock to seek
+        let file_len = reader.metadata()?.len();
         reader.seek(SeekFrom::Start(offset))?;
 
         let mut len_bytes = [0u8; 4];
         reader.read_exact(&mut len_bytes)?;
-        let len = u32::from_le_bytes(len_bytes) as usize;
+        let declared = u64::from(u32::from_le_bytes(len_bytes));
+
+        // OOM guard (#897/#898): a corrupt length field must not drive an
+        // unbounded allocation. The payload cannot exceed the bytes remaining
+        // after the length field.
+        let pos_after_len = offset.saturating_add(4);
+        let remaining = file_len.saturating_sub(pos_after_len);
+        if declared > remaining {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "payload length exceeds file size",
+            ));
+        }
+        let len = usize::try_from(declared)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "payload length overflow"))?;
 
         let mut payload_bytes = vec![0u8; len];
         reader.read_exact(&mut payload_bytes)?;

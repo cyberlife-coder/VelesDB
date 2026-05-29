@@ -371,7 +371,23 @@ impl CompactionContext<'_> {
 
         let mut new_offset = 0usize;
         for (&id, &old_offset) in &old_index {
-            let src = &mmap[old_offset..old_offset + vector_size];
+            // #898: bounds-check the source slice against the live mmap. A
+            // corrupt/overflowing index offset must be skipped, not allowed to
+            // panic the compaction with an out-of-range slice.
+            let Some(src_end) = old_offset.checked_add(vector_size) else {
+                tracing::warn!(id, old_offset, "compaction: skipping offset overflow");
+                continue;
+            };
+            if src_end > mmap.len() {
+                tracing::warn!(
+                    id,
+                    old_offset,
+                    mmap_len = mmap.len(),
+                    "compaction: skipping out-of-bounds vector offset"
+                );
+                continue;
+            }
+            let src = &mmap[old_offset..src_end];
             temp_mmap[new_offset..new_offset + vector_size].copy_from_slice(src);
             new_index.insert(id, new_offset);
             new_offset += vector_size;
