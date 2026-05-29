@@ -1109,7 +1109,7 @@ export interface SparseUpsertRequest {
  * });
  * ```
  */
-export async function sparseSearch(request: SparseSearchRequest): Promise<SearchResponse> {
+export function sparseSearch(request: SparseSearchRequest): Promise<SearchResponse> {
   return invoke<SearchResponse>('plugin:velesdb|sparse_search', { request });
 }
 
@@ -1120,7 +1120,7 @@ export async function sparseSearch(request: SparseSearchRequest): Promise<Search
  * @returns Fused search results ordered by relevance
  * @throws {CommandError} If the collection does not exist
  */
-export async function hybridSparseSearch(request: HybridSparseSearchRequest): Promise<SearchResponse> {
+export function hybridSparseSearch(request: HybridSparseSearchRequest): Promise<SearchResponse> {
   return invoke<SearchResponse>('plugin:velesdb|hybrid_sparse_search', { request });
 }
 
@@ -1131,7 +1131,7 @@ export async function hybridSparseSearch(request: HybridSparseSearchRequest): Pr
  * @returns Number of points written
  * @throws {CommandError} On dimension mismatch or write failure
  */
-export async function sparseUpsert(request: SparseUpsertRequest): Promise<number> {
+export function sparseUpsert(request: SparseUpsertRequest): Promise<number> {
   return invoke<number>('plugin:velesdb|sparse_upsert', { request });
 }
 
@@ -1158,7 +1158,7 @@ export interface TrainPqRequest {
  * @returns A human-readable training summary
  * @throws {CommandError} If the collection has too few vectors to train
  */
-export async function trainPq(request: TrainPqRequest): Promise<string> {
+export function trainPq(request: TrainPqRequest): Promise<string> {
   return invoke<string>('plugin:velesdb|train_pq', { request });
 }
 
@@ -1183,7 +1183,7 @@ export interface StreamInsertRequest {
  * @returns Number of points written
  * @throws {CommandError} If persistence is disabled or the write fails
  */
-export async function streamInsert(request: StreamInsertRequest): Promise<number> {
+export function streamInsert(request: StreamInsertRequest): Promise<number> {
   return invoke<number>('plugin:velesdb|stream_insert', { request });
 }
 
@@ -1234,7 +1234,7 @@ export interface IndexInfoOutput {
  * @throws {CommandError} If the collection does not exist
  */
 export async function createIndex(request: CreateIndexRequest): Promise<void> {
-  return invoke<void>('plugin:velesdb|create_index', { request });
+  await invoke('plugin:velesdb|create_index', { request });
 }
 
 /**
@@ -1244,7 +1244,7 @@ export async function createIndex(request: CreateIndexRequest): Promise<void> {
  * @returns `true` if an index was removed, `false` if none existed
  * @throws {CommandError} If the collection does not exist
  */
-export async function dropIndex(request: DropIndexRequest): Promise<boolean> {
+export function dropIndex(request: DropIndexRequest): Promise<boolean> {
   return invoke<boolean>('plugin:velesdb|drop_index', { request });
 }
 
@@ -1255,7 +1255,7 @@ export async function dropIndex(request: DropIndexRequest): Promise<boolean> {
  * @returns Array of index descriptors
  * @throws {CommandError} If the collection does not exist
  */
-export async function listIndexes(request: ListIndexesRequest): Promise<IndexInfoOutput[]> {
+export function listIndexes(request: ListIndexesRequest): Promise<IndexInfoOutput[]> {
   return invoke<IndexInfoOutput[]>('plugin:velesdb|list_indexes', { request });
 }
 
@@ -1284,7 +1284,7 @@ export interface TraverseGraphParallelRequest {
  * @returns Array of traversal result nodes
  * @throws {CommandError} If the collection is not a graph collection
  */
-export async function traverseGraphParallel(
+export function traverseGraphParallel(
   request: TraverseGraphParallelRequest,
 ): Promise<TraversalOutput[]> {
   return invoke<TraversalOutput[]>('plugin:velesdb|traverse_graph_parallel', { request });
