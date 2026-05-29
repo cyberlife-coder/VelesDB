@@ -520,9 +520,13 @@ fn extract_vector_distance_metric(items: &[redis::Value], vector_field: &str) ->
     // Find the "attributes" key and scan each attribute array for the
     // vector field definition.
     let attrs_array = find_attributes_array(items)?;
-    attrs_array
+    // Stop at the FIRST attribute that describes `vector_field` and return its
+    // metric (or None) — do not keep scanning later attributes, matching the
+    // pre-refactor behavior on responses with duplicate identifiers.
+    let attr = attrs_array
         .iter()
-        .find_map(|attr| distance_metric_for_field(attr, vector_field))
+        .find(|attr| attr_matches_field(attr, vector_field))?;
+    metric_from_attr(attr)
 }
 
 /// Returns the value array following the `"attributes"` key in a flat
@@ -541,15 +545,21 @@ fn find_attributes_array(items: &[redis::Value]) -> Option<&[redis::Value]> {
     None
 }
 
-/// Extracts the distance metric from a single attribute array, but only if it
-/// describes `vector_field`.
-fn distance_metric_for_field(attr: &redis::Value, vector_field: &str) -> Option<String> {
+/// Returns true if `attr` is an attribute array whose `identifier` equals
+/// `vector_field`.
+fn attr_matches_field(attr: &redis::Value, vector_field: &str) -> bool {
+    let redis::Value::Array(parts) = attr else {
+        return false;
+    };
+    find_string_after(parts, "identifier").as_deref() == Some(vector_field)
+}
+
+/// Extracts the distance metric value from an attribute array (already known to
+/// describe the target field). Returns `None` if no metric key is present.
+fn metric_from_attr(attr: &redis::Value) -> Option<String> {
     let redis::Value::Array(parts) = attr else {
         return None;
     };
-    if find_string_after(parts, "identifier").as_deref() != Some(vector_field) {
-        return None;
-    }
     find_string_after(parts, "distance_metric")
         .or_else(|| find_string_after(parts, "DISTANCE_METRIC"))
 }
