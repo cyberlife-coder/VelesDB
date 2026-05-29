@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-05-01 (v1.15.0 — Haystack 2.x DocumentStore SKIP-policy contract fix)
+Last updated: 2026-05-29 (v1.15.0 — Mobile graph collection creation parity correction)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -33,11 +33,11 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 | **Batch Operations** (batch_insert, batch_upsert) | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Vector Search** (k-NN, filtered, batch) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Multi-Query Fusion** (RRF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
-| **Multi-Query Fusion** (RSF / Weighted) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| **Multi-Query Fusion** (RSF / Weighted) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Hybrid Search** (dense+sparse, dense+text) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Text Search BM25** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Sparse Vector Search** (sparse index) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Sparse Vector Search** (named indexes) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Sparse Vector Search** (named indexes) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ❌ |
 | **Graph Operations** (nodes, edges, traversal) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | **Cross-Collection MATCH** (`@collection`) | ✅ | ✅ | ⚠️ | ❌ | ❌ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ |
 | **VelesQL** (parser + executor) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
@@ -55,7 +55,8 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 
 - **Cross-Collection MATCH**: Core and Server support `@collection` annotation on MATCH node patterns. Python bindings support via `_collection` param. CLI supports via `\use`. WASM, Mobile, Tauri, and integrations do not yet expose this feature.
 - **Batch Operations**: WASM and Mobile use streaming chunked inserts instead of single-call bulk to stay within memory constraints.
-- **Multi-Query Fusion (RSF/Weighted)**: WASM supports RRF only; RSF/Weighted fusion is not yet exposed in LangChain/LlamaIndex integrations and is unavailable in Haystack (RRF itself is exposed only via the underlying `velesdb` Python wrapper, not through the `DocumentStore` protocol).
+- **Multi-Query Fusion (RSF/Weighted)**: WASM supports RRF only. LangChain and LlamaIndex expose RSF/Weighted through `multi_query_search(fusion=...)`, which delegates to the shared `velesdb_common.fusion.build_fusion_strategy` (builds `weighted()` and `relative_score()`). Haystack remains ⚠️: fusion is reachable only via the underlying `velesdb` Python wrapper, not through the `DocumentStore` protocol.
+- **Sparse Vector Search (named indexes) — LangChain/LlamaIndex**: ⚠️ query-side only. Both integrations forward a `sparse_index_name` argument to the underlying `collection.search`/`hybrid_search`, so an existing named sparse index can be *queried*. Creating named sparse indexes is not exposed by the integrations (use the core `velesdb` API), and this path is not yet covered by integration tests.
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
 - **VelesQL (LangChain/LlamaIndex/Haystack)**: Pass-through to Python bindings works for simple queries; full parser integration is not surfaced in the integration API.
 - **Haystack DocumentStore protocol limits**: The Haystack 2.x `DocumentStore` ABC exposes `write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, and `delete_documents`. BM25 / hybrid retrieval requires a separate `Retriever` component (planned follow-up). Graph collections, agent memory, and sparse-named indexes are intentionally `N/A` because they have no idiomatic mapping in Haystack's protocol and are reachable through the raw `velesdb` Python wrapper if needed.
@@ -169,7 +170,8 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 
 ### CollectionType — 9/10
 
-3 types (`Vector`, `MetadataOnly`, `Graph`). Mobile does not expose graph collection creation.
+3 types (`Vector`, `MetadataOnly`, `Graph`). All native crates expose graph
+collection creation; only Haystack is limited by its DocumentStore protocol.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -177,7 +179,7 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | Server | ✅ | |
 | Python | ✅ | |
 | WASM | ✅ | |
-| Mobile | ⚠️ 2/3 | `Vector` and `MetadataOnly` only -- graph collection creation not exposed |
+| Mobile | ✅ | `create_graph_collection` / `create_graph_collection_with_embeddings` exposed via `#[uniffi::export]` |
 | CLI | ✅ | |
 | TS SDK | ✅ | |
 | Tauri | ✅ | |
@@ -193,7 +195,7 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | `StorageMode` | 10/10 | 100% |
 | `FusionStrategy` | 10/10 | 100% |
 | `SearchQuality` | 7/10 | N/A for WASM/Mobile/Tauri (brute-force) |
-| `CollectionType` | 9/10 | Mobile missing graph creation; Haystack `Vector` only by protocol |
+| `CollectionType` | 9/10 | Haystack `Vector` only by protocol; all native crates full |
 
 ---
 
@@ -203,8 +205,9 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 2. Extend WASM conformance from parser-only to executable feature checks where applicable.
 3. Keep docs, fixtures, and examples synchronized on every contract version change.
 4. Promote RaBitQ from experimental to stable once the API is finalized.
-5. Surface RSF/Weighted fusion in LangChain, LlamaIndex, and Haystack integrations.
-6. Expose named sparse indexes in LangChain, LlamaIndex, and Haystack integrations.
+5. Surface RSF/Weighted fusion in Haystack (already exposed in LangChain and
+   LlamaIndex via the shared `velesdb_common.fusion` module).
+6. Expose named-sparse-index *creation* in LangChain/LlamaIndex (query-side
+   `sparse_index_name` targeting already works) and add Haystack support.
 7. Propagate `@collection` cross-collection MATCH to WASM, Mobile, Tauri, LangChain, LlamaIndex, and Haystack.
 8. Add cross-collection vector search (`similarity()` on `@collection`-annotated nodes).
-9. Expose graph collection creation in `velesdb-mobile` (`create_graph_collection`).
