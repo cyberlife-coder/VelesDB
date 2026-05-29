@@ -14,8 +14,15 @@ use crate::config::{ConfigError, VelesConfig};
 // capacities/sizes because a zero capacity is never a meaningful config.
 // ---------------------------------------------------------------------------
 
-/// Hard ceiling for `limits.max_vectors_per_collection` (10 billion).
+/// Hard ceiling for `limits.max_vectors_per_collection`.
+///
+/// On 64-bit targets this is 10 billion. On 32-bit / WASM targets `usize`
+/// is only 32 bits (max ≈ 4.29 billion), so the literal is capped at
+/// 4 billion to prevent a compile-time integer-overflow error.
+#[cfg(target_pointer_width = "64")]
 const MAX_VECTORS_PER_COLLECTION_CAP: usize = 10_000_000_000;
+#[cfg(not(target_pointer_width = "64"))]
+const MAX_VECTORS_PER_COLLECTION_CAP: usize = 4_000_000_000;
 /// Hard ceiling for `limits.max_collections` (1 million).
 const MAX_COLLECTIONS_CAP: usize = 1_000_000;
 /// Hard ceiling for `limits.max_payload_size` (1 GiB).
