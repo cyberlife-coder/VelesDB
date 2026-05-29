@@ -548,17 +548,20 @@ pub(crate) fn load_sidecars(
         ));
     }
 
-    // Cross-check each mapped index against the REAL number of loaded vectors
-    // — not the file's own `next_idx`, which comes from the same untrusted
-    // blob and offers no independent assurance. When vector storage is
-    // disabled there is no vector store to resolve into, so the file's
-    // `next_idx` remains the only available bound.
-    let index_bound = if enable_vector_storage {
-        vectors.len()
+    // Cross-check each mapped index against the actually-loaded vector set.
+    // Internal indices are sparse and monotonic (never reused after an
+    // upsert/delete), so a perfectly valid live index can exceed
+    // `vectors.len()`; membership in the loaded store is the correct test —
+    // and strictly stronger than the file's own `next_idx`, which comes from
+    // the same untrusted blob and cannot vouch for itself. When vector storage
+    // is disabled there is no store to resolve into, so the file's `next_idx`
+    // remains the only available bound.
+    let bound = if enable_vector_storage {
+        MappingBound::Loaded(&vectors)
     } else {
-        mappings_data.next_idx
+        MappingBound::MaxExclusive(mappings_data.next_idx)
     };
-    validate_loaded_mappings(&mappings_data, index_bound)?;
+    validate_loaded_mappings(&mappings_data, bound)?;
 
     let mappings = super::sharded_mappings::ShardedMappings::from_parts(
         mappings_data.id_to_idx,
@@ -612,18 +615,29 @@ fn validate_loaded_vectors(vectors: &[(usize, Vec<f32>)], dimension: usize) -> s
 /// index is `< index_bound`, and `id_to_idx` / `idx_to_id` are exact inverses
 /// of each other (same cardinality, every entry round-trips).
 ///
-/// `index_bound` is the REAL number of vectors loaded into the store (passed by
-/// [`load_sidecars`]), so this rejects a mapping that resolves to an index past
-/// the end of the actual vector store — not merely past the file's own
-/// self-reported `next_idx`, which is read from the same untrusted blob and
-/// therefore cannot vouch for itself. When vector storage is disabled the
-/// caller passes the file's `next_idx`, since there is no vector store to
-/// resolve into.
+/// How a mapped internal index is bound-checked, depending on whether the
+/// vector store was loaded.
+#[derive(Clone, Copy)]
+enum MappingBound<'a> {
+    /// Vector storage enabled: every mapped index must be a vector actually
+    /// present in the loaded store. Correct for sparse/monotonic indices and
+    /// strictly stronger than the file's self-reported `next_idx`.
+    Loaded(&'a super::sharded_vectors::ShardedVectors),
+    /// Vector storage disabled: no store to resolve into, so the only bound is
+    /// the file's `next_idx` (indices must be `< next_idx`).
+    MaxExclusive(usize),
+}
+
+/// Validates id-mappings deserialized from an untrusted `native_mappings.bin`.
+///
+/// Enforces the bijection invariant `HnswIndex` relies on: every internal
+/// index is valid under `bound`, and `id_to_idx` / `idx_to_id` are exact
+/// inverses of each other (same cardinality, every entry round-trips).
 ///
 /// # Errors
 ///
 /// Returns `InvalidData` on any out-of-range index or broken bijection.
-fn validate_loaded_mappings(data: &HnswMappingsData, index_bound: usize) -> std::io::Result<()> {
+fn validate_loaded_mappings(data: &HnswMappingsData, bound: MappingBound) -> std::io::Result<()> {
     if data.id_to_idx.len() != data.idx_to_id.len() {
         return Err(invalid_data(format!(
             "mapping cardinality mismatch: id_to_idx={} idx_to_id={}",
@@ -632,9 +646,13 @@ fn validate_loaded_mappings(data: &HnswMappingsData, index_bound: usize) -> std:
         )));
     }
     for (&id, &idx) in &data.id_to_idx {
-        if idx >= index_bound {
+        let valid = match bound {
+            MappingBound::Loaded(vectors) => vectors.contains(idx),
+            MappingBound::MaxExclusive(next_idx) => idx < next_idx,
+        };
+        if !valid {
             return Err(invalid_data(format!(
-                "mapping index {idx} >= vector count {index_bound}"
+                "mapping id {id} resolves to index {idx} absent from the loaded vector store"
             )));
         }
         if data.idx_to_id.get(&idx) != Some(&id) {

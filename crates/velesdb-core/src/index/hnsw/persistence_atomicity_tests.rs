@@ -579,23 +579,22 @@ fn load_with_corrupt_single_mapping(id: u64, idx: usize, mapped_back: u64) -> st
 
 #[test]
 fn test_load_sidecars_rejects_index_beyond_vector_count() {
-    // Internal index 99 is >= the loaded vector count (2); id_to_idx/idx_to_id
-    // agree. `load_with_corrupt_single_mapping` writes next_idx=2, so this is
-    // also out of range against the file's own counter.
+    // Internal index 99 is absent from the loaded vector store ({0,1});
+    // id_to_idx/idx_to_id agree but the index is dangling.
     let err = load_with_corrupt_single_mapping(1, 99, 1);
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
-        err.to_string().contains("vector count"),
-        "error should mention vector count, got: {err}"
+        err.to_string().contains("absent from the loaded vector store"),
+        "error should flag the absent index, got: {err}"
     );
 }
 
 #[test]
-fn test_load_sidecars_rejects_index_within_next_idx_but_beyond_vector_count() {
-    // Regression for #894 follow-up: the mapping's idx (5) is VALID against the
-    // file's own self-reported `next_idx` (6) — the old check would accept it —
-    // but it points BEYOND the actual loaded vector count (2). Cross-checking
-    // against the real vector store length must reject it.
+fn test_load_sidecars_rejects_dangling_index_within_next_idx() {
+    // The mapping's idx (5) is VALID against the file's own self-reported
+    // `next_idx` (6) — the file's own bound would accept it — but no vector
+    // exists at index 5 in the loaded store ({0,1}). Membership in the real
+    // store must reject this dangling index.
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     seed_consistent_gen4(path, &build_mappings(), &build_vectors());
@@ -614,12 +613,40 @@ fn test_load_sidecars_rejects_index_within_next_idx_but_beyond_vector_count() {
 
     let meta = persistence::load_meta(path).expect("test: reload meta");
     let err = load_sidecars(path, &meta)
-        .expect_err("test: index beyond real vector count must be rejected");
+        .expect_err("test: dangling index must be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
-        err.to_string().contains("vector count"),
-        "error should mention vector count, got: {err}"
+        err.to_string().contains("absent from the loaded vector store"),
+        "error should flag the absent index, got: {err}"
     );
+}
+
+#[test]
+fn test_load_sidecars_accepts_sparse_index_beyond_count() {
+    // Regression for the #908 review: internal indices are sparse and monotonic
+    // (never reused after an upsert/delete), so a live vector legitimately sits
+    // at an index >= the live count. Here 2 vectors are loaded at indices {0, 5}
+    // with id 2 -> idx 5; a `idx < count` bound would WRONGLY reject this valid,
+    // previously-saved index. Membership in the loaded store must accept it.
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+
+    let vectors = ShardedVectors::new(4);
+    vectors.insert_batch(vec![(0_usize, vec![1.0_f32; 4]), (5_usize, vec![2.0_f32; 4])]);
+    let mut id_to_idx = HashMap::new();
+    id_to_idx.insert(1_u64, 0_usize);
+    id_to_idx.insert(2_u64, 5_usize);
+    let mut idx_to_id = HashMap::new();
+    idx_to_id.insert(0_usize, 1_u64);
+    idx_to_id.insert(5_usize, 2_u64);
+    let mappings = ShardedMappings::from_parts(id_to_idx, idx_to_id, 6);
+    seed_consistent_gen4(path, &mappings, &vectors);
+
+    let meta = persistence::load_meta(path).expect("test: reload meta");
+    let (loaded, _vectors, enabled) =
+        load_sidecars(path, &meta).expect("test: sparse-but-valid index must load");
+    assert!(enabled);
+    assert_eq!(loaded.get_id(5), Some(2_u64), "id 2 must resolve via sparse idx 5");
 }
 
 #[test]
