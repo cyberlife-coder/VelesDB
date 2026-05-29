@@ -124,8 +124,12 @@ impl TemporalIndex {
     /// Vector of (id, timestamp) pairs, ordered by timestamp descending.
     #[must_use]
     pub fn recent(&self, limit: usize, since_timestamp: Option<i64>) -> Vec<TemporalEntry> {
+        // Read `id_to_timestamp` first (insert order) to honour lock ordering and
+        // to clamp the caller-supplied `limit`: results can never exceed the total
+        // number of indexed entries, so a huge `limit` must not pre-allocate beyond it.
+        let total = self.id_to_timestamp.read().len();
         let by_ts = self.by_timestamp.read();
-        let mut results = Vec::with_capacity(limit);
+        let mut results = Vec::with_capacity(limit.min(total));
 
         for (&ts, ids) in by_ts.iter().rev() {
             if let Some(since) = since_timestamp {
@@ -157,8 +161,11 @@ impl TemporalIndex {
     /// Vector of (id, timestamp) pairs, ordered by timestamp ascending.
     #[must_use]
     pub fn older_than(&self, before_timestamp: i64, limit: usize) -> Vec<TemporalEntry> {
+        // Clamp `limit` to the total indexed entries (read first, per lock order)
+        // so a huge caller-supplied `limit` cannot pre-allocate beyond available data.
+        let total = self.id_to_timestamp.read().len();
         let by_ts = self.by_timestamp.read();
-        let mut results = Vec::with_capacity(limit);
+        let mut results = Vec::with_capacity(limit.min(total));
 
         for (&ts, ids) in by_ts.iter() {
             if ts >= before_timestamp {

@@ -79,6 +79,32 @@ mod tests {
         assert_eq!(events.len(), 3);
     }
 
+    /// #897 follow-up: a caller-supplied `limit` near `usize::MAX` must not
+    /// overflow the internal fetch-doubling (panic under `panic=abort` / debug
+    /// overflow checks, silent wrap in release). It must return a bounded result.
+    #[test]
+    fn test_recent_huge_limit_no_overflow() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let ep = make_episodic(Arc::clone(&db));
+
+        for i in 0u64..3 {
+            #[allow(clippy::cast_possible_wrap)] // i < 3; u64→i64 cannot wrap.
+            ep.record(i, "ev", i as i64 * 1_000, None).unwrap();
+        }
+
+        // usize::MAX would overflow `max_fetch * 2` / `fetch_limit *= 2` before the fix.
+        let events = ep.recent(usize::MAX, None).unwrap();
+        assert_eq!(
+            events.len(),
+            3,
+            "must return all (and only) recorded events"
+        );
+
+        let older = ep.older_than(i64::MAX, usize::MAX).unwrap();
+        assert!(older.len() <= 3);
+    }
+
     #[test]
     fn test_recent_with_since_timestamp_filters_older() {
         let dir = tempdir().unwrap();

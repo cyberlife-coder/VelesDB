@@ -377,3 +377,84 @@ fn test_update_document_removes_old_terms() {
     assert_eq!(new_term_results.len(), 1);
     assert_eq!(new_term_results[0].0, 1);
 }
+
+// =========================================================================
+// #897 — snapshot validation on load (untrusted on-disk state)
+// =========================================================================
+
+#[test]
+fn test_from_snapshot_valid_round_trips() {
+    let index = Bm25Index::new();
+    index.add_document(1, "rust systems programming");
+    index.add_document(2, "python data science");
+
+    let snapshot = index.to_snapshot();
+    let restored = Bm25Index::from_snapshot(snapshot).expect("valid snapshot must load");
+
+    assert_eq!(restored.len(), 2);
+    assert_eq!(restored.search("rust", 10).len(), 1);
+    assert_eq!(restored.search("python", 10).len(), 1);
+}
+
+#[test]
+fn test_from_snapshot_rejects_version_mismatch() {
+    let index = Bm25Index::new();
+    index.add_document(1, "hello world");
+
+    let mut snapshot = index.to_snapshot();
+    snapshot.version = BM25_SNAPSHOT_VERSION + 1;
+
+    match Bm25Index::from_snapshot(snapshot) {
+        Err(e) => assert!(
+            e.to_string().contains("version mismatch"),
+            "expected version-mismatch error, got: {e}"
+        ),
+        Ok(_) => panic!("version mismatch must be rejected"),
+    }
+}
+
+#[test]
+fn test_from_snapshot_recomputes_inconsistent_counters() {
+    let index = Bm25Index::new();
+    index.add_document(1, "alpha beta gamma");
+    index.add_document(2, "delta epsilon");
+
+    // Tamper the counters: zero total_doc_length while doc_count stays positive.
+    // The pre-fix code installed these verbatim → avgdl = 0 → inf/NaN scores.
+    let mut snapshot = index.to_snapshot();
+    snapshot.doc_count = 999;
+    snapshot.total_doc_length = 0;
+
+    // documents are intact, so validation recomputes consistent counters.
+    let restored = Bm25Index::from_snapshot(snapshot).expect("counters recomputed from documents");
+    assert_eq!(restored.len(), 2, "doc_count recomputed from documents");
+
+    // Scores must be finite (no inf/NaN from a zero avgdl).
+    for (_, score) in restored.search("alpha", 10) {
+        assert!(score.is_finite(), "BM25 score must be finite");
+    }
+}
+
+/// #897 follow-up: `from_snapshot` must recompute `doc_count`/`avgdl` from the
+/// SCORABLE corpus (docs present in `point_to_doc`), not all of `documents`.
+/// A doc in `documents` but missing from `point_to_doc` is skipped during
+/// inverted-index reconstruction, so counting it would inflate `N`/`avgdl` and
+/// skew every IDF and length-normalization.
+#[test]
+fn test_from_snapshot_counts_only_scorable_corpus() {
+    let index = Bm25Index::new();
+    index.add_document(1, "rust programming language");
+    index.add_document(2, "python programming language");
+
+    let mut snap = index.to_snapshot();
+    assert_eq!(snap.documents.len(), 2);
+    // Divergence: point 2 stays in `documents` but is no longer scorable.
+    snap.point_to_doc.remove(&2);
+
+    let restored = Bm25Index::from_snapshot(snap).expect("valid snapshot");
+    assert_eq!(
+        restored.len(),
+        1,
+        "doc_count must reflect only the scorable corpus, not all documents"
+    );
+}

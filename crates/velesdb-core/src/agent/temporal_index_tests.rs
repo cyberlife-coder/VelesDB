@@ -98,6 +98,41 @@ mod tests {
         assert_eq!(restored.get_timestamp(3), Some(3000));
     }
 
+    /// #897: a binary header whose `count * entry_size` overflows `usize` so the
+    /// product wraps to match `data.len()` must be rejected, not blindly trusted
+    /// (which would `reserve(count)` and abort/OOM).
+    #[test]
+    fn test_deserialize_rejects_overflowing_count() {
+        // entry_size = 16 for TemporalIndex. With an 8-byte buffer (zero payload),
+        // count = 2^60 makes count*16 wrap to 0 (mod 2^64), so the pre-fix length
+        // check `8 + count*16 == data.len()` spuriously passed.
+        let count: u64 = 1u64 << 60;
+        let mut data = Vec::with_capacity(8);
+        data.extend_from_slice(&count.to_le_bytes());
+
+        let restored = TemporalIndex::deserialize(&data);
+        assert!(
+            restored.is_none(),
+            "overflowing count header must be rejected"
+        );
+    }
+
+    /// #897: a huge caller-supplied `limit` must not pre-allocate beyond the number
+    /// of indexed entries.
+    #[test]
+    fn test_recent_huge_limit_does_not_overallocate() {
+        let index = TemporalIndex::new();
+        index.insert(1, 1000);
+        index.insert(2, 2000);
+
+        // A `limit` near usize::MAX must not abort/OOM; results are bounded by data.
+        let recent = index.recent(usize::MAX, None);
+        assert_eq!(recent.len(), 2);
+
+        let older = index.older_than(i64::MAX, usize::MAX);
+        assert_eq!(older.len(), 2);
+    }
+
     #[test]
     fn test_temporal_index_stats() {
         let index = TemporalIndex::new();

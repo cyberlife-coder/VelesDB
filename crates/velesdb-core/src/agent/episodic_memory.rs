@@ -297,11 +297,18 @@ impl EpisodicMemory {
         id_fetcher: impl Fn(usize) -> Vec<u64>,
         collection: &crate::collection::Collection,
     ) -> Vec<(u64, String, i64)> {
-        let mut events = Vec::with_capacity(limit);
-        let mut fetch_limit = limit * 2;
-        let max_fetch = self.temporal_index.len().max(limit);
+        // Clamp the pre-allocation: the number of events can never exceed the
+        // total indexed entries, so a huge caller-supplied `limit` must not
+        // pre-allocate beyond available data.
+        let indexed = self.temporal_index.len();
+        let mut events = Vec::with_capacity(limit.min(indexed));
+        let mut fetch_limit = limit.saturating_mul(2);
+        // Saturating to keep an attacker-supplied `limit` near `usize::MAX` from
+        // overflowing the loop ceiling (panic under `panic=abort`, silent wrap in
+        // release). The `id_count < fetch_limit` break still terminates the loop.
+        let max_fetch = indexed.max(limit).saturating_mul(2);
 
-        while events.len() < limit && fetch_limit <= max_fetch * 2 {
+        while events.len() < limit && fetch_limit <= max_fetch {
             let ids = id_fetcher(fetch_limit);
             if ids.is_empty() {
                 break;
@@ -313,7 +320,7 @@ impl EpisodicMemory {
             if events.len() >= limit || id_count < fetch_limit {
                 break;
             }
-            fetch_limit *= 2;
+            fetch_limit = fetch_limit.saturating_mul(2);
         }
 
         events
