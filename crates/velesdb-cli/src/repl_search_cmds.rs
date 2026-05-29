@@ -188,7 +188,9 @@ pub(crate) fn cmd_guardrails() -> CommandResult {
     println!();
     println!(
         "  {}",
-        "Use '.guardrails set <key> <value>' to modify (server restart required for persistence)."
+        "These are the built-in defaults (read-only in the REPL). A running \
+         velesdb-server can adjust them at runtime via its PUT /guardrails \
+         endpoint; the REPL has no '.guardrails set' command."
             .dimmed()
     );
     println!();
