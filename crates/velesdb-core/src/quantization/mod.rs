@@ -14,6 +14,33 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
+/// Validate that a flat row-major rotation matrix has exactly `dimension^2`
+/// elements, returning [`crate::error::Error::IndexCorrupted`] otherwise.
+///
+/// Shared by the PQ (OPQ) and `RaBitQ` load-time validators so the unchecked
+/// `matrix[i * d + j]` indexing in their rotation kernels stays in bounds.
+pub(crate) fn validate_rotation_len(
+    len: usize,
+    dimension: usize,
+    label: &str,
+) -> Result<(), crate::error::Error> {
+    // `checked_mul`: `dimension` is attacker-controlled post-deserialize; a wrapping
+    // `dimension * dimension` (esp. on 32-bit targets) could yield a small `expected`
+    // that a tampered `len` matches, false-passing the shape check that the unchecked
+    // `matrix[i * d + j]` indexing relies on.
+    let Some(expected) = dimension.checked_mul(dimension) else {
+        return Err(crate::error::Error::IndexCorrupted(format!(
+            "{label} rotation dimension {dimension} squared overflows usize"
+        )));
+    };
+    if len != expected {
+        return Err(crate::error::Error::IndexCorrupted(format!(
+            "{label} rotation has {len} elements, expected dimension^2 = {expected}"
+        )));
+    }
+    Ok(())
+}
+
 mod binary;
 pub(crate) mod codec_helpers;
 mod pq;

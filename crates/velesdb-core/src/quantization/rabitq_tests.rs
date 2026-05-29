@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(feature = "persistence")]
+use crate::error::Error;
 
 /// Compute brute-force L2 (Euclidean) top-k neighbors for a query.
 ///
@@ -610,4 +612,106 @@ fn rabitq_prepared_query_is_pub_crate() {
     assert!(pq.norm_sq > 0.0);
     assert_eq!(pq.bits.len(), 1);
     assert_eq!(pq.rotated.len(), dim);
+}
+
+// ====================================================================
+// #895: RaBitQ padding-bit safety (u32 underflow guard on load)
+// ====================================================================
+
+#[test]
+fn last_word_mask_covers_used_bits_only() {
+    // dim multiple of 64 → all bits used.
+    assert_eq!(last_word_mask(64), u64::MAX);
+    assert_eq!(last_word_mask(128), u64::MAX);
+    // dim == 0 → no in-use bits in a (nonexistent) last word; mask is full.
+    assert_eq!(last_word_mask(0), u64::MAX);
+    // dim = 70 → last word uses 6 low bits.
+    assert_eq!(last_word_mask(70), (1u64 << 6) - 1);
+    // dim = 1 → only bit 0.
+    assert_eq!(last_word_mask(1), 1);
+}
+
+#[test]
+fn xor_popcount_ip_no_underflow_with_set_padding_bits() {
+    // dim = 70 → 2 words; bits 70..128 of word 1 are padding.
+    let dim: usize = 70;
+    let num_words = dim.div_ceil(64);
+    // Query and encoded agree on all real bits (all zero), so a clean estimate
+    // would be ip = +1 (all matching). Inject padding bits into the encoded
+    // word — without the guard these would count as "differing" and drive
+    // matching_bits negative (u32 underflow → garbage / non-finite).
+    let q_bits = vec![0u64; num_words];
+    let mut enc_bits = vec![0u64; num_words];
+    enc_bits[1] = !((1u64 << 6) - 1); // set every padding bit (bits 6..64).
+
+    // Safety: with raw (unsanitized) padding bits set, the clamp keeps the
+    // estimate finite and in range — no u32 underflow / garbage.
+    let ip = xor_popcount_ip(&q_bits, &enc_bits, num_words, dim);
+    assert!(ip.is_finite(), "ip must be finite, got {ip}");
+    assert!(
+        (-1.0..=1.0).contains(&ip),
+        "ip must stay in [-1, 1], got {ip}"
+    );
+
+    // Correctness: masking padding to zero restores the exact clean estimate.
+    let mut masked = enc_bits.clone();
+    masked[1] &= last_word_mask(dim);
+    let ref_ip = xor_popcount_ip(&q_bits, &masked, num_words, dim);
+    assert!((ref_ip - 1.0).abs() < 1e-6, "all-matching ip should be 1.0");
+}
+
+#[test]
+fn distance_with_tampered_padding_stays_finite_and_masks_to_clean() {
+    // End-to-end: a tampered RaBitQVector (padding bits set) must yield a finite
+    // distance (the `xor_popcount_ip` clamp is defense-in-depth, no underflow), and
+    // masking the padding (what `signs_to_bits`/`push` do) restores the exact clean
+    // encoding and distance.
+    let dim: usize = 70;
+    let index = identity_index(dim);
+    let mut vector = vec![0.0f32; dim];
+    for (i, x) in vector.iter_mut().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let v = (i as f32) - 35.0;
+        *x = v;
+    }
+    let clean = index.encode(&vector).expect("encode");
+
+    // Tamper: set the padding bits of the last word.
+    let mut tampered = clean.clone();
+    let last = tampered.bits.len() - 1;
+    tampered.bits[last] |= !last_word_mask(dim);
+
+    let query = vec![1.0f32; dim];
+    let d_clean = index.distance(&query, &clean);
+    let d_tampered = index.distance(&query, &tampered);
+    assert!(d_tampered.is_finite(), "tampered distance must be finite");
+    assert!(d_clean.is_finite());
+
+    // Masking the padding (the encode/store invariant) restores the clean bit
+    // pattern and the clean distance exactly.
+    let mut masked = tampered.clone();
+    let last = masked.bits.len() - 1;
+    masked.bits[last] &= last_word_mask(dim);
+    assert_eq!(masked.bits, clean.bits);
+    let d_masked = index.distance(&query, &masked);
+    assert!(
+        (d_clean - d_masked).abs() < 1e-4,
+        "masked distance {d_masked} != clean {d_clean}"
+    );
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn rabitq_load_rejects_rotation_length_mismatch() {
+    let dim = 8;
+    let mut index = identity_index(dim);
+    // Corrupt the rotation length (must be dim*dim = 64).
+    index.rotation.truncate(40);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bytes = postcard::to_allocvec(&index).expect("serialize");
+    std::fs::write(dir.path().join("rabitq.idx"), &bytes).expect("write");
+
+    let err = RaBitQIndex::load(dir.path()).expect_err("corrupt rotation length must fail to load");
+    assert!(matches!(err, Error::IndexCorrupted(_)), "got {err:?}");
 }

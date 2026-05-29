@@ -211,15 +211,13 @@ fn rescore_euclidean_batch(
             }
         }
         Err(err) => {
-            // ADC batch failed (should not happen with valid quantizer);
-            // fall back to per-item scalar scoring.
-            tracing::warn!(%err, "batch ADC rescore failed; falling back to scalar");
-            for &(orig_idx, pq_vec) in &with_pq {
-                scores[orig_idx] = ScoredResult::new(
-                    index_results[orig_idx].id,
-                    distance_pq_l2(query, pq_vec, quantizer),
-                );
-            }
+            // ADC batch rejected the candidates (e.g. an out-of-range PQ code on a
+            // tampered/corrupt persisted vector). The same codes would also drive the
+            // scalar `distance_pq_l2` path out of bounds (LUT indexing panic), so we
+            // do NOT re-invoke it here. The affected candidates keep their original
+            // HNSW score (already seeded into `scores`) — a clean skip, matching the
+            // graceful degradation used for cache misses above.
+            tracing::warn!(%err, "batch ADC rescore rejected candidates; keeping HNSW scores");
         }
     }
 
@@ -533,5 +531,48 @@ impl Collection {
             return self.merge_delta(results, query, candidates_k, metric);
         }
         self.search_ids_with_adc_if_pq(query, candidates_k)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rescore_euclidean_batch, PQVector, ProductQuantizer};
+    use crate::scored_result::ScoredResult;
+    use std::collections::HashMap;
+
+    fn small_trained_pq() -> ProductQuantizer {
+        let vectors = vec![
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![5.0, 6.0, 7.0, 8.0],
+            vec![-1.0, -2.0, 9.0, 10.0],
+        ];
+        ProductQuantizer::train(&vectors, 2, 2).expect("train small PQ")
+    }
+
+    #[test]
+    fn invalid_pq_code_in_search_path_skips_candidate_without_panic() {
+        // Routing an out-of-range PQ code through the Euclidean batch scoring entry
+        // point (the same one the fallback uses) must NOT panic and must NOT re-invoke
+        // the unvalidated scalar indexing path. The candidate keeps its HNSW score.
+        let quantizer = small_trained_pq();
+        // num_centroids == 2, so code 99 is out of range for both subspaces.
+        let bad = PQVector { codes: vec![0, 99] };
+
+        let mut pq_cache: HashMap<u64, PQVector> = HashMap::new();
+        pq_cache.insert(7, bad);
+
+        let index_results = vec![ScoredResult::new(7, 0.42)];
+        let query = vec![1.0, 2.0, 3.0, 4.0];
+
+        let scored = rescore_euclidean_batch(&query, &quantizer, &pq_cache, &index_results);
+
+        assert_eq!(scored.len(), 1);
+        assert_eq!(scored[0].id, 7);
+        // Clean skip: original HNSW score is retained, no panic, no garbage.
+        assert!(
+            (scored[0].score - 0.42).abs() < 1e-6,
+            "rejected candidate must keep its HNSW score, got {}",
+            scored[0].score
+        );
     }
 }
