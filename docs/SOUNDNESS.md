@@ -195,6 +195,13 @@ in-place vector normalization using `_mm256_mul_ps`.
 3. `code[i] < k` for all `i` asserted via `debug_assert!` at function entry
 4. AVX2 gather indices computed as `subspace * k + code[subspace]`, bounded by `m * k`
 5. Scalar fallback exists for CPUs without AVX2 or NEON
+6. (#895) The `code[i] < k` precondition (3) — only a `debug_assert!` here — is
+   upheld for codes originating from a deserialized on-disk codebook by
+   **load-time validation**: every PQ code is checked `< num_centroids` and the
+   OPQ rotation length `== dim * dim` after deserialization (`quantization/pq.rs`,
+   `quantization/pq_persistence.rs`). An invalid code is skipped gracefully
+   rather than reaching the gather, so the release-mode OOB gather / scalar-path
+   panic class is closed before the unsafe kernel runs.
 
 **Why It's Sound**:
 ```rust
@@ -372,6 +379,11 @@ unsafe {
 2. `data` points to memory allocated with 64-byte alignment
 3. `capacity * dimension * sizeof(f32)` bytes are always allocated
 4. `count <= capacity` is always maintained
+5. (#899) All offset/capacity arithmetic (`index * dimension`, `capacity * 2`,
+   `ensure_capacity(index + 1)`) uses `checked_mul`/`checked_add`. An overflow
+   returns an error instead of wrapping, so a crafted index can no longer wrap
+   an offset to a small value and drive an out-of-bounds `copy_nonoverlapping`
+   write in release builds.
 
 **Why It's Sound**:
 ```rust
@@ -442,6 +454,18 @@ unsafe { dealloc(self.data.as_ptr().cast::<u8>(), layout); }
 1. `ptr` is either valid or `owns_memory = false`
 2. `layout` matches the allocation
 3. Drop deallocates if and only if `owns_memory = true`
+4. (#899) `new`/`new_zeroed` return `None` when `layout.size()` exceeds the
+   process-wide per-allocation ceiling (`DEFAULT_ALLOC_BYTE_LIMIT`, **1 TiB**;
+   configurable via `set_alloc_byte_limit`). This is a deliberately high
+   *backstop* against pathological/attacker-controlled or arithmetic-wrapped
+   sizes — far above any single contiguous buffer VelesDB legitimately
+   allocates, so it never rejects a real index. It is threaded through the
+   `ContiguousVectors` construct / resize / reorder allocation paths plus the
+   `check_alloc_bound` pre-check. It does not affect soundness of the RAII
+   guarantee; it only narrows which requests reach the system allocator.
+   Primary defense against untrusted sizes remains the per-artifact load-time
+   validation (file-length-bounded counts, see below) — `AllocGuard` only
+   catches whatever slips past those local checks.
 
 **Why It's Sound**:
 ```rust
@@ -670,6 +694,13 @@ traversal, where the node IDs are guaranteed valid by construction.
    it appears in any neighbor list
 3. Vectors are never removed from `ContiguousVectors` during the lifetime
    of a search (vectors outlive graph references)
+4. (#894) For a graph loaded from disk — the untrusted-input path — invariant 1
+   is upheld by **load-time validation** in `index/hnsw/native/graph_io.rs`:
+   the header `count_check` must equal the vector count, `entry_point < count`,
+   and every neighbor ID is checked `< count` before being stored in a layer.
+   A file violating any of these is rejected with `InvalidData` at load, so no
+   out-of-range ID ever reaches `get_unchecked` on the search hot path (the
+   release-mode OOB read class is closed at the source).
 
 **Usage in `neighbors.rs`** (neighbor selection with VAMANA diversification):
 ```rust

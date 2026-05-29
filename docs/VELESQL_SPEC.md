@@ -1352,6 +1352,14 @@ WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 | `rerank` | boolean | `true`/`false` | Two-stage SIMD reranking (retrieves 4x candidates, re-ranks with exact distance) |
 | `quantization` | string | `f32`, `int8`, `dual`, `auto` | Quantization mode for search |
 | `oversampling` | float | >= 1.0 | Oversampling ratio for dual-precision mode |
+| `max_groups` (alias `group_limit`) | integer | 1 .. 1,000,000 | GROUP BY group budget. Lowers the default (10,000); **clamped down** to the server ceiling of 1,000,000 — cannot raise it. See [GROUP BY](#group-by-clause-v20). |
+
+> **Query guard-rails.** Two hard limits protect the server from adversarial
+> queries. (1) A query is rejected before parsing if its length exceeds the
+> configured `max_query_length` or its bracket/`NOT` nesting depth exceeds
+> **64** (prevents a parser stack-overflow DoS). (2) `WITH (max_groups = N)` for
+> GROUP BY is clamped to a server-side ceiling of **1,000,000** groups; the
+> query can lower its budget but never raise the server memory ceiling.
 
 ### Examples
 

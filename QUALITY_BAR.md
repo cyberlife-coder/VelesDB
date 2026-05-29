@@ -195,6 +195,7 @@ These signals are tracked but do not block release individually:
 | Promise contract sync | All numeric claims in README backed by benchmark commands | `scripts/check-promise-contract.py` in CI |
 | TODO governance | All TODOs in format `// TODO(EPIC-XXX):` | `scripts/check-todo-annotations.py` |
 | RUSTSEC | All advisories tracked or justified in `deny.toml` | `cargo deny check` in CI (Security Audit job) |
+| Untrusted-input hardening | Corrupt/oversized persisted artifacts (HNSW graph, PQ codebook, sparse, BM25, WAL) are rejected at load, not used to size allocations; WAL `Fsync` is durable before ack; config limits validated in loaders + on open | Regression suites: `storage/storage_reliability_tests.rs`, `index/hnsw/persistence_atomicity_tests.rs`, `quantization/pq_tests.rs`, `quantization/rabitq_tests.rs`, `index/sparse/persistence_tests.rs`, `index/bm25_tests.rs`, `config_tests.rs`, `velesql/parser/robustness_tests.rs` (gated by `cargo test`) |
 
 ---
 
