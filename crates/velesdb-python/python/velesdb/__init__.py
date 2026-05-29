@@ -614,14 +614,19 @@ class VelesQL:
             normalized,
             flags=re.IGNORECASE,
         )
+        # NOSONAR(python:S5843) — the trailing look-ahead enumerates VelesQL
+        # clause keywords (JOIN/WHERE/GROUP/ORDER/LIMIT/OFFSET) to mark where the
+        # alias ends; this alternation is grammar-driven and cannot be simplified
+        # without changing what the pattern matches. The `\s+` prefix is already
+        # factored out of the alternation.
         normalized = re.sub(
-            r"\bFROM\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+JOIN|\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|\s+OFFSET|$)",
+            r"\bFROM\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+(?:JOIN|WHERE|GROUP|ORDER|LIMIT|OFFSET)|$)",  # NOSONAR(python:S5843)
             r"FROM \1 AS \2",
             normalized,
             flags=re.IGNORECASE,
         )
         normalized = re.sub(
-            r"\bJOIN\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+ON|\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|\s+OFFSET|$)",
+            r"\bJOIN\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+(?:ON|WHERE|GROUP|ORDER|LIMIT|OFFSET)|$)",  # NOSONAR(python:S5843)
             r"JOIN \1 AS \2",
             normalized,
             flags=re.IGNORECASE,
