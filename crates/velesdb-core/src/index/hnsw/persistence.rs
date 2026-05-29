@@ -292,6 +292,7 @@ pub(crate) fn load_vectors_or_disable(
 
     match load_vectors(path) {
         Ok(vectors_data) => {
+            validate_loaded_vectors(&vectors_data.vectors, meta.dimension)?;
             let vectors = ShardedVectors::new(meta.dimension);
             vectors.insert_batch(vectors_data.vectors);
             Ok((vectors, true, vectors_data.generation))
@@ -535,7 +536,6 @@ pub(crate) fn load_sidecars(
             ),
         ));
     }
-
     let (vectors, enable_vector_storage, vectors_generation) = load_vectors_or_disable(path, meta)?;
     if enable_vector_storage && vectors_generation != meta.generation {
         return Err(std::io::Error::new(
@@ -548,12 +548,102 @@ pub(crate) fn load_sidecars(
         ));
     }
 
+    // Cross-check each mapped index against the REAL number of loaded vectors
+    // — not the file's own `next_idx`, which comes from the same untrusted
+    // blob and offers no independent assurance. When vector storage is
+    // disabled there is no vector store to resolve into, so the file's
+    // `next_idx` remains the only available bound.
+    let index_bound = if enable_vector_storage {
+        vectors.len()
+    } else {
+        mappings_data.next_idx
+    };
+    validate_loaded_mappings(&mappings_data, index_bound)?;
+
     let mappings = super::sharded_mappings::ShardedMappings::from_parts(
         mappings_data.id_to_idx,
         mappings_data.idx_to_id,
         mappings_data.next_idx,
     );
     Ok((mappings, vectors, enable_vector_storage))
+}
+
+/// Builds an `InvalidData` I/O error for the load-time validation paths.
+///
+/// Single idiom shared by [`validate_loaded_vectors`] and
+/// [`validate_loaded_mappings`] so the new validation code does not
+/// re-spell `std::io::Error::new(InvalidData, …)` at every site.
+fn invalid_data(msg: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, msg)
+}
+
+/// Validates vectors deserialized from an untrusted `native_vectors.bin`.
+///
+/// Every stored vector must have exactly `dimension` components and a unique
+/// internal index. A corrupt file with the wrong dimension would otherwise
+/// produce malformed rows in `ShardedVectors` and feed wrong-length slices
+/// into the SIMD distance kernels (out-of-bounds reads).
+///
+/// # Errors
+///
+/// Returns `InvalidData` if any vector length differs from `dimension` or any
+/// internal index is duplicated.
+fn validate_loaded_vectors(vectors: &[(usize, Vec<f32>)], dimension: usize) -> std::io::Result<()> {
+    let mut seen = std::collections::HashSet::with_capacity(vectors.len());
+    for (idx, vec) in vectors {
+        if vec.len() != dimension {
+            return Err(invalid_data(format!(
+                "vector at index {idx} has length {} but dimension is {dimension}",
+                vec.len()
+            )));
+        }
+        if !seen.insert(*idx) {
+            return Err(invalid_data(format!(
+                "duplicate internal index {idx} in persisted vectors"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validates id-mappings deserialized from an untrusted `native_mappings.bin`.
+///
+/// Enforces the bijection invariant `HnswIndex` relies on: every internal
+/// index is `< index_bound`, and `id_to_idx` / `idx_to_id` are exact inverses
+/// of each other (same cardinality, every entry round-trips).
+///
+/// `index_bound` is the REAL number of vectors loaded into the store (passed by
+/// [`load_sidecars`]), so this rejects a mapping that resolves to an index past
+/// the end of the actual vector store — not merely past the file's own
+/// self-reported `next_idx`, which is read from the same untrusted blob and
+/// therefore cannot vouch for itself. When vector storage is disabled the
+/// caller passes the file's `next_idx`, since there is no vector store to
+/// resolve into.
+///
+/// # Errors
+///
+/// Returns `InvalidData` on any out-of-range index or broken bijection.
+fn validate_loaded_mappings(data: &HnswMappingsData, index_bound: usize) -> std::io::Result<()> {
+    if data.id_to_idx.len() != data.idx_to_id.len() {
+        return Err(invalid_data(format!(
+            "mapping cardinality mismatch: id_to_idx={} idx_to_id={}",
+            data.id_to_idx.len(),
+            data.idx_to_id.len()
+        )));
+    }
+    for (&id, &idx) in &data.id_to_idx {
+        if idx >= index_bound {
+            return Err(invalid_data(format!(
+                "mapping index {idx} >= vector count {index_bound}"
+            )));
+        }
+        if data.idx_to_id.get(&idx) != Some(&id) {
+            return Err(invalid_data(format!(
+                "mapping bijection broken for id {id} / idx {idx}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Converts a u8 discriminant to a `DistanceMetric`.

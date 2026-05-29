@@ -193,6 +193,161 @@ fn test_file_dump_and_load_roundtrip() {
 }
 
 // =========================================================================
+// Regression tests (#894): reject corrupt/malicious persisted graph files
+// so that out-of-bounds node/neighbor IDs cannot reach `get_unchecked` in
+// the release search hot path. Each test corrupts exactly one field.
+// =========================================================================
+
+/// Builds a small index and dumps it, returning the temp dir so the files
+/// outlive the helper. The dir must be kept alive by the caller.
+fn dump_small_index(dir: &tempfile::TempDir, basename: &str) {
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 8);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+    for i in 0..20 {
+        hnsw.insert(&[i as f32; 8]).expect("insert");
+    }
+    hnsw.file_dump(dir.path(), basename).expect("dump");
+}
+
+/// Overwrites `len` bytes at `offset` in the named file with `bytes`.
+fn patch_file(path: &std::path::Path, offset: usize, bytes: &[u8]) {
+    let mut data = std::fs::read(path).expect("read file");
+    data[offset..offset + bytes.len()].copy_from_slice(bytes);
+    std::fs::write(path, &data).expect("write file");
+}
+
+fn load_corrupt(dir: &tempfile::TempDir, basename: &str) -> std::io::Result<()> {
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 8);
+    NativeHnsw::file_load(dir.path(), basename, engine).map(|_| ())
+}
+
+// Graph header byte layout (little-endian): version u32 @0, num_layers u32 @4,
+// max_connections u32 @8, max_connections_0 u32 @12, ef_construction u32 @16,
+// entry_point u64 @20, max_layer u32 @28, count u64 @32. Layer 0 starts @40
+// with num_nodes u64, then per node: num_neighbors u32 followed by neighbor u32s.
+
+#[test]
+fn test_file_load_rejects_neighbor_id_beyond_count() {
+    let dir = tempdir().unwrap();
+    dump_small_index(&dir, "corrupt_nbr");
+    let graph = dir.path().join("corrupt_nbr.graph");
+    // First node's first neighbor id sits at offset 40 (num_nodes u64)
+    // + 4 (num_neighbors u32) = 44. Set it to a huge value >= count.
+    patch_file(&graph, 44, &u32::MAX.to_le_bytes());
+    assert!(
+        load_corrupt(&dir, "corrupt_nbr").is_err(),
+        "load must reject an out-of-range neighbor id"
+    );
+}
+
+#[test]
+fn test_file_load_rejects_entry_point_beyond_count() {
+    let dir = tempdir().unwrap();
+    dump_small_index(&dir, "corrupt_ep");
+    let graph = dir.path().join("corrupt_ep.graph");
+    // entry_point u64 @20
+    patch_file(&graph, 20, &9_999_999u64.to_le_bytes());
+    assert!(
+        load_corrupt(&dir, "corrupt_ep").is_err(),
+        "load must reject an out-of-range entry_point"
+    );
+}
+
+#[test]
+fn test_file_load_rejects_absurd_num_nodes() {
+    let dir = tempdir().unwrap();
+    dump_small_index(&dir, "corrupt_nodes");
+    let graph = dir.path().join("corrupt_nodes.graph");
+    // Layer 0 num_nodes u64 @40 — far larger than the 20 vectors.
+    patch_file(&graph, 40, &1_000_000_000u64.to_le_bytes());
+    assert!(
+        load_corrupt(&dir, "corrupt_nodes").is_err(),
+        "load must reject num_nodes exceeding the vector count"
+    );
+}
+
+#[test]
+fn test_file_load_rejects_absurd_num_neighbors() {
+    let dir = tempdir().unwrap();
+    dump_small_index(&dir, "corrupt_nnbr");
+    let graph = dir.path().join("corrupt_nnbr.graph");
+    // First node's num_neighbors u32 @40 + 8 = 48; absurd value > cap.
+    patch_file(&graph, 48, &u32::MAX.to_le_bytes());
+    assert!(
+        load_corrupt(&dir, "corrupt_nnbr").is_err(),
+        "load must reject num_neighbors exceeding the safety cap"
+    );
+}
+
+#[test]
+fn test_file_load_rejects_degenerate_max_connections() {
+    let dir = tempdir().unwrap();
+    dump_small_index(&dir, "corrupt_mc");
+    let graph = dir.path().join("corrupt_mc.graph");
+    // max_connections u32 @8 set to 1 (invalid: level_mult = 1/ln(1) = inf).
+    patch_file(&graph, 8, &1u32.to_le_bytes());
+    assert!(
+        load_corrupt(&dir, "corrupt_mc").is_err(),
+        "load must reject max_connections < 2"
+    );
+}
+
+#[test]
+fn test_file_load_rejects_count_mismatch() {
+    let dir = tempdir().unwrap();
+    dump_small_index(&dir, "corrupt_count");
+    let graph = dir.path().join("corrupt_count.graph");
+    // graph count u64 @32 set to a value != vectors count (20).
+    patch_file(&graph, 32, &7u64.to_le_bytes());
+    assert!(
+        load_corrupt(&dir, "corrupt_count").is_err(),
+        "load must reject a graph/vectors count mismatch"
+    );
+}
+
+#[test]
+fn test_file_load_rejects_truncated_vectors_header() {
+    let dir = tempdir().unwrap();
+    dump_small_index(&dir, "corrupt_vlen");
+    let vectors = dir.path().join("corrupt_vlen.vectors");
+    // Vectors header: version u32 @0, count u64 @4, dimension u32 @12.
+    // Inflate the declared count so the file is far too short to back it.
+    patch_file(&vectors, 4, &1_000_000u64.to_le_bytes());
+    assert!(
+        load_corrupt(&dir, "corrupt_vlen").is_err(),
+        "load must reject a vectors file shorter than its declared payload"
+    );
+}
+
+#[test]
+fn test_file_load_valid_index_still_loads() {
+    // Regression guard: the new validation must not reject a genuine index.
+    let dir = tempdir().unwrap();
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 8);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+    let vectors: Vec<Vec<f32>> = (0..25).map(|i| vec![i as f32 * 0.1; 8]).collect();
+    for v in &vectors {
+        hnsw.insert(v).expect("insert");
+    }
+    hnsw.file_dump(dir.path(), "valid").expect("dump");
+
+    let engine2 = CachedSimdDistance::new(DistanceMetric::Euclidean, 8);
+    let loaded = NativeHnsw::file_load(dir.path(), "valid", engine2).expect("valid load");
+    assert_eq!(loaded.len(), 25);
+
+    let query = vectors[3].clone();
+    let orig = hnsw.search(&query, 5, 50);
+    let after = loaded.search(&query, 5, 50);
+    assert_eq!(orig.len(), after.len());
+    if !orig.is_empty() {
+        assert_eq!(
+            orig[0].0, after[0].0,
+            "nearest neighbor must match after load"
+        );
+    }
+}
+
+// =========================================================================
 // TDD Tests: set_searching_mode (no-op but should not panic)
 // =========================================================================
 

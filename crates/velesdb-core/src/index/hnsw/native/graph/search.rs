@@ -229,6 +229,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             );
             // SAFETY: `get_unchecked` dereferences `entry` without bounds checks.
             // - Condition 1: `entry < vectors.len()` verified by `debug_assert!` above.
+            //   Persisted entry points / neighbor IDs are validated `< count`
+            //   once at load time (`graph_io::validate_graph_header`,
+            //   `read_node_neighbors`), so this holds in release too.
             // SAFETY: Skipping the bounds check avoids a branch in the HNSW hot path.
             let entry_vec = unsafe { vectors.get_unchecked(entry) };
             let mut best_dist = self.distance.distance(query, entry_vec);
@@ -308,6 +311,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             );
             // SAFETY: `get_unchecked` dereferences `neighbor` without bounds checks.
             // - Condition 1: `neighbor < vectors.len()` verified by `debug_assert!` above.
+            //   Persisted neighbor IDs are validated `< count` once at load
+            //   time (`graph_io::read_node_neighbors`), so this holds in release.
             // SAFETY: Skipping the bounds check avoids a branch in the HNSW hot path.
             let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
             let dist = self.distance.distance(query, neighbor_vec);
@@ -364,6 +369,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 );
                 // SAFETY: `get_unchecked` dereferences `ep` without bounds checks.
                 // - Condition 1: `ep < vectors.len()` verified by `debug_assert!` above.
+                //   Persisted entry points / neighbor IDs are validated `< count`
+                //   once at load time (`graph_io` validation), so this holds in release.
                 // SAFETY: Skipping the bounds check avoids a branch in the HNSW hot path.
                 let ep_vec = unsafe { vectors.get_unchecked(ep) };
                 let dist = self.distance.distance(query, ep_vec);

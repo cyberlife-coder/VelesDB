@@ -93,7 +93,15 @@ impl<'a> DirectVectorWriter<'a> {
         inner.with_contiguous_vectors_mut(|storage| {
             // Ensure capacity for all new vectors.
             let max_idx = results.iter().map(|r| r.idx).max().unwrap_or(0);
-            storage.ensure_capacity(max_idx + 1)?;
+            // #899 follow-up: use checked_add for consistency with the rest of
+            // the allocation hardening — a wrapped `max_idx + 1` would otherwise
+            // request capacity 0 and let `insert_at` write out of bounds.
+            let required = max_idx.checked_add(1).ok_or_else(|| {
+                crate::error::Error::AllocationFailed(format!(
+                    "write_to_contiguous: max index {max_idx} + 1 overflows usize"
+                ))
+            })?;
+            storage.ensure_capacity(required)?;
 
             for ((_, vector), result) in vectors.iter().zip(results.iter()) {
                 storage.insert_at(result.idx, vector)?;
