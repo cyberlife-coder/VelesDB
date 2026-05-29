@@ -55,6 +55,15 @@ exclude_paths:
   # TypeScript SDK REST/streaming backends — fetch URL constructed from
   # trusted application config (baseUrl), not user input. SSRF is FP.
   - "sdks/typescript/src/backends/**"
+  # TypeScript embedding adapter — same profile as backends/** (outbound fetch
+  # to a trusted, config-provided baseUrl, so opengrep's SSRF rule is a FP) and
+  # additionally hits an ESLint8 false positive: Codacy's bundled eslint@8.57.0
+  # does not load the SDK's flat `eslint.config.mjs` (flat config needs ESLint
+  # 9+), so it falls back to the *base* `no-unused-vars`, which mis-flags the
+  # `texts` parameter in the `Embedder.embed(texts)` interface signature. The
+  # SDK's own config (`@typescript-eslint/no-unused-vars`) + `tsc` enforce this
+  # file correctly in CI (`npm run typecheck`).
+  - "sdks/typescript/src/embed.ts"
   # Integration contains_text_search helpers — Codacy's online taint analysis
   # flags VelesQL query construction as SQL injection. All user inputs are
   # sanitized BEFORE the query is built:
@@ -364,15 +373,3 @@ engines:
       # LangChain usage" is a self-reference false positive.
       - "integrations/langchain/src/langchain_velesdb/scroll_ops.py"
       - "integrations/langchain/src/langchain_velesdb/multi_query_ops.py"
-
-  eslint:
-    exclude_paths:
-      # Embedding adapter — Codacy runs eslint@8.57.0, which does not load the
-      # SDK's flat `eslint.config.mjs` (flat config requires ESLint 9+) and so
-      # falls back to the *base* `no-unused-vars` rule. With the TS parser that
-      # rule false-positives on parameter names in interface/function-type
-      # signatures (`embed(texts: string[]): …`) — exactly the case
-      # `@typescript-eslint/no-unused-vars` was built to handle and which the
-      # SDK's own flat config (CI `npm run typecheck` + local `eslint src`)
-      # already enforces correctly. opengrep/trivy still scan this file.
-      - "sdks/typescript/src/embed.ts"
