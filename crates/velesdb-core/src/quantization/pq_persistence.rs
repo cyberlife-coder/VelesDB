@@ -9,6 +9,15 @@ use serde::{Deserialize, Serialize};
 
 use super::pq::ProductQuantizer;
 
+/// Maximum accepted size of a persisted PQ artifact (codebook or rotation).
+///
+/// A valid codebook is `num_subspaces * num_centroids * subspace_dim` f32s
+/// plus small metadata; with the trained bounds (`num_subspaces <= 64`,
+/// `num_centroids <= u16::MAX`, `subspace_dim` modest) this stays well under
+/// 256 MiB. The cap rejects absurd/hostile files before they are decoded into
+/// a multi-gigabyte allocation. (Addresses the alloc-cap concern of #897.)
+const MAX_PQ_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+
 /// RF-2: Serializes `value` with postcard and atomically writes to `dir/filename`.
 ///
 /// Write goes to `.tmp` suffix first, then renamed for crash safety.
@@ -43,6 +52,12 @@ fn postcard_load<T: for<'de> Deserialize<'de>>(
     if !path.exists() {
         return Ok(None);
     }
+    let file_len = std::fs::metadata(&path)?.len();
+    if file_len > MAX_PQ_ARTIFACT_BYTES {
+        return Err(Error::IndexCorrupted(format!(
+            "{label} file is {file_len} bytes, exceeds cap {MAX_PQ_ARTIFACT_BYTES}"
+        )));
+    }
     let data = std::fs::read(&path)?;
     let value: T = postcard::from_bytes(&data).map_err(|e| {
         Error::Io(std::io::Error::new(
@@ -67,11 +82,22 @@ impl ProductQuantizer {
 
     /// Load codebook from `<dir>/codebook.pq`. Returns `None` if file doesn't exist.
     ///
+    /// The decoded quantizer is structurally validated ([`Self::validate_loaded`])
+    /// before being returned, so a corrupt or tampered codebook is rejected here
+    /// rather than producing out-of-bounds indexing during search.
+    ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if deserialization or file I/O fails.
+    /// Returns `Error::Io` if deserialization or file I/O fails, or
+    /// `Error::IndexCorrupted` if the decoded codebook/rotation is inconsistent
+    /// or the file exceeds [`MAX_PQ_ARTIFACT_BYTES`].
     pub fn load_codebook(dir: &std::path::Path) -> Result<Option<Self>, Error> {
-        postcard_load(dir, "codebook.pq", "PQ codebook")
+        let Some(quantizer): Option<Self> = postcard_load(dir, "codebook.pq", "PQ codebook")?
+        else {
+            return Ok(None);
+        };
+        quantizer.validate_loaded()?;
+        Ok(Some(quantizer))
     }
 
     /// Save OPQ rotation matrix to `<dir>/rotation.opq` using postcard.

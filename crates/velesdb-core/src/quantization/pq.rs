@@ -331,6 +331,129 @@ fn check_degenerate_centroids(centroids: &[Vec<Vec<f32>>]) {
 }
 
 impl ProductQuantizer {
+    /// Validate a deserialized quantizer's structural invariants.
+    ///
+    /// Must be called once on every quantizer loaded from untrusted bytes
+    /// (see [`Self::load_codebook`]) before it is used for search. After this
+    /// returns `Ok`, the codebook layout matches its declared dimensions and
+    /// the rotation matrix (if present) is `dimension * dimension`, so the
+    /// unchecked indexing in [`apply_rotation`](Self::apply_rotation) operates
+    /// only on in-bounds offsets.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::IndexCorrupted` if the centroid table shape, subspace
+    /// dimension, or rotation length is inconsistent with the declared
+    /// `dimension` / `num_subspaces` / `num_centroids`.
+    pub fn validate_loaded(&self) -> Result<(), Error> {
+        let cb = &self.codebook;
+        if cb.num_subspaces == 0 || cb.num_centroids == 0 || cb.subspace_dim == 0 {
+            return Err(Error::IndexCorrupted(
+                "PQ codebook has zero subspaces, centroids, or subspace_dim".into(),
+            ));
+        }
+        Self::validate_dimensions(cb)?;
+        if cb.centroids.len() != cb.num_subspaces {
+            return Err(Error::IndexCorrupted(format!(
+                "PQ codebook has {} centroid tables, expected num_subspaces {}",
+                cb.centroids.len(),
+                cb.num_subspaces
+            )));
+        }
+        Self::validate_centroid_tables(cb)?;
+        self.validate_rotation()
+    }
+
+    /// Validate the `num_centroids` ceiling and the `subspace_dim * num_subspaces`
+    /// shape invariant against attacker-controlled, post-deserialize fields.
+    fn validate_dimensions(cb: &PQCodebook) -> Result<(), Error> {
+        // `train()` enforces `num_centroids <= u16::MAX` so codes (u16) can index
+        // every centroid. Without this, `validate_codes` (`code < num_centroids`)
+        // is trivially true for any `num_centroids > 65535`, letting out-of-table
+        // codes slip past. Reject here, consistent with `train`.
+        if u16::try_from(cb.num_centroids).is_err() {
+            return Err(Error::IndexCorrupted(format!(
+                "PQ codebook num_centroids {} exceeds u16::MAX (65535)",
+                cb.num_centroids
+            )));
+        }
+        // `checked_mul`: both operands are attacker-controlled post-deserialize; a
+        // wrapping multiply (esp. on 32-bit targets) could false-pass this check.
+        let Some(product) = cb.subspace_dim.checked_mul(cb.num_subspaces) else {
+            return Err(Error::IndexCorrupted(format!(
+                "PQ codebook subspace_dim {} * num_subspaces {} overflows usize",
+                cb.subspace_dim, cb.num_subspaces
+            )));
+        };
+        if product != cb.dimension {
+            return Err(Error::IndexCorrupted(format!(
+                "PQ codebook dimension {} != num_subspaces {} * subspace_dim {}",
+                cb.dimension, cb.num_subspaces, cb.subspace_dim
+            )));
+        }
+        Ok(())
+    }
+
+    /// Validate that every subspace has `num_centroids` centroids of `subspace_dim`.
+    fn validate_centroid_tables(cb: &PQCodebook) -> Result<(), Error> {
+        for (subspace, table) in cb.centroids.iter().enumerate() {
+            if table.len() != cb.num_centroids {
+                return Err(Error::IndexCorrupted(format!(
+                    "PQ subspace {subspace} has {} centroids, expected {}",
+                    table.len(),
+                    cb.num_centroids
+                )));
+            }
+            if let Some(bad) = table.iter().position(|c| c.len() != cb.subspace_dim) {
+                return Err(Error::IndexCorrupted(format!(
+                    "PQ subspace {subspace} centroid {bad} has wrong length, expected {}",
+                    cb.subspace_dim
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate the OPQ rotation matrix length against the codebook dimension.
+    fn validate_rotation(&self) -> Result<(), Error> {
+        if let Some(matrix) = &self.rotation {
+            super::validate_rotation_len(matrix.len(), self.codebook.dimension, "OPQ")?;
+        }
+        Ok(())
+    }
+
+    /// Verify every code in `pq_vector` is a valid centroid index `< num_centroids`
+    /// and that the code count matches `num_subspaces`.
+    ///
+    /// This is the precondition the unsafe SIMD ADC kernels rely on: once it
+    /// returns `Ok`, `code[i] < num_centroids` for all `i`, so every gather
+    /// index `subspace * num_centroids + code` stays within the LUT bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::IndexCorrupted` if a code is out of range or the code
+    /// count is wrong.
+    pub fn validate_codes(&self, pq_vector: &PQVector) -> Result<(), Error> {
+        if pq_vector.codes.len() != self.codebook.num_subspaces {
+            return Err(Error::IndexCorrupted(format!(
+                "PQ vector has {} codes, expected num_subspaces {}",
+                pq_vector.codes.len(),
+                self.codebook.num_subspaces
+            )));
+        }
+        if let Some(bad) = pq_vector
+            .codes
+            .iter()
+            .position(|&c| usize::from(c) >= self.codebook.num_centroids)
+        {
+            return Err(Error::IndexCorrupted(format!(
+                "PQ code {} at subspace {bad} >= num_centroids {}",
+                pq_vector.codes[bad], self.codebook.num_centroids
+            )));
+        }
+        Ok(())
+    }
+
     /// Precompute ADC lookup table for a query vector.
     ///
     /// Returns flat `[m * k]` table indexed as `lut[subspace * k + centroid_id]`.
@@ -437,9 +560,9 @@ const ADC_SIMD_BATCH_THRESHOLD: usize = 8;
 ///
 /// # Errors
 ///
-/// Returns `Err` only if LUT construction parameters are inconsistent
-/// (zero subspaces). In practice this cannot happen with a validly
-/// trained `ProductQuantizer`.
+/// Returns `Err` if a candidate's PQ codes are out of range for the codebook
+/// (`Error::IndexCorrupted`, e.g. from a tampered/corrupt persisted vector) or
+/// if LUT construction parameters are inconsistent (zero subspaces).
 #[cfg_attr(not(feature = "persistence"), allow(dead_code))]
 pub(crate) fn pq_adc_batch_rescore(
     quantizer: &ProductQuantizer,
@@ -451,6 +574,15 @@ pub(crate) fn pq_adc_batch_rescore(
     }
 
     let m = quantizer.codebook.num_subspaces;
+
+    // Validate every code once, before any indexing into the LUT. This upholds
+    // the unsafe SIMD kernel precondition `code[i] < num_centroids` (== k) for
+    // the whole batch — so the gather indices stay within the LUT bounds — and
+    // keeps the scalar fallback panic-free. A single linear scan here keeps the
+    // check out of both the scalar and SIMD hot loops.
+    for pq_vec in pq_vectors {
+        quantizer.validate_codes(pq_vec)?;
+    }
 
     // Small batches: scalar path avoids slice-building overhead.
     if pq_vectors.len() < ADC_SIMD_BATCH_THRESHOLD {

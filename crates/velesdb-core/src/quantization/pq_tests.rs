@@ -978,3 +978,155 @@ fn adc_batch_rescore_preserves_ordering() {
         "batch ADC top-k should match scalar top-k exactly, got recall={recall}"
     );
 }
+
+// ====================================================================
+// #895: load-time validation of PQ codes / rotation (OOB gather guard)
+// ====================================================================
+
+/// Train a small valid PQ for validation tests: 4D, 2 subspaces, 2 centroids.
+fn small_trained_pq() -> ProductQuantizer {
+    let vectors = vec![
+        vec![1.0, 2.0, 3.0, 4.0],
+        vec![5.0, 6.0, 7.0, 8.0],
+        vec![-1.0, -2.0, 9.0, 10.0],
+    ];
+    ProductQuantizer::train(&vectors, 2, 2).expect("train small PQ")
+}
+
+#[test]
+fn validate_codes_rejects_out_of_range_code() {
+    let pq = small_trained_pq();
+    // num_centroids == 2, so code 2 is out of range (valid are 0,1).
+    let corrupt = PQVector { codes: vec![0, 2] };
+    let err = pq
+        .validate_codes(&corrupt)
+        .expect_err("out-of-range code must be rejected");
+    assert!(matches!(err, Error::IndexCorrupted(_)), "got {err:?}");
+}
+
+#[test]
+fn validate_codes_rejects_wrong_code_count() {
+    let pq = small_trained_pq();
+    let corrupt = PQVector {
+        codes: vec![0, 1, 0],
+    };
+    let err = pq
+        .validate_codes(&corrupt)
+        .expect_err("wrong code count must be rejected");
+    assert!(matches!(err, Error::IndexCorrupted(_)), "got {err:?}");
+}
+
+#[test]
+fn validate_codes_accepts_valid_codes() {
+    let pq = small_trained_pq();
+    let valid = PQVector { codes: vec![1, 0] };
+    assert!(pq.validate_codes(&valid).is_ok());
+}
+
+#[test]
+fn batch_rescore_rejects_out_of_range_code_without_ub() {
+    // The SIMD ADC dispatch path must return Err (not OOB gather / UB / panic)
+    // when a candidate carries a tampered code >= num_centroids.
+    let pq = small_trained_pq();
+    let bad = PQVector { codes: vec![0, 99] };
+    let refs: Vec<&PQVector> = vec![&bad];
+    let query = vec![1.0, 2.0, 3.0, 4.0];
+    let err = pq_adc_batch_rescore(&pq, &query, &refs)
+        .expect_err("batch rescore must reject out-of-range codes");
+    assert!(matches!(err, Error::IndexCorrupted(_)), "got {err:?}");
+}
+
+#[test]
+fn validate_loaded_rejects_rotation_length_mismatch() {
+    let mut pq = small_trained_pq();
+    // dimension == 4 → rotation must be 16 elements; give 9 instead.
+    pq.rotation = Some(vec![0.0; 9]);
+    let err = pq
+        .validate_loaded()
+        .expect_err("rotation length mismatch must be rejected");
+    assert!(matches!(err, Error::IndexCorrupted(_)), "got {err:?}");
+}
+
+#[test]
+fn validate_loaded_rejects_centroid_table_count_mismatch() {
+    let mut pq = small_trained_pq();
+    // Drop a subspace table so centroids.len() != num_subspaces.
+    pq.codebook.centroids.pop();
+    let err = pq
+        .validate_loaded()
+        .expect_err("centroid table count mismatch must be rejected");
+    assert!(matches!(err, Error::IndexCorrupted(_)), "got {err:?}");
+}
+
+#[test]
+fn validate_loaded_accepts_valid_quantizer() {
+    let pq = small_trained_pq();
+    assert!(pq.validate_loaded().is_ok());
+}
+
+#[test]
+fn validate_loaded_rejects_num_centroids_above_u16_max() {
+    // `train()` caps num_centroids at u16::MAX; a tampered codebook declaring more
+    // would let out-of-table u16 codes pass `validate_codes` trivially. Reject it.
+    let mut pq = small_trained_pq();
+    pq.codebook.num_centroids = usize::from(u16::MAX) + 1;
+    let err = pq
+        .validate_loaded()
+        .expect_err("num_centroids > 65535 must be rejected");
+    assert!(matches!(err, Error::IndexCorrupted(_)), "got {err:?}");
+}
+
+#[test]
+fn validate_loaded_rejects_shape_check_multiply_overflow() {
+    // `subspace_dim * num_subspaces` must use checked_mul: a wrapping product could
+    // false-pass the `== dimension` shape check on attacker-controlled fields.
+    let mut pq = small_trained_pq();
+    // Pick operands whose usize product overflows but whose declared dimension is
+    // left small, so an unchecked multiply could wrap to match `dimension`.
+    pq.codebook.subspace_dim = usize::MAX;
+    pq.codebook.num_subspaces = 2;
+    let err = pq
+        .validate_loaded()
+        .expect_err("multiply overflow must be rejected, not false-passed");
+    assert!(matches!(err, Error::IndexCorrupted(_)), "got {err:?}");
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn load_codebook_rejects_corrupt_centroid_table() {
+    let mut pq = small_trained_pq();
+    let dir = tempfile::tempdir().expect("tempdir");
+    pq.save_codebook(dir.path()).expect("save");
+
+    // Corrupt on disk: re-serialize a quantizer with a dropped centroid table.
+    pq.codebook.centroids.pop();
+    let bytes = postcard::to_allocvec(&pq).expect("serialize corrupt");
+    std::fs::write(dir.path().join("codebook.pq"), &bytes).expect("write corrupt");
+
+    let err = ProductQuantizer::load_codebook(dir.path())
+        .expect_err("corrupt codebook must fail to load");
+    assert!(matches!(err, Error::IndexCorrupted(_)), "got {err:?}");
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn load_codebook_valid_roundtrip_unchanged_distances() {
+    // Recall non-regression at the unit level: a valid round-trip loads and
+    // produces identical ADC distances to the in-memory quantizer.
+    let pq = small_trained_pq();
+    let query = vec![0.5, 1.5, 2.5, 3.5];
+    let encoded = pq.quantize(&query).expect("quantize");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    pq.save_codebook(dir.path()).expect("save");
+    let loaded = ProductQuantizer::load_codebook(dir.path())
+        .expect("load ok")
+        .expect("codebook exists");
+
+    let before = distance_pq_l2(&query, &encoded, &pq);
+    let after = distance_pq_l2(&query, &encoded, &loaded);
+    assert!(
+        (before - after).abs() < 1e-6,
+        "distance changed across round-trip: {before} vs {after}"
+    );
+}
