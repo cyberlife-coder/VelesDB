@@ -251,20 +251,23 @@ results = vector_store.text_query(
 
 ### Cross-Collection MATCH
 
-Use the `velesql()` method with the `_collection` parameter to run MATCH queries
-that enrich results with data from other collections. Nodes annotated with
-`@collection` in the MATCH pattern have their payloads looked up from the named
-collection after traversal.
+The `velesql()` method runs single-collection VelesQL/MATCH queries against the
+vector store's own collection:
 
 ```python
 results = vector_store.velesql(
-    "MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) "
-    "RETURN p.name, inv.price, inv.stock LIMIT 20",
-    params={"_collection": "catalog_graph"}
+    "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse) RETURN p.name, w.city LIMIT 20"
 )
 for row in results:
-    print(row["p.name"], row["inv.price"])
+    print(row["p.name"], row["w.city"])
 ```
+
+> **Cross-collection `@collection` MATCH is not available through the LlamaIndex
+> integration.** `velesql()` delegates to a single `velesdb.Collection`, which
+> cannot resolve `@collection`-annotated nodes from *other* collections — that
+> requires `Database`-level routing. For cross-collection MATCH, use the core
+> `velesdb.Database` API or the [REST server](https://github.com/cyberlife-coder/VelesDB)
+> directly. (Tracked in `docs/reference/ECOSYSTEM_PARITY.md`, action item #7.)
 
 ## Performance
 
