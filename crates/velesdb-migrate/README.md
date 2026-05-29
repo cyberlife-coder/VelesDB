@@ -38,6 +38,23 @@ Switch to VelesDB in minutes, not days. `velesdb-migrate` handles the heavy lift
 | **Elasticsearch** | ✅ Ready | REST API | OpenSearch compatible, `search_after` pagination |
 | **Redis** | ✅ Ready | REST API | Redis Stack with RediSearch, FT.SEARCH |
 
+### Sparse vector migration
+
+Sparse vectors (e.g. SPLADE / learned-sparse, BM25-style indexes) are extracted
+and carried through to the destination **only** for sources that expose them in
+their API:
+
+| Source | Sparse extraction |
+|--------|-------------------|
+| **Qdrant** (named sparse vectors) | ✅ |
+| **Pinecone** (`sparseValues`) | ✅ |
+| Supabase, Weaviate, Milvus, ChromaDB, Elasticsearch, Redis, JSON, CSV | ❌ (none extracted) |
+
+> ⚠️ If your source stores sparse vectors but is **not** in the ✅ list, those
+> sparse vectors are silently dropped during migration (dense vectors and
+> payloads still migrate normally). Export the sparse vectors separately and
+> re-ingest them, or open an issue if you need a connector to add sparse support.
+
 ### Previously supported (removed)
 
 | Source | Removed | Reason | Workaround |
