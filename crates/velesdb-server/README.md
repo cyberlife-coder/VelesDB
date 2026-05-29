@@ -103,6 +103,70 @@ curl http://localhost:8080/collections/documents
 curl -X DELETE http://localhost:8080/collections/documents
 ```
 
+#### Collection types
+
+`POST /collections` accepts an optional `collection_type` field
+(`"vector"` — the default, `"metadata_only"`, or `"graph"`):
+
+```bash
+# Metadata-only collection (no vectors) — reference data, lookups
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "entities", "collection_type": "metadata_only"}'
+
+# Graph collection (labeled nodes + edges). Omit `graph_schema` entirely for a
+# schemaless graph that accepts any node/edge types:
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "kg", "collection_type": "graph"}'
+
+# For a strict schema, pass the full `graph_schema` object. `schemaless` is
+# required; `node_types` / `edge_types` are typed objects (not bare strings),
+# and each `properties` map declares allowed property types ({} for none).
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "kg",
+        "collection_type": "graph",
+        "graph_schema": {
+          "schemaless": false,
+          "node_types": [
+            {"name": "Person",  "properties": {"name": "string"}},
+            {"name": "Company", "properties": {}}
+          ],
+          "edge_types": [
+            {"name": "WORKS_AT", "from_type": "Person", "to_type": "Company", "properties": {}},
+            {"name": "KNOWS",    "from_type": "Person", "to_type": "Person",  "properties": {}}
+          ]
+        }
+      }'
+```
+
+#### Optional HNSW tuning parameters
+
+For vector collections, four optional fields override the auto-tuned index
+parameters. Omit them to let VelesDB pick values from the vector dimension:
+
+| Field | Meaning | Default (auto-tuned) |
+|-------|---------|----------------------|
+| `hnsw_m` | Max neighbor connections per node | 24 (≤256 dim) / 32 (>256 dim) |
+| `hnsw_ef_construction` | Build-time search breadth | 300 (≤256 dim) / 400 (>256 dim) |
+| `hnsw_alpha` | VAMANA neighbor-diversification factor | 1.2 |
+| `hnsw_max_elements` | Initial capacity hint (pre-sizing for bulk import) | 100000 |
+
+```bash
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "tuned",
+        "dimension": 768,
+        "metric": "cosine",
+        "hnsw_m": 48,
+        "hnsw_ef_construction": 800,
+        "hnsw_max_elements": 500000
+      }'
+```
+
 ### Points (Vectors)
 
 ```bash
@@ -199,6 +263,28 @@ Response:
     {"id": 12, "score": 1.892, "payload": {"title": "Systems Programming in Rust"}}
   ]
 }
+```
+
+```bash
+# Sparse-vector search (learned-sparse / SPLADE-style)
+# `sparse_vector` accepts either the parallel-array form shown here, or the
+# Qdrant-compatible dict form {"42": 0.5, "1337": 1.2}.
+curl -X POST http://localhost:8080/collections/documents/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sparse_vector": {"indices": [42, 1337], "values": [0.5, 1.2]},
+    "top_k": 10
+  }'
+
+# Named sparse indexes: send `sparse_vectors` (a map) plus `sparse_index`
+# to select which one to query when more than one is defined.
+curl -X POST http://localhost:8080/collections/documents/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sparse_vectors": {"splade": {"indices": [42], "values": [0.9]}},
+    "sparse_index": "splade",
+    "top_k": 10
+  }'
 ```
 
 ```bash
