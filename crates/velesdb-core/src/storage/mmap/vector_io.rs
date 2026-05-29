@@ -199,7 +199,8 @@ impl VectorStorage for MmapStorage {
         // 1. Calculate total space needed and prepare batch WAL entry
         // Perf: Use FxHashMap for O(1) lookup instead of Vec with O(n) find
         // EPIC-033/US-004: Use sharded index for reduced contention
-        let (new_vector_offsets, total_new_size) = self.compute_new_offsets(vectors, vector_size)?;
+        let (new_vector_offsets, total_new_size) =
+            self.compute_new_offsets(vectors, vector_size)?;
 
         // 2. Pre-allocate space for all new vectors at once.
         // #898 follow-up: validate the new watermark with `checked_add` BEFORE

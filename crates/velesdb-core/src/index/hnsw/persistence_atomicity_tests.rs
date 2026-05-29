@@ -584,7 +584,8 @@ fn test_load_sidecars_rejects_index_beyond_vector_count() {
     let err = load_with_corrupt_single_mapping(1, 99, 1);
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
-        err.to_string().contains("absent from the loaded vector store"),
+        err.to_string()
+            .contains("absent from the loaded vector store"),
         "error should flag the absent index, got: {err}"
     );
 }
@@ -612,11 +613,11 @@ fn test_load_sidecars_rejects_dangling_index_within_next_idx() {
     persistence::save_mappings(path, &bad).expect("test: overwrite mappings");
 
     let meta = persistence::load_meta(path).expect("test: reload meta");
-    let err = load_sidecars(path, &meta)
-        .expect_err("test: dangling index must be rejected");
+    let err = load_sidecars(path, &meta).expect_err("test: dangling index must be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
-        err.to_string().contains("absent from the loaded vector store"),
+        err.to_string()
+            .contains("absent from the loaded vector store"),
         "error should flag the absent index, got: {err}"
     );
 }
@@ -632,7 +633,10 @@ fn test_load_sidecars_accepts_sparse_index_beyond_count() {
     let path = dir.path();
 
     let vectors = ShardedVectors::new(4);
-    vectors.insert_batch(vec![(0_usize, vec![1.0_f32; 4]), (5_usize, vec![2.0_f32; 4])]);
+    vectors.insert_batch(vec![
+        (0_usize, vec![1.0_f32; 4]),
+        (5_usize, vec![2.0_f32; 4]),
+    ]);
     let mut id_to_idx = HashMap::new();
     id_to_idx.insert(1_u64, 0_usize);
     id_to_idx.insert(2_u64, 5_usize);
@@ -646,7 +650,11 @@ fn test_load_sidecars_accepts_sparse_index_beyond_count() {
     let (loaded, _vectors, enabled) =
         load_sidecars(path, &meta).expect("test: sparse-but-valid index must load");
     assert!(enabled);
-    assert_eq!(loaded.get_id(5), Some(2_u64), "id 2 must resolve via sparse idx 5");
+    assert_eq!(
+        loaded.get_id(5),
+        Some(2_u64),
+        "id 2 must resolve via sparse idx 5"
+    );
 }
 
 #[test]
