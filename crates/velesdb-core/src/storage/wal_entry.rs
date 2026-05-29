@@ -69,13 +69,18 @@ impl WalEntry {
     }
 
     /// Applies this entry to the index, returning the new file position.
+    ///
+    /// `wal_end` is the logical end of the WAL being replayed; it bounds the
+    /// declared payload length so a corrupt length field cannot drive an
+    /// unbounded allocation (#897/#898).
     pub(super) fn apply(
         self,
         index: &mut FxHashMap<u64, u64>,
         reader: &mut BufReader<File>,
+        wal_end: u64,
     ) -> io::Result<u64> {
         match self.op {
-            WalOp::Store { id } => self.apply_store(id, index, reader),
+            WalOp::Store { id } => self.apply_store(id, index, reader, wal_end),
             WalOp::Delete { id } => self.apply_delete(id, index, reader),
         }
     }
@@ -85,11 +90,24 @@ impl WalEntry {
         id: u64,
         index: &mut FxHashMap<u64, u64>,
         reader: &mut BufReader<File>,
+        wal_end: u64,
     ) -> io::Result<u64> {
         let len_offset = self.pos_after_header;
         let mut len_bytes = [0u8; 4];
         reader.read_exact(&mut len_bytes)?;
         let payload_len = u64::from(u32::from_le_bytes(len_bytes));
+
+        // OOM guard (#897/#898): the payload (plus the 4-byte CRC for v2
+        // records) cannot extend past the WAL end. Reject before allocating.
+        let payload_start = self.pos_after_header + 4;
+        let crc_bytes = u64::from(self.has_crc) * 4;
+        let max_payload = wal_end.saturating_sub(payload_start);
+        if payload_len.saturating_add(crc_bytes) > max_payload {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "WAL payload length exceeds remaining file",
+            ));
+        }
 
         let end_pos = if self.has_crc {
             self.apply_store_with_crc(id, payload_len, index, reader, len_offset)?

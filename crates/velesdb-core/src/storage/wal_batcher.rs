@@ -16,7 +16,48 @@
 
 use crate::config::WalBatchConfig;
 use parking_lot::Mutex;
+use std::fs::File;
 use std::io::{self, Write};
+
+/// A WAL write target that can be both buffered-flushed and durably synced.
+///
+/// #898: group commit previously only flushed the `BufWriter`, never issuing an
+/// `fsync`, so a power loss after a "committed" batch could lose it. Flushing a
+/// batch now also calls [`WalSink::sync`]; for file-backed sinks this is
+/// `sync_all()`, while in-memory sinks (tests) are a no-op.
+pub trait WalSink: Write {
+    /// Durably persists previously written bytes (file-backed: `fsync`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the underlying sync fails.
+    fn sync(&mut self) -> io::Result<()>;
+}
+
+impl WalSink for File {
+    fn sync(&mut self) -> io::Result<()> {
+        self.sync_all()
+    }
+}
+
+impl WalSink for io::BufWriter<File> {
+    fn sync(&mut self) -> io::Result<()> {
+        self.flush()?;
+        self.get_ref().sync_all()
+    }
+}
+
+impl WalSink for Vec<u8> {
+    fn sync(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<W: WalSink + ?Sized> WalSink for &mut W {
+    fn sync(&mut self) -> io::Result<()> {
+        (**self).sync()
+    }
+}
 
 /// A batch of pending WAL entries awaiting flush.
 struct PendingBatch {
@@ -80,9 +121,9 @@ impl WalBatcher {
     /// # Errors
     ///
     /// Returns an I/O error if the underlying write or flush fails.
-    pub fn submit(&self, data: &[u8], writer: &mut impl Write) -> io::Result<()> {
+    pub fn submit(&self, data: &[u8], writer: &mut impl WalSink) -> io::Result<()> {
         if !self.config.enabled {
-            return write_and_flush(writer, data);
+            return write_and_sync(writer, data);
         }
 
         let needs_flush = {
@@ -106,7 +147,7 @@ impl WalBatcher {
     /// # Errors
     ///
     /// Returns an I/O error if the underlying write or flush fails.
-    pub fn flush(&self, writer: &mut impl Write) -> io::Result<()> {
+    pub fn flush(&self, writer: &mut impl WalSink) -> io::Result<()> {
         let data = {
             let mut batch = self.pending.lock();
             if batch.entry_count == 0 {
@@ -118,7 +159,9 @@ impl WalBatcher {
         };
 
         writer.write_all(&data)?;
-        writer.flush()
+        writer.flush()?;
+        // #898: group commit is only durable once the batch is fsynced.
+        writer.sync()
     }
 
     /// Returns `true` if batching is enabled.
@@ -144,8 +187,10 @@ impl WalBatcher {
     }
 }
 
-/// Writes data and flushes the writer in a single operation.
-fn write_and_flush(writer: &mut impl Write, data: &[u8]) -> io::Result<()> {
+/// Writes data, flushes, and fsyncs the writer in a single operation.
+fn write_and_sync(writer: &mut impl WalSink, data: &[u8]) -> io::Result<()> {
     writer.write_all(data)?;
-    writer.flush()
+    writer.flush()?;
+    // #898: pass-through (batching disabled) must still be durable.
+    writer.sync()
 }
