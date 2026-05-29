@@ -11,6 +11,7 @@ mod dml_helpers;
 pub(crate) mod helpers;
 mod introspection;
 mod match_parser;
+mod prescan;
 mod select;
 mod train;
 mod values;
@@ -98,6 +99,12 @@ impl Parser {
     /// let query = Parser::parse("SELECT * FROM documents LIMIT 10")?;
     /// ```
     pub fn parse(input: &str) -> Result<Query, ParseError> {
+        let config = ValidationConfig::default();
+        // #896: reject over-length / over-nested queries by a cheap linear
+        // pre-scan of the raw bytes BEFORE pest builds the full parse tree,
+        // so deeply nested ()/[]/(SELECT cannot overflow the native stack.
+        prescan::prescan(input, config.max_query_length)?;
+
         let pairs = VelesQLParser::parse(Rule::query, input).map_err(|e| {
             let position = match e.location {
                 pest::error::InputLocation::Pos(p) => p,
@@ -117,7 +124,7 @@ impl Parser {
             .ok_or_else(|| ParseError::syntax(0, input, "Empty query"))?;
 
         let query = Self::parse_query(query_pair)?;
-        QueryValidator::enforce_query_complexity(&query, input, &ValidationConfig::default())?;
+        QueryValidator::enforce_query_complexity(&query, input, &config)?;
         Ok(query)
     }
 }
