@@ -49,6 +49,72 @@ fn rate_limiter_isolates_clients() {
     assert!(limiter.check("client-b").is_ok());
 }
 
+#[test]
+fn rate_limiter_bounds_client_map_under_id_rotation() {
+    use crate::guardrails::resilience::MAX_TRACKED_CLIENTS;
+
+    let limiter = RateLimiter::new(10);
+
+    // Simulate an attacker rotating client_id on every request: insert far
+    // more distinct clients than the cap. The map must never exceed the cap
+    // (regression #907 — previously unbounded → OOM).
+    let total = MAX_TRACKED_CLIENTS + 500;
+    for i in 0..total {
+        let _ = limiter.check(&format!("attacker-{i}"));
+        assert!(
+            limiter.tracked_clients() <= MAX_TRACKED_CLIENTS,
+            "client map exceeded cap at iteration {i}: {}",
+            limiter.tracked_clients()
+        );
+    }
+    assert_eq!(limiter.tracked_clients(), MAX_TRACKED_CLIENTS);
+
+    // An active client is still correctly rate-limited: exhaust its tokens and
+    // confirm the next request is rejected.
+    for _ in 0..10 {
+        let _ = limiter.check("active");
+    }
+    assert!(
+        limiter.check("active").is_err(),
+        "active client should be rate-limited after exhausting tokens"
+    );
+}
+
+#[test]
+fn rate_limiter_bounded_eviction_under_low_qps_rotation() {
+    use crate::guardrails::resilience::MAX_TRACKED_CLIENTS;
+
+    // Low QPS is the worst case for eviction (#907 follow-up DoS): every fresh
+    // client immediately spends its single token and stays NON-idle for ~1s,
+    // so the old code took the LRU branch and scanned ALL 100k buckets under
+    // the write lock on every new-client request. The new code samples a
+    // bounded constant number of buckets, so this loop completes quickly and
+    // the map stays bounded even though no bucket is ever idle in the window.
+    let limiter = RateLimiter::new(1);
+
+    let total = MAX_TRACKED_CLIENTS + 500;
+    for i in 0..total {
+        let _ = limiter.check(&format!("rot-{i}"));
+        assert!(
+            limiter.tracked_clients() <= MAX_TRACKED_CLIENTS,
+            "client map exceeded cap at iteration {i}: {}",
+            limiter.tracked_clients()
+        );
+    }
+    assert_eq!(limiter.tracked_clients(), MAX_TRACKED_CLIENTS);
+
+    // Correctness under eviction pressure: a re-used (already-tracked) id must
+    // still hit its existing bucket and stay throttled — an attacker cannot
+    // reset their own limit by forcing eviction of other buckets. With qps=1
+    // the very first request spends the only token, so the immediate second
+    // request for the same id is rejected.
+    assert!(limiter.check("victim").is_ok(), "first token available");
+    assert!(
+        limiter.check("victim").is_err(),
+        "re-used id must remain throttled (no self-reset via eviction)"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CircuitBreaker: state transitions
 // ─────────────────────────────────────────────────────────────────────────────
