@@ -44,26 +44,36 @@ impl Parser {
         let mut operators = Vec::new();
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::having_condition {
-                for term_pair in inner_pair.into_inner() {
-                    match term_pair.as_rule() {
-                        Rule::having_term => conditions.push(Self::parse_having_term(term_pair)?),
-                        Rule::having_logical_op => {
-                            let text = term_pair.as_str().to_uppercase();
-                            if text == "AND" {
-                                operators.push(crate::velesql::LogicalOp::And);
-                            } else if text == "OR" {
-                                operators.push(crate::velesql::LogicalOp::Or);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                Self::collect_having_terms(inner_pair, &mut conditions, &mut operators)?;
             }
         }
         Ok(HavingClause {
             conditions,
             operators,
         })
+    }
+
+    /// Collects HAVING terms and logical operators from a `having_condition` node.
+    fn collect_having_terms(
+        condition_pair: pest::iterators::Pair<Rule>,
+        conditions: &mut Vec<HavingCondition>,
+        operators: &mut Vec<crate::velesql::LogicalOp>,
+    ) -> Result<(), ParseError> {
+        for term_pair in condition_pair.into_inner() {
+            match term_pair.as_rule() {
+                Rule::having_term => conditions.push(Self::parse_having_term(term_pair)?),
+                Rule::having_logical_op => {
+                    let text = term_pair.as_str().to_uppercase();
+                    if text == "AND" {
+                        operators.push(crate::velesql::LogicalOp::And);
+                    } else if text == "OR" {
+                        operators.push(crate::velesql::LogicalOp::Or);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     fn parse_having_term(pair: pest::iterators::Pair<Rule>) -> Result<HavingCondition, ParseError> {

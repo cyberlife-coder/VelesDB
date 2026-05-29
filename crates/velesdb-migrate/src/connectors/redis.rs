@@ -519,25 +519,39 @@ fn parse_ft_info_response(
 fn extract_vector_distance_metric(items: &[redis::Value], vector_field: &str) -> Option<String> {
     // Find the "attributes" key and scan each attribute array for the
     // vector field definition.
+    let attrs_array = find_attributes_array(items)?;
+    attrs_array
+        .iter()
+        .find_map(|attr| distance_metric_for_field(attr, vector_field))
+}
+
+/// Returns the value array following the `"attributes"` key in a flat
+/// `FT.INFO` response, if present.
+fn find_attributes_array(items: &[redis::Value]) -> Option<&[redis::Value]> {
     let mut i = 0;
     while i + 1 < items.len() {
         if extract_bulk_string(&items[i]).as_deref() == Some("attributes") {
             if let redis::Value::Array(attrs_array) = &items[i + 1] {
-                for attr in attrs_array {
-                    if let redis::Value::Array(parts) = attr {
-                        let identifier = find_string_after(parts, "identifier");
-                        if identifier.as_deref() == Some(vector_field) {
-                            return find_string_after(parts, "distance_metric")
-                                .or_else(|| find_string_after(parts, "DISTANCE_METRIC"));
-                        }
-                    }
-                }
+                return Some(attrs_array);
             }
-            break;
+            return None;
         }
         i += 2;
     }
     None
+}
+
+/// Extracts the distance metric from a single attribute array, but only if it
+/// describes `vector_field`.
+fn distance_metric_for_field(attr: &redis::Value, vector_field: &str) -> Option<String> {
+    let redis::Value::Array(parts) = attr else {
+        return None;
+    };
+    if find_string_after(parts, "identifier").as_deref() != Some(vector_field) {
+        return None;
+    }
+    find_string_after(parts, "distance_metric")
+        .or_else(|| find_string_after(parts, "DISTANCE_METRIC"))
 }
 
 /// Finds a numeric value by key in a flat key-value RESP list.

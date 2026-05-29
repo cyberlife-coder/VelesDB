@@ -57,10 +57,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
         // Phase 1: CPU greedy descent through upper layers (tiny, < 1000 nodes)
         let max_layer = self.max_layer.load(Ordering::Relaxed);
-        let mut current_ep = ep;
-        for layer_idx in (1..=max_layer).rev() {
-            current_ep = self.search_layer_single(&prepared, current_ep, layer_idx);
-        }
+        let current_ep = self.descend_to_layer0(&prepared, ep, max_layer);
 
         // Phase 2: Build or reuse cached CSR from layer 0.
         //
@@ -138,11 +135,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 dimension,
                 metric,
             );
-            if results.is_empty() {
-                None
-            } else {
-                Some(results)
-            }
+            (!results.is_empty()).then_some(results)
         } else {
             // Multi-entry GPU search: launch from diversified entry points
             // and merge results (matching CPU search_multi_entry pattern).
@@ -163,22 +156,39 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 all_results.extend(results);
             }
 
-            if all_results.is_empty() {
-                return None;
-            }
-
-            // Deduplicate by node ID, then sort by distance.
-            //
-            // Must sort by node ID first because dedup_by_key only removes
-            // *consecutive* duplicates. Sorting by distance first would leave
-            // non-adjacent duplicates (same node from different probes)
-            // interleaved with other nodes at similar distances.
-            all_results.sort_unstable_by_key(|r| r.0);
-            all_results.dedup_by_key(|r| r.0);
-            all_results.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
-            all_results.truncate(k);
-            Some(all_results)
+            Self::merge_gpu_probe_results(all_results, k)
         }
+    }
+
+    /// CPU greedy descent through the upper layers (1..=`max_layer`), returning
+    /// the layer-0 entry point. Layer 0 itself is offloaded to the GPU.
+    fn descend_to_layer0(&self, prepared: &[f32], ep: usize, max_layer: usize) -> usize {
+        let mut current_ep = ep;
+        for layer_idx in (1..=max_layer).rev() {
+            current_ep = self.search_layer_single(prepared, current_ep, layer_idx);
+        }
+        current_ep
+    }
+
+    /// Merges multi-probe GPU results: dedups by node id and returns the top-`k`
+    /// by ascending distance, or `None` if no probe returned anything.
+    ///
+    /// Must sort by node ID first because `dedup_by_key` only removes
+    /// *consecutive* duplicates. Sorting by distance first would leave
+    /// non-adjacent duplicates (same node from different probes) interleaved
+    /// with other nodes at similar distances.
+    fn merge_gpu_probe_results(
+        mut all_results: Vec<(usize, f32)>,
+        k: usize,
+    ) -> Option<Vec<(usize, f32)>> {
+        if all_results.is_empty() {
+            return None;
+        }
+        all_results.sort_unstable_by_key(|r| r.0);
+        all_results.dedup_by_key(|r| r.0);
+        all_results.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+        all_results.truncate(k);
+        Some(all_results)
     }
 
     /// Returns cached vector snapshot or refreshes it if the index version

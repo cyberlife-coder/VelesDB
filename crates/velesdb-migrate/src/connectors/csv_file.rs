@@ -172,6 +172,79 @@ impl CsvFileConnector {
         }
         payload
     }
+
+    /// Reads the header row, or synthesises `col_N` headers from the first data
+    /// row when the file is headerless. The first data row is retained as a
+    /// record in the headerless case.
+    fn read_header_or_first_row(&mut self, lines: &mut std::io::Lines<BufReader<File>>) {
+        if self.config.has_header {
+            if let Some(Ok(header_line)) = lines.next() {
+                self.headers = Self::parse_csv_line(&header_line, self.config.delimiter);
+            }
+        } else if let Some(Ok(first_line)) = lines.next() {
+            let fields = Self::parse_csv_line(&first_line, self.config.delimiter);
+            self.headers = (0..fields.len()).map(|i| format!("col_{}", i)).collect();
+            self.records.push(fields);
+        }
+    }
+
+    /// Parses every remaining line into a record.
+    fn read_remaining_records(&mut self, lines: std::io::Lines<BufReader<File>>) -> Result<()> {
+        for line in lines {
+            let line =
+                line.map_err(|e| Error::Extraction(format!("Failed to read line: {}", e)))?;
+            self.records
+                .push(Self::parse_csv_line(&line, self.config.delimiter));
+        }
+        Ok(())
+    }
+
+    /// Builds the field list from the headers, excluding the id, vector, and
+    /// (when spread) dimension columns.
+    fn payload_field_infos(&self) -> Vec<FieldInfo> {
+        let mut fields = Vec::new();
+        for header in &self.headers {
+            if header == &self.config.id_column || header == &self.config.vector_column {
+                continue;
+            }
+            if self.config.vector_spread && header.starts_with(&self.config.dim_prefix) {
+                continue;
+            }
+            fields.push(FieldInfo {
+                name: header.clone(),
+                field_type: "string".to_string(),
+                indexed: false,
+            });
+        }
+        fields
+    }
+
+    /// Derives the source schema from the first record, when one exists.
+    fn build_schema(&mut self) -> Result<()> {
+        let Some(first) = self.records.first() else {
+            return Ok(());
+        };
+        let vector = self.parse_vector(first)?;
+        let fields = self.payload_field_infos();
+        self.schema = Some(SourceSchema {
+            source_type: "csv_file".to_string(),
+            collection: self
+                .config
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("csv_import")
+                .to_string(),
+            dimension: vector.len(),
+            total_count: Some(self.records.len() as u64),
+            fields,
+            vector_column: Some(self.config.vector_column.clone()),
+            id_column: Some(self.config.id_column.clone()),
+            // File-backed connectors cannot introspect the metric.
+            metric: None,
+        });
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -192,57 +265,9 @@ impl SourceConnector for CsvFileConnector {
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
 
-        if self.config.has_header {
-            if let Some(Ok(header_line)) = lines.next() {
-                self.headers = Self::parse_csv_line(&header_line, self.config.delimiter);
-            }
-        } else if let Some(Ok(first_line)) = lines.next() {
-            let fields = Self::parse_csv_line(&first_line, self.config.delimiter);
-            self.headers = (0..fields.len()).map(|i| format!("col_{}", i)).collect();
-            self.records.push(fields);
-        }
-
-        for line in lines {
-            let line =
-                line.map_err(|e| Error::Extraction(format!("Failed to read line: {}", e)))?;
-            self.records
-                .push(Self::parse_csv_line(&line, self.config.delimiter));
-        }
-
-        if let Some(first) = self.records.first() {
-            let vector = self.parse_vector(first)?;
-            let mut fields = Vec::new();
-            for header in &self.headers {
-                if header == &self.config.id_column || header == &self.config.vector_column {
-                    continue;
-                }
-                if self.config.vector_spread && header.starts_with(&self.config.dim_prefix) {
-                    continue;
-                }
-                fields.push(FieldInfo {
-                    name: header.clone(),
-                    field_type: "string".to_string(),
-                    indexed: false,
-                });
-            }
-            self.schema = Some(SourceSchema {
-                source_type: "csv_file".to_string(),
-                collection: self
-                    .config
-                    .path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("csv_import")
-                    .to_string(),
-                dimension: vector.len(),
-                total_count: Some(self.records.len() as u64),
-                fields,
-                vector_column: Some(self.config.vector_column.clone()),
-                id_column: Some(self.config.id_column.clone()),
-                // File-backed connectors cannot introspect the metric.
-                metric: None,
-            });
-        }
+        self.read_header_or_first_row(&mut lines);
+        self.read_remaining_records(lines)?;
+        self.build_schema()?;
         Ok(())
     }
 

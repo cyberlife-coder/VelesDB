@@ -3,6 +3,7 @@
 use super::super::distance::DistanceEngine;
 use super::super::layer::NodeId;
 use super::NativeHnsw;
+use crate::perf_optimizations::ContiguousVectors;
 use rustc_hash::FxHashSet;
 
 impl<D: DistanceEngine> NativeHnsw<D> {
@@ -40,39 +41,67 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 // Reason: neighbor-selection hot path; bounds check elided after assert.
                 let candidate_vec = unsafe { vectors.get_unchecked(candidate_id) };
 
-                let is_diverse = selected.iter().all(|&selected_id| {
-                    debug_assert!(
-                        selected_id < vectors.len(),
-                        "selected_id {selected_id} out of bounds (len {})",
-                        vectors.len()
-                    );
-                    // SAFETY: selected_id < vectors.len() — verified by debug_assert above.
-                    // - selected_id was previously inserted via the same code path as candidate_id.
-                    // Reason: diversity inner loop; bounds check elided after assert.
-                    let selected_vec = unsafe { vectors.get_unchecked(selected_id) };
-                    let dist_to_selected = self.distance.distance(candidate_vec, selected_vec);
-                    self.alpha * candidate_dist <= dist_to_selected
-                });
-
-                if is_diverse || selected.is_empty() {
+                // The first neighbor is always accepted; the empty-`selected`
+                // short-circuit matches the original vacuous `all()` (which
+                // returns true over an empty set), avoiding a needless scan.
+                if selected.is_empty()
+                    || self.is_candidate_diverse(vectors, candidate_vec, candidate_dist, &selected)
+                {
                     selected.push(candidate_id);
                     selected_set.insert(candidate_id);
                 }
             }
         });
 
-        if selected.len() < max_neighbors {
-            for &(candidate_id, _) in candidates {
-                if selected.len() >= max_neighbors {
-                    break;
-                }
-                if selected_set.insert(candidate_id) {
-                    selected.push(candidate_id);
-                }
-            }
-        }
+        Self::backfill_neighbors(candidates, &mut selected, &mut selected_set, max_neighbors);
 
         selected
+    }
+
+    /// VAMANA diversity test: true iff `candidate_vec` is at least `alpha *
+    /// candidate_dist` away from every already-selected neighbor.
+    #[inline]
+    fn is_candidate_diverse(
+        &self,
+        vectors: &ContiguousVectors,
+        candidate_vec: &[f32],
+        candidate_dist: f32,
+        selected: &[NodeId],
+    ) -> bool {
+        selected.iter().all(|&selected_id| {
+            debug_assert!(
+                selected_id < vectors.len(),
+                "selected_id {selected_id} out of bounds (len {})",
+                vectors.len()
+            );
+            // SAFETY: selected_id < vectors.len() — verified by debug_assert above.
+            // - selected_id was previously inserted via the same code path as candidate_id.
+            // Reason: diversity inner loop; bounds check elided after assert.
+            let selected_vec = unsafe { vectors.get_unchecked(selected_id) };
+            let dist_to_selected = self.distance.distance(candidate_vec, selected_vec);
+            self.alpha * candidate_dist <= dist_to_selected
+        })
+    }
+
+    /// Fills any remaining neighbor slots in candidate order, ignoring
+    /// diversity, until `max_neighbors` is reached (skipping duplicates).
+    fn backfill_neighbors(
+        candidates: &[(NodeId, f32)],
+        selected: &mut Vec<NodeId>,
+        selected_set: &mut FxHashSet<NodeId>,
+        max_neighbors: usize,
+    ) {
+        if selected.len() >= max_neighbors {
+            return;
+        }
+        for &(candidate_id, _) in candidates {
+            if selected.len() >= max_neighbors {
+                break;
+            }
+            if selected_set.insert(candidate_id) {
+                selected.push(candidate_id);
+            }
+        }
     }
 
     /// Batch-connects a new node to all its selected neighbors in a single lock scope.
