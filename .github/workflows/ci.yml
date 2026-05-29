@@ -25,6 +25,7 @@ on:
       - 'demos/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'sonar-project.properties'
       - '.github/workflows/**'
   pull_request:
     branches: [main, develop]
@@ -39,6 +40,7 @@ on:
       - 'demos/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'sonar-project.properties'
       - '.github/workflows/**'
 
 # Annuler les runs précédents pour la même branche/PR
