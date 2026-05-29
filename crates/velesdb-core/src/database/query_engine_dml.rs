@@ -163,40 +163,50 @@ impl Database {
             if !Self::matches_update_filter(&point, filter) {
                 continue;
             }
-
-            let mut payload_map = point
-                .payload
-                .as_ref()
-                .and_then(serde_json::Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-
-            let mut updated_vector = point.vector.clone();
-
-            for (field, value) in assignments {
-                if field == "vector" {
-                    if collection.is_metadata_only() {
-                        return Err(Error::Query(
-                            "UPDATE on metadata-only collection cannot set 'vector'".to_string(),
-                        ));
-                    }
-                    updated_vector = Self::json_to_vector(value)?;
-                } else {
-                    payload_map.insert(field.clone(), value.clone());
-                }
-            }
-
-            let updated = if collection.is_metadata_only() {
-                crate::Point::metadata_only(point.id, serde_json::Value::Object(payload_map))
-            } else {
-                crate::Point::new(
-                    point.id,
-                    updated_vector,
-                    Some(serde_json::Value::Object(payload_map)),
-                )
-            };
-            updated_points.push(updated);
+            updated_points.push(Self::apply_assignments_to_point(
+                collection,
+                &point,
+                assignments,
+            )?);
         }
         Ok(updated_points)
+    }
+
+    /// Applies field assignments to a single point, producing the updated point.
+    fn apply_assignments_to_point(
+        collection: &crate::collection::Collection,
+        point: &crate::Point,
+        assignments: &[(String, serde_json::Value)],
+    ) -> Result<crate::Point> {
+        let mut payload_map = point
+            .payload
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let mut updated_vector = point.vector.clone();
+
+        for (field, value) in assignments {
+            if field == "vector" {
+                if collection.is_metadata_only() {
+                    return Err(Error::Query(
+                        "UPDATE on metadata-only collection cannot set 'vector'".to_string(),
+                    ));
+                }
+                updated_vector = Self::json_to_vector(value)?;
+            } else {
+                payload_map.insert(field.clone(), value.clone());
+            }
+        }
+
+        Ok(if collection.is_metadata_only() {
+            crate::Point::metadata_only(point.id, serde_json::Value::Object(payload_map))
+        } else {
+            crate::Point::new(
+                point.id,
+                updated_vector,
+                Some(serde_json::Value::Object(payload_map)),
+            )
+        })
     }
 }

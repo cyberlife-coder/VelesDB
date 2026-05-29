@@ -609,19 +609,19 @@ class VelesQL:
     def _normalize_legacy_query(query: str) -> str:
         normalized = query
         normalized = re.sub(
-            r"USING\s+FUSION\s+([a-zA-Z_][a-zA-Z0-9_]*)\b",
+            r"USING\s+FUSION\s+([a-z_][a-z0-9_]*)\b",
             r"USING FUSION (strategy='\1')",
             normalized,
             flags=re.IGNORECASE,
         )
         normalized = re.sub(
-            r"\bFROM\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\b(?=\s+JOIN|\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|\s+OFFSET|$)",
+            r"\bFROM\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+JOIN|\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|\s+OFFSET|$)",
             r"FROM \1 AS \2",
             normalized,
             flags=re.IGNORECASE,
         )
         normalized = re.sub(
-            r"\bJOIN\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\b(?=\s+ON|\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|\s+OFFSET|$)",
+            r"\bJOIN\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+ON|\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|\s+OFFSET|$)",
             r"JOIN \1 AS \2",
             normalized,
             flags=re.IGNORECASE,

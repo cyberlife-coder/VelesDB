@@ -214,13 +214,7 @@ impl MobileGraphStore {
                 results.push(TraversalResult { node_id, depth });
             }
 
-            if depth < max_depth {
-                for edge in self.get_outgoing(node_id) {
-                    if visited.insert(edge.target) {
-                        queue.push_back((edge.target, depth + 1));
-                    }
-                }
-            }
+            self.enqueue_neighbors(node_id, depth, max_depth, &mut visited, &mut queue);
         }
 
         results
@@ -413,6 +407,27 @@ impl MobileGraphStore {
         idx.get(&node_id)
             .map(|ids| ids.iter().filter_map(|id| edges.get(id).cloned()).collect())
             .unwrap_or_default()
+    }
+
+    /// Enqueues unvisited outgoing neighbors of `node_id` for further traversal.
+    ///
+    /// No-op when `depth` has already reached `max_depth`.
+    fn enqueue_neighbors(
+        &self,
+        node_id: u64,
+        depth: u32,
+        max_depth: u32,
+        visited: &mut std::collections::HashSet<u64>,
+        queue: &mut std::collections::VecDeque<(u64, u32)>,
+    ) {
+        if depth >= max_depth {
+            return;
+        }
+        for edge in self.get_outgoing(node_id) {
+            if visited.insert(edge.target) {
+                queue.push_back((edge.target, depth + 1));
+            }
+        }
     }
 }
 

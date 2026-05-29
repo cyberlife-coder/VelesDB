@@ -146,30 +146,45 @@ impl ScratchBuffer {
             }
             // ProductQuantization/RaBitQ share the SQ8 decode path in WASM context.
             StorageMode::SQ8 | StorageMode::ProductQuantization | StorageMode::RaBitQ => {
-                let start = idx * dimension;
-                let min = sq8_mins[idx];
-                let scale = sq8_scales[idx];
-                for (i, &q) in data_sq8[start..start + dimension].iter().enumerate() {
-                    self.buf[i] = (f32::from(q) / scale) + min;
-                }
-                &self.buf[..dimension]
+                self.decode_sq8(idx, data_sq8, sq8_mins, sq8_scales, dimension)
             }
-            StorageMode::Binary => {
-                let start = idx * self.bytes_per_vec;
-                for (i, &byte) in data_binary[start..start + self.bytes_per_vec]
-                    .iter()
-                    .enumerate()
-                {
-                    for bit in 0..8 {
-                        let dim_idx = i * 8 + bit;
-                        if dim_idx < dimension {
-                            self.buf[dim_idx] = if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
-                        }
-                    }
+            StorageMode::Binary => self.decode_binary(idx, data_binary, dimension),
+        }
+    }
+
+    /// Decodes an SQ8-quantized vector at `idx` into the scratch buffer.
+    fn decode_sq8(
+        &mut self,
+        idx: usize,
+        data_sq8: &[u8],
+        sq8_mins: &[f32],
+        sq8_scales: &[f32],
+        dimension: usize,
+    ) -> &[f32] {
+        let start = idx * dimension;
+        let min = sq8_mins[idx];
+        let scale = sq8_scales[idx];
+        for (i, &q) in data_sq8[start..start + dimension].iter().enumerate() {
+            self.buf[i] = (f32::from(q) / scale) + min;
+        }
+        &self.buf[..dimension]
+    }
+
+    /// Decodes a binary-packed vector at `idx` into the scratch buffer.
+    fn decode_binary(&mut self, idx: usize, data_binary: &[u8], dimension: usize) -> &[f32] {
+        let start = idx * self.bytes_per_vec;
+        for (i, &byte) in data_binary[start..start + self.bytes_per_vec]
+            .iter()
+            .enumerate()
+        {
+            for bit in 0..8 {
+                let dim_idx = i * 8 + bit;
+                if dim_idx < dimension {
+                    self.buf[dim_idx] = if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
                 }
-                &self.buf[..dimension]
             }
         }
+        &self.buf[..dimension]
     }
 }
 

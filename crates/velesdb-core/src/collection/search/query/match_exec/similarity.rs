@@ -321,49 +321,54 @@ impl Collection {
             "similarity()" | "similarity" => {
                 results.sort_unstable_by(|a, b| {
                     let cmp = a.score.unwrap_or(0.0).total_cmp(&b.score.unwrap_or(0.0));
-                    if descending {
-                        cmp.reverse()
-                    } else {
-                        cmp
-                    }
+                    Self::apply_direction(cmp, descending)
                 });
             }
             "depth" => {
                 results.sort_unstable_by(|a, b| {
-                    let cmp = a.depth.cmp(&b.depth);
-                    if descending {
-                        cmp.reverse()
-                    } else {
-                        cmp
-                    }
+                    Self::apply_direction(a.depth.cmp(&b.depth), descending)
                 });
             }
-            _ => {
-                if let Some((alias, property)) = parse_property_path(order_by) {
-                    let payload_storage = self.payload_storage.read();
-                    results.sort_unstable_by(|a, b| {
-                        let get_value = |r: &MatchResult| -> Option<serde_json::Value> {
-                            let node_id = *r.bindings.get(alias)?;
-                            let payload = payload_storage.retrieve(node_id).ok().flatten()?;
-                            let object = payload.as_object()?;
-                            Self::get_nested_property(object, property).cloned()
-                        };
-
-                        let a_value = get_value(a);
-                        let b_value = get_value(b);
-                        let cmp =
-                            super::super::compare_json_values(a_value.as_ref(), b_value.as_ref());
-                        if descending {
-                            cmp.reverse()
-                        } else {
-                            cmp
-                        }
-                    });
-                } else {
-                    tracing::warn!("Unsupported MATCH ORDER BY expression '{}'", order_by);
-                }
-            }
+            _ => self.order_match_results_by_property(results, order_by, descending),
         }
+    }
+
+    /// Applies sort direction to a comparison (reverses when `descending`).
+    #[inline]
+    fn apply_direction(cmp: std::cmp::Ordering, descending: bool) -> std::cmp::Ordering {
+        if descending {
+            cmp.reverse()
+        } else {
+            cmp
+        }
+    }
+
+    /// ORDER BY a property path (e.g. `n.name`); warns and leaves order
+    /// unchanged when the expression is not a recognized property path.
+    fn order_match_results_by_property(
+        &self,
+        results: &mut [MatchResult],
+        order_by: &str,
+        descending: bool,
+    ) {
+        let Some((alias, property)) = parse_property_path(order_by) else {
+            tracing::warn!("Unsupported MATCH ORDER BY expression '{}'", order_by);
+            return;
+        };
+        let payload_storage = self.payload_storage.read();
+        results.sort_unstable_by(|a, b| {
+            let get_value = |r: &MatchResult| -> Option<serde_json::Value> {
+                let node_id = *r.bindings.get(alias)?;
+                let payload = payload_storage.retrieve(node_id).ok().flatten()?;
+                let object = payload.as_object()?;
+                Self::get_nested_property(object, property).cloned()
+            };
+
+            let a_value = get_value(a);
+            let b_value = get_value(b);
+            let cmp = super::super::compare_json_values(a_value.as_ref(), b_value.as_ref());
+            Self::apply_direction(cmp, descending)
+        });
     }
 
     /// Converts `MatchResults` to `SearchResults` for unified API (EPIC-045 US-002).

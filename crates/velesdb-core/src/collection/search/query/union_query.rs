@@ -170,71 +170,109 @@ impl Collection {
     ) {
         match condition {
             crate::velesql::Condition::Or(left, right) => {
-                // Direct OR at top level
-                let left_has_sim = Self::count_similarity_conditions(left) > 0;
-                let right_has_sim = Self::count_similarity_conditions(right) > 0;
-
-                match (left_has_sim, right_has_sim) {
-                    (true, false) => (Some((**left).clone()), Some((**right).clone()), None),
-                    (false, true) => (Some((**right).clone()), Some((**left).clone()), None),
-                    _ => (Some(condition.clone()), None, None),
-                }
+                Self::split_top_level_or(condition, left, right)
             }
             crate::velesql::Condition::And(left, right) => {
-                // Issue #122: Check if one side contains an OR with similarity
-                let left_has_problematic_or = Self::has_similarity_in_problematic_or(left);
-                let right_has_problematic_or = Self::has_similarity_in_problematic_or(right);
-
-                match (left_has_problematic_or, right_has_problematic_or) {
-                    (true, false) => {
-                        // Left has the OR, right is an outer filter
-                        let (sim, meta, inner_filter) =
-                            Self::split_or_condition_with_outer_filter(left);
-                        // Combine inner_filter with right as outer filter
-                        let outer = match inner_filter {
-                            Some(inner) => Some(crate::velesql::Condition::And(
-                                Box::new(inner),
-                                Box::new((**right).clone()),
-                            )),
-                            None => Some((**right).clone()),
-                        };
-                        (sim, meta, outer)
-                    }
-                    (false, true) => {
-                        // Right has the OR, left is an outer filter
-                        let (sim, meta, inner_filter) =
-                            Self::split_or_condition_with_outer_filter(right);
-                        let outer = match inner_filter {
-                            Some(inner) => Some(crate::velesql::Condition::And(
-                                Box::new((**left).clone()),
-                                Box::new(inner),
-                            )),
-                            None => Some((**left).clone()),
-                        };
-                        (sim, meta, outer)
-                    }
-                    _ => {
-                        // Both or neither - treat as before
-                        if Self::count_similarity_conditions(condition) > 0 {
-                            (Some(condition.clone()), None, None)
-                        } else {
-                            (None, Some(condition.clone()), None)
-                        }
-                    }
-                }
+                Self::split_top_level_and(condition, left, right)
             }
             crate::velesql::Condition::Group(inner) => {
                 // Unwrap group and recurse
                 Self::split_or_condition_with_outer_filter(inner)
             }
             // Not an OR or AND condition - treat as similarity if it contains similarity
-            _ => {
-                if Self::count_similarity_conditions(condition) > 0 {
-                    (Some(condition.clone()), None, None)
-                } else {
-                    (None, Some(condition.clone()), None)
-                }
+            _ => Self::classify_leaf_condition(condition),
+        }
+    }
+
+    /// Handles a top-level `OR`: routes the similarity-bearing side to the
+    /// similarity slot and the other to the metadata slot (Issue #122).
+    fn split_top_level_or(
+        condition: &crate::velesql::Condition,
+        left: &crate::velesql::Condition,
+        right: &crate::velesql::Condition,
+    ) -> (
+        Option<crate::velesql::Condition>,
+        Option<crate::velesql::Condition>,
+        Option<crate::velesql::Condition>,
+    ) {
+        let left_has_sim = Self::count_similarity_conditions(left) > 0;
+        let right_has_sim = Self::count_similarity_conditions(right) > 0;
+        match (left_has_sim, right_has_sim) {
+            (true, false) => (Some(left.clone()), Some(right.clone()), None),
+            (false, true) => (Some(right.clone()), Some(left.clone()), None),
+            _ => (Some(condition.clone()), None, None),
+        }
+    }
+
+    /// Handles a top-level `AND`: when exactly one side carries a problematic
+    /// OR, recurse into it and fold the other side into the outer filter.
+    fn split_top_level_and(
+        condition: &crate::velesql::Condition,
+        left: &crate::velesql::Condition,
+        right: &crate::velesql::Condition,
+    ) -> (
+        Option<crate::velesql::Condition>,
+        Option<crate::velesql::Condition>,
+        Option<crate::velesql::Condition>,
+    ) {
+        match (
+            Self::has_similarity_in_problematic_or(left),
+            Self::has_similarity_in_problematic_or(right),
+        ) {
+            (true, false) => {
+                let (sim, meta, inner_filter) = Self::split_or_condition_with_outer_filter(left);
+                (
+                    sim,
+                    meta,
+                    Some(Self::combine_outer_filter(inner_filter, right, true)),
+                )
             }
+            (false, true) => {
+                let (sim, meta, inner_filter) = Self::split_or_condition_with_outer_filter(right);
+                (
+                    sim,
+                    meta,
+                    Some(Self::combine_outer_filter(inner_filter, left, false)),
+                )
+            }
+            // Both or neither - treat as a leaf.
+            _ => Self::classify_leaf_condition(condition),
+        }
+    }
+
+    /// Combines a recursively-extracted inner filter with the AND's other side,
+    /// preserving operand order (`inner_on_left` keeps the inner condition left).
+    fn combine_outer_filter(
+        inner_filter: Option<crate::velesql::Condition>,
+        other: &crate::velesql::Condition,
+        inner_on_left: bool,
+    ) -> crate::velesql::Condition {
+        match inner_filter {
+            Some(inner) => {
+                let (l, r) = if inner_on_left {
+                    (Box::new(inner), Box::new(other.clone()))
+                } else {
+                    (Box::new(other.clone()), Box::new(inner))
+                };
+                crate::velesql::Condition::And(l, r)
+            }
+            None => other.clone(),
+        }
+    }
+
+    /// Classifies a non-OR/AND condition: similarity slot if it contains a
+    /// similarity predicate, otherwise the metadata slot.
+    fn classify_leaf_condition(
+        condition: &crate::velesql::Condition,
+    ) -> (
+        Option<crate::velesql::Condition>,
+        Option<crate::velesql::Condition>,
+        Option<crate::velesql::Condition>,
+    ) {
+        if Self::count_similarity_conditions(condition) > 0 {
+            (Some(condition.clone()), None, None)
+        } else {
+            (None, Some(condition.clone()), None)
         }
     }
 }
