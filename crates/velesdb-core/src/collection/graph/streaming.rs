@@ -9,6 +9,14 @@ use super::{EdgeStore, TraversalResult, DEFAULT_MAX_DEPTH};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 
+/// Default upper bound on the visited-set / parent-map size for a single
+/// traversal (issue #906).
+///
+/// ~800 KB for an `FxHashSet<u64>` of this size. The streaming iterators
+/// switch to approximate mode at this bound; the eager BFS/DFS helpers stop
+/// expanding and return the bounded result they have accumulated so far.
+pub const MAX_VISITED_SIZE: usize = 100_000;
+
 /// Configuration for streaming traversal.
 ///
 /// Unlike `TraversalConfig`, this is optimized for memory-bounded streaming
@@ -32,7 +40,7 @@ impl Default for StreamingConfig {
         Self {
             max_depth: DEFAULT_MAX_DEPTH,
             limit: None,
-            max_visited_size: 100_000, // ~800KB for FxHashSet<u64>
+            max_visited_size: MAX_VISITED_SIZE, // ~800KB for FxHashSet<u64>
             rel_types: Vec::new(),
         }
     }
