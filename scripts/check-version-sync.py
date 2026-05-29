@@ -105,6 +105,10 @@ TARGETS: "list[tuple[str, str]]" = [
     # rewrites them on every release.
     ("scripts/dx-timing/scenario_rust.sh", "cargo_pin"),
     ("scripts/dx-timing/scenario_server.sh", "cargo_pin"),
+    # Install guide pins the pre-built multi-arch GHCR image (added v1.16.0).
+    # The `docker pull ...:X.Y.Z` example must track the workspace version so
+    # readers copy a tag that actually exists; bump-version.ps1 rewrites it.
+    ("docs/guides/INSTALLATION.md", "ghcr_image"),
 ]
 
 
@@ -301,6 +305,18 @@ def _read_cargo_pin(path: Path) -> str:
     return match.group(1)
 
 
+def _read_ghcr_image(path: Path) -> str:
+    """Pull the version out of a pinned `ghcr.io/cyberlife-coder/velesdb:X.Y.Z`
+    image reference. Added in v1.16.0 when the install guide started documenting
+    the pre-built multi-arch GHCR image; the adjacent `:latest` reference is
+    intentionally not matched (it never drifts)."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"ghcr\.io/cyberlife-coder/velesdb:(\d+\.\d+\.\d+)", text)
+    if not match:
+        raise RuntimeError(f"No `ghcr.io/cyberlife-coder/velesdb:X.Y.Z` pin in {path}")
+    return match.group(1)
+
+
 _READERS = {
     "toml": _read_toml_version,
     "json": _read_json_version,
@@ -318,6 +334,7 @@ _READERS = {
     "roadmap_current": _read_roadmap_current,
     "ts_sdk_banner": _read_ts_sdk_banner,
     "cargo_pin": _read_cargo_pin,
+    "ghcr_image": _read_ghcr_image,
 }
 
 

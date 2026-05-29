@@ -69,8 +69,52 @@ impl Collection {
         // Decrement histogram buckets BEFORE cache invalidation.
         self.update_histograms_on_delete(&old_payloads);
 
+        // Issue #900: deleting a node must cascade to its edges. Otherwise the
+        // edge store retains dangling edges pointing at (or from) a node that
+        // no longer exists, silently corrupting the graph. Gated to graph
+        // collections; no-op for vector / metadata-only collections.
+        self.cascade_delete_node_edges(ids);
+
         self.invalidate_caches_and_bump_generation();
         Ok(())
+    }
+
+    /// Removes every edge connected to each deleted node id (issue #900).
+    ///
+    /// Only graph collections own a populated edge store; for vector and
+    /// metadata-only collections this is a cheap config check followed by an
+    /// early return.
+    ///
+    /// # Lock ordering
+    ///
+    /// Runs **after** the storage / cache / label-index write locks acquired
+    /// in [`delete_vector_core_stores`](Self::delete_vector_core_stores) and
+    /// [`delete_metadata_only`](Self::delete_metadata_only) have been released
+    /// (those helpers drop their guards before returning). The edge store uses
+    /// its own internal lock chain (`edge_ids` registry → `shards[*]` in
+    /// ascending order, per `docs/CONCURRENCY_MODEL.md`), acquired here with no
+    /// other collection lock held — so taking them respects the documented
+    /// ascending lock order and cannot deadlock.
+    fn cascade_delete_node_edges(&self, ids: &[u64]) {
+        if self.config.read().graph_schema.is_none() {
+            return;
+        }
+        let mut removed_any = false;
+        for &id in ids {
+            // Both directions: `remove_node_edges` clears outgoing AND incoming
+            // edges so no dangling edge references the deleted node.
+            let before = self.edge_store.outgoing_degree(id) + self.edge_store.incoming_degree(id);
+            if before > 0 {
+                self.edge_store.remove_node_edges(id);
+                removed_any = true;
+            }
+        }
+        if removed_any {
+            // Bump write generation so cached query plans referencing the now
+            // removed edges are invalidated on the next query (CACHE-01).
+            self.write_generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// Collects current payloads for the given IDs (for histogram decrements on delete).

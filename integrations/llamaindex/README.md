@@ -12,6 +12,7 @@ VelesDB vector store integration for [LlamaIndex](https://www.llamaindex.ai/).
 - 🔒 **Local-first** — All data stays on your machine
 - 🧠 **RAG-ready** — Built for Retrieval-Augmented Generation
 - 🔀 **Multi-Query Fusion** — Native MQG support with RRF/Weighted strategies
+- 🌊 **Streaming inserts** — Backpressure-aware streaming ingestion through VelesDB's bounded-channel API
 
 ## Installation
 
@@ -250,20 +251,23 @@ results = vector_store.text_query(
 
 ### Cross-Collection MATCH
 
-Use the `velesql()` method with the `_collection` parameter to run MATCH queries
-that enrich results with data from other collections. Nodes annotated with
-`@collection` in the MATCH pattern have their payloads looked up from the named
-collection after traversal.
+The `velesql()` method runs single-collection VelesQL/MATCH queries against the
+vector store's own collection:
 
 ```python
 results = vector_store.velesql(
-    "MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) "
-    "RETURN p.name, inv.price, inv.stock LIMIT 20",
-    params={"_collection": "catalog_graph"}
+    "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse) RETURN p.name, w.city LIMIT 20"
 )
 for row in results:
-    print(row["p.name"], row["inv.price"])
+    print(row["p.name"], row["w.city"])
 ```
+
+> **Cross-collection `@collection` MATCH is not available through the LlamaIndex
+> integration.** `velesql()` delegates to a single `velesdb.Collection`, which
+> cannot resolve `@collection`-annotated nodes from *other* collections — that
+> requires `Database`-level routing. For cross-collection MATCH, use the core
+> `velesdb.Database` API or the [REST server](https://github.com/cyberlife-coder/VelesDB)
+> directly. (Tracked in `docs/reference/ECOSYSTEM_PARITY.md`, action item #7.)
 
 ## Performance
 
@@ -275,6 +279,26 @@ Source: `benchmarks/baseline.json`.
 | Search (10K / 128D, k=10) | ~0.34 ms | HNSW + SIMD cosine |
 | Hybrid (vector + filter) | ~0.27 ms | Filtered vector search |
 | Batch insert (10K / 128D) | ~9 s total | Sequential HNSW build |
+
+## Agent Memory (optional)
+
+`llamaindex-velesdb` re-exports three agent-memory wrappers around VelesDB's
+native memory subsystems. They are imported lazily — if the underlying
+`velesdb` native extension isn't installed, the import becomes a no-op and
+the symbols are exposed as `None`.
+
+```python
+from llamaindex_velesdb import (
+    VelesDBSemanticMemory,       # long-term knowledge store
+    VelesDBEpisodicMemory,       # time-sequenced event recall
+    VelesDBProceduralMemory,     # learned procedures with reinforcement
+)
+```
+
+See `llamaindex_velesdb/memory.py` for the full per-class API. The
+companion `GraphLoader`, `GraphRetriever`, and `GraphQARetriever` exports
+(top of the public namespace) are documented in the Graph Retrieval
+section above.
 
 ## Comparison with Other Stores
 

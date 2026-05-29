@@ -90,7 +90,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         }
 
         let mut result_vec: Vec<(NodeId, u32)> = results.into_iter().map(|(d, n)| (n, d)).collect();
-        result_vec.sort_by_key(|&(_, d)| d);
+        result_vec.sort_unstable_by_key(|&(_, d)| d);
         result_vec.truncate(k);
         result_vec
     }

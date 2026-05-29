@@ -90,7 +90,7 @@ impl ParallelTraverser {
             .collect();
 
         // Sort by score descending (highest first), break ties by depth ascending
-        unique.sort_by(|a, b| {
+        unique.sort_unstable_by(|a, b| {
             let score_cmp = b
                 .score
                 .unwrap_or(f32::NEG_INFINITY)
@@ -173,6 +173,11 @@ impl ParallelTraverser {
             stats.add_edges_traversed(neighbors.len());
 
             for (neighbor, edge_id) in neighbors {
+                // Stop expanding this node's neighbors once the budget is hit so a
+                // high fan-out node cannot blow past the limit in a single step.
+                if results.len() >= self.config.limit {
+                    break;
+                }
                 if visited.insert(neighbor) {
                     stats.add_nodes_visited(1);
                     let mut new_path = path.clone();

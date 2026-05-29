@@ -53,7 +53,7 @@ Check server health status.
 ```json
 {
   "status": "ok",
-  "version": "1.15.0"
+  "version": "1.16.0"
 }
 ```
 

@@ -1,7 +1,10 @@
 //! NEON SIMD implementations for ARM64 (EPIC-054 US-001).
 //!
 //! This module provides NEON-optimized distance calculations for aarch64 targets.
-//! Performance is comparable to x86_64 AVX2 (≥95% parity).
+//! Performance is comparable to `x86_64` AVX2 (≥95% parity).
+
+// Wildcard import of NEON intrinsics is the idiomatic pattern for SIMD kernels.
+#![allow(clippy::wildcard_imports)]
 
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
@@ -13,7 +16,7 @@ use std::arch::aarch64::*;
 /// Input slices must have equal length.
 ///
 /// # Performance
-/// - Uses vfmaq_f32 (fused multiply-add)
+/// - Uses `vfmaq_f32` (fused multiply-add)
 /// - Processes 4 elements per iteration
 /// - ~3-4x faster than scalar on M1/M2
 #[cfg(target_arch = "aarch64")]
@@ -277,8 +280,8 @@ mod tests {
     #[test]
     fn test_dot_product_neon_768d() {
         // Test with typical embedding dimension
-        let a: Vec<f32> = (0..768).map(|i| (i as f32) * 0.001).collect();
-        let b: Vec<f32> = (0..768).map(|i| (i as f32) * 0.002).collect();
+        let a: Vec<f32> = (0_u16..768).map(|i| f32::from(i) * 0.001).collect();
+        let b: Vec<f32> = (0_u16..768).map(|i| f32::from(i) * 0.002).collect();
 
         let neon_result = dot_product_neon_safe(&a, &b);
 

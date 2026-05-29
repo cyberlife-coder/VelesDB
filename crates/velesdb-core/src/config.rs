@@ -333,9 +333,11 @@ impl VelesConfig {
             .merge(Toml::file(path.as_ref()))
             .merge(Env::prefixed("VELESDB_").split("_").lowercase(false));
 
-        figment
+        let config: Self = figment
             .extract()
-            .map_err(|e| ConfigError::ParseError(e.to_string()))
+            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        config.validate()?;
+        Ok(config)
     }
 
     /// Creates a configuration from a TOML string.
@@ -352,9 +354,11 @@ impl VelesConfig {
             .merge(Serialized::defaults(Self::default()))
             .merge(Toml::string(toml_str));
 
-        figment
+        let config: Self = figment
             .extract()
-            .map_err(|e| ConfigError::ParseError(e.to_string()))
+            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        config.validate()?;
+        Ok(config)
     }
 
     // Validation is in config_validation.rs

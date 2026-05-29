@@ -5,6 +5,16 @@
 
 REST API server for VelesDB - a high-performance vector database.
 
+## Features
+
+- **Vector + Sparse + Hybrid search** with RRF/RSF fusion
+- **Graph traversal** (BFS/DFS) and Cypher-style MATCH queries via VelesQL
+- **Metadata collections** for schema-free reference data without vector overhead
+- **ColumnStore filtering** — typed columnar metadata with up to 130x faster predicate evaluation than JSON scanning
+- **Streaming inserts** via `/collections/{name}/stream/insert` for backpressure-aware bulk ingestion
+- **Quantization modes** (full, SQ8, binary) selected per collection
+- **Persistent storage** (WAL + mmap) — durable across restarts
+
 ## Installation
 
 ### From crates.io
@@ -91,6 +101,70 @@ curl http://localhost:8080/collections/documents
 
 # Delete collection
 curl -X DELETE http://localhost:8080/collections/documents
+```
+
+#### Collection types
+
+`POST /collections` accepts an optional `collection_type` field
+(`"vector"` — the default, `"metadata_only"`, or `"graph"`):
+
+```bash
+# Metadata-only collection (no vectors) — reference data, lookups
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "entities", "collection_type": "metadata_only"}'
+
+# Graph collection (labeled nodes + edges). Omit `graph_schema` entirely for a
+# schemaless graph that accepts any node/edge types:
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "kg", "collection_type": "graph"}'
+
+# For a strict schema, pass the full `graph_schema` object. `schemaless` is
+# required; `node_types` / `edge_types` are typed objects (not bare strings),
+# and each `properties` map declares allowed property types ({} for none).
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "kg",
+        "collection_type": "graph",
+        "graph_schema": {
+          "schemaless": false,
+          "node_types": [
+            {"name": "Person",  "properties": {"name": "string"}},
+            {"name": "Company", "properties": {}}
+          ],
+          "edge_types": [
+            {"name": "WORKS_AT", "from_type": "Person", "to_type": "Company", "properties": {}},
+            {"name": "KNOWS",    "from_type": "Person", "to_type": "Person",  "properties": {}}
+          ]
+        }
+      }'
+```
+
+#### Optional HNSW tuning parameters
+
+For vector collections, four optional fields override the auto-tuned index
+parameters. Omit them to let VelesDB pick values from the vector dimension:
+
+| Field | Meaning | Default (auto-tuned) |
+|-------|---------|----------------------|
+| `hnsw_m` | Max neighbor connections per node | 24 (≤256 dim) / 32 (>256 dim) |
+| `hnsw_ef_construction` | Build-time search breadth | 300 (≤256 dim) / 400 (>256 dim) |
+| `hnsw_alpha` | VAMANA neighbor-diversification factor | 1.2 |
+| `hnsw_max_elements` | Initial capacity hint (pre-sizing for bulk import) | 100000 |
+
+```bash
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "tuned",
+        "dimension": 768,
+        "metric": "cosine",
+        "hnsw_m": 48,
+        "hnsw_ef_construction": 800,
+        "hnsw_max_elements": 500000
+      }'
 ```
 
 ### Points (Vectors)
@@ -189,6 +263,28 @@ Response:
     {"id": 12, "score": 1.892, "payload": {"title": "Systems Programming in Rust"}}
   ]
 }
+```
+
+```bash
+# Sparse-vector search (learned-sparse / SPLADE-style)
+# `sparse_vector` accepts either the parallel-array form shown here, or the
+# Qdrant-compatible dict form {"42": 0.5, "1337": 1.2}.
+curl -X POST http://localhost:8080/collections/documents/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sparse_vector": {"indices": [42, 1337], "values": [0.5, 1.2]},
+    "top_k": 10
+  }'
+
+# Named sparse indexes: send `sparse_vectors` (a map) plus `sparse_index`
+# to select which one to query when more than one is defined.
+curl -X POST http://localhost:8080/collections/documents/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sparse_vectors": {"splade": {"indices": [42], "values": [0.9]}},
+    "sparse_index": "splade",
+    "top_k": 10
+  }'
 ```
 
 ```bash
@@ -470,11 +566,14 @@ The following endpoints bypass authentication even when API keys are configured:
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /health` | Liveness probe |
-| `GET /ready` | Readiness probe |
-| `GET /metrics` | Prometheus metrics (if enabled) |
+| `GET /health`, `GET /v1/health` | Liveness probe |
+| `GET /ready`, `GET /v1/ready` | Readiness probe |
 
-This allows load balancers and orchestrators to probe the server without credentials.
+This allows load balancers and orchestrators to probe the server without
+credentials. `GET /metrics` (Prometheus) is **gated by the API key** when
+auth is enabled — see `src/auth.rs::is_public_path` and finding F-02 in
+the auth audit; the metrics endpoint can leak collection names and
+write rates, so it is intentionally not in the public list.
 
 ## TLS / HTTPS
 
@@ -560,7 +659,7 @@ curl http://localhost:8080/health
 Response:
 
 ```json
-{"status": "ok", "version": "1.15.0"}
+{"status": "ok", "version": "1.16.0"}
 ```
 
 ### `GET /ready` -- Readiness Probe
@@ -574,13 +673,13 @@ curl http://localhost:8080/ready
 Response (ready):
 
 ```json
-{"status": "ready", "version": "1.15.0"}
+{"status": "ready", "version": "1.16.0"}
 ```
 
 Response (not ready):
 
 ```json
-{"status": "not_ready", "version": "1.15.0"}
+{"status": "not_ready", "version": "1.16.0"}
 ```
 
 ### Kubernetes Example
@@ -613,10 +712,14 @@ readinessProbe:
 
 ## Performance
 
-- **Cosine similarity**: ~33.1 ns per operation (768d)
-- **Dot product**: ~19.8 ns per operation (768d)
-- **Search latency**: 47.0 µs for 10K vectors (768D, Balanced mode)
-- **Throughput**: 38.8 Gelem/s (dot product, 768D)
+Numbers match the canonical contract in
+[`docs/reference/promise-contract.json`](../../docs/reference/promise-contract.json)
+(i9-14900KF, AVX2, `--release`, `target-cpu=native`):
+
+- **Cosine similarity**: ~33 ns per operation (768D)
+- **Dot product**: ~21.7 ns per operation (768D), ~35 Gelem/s
+- **HNSW search (index-only)**: ~55 µs (10K vectors, 768D, Balanced mode, k=10)
+- **End-to-end search p50**: ~450 µs (10K/384D, WAL ON, recall ≥ 96%)
 
 ## Configuration Reference
 

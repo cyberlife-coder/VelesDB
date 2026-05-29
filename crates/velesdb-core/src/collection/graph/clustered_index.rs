@@ -272,7 +272,7 @@ impl ClusteredIndex {
         }
 
         // Sort by offset
-        self.free_slots.sort_by_key(|(offset, _)| *offset);
+        self.free_slots.sort_unstable_by_key(|(offset, _)| *offset);
 
         // Merge adjacent slots
         let mut i = 0;

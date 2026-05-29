@@ -316,10 +316,12 @@ LIMIT 20
 | Metric | Latency | Throughput | SIMD Optimized |
 |--------|---------|------------|----------------|
 | **Cosine** | 33.1 ns | 30M ops/sec | AVX2 |
-| **Euclidean** | 22.5 ns | 44M ops/sec | AVX2 |
-| **DotProduct** | 19.8 ns | 50M ops/sec | AVX2 |
+| **Euclidean** | 26.0 ns | 34M ops/sec | AVX2 |
+| **DotProduct** | 21.7 ns | ~46M ops/sec | AVX2 |
 | **Hamming** | **35.8 ns** | **28M ops/sec** | POPCNT |
 | **Jaccard** | 35.1 ns | 28M ops/sec | AVX2 |
+
+> Per-metric latency values are the contract numbers in `docs/reference/promise-contract.json`.
 
 > **Tip:** Hamming is 10x faster than float metrics - ideal for binary embeddings on edge devices!
 

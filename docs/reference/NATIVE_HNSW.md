@@ -103,6 +103,31 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `save(path)` | Save index to disk |
 | `load(path, dim, metric)` | Load index from disk |
 
+#### Load-time validation (untrusted file safety)
+
+A persisted index is treated as **untrusted input**. `load` validates the
+`.graph` file against the trusted vector `count` (read from the `.vectors` file)
+**before** any node ID can reach the search hot path, which uses `get_unchecked`
+on the contiguous vector buffer. All of the following are checked once at load
+and a violation is rejected with `InvalidData`:
+
+- Graph header `count_check` must equal the vector `count` (mismatched
+  `.graph` / `.vectors` files are rejected).
+- `entry_point < count` (when `count > 0`).
+- Every neighbor ID is `< count`.
+- `num_neighbors` per node is capped (`MAX_NEIGHBORS_PER_NODE`), and node
+  iteration is bounded by the **remaining file length** (each node serializes at
+  least a 4-byte length), not a static ceiling — so a corrupt length field
+  cannot drive an unbounded allocation.
+- The `.vectors` header `(count, dimension)` is validated to fit within the
+  actual file size before any pointer cast.
+
+Because these invariants are established at load, the release-mode
+`get_unchecked` reads during search are provably in-bounds (closing the
+out-of-bounds-read class for a tampered index). See
+[SOUNDNESS.md](../SOUNDNESS.md#hnsw-graph-unsafe-operations) and
+[STORAGE_FORMAT.md](../STORAGE_FORMAT.md#load-time-validation-of-persisted-artifacts).
+
 ## Batch Insert Internals
 
 ### Two-Phase Allocation

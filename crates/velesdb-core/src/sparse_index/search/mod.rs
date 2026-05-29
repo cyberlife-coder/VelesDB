@@ -164,7 +164,7 @@ pub(crate) fn brute_force_search(
         .into_iter()
         .map(|(doc_id, score)| ScoredDoc { score, doc_id })
         .collect();
-    all_docs.sort_by(|a, b| b.cmp(a)); // descending
+    all_docs.sort_unstable_by(|a, b| b.cmp(a)); // descending
     all_docs.truncate(k);
     all_docs
 }

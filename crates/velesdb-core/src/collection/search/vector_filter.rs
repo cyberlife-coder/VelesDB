@@ -161,7 +161,11 @@ fn resolve_quality(
 
 /// Computes the oversampled candidate count for filtered search.
 pub(super) fn compute_oversampled_k(k: usize, filter: &crate::filter::Filter) -> usize {
-    let selectivity = estimate_filter_selectivity(filter);
+    // Clamp to a tiny positive value so that a zero-selectivity filter (e.g. empty
+    // IN clause) never produces NaN (0.0/0.0 when k=0) or Inf (k>0/0.0). Both would
+    // be handled by the clamp below, but NaN→usize is implementation-defined (LLVM
+    // saturates to 0, giving zero candidates instead of the minimum sensible count).
+    let selectivity = estimate_filter_selectivity(filter).max(1e-9);
     #[allow(clippy::cast_precision_loss)]
     let k_f64 = k as f64;
     #[allow(clippy::cast_precision_loss)]

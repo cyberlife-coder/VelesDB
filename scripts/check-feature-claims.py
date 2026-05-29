@@ -11,6 +11,7 @@ Exit codes:
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -29,7 +30,11 @@ CAPABILITIES: dict[str, list[str]] = {
     "sparse": ["sparse", "bm25", "tfidf", "inverted", "splade", "sparse_insert", "sparse_search"],
     "streaming": ["stream", "streaming", "stream_insert", "stream_upsert", "stream_traverse"],
     "quantization": ["quantization", "pq", "sq8", "binary", "train_pq", "storage_mode"],
-    "gpu": ["gpu", "wgpu", "acceleration"],
+    # `gpu` as a bare substring matches `GpuError` (an error-type variant
+    # propagated from core into bindings that expose no GPU compute API),
+    # producing false positives. Require either the `wgpu` crate, the
+    # `gpu_*` snake_case API prefix, or explicit "acceleration" wording.
+    "gpu": ["wgpu", "gpu_", "acceleration"],
     "persistence": ["persistence", "wal", "mmap", "flush", "storage", "save", "load", "indexeddb"],
     "column_store": ["column_store", "typed_column", "metadata_collection", "column_type"],
 }
@@ -107,6 +112,115 @@ def _parse_rust_public_api(src_path: Path) -> set[str]:
     if not text:
         return set()
     return _capabilities_from_text(text, CAPABILITIES)
+
+
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", flags=re.DOTALL)
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+_STRING_LITERAL_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _strip_rust_non_code(text: str) -> str:
+    """Remove comments and string literals from Rust source text.
+
+    Capability keywords that appear only in prose — `///` doc comments,
+    `//` line comments, `/* ... */` block comments, log messages or error
+    strings — are not part of the public API surface. Stripping them keeps
+    keyword detection focused on real identifiers (function names, type
+    names, `pub use` re-exports) so that a future regression that removes
+    a function while leaving its docstring behind does not mask a MISSING
+    gap.
+
+    Order matters: must run before `_strip_cfg_test_blocks` so that braces
+    inside string literals do not confuse the brace-balancing scan.
+    """
+    text = _BLOCK_COMMENT_RE.sub(" ", text)
+    text = _LINE_COMMENT_RE.sub(" ", text)
+    text = _STRING_LITERAL_RE.sub(" ", text)
+    return text
+
+
+def _strip_cfg_test_blocks(text: str) -> str:
+    """Remove `#[cfg(test)]`-annotated items from Rust source text.
+
+    The audit treats source files as API surface. Test modules and test
+    functions are deliberately not part of the API and would otherwise
+    contribute false-positive capability signals — e.g., a `CoreError::GpuError`
+    variant referenced inside `#[cfg(test)] mod tests` would register the
+    crate as exposing GPU acceleration even when no production code does.
+
+    Strategy: scan for each `#[cfg(test)]` attribute, then strip from the
+    attribute through either the matching closing brace (block items like
+    `mod tests {{ ... }}`) or the next `;` (statement items like
+    `#[cfg(test)] use ...;`). Brace counting is naive (no string/comment
+    parsing) but the asymmetric risk favors over-stripping: missing a
+    test-only mention is harmless, while leaking test mentions into the API
+    set hides real doc-vs-API gaps.
+    """
+    attr = "#[cfg(test)]"
+    out_parts: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        idx = text.find(attr, i)
+        if idx == -1:
+            out_parts.append(text[i:])
+            break
+        out_parts.append(text[i:idx])
+        # After the attribute, advance until the item terminates with either
+        # a balanced `{...}` block or a top-level `;`.
+        j = idx + len(attr)
+        while j < n:
+            c = text[j]
+            if c == "{":
+                depth = 1
+                j += 1
+                while j < n and depth > 0:
+                    if text[j] == "{":
+                        depth += 1
+                    elif text[j] == "}":
+                        depth -= 1
+                    j += 1
+                break
+            if c == ";":
+                j += 1
+                break
+            j += 1
+        i = j
+    return "".join(out_parts)
+
+
+def _scan_rust_src(src_dir: Path) -> set[str]:
+    """Scan every `.rs` file under *src_dir* and infer capabilities.
+
+    Used for crates whose public-facing API surface is split across sub-modules
+    (e.g. PyO3 method definitions on `Collection`/`Database` types in
+    velesdb-python). Reading only `lib.rs` misses those — `lib.rs` re-exports
+    types but the capability-bearing method names live one level deeper.
+
+    `#[cfg(test)]` items are stripped before keyword matching so that test
+    fixtures (mock error variants, test-only helpers) do not get counted as
+    public API.
+
+    Symlinks are explicitly not followed. `pathlib.Path.glob` defaults to
+    not following symlinks on Python 3.11 but the rewrite in 3.13 follows
+    them; using `os.walk(followlinks=False)` pins the behaviour across
+    interpreter versions and avoids both symlink-cycle hangs and accidental
+    inclusion of code outside the crate's source tree.
+    """
+    if not src_dir.is_dir():
+        return set()
+    combined = ""
+    for dirpath, _dirs, filenames in os.walk(src_dir, followlinks=False):
+        for filename in filenames:
+            if filename.endswith(".rs"):
+                rs_file = Path(dirpath) / filename
+                text = _read_text(rs_file)
+                # Prose stripping first so brace-balancing in cfg(test)
+                # stripping is not confused by `{`/`}` inside string literals.
+                text = _strip_rust_non_code(text)
+                text = _strip_cfg_test_blocks(text)
+                combined += text + "\n"
+    return _capabilities_from_text(combined, CAPABILITIES)
 
 
 def _parse_typescript_exports(entry_path: Path) -> set[str]:
@@ -202,20 +316,31 @@ def _check_roadmap(root: Path) -> list[str]:
 
 def _audit_crate(
     name: str,
-    lib_rs: Path,
+    actual: set[str],
     readme: Path,
     extra_notes: list[str] | None = None,
 ) -> AuditResult:
-    actual = _parse_rust_public_api(lib_rs)
+    """Build an AuditResult from a precomputed `actual` set and a README path.
+
+    Every per-crate audit funnels through this builder so that a future field
+    added to `AuditResult`, or a cross-cutting concern like logging/telemetry,
+    is wired in one place rather than re-implemented inline at each call site.
+    """
     claimed = _parse_readme(readme)
     notes = list(extra_notes or [])
     return AuditResult(name=name, actual=actual, claimed=claimed, notes=notes)
 
 
+def _audit_core(root: Path) -> AuditResult:
+    lib_rs = root / "crates" / "velesdb-core" / "src" / "lib.rs"
+    readme = root / "crates" / "velesdb-core" / "README.md"
+    return _audit_crate("velesdb-core", _parse_rust_public_api(lib_rs), readme)
+
+
 def _audit_python(root: Path) -> AuditResult:
-    lib_rs = root / "crates" / "velesdb-python" / "src" / "lib.rs"
+    src_dir = root / "crates" / "velesdb-python" / "src"
     readme = root / "crates" / "velesdb-python" / "README.md"
-    return _audit_crate("velesdb-python", lib_rs, readme)
+    return _audit_crate("velesdb-python", _scan_rust_src(src_dir), readme)
 
 
 def _audit_wasm(root: Path) -> AuditResult:
@@ -223,58 +348,41 @@ def _audit_wasm(root: Path) -> AuditResult:
     readme = root / "crates" / "velesdb-wasm" / "README.md"
     return _audit_crate(
         "velesdb-wasm",
-        lib_rs,
+        _parse_rust_public_api(lib_rs),
         readme,
         extra_notes=["Note: persistence feature intentionally excluded (WASM target uses IndexedDB)"],
     )
 
 
-def _audit_core(root: Path) -> AuditResult:
-    lib_rs = root / "crates" / "velesdb-core" / "src" / "lib.rs"
-    readme = root / "crates" / "velesdb-core" / "README.md"
-    return _audit_crate("velesdb-core", lib_rs, readme)
-
-
 def _audit_server(root: Path) -> AuditResult:
-    server_src = root / "crates" / "velesdb-server" / "src"
+    src_dir = root / "crates" / "velesdb-server" / "src"
     readme = root / "crates" / "velesdb-server" / "README.md"
-    # Scan all .rs files in the server (handlers contain the real API surface)
-    combined = ""
-    if server_src.exists():
-        for rs_file in server_src.glob("**/*.rs"):
-            combined += _read_text(rs_file) + "\n"
-    actual = _capabilities_from_text(combined, CAPABILITIES)
-    claimed = _parse_readme(readme)
-    return AuditResult(name="velesdb-server", actual=actual, claimed=claimed, notes=[])
+    return _audit_crate("velesdb-server", _scan_rust_src(src_dir), readme)
 
 
 def _audit_typescript(root: Path) -> AuditResult:
     ts_src = root / "sdks" / "typescript" / "src"
     readme = root / "sdks" / "typescript" / "README.md"
-    # Scan all .ts files (backends contain the real API surface)
+    # TS sources use a different glob (.ts not .rs) — inline scan stays here
+    # rather than carving a fourth `_scan_*` helper for a single caller.
     combined = ""
     if ts_src.exists():
         for ts_file in ts_src.glob("**/*.ts"):
             combined += _read_text(ts_file) + "\n"
     actual = _capabilities_from_text(combined, CAPABILITIES)
-    claimed = _parse_readme(readme)
-    return AuditResult(name="typescript-sdk", actual=actual, claimed=claimed, notes=[])
+    return _audit_crate("typescript-sdk", actual, readme)
 
 
 def _audit_langchain(root: Path) -> AuditResult:
     src_dir = root / "integrations" / "langchain" / "src"
     readme = root / "integrations" / "langchain" / "README.md"
-    actual = _parse_integration_src(src_dir)
-    claimed = _parse_readme(readme)
-    return AuditResult(name="langchain-integration", actual=actual, claimed=claimed, notes=[])
+    return _audit_crate("langchain-integration", _parse_integration_src(src_dir), readme)
 
 
 def _audit_llamaindex(root: Path) -> AuditResult:
     src_dir = root / "integrations" / "llamaindex" / "src"
     readme = root / "integrations" / "llamaindex" / "README.md"
-    actual = _parse_integration_src(src_dir)
-    claimed = _parse_readme(readme)
-    return AuditResult(name="llamaindex-integration", actual=actual, claimed=claimed, notes=[])
+    return _audit_crate("llamaindex-integration", _parse_integration_src(src_dir), readme)
 
 
 # ---------------------------------------------------------------------------

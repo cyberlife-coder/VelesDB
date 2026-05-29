@@ -206,7 +206,7 @@ fn sort_eigenvectors_into_rotation(cov: &[f64], q_cols: &[Vec<f64>], d: usize) -
             (lambda, j)
         })
         .collect();
-    eigenvalue_col_pairs.sort_by(|a, b| b.0.total_cmp(&a.0));
+    eigenvalue_col_pairs.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
 
     let mut rotation = vec![0.0_f32; d * d];
     for (i, (_, col_idx)) in eigenvalue_col_pairs.iter().enumerate() {

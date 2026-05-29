@@ -527,9 +527,8 @@ impl Collection {
         };
         let (params, size, dimension) = self.auto_reindex_inputs();
         if manager.should_reindex(&params, size, dimension) {
-            let name = self.config.read().name.clone();
             tracing::info!(
-                collection = %name,
+                collection = %self.config.read().name,
                 current_size = size,
                 dimension = dimension,
                 "auto-reindex manager reports divergence — reindex recommended"

@@ -507,3 +507,181 @@ fn test_next_generation_propagates_corrupted_meta_error() {
         "missing meta must yield generation 1, not propagate NotFound"
     );
 }
+
+// -----------------------------------------------------------------------
+// Regression tests (#894): reject corrupt sidecar payloads on load so that
+// a malformed vector dimension or a broken id<->idx bijection cannot reach
+// the SIMD distance kernels or resolve a result to an out-of-range index.
+// -----------------------------------------------------------------------
+
+/// Writes a consistent generation-4 baseline (graph marker + mappings +
+/// vectors + meta) so that the generation checks in `load_sidecars` pass and
+/// the new content validation is what decides accept/reject.
+fn seed_consistent_gen4(path: &Path, mappings: &ShardedMappings, vectors: &ShardedVectors) {
+    persistence::save_graph_generation(path, 4).expect("test: graph gen 4");
+    persistence::save_mappings(path, &mappings_data(mappings, 4)).expect("test: save mappings 4");
+    persistence::save_vectors(path, &vectors_data(vectors, 4)).expect("test: save vectors 4");
+    persistence::save_meta(path, &build_meta(4)).expect("test: save meta 4");
+}
+
+#[test]
+fn test_load_sidecars_rejects_wrong_vector_dimension() {
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+    let mappings = build_mappings();
+    let vectors = build_vectors();
+    seed_consistent_gen4(path, &mappings, &vectors);
+
+    // Overwrite vectors at the SAME generation (4) with a wrong-dimension
+    // payload: meta declares dimension 4, this vector has length 3.
+    let bad = HnswVectorsData {
+        vectors: vec![
+            (0_usize, vec![1.0_f32, 2.0, 3.0]),
+            (1_usize, vec![0.0_f32; 4]),
+        ],
+        generation: 4,
+    };
+    persistence::save_vectors(path, &bad).expect("test: overwrite vectors");
+
+    let meta = persistence::load_meta(path).expect("test: reload meta");
+    let err = load_sidecars(path, &meta).expect_err("test: wrong dimension must be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("dimension"),
+        "error should mention dimension, got: {err}"
+    );
+}
+
+/// Seeds a consistent gen-4 baseline, overwrites the mappings sidecar at the
+/// same generation with a single corrupt `id -> idx` pair (so the new content
+/// validation, not the generation check, decides), then runs `load_sidecars`
+/// and returns the resulting error.
+fn load_with_corrupt_single_mapping(id: u64, idx: usize, mapped_back: u64) -> std::io::Error {
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+    seed_consistent_gen4(path, &build_mappings(), &build_vectors());
+
+    let mut id_to_idx = HashMap::new();
+    id_to_idx.insert(id, idx);
+    let mut idx_to_id = HashMap::new();
+    idx_to_id.insert(idx, mapped_back);
+    let bad = HnswMappingsData {
+        id_to_idx,
+        idx_to_id,
+        next_idx: 2,
+        generation: 4,
+    };
+    persistence::save_mappings(path, &bad).expect("test: overwrite mappings");
+
+    let meta = persistence::load_meta(path).expect("test: reload meta");
+    load_sidecars(path, &meta).expect_err("test: corrupt mapping must be rejected")
+}
+
+#[test]
+fn test_load_sidecars_rejects_index_beyond_vector_count() {
+    // Internal index 99 is absent from the loaded vector store ({0,1});
+    // id_to_idx/idx_to_id agree but the index is dangling.
+    let err = load_with_corrupt_single_mapping(1, 99, 1);
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string()
+            .contains("absent from the loaded vector store"),
+        "error should flag the absent index, got: {err}"
+    );
+}
+
+#[test]
+fn test_load_sidecars_rejects_dangling_index_within_next_idx() {
+    // The mapping's idx (5) is VALID against the file's own self-reported
+    // `next_idx` (6) — the file's own bound would accept it — but no vector
+    // exists at index 5 in the loaded store ({0,1}). Membership in the real
+    // store must reject this dangling index.
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+    seed_consistent_gen4(path, &build_mappings(), &build_vectors());
+
+    let mut id_to_idx = HashMap::new();
+    id_to_idx.insert(1_u64, 5_usize);
+    let mut idx_to_id = HashMap::new();
+    idx_to_id.insert(5_usize, 1_u64);
+    let bad = HnswMappingsData {
+        id_to_idx,
+        idx_to_id,
+        next_idx: 6, // > idx, so the file's own bound would pass
+        generation: 4,
+    };
+    persistence::save_mappings(path, &bad).expect("test: overwrite mappings");
+
+    let meta = persistence::load_meta(path).expect("test: reload meta");
+    let err = load_sidecars(path, &meta).expect_err("test: dangling index must be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string()
+            .contains("absent from the loaded vector store"),
+        "error should flag the absent index, got: {err}"
+    );
+}
+
+#[test]
+fn test_load_sidecars_accepts_sparse_index_beyond_count() {
+    // Regression for the #908 review: internal indices are sparse and monotonic
+    // (never reused after an upsert/delete), so a live vector legitimately sits
+    // at an index >= the live count. Here 2 vectors are loaded at indices {0, 5}
+    // with id 2 -> idx 5; a `idx < count` bound would WRONGLY reject this valid,
+    // previously-saved index. Membership in the loaded store must accept it.
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+
+    let vectors = ShardedVectors::new(4);
+    vectors.insert_batch(vec![
+        (0_usize, vec![1.0_f32; 4]),
+        (5_usize, vec![2.0_f32; 4]),
+    ]);
+    let mut id_to_idx = HashMap::new();
+    id_to_idx.insert(1_u64, 0_usize);
+    id_to_idx.insert(2_u64, 5_usize);
+    let mut idx_to_id = HashMap::new();
+    idx_to_id.insert(0_usize, 1_u64);
+    idx_to_id.insert(5_usize, 2_u64);
+    let mappings = ShardedMappings::from_parts(id_to_idx, idx_to_id, 6);
+    seed_consistent_gen4(path, &mappings, &vectors);
+
+    let meta = persistence::load_meta(path).expect("test: reload meta");
+    let (loaded, _vectors, enabled) =
+        load_sidecars(path, &meta).expect("test: sparse-but-valid index must load");
+    assert!(enabled);
+    assert_eq!(
+        loaded.get_id(5),
+        Some(2_u64),
+        "id 2 must resolve via sparse idx 5"
+    );
+}
+
+#[test]
+fn test_load_sidecars_rejects_broken_bijection() {
+    // idx 0 is in range but idx_to_id maps it back to a different id (7 != 1).
+    let err = load_with_corrupt_single_mapping(1, 0, 7);
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("bijection"),
+        "error should mention bijection, got: {err}"
+    );
+}
+
+#[test]
+fn test_load_sidecars_accepts_valid_sidecars() {
+    // Regression guard: the new content validation must not reject genuine data.
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+    let mappings = build_mappings();
+    let vectors = build_vectors();
+    seed_consistent_gen4(path, &mappings, &vectors);
+
+    let meta = persistence::load_meta(path).expect("test: reload meta");
+    let (loaded_mappings, _vectors, enabled) =
+        load_sidecars(path, &meta).expect("test: valid sidecars must load");
+    assert!(enabled, "vector storage should remain enabled");
+    let (id_to_idx, _, next_idx) = loaded_mappings.as_parts();
+    assert_eq!(id_to_idx.len(), 2);
+    assert_eq!(next_idx, 2);
+}

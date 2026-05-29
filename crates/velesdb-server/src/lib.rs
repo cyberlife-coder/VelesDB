@@ -47,9 +47,9 @@ use security_addon::SecurityAddon;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use utoipa::OpenApi;
-use velesdb_core::guardrails::QueryLimits;
-use velesdb_core::metrics::{DurationHistogram, OperationalMetrics, TraversalMetrics};
-use velesdb_core::Database;
+use velesdb_core::{
+    Database, DurationHistogram, OperationalMetrics, QueryLimits, TraversalMetrics,
+};
 
 pub use onboarding::OnboardingMetrics;
 pub use types::*;

@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.9.0 | **Last Updated**: 2026-04-30 (VelesDB v1.14.0)
+**Version**: 3.10.0 | **Last Updated**: 2026-05-15 (VelesDB v1.15.0)
 
 ---
 
@@ -28,8 +28,8 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | ORDER BY | Stable | 2.0 |
 | GROUP BY, HAVING | Stable | 2.0 |
 | JOIN (INNER ... ON) | Stable | 2.0 |
-| JOIN (LEFT, RIGHT, FULL) | Parsed, explicit runtime error | 2.0 |
-| JOIN USING | Experimental (single-column) | 2.0 |
+| JOIN (LEFT, RIGHT, FULL OUTER) | Stable (column-store, primary-key join only — see `crates/velesdb-core/src/collection/search/query/join.rs:155-171`) | 2.0 |
+| JOIN USING | Stable (single-column only; multi-column `USING (a, b, …)` parses but is rejected at execution by `validate_join_condition`) | 2.0 |
 | Set Operations (UNION, INTERSECT, EXCEPT) | Stable | 2.0 |
 | USING FUSION | Stable | 2.0 |
 | NOW() / INTERVAL temporal | Stable | 2.1 |
@@ -73,6 +73,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | FIRST(column) projection | Stable | 3.7 |
 | CONTAINS_TEXT strict text filter | Stable | 3.8 |
 | Window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK`) with `OVER`, `PARTITION BY`, `ORDER BY` | Stable | 3.9 (VelesDB v1.13.0) |
+| CBO feedback calibration in `EXPLAIN ANALYZE` | Stable | 3.10 (VelesDB v1.15.0) |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -260,9 +261,15 @@ FROM <table1> [AS <alias1>]
 | Type | Keyword | Description | Runtime |
 |------|---------|-------------|---------|
 | Inner | `JOIN` or `INNER JOIN` | Only matching rows from both sides | Fully executed |
-| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left + matching right | Parsed, runtime error |
-| Right | `RIGHT JOIN` or `RIGHT OUTER JOIN` | All right + matching left | Parsed, runtime error |
-| Full | `FULL JOIN` or `FULL OUTER JOIN` | All from both tables | Parsed, runtime error |
+| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left rows; unmatched right side gets `NULL`s for joined columns | Fully executed (column-store, primary-key only — see `collection/search/query/join.rs:164-171`) |
+| Right | `RIGHT JOIN` or `RIGHT OUTER JOIN` | All right rows; unmatched left side gets `NULL`s | Fully executed (`join.rs:155-162`) |
+| Full | `FULL JOIN` or `FULL OUTER JOIN` | All rows from both sides with `NULL`s on the unmatched side | Fully executed (`join.rs:155-171`) |
+
+> **Constraint:** all four JOIN types require the join column to be the
+> right-side collection's column-store **primary key**. The executor
+> rejects `JOIN ... ON other_col = ...` at runtime with
+> `"JOIN on table 'T' requires primary key 'PK', got 'other_col'"`
+> (see `validate_join_condition` in `join.rs:177-201`).
 
 ### ON Condition
 
@@ -284,7 +291,11 @@ FROM orders AS o
 JOIN customers AS c USING (customer_id)
 ```
 
-> **Limitation**: USING currently supports a single column only.
+> **Limitation:** `USING` currently supports a single column only.
+> Multi-column `USING (a, b, …)` parses successfully but is rejected at
+> execution by `validate_join_condition`
+> (`collection/search/query/join.rs:177`) with the error
+> `"JOIN on table 'T' must use ON condition or USING(single_column)"`.
 
 ### Self-Join
 
@@ -1341,6 +1352,14 @@ WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 | `rerank` | boolean | `true`/`false` | Two-stage SIMD reranking (retrieves 4x candidates, re-ranks with exact distance) |
 | `quantization` | string | `f32`, `int8`, `dual`, `auto` | Quantization mode for search |
 | `oversampling` | float | >= 1.0 | Oversampling ratio for dual-precision mode |
+| `max_groups` (alias `group_limit`) | integer | 1 .. 1,000,000 | GROUP BY group budget. Lowers the default (10,000); **clamped down** to the server ceiling of 1,000,000 — cannot raise it. See [GROUP BY](#group-by-clause-v20). |
+
+> **Query guard-rails.** Two hard limits protect the server from adversarial
+> queries. (1) A query is rejected before parsing if its length exceeds the
+> configured `max_query_length` or its bracket/`NOT` nesting depth exceeds
+> **64** (prevents a parser stack-overflow DoS). (2) `WITH (max_groups = N)` for
+> GROUP BY is clamped to a server-side ceiling of **1,000,000** groups; the
+> query can lower its budget but never raise the server memory ceiling.
 
 ### Examples
 
@@ -1786,6 +1805,9 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `plan` | object | Estimated query plan (same as EXPLAIN) |
 | `actual_stats` | object | Top-level actual execution statistics |
 | `node_stats` | array | Per-plan-node actual statistics |
+| `cost_factors` | object \| null | Effective cost factors used for this plan (operation-by-operation cost weights). `null` when EXPLAIN is called without ANALYZE. |
+| `calibration_source` | string \| null | Where the cost model picked its values: `"histogram"` if the collection's `ANALYZE` histogram was used, `"default"` otherwise. `null` without ANALYZE. |
+| `feedback_calibration` | object \| null | Runtime CBO calibration from the EMA feedback loop (v1.15.0, issue #469 Phase 2). Present only once the loop has observed ≥ 10 vector queries on this collection. See subsection below. |
 
 **`actual_stats` fields:**
 
@@ -1796,6 +1818,21 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `loops` | u64 | Number of execution iterations (always 1) |
 | `nodes_visited` | u64 | Graph nodes visited (0 for non-MATCH queries) |
 | `edges_traversed` | u64 | Graph edges traversed (0 for non-MATCH queries) |
+
+**`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ms_per_cost_unit` | f64 | EMA-adjusted milliseconds per cost unit observed at runtime. Compares against the static default of `0.1 ms/unit`. Values consistently below `0.1` indicate the cost model is over-estimating latency; above indicate under-estimation. |
+| `sample_count` | u64 | Number of vector query samples that produced this estimate. Low counts (< ~50) mean the EMA is still in warm-up; higher counts indicate a stable, deployment-specific calibration. |
+
+The block is **omitted from the JSON** (via `skip_serializing_if`) when the
+feedback loop has not yet warmed (< 10 samples for that collection) and on
+plain `EXPLAIN` (no execution → no runtime samples).
+
+See `crates/velesdb-core/src/velesql/explain/types.rs:160-180` for the
+canonical type definition and `ExplainOutput::with_feedback_calibration`
+for how the planner attaches it.
 
 **`node_stats` entry fields:**
 
@@ -1828,6 +1865,35 @@ EXPLAIN ANALYZE SELECT * FROM products WHERE category = 'tech' AND price > 50 LI
 -- Analyze a graph traversal
 EXPLAIN ANALYZE MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10
 ```
+
+After ≥ 10 vector queries against the same collection, the EMA feedback
+loop (v1.15.0) attaches a `feedback_calibration` block:
+
+```json
+{
+  "plan": { ... },
+  "actual_stats": {
+    "actual_rows": 10,
+    "actual_time_ms": 1.234,
+    "loops": 1,
+    "nodes_visited": 0,
+    "edges_traversed": 0
+  },
+  "node_stats": [ ... ],
+  "cost_factors": { ... },
+  "calibration_source": "histogram",
+  "feedback_calibration": {
+    "ms_per_cost_unit": 0.087,
+    "sample_count": 42
+  }
+}
+```
+
+Read the block as: *"On this deployment, every CBO cost unit has cost
+0.087 ms in practice (vs the 0.1 ms default) across the last 42 vector
+queries"*. A persistent gap between estimated and actual time (the `⚠`
+warning below) usually shows up here as `ms_per_cost_unit` drifting
+significantly away from `0.1`.
 
 #### CLI Usage
 
@@ -2371,6 +2437,17 @@ LIMIT 10
 Payload fields: `name` (string), `steps` (array), `confidence` (float),
 `usage_count` (integer), `created_at` (integer), `last_used_at` (integer).
 
+> **ACT-R activation decay (v1.15.0, opt-in).** When the surrounding
+> `ProceduralMemory` is built with
+> `ProceduralMemory::with_activation_decay(d)` (Phase 1 of
+> [#433](https://github.com/cyberlife-coder/VelesDB/issues/433)), the
+> `confidence` value returned by recall queries is **adjusted on read**
+> by an ACT-R base-level activation decay
+> (`c_effective = c_stored × (Δt^-d)`, Anderson 1996, default `d ≈ 0.5`).
+> The stored value is unchanged — VelesQL filters and `ORDER BY` see the
+> decayed (effective) confidence. Queries written before v1.15.0 keep
+> working unchanged because the strategy is opt-in.
+
 ### Convenience API (Rust/Python)
 
 ```rust
@@ -2624,8 +2701,15 @@ VelesQL returns structured errors:
 | NEAR_FUSED | `vector NEAR_FUSED [$v1,$v2]` | `WHERE vector NEAR_FUSED [$a, $b]` |
 | similarity() | `similarity(field, $v) op N` | `WHERE similarity(emb, $v) > 0.8` |
 | MATCH (text) | `column MATCH 'text'` | `WHERE content MATCH 'database'` |
-| `=` `!=` `>` `>=` `<` `<=` | `column op value` | `WHERE price > 100` |
-| IN | `column IN (values)` | `WHERE id IN (1, 2, 3)` |
+| CONTAINS_TEXT | `column CONTAINS_TEXT 'literal'` | `WHERE name CONTAINS_TEXT 'rust'` (case-insensitive, no BM25 ranking) |
+| CONTAINS (array) | `column CONTAINS value` | `WHERE tags CONTAINS 'rust'` |
+| `=` `!=` `<>` `>` `>=` `<` `<=` | `column op value` | `WHERE price > 100` |
+| IN / NOT IN | `column [NOT] IN (values)` | `WHERE id IN (1, 2, 3)` |
+| BETWEEN | `column BETWEEN low AND high` | `WHERE price BETWEEN 50 AND 200` |
+| LIKE / ILIKE | `column [I]LIKE 'pattern'` | `WHERE title LIKE 'rust%'`, `WHERE name ILIKE '%rust%'` |
+| IS NULL / IS NOT NULL | `column IS [NOT] NULL` | `WHERE email IS NOT NULL` |
+| Scalar subquery | `column op (SELECT … LIMIT 1)` | `WHERE views > (SELECT AVG(views) FROM stats LIMIT 1)` |
+| Graph match predicate | `MATCH (...)` in WHERE | `WHERE MATCH (a:Person)-[:KNOWS]->(b) AND a.id = $u` |
 | GEO_DISTANCE | `GEO_DISTANCE(col, lat, lng) op meters` | `WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500` |
 | GEO_BBOX | `GEO_BBOX(col, lat_min, lng_min, lat_max, lng_max)` | `WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4)` |
 
@@ -3019,6 +3103,51 @@ DESCRIBE documents
 
 -- View query execution plan without running
 EXPLAIN SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
+
+-- Run with instrumentation: get the plan + actual rows / time / per-node stats
+-- (v1.15.0+: also returns feedback_calibration once the EMA loop is warm)
+EXPLAIN ANALYZE SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
+```
+
+### Window Functions
+
+```sql
+-- Rank top-3 results per category by vector similarity
+SELECT id, title, category, similarity() AS score,
+       ROW_NUMBER() OVER (PARTITION BY category ORDER BY similarity() DESC) AS rank_in_cat
+FROM articles
+WHERE vector NEAR $query
+LIMIT 50
+
+-- Dense rank by an aggregated metric per author
+SELECT author, year, COUNT(*) AS papers,
+       DENSE_RANK() OVER (PARTITION BY author ORDER BY COUNT(*) DESC) AS productivity_rank
+FROM publications
+GROUP BY author, year
+```
+
+### Agent Memory
+
+```sql
+-- Recall the 5 facts most similar to a query embedding (semantic memory)
+SELECT * FROM _semantic_memory
+WHERE vector NEAR $query
+ORDER BY similarity() DESC
+LIMIT 5
+
+-- Recent events from the last day (episodic memory)
+SELECT * FROM _episodic_memory
+WHERE timestamp > NOW() - INTERVAL '1 day'
+ORDER BY timestamp DESC
+LIMIT 50
+
+-- Recall high-confidence procedures matching a goal embedding.
+-- With v1.15.0 ACT-R decay enabled (`with_activation_decay(0.5)`),
+-- `confidence` here is the time-decayed effective confidence.
+SELECT * FROM _procedural_memory
+WHERE vector NEAR $goal AND confidence > 0.6
+ORDER BY confidence DESC
+LIMIT 10
 ```
 
 ### Administration

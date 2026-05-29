@@ -57,6 +57,8 @@ mod match_vector_first;
 mod operators;
 #[path = "bdd/recall_contract.rs"]
 mod recall_contract;
+#[path = "bdd/recall_contract_multimetric.rs"]
+mod recall_contract_multimetric;
 #[path = "bdd/regression.rs"]
 mod regression;
 #[path = "bdd/secondary_index_bitmap_in.rs"]

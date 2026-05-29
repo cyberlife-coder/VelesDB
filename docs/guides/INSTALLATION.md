@@ -153,6 +153,24 @@ cargo install velesdb-server
 
 ## 🐳 Docker Installation
 
+### Pre-built image (recommended)
+
+Each release publishes a multi-architecture image (linux/amd64 + linux/arm64) to the
+GitHub Container Registry, so you don't need to build locally:
+
+```bash
+# Pull a specific release (recommended for reproducibility)
+docker pull ghcr.io/cyberlife-coder/velesdb:1.16.0
+
+# ...or the latest stable release
+docker pull ghcr.io/cyberlife-coder/velesdb:latest
+
+docker run -d --name velesdb -p 8080:8080 -v velesdb_data:/data \
+  ghcr.io/cyberlife-coder/velesdb:1.16.0
+```
+
+### Build locally
+
 ```bash
 # Clone and build the image locally
 git clone https://github.com/cyberlife-coder/VelesDB.git && cd VelesDB

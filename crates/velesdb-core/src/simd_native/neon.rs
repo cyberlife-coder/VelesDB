@@ -13,6 +13,8 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::missing_panics_doc)]
+// Wildcard import of NEON intrinsics is idiomatic for SIMD kernels.
+#![allow(clippy::wildcard_imports)]
 #![allow(clippy::similar_names)]
 
 // =============================================================================
@@ -75,7 +77,7 @@ pub(crate) fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// SAFETY: `vfmaq_f32` is a non-faulting register operation on aarch64.
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[inline]
 unsafe fn neon_fma_compat(
     a: std::arch::aarch64::float32x4_t,
     b: std::arch::aarch64::float32x4_t,

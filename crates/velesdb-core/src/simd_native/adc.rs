@@ -4,7 +4,10 @@
 //! Dispatches to AVX2 gather, NEON, or scalar path based on runtime detection.
 //!
 //! The crate-private API (`adc_distances_batch`) is called from the PQ
-//! rescoring pipeline in `crate::quantization::pq::pq_adc_batch_rescore`.
+//! rescoring pipeline in `crate::quantization::pq::pq_adc_batch_rescore`, which
+//! validates that every PQ code is `< k` (via `ProductQuantizer::validate_codes`)
+//! before reaching the unsafe gather kernels here. That validation is the
+//! precondition the `unsafe` blocks below rely on for in-bounds LUT indexing.
 
 // The sole caller (`pq_adc_batch_rescore`) is persistence-gated, so all items
 // in this module are dead when persistence is disabled.
@@ -63,7 +66,9 @@ pub(crate) fn adc_distances_batch(
                     if i + 1 < codes.len() {
                         super::prefetch::prefetch_vector_from_u16(codes[i + 1]);
                     }
-                    // SAFETY: AVX2 ADC gather kernel — `simd_level()` confirmed Avx2/Avx512 above.
+                    // SAFETY: AVX2 ADC gather kernel — `simd_level()` confirmed Avx2/Avx512 above;
+                    // codes were validated `< k` by `pq_adc_batch_rescore::validate_codes` (see
+                    // module/function docs), so gather indices stay within `lut`.
                     unsafe { adc_single_avx2(lut, c, m, k) }
                 })
                 .collect()
@@ -83,6 +88,9 @@ pub(crate) fn adc_distances_batch(
                     }
                     // SAFETY: NEON is available (checked by `simd_level()` in outer match).
                     // - Condition 1: `simd_level()` selected `Neon`, confirming aarch64 NEON support.
+                    // - Condition 2: codes were validated `< k` by
+                    //   `pq_adc_batch_rescore::validate_codes` before this dispatch, so the
+                    //   `get_unchecked` indices stay within `lut` (length `m * k`).
                     // SAFETY: Call per-code NEON ADC kernel for throughput inside the iterator.
                     unsafe { adc_single_neon(lut, c, m, k) }
                 })
@@ -206,6 +214,7 @@ unsafe fn adc_single_avx2(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 
 ///   well-defined.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
+#[allow(clippy::wildcard_imports)] // idiomatic for NEON intrinsics
 unsafe fn adc_single_neon(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 {
     use std::arch::aarch64::*;
     debug_assert_eq!(code.len(), m, "code length must equal m");
@@ -239,8 +248,8 @@ unsafe fn adc_single_neon(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 
 
     // Handle tail subspaces with scalar loop
     let tail_start = full_chunks * 4;
-    for subspace in tail_start..tail_start + tail {
-        let idx = subspace * k + usize::from(code[subspace]);
+    for (subspace, &codeword) in code.iter().enumerate().skip(tail_start).take(tail) {
+        let idx = subspace * k + usize::from(codeword);
         total += lut[idx];
     }
 

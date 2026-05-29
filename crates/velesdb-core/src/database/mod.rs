@@ -188,6 +188,16 @@ impl Database {
         observer: Option<std::sync::Arc<dyn DatabaseObserver>>,
         config: Option<crate::config::VelesConfig>,
     ) -> Result<Self> {
+        // Validate at the consumption boundary: a `VelesConfig` built
+        // programmatically (not through a loader) never passes through
+        // `validate()`, so an out-of-range field would otherwise reach the
+        // engine unchecked. Loaders already validate, but re-validating here
+        // is cheap and closes the bypass for direct API callers.
+        let config = config.unwrap_or_default();
+        config
+            .validate()
+            .map_err(|e| Error::Config(e.to_string()))?;
+
         let data_dir = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&data_dir)?;
 
@@ -208,7 +218,7 @@ impl Database {
         let db = Self {
             data_dir,
             _lock_file: lock_file,
-            config: std::sync::Arc::new(config.unwrap_or_default()),
+            config: std::sync::Arc::new(config),
             vector_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
             graph_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
             metadata_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),

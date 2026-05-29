@@ -50,6 +50,48 @@ fn test_delete_payload() {
 }
 
 #[test]
+fn test_delete_never_stored_id_is_no_op() {
+    // Regression: `write_deduped_payloads` calls `delete()` for every batch
+    // entry with no payload — used to write one tombstone (+ fsync) per
+    // never-stored id, adding O(N × fsync_latency) to fresh upserts.
+    let temp = TempDir::new().expect("Failed to create temp dir");
+    let mut storage = LogPayloadStorage::new_with_durability(temp.path(), DurabilityMode::Fsync)
+        .expect("Create failed");
+    let wal_path = temp.path().join("payloads.log");
+    let wal_size_before = std::fs::metadata(&wal_path).expect("WAL exists").len();
+
+    storage
+        .delete(42)
+        .expect("Delete of never-stored id should succeed");
+
+    // No WAL append: confirms the fsync-per-call cost is gone.
+    let wal_size_after = std::fs::metadata(&wal_path).expect("WAL exists").len();
+    assert_eq!(
+        wal_size_before, wal_size_after,
+        "delete() on a never-stored id must not append to the WAL"
+    );
+
+    // In-memory state matches the WAL: no spurious tombstone, no phantom id.
+    // Catches a future regression that writes a tombstone but truncates the
+    // file, or that marks the id present in the index.
+    assert_eq!(
+        storage
+            .retrieve(42)
+            .expect("Retrieve of never-stored id should succeed"),
+        None,
+        "delete() on a never-stored id must leave retrieve() returning None"
+    );
+    assert!(
+        storage.ids().is_empty(),
+        "delete() on a never-stored id must not introduce an id into the index"
+    );
+
+    // Drop storage before TempDir cleanup so Windows can remove the WAL file
+    // (no-op on Unix, defensive against future test reordering).
+    drop(storage);
+}
+
+#[test]
 fn test_ids_returns_all_stored_ids() {
     // Arrange
     let (mut storage, _temp) = create_test_storage();

@@ -31,7 +31,7 @@ toml = { workspace = true }
 
 # UUID - target-specific for WASM compatibility
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.uuid]
-version = "1.7"
+version = "1.23"
 features = ["v4", "serde"]
 
 [dependencies.smallvec]
@@ -43,7 +43,7 @@ version = "0.12"
 # rayon moved to optional deps section (persistence feature)
 
 [dependencies.arc-swap]
-version = "1.7"
+version = "1.9"
 
 [dependencies.bytes]
 version = "1.11"
@@ -56,13 +56,13 @@ version = "2.14"
 
 # Lock-free concurrent HashMap for high-throughput parallel operations
 [dependencies.dashmap]
-version = "5.5"
+version = "6.2"
 
 # wide crate removed - EPIC-075 consolidation to simd_native
 
 # GPU acceleration (optional)
 [dependencies.wgpu]
-version = "23"
+version = "29"
 optional = true
 
 [dependencies.pollster]
@@ -80,7 +80,7 @@ features = ["std", "serde"]
 
 # EPIC-033/US-003: Windows hole-punch (FSCTL_SET_ZERO_DATA)
 [target.'cfg(target_os = "windows")'.dependencies.windows-sys]
-version = "0.59"
+version = "0.61"
 features = ["Win32_Foundation", "Win32_System_Ioctl", "Win32_System_IO"]
 
 # EPIC-033/US-003: Linux hole-punch (fallocate)
@@ -138,7 +138,7 @@ proptest = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = "0.4"
 serial_test = "3.1"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 rand_distr = "0.6"
 
 # Loom for concurrency testing (EPIC-023) - optional dependency, not dev-dependency
@@ -328,7 +328,7 @@ workspace = true
 optional = true
 
 [dependencies.rayon]
-version = "1.10"
+version = "1.12"
 optional = true
 
 [dependencies.tokio]

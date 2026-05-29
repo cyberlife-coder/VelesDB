@@ -82,7 +82,7 @@ pub(crate) fn load_snapshot(dir: &Path) -> Result<Option<Bm25Index>> {
     };
     let snapshot: Bm25Snapshot = postcard::from_bytes(&bytes)
         .map_err(|e| Error::Index(format!("BM25 snapshot deserialize: {e}")))?;
-    Ok(Some(Bm25Index::from_snapshot(snapshot)))
+    Ok(Some(Bm25Index::from_snapshot(snapshot)?))
 }
 
 // ---------------------------------------------------------------------------

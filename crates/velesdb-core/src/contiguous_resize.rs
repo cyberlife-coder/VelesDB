@@ -21,7 +21,12 @@ impl ContiguousVectors {
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     pub fn ensure_capacity(&mut self, required_capacity: usize) -> crate::error::Result<()> {
         if required_capacity > self.capacity {
-            let new_capacity = required_capacity.max(self.capacity * 2);
+            // #899: `self.capacity * 2` could overflow `usize` and wrap to a tiny
+            // value, defeating the `.max(required_capacity)` guard. Saturate the
+            // doubling so growth always satisfies `required_capacity` and the
+            // final layout-size check (in `resize`) still rejects true overflow.
+            let doubled = self.capacity.saturating_mul(2);
+            let new_capacity = required_capacity.max(doubled);
             self.resize(new_capacity)?;
         }
         Ok(())

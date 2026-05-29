@@ -218,8 +218,9 @@ impl VelesDatabase {
     /// Gets a vector collection by name.
     ///
     /// Returns `None` if the collection does not exist.
-    /// Returns an error if the collection exists but is not a vector collection
-    /// (use [`get_graph_collection`](Self::get_graph_collection) for graph collections).
+    /// Returns an error if the collection exists but is not a vector collection.
+    /// Graph collections are queried through [`execute_query`](Self::execute_query)
+    /// (VelesQL); metadata collections are not retrievable through this accessor.
     pub fn get_collection(&self, name: String) -> Result<Option<Arc<VelesCollection>>, VelesError> {
         match self.inner.get_any_collection(&name) {
             Some(any_coll) => match any_coll.into_vector() {
@@ -227,7 +228,7 @@ impl VelesDatabase {
                 Err(_other_variant) => Err(VelesError::Collection {
                     message: format!(
                         "Collection '{name}' is not a vector collection. \
-                         Use get_graph_collection() for graph collections."
+                         Query graph collections through execute_query() (VelesQL)."
                     ),
                 }),
             },

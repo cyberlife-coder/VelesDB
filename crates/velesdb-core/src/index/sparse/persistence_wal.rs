@@ -263,7 +263,16 @@ fn replay_upsert_entry(
     let nnz = read_le_u32(data, pos, "WAL entry corrupted: bad nnz bytes")? as usize;
     pos += 4;
 
-    if body_start + total_len < pos + nnz * 8 {
+    // Untrusted `nnz`: each pair is 8 bytes (u32 term_id + f32 weight). Compute
+    // in u64 with checked/saturating arithmetic so a crafted `nnz` cannot wrap on
+    // a 32-bit target and defeat the truncation guard below. `read_term_weight_pairs`
+    // then bounds its own `Vec::with_capacity` against the validated `nnz`.
+    let Some(payload_bytes) = (nnz as u64).checked_mul(8) else {
+        tracing::warn!("Sparse WAL upsert entry nnz overflow at offset {body_start}");
+        return Ok(None);
+    };
+    let entry_end = (body_start as u64).saturating_add(total_len as u64);
+    if entry_end < (pos as u64).saturating_add(payload_bytes) {
         tracing::warn!("Sparse WAL upsert entry truncated at offset {body_start}");
         return Ok(None);
     }
@@ -276,7 +285,10 @@ fn replay_upsert_entry(
 
 /// Reads `nnz` (`term_id`, weight) pairs from the data buffer.
 fn read_term_weight_pairs(data: &[u8], pos: &mut usize, nnz: usize) -> Result<Vec<(u32, f32)>> {
-    let mut pairs = Vec::with_capacity(nnz);
+    // Defensive cap: a pair is 8 bytes, so the data buffer can hold at most
+    // `data.len() / 8` pairs. Clamp the pre-allocation so an untrusted `nnz`
+    // cannot pre-reserve far beyond what the buffer could ever supply.
+    let mut pairs = Vec::with_capacity(nnz.min(data.len() / 8));
     for _ in 0..nnz {
         let idx = read_le_u32(data, *pos, "WAL entry corrupted: bad term-index bytes")?;
         *pos += 4;

@@ -32,6 +32,10 @@ impl JoinedResult {
     }
 }
 
+/// Conservative server-side ceiling on the number of joined rows materialized
+/// when the query carries no explicit LIMIT (mirrors `query::options::MAX_LIMIT`).
+pub const JOIN_ROW_CEILING: usize = 100_000;
+
 /// Adaptive batch size thresholds.
 const SMALL_BATCH_THRESHOLD: usize = 100;
 const MEDIUM_BATCH_THRESHOLD: usize = 10_000;
@@ -110,10 +114,14 @@ pub fn extract_join_keys(results: &[SearchResult], condition: &JoinCondition) ->
 /// * `results` - Search results from vector/graph query
 /// * `join` - JOIN clause from parsed query
 /// * `column_store` - ColumnStore to join with
+/// * `row_budget` - Maximum number of joined rows to materialize. Callers pass
+///   the query's effective `LIMIT + OFFSET`; pass [`JOIN_ROW_CEILING`] when the
+///   query has no LIMIT. Bounds OOM on RIGHT/FULL joins over large stores
+///   without dropping rows inside the requested window.
 ///
 /// # Returns
 ///
-/// Vector of JoinedResults containing merged data.
+/// Vector of JoinedResults containing merged data (at most `row_budget` rows).
 /// Returns empty vector if the join condition's left column doesn't match the primary key.
 ///
 /// # Errors
@@ -127,6 +135,7 @@ pub fn execute_join(
     results: &[SearchResult],
     join: &JoinClause,
     column_store: &ColumnStore,
+    row_budget: usize,
 ) -> Result<Vec<JoinedResult>> {
     let condition = validate_join_condition(join, column_store)?;
     let join_keys = extract_join_keys(results, &condition);
@@ -150,23 +159,30 @@ pub fn execute_join(
         &null_row_data,
         &mut matched_left_indices,
         &mut matched_right_pks,
+        row_budget,
     );
 
-    if matches!(join.join_type, JoinType::Right | JoinType::Full) {
+    if joined_results.len() < row_budget
+        && matches!(join.join_type, JoinType::Right | JoinType::Full)
+    {
         append_unmatched_right_rows(
             column_store,
             &condition.left.column,
             &matched_right_pks,
             &mut joined_results,
+            row_budget,
         );
     }
 
-    if matches!(join.join_type, JoinType::Left | JoinType::Full) {
+    if joined_results.len() < row_budget
+        && matches!(join.join_type, JoinType::Left | JoinType::Full)
+    {
         append_unmatched_left_rows(
             results,
             &matched_left_indices,
             &null_row_data,
             &mut joined_results,
+            row_budget,
         );
     }
 
@@ -211,14 +227,21 @@ fn process_join_batches(
     null_row_data: &HashMap<String, serde_json::Value>,
     matched_left_indices: &mut [bool],
     matched_right_pks: &mut HashSet<i64>,
+    row_budget: usize,
 ) -> Vec<JoinedResult> {
-    let mut joined_results = Vec::with_capacity(join_keys.len());
+    let mut joined_results = Vec::with_capacity(join_keys.len().min(row_budget));
 
     for chunk in join_keys.chunks(batch_size) {
+        if joined_results.len() >= row_budget {
+            break;
+        }
         let pks: Vec<i64> = chunk.iter().map(|(_, pk)| *pk).collect();
         let row_map = batch_get_rows(column_store, &pks);
 
         for (result_idx, pk) in chunk {
+            if joined_results.len() >= row_budget {
+                break;
+            }
             if let Some(column_data) = row_map.get(pk) {
                 joined_results.push(JoinedResult::new(
                     results[*result_idx].clone(),
@@ -245,8 +268,12 @@ fn append_unmatched_right_rows(
     join_column: &str,
     matched_right_pks: &HashSet<i64>,
     joined_results: &mut Vec<JoinedResult>,
+    row_budget: usize,
 ) {
     for row_idx in column_store.live_row_indices() {
+        if joined_results.len() >= row_budget {
+            break;
+        }
         let Some(pk_value) = column_store.get_value_as_json(join_column, row_idx) else {
             continue;
         };
@@ -272,8 +299,12 @@ fn append_unmatched_left_rows(
     matched_left_indices: &[bool],
     null_row_data: &HashMap<String, serde_json::Value>,
     joined_results: &mut Vec<JoinedResult>,
+    row_budget: usize,
 ) {
     for (idx, left_result) in results.iter().enumerate() {
+        if joined_results.len() >= row_budget {
+            break;
+        }
         if !matched_left_indices[idx] {
             joined_results.push(JoinedResult::new(
                 left_result.clone(),

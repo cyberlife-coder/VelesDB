@@ -20,17 +20,17 @@ path = "src/main.rs"
 velesdb-core = { workspace = true }
 
 # CLI
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 clap_complete = "4.6"
 
 # REPL
-rustyline = { version = "14.0", features = ["derive"] }
+rustyline = { version = "18.0", features = ["derive"] }
 
 # Table formatting
 comfy-table = "7.1"
 
 # Colors
-colored = "2.1"
+colored = "3.1"
 
 # Serialization
 serde_json = { workspace = true }
@@ -49,7 +49,7 @@ anyhow = { workspace = true }
 instant = "0.1"
 
 # Directories
-dirs = "5.0"
+dirs = "6.0"
 
 # License validation (Ed25519 cryptographic signatures)
 ed25519-dalek = { workspace = true }
@@ -64,7 +64,7 @@ loom = ["velesdb-core/loom"]
 
 [dev-dependencies]
 tempfile = "3.10"
-assert_cmd = "2.0"
+assert_cmd = "2.2"
 predicates = "3.1"
 
 [lints]

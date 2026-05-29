@@ -53,7 +53,7 @@ pub(crate) fn prepare_term_data(
     }
 
     // Sort by max_contribution ascending (least contributing first)
-    terms.sort_by(|a, b| {
+    terms.sort_unstable_by(|a, b| {
         let ca = a.query_weight.abs() * a.max_doc_weight;
         let cb = b.query_weight.abs() * b.max_doc_weight;
         ca.total_cmp(&cb)
@@ -131,6 +131,6 @@ pub(crate) fn find_split(upper_bound: &[f32], threshold: f32) -> usize {
 /// Extract results from a min-heap and sort descending by score.
 pub(crate) fn extract_sorted_results(heap: BinaryHeap<Reverse<ScoredDoc>>) -> Vec<ScoredDoc> {
     let mut results: Vec<ScoredDoc> = heap.into_iter().map(|Reverse(s)| s).collect();
-    results.sort_by(|a, b| b.cmp(a)); // descending
+    results.sort_unstable_by(|a, b| b.cmp(a)); // descending
     results
 }

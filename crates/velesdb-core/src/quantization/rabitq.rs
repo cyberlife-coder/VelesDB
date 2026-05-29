@@ -66,6 +66,21 @@ pub(crate) fn signs_to_bits(values: &[f32], dim: usize) -> Vec<u64> {
     bits
 }
 
+/// Bitmask selecting the in-use bits of the last u64 word for `dim` dimensions.
+///
+/// Returns `u64::MAX` when `dim` is a multiple of 64 (the last word is fully
+/// used) or when `dim == 0`. Otherwise returns a mask with the low `dim % 64`
+/// bits set, so a bitwise-AND on the last word zeroes the high padding bits.
+#[must_use]
+pub(crate) const fn last_word_mask(dim: usize) -> u64 {
+    let rem = dim % 64;
+    if rem == 0 {
+        u64::MAX
+    } else {
+        (1u64 << rem) - 1
+    }
+}
+
 /// Apply a flat row-major rotation matrix to a vector.
 ///
 /// Computes `result[i] = sum_j rotation[i * dim + j] * vector[j]` for each `i`.
@@ -96,17 +111,21 @@ fn xor_popcount_ip(q_bits: &[u64], enc_bits: &[u64], num_words: usize, dim: usiz
     let differing_bits =
         crate::simd_native::hamming_binary_native(&q_bits[..num_words], &enc_bits[..num_words]);
 
-    // Invariant: differing_bits <= dim because padding bits never contribute.
+    // When padding bits are zero, `differing_bits <= dim`, so
+    // `matching_bits = dim - differing_bits` is exact. Clean vectors satisfy
+    // this: `signs_to_bits` zeroes padding on encode and `RaBitQVectorStore::push`
+    // masks it on store (the only paths that populate the bit store).
+    //
+    // This clamp is defense-in-depth for any vector whose padding bits are
+    // nonetheless set (e.g. a tampered in-memory value): set padding bits would
+    // push `differing_bits` above `dim`. We clamp so `matching_bits` cannot
+    // underflow (u32 wraparound → garbage / non-finite distance), keeping the
+    // estimate finite and within `[-1, 1]`. This is graceful degradation, not
+    // exact recovery — exactness comes from the masking on the encode/store path.
     // Reason: dim fits in u32 for any practical vector dimension (< 2^32).
     #[allow(clippy::cast_possible_truncation)]
     let dim_u32 = dim as u32;
-    debug_assert!(
-        differing_bits <= dim_u32,
-        "differing_bits ({differing_bits}) > dim ({dim}): \
-         signs_to_bits must zero padding bits"
-    );
-
-    let matching_bits = dim_u32 - differing_bits;
+    let matching_bits = dim_u32 - differing_bits.min(dim_u32);
 
     // Inner product estimate: each matching bit contributes +1/D,
     // each differing bit contributes -1/D.
@@ -363,13 +382,25 @@ impl RaBitQIndex {
 
     /// Load `RaBitQ` index from `<dir>/rabitq.idx`. Returns `None` if file doesn't exist.
     ///
+    /// The decoded index is validated ([`Self::validate_loaded`]) so a corrupt
+    /// rotation/centroid is rejected here rather than producing out-of-bounds
+    /// indexing in [`apply_rotation_flat`] during search.
+    ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if deserialization or file I/O fails.
+    /// Returns `Error::Io` if deserialization or file I/O fails, or
+    /// `Error::IndexCorrupted` if the file exceeds the size cap or the decoded
+    /// rotation/centroid lengths are inconsistent with `dimension`.
     pub fn load(dir: &std::path::Path) -> Result<Option<Self>, Error> {
         let path = dir.join("rabitq.idx");
         if !path.exists() {
             return Ok(None);
+        }
+        let file_len = std::fs::metadata(&path)?.len();
+        if file_len > MAX_RABITQ_INDEX_BYTES {
+            return Err(Error::IndexCorrupted(format!(
+                "RaBitQ index file is {file_len} bytes, exceeds cap {MAX_RABITQ_INDEX_BYTES}"
+            )));
         }
         let data = std::fs::read(&path)?;
         let index: Self = postcard::from_bytes(&data).map_err(|e| {
@@ -378,9 +409,43 @@ impl RaBitQIndex {
                 format!("failed to deserialize RaBitQ index: {e}"),
             ))
         })?;
+        index.validate_loaded()?;
         Ok(Some(index))
     }
+
+    /// Validate a deserialized index's structural invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::IndexCorrupted` if `dimension` is zero, the centroid
+    /// length is not `dimension`, or the rotation length is not `dimension^2`.
+    fn validate_loaded(&self) -> Result<(), Error> {
+        if self.dimension == 0 {
+            return Err(Error::IndexCorrupted(
+                "RaBitQ index has zero dimension".into(),
+            ));
+        }
+        if self.centroid.len() != self.dimension {
+            return Err(Error::IndexCorrupted(format!(
+                "RaBitQ centroid has {} elements, expected dimension {}",
+                self.centroid.len(),
+                self.dimension
+            )));
+        }
+        super::validate_rotation_len(self.rotation.len(), self.dimension, "RaBitQ")?;
+        Ok(())
+    }
 }
+
+/// Maximum accepted size of a persisted `RaBitQ` index file.
+///
+/// The index stores a `dimension^2` rotation matrix plus a `dimension`
+/// centroid. For the documented stability ceiling (`dimension <= 2048`) the
+/// rotation is `2048^2` f32 ≈ 16 MiB; the 256 MiB cap rejects hostile files
+/// before they trigger a huge allocation. (Addresses the alloc-cap concern of
+/// #897.)
+#[cfg(feature = "persistence")]
+const MAX_RABITQ_INDEX_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Generate a random orthogonal matrix using modified Gram-Schmidt.
 ///

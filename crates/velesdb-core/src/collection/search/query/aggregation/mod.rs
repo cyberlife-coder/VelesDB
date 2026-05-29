@@ -225,7 +225,13 @@ impl Collection {
         }
     }
 
-    /// Pre-fetches payloads and runs parallel aggregation.
+    /// Runs parallel aggregation, streaming payloads per chunk.
+    ///
+    /// #901: previously this pre-collected **every** payload into one
+    /// `Vec<Option<Value>>` before aggregating — O(n) peak memory for the
+    /// whole collection. Now each rayon chunk retrieves only its own slice of
+    /// payloads on the fly, so peak memory is bounded to `O(CHUNK_SIZE ×
+    /// rayon_threads)`. Aggregation results are unchanged.
     fn run_parallel_path(
         ids: &[u64],
         payload_storage: &dyn PayloadStorage,
@@ -233,12 +239,7 @@ impl Collection {
         columns_vec: &[String],
         has_count_star: bool,
     ) -> crate::velesql::AggregateResult {
-        let payloads: Vec<Option<serde_json::Value>> = ids
-            .iter()
-            .map(|&id| payload_storage.retrieve(id).ok().flatten())
-            .collect();
-
-        Self::aggregate_parallel(&payloads, filter, columns_vec, has_count_star)
+        Self::aggregate_parallel(ids, payload_storage, filter, columns_vec, has_count_star)
     }
 
     /// Returns true if the payload passes the static filter.
@@ -271,18 +272,23 @@ impl Collection {
         }
     }
 
-    /// Parallel aggregation on pre-fetched payloads.
+    /// Parallel aggregation that streams payloads per chunk (#901).
+    ///
+    /// Each chunk of IDs retrieves its own payloads inside the rayon closure,
+    /// so the full payload set is never materialized at once.
     fn aggregate_parallel(
-        payloads: &[Option<serde_json::Value>],
+        ids: &[u64],
+        payload_storage: &dyn PayloadStorage,
         filter: Option<&crate::filter::Filter>,
         columns_to_aggregate: &[String],
         has_count_star: bool,
     ) -> crate::velesql::AggregateResult {
-        let partial_aggregators: Vec<Aggregator> = payloads
+        let partial_aggregators: Vec<Aggregator> = ids
             .par_chunks(CHUNK_SIZE)
             .map(|chunk| {
                 let mut chunk_agg = Aggregator::new();
-                for payload in chunk {
+                for &id in chunk {
+                    let payload = payload_storage.retrieve(id).ok().flatten();
                     if let Some(f) = filter {
                         if !Self::payload_passes_filter(f, payload.as_ref()) {
                             continue;

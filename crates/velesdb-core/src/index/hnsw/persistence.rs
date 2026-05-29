@@ -292,6 +292,7 @@ pub(crate) fn load_vectors_or_disable(
 
     match load_vectors(path) {
         Ok(vectors_data) => {
+            validate_loaded_vectors(&vectors_data.vectors, meta.dimension)?;
             let vectors = ShardedVectors::new(meta.dimension);
             vectors.insert_batch(vectors_data.vectors);
             Ok((vectors, true, vectors_data.generation))
@@ -535,7 +536,6 @@ pub(crate) fn load_sidecars(
             ),
         ));
     }
-
     let (vectors, enable_vector_storage, vectors_generation) = load_vectors_or_disable(path, meta)?;
     if enable_vector_storage && vectors_generation != meta.generation {
         return Err(std::io::Error::new(
@@ -548,12 +548,120 @@ pub(crate) fn load_sidecars(
         ));
     }
 
+    // Cross-check each mapped index against the actually-loaded vector set.
+    // Internal indices are sparse and monotonic (never reused after an
+    // upsert/delete), so a perfectly valid live index can exceed
+    // `vectors.len()`; membership in the loaded store is the correct test —
+    // and strictly stronger than the file's own `next_idx`, which comes from
+    // the same untrusted blob and cannot vouch for itself. When vector storage
+    // is disabled there is no store to resolve into, so the file's `next_idx`
+    // remains the only available bound.
+    let bound = if enable_vector_storage {
+        MappingBound::Loaded(&vectors)
+    } else {
+        MappingBound::MaxExclusive(mappings_data.next_idx)
+    };
+    validate_loaded_mappings(&mappings_data, bound)?;
+
     let mappings = super::sharded_mappings::ShardedMappings::from_parts(
         mappings_data.id_to_idx,
         mappings_data.idx_to_id,
         mappings_data.next_idx,
     );
     Ok((mappings, vectors, enable_vector_storage))
+}
+
+/// Builds an `InvalidData` I/O error for the load-time validation paths.
+///
+/// Single idiom shared by [`validate_loaded_vectors`] and
+/// [`validate_loaded_mappings`] so the new validation code does not
+/// re-spell `std::io::Error::new(InvalidData, …)` at every site.
+fn invalid_data(msg: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, msg)
+}
+
+/// Validates vectors deserialized from an untrusted `native_vectors.bin`.
+///
+/// Every stored vector must have exactly `dimension` components and a unique
+/// internal index. A corrupt file with the wrong dimension would otherwise
+/// produce malformed rows in `ShardedVectors` and feed wrong-length slices
+/// into the SIMD distance kernels (out-of-bounds reads).
+///
+/// # Errors
+///
+/// Returns `InvalidData` if any vector length differs from `dimension` or any
+/// internal index is duplicated.
+fn validate_loaded_vectors(vectors: &[(usize, Vec<f32>)], dimension: usize) -> std::io::Result<()> {
+    let mut seen = std::collections::HashSet::with_capacity(vectors.len());
+    for (idx, vec) in vectors {
+        if vec.len() != dimension {
+            return Err(invalid_data(format!(
+                "vector at index {idx} has length {} but dimension is {dimension}",
+                vec.len()
+            )));
+        }
+        if !seen.insert(*idx) {
+            return Err(invalid_data(format!(
+                "duplicate internal index {idx} in persisted vectors"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validates id-mappings deserialized from an untrusted `native_mappings.bin`.
+///
+/// Enforces the bijection invariant `HnswIndex` relies on: every internal
+/// index is `< index_bound`, and `id_to_idx` / `idx_to_id` are exact inverses
+/// of each other (same cardinality, every entry round-trips).
+///
+/// How a mapped internal index is bound-checked, depending on whether the
+/// vector store was loaded.
+#[derive(Clone, Copy)]
+enum MappingBound<'a> {
+    /// Vector storage enabled: every mapped index must be a vector actually
+    /// present in the loaded store. Correct for sparse/monotonic indices and
+    /// strictly stronger than the file's self-reported `next_idx`.
+    Loaded(&'a super::sharded_vectors::ShardedVectors),
+    /// Vector storage disabled: no store to resolve into, so the only bound is
+    /// the file's `next_idx` (indices must be `< next_idx`).
+    MaxExclusive(usize),
+}
+
+/// Validates id-mappings deserialized from an untrusted `native_mappings.bin`.
+///
+/// Enforces the bijection invariant `HnswIndex` relies on: every internal
+/// index is valid under `bound`, and `id_to_idx` / `idx_to_id` are exact
+/// inverses of each other (same cardinality, every entry round-trips).
+///
+/// # Errors
+///
+/// Returns `InvalidData` on any out-of-range index or broken bijection.
+fn validate_loaded_mappings(data: &HnswMappingsData, bound: MappingBound) -> std::io::Result<()> {
+    if data.id_to_idx.len() != data.idx_to_id.len() {
+        return Err(invalid_data(format!(
+            "mapping cardinality mismatch: id_to_idx={} idx_to_id={}",
+            data.id_to_idx.len(),
+            data.idx_to_id.len()
+        )));
+    }
+    for (&id, &idx) in &data.id_to_idx {
+        let valid = match bound {
+            MappingBound::Loaded(vectors) => vectors.contains(idx),
+            MappingBound::MaxExclusive(next_idx) => idx < next_idx,
+        };
+        if !valid {
+            return Err(invalid_data(format!(
+                "mapping id {id} resolves to index {idx} absent from the loaded vector store"
+            )));
+        }
+        if data.idx_to_id.get(&idx) != Some(&id) {
+            return Err(invalid_data(format!(
+                "mapping bijection broken for id {id} / idx {idx}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Converts a u8 discriminant to a `DistanceMetric`.

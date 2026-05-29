@@ -2,11 +2,15 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.15.0** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.16.0** | Node.js >= 18 | Browser (WASM) | MIT License
 
-## What's New in v1.14.2
+## What's New in v1.16.0
 
-- **No SDK source change.** v1.14.2 is a workspace patch focused on the Python Haystack `DocumentStore` (`DuplicatePolicy.SKIP` contract fix) and seven version-drift gaps in the release tooling. The TS SDK ships in lock-step with the workspace and is functionally identical to v1.14.1; the version bump only ensures `npm install @wiscale/velesdb-sdk` resolves to the same release line as `pip install velesdb` and `cargo add velesdb-core@1.14.2`.
+- **First-party embedding helper.** New `OpenAIEmbedder` (plus the `Embedder` interface and `OpenAIEmbedderOptions` type), exported from the package root. It calls any OpenAI-compatible `/embeddings` endpoint via the global `fetch` API — no extra runtime dependency — so you can go from text to vectors without hand-writing the request. See [Embedding helper](#embedding-helper) below. Works in Node.js ≥ 18, browsers, and Deno.
+
+### Previous (v1.14.2)
+
+- **No SDK source change.** v1.14.2 was a workspace patch focused on the Python Haystack `DocumentStore` (`DuplicatePolicy.SKIP` contract fix) and seven version-drift gaps in the release tooling. The TS SDK ships in lock-step with the workspace and was functionally identical to v1.14.1.
 
 ### Previous (v1.14.1)
 
@@ -160,6 +164,39 @@ const results = await db.search('products', queryVector, { k: 10 });
 > (e.g. `POST /v1/collections/{name}/search`). Legacy routes without the prefix
 > are accepted for backward compatibility but are deprecated and will be removed
 > in a future major version. Always target `/v1/` in custom HTTP clients.
+
+## Embedding helper
+
+The SDK ships an optional `OpenAIEmbedder` so you can turn text into vectors without
+writing the HTTP call yourself. It targets any OpenAI-compatible `/embeddings`
+endpoint (OpenAI, Azure OpenAI, vLLM, …) using the global `fetch` API, so it adds
+**no extra runtime dependency** and runs in Node.js ≥ 18, browsers, and Deno.
+
+```typescript
+import { VelesDB, OpenAIEmbedder } from '@wiscale/velesdb-sdk';
+
+const embedder = new OpenAIEmbedder({
+  apiKey: process.env.OPENAI_API_KEY!,
+  model: 'text-embedding-3-small', // default; pass `dimensions` to truncate
+});
+
+const db = new VelesDB({ backend: 'wasm' });
+await db.init();
+
+// Embed first so the collection dimension matches the model output.
+const vectors = await embedder.embed(['hello world', 'vector search']);
+await db.createCollection('docs', { dimension: embedder.dimension, metric: 'cosine' });
+await db.upsertBatch('docs', vectors.map((vector, i) => ({ id: `doc-${i}`, vector })));
+
+const [query] = await embedder.embed(['greeting']);
+const results = await db.search('docs', query, { k: 5 });
+```
+
+`embedder.dimension` is `0` until the first `embed()` call (or until you pass
+`dimensions` to the constructor), at which point it is inferred from the model's
+output. To use a different provider, set `baseUrl`. Implement the `Embedder`
+interface (`{ dimension: number; embed(texts: string[]): Promise<number[][]> }`)
+to plug in any other embedding source.
 
 ## API Reference
 
@@ -827,6 +864,11 @@ import {
   // Client
   VelesDB,
   AgentMemoryClient,
+
+  // Embedding helper
+  OpenAIEmbedder,
+  type Embedder,
+  type OpenAIEmbedderOptions,
 
   // Backends (advanced: use VelesDB client instead)
   WasmBackend,

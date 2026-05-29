@@ -178,11 +178,12 @@ class MultiQueryOpsMixin:
         Args:
             queries: List of query strings (reformulations of user query).
             k: Number of results to return after fusion. Defaults to 4.
-            fusion: Fusion strategy - "average", "maximum", "rrf", or "weighted".
-                Defaults to "rrf".
+            fusion: Fusion strategy - "average", "maximum", "rrf", "weighted",
+                or "relative_score" (alias "rsf"). Defaults to "rrf".
             fusion_params: Optional parameters for fusion strategy:
                 - For "rrf": {"k": 60} (ranking constant)
                 - For "weighted": {"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1}
+                - For "relative_score"/"rsf": {"dense_weight": 0.5, "sparse_weight": 0.5}
             filter: Optional metadata filter dict.
             **kwargs: Additional arguments.
 

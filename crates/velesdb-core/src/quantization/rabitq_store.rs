@@ -55,9 +55,20 @@ impl RaBitQVectorStore {
     }
 
     /// Appends an encoded vector's bits and correction to the store.
+    ///
+    /// The unused padding bits of the last word are masked to zero so that the
+    /// XOR + popcount distance estimator cannot underflow even if `bits` came
+    /// from untrusted (deserialized/tampered) input. Masking is correctness-
+    /// preserving: padding bits carry no information (see
+    /// [`super::rabitq::signs_to_bits`]).
     pub fn push(&mut self, bits: &[u64], correction: RaBitQCorrection) {
         debug_assert_eq!(bits.len(), self.words_per_vector);
         self.bits_data.extend_from_slice(bits);
+        if !bits.is_empty() {
+            if let Some(last) = self.bits_data.last_mut() {
+                *last &= super::rabitq::last_word_mask(self.dimension);
+            }
+        }
         self.corrections.push(correction);
         self.count += 1;
     }

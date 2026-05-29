@@ -276,7 +276,7 @@ impl Collection {
     }
 
     /// Batch-inserts into HNSW or defers into the deferred indexer.
-    pub(super) fn bulk_index_or_defer(&self, vector_refs: Vec<(u64, &[f32])>) -> usize {
+    pub(super) fn bulk_index_or_defer(&self, vector_refs: &[(u64, &[f32])]) -> usize {
         let count = vector_refs.len();
         #[cfg(feature = "persistence")]
         if let Some(ref di) = self.deferred_indexer {
@@ -289,7 +289,9 @@ impl Collection {
                 .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
             return count;
         }
-        let inserted = self.index.insert_batch_parallel(vector_refs);
+        let inserted = self
+            .index
+            .insert_batch_parallel(vector_refs.iter().copied());
         #[allow(clippy::cast_possible_truncation)]
         self.inserts_since_last_hnsw_save
             .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);

@@ -180,6 +180,7 @@ fn batch_dot(@builtin(global_invocation_id) id: vec3<u32>) {
 /// - binding 4: `storage(read_write)` — visited bitset (atomic u32 words)
 /// - binding 5: `storage(read_write)` — counters (atomic: [0]=candidate_count)
 /// - binding 6: `uniform` — params
+#[cfg(feature = "persistence")]
 pub(crate) const EXPAND_FRONTIER_SHADER: &str = r"
 struct ExpandParams {
     num_frontier: u32,
@@ -253,6 +254,7 @@ fn expand_frontier(@builtin(global_invocation_id) id: vec3<u32>) {
 /// - binding 2: `storage(read)` — candidate_ids (node IDs from expand pass)
 /// - binding 3: `storage(read_write)` — results (distances, one per candidate)
 /// - binding 4: `uniform` — params (dimension, max_candidates)
+#[cfg(feature = "persistence")]
 pub(crate) const TRAVERSAL_EUCLIDEAN_SQ_SHADER: &str = r"
 struct Params {
     dimension: u32,
@@ -300,6 +302,7 @@ fn traversal_euclidean_sq(@builtin(global_invocation_id) id: vec3<u32>) {
 /// Same u32 offset limit as `TRAVERSAL_EUCLIDEAN_SQ_SHADER`: callers must
 /// ensure `num_vectors * dim <= u32::MAX` (gated by
 /// [`crate::gpu::should_traverse_gpu`]).
+#[cfg(feature = "persistence")]
 pub(crate) const TRAVERSAL_COSINE_SHADER: &str = r"
 struct Params {
     dimension: u32,
@@ -356,6 +359,7 @@ fn traversal_cosine(@builtin(global_invocation_id) id: vec3<u32>) {
 /// Same u32 offset limit as `TRAVERSAL_EUCLIDEAN_SQ_SHADER`: callers must
 /// ensure `num_vectors * dim <= u32::MAX` (gated by
 /// [`crate::gpu::should_traverse_gpu`]).
+#[cfg(feature = "persistence")]
 pub(crate) const TRAVERSAL_DOT_PRODUCT_SHADER: &str = r"
 struct Params {
     dimension: u32,
@@ -443,6 +447,7 @@ fn traversal_dot(@builtin(global_invocation_id) id: vec3<u32>) {
 /// iteration at `num_candidates` = 8192 / `k` = 128. Acceptable for the
 /// advertised 500K–5M-vector GPU range; a parallel reduction is a future
 /// perf win (tracked separately).
+#[cfg(feature = "persistence")]
 pub(crate) const SELECT_TOPK_SHADER: &str = r"
 struct SelectParams {
     num_candidates: u32,

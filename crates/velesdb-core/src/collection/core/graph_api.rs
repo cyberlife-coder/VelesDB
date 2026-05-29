@@ -14,7 +14,7 @@ use crate::storage::{PayloadStorage, VectorStorage};
 
 use super::graph_traversal_helpers::{
     bfs_pop, bfs_push, dfs_pop, dfs_push, expand_dfs_neighbors, reconstruct_path,
-    traverse_with_frontier, TraversalEntry, TraversalParams,
+    traverse_with_frontier, DfsFrontier, TraversalEntry, TraversalParams,
 };
 
 // Traversal helper functions are in graph_traversal_helpers.rs
@@ -329,23 +329,32 @@ impl Collection {
         source_id: u64,
         config: &TraversalConfig,
     ) -> Vec<TraversalResult> {
-        use crate::collection::graph::{concurrent_bfs_stream, StreamingConfig};
+        use crate::collection::graph::{concurrent_bfs_stream, StreamingConfig, MAX_VISITED_SIZE};
 
-        // Prefer the lock-free CSR snapshot path when available (Issue #491).
-        let snapshot = self.edge_store.get_csr_snapshot();
-        // Guard: only use the CSR path when the snapshot has been populated
-        // (node_count > 0). An empty snapshot means no edges have been
-        // ingested yet, so we fall through to the per-shard streaming BFS.
-        if snapshot.node_count() > 0 {
-            return crate::collection::graph::bfs_traverse_csr(&snapshot, source_id, config);
+        // Issue #905 debounce: only pay for the O(N+E) CSR rebuild when the
+        // snapshot is already authoritative (no pending writes) or enough
+        // writes have accumulated to make the rebuild worthwhile. While the
+        // snapshot is stale-but-below-threshold we serve from the
+        // authoritative per-shard streaming path instead of rebuilding on
+        // every read — correct results, no stale data, no rebuild.
+        if self.edge_store.csr_is_authoritative() || self.edge_store.csr_rebuild_due() {
+            // Prefer the lock-free CSR snapshot path when available (Issue #491).
+            let snapshot = self.edge_store.get_csr_snapshot();
+            // Guard: only use the CSR path when the snapshot has been populated
+            // (node_count > 0). An empty snapshot means no edges have been
+            // ingested yet, so we fall through to the per-shard streaming BFS.
+            if snapshot.node_count() > 0 {
+                return crate::collection::graph::bfs_traverse_csr(&snapshot, source_id, config);
+            }
         }
 
-        // Fallback: streaming BFS via per-shard locks
+        // Fallback: streaming BFS via per-shard locks (also the correctness
+        // path while the CSR rebuild is debounced).
         let streaming = StreamingConfig {
             max_depth: config.max_depth,
             rel_types: config.rel_types.clone(),
             limit: Some(config.limit),
-            max_visited_size: 100_000,
+            max_visited_size: MAX_VISITED_SIZE,
         };
         concurrent_bfs_stream(&self.edge_store, source_id, streaming)
             .filter(|result| result.depth >= config.min_depth)
@@ -373,6 +382,18 @@ impl Collection {
             if results.len() >= config.limit {
                 break;
             }
+            // Issue #906: bound the visited set / parent map. A highly-connected
+            // graph with a high limit/max_depth would otherwise grow these
+            // unboundedly (OOM). Consistent with the streaming iterators and
+            // `traverse_with_frontier`: stop and return the bounded result.
+            //
+            // NOTE: this pop-time guard alone is insufficient for DFS — a single
+            // high-out-degree hub fills `stack`/`parent_map` at PUSH time while
+            // `visited` stays tiny. `expand_dfs_neighbors` therefore also caps
+            // push-time growth at `MAX_VISITED_SIZE`.
+            if visited.len() >= crate::collection::graph::MAX_VISITED_SIZE {
+                break;
+            }
             if !visited.insert(node_id) {
                 continue;
             }
@@ -384,14 +405,18 @@ impl Collection {
                 }
             }
             if depth < config.max_depth {
+                let mut frontier = DfsFrontier {
+                    stack: &mut stack,
+                    parent_map: &mut parent_map,
+                    max_pending: crate::collection::graph::MAX_VISITED_SIZE,
+                };
                 expand_dfs_neighbors(
                     &self.edge_store,
                     node_id,
                     depth,
                     &rel_filter,
                     &visited,
-                    &mut stack,
-                    &mut parent_map,
+                    &mut frontier,
                 );
             }
         }

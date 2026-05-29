@@ -4,7 +4,7 @@ This document specifies the **explicit, enforceable thresholds** below which Vel
 
 These gates are not aspirational. They are enforced via CI workflows, scripts, and explicit pre-merge protocols. Each gate listed here links to its enforcement mechanism so that the gate can be inspected, contested, or extended publicly.
 
-> **Last updated:** 2026-05-14 — applies to v1.14.x and onward.
+> **Last updated:** 2026-05-15 — applies to v1.14.x and onward.
 
 ---
 
@@ -36,7 +36,10 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
   ```
   Must pass with recall ≥ 0.95 on 10K vectors.
 
-- **CI (authoritative):** `recall-quality` job runs on every push to `develop` and `main` with 100K vectors and threshold ≥ 0.90.
+- **CI (authoritative):**
+  - [`.github/workflows/perf-gate-e2e.yml`](.github/workflows/perf-gate-e2e.yml) gates **recall@10 ≥ 0.95** on the 10K/384D benchmark for every PR touching the search hot path (also gates Gate 2's p50 — same workflow, single source of truth).
+  - The `recall-quality` job in the broader CI pipeline runs the 100K-vector ≥ 0.90 floor on pushes to `develop` and `main`.
+  - The BDD suite enforces **per-metric recall coverage** via [`crates/velesdb-core/tests/bdd/recall_contract_multimetric.rs`](crates/velesdb-core/tests/bdd/recall_contract_multimetric.rs) (Cosine in `recall_contract.rs`, Euclidean and DotProduct in `recall_contract_multimetric.rs`) on every PR.
 
 - **Documented modes:**
 
@@ -62,6 +65,7 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
 
 **Enforcement:**
 
+- **CI gate (blocking):** [`.github/workflows/perf-gate-e2e.yml`](.github/workflows/perf-gate-e2e.yml) runs `benchmarks/velesdb_benchmark.py --datasets 10000 --recall --json` on every PR that touches `crates/velesdb-core/src/{index,simd_native,quantization,fusion,wal,storage}/`, `crates/velesdb-python/`, or `benchmarks/velesdb_benchmark.py`. The recall@10 ≥ 0.95 bound (Gate 1) is gated at the contract threshold; the p50 bound is gated at a deliberately loose **1500 µs sanity floor** that catches order-of-magnitude algorithmic regressions without flaking on the ~3-4× slower GitHub-hosted runner. The canonical 450 µs claim itself is preserved by local + release-engineering measurement on the i9-14900KF reference machine.
 - **Reproducible benchmark:** `python benchmarks/velesdb_benchmark.py --recall`
 - **Source:** `CHANGELOG.md` v1.13.0 (measured 2026-03-27, baseline preserved through pre-seed remediation phases)
 - **Promise contract:** [`docs/reference/promise-contract.json`](docs/reference/promise-contract.json) entry `readme_production_search_latency` enforces the exact substring `**450 us**` in `README.md`.
@@ -191,6 +195,7 @@ These signals are tracked but do not block release individually:
 | Promise contract sync | All numeric claims in README backed by benchmark commands | `scripts/check-promise-contract.py` in CI |
 | TODO governance | All TODOs in format `// TODO(EPIC-XXX):` | `scripts/check-todo-annotations.py` |
 | RUSTSEC | All advisories tracked or justified in `deny.toml` | `cargo deny check` in CI (Security Audit job) |
+| Untrusted-input hardening | Corrupt/oversized persisted artifacts (HNSW graph, PQ codebook, sparse, BM25, WAL) are rejected at load, not used to size allocations; WAL `Fsync` is durable before ack; config limits validated in loaders + on open | Regression suites: `storage/storage_reliability_tests.rs`, `index/hnsw/persistence_atomicity_tests.rs`, `quantization/pq_tests.rs`, `quantization/rabitq_tests.rs`, `index/sparse/persistence_tests.rs`, `index/bm25_tests.rs`, `config_tests.rs`, `velesql/parser/robustness_tests.rs` (gated by `cargo test`) |
 
 ---
 

@@ -259,8 +259,8 @@ VelesDB uses **3 simplified GitHub Actions workflows**:
 ```bash
 # 1. Bump every manifest in lock-step
 pwsh -File scripts/bump-version.ps1 -Version <vX.Y.Z>
-python scripts/check-version-sync.py    # 37 checks must align
-python scripts/check-promise-contract.py # 15 claims must pass
+python scripts/check-version-sync.py    # 38 checks must align
+python scripts/check-promise-contract.py # 19 claims must pass
 cargo update --workspace                 # refresh Cargo.lock
 
 # 2. Open release/<vX.Y.Z> -> main, wait for ALL CI green on the merge commit

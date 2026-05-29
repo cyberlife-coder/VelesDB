@@ -108,7 +108,7 @@ print(result["retriever"]["documents"])
 | `path` | `"./velesdb_haystack"` | Directory where VelesDB persists data |
 | `collection_name` | `"haystack_documents"` | VelesDB collection name |
 | `embedding_dim` | `768` | Embedding vector dimension |
-| `metric` | `"cosine"` | Distance metric: `"cosine"`, `"euclidean"`, or `"dot"` |
+| `metric` | `"cosine"` | Distance metric: `"cosine"`, `"euclidean"`, `"dot"`, `"hamming"`, or `"jaccard"` |
 
 ### Methods
 

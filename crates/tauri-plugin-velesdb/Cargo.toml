@@ -12,7 +12,7 @@ categories = ["database", "gui"]
 links = "tauri-plugin-velesdb"
 
 [build-dependencies]
-tauri-plugin = { version = "2.0", features = ["build"] }
+tauri-plugin = { version = "2.6", features = ["build"] }
 
 [dependencies]
 tauri = { version = "2.11", default-features = false }
@@ -21,14 +21,14 @@ serde_json = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
 parking_lot = "0.12"
-dirs = "5.0"
+dirs = "6.0"
 
 # VelesDB core dependency (local path for development)
 velesdb-core = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.14"
-toml = "0.9"
+toml = "1.1"
 
 [features]
 default = ["velesdb-core/default"]

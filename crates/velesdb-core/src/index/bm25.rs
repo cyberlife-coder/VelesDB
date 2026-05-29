@@ -531,12 +531,20 @@ impl Bm25Index {
     ///
     /// # Errors
     ///
+    /// Returns [`Error::IndexCorrupted`] when `snapshot.version` does not match
+    /// [`BM25_SNAPSHOT_VERSION`], protecting against loading an incompatible
+    /// on-disk format. Document-length counters (`doc_count`,
+    /// `total_doc_length`) are recomputed from the authoritative `documents`
+    /// map and rejected if the recomputed `doc_count` would leave
+    /// `total_doc_length == 0` while `doc_count > 0` (which would make `avgdl`
+    /// produce inf/NaN BM25 scores).
+    ///
     /// Silently skips documents missing from `point_to_doc`. Such a
     /// mismatch would indicate a corrupt snapshot and is logged
     /// rather than raised, matching the existing BM25
     /// `remove_document_internal` tolerance for unknown ids.
-    #[must_use]
-    pub(crate) fn from_snapshot(snapshot: Bm25Snapshot) -> Self {
+    pub(crate) fn from_snapshot(mut snapshot: Bm25Snapshot) -> crate::Result<Self> {
+        Self::validate_snapshot(&mut snapshot)?;
         let index = Self::with_params(snapshot.params);
 
         // Rebuild inverted index from `documents` + `point_to_doc`.
@@ -569,6 +577,46 @@ impl Bm25Index {
         *index.doc_count.write() = snapshot.doc_count;
         *index.total_doc_length.write() = snapshot.total_doc_length;
 
-        index
+        Ok(index)
+    }
+
+    /// Validates an untrusted [`Bm25Snapshot`] and repairs its counters in place.
+    ///
+    /// Rejects version mismatches, then recomputes `doc_count` /
+    /// `total_doc_length` from the **scorable** corpus — the documents that are
+    /// also present in `point_to_doc` and therefore added to the inverted index
+    /// by [`Self::from_snapshot`]. Counting all of `documents` (including ones
+    /// skipped during reconstruction) would inflate `N`/`avgdl` and skew every
+    /// IDF and length-normalization, yielding wrong (but finite) scores. This
+    /// also prevents a tampered header from installing inconsistent counters
+    /// that would make `avgdl == 0` (inf/NaN scores).
+    fn validate_snapshot(snapshot: &mut Bm25Snapshot) -> crate::Result<()> {
+        if snapshot.version != BM25_SNAPSHOT_VERSION {
+            return Err(crate::Error::IndexCorrupted(format!(
+                "BM25 snapshot version mismatch: got {}, expected {BM25_SNAPSHOT_VERSION}",
+                snapshot.version
+            )));
+        }
+
+        let scorable = |point_id| snapshot.point_to_doc.contains_key(point_id);
+        let real_count = snapshot.documents.keys().filter(|id| scorable(id)).count();
+        let real_total: u64 = snapshot
+            .documents
+            .iter()
+            .filter(|(id, _)| scorable(id))
+            .map(|(_, d)| u64::from(d.length))
+            .sum();
+
+        // `avgdl = total_doc_length / doc_count` must never divide by a positive
+        // count with a zero numerator (→ 0 → division by avgdl yields inf/NaN).
+        if real_count > 0 && real_total == 0 {
+            return Err(crate::Error::IndexCorrupted(
+                "BM25 snapshot: doc_count > 0 but total document length is 0".to_string(),
+            ));
+        }
+
+        snapshot.doc_count = real_count;
+        snapshot.total_doc_length = real_total;
+        Ok(())
     }
 }

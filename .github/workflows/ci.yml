@@ -153,9 +153,11 @@ jobs:
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
+      - name: Test feature-claims audit script
+        run: python3 -m unittest scripts.tests.test_check_feature_claims
+
       - name: Audit feature claims vs exports
         run: python3 scripts/check-feature-claims.py
-        continue-on-error: true  # Advisory — does not block merge
 
       - name: Audit performance claims consistency
         run: python3 scripts/check-perf-claims.py --no-criterion
@@ -318,7 +320,7 @@ jobs:
     name: Python Integrations
     runs-on: ubuntu-latest
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -335,7 +337,7 @@ jobs:
       # were causing pyo3-build-config to misdetect the interpreter even when
       # PYO3_PYTHON was set correctly).
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -588,7 +590,7 @@ jobs:
           java-version: '17'
 
       - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@aecaf43ae57e412bd97d70ef9ce6076e672fe0a9 # v3.0.0
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v3.0.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io

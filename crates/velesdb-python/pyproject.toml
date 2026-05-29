@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "velesdb"
-version = "1.15.0"
+version = "1.16.0"
 description = "VelesDB: The Local Vector Database for Python & AI. Microsecond semantic search, zero network latency."
 readme = "README.md"
 license = { text = "MIT" }
@@ -40,6 +40,9 @@ numpy = ["numpy>=1.20"]
 pandas = ["pandas>=1.5"]
 polars = ["polars>=0.19"]
 dataframe = ["pandas>=1.5", "polars>=0.19"]
+embed-openai = ["openai>=1.0"]
+embed-sentence-transformers = ["sentence-transformers>=2.2"]
+embed = ["openai>=1.0", "sentence-transformers>=2.2"]
 dev = [
     "pytest>=7.0",
     "numpy>=1.20",

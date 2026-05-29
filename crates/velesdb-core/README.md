@@ -23,6 +23,7 @@ High-performance vector database engine written in Rust.
 - **Bulk Operations**: Optimized batch insert with turbo/fast modes, parallel HNSW indexing, graduated ef_construction (VAMANA 3-phase), and lock-free CAS entry-point promotion
 - **Graph Traversal**: CSR snapshot for zero-copy BFS/DFS, FxHashSet visited sets, parent-pointer path reconstruction
 - **Quantization**: SQ8 (4x), Binary (32x), Product Quantization (8-32x), RaBitQ compression
+- **GPU Acceleration** *(optional, `gpu` feature)*: wgpu-backed compute pipeline for batch distance kernels; falls back transparently to SIMD on hosts without a usable GPU
 
 ## Installation
 
@@ -67,8 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &query,
         "rust programming",
         5,
-        Some(0.7), // 70% vector, 30% text
-        None,       // RRF k=60 (default)
+        Some(0.7), // alpha: 70% vector, 30% text (None = balanced default)
     )?;
 
     // BM25 full-text search only

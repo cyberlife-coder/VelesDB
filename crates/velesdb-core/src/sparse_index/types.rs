@@ -41,7 +41,7 @@ impl SparseVector {
         }
 
         // Sort by index
-        pairs.sort_by_key(|&(idx, _)| idx);
+        pairs.sort_unstable_by_key(|&(idx, _)| idx);
 
         let mut indices = Vec::with_capacity(pairs.len());
         let mut values = Vec::with_capacity(pairs.len());

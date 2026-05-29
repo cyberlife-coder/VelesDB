@@ -152,7 +152,14 @@ let mut target = shards[target_shard].write();  // DEADLOCK if another thread ho
 
 ### Cascade Delete (remove_node_edges)
 
-Uses BTreeSet for automatic ascending order:
+Deleting a graph node now **cascades to its edges**: the node-delete path
+(`collection/core/crud_read_delete.rs`) calls
+`ConcurrentEdgeStore::remove_node_edges(id)` so both outgoing and incoming
+edges are removed, leaving no dangling edges pointing at a phantom node (#900).
+
+The cascade follows the global lock order: it acquires `edge_ids` **first**,
+then the affected shards in **ascending** index order, using a `BTreeSet` whose
+iteration is already sorted:
 
 ```rust
 let mut shards_to_clean: BTreeSet<usize> = BTreeSet::new();
@@ -161,6 +168,10 @@ for &idx in &shards_to_clean {
     guards.push(shards[idx].write());
 }
 ```
+
+The snapshot invalidation / debounced rebuild (see below) runs **after** the
+`edge_ids` write lock is released, never while holding it, to avoid deadlocking
+against the downstream rebuild lock acquisition.
 
 ## RaBitQ Interior Mutability
 
@@ -268,13 +279,27 @@ neighbor access during BFS/DFS traversal.
 2. **Read**: `csr_snapshot().neighbors(source_id)` returns `&[u64]` -- a
    zero-copy slice into the contiguous target array.
 3. **Invalidate**: Every write operation (`add_edge`, `remove_edge`,
-   `remove_node_edges`) sets `csr_snapshot = None`. Subsequent reads fall
-   back to per-shard edge lookup until the snapshot is rebuilt.
+   `remove_node_edges`) sets `csr_snapshot = None` and increments a
+   pending-write counter. Subsequent reads fall back to per-shard edge lookup
+   until the snapshot is rebuilt.
+
+**Debounced rebuild** (#905): The actual O(N+E) CSR rebuild (which clones every
+edge into a fresh `EdgeStore`) is **debounced** rather than run on the first
+read after any write. A mutation only flips the dirty flag and bumps
+`pending_writes`; the rebuild is deferred until the accumulated write count
+reaches `CSR_REBUILD_WRITE_THRESHOLD` (64). Batch writes count their full size
+toward the threshold. While dirty-but-below-threshold, reads remain correct by
+falling back to per-shard lookup — debouncing trades a slightly slower fallback
+read for avoiding a full rebuild on every interleaved read/write. A completed
+rebuild clears the dirty flag and resets the counter to 0.
 
 **Thread safety** (ConcurrentEdgeStore): The snapshot is stored under the
 same `RwLock` as the shard data. A read lock on the snapshot shard is
 sufficient for BFS access. Write operations acquire write locks and
-invalidate the snapshot as part of the same critical section.
+invalidate the snapshot as part of the same critical section. The deferred
+rebuild path acquires `edge_ids` **read-only** (never write) and releases
+per-shard read locks promptly, so it never violates the `edge_ids → shards`
+ordering and the caller must not hold an `edge_ids` write lock across it.
 
 ## Performance vs Safety Tradeoffs
 

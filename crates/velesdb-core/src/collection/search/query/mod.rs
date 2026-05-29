@@ -31,6 +31,7 @@
 #![allow(clippy::implicit_hasher)] // HashSet hasher genericity adds noise for internal APIs.
 
 mod aggregation;
+mod bounded_top_k;
 #[cfg(test)]
 mod component_scores_tests;
 pub(crate) mod condition_tree;
@@ -95,7 +96,7 @@ mod with_options_tests;
 pub use ordering::compare_json_values;
 // Re-export join functions for future integration with execute_query
 #[allow(unused_imports)]
-pub use join::{execute_join, JoinedResult};
+pub use join::{execute_join, JoinedResult, JOIN_ROW_CEILING};
 
 // Re-export types from options.rs so sibling submodules can use `super::*`.
 pub(crate) use options::QuerySearchOptions;
@@ -147,8 +148,14 @@ impl Collection {
                 right_query.select.limit = compound_limit;
                 let right_results =
                     self.execute_query_with_client(&right_query, params, "default")?;
-                accumulated =
-                    set_operations::apply_set_operation(accumulated, right_results, *operator);
+                // Intermediate ops keep the server-side ceiling: truncating to the
+                // user LIMIT here would drop rows a later chained set op still needs.
+                accumulated = set_operations::apply_set_operation(
+                    accumulated,
+                    right_results,
+                    *operator,
+                    MAX_LIMIT,
+                );
             }
             // SQL-standard: OFFSET then LIMIT on the combined result.
             if let Some(offset) = query.select.offset {

@@ -294,9 +294,10 @@ impl Collection {
     /// ascending for distance metrics.
     pub(super) fn sort_by_score(results: &mut [MatchResult], higher_is_better: bool) {
         if higher_is_better {
-            results.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+            results
+                .sort_unstable_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
         } else {
-            results.sort_by(|a, b| {
+            results.sort_unstable_by(|a, b| {
                 a.score
                     .unwrap_or(f32::MAX)
                     .total_cmp(&b.score.unwrap_or(f32::MAX))
@@ -318,7 +319,7 @@ impl Collection {
     ) {
         match order_by {
             "similarity()" | "similarity" => {
-                results.sort_by(|a, b| {
+                results.sort_unstable_by(|a, b| {
                     let cmp = a.score.unwrap_or(0.0).total_cmp(&b.score.unwrap_or(0.0));
                     if descending {
                         cmp.reverse()
@@ -328,7 +329,7 @@ impl Collection {
                 });
             }
             "depth" => {
-                results.sort_by(|a, b| {
+                results.sort_unstable_by(|a, b| {
                     let cmp = a.depth.cmp(&b.depth);
                     if descending {
                         cmp.reverse()
@@ -340,7 +341,7 @@ impl Collection {
             _ => {
                 if let Some((alias, property)) = parse_property_path(order_by) {
                     let payload_storage = self.payload_storage.read();
-                    results.sort_by(|a, b| {
+                    results.sort_unstable_by(|a, b| {
                         let get_value = |r: &MatchResult| -> Option<serde_json::Value> {
                             let node_id = *r.bindings.get(alias)?;
                             let payload = payload_storage.retrieve(node_id).ok().flatten()?;

@@ -434,8 +434,20 @@ fn test_new_zero_dimension_returns_error() {
 
 #[test]
 fn test_new_overflow_dimension_returns_error() {
-    // Requesting absurd sizes should return AllocationFailed, not panic
+    // Requesting absurd sizes must return an error, not panic. Since #899
+    // enforces the dimension range up front, an absurd dimension is rejected as
+    // InvalidDimension (VELES-032) before the size product is ever computed.
     let result = ContiguousVectors::new(usize::MAX / 2, usize::MAX / 2);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), "VELES-032");
+}
+
+#[test]
+fn test_new_overflow_capacity_returns_alloc_error() {
+    // With a valid dimension but an absurd capacity, the size product overflows /
+    // exceeds the ceiling and surfaces as AllocationFailed (VELES-033), not a panic.
+    let result = ContiguousVectors::new(crate::validation::MAX_DIMENSION, usize::MAX / 2);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert_eq!(err.code(), "VELES-033");
@@ -581,4 +593,125 @@ fn test_reserve_additional_then_push_batch_no_resize() {
         let actual = cv.get(i).expect("test: vector should exist");
         assert_eq!(actual, expected.as_slice(), "vector {i} data mismatch");
     }
+}
+
+// =========================================================================
+// #899 — Checked arithmetic / allocation-bound regression tests
+// =========================================================================
+
+/// `insert_at(usize::MAX, ..)` must error (no `index + 1` wrap to 0 → OOB write).
+#[test]
+fn test_insert_at_usize_max_index_rejected() {
+    let mut cv = ContiguousVectors::new(4, 16).expect("test");
+    let v = vec![1.0_f32, 2.0, 3.0, 4.0];
+    let err = cv
+        .insert_at(usize::MAX, &v)
+        .expect_err("usize::MAX index must be rejected, not wrap to OOB write");
+    assert!(matches!(err, crate::error::Error::AllocationFailed(_)));
+    // State must be unchanged — no partial/OOB write occurred.
+    assert_eq!(cv.len(), 0);
+}
+
+/// A large-but-not-MAX index whose `index * dimension` offset overflows must error.
+#[test]
+fn test_insert_at_offset_overflow_rejected() {
+    let mut cv = ContiguousVectors::new(4, 16).expect("test");
+    let v = vec![1.0_f32, 2.0, 3.0, 4.0];
+    // index * 4 overflows usize for this index.
+    let index = usize::MAX / 2;
+    let err = cv
+        .insert_at(index, &v)
+        .expect_err("offset overflow must be rejected");
+    assert!(matches!(err, crate::error::Error::AllocationFailed(_)));
+    assert_eq!(cv.len(), 0);
+}
+
+/// Oversized dimension (> MAX_DIMENSION) must be rejected at construction.
+#[test]
+fn test_oversized_dimension_rejected_at_construction() {
+    let err = ContiguousVectors::new(crate::validation::MAX_DIMENSION + 1, 16)
+        .expect_err("dimension above MAX_DIMENSION must be rejected");
+    assert!(matches!(err, crate::error::Error::InvalidDimension { .. }));
+    // The maximum valid dimension must still succeed.
+    assert!(ContiguousVectors::new(crate::validation::MAX_DIMENSION, 1).is_ok());
+}
+
+/// A construction request above the AllocGuard byte ceiling must be rejected.
+///
+/// #899 follow-up: the default ceiling is now a high 1 TiB backstop, so this
+/// uses a deliberately impossible ~238 TiB request (still below `usize`
+/// overflow) to exercise the ceiling rejection itself rather than the checked
+/// arithmetic. A legitimate large index (tens/hundreds of GiB) is NOT rejected.
+#[test]
+fn test_construction_above_alloc_ceiling_rejected() {
+    // dimension * capacity * 4 well above the 1 TiB default ceiling, but each
+    // factor is small enough not to overflow usize on its own.
+    let dimension = 65_536; // == MAX_DIMENSION, a valid dimension
+    let capacity = 1_000_000_000; // 65_536 * 1e9 * 4 bytes ≈ 238 TiB ≫ 1 TiB
+    let err = ContiguousVectors::new(dimension, capacity)
+        .expect_err("allocation above ceiling must be rejected");
+    assert!(matches!(err, crate::error::Error::AllocationFailed(_)));
+}
+
+/// REGRESSION (#899 follow-up): a large-but-legitimate single buffer that the
+/// old 16 GiB cap would have falsely rejected now constructs successfully —
+/// only the metadata/decision is exercised; we do NOT actually back 20 GiB.
+///
+/// `byte_size` is `pub(crate)`, so this test (compiled into the crate) can call
+/// the exact bound-decision path used by `new` without allocating.
+#[test]
+fn test_large_legit_buffer_size_decision_accepted() {
+    const GIB: usize = 1024 * 1024 * 1024;
+    // 20 GiB at 768D ≈ 6.8M vectors — above the old 16 GiB cap, below 1 TiB.
+    let dimension = 768;
+    let capacity = (20 * GIB) / (dimension * std::mem::size_of::<f32>());
+    let bytes = ContiguousVectors::byte_size(dimension, capacity)
+        .expect("byte_size must not overflow for a legit large buffer");
+    assert!(
+        bytes > 16 * GIB,
+        "test setup: should exceed the old 16 GiB cap"
+    );
+    assert!(
+        crate::alloc_guard::check_alloc_bound(bytes).is_ok(),
+        "legit ~20 GiB single buffer must not be falsely rejected"
+    );
+}
+
+/// Geometric-growth doubling must not wrap: a resize request near usize::MAX
+/// fails cleanly rather than wrapping `capacity * 2` to a tiny value.
+#[test]
+fn test_ensure_capacity_doubling_overflow_handled() {
+    let mut cv = ContiguousVectors::new(4, 16).expect("test");
+    let err = cv
+        .ensure_capacity(usize::MAX)
+        .expect_err("usize::MAX capacity must fail cleanly");
+    assert!(matches!(err, crate::error::Error::AllocationFailed(_)));
+    // Buffer remains usable after the rejected growth.
+    assert_eq!(cv.capacity(), 16);
+    cv.push(&[1.0, 2.0, 3.0, 4.0]).expect("test");
+    assert_eq!(cv.len(), 1);
+}
+
+/// `gather_flat` with a huge index list must not panic on the capacity hint and
+/// must skip out-of-bounds indices.
+#[test]
+fn test_gather_flat_overflow_hint_safe() {
+    let mut cv = ContiguousVectors::new(4, 16).expect("test");
+    cv.push(&[1.0, 2.0, 3.0, 4.0]).expect("test");
+    // Valid index plus an out-of-bounds one; result holds only the valid vector.
+    let out = cv.gather_flat(&[0, 999]);
+    assert_eq!(out, vec![1.0, 2.0, 3.0, 4.0]);
+}
+
+/// Normal store / insert / gather paths remain unaffected by the new guards.
+#[test]
+fn test_normal_paths_unaffected_by_guards() {
+    let mut cv = ContiguousVectors::new(3, 16).expect("test");
+    cv.insert_at(0, &[1.0, 2.0, 3.0]).expect("test");
+    cv.insert_at(2, &[7.0, 8.0, 9.0]).expect("test"); // sparse insert
+    cv.push(&[4.0, 5.0, 6.0]).expect("test");
+    assert_eq!(cv.get(0), Some(&[1.0, 2.0, 3.0][..]));
+    assert_eq!(cv.get(2), Some(&[7.0, 8.0, 9.0][..]));
+    let flat = cv.gather_flat(&[0, 2]);
+    assert_eq!(flat, vec![1.0, 2.0, 3.0, 7.0, 8.0, 9.0]);
 }

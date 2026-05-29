@@ -1262,3 +1262,175 @@ fn test_from_edge_store_builds_snapshot() {
     neighbors.sort_unstable();
     assert_eq!(neighbors, vec![20, 30]);
 }
+
+// =============================================================================
+// Issue #905 — CSR rebuild debounce + from_edge_store round-trip correctness
+// =============================================================================
+
+/// `from_edge_store()` round-trips edges (including cross-shard) correctly and
+/// leaves the store with an authoritative, fresh CSR snapshot.
+#[test]
+fn test_from_edge_store_roundtrip_correctness() {
+    use super::edge::EdgeStore;
+
+    let mut es = EdgeStore::new();
+    // Mix of same-shard and cross-shard edges (shard = node_id % 256).
+    es.add_edge(GraphEdge::new(1, 1, 2, "R").expect("valid"))
+        .expect("add");
+    es.add_edge(GraphEdge::new(2, 1, 257, "R").expect("valid")) // cross-shard target
+        .expect("add");
+    es.add_edge(GraphEdge::new(3, 2, 3, "R").expect("valid"))
+        .expect("add");
+
+    let store = ConcurrentEdgeStore::from_edge_store(&es);
+
+    // Edge count and connectivity must match the source store exactly.
+    assert_eq!(store.edge_count(), 3, "all edges round-tripped");
+    let mut n1 = store.get_neighbors(1);
+    n1.sort_unstable();
+    assert_eq!(n1, vec![2, 257]);
+    assert_eq!(store.get_neighbors(2), vec![3]);
+
+    // After a full rebuild the snapshot must be authoritative (no pending
+    // debounce that would force a needless rebuild on the next read).
+    assert!(
+        store.csr_is_authoritative(),
+        "freshly reconstructed store must have an authoritative CSR snapshot"
+    );
+}
+
+/// A single write does not mark the CSR authoritative, but the per-shard read
+/// path still returns the write's effect immediately (no stale data).
+#[test]
+fn test_csr_debounce_keeps_reads_correct_without_rebuild() {
+    let store = ConcurrentEdgeStore::new();
+    // Build an authoritative snapshot first.
+    store
+        .add_edge(GraphEdge::new(1, 1, 2, "R").expect("valid"))
+        .expect("add");
+    store.build_read_snapshot();
+    assert!(store.csr_is_authoritative());
+
+    // A handful of writes below the debounce threshold must NOT make the CSR
+    // authoritative again (i.e. it is intentionally not rebuilt on every
+    // write), proving the rebuild is debounced rather than eager.
+    for id in 2..10u64 {
+        store
+            .add_edge(GraphEdge::new(id, 1, id + 100, "R").expect("valid"))
+            .expect("add");
+    }
+    assert!(
+        !store.csr_is_authoritative(),
+        "writes below threshold must leave the CSR stale (debounced, not rebuilt)"
+    );
+    assert!(
+        !store.csr_rebuild_due(),
+        "a handful of writes must not yet trigger a forced rebuild"
+    );
+
+    // ...yet the authoritative per-shard read path reflects every write.
+    let mut neighbors = store.get_outgoing(1);
+    neighbors.sort_by_key(super::edge::GraphEdge::target);
+    let targets: Vec<u64> = neighbors.iter().map(GraphEdge::target).collect();
+    assert!(targets.contains(&2), "original edge still visible");
+    assert!(
+        targets.contains(&102),
+        "new edge visible without a CSR rebuild"
+    );
+    assert_eq!(
+        store.edge_count(),
+        9,
+        "all writes are reflected in the live store"
+    );
+}
+
+/// Crossing the write threshold makes the next CSR read rebuild (and become
+/// authoritative again), and the rebuilt snapshot reflects every write.
+#[test]
+fn test_csr_debounce_rebuilds_after_threshold() {
+    use super::traversal::TraversalConfig;
+
+    let store = ConcurrentEdgeStore::new();
+    // Exceed the debounce threshold with a chain 0->1->2->...
+    let total = super::edge_concurrent::CSR_REBUILD_WRITE_THRESHOLD + 5;
+    for i in 0..total {
+        store
+            .add_edge(GraphEdge::new(i + 1, i, i + 1, "R").expect("valid"))
+            .expect("add");
+    }
+    assert!(
+        store.csr_rebuild_due(),
+        "writes past the threshold must mark a rebuild as due"
+    );
+
+    // A CSR traversal forces the (single) rebuild and returns correct results.
+    let config = TraversalConfig {
+        max_depth: 3,
+        min_depth: 1,
+        rel_types: vec![],
+        limit: 100,
+    };
+    let results = store.traverse_bfs_csr(0, &config);
+    let targets: std::collections::HashSet<u64> = results.iter().map(|r| r.target_id).collect();
+    assert!(
+        targets.contains(&1),
+        "1-hop neighbor reachable after rebuild"
+    );
+    assert!(
+        targets.contains(&2),
+        "2-hop neighbor reachable after rebuild"
+    );
+
+    // After the forced rebuild the snapshot is authoritative again.
+    assert!(
+        store.csr_is_authoritative(),
+        "CSR snapshot is authoritative after the debounced rebuild"
+    );
+}
+
+#[test]
+fn test_add_edges_batch_counts_each_edge_toward_csr_debounce() {
+    // Regression (#905 follow-up): `add_edges_batch` must count every inserted
+    // edge toward the rebuild debounce, not a flat `1` per batch. With the old
+    // behavior a single bulk load stayed permanently below the threshold so the
+    // CSR fast path never engaged (permanent slow per-shard reads).
+    use super::traversal::TraversalConfig;
+
+    let store = ConcurrentEdgeStore::new();
+    let total = super::edge_concurrent::CSR_REBUILD_WRITE_THRESHOLD + 5;
+
+    // A *single* batch of >= threshold distinct edges (chain 0->1->2->...).
+    let edges: Vec<GraphEdge> = (0..total)
+        .map(|i| GraphEdge::new(i + 1, i, i + 1, "R").expect("valid"))
+        .collect();
+    let inserted = store.add_edges_batch(edges);
+    assert_eq!(inserted as u64, total, "all distinct edges inserted");
+
+    assert!(
+        store.csr_rebuild_due(),
+        "a single batch of >= threshold edges must mark a CSR rebuild as due"
+    );
+
+    // The subsequent CSR read engages the fast path: it rebuilds once, the
+    // snapshot becomes authoritative, and neighbors are correct.
+    let config = TraversalConfig {
+        max_depth: 3,
+        min_depth: 1,
+        rel_types: vec![],
+        limit: 100,
+    };
+    let results = store.traverse_bfs_csr(0, &config);
+    let targets: std::collections::HashSet<u64> = results.iter().map(|r| r.target_id).collect();
+    assert!(
+        targets.contains(&1),
+        "1-hop neighbor reachable after rebuild"
+    );
+    assert!(
+        targets.contains(&2),
+        "2-hop neighbor reachable after rebuild"
+    );
+    assert!(
+        store.csr_is_authoritative(),
+        "CSR snapshot is authoritative after the batch-triggered rebuild"
+    );
+}

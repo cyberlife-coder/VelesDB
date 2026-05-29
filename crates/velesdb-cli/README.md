@@ -120,7 +120,7 @@ History is persisted across sessions in `~/.local/share/.velesdb_history` (Linux
 | `.count <name>` | | Show record/edge/item count |
 | `.sample <name> [n]` | | Show first N records (default: 5). Works for Vector, Graph, and Metadata collections. |
 | `.browse <name> [page]` | | Paginated record browsing (10 per page). Works for Vector, Graph, and Metadata collections. |
-| `.nodes <name> [page]` | | Paginated node browsing for Graph collections (10 per page, includes payload). |
+| `.nodes <name> [page]` | | Paginated node browsing for Graph collections (20 per page, includes payload). |
 
 ### Data Operations
 
@@ -188,7 +188,7 @@ All graph REPL commands operate on graph collections via `.graph <subcommand>`:
 | `.graph store-payload <col> <node_id> <json>` | Store JSON payload on a node |
 | `.graph get-payload <col> <node_id>` | Retrieve node payload |
 | `.graph nodes <col> [--page N]` | Paginated node browsing (20 per page) |
-| `.nodes <col> [page]` | Paginated node browsing for Graph collections (10 per page, includes payload). |
+| `.nodes <col> [page]` | Paginated node browsing for Graph collections (20 per page, includes payload). |
 
 > **Naming note:** The REPL uses `.graph edges` while the CLI subcommand uses `graph get-edges`. Both do the same thing.
 

@@ -102,7 +102,7 @@ impl DistanceMetric {
             Self::Cosine => simd_native::cosine_similarity_native(a, b),
             Self::Euclidean => simd_native::euclidean_native(a, b),
             Self::DotProduct => simd_native::dot_product_native(a, b),
-            Self::Hamming => simd_native::hamming_distance_native(a, b) as f32,
+            Self::Hamming => simd_native::hamming_distance_native(a, b),
             Self::Jaccard => simd_native::jaccard_similarity_native(a, b),
         }
     }
@@ -131,10 +131,10 @@ impl DistanceMetric {
     pub fn sort_results(&self, results: &mut [(u64, f32)]) {
         if self.higher_is_better() {
             // Similarity metrics: descending order (higher = better)
-            results.sort_by(|a, b| b.1.total_cmp(&a.1));
+            results.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
         } else {
             // Distance metrics: ascending order (lower = better)
-            results.sort_by(|a, b| a.1.total_cmp(&b.1));
+            results.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         }
     }
 
@@ -144,9 +144,9 @@ impl DistanceMetric {
     /// [`ScoredResult`](crate::scored_result::ScoredResult) slices.
     pub fn sort_scored_results(&self, results: &mut [crate::scored_result::ScoredResult]) {
         if self.higher_is_better() {
-            results.sort_by(|a, b| b.score.total_cmp(&a.score));
+            results.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
         } else {
-            results.sort_by(|a, b| a.score.total_cmp(&b.score));
+            results.sort_unstable_by(|a, b| a.score.total_cmp(&b.score));
         }
     }
 }

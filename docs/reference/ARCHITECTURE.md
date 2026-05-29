@@ -255,11 +255,16 @@ VelesDB core architecture is explicitly **hybrid by design**:
 
 | Metric | Implementation | Latency (768D) |
 |--------|---------------|----------------|
-| Dot Product | AVX2 FMA | **19.8 ns** |
-| Euclidean | AVX2 FMA | **22.5 ns** |
+| Dot Product | AVX2 FMA | **21.7 ns** |
+| Euclidean | AVX2 FMA | **26.0 ns** |
 | Cosine | AVX2 4-acc, single-sqrt finish | **33.1 ns** |
 | Hamming | AVX2 FP-domain 4-acc | **35.8 ns** |
 | Jaccard | AVX-512 4-acc | **35.1 ns** |
+
+> Per-metric numbers above are the contract values in `docs/reference/promise-contract.json`.
+> Raw micro-benchmark snapshots (March 27 2026 run on a specific machine) live in
+> [`SIMD_PERFORMANCE.md`](SIMD_PERFORMANCE.md) and may differ by ~10% due to
+> methodology / cache state.
 
 **SIMD Strategy**:
 1. **Native (x86_64)**: AVX2/AVX-512 via `core::arch` intrinsics with 4-accumulator ILP
@@ -445,7 +450,8 @@ LIMIT 20
 | Operation | Throughput |
 |-----------|------------|
 | Insert | ~3.8K-6.4K vec/sec (768D) |
-| Search k=10 (10K vectors, 768D) | ~47.0 µs |
+| Search k=10 (10K vectors, 768D, HNSW index-only) | ~55 µs |
+| Search end-to-end p50 (10K/384D, WAL ON, recall ≥ 96%) | ~450 µs |
 | Search (100K vectors) | < 5 ms |
 | VelesQL Parse | 1.3M queries/sec |
 | Export (WASM) | 4,479 MB/s |

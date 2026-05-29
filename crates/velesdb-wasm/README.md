@@ -280,16 +280,28 @@ The WASM build is optimized for client-side use cases but has some limitations c
 | Knowledge Graph (nodes, edges, traversal) | ✅ | ✅ |
 | Agent Memory (SemanticMemory) | ✅ | ✅ |
 | VelesQL parsing and validation | ✅ | ✅ |
-| VelesQL query execution | ❌ | ✅ |
+| VelesQL query execution | ✅ | ✅ |
+| JOIN operations | ✅ (INNER, LEFT) | ✅ |
+| Aggregations (GROUP BY / HAVING) | ✅ | ✅ |
+| Set operations (UNION / INTERSECT / EXCEPT) | ✅ | ✅ |
+| MATCH (graph traversal) | ✅ (1–2 hop) | ✅ |
 | Cross-collection MATCH (`@collection`) | ❌ | ✅ |
-| JOIN operations | ❌ | ✅ |
-| Aggregations (GROUP BY) | ❌ | ✅ |
 | Persistence | IndexedDB | Disk (mmap) |
 | Max vectors | ~100K (browser RAM) | Millions |
 
-### VelesQL (Parser Only)
+### VelesQL (Parser + Execution)
 
-VelesQL parsing and validation are available in WASM. You can parse queries, inspect their AST, and validate syntax client-side. However, query **execution** (running queries against data) requires the REST server.
+VelesQL parsing, validation, **and execution** are all available in WASM. You can
+parse queries and inspect their AST client-side, and you can run queries against
+a `WasmDatabase` via `executeQuery()`. The single-collection executor supports
+`SELECT` (with `WHERE`, `NEAR`, `similarity()`), `GROUP BY`/`HAVING`,
+aggregations, `ORDER BY`, `UNION`/`INTERSECT`/`EXCEPT`, `INNER`/`LEFT JOIN`,
+`INSERT`/`UPSERT`/`UPDATE`/`DELETE`, DDL, and 1–2 hop `MATCH` graph traversal.
+
+The only VelesQL features that still require the REST server are
+**cross-collection `MATCH` (`@collection`)** — which needs Database-level query
+routing — and `MATCH` traversals beyond 2 hops. `RIGHT`/`FULL JOIN` and
+`TRAIN QUANTIZER` are rejected with a descriptive error.
 
 ```javascript
 import { VelesQL } from '@wiscale/velesdb-wasm';
@@ -384,8 +396,8 @@ const fused = hybrid_search_fuse(denseResults, sparseResults, 60, 10);
 
 Consider using the [REST server](https://github.com/cyberlife-coder/VelesDB) if you need:
 
-- **VelesQL query execution** - Running queries against data (JOINs, aggregations, server-side filtering)
 - **Cross-collection MATCH** - The `@collection` annotation requires Database-level query routing, which is only available on the server (WASM operates on a single collection)
+- **Multi-hop MATCH** - Graph traversals beyond 2 hops (WASM supports 1–2 hop MATCH)
 - **Large datasets** - More than 100K vectors
 - **Server-side processing** - Centralized vector database
 

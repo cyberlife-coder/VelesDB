@@ -35,6 +35,7 @@ pub(crate) enum TrigramSimdLevel {
     #[cfg(target_arch = "aarch64")]
     Neon,
     /// Scalar fallback
+    #[cfg(not(target_arch = "aarch64"))]
     Scalar,
 }
 
@@ -50,15 +51,19 @@ impl TrigramSimdLevel {
             if is_x86_feature_detected!("avx2") {
                 return Self::Avx2;
             }
+            Self::Scalar
         }
 
         #[cfg(target_arch = "aarch64")]
         {
             // NEON is always available on aarch64
-            return Self::Neon;
+            Self::Neon
         }
 
-        Self::Scalar
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        {
+            Self::Scalar
+        }
     }
 
     /// Get the name of the SIMD level
@@ -72,6 +77,7 @@ impl TrigramSimdLevel {
             Self::Avx2 => "AVX2",
             #[cfg(target_arch = "aarch64")]
             Self::Neon => "NEON",
+            #[cfg(not(target_arch = "aarch64"))]
             Self::Scalar => "Scalar",
         }
     }
@@ -91,6 +97,7 @@ pub fn extract_trigrams_simd(text: &str) -> HashSet<Trigram> {
         TrigramSimdLevel::Avx2 => extract_trigrams_avx2(text),
         #[cfg(target_arch = "aarch64")]
         TrigramSimdLevel::Neon => extract_trigrams_neon(text),
+        #[cfg(not(target_arch = "aarch64"))]
         TrigramSimdLevel::Scalar => extract_trigrams_scalar(text),
     }
 }

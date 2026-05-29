@@ -37,7 +37,7 @@
 ///
 /// * `ptr` - Pointer to the data to prefetch
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[inline]
 pub fn prefetch_read_l1(ptr: *const u8) {
     // SAFETY: `asm!(prfm ...)` emits a prefetch hint only.
     // - Condition 1: `prfm` does not dereference memory architecturally.
@@ -56,7 +56,7 @@ pub fn prefetch_read_l1(ptr: *const u8) {
 ///
 /// Use this for data that will be accessed soon but not immediately.
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[inline]
 pub fn prefetch_read_l2(ptr: *const u8) {
     // SAFETY: `asm!(prfm ...)` emits a prefetch hint only.
     // - Condition 1: `prfm` does not dereference memory architecturally.
@@ -75,7 +75,7 @@ pub fn prefetch_read_l2(ptr: *const u8) {
 ///
 /// Use this for data that will be accessed later in the computation.
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[inline]
 pub fn prefetch_read_l3(ptr: *const u8) {
     // SAFETY: `asm!(prfm ...)` emits a prefetch hint only.
     // - Condition 1: Invalid pointers are tolerated by hardware for prefetch hints.
@@ -94,7 +94,7 @@ pub fn prefetch_read_l3(ptr: *const u8) {
 ///
 /// Use this when you know you'll be writing to the data soon.
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[inline]
 pub fn prefetch_write_l1(ptr: *const u8) {
     // SAFETY: `asm!(prfm ...)` emits a write-prefetch hint only.
     // - Condition 1: This does not perform a memory store.
@@ -121,18 +121,18 @@ pub fn prefetch_write_l1(ptr: *const u8) {
 /// - 768D vector (3072B): covers 512B = 16.7%
 /// - 128D vector (512B): covers 384B = 75%
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[inline]
 pub fn prefetch_vector_neon(vector: &[f32]) {
-    if vector.is_empty() {
-        return;
-    }
-
     // Apple Silicon (M1-M4) uses 128-byte cache lines.
     // Graviton uses 64B but 128B stride still improves locality.
     const ARM_CACHE_LINE: usize = 128;
 
+    if vector.is_empty() {
+        return;
+    }
+
     let base = vector.as_ptr().cast::<u8>();
-    let vector_bytes = vector.len() * std::mem::size_of::<f32>();
+    let vector_bytes = std::mem::size_of_val(vector);
 
     // Line 0 → L1
     prefetch_read_l1(base);
@@ -188,27 +188,27 @@ pub fn calculate_prefetch_distance_neon(dimension: usize) -> usize {
 
 /// No-op prefetch for non-ARM64 targets.
 #[cfg(not(target_arch = "aarch64"))]
-#[inline(always)]
+#[inline]
 pub fn prefetch_read_l1(_ptr: *const u8) {}
 
 /// No-op prefetch for non-ARM64 targets.
 #[cfg(not(target_arch = "aarch64"))]
-#[inline(always)]
+#[inline]
 pub fn prefetch_read_l2(_ptr: *const u8) {}
 
 /// No-op prefetch for non-ARM64 targets.
 #[cfg(not(target_arch = "aarch64"))]
-#[inline(always)]
+#[inline]
 pub fn prefetch_read_l3(_ptr: *const u8) {}
 
 /// No-op prefetch for non-ARM64 targets.
 #[cfg(not(target_arch = "aarch64"))]
-#[inline(always)]
+#[inline]
 pub fn prefetch_write_l1(_ptr: *const u8) {}
 
 /// No-op prefetch for non-ARM64 targets.
 #[cfg(not(target_arch = "aarch64"))]
-#[inline(always)]
+#[inline]
 pub fn prefetch_vector_neon(_vector: &[f32]) {}
 
 #[cfg(test)]
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_prefetch_vector_neon() {
-        let vector: Vec<f32> = (0..768).map(|i| i as f32).collect();
+        let vector: Vec<f32> = (0_u16..768).map(f32::from).collect();
         prefetch_vector_neon(&vector);
         // No crash = success
     }

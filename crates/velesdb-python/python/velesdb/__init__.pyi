@@ -44,13 +44,18 @@ class GraphNodeDict(TypedDict, total=False):
 
 
 class TraversalResultDict(TypedDict, total=False):
-    """Shape of a traversal step (BFS/DFS) returned by ``traverse_*`` methods."""
+    """Shape of a traversal step (BFS/DFS) returned by ``traverse_*`` methods.
 
-    node_id: int
+    The keys mirror exactly what the PyO3 binding emits in
+    ``crates/velesdb-python/src/graph.rs::traversal_to_dict``.
+    """
+
+    target_id: int
+    """ID of the node reached at this traversal step."""
+    path: List[int]
+    """Node IDs visited from the source up to and including ``target_id``."""
     depth: int
-    parent_id: Optional[int]
-    label: Optional[str]
-    payload: Optional[Dict[str, Any]]
+    """Number of edges from the source to ``target_id`` (source = depth 0)."""
 
 
 class FusionStrategy:
@@ -123,6 +128,16 @@ class SearchOptions:
     All fields are keyword-only.  At least one of ``vector`` or
     ``sparse_vector`` must be set before calling ``search_request``.
 
+    Supports two equivalent construction styles:
+
+    Keyword-constructor style::
+
+        opts = SearchOptions(vector=my_embedding, top_k=20, filter={"lang": "en"})
+
+    Fluent builder style (each ``with_*`` method returns ``self``)::
+
+        opts = SearchOptions().with_vector(my_embedding).with_top_k(20)
+
     Attributes:
         vector: Dense query vector (list or numpy array).
         sparse_vector: Sparse query as dict[int, float] or scipy sparse.
@@ -153,6 +168,16 @@ class SearchOptions:
         sparse_index_name: Optional[str] = None,
         include_vectors: bool = False,
     ) -> None: ...
+    def with_vector(
+        self, vector: Optional[Union[List[float], "np.ndarray"]]
+    ) -> "SearchOptions": ...
+    def with_sparse_vector(
+        self, sparse_vector: Optional[Dict[int, float]]
+    ) -> "SearchOptions": ...
+    def with_top_k(self, top_k: int) -> "SearchOptions": ...
+    def with_filter(self, filter: Optional[Dict[str, Any]]) -> "SearchOptions": ...
+    def with_sparse_index_name(self, name: Optional[str]) -> "SearchOptions": ...
+    def with_include_vectors(self, include: bool) -> "SearchOptions": ...
 
 
 class SearchResult:

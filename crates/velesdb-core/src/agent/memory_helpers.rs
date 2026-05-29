@@ -230,7 +230,15 @@ pub(super) fn validate_binary_header(data: &[u8], entry_size: usize) -> Option<u
         return None;
     }
     let count = u64::from_le_bytes(data[0..8].try_into().ok()?) as usize;
-    if data.len() != 8 + count * entry_size {
+    let payload = data.len() - 8;
+    // Untrusted `count`: bound it against the actual payload first so the
+    // `count * entry_size` below cannot wrap on a 32-bit target and produce a
+    // total that spuriously equals `data.len()`.
+    if entry_size == 0 || count > payload / entry_size {
+        return None;
+    }
+    let total = 8usize.checked_add(count.checked_mul(entry_size)?)?;
+    if data.len() != total {
         return None;
     }
     Some(count)

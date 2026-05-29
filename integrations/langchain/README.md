@@ -82,6 +82,7 @@ VelesDBVectorStore(
 **Core Operations:**
 - `add_texts(texts, metadatas=None, ids=None)` - Add texts to the store
 - `add_texts_bulk(texts, metadatas=None, ids=None)` - Bulk insert (2-3x faster for large batches)
+- `add_texts_streaming(texts, metadatas=None, ids=None, ...)` - Stream-insert via the bounded-channel ingestion pipeline (returns backpressure status)
 - `delete(ids)` - Delete documents by ID
 - `get_by_ids(ids)` - Retrieve documents by their IDs
 - `flush()` - Flush pending changes to disk
@@ -248,21 +249,23 @@ results = vectorstore.similarity_search_with_filter(
 
 ### Cross-Collection MATCH
 
-Use the `query()` method with the `_collection` parameter to run MATCH queries
-that enrich results with data from other collections. Nodes annotated with
-`@collection` in the MATCH pattern have their payloads looked up from the named
-collection after traversal.
+The `query()` method runs single-collection VelesQL/MATCH queries against the
+vector store's own collection:
 
 ```python
-# Enrich Product nodes with Inventory data from the 'inventory' collection
 results = vectorstore.query(
-    "MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) "
-    "RETURN p.name, inv.price, inv.stock LIMIT 20",
-    params={"_collection": "catalog_graph"}
+    "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse) RETURN p.name, w.city LIMIT 20"
 )
 for row in results:
-    print(row["p.name"], row["inv.price"])
+    print(row["p.name"], row["w.city"])
 ```
+
+> **Cross-collection `@collection` MATCH is not available through the LangChain
+> integration.** `vectorstore.query()` delegates to a single `velesdb.Collection`,
+> which cannot resolve `@collection`-annotated nodes from *other* collections —
+> that requires `Database`-level routing. For cross-collection MATCH, use the
+> core `velesdb.Database` API or the [REST server](https://github.com/cyberlife-coder/VelesDB)
+> directly. (Tracked in `docs/reference/ECOSYSTEM_PARITY.md`, action item #7.)
 
 ## Features
 
@@ -272,8 +275,28 @@ for row in results:
 - **Hybrid Search**: Combine vector similarity with BM25 text matching
 - **Full-Text Search**: BM25 ranking for keyword queries
 - **Metadata Filtering**: Filter results by document attributes
+- **Typed Column Store**: Schema-aware metadata collections with ColumnStore-backed range / equality predicates
 - **Simple Setup**: Self-contained single binary, no external services required
 - **Full LangChain Compatibility**: Works with all LangChain chains and agents
+
+## Agent Memory (optional)
+
+`langchain-velesdb` also re-exports three agent-memory wrappers around VelesDB's
+native memory subsystems. They are imported lazily — if the underlying
+`langchain` extras aren't installed, the import becomes a no-op and the
+symbols are exposed as `None`.
+
+```python
+from langchain_velesdb import (
+    VelesDBChatMemory,           # short-term conversational buffer
+    VelesDBSemanticMemory,       # long-term knowledge store
+    VelesDBProceduralMemory,     # learned action patterns with reinforcement
+)
+```
+
+See `langchain_velesdb/memory.py` for the full per-class API (chat history
+buffer with optional embedding, semantic recall with score, procedural
+reinforcement). Tests under `integrations/langchain/tests/` exercise each.
 
 ## License
 

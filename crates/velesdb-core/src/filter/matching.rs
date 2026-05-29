@@ -275,13 +275,14 @@ fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
         return false;
     }
 
-    let (text, pattern) = if case_insensitive {
-        (text.to_lowercase(), pattern.to_lowercase())
+    if case_insensitive {
+        like_match_impl(
+            text.to_lowercase().as_bytes(),
+            pattern.to_lowercase().as_bytes(),
+        )
     } else {
-        (text.to_string(), pattern.to_string())
-    };
-
-    like_match_impl(text.as_bytes(), pattern.as_bytes())
+        like_match_impl(text.as_bytes(), pattern.as_bytes())
+    }
 }
 
 #[derive(Clone, Copy)]

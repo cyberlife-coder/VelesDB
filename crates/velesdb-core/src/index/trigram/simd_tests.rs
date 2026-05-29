@@ -138,9 +138,17 @@ fn test_extract_trigrams_scalar_two_chars() {
 }
 
 #[test]
+#[cfg(not(target_arch = "aarch64"))]
 fn test_trigram_simd_level_name() {
     let level = TrigramSimdLevel::Scalar;
     assert_eq!(level.name(), "Scalar");
+}
+
+#[test]
+#[cfg(target_arch = "aarch64")]
+fn test_trigram_simd_level_name() {
+    let level = TrigramSimdLevel::Neon;
+    assert_eq!(level.name(), "NEON");
 }
 
 #[test]

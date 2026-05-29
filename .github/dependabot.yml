@@ -8,15 +8,83 @@ updates:
     labels: ["dependencies", "rust"]
     open-pull-requests-limit: 5
     target-branch: "develop"
+    groups:
+      # Batch all non-major cargo bumps into one PR per week so the
+      # backlog stays manageable. Major bumps stay one-per-PR because
+      # they need targeted review (API changes, MSRV drift, etc.).
+      cargo-non-major:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+      security-cargo:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: "npm"
     directory: "/sdks/typescript"
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["dependencies", "typescript"]
+    labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 3
     target-branch: "develop"
+    groups:
+      npm-sdk-non-major:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+      security-npm-sdk:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/examples/react-wasm-search"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies", "javascript"]
+    open-pull-requests-limit: 3
+    target-branch: "develop"
+    groups:
+      npm-react-example-non-major:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+      security-npm-react-example:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/examples/node-express-rag"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies", "javascript"]
+    open-pull-requests-limit: 3
+    target-branch: "develop"
+    groups:
+      npm-node-example-non-major:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+      security-npm-node-example:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/demos/tauri-rag-app"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies", "javascript"]
+    open-pull-requests-limit: 3
+    target-branch: "develop"
+    groups:
+      npm-tauri-demo-non-major:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+      security-npm-tauri-demo:
+        applies-to: security-updates
+        patterns: ["*"]
 
   - package-ecosystem: "pip"
     directory: "/crates/velesdb-python"
@@ -24,6 +92,22 @@ updates:
       interval: "weekly"
       day: "monday"
     labels: ["dependencies", "python"]
+    open-pull-requests-limit: 3
+    target-branch: "develop"
+    groups:
+      pip-non-major:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+      security-pip:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies", "docker"]
     open-pull-requests-limit: 3
     target-branch: "develop"
 
@@ -35,3 +119,10 @@ updates:
     labels: ["ci", "dependencies"]
     open-pull-requests-limit: 3
     target-branch: "develop"
+    groups:
+      gha-non-major:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+      security-gha:
+        applies-to: security-updates
+        patterns: ["*"]

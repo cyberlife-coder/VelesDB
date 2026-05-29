@@ -174,7 +174,7 @@ impl Parser {
         alias
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: VelesQL GROUP BY / aggregation parser — wired from future ANALYZE/GROUP clause
     pub(crate) fn parse_aggregation_list(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Vec<AggregateFunction>, ParseError> {
@@ -253,7 +253,7 @@ impl Parser {
         AggregateArg::Column(raw.to_string())
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: VelesQL column projection parser — wired from future SELECT clause handler
     pub(crate) fn parse_column_list(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Vec<Column>, ParseError> {

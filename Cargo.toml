@@ -17,7 +17,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.15.0"
+version = "1.16.0"
 edition = "2021"
 rust-version = "1.89"
 license-file = "LICENSE"
@@ -31,7 +31,7 @@ authors = ["Julien Lange <contact@wiscale.fr>"]
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.42", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -61,7 +61,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Configuration
 figment = { version = "0.10", features = ["toml", "env"] }
-toml = "0.9"
+toml = "1.1"
 
 # Testing
 criterion = "0.5"
@@ -77,7 +77,7 @@ base64 = "0.22"
 smallvec = { version = "1", features = ["serde"] }
 
 # Internal workspace crates
-velesdb-core = { path = "crates/velesdb-core", version = "1.14.4", default-features = false }
+velesdb-core = { path = "crates/velesdb-core", version = "1.16.0", default-features = false }
 
 [profile.release]
 lto = true

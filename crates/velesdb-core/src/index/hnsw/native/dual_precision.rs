@@ -296,7 +296,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             Vec::new()
         };
 
-        reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
+        reranked.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         reranked.truncate(k);
         reranked
     }

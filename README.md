@@ -167,19 +167,39 @@ For **internal technical limitations** (query-planner approximations, plan cache
 
 ## Getting Started in 60 Seconds
 
-### Install
+**The fastest path is Python — under 5 seconds median, measured.** ([timing methodology](docs/quickstart/timing-results.md))
 
-**Cargo (Rust):**
+```bash
+pip install velesdb
+curl -O https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/examples/python/hello_velesdb.py
+python hello_velesdb.py
+```
+
+Expected output:
+
+```
+Query: "tech"
+  score=1.000  Rust 1.89 release notes
+  score=0.600  AI-generated jazz: the new wave
+  score=0.000  Best ramen in Tokyo
+
+Query: "tech + music"
+  score=0.990  AI-generated jazz: the new wave
+  score=0.707  Rust 1.89 release notes
+  score=0.707  Miles Davis discography
+```
+
+That's it — no server, no JSON, no embedding model. Read the [25-line script](examples/python/hello_velesdb.py) to see what happened. From here, the [Agent Memory guide](docs/guides/AGENT_MEMORY.md) and the [VelesQL spec](docs/VELESQL_SPEC.md) are the natural next stops.
+
+<details>
+<summary><strong>Other install paths — Rust, Docker, WASM, REST server</strong></summary>
+
+**Cargo (Rust + REST server):**
 ```bash
 cargo install velesdb-server velesdb-cli
 ```
 
-**Python:**
-```bash
-pip install velesdb
-```
-
-**Docker:**
+**Docker (REST server):**
 ```bash
 # Build the image locally
 git clone https://github.com/cyberlife-coder/VelesDB.git && cd VelesDB
@@ -191,10 +211,8 @@ docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb
 # Verify it's running
 curl http://localhost:8080/health
 ```
-Data is stored in the `/data` directory inside the container. The named volume `velesdb_data` persists data across container restarts. The built-in health check polls `GET /health` every 30 seconds.
 
-<details>
-<summary>More install options (Docker Compose, WASM, install scripts)</summary>
+Data is stored in `/data` inside the container; the named volume `velesdb_data` persists across restarts.
 
 **Docker Compose:**
 ```bash
@@ -224,14 +242,9 @@ curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/script
 irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install.ps1 | iex
 ```
 
-</details>
-
-### First search in 30 seconds
+**First search against the REST server (once `velesdb-server` is running on :8080):**
 
 ```bash
-velesdb-server --data-dir ./my_data &
-
-# Create collection + insert + search
 curl -X POST http://localhost:8080/collections \
   -d '{"name": "docs", "dimension": 4, "metric": "cosine"}' -H "Content-Type: application/json"
 
@@ -246,6 +259,8 @@ curl -X POST http://localhost:8080/collections/docs/search \
   -d '{"vector": [0.9, 0.1, 0.0, 0.0], "top_k": 2}' -H "Content-Type: application/json"
 # [{"id":1,"score":0.995,"payload":{"title":"AI Intro","category":"tech"}}, ...]
 ```
+
+</details>
 
 > Full installation guide: [docs/guides/INSTALLATION.md](docs/guides/INSTALLATION.md)
 
