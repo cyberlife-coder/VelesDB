@@ -274,6 +274,120 @@ default_mode = "ultra_fast"
         assert!(result.is_err());
     }
 
+    #[test]
+    fn test_from_toml_rejects_zero_max_collections() {
+        // Regression (#907): loaders previously skipped validate(), silently
+        // accepting out-of-range values. A zero capacity must now be rejected.
+        let toml = r"
+[limits]
+max_collections = 0
+";
+
+        // Act
+        let result = VelesConfig::from_toml(toml);
+
+        // Assert
+        assert!(result.is_err(), "max_collections = 0 must be rejected");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("limits.max_collections"));
+    }
+
+    #[test]
+    fn test_from_toml_default_config_validates_via_loader() {
+        // Regression (#907): the DEFAULT config must still pass validation
+        // when produced through the loader (no false-positive rejection).
+        let result = VelesConfig::from_toml("");
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "default config must validate via loader: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_config_validate_query_timeout_just_under_cap() {
+        // 24h cap (#907 follow-up): a long-but-finite batch timeout just below
+        // the cap must validate (the old 1h cap rejected such legit configs).
+        let mut config = VelesConfig::default();
+        config.search.query_timeout_ms = 86_400_000 - 1; // just under 24h
+
+        assert!(
+            config.validate().is_ok(),
+            "timeout just under the cap must validate"
+        );
+    }
+
+    #[test]
+    fn test_config_validate_query_timeout_zero_disables() {
+        // `0` means "disabled" and must always validate.
+        let mut config = VelesConfig::default();
+        config.search.query_timeout_ms = 0;
+
+        assert!(config.validate().is_ok(), "0 must disable, not reject");
+    }
+
+    #[test]
+    fn test_config_validate_query_timeout_absurd_rejected() {
+        // An absurdly large finite timeout (above the 24h cap) is rejected.
+        let mut config = VelesConfig::default();
+        config.search.query_timeout_ms = u64::MAX;
+
+        let result = config.validate();
+        assert!(result.is_err(), "absurd timeout must be rejected");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("search.query_timeout_ms"));
+    }
+
+    #[test]
+    fn test_config_validate_mmap_cache_zero_rejected() {
+        // A zero-byte mmap cache is meaningless and must be rejected.
+        let mut config = VelesConfig::default();
+        config.storage.mmap_cache_mb = 0;
+
+        let result = config.validate();
+        assert!(result.is_err(), "mmap_cache_mb = 0 must be rejected");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("storage.mmap_cache_mb"));
+    }
+
+    #[test]
+    fn test_config_validate_mmap_cache_too_large_rejected() {
+        let mut config = VelesConfig::default();
+        config.storage.mmap_cache_mb = usize::MAX;
+
+        let result = config.validate();
+        assert!(result.is_err(), "absurd mmap_cache_mb must be rejected");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("storage.mmap_cache_mb"));
+    }
+
+    #[test]
+    fn test_config_validate_workers_zero_is_auto() {
+        // `0` workers means "auto" (derive from CPU count) and must validate.
+        let mut config = VelesConfig::default();
+        config.server.workers = 0;
+
+        assert!(config.validate().is_ok(), "workers = 0 means auto");
+    }
+
+    #[test]
+    fn test_config_validate_workers_too_large_rejected() {
+        let mut config = VelesConfig::default();
+        config.server.workers = usize::MAX;
+
+        let result = config.validate();
+        assert!(result.is_err(), "absurd worker count must be rejected");
+        assert!(result.unwrap_err().to_string().contains("server.workers"));
+    }
+
     // ========================================================================
     // Serialization tests
     // ========================================================================

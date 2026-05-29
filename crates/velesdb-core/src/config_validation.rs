@@ -4,6 +4,49 @@
 
 use crate::config::{ConfigError, VelesConfig};
 
+// ---------------------------------------------------------------------------
+// Upper-bound caps for capacity/size limits.
+//
+// These caps reject absurd values that would silently invite resource
+// exhaustion or integer-overflow surprises downstream, while staying well
+// above every realistic deployment (and above the crate defaults so the
+// default config validates through the loaders). `0` is rejected for
+// capacities/sizes because a zero capacity is never a meaningful config.
+// ---------------------------------------------------------------------------
+
+/// Hard ceiling for `limits.max_vectors_per_collection` (10 billion).
+const MAX_VECTORS_PER_COLLECTION_CAP: usize = 10_000_000_000;
+/// Hard ceiling for `limits.max_collections` (1 million).
+const MAX_COLLECTIONS_CAP: usize = 1_000_000;
+/// Hard ceiling for `limits.max_payload_size` (1 GiB).
+const MAX_PAYLOAD_SIZE_CAP: usize = 1_073_741_824;
+/// Hard ceiling for `limits.max_perfect_mode_vectors` (100 million).
+const MAX_PERFECT_MODE_VECTORS_CAP: usize = 100_000_000;
+/// Hard ceiling for `search.query_timeout_ms` (24 hours). `0` means
+/// "disabled". The previous 1-hour cap rejected legitimate long batch
+/// timeouts; 24h is generous enough for any real query while still rejecting
+/// effectively-unbounded values.
+const QUERY_TIMEOUT_MS_CAP: u64 = 86_400_000;
+/// Hard ceiling for `hnsw.max_layers`. `0` means "auto".
+const MAX_LAYERS_CAP: usize = 64;
+/// Hard ceiling for `storage.mmap_cache_mb` (1 TiB). `0` is rejected: a
+/// zero-byte mmap cache is never a meaningful configuration.
+const MMAP_CACHE_MB_CAP: usize = 1_048_576;
+/// Hard ceiling for `server.workers`. `0` means "auto" (derive from CPU
+/// count), so it is allowed; any positive value is capped to a sane ceiling.
+const WORKERS_CAP: usize = 4_096;
+
+/// Rejects `0` and any value above `cap` for a capacity/size field.
+fn range_check_capacity(key: &str, value: usize, cap: usize) -> Result<(), ConfigError> {
+    if value == 0 || value > cap {
+        return Err(ConfigError::InvalidValue {
+            key: key.to_string(),
+            message: format!("value {value} is out of range [1, {cap}]"),
+        });
+    }
+    Ok(())
+}
+
 impl VelesConfig {
     /// Validates the configuration.
     ///
@@ -38,6 +81,18 @@ impl VelesConfig {
                 ),
             });
         }
+
+        // `query_timeout_ms == 0` disables the timeout (see `QueryContext`);
+        // any positive value is capped to avoid effectively-unbounded queries.
+        if self.search.query_timeout_ms > QUERY_TIMEOUT_MS_CAP {
+            return Err(ConfigError::InvalidValue {
+                key: "search.query_timeout_ms".to_string(),
+                message: format!(
+                    "value {} is out of range [0, {QUERY_TIMEOUT_MS_CAP}]",
+                    self.search.query_timeout_ms
+                ),
+            });
+        }
         Ok(())
     }
 
@@ -59,20 +114,44 @@ impl VelesConfig {
                 });
             }
         }
-        Ok(())
-    }
 
-    fn validate_limits(&self) -> Result<(), ConfigError> {
-        if self.limits.max_dimensions == 0 || self.limits.max_dimensions > 65536 {
+        // `max_layers == 0` means "auto" (see `HnswConfig`); a positive value
+        // is capped to a sane ceiling.
+        if self.hnsw.max_layers > MAX_LAYERS_CAP {
             return Err(ConfigError::InvalidValue {
-                key: "limits.max_dimensions".to_string(),
+                key: "hnsw.max_layers".to_string(),
                 message: format!(
-                    "value {} is out of range [1, 65536]",
-                    self.limits.max_dimensions
+                    "value {} is out of range [0, {MAX_LAYERS_CAP}]",
+                    self.hnsw.max_layers
                 ),
             });
         }
         Ok(())
+    }
+
+    fn validate_limits(&self) -> Result<(), ConfigError> {
+        let limits = &self.limits;
+        range_check_capacity("limits.max_dimensions", limits.max_dimensions, 65536)?;
+        range_check_capacity(
+            "limits.max_vectors_per_collection",
+            limits.max_vectors_per_collection,
+            MAX_VECTORS_PER_COLLECTION_CAP,
+        )?;
+        range_check_capacity(
+            "limits.max_collections",
+            limits.max_collections,
+            MAX_COLLECTIONS_CAP,
+        )?;
+        range_check_capacity(
+            "limits.max_payload_size",
+            limits.max_payload_size,
+            MAX_PAYLOAD_SIZE_CAP,
+        )?;
+        range_check_capacity(
+            "limits.max_perfect_mode_vectors",
+            limits.max_perfect_mode_vectors,
+            MAX_PERFECT_MODE_VECTORS_CAP,
+        )
     }
 
     fn validate_server(&self) -> Result<(), ConfigError> {
@@ -80,6 +159,18 @@ impl VelesConfig {
             return Err(ConfigError::InvalidValue {
                 key: "server.port".to_string(),
                 message: format!("value {} must be >= 1024", self.server.port),
+            });
+        }
+
+        // `workers == 0` means "auto" (derive from CPU count); a positive
+        // value is capped so a typo cannot spawn an absurd thread count.
+        if self.server.workers > WORKERS_CAP {
+            return Err(ConfigError::InvalidValue {
+                key: "server.workers".to_string(),
+                message: format!(
+                    "value {} is out of range [0, {WORKERS_CAP}]",
+                    self.server.workers
+                ),
             });
         }
         Ok(())
@@ -96,6 +187,14 @@ impl VelesConfig {
                 ),
             });
         }
+
+        // A zero-byte mmap cache is meaningless; cap the upper bound so an
+        // out-of-range value cannot drive an absurd reservation.
+        range_check_capacity(
+            "storage.mmap_cache_mb",
+            self.storage.mmap_cache_mb,
+            MMAP_CACHE_MB_CAP,
+        )?;
         Ok(())
     }
 

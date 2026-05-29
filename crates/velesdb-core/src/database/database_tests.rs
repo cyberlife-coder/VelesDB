@@ -13,6 +13,27 @@ fn test_database_open() {
 }
 
 #[test]
+fn test_open_with_config_rejects_invalid_config() {
+    // #907 follow-up: a `VelesConfig` built programmatically (bypassing the
+    // loader, which is the only place that used to call validate()) must be
+    // validated at the open boundary, so an out-of-range field is rejected.
+    let dir = tempdir().unwrap();
+    let mut config = crate::config::VelesConfig::default();
+    config.limits.max_collections = 0; // out of range [1, ..]
+
+    let result = Database::open_with_config(dir.path(), config);
+    assert!(
+        result.is_err(),
+        "open_with_config must reject an invalid (unloader-validated) config"
+    );
+    let msg = result.err().unwrap().to_string();
+    assert!(
+        msg.contains("limits.max_collections"),
+        "error should name the offending key, got: {msg}"
+    );
+}
+
+#[test]
 fn test_create_collection() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();

@@ -14,6 +14,27 @@ use super::limits::GuardRailViolation;
 // Rate Limiter
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Maximum number of distinct `client_id` buckets retained at once.
+///
+/// The per-client `TokenBucket` map is otherwise unbounded: an attacker
+/// rotating `client_id` on every request would grow it without limit and
+/// exhaust memory. When inserting a brand-new client would exceed this cap we
+/// evict one existing bucket (see [`RateLimiter::evict_one`]) to make room.
+/// Active clients within the cap keep accurate rate-limit state, and re-using
+/// an already-tracked id always hits its existing bucket (eviction only ever
+/// targets *other* buckets), so a client cannot reset its own throttle state.
+pub(super) const MAX_TRACKED_CLIENTS: usize = 100_000;
+
+/// Number of buckets examined per eviction.
+///
+/// Eviction inspects at most this many buckets (a bounded sample of the map,
+/// effectively randomized by the `HashMap`'s `SipHash` seed) rather than
+/// scanning all [`MAX_TRACKED_CLIENTS`] entries. This keeps eviction `O(k)`
+/// on the hot path under the exclusive write lock, closing the low-QPS `DoS`
+/// where every bucket is non-idle and a full scan would otherwise run on
+/// every new-client request.
+const EVICTION_SAMPLE_SIZE: usize = 16;
+
 /// Rate limiter for query throttling (EPIC-048 US-005).
 #[derive(Debug)]
 pub struct RateLimiter {
@@ -51,6 +72,12 @@ impl RateLimiter {
         let limit_qps = self.limit_qps.load(std::sync::atomic::Ordering::Relaxed);
         let limit = f64::from(limit_qps);
 
+        // Bound the map before inserting a brand-new client so that a rotating
+        // `client_id` attacker cannot grow it without limit (OOM guard).
+        if !clients.contains_key(client_id) && clients.len() >= MAX_TRACKED_CLIENTS {
+            Self::evict_one(&mut clients, limit);
+        }
+
         let bucket = clients.entry(client_id.to_string()).or_insert(TokenBucket {
             tokens: limit,
             last_update: now,
@@ -68,6 +95,52 @@ impl RateLimiter {
         } else {
             Err(GuardRailViolation::RateLimitExceeded { limit_qps })
         }
+    }
+
+    /// Evicts a single bucket to make room for a new client.
+    ///
+    /// Examines only a bounded sample of at most [`EVICTION_SAMPLE_SIZE`]
+    /// buckets — *not* the whole map — so the work is `O(k)` regardless of how
+    /// many clients are tracked. Within the sample it prefers an idle bucket
+    /// (one that has fully refilled to `limit` given the elapsed time —
+    /// dropping it is lossless since it is recreated full on demand); if none
+    /// in the sample are idle it evicts the oldest-touched bucket in the
+    /// sample. The sample is effectively randomized by the `HashMap`'s
+    /// `SipHash` seed, so under sustained pressure every bucket is eventually
+    /// a candidate and the map stays bounded even when all clients are active.
+    ///
+    /// This is safe against `client_id` rotation: eviction only runs when
+    /// inserting a *new* id, and only ever removes some *other* bucket, so a
+    /// client re-using a throttled id still hits its existing (throttled)
+    /// bucket and cannot reset its own limit.
+    fn evict_one(clients: &mut HashMap<String, TokenBucket>, limit: f64) {
+        let now = Instant::now();
+        let mut idle: Option<String> = None;
+        let mut oldest: Option<(String, Instant)> = None;
+        for (id, bucket) in clients.iter().take(EVICTION_SAMPLE_SIZE) {
+            let elapsed = now.duration_since(bucket.last_update).as_secs_f64();
+            if (bucket.tokens + elapsed * limit).min(limit) >= limit {
+                idle = Some(id.clone());
+                break;
+            }
+            if oldest
+                .as_ref()
+                .is_none_or(|(_, ts)| bucket.last_update < *ts)
+            {
+                oldest = Some((id.clone(), bucket.last_update));
+            }
+        }
+        if let Some(key) = idle.or_else(|| oldest.map(|(id, _)| id)) {
+            clients.remove(&key);
+        }
+    }
+
+    /// Returns the number of currently tracked client buckets.
+    ///
+    /// Test-only accessor used to assert the OOM guard keeps the map bounded.
+    #[cfg(test)]
+    pub(crate) fn tracked_clients(&self) -> usize {
+        self.clients.read().len()
     }
 
     /// Exhausts all tokens for a specific client, ensuring the next
