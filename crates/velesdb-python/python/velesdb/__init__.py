@@ -614,19 +614,20 @@ class VelesQL:
             normalized,
             flags=re.IGNORECASE,
         )
-        # NOSONAR(python:S5843) — the trailing look-ahead enumerates VelesQL
-        # clause keywords (JOIN/WHERE/GROUP/ORDER/LIMIT/OFFSET) to mark where the
-        # alias ends; this alternation is grammar-driven and cannot be simplified
-        # without changing what the pattern matches. The `\s+` prefix is already
-        # factored out of the alternation.
+        # The FROM/JOIN look-aheads enumerate VelesQL clause keywords
+        # (JOIN/WHERE/GROUP/ORDER/LIMIT/OFFSET) to mark where an alias ends. That
+        # alternation is grammar-driven and cannot be simplified without changing
+        # what the patterns match (the common `\s+` prefix is already factored
+        # out). The resulting regex-complexity rule (python:S5843) is suppressed
+        # for this file in sonar-project.properties with that justification.
         normalized = re.sub(
-            r"\bFROM\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+(?:JOIN|WHERE|GROUP|ORDER|LIMIT|OFFSET)|$)",  # NOSONAR(python:S5843)
+            r"\bFROM\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+(?:JOIN|WHERE|GROUP|ORDER|LIMIT|OFFSET)|$)",
             r"FROM \1 AS \2",
             normalized,
             flags=re.IGNORECASE,
         )
         normalized = re.sub(
-            r"\bJOIN\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+(?:ON|WHERE|GROUP|ORDER|LIMIT|OFFSET)|$)",  # NOSONAR(python:S5843)
+            r"\bJOIN\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+(?:ON|WHERE|GROUP|ORDER|LIMIT|OFFSET)|$)",
             r"JOIN \1 AS \2",
             normalized,
             flags=re.IGNORECASE,
