@@ -319,6 +319,11 @@ collection.create_property_index("Document", "category")  # O(1) equality lookup
 collection.create_range_index("Document", "price")         # O(log n) range queries
 indexes = collection.list_indexes()
 collection.drop_index("Document", "category")
+
+# Secondary indexes on a payload field (and their memory footprint)
+collection.has_secondary_index("category")                 # -> bool
+collection.drop_secondary_index("category")                # -> bool (True if dropped)
+collection.indexes_memory_usage()                          # -> int (total bytes)
 ```
 
 ### Sparse Vector Search
