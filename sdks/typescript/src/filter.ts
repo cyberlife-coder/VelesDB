@@ -130,13 +130,16 @@ export type FilterInput = Filter | Record<string, unknown>;
  * — use TypeScript's compile-time checking for that.
  */
 export function isTypedFilter(input: FilterInput): input is Filter {
-  if (typeof input !== 'object' || input === null) {
+  // Inspect as an untyped value: callers from plain JS may pass shapes the
+  // compile-time `FilterInput` union does not cover.
+  const value: unknown = input;
+  if (typeof value !== 'object' || value === null) {
     return false;
   }
-  if (!('condition' in input)) {
+  if (!('condition' in value)) {
     return false;
   }
-  const cond = (input as { condition: unknown }).condition;
+  const cond = (value as { condition: unknown }).condition;
   return typeof cond === 'object' && cond !== null;
 }
 
