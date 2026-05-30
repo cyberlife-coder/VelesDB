@@ -383,6 +383,60 @@ engines:
       # I/O phases, not branch complexity.
       - "crates/velesdb-core/src/collection/core/bulk_import.rs"
 
+      # --- Grade-A wave: legitimately-complex / Lizard-FP files ---
+      # The genuinely-splittable findings in this wave were refactored in code
+      # (projection.rs, select_dispatch.rs, hnsw/persistence.rs,
+      # sparse/persistence.rs, log_payload.rs, and the velesdb-server handlers).
+      # The files below are excluded instead — each for a documented reason
+      # matching an existing policy above.
+
+      # HNSW graph_io: read_vector_data / validate_graph_header /
+      # read_graph_header_fields parse an UNTRUSTED `.graph`/`.vectors` file.
+      # Their CCN is inflated by chained `?` over sequential field reads (same
+      # FP as backend_adapter.rs / query_engine.rs above), and the header
+      # validation is security-critical — every check lets the search hot path
+      # use get_unchecked safely, so it must stay one cohesive function.
+      - "crates/velesdb-core/src/index/hnsw/native/graph_io.rs"
+
+      # Filter condition dispatch — `Condition::matches` is a flat 22-arm match
+      # mapping each enum variant to a 1-line predicate (same flat-table pattern
+      # as filter/conversion.rs and simd_dispatch.rs above). Splitting scatters
+      # the dispatch.
+      - "crates/velesdb-core/src/filter/matching.rs"
+
+      # VelesQL scalar literal parser — `parse_scalar_from_rule` is a 13-line
+      # 7-arm match, but Lizard merges it with the adjacent literal-parsing
+      # helpers and reports 53 NLOC (same merge FP as match_exec/mod.rs and
+      # crud.rs above).
+      - "crates/velesdb-core/src/velesql/parser/helpers.rs"
+
+      # Graph traversal algorithms — `traverse_dfs_config` and `traverse_single`
+      # are tight BFS/DFS hot loops whose branching is inherent (visited/parent
+      # bookkeeping, depth/limit guards). Same rationale as the already-excluded
+      # collection/graph/traversal.rs; extracting the loop body would need 8+
+      # mutable-borrow params and add indirection without clarity.
+      - "crates/velesdb-core/src/collection/core/graph_api.rs"
+      - "crates/velesdb-core/src/collection/search/query/parallel_traversal/traverser.rs"
+
+      # Parameter-heavy query dispatch — `score_match_results` (10 params) and
+      # `evaluate_where_condition_for_record` (9 params) thread many per-query
+      # context fields through; wrapping them in a struct adds indirection
+      # without clarity (same rationale as execution_paths.rs / join.rs above).
+      - "crates/velesdb-core/src/collection/search/query/match_exec/similarity.rs"
+      - "crates/velesdb-core/src/collection/search/query/where_eval.rs"
+
+      # Server configuration module — serde struct definitions + multi-source
+      # (CLI > env > toml > defaults) loading. File NLOC (672) is data
+      # definitions, not branch complexity (same rationale as the excluded
+      # velesdb-core/config.rs and velesdb-server/src/lib.rs above).
+      - "crates/velesdb-server/src/config.rs"
+
+      # LangChain / LlamaIndex vector store constructors — `__init__` takes many
+      # config kwargs per the frameworks' VectorStore convention (same rationale
+      # as the already-excluded graph_retriever.py).
+      - "integrations/langchain/src/langchain_velesdb/vectorstore.py"
+      - "integrations/llamaindex/src/llamaindex_velesdb/vectorstore.py"
+
   opengrep:
     exclude_paths:
       # --- Test files (issue #957) ---
