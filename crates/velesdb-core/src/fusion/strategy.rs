@@ -387,10 +387,11 @@ fn min_max_normalize(branch: &[(u64, f32)]) -> HashMap<u64, f32> {
         return HashMap::new();
     }
     // Single pass to find both min and max.
-    let (min, max) = branch.iter().fold(
-        (f32::INFINITY, f32::NEG_INFINITY),
-        |(lo, hi), &(_, s)| (lo.min(s), hi.max(s)),
-    );
+    let (min, max) = branch
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &(_, s)| {
+            (lo.min(s), hi.max(s))
+        });
     let range = max - min;
     let mut out = HashMap::with_capacity(branch.len());
     for &(id, s) in branch {
