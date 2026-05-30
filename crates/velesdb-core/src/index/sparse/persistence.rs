@@ -377,47 +377,54 @@ fn build_postings_from_idx(
     let mut postings: FxHashMap<u32, (Vec<PostingEntry>, f32)> = FxHashMap::default();
 
     for te in term_entries {
-        // Untrusted lengths/offsets: do ALL bound arithmetic in u64 so a crafted
-        // `offset`/`len` cannot truncate on a 32-bit target and slip past the
-        // check below (which also caps the `Vec::with_capacity` that follows).
-        let byte_count = u64::from(te.len)
-            .checked_mul(POSTING_DISK_SIZE as u64)
-            .ok_or_else(|| {
-                Error::SparseIndexError(format!("load idx: term {} len overflow", te.term_id))
-            })?;
-        let end = te.offset.checked_add(byte_count).ok_or_else(|| {
-            Error::SparseIndexError(format!("load idx: term {} range overflow", te.term_id))
-        })?;
-
-        if end > idx_data.len() as u64 {
-            return Err(Error::SparseIndexError(format!(
-                "load idx: term {} offset {}+{byte_count} exceeds file size {}",
-                te.term_id,
-                te.offset,
-                idx_data.len()
-            )));
-        }
-        // Safe to narrow now: `end <= idx_data.len() <= usize::MAX`, so `offset` fits.
-        let start = usize::try_from(te.offset).map_err(|_| {
-            Error::SparseIndexError(format!("load idx: term {} offset too large", te.term_id))
-        })?;
-
-        let mut entries = Vec::with_capacity(te.len as usize);
-        let mut pos = start;
-        for _ in 0..te.len {
-            // We verified `end <= idx_data.len()` above, so every 12-byte window is in-bounds.
-            // read_le_u64/f32 propagate rather than panic to catch future refactor regressions.
-            let doc_id = read_le_u64(idx_data, pos, "load idx: corrupt doc_id bytes")?;
-            pos += 8;
-            let weight = read_le_f32(idx_data, pos, "load idx: corrupt weight bytes")?;
-            pos += 4;
-            entries.push(PostingEntry { doc_id, weight });
-        }
-
+        let entries = read_term_postings(idx_data, te)?;
         postings.insert(te.term_id, (entries, te.max_weight));
     }
 
     Ok(postings)
+}
+
+/// Validates an (untrusted) term's byte range against the file length and
+/// returns its start offset. All arithmetic is done in `u64` so a crafted
+/// `offset`/`len` cannot truncate on a 32-bit target and slip past the check.
+fn validate_term_range(idx_data_len: usize, te: &TermEntry) -> Result<usize> {
+    let byte_count = u64::from(te.len)
+        .checked_mul(POSTING_DISK_SIZE as u64)
+        .ok_or_else(|| {
+            Error::SparseIndexError(format!("load idx: term {} len overflow", te.term_id))
+        })?;
+    let end = te.offset.checked_add(byte_count).ok_or_else(|| {
+        Error::SparseIndexError(format!("load idx: term {} range overflow", te.term_id))
+    })?;
+
+    if end > idx_data_len as u64 {
+        return Err(Error::SparseIndexError(format!(
+            "load idx: term {} offset {}+{byte_count} exceeds file size {idx_data_len}",
+            te.term_id, te.offset,
+        )));
+    }
+    // Safe to narrow now: `end <= idx_data_len <= usize::MAX`, so `offset` fits.
+    usize::try_from(te.offset).map_err(|_| {
+        Error::SparseIndexError(format!("load idx: term {} offset too large", te.term_id))
+    })
+}
+
+/// Reads one term's posting list (`te.len` 12-byte `doc_id`/weight pairs) after
+/// validating its byte range fits within `idx_data`.
+fn read_term_postings(idx_data: &[u8], te: &TermEntry) -> Result<Vec<PostingEntry>> {
+    let start = validate_term_range(idx_data.len(), te)?;
+    let mut entries = Vec::with_capacity(te.len as usize);
+    let mut pos = start;
+    for _ in 0..te.len {
+        // The range was verified above, so every 12-byte window is in-bounds.
+        // read_le_u64/f32 propagate rather than panic to catch future regressions.
+        let doc_id = read_le_u64(idx_data, pos, "load idx: corrupt doc_id bytes")?;
+        pos += 8;
+        let weight = read_le_f32(idx_data, pos, "load idx: corrupt weight bytes")?;
+        pos += 4;
+        entries.push(PostingEntry { doc_id, weight });
+    }
+    Ok(entries)
 }
 
 #[cfg(test)]

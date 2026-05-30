@@ -294,14 +294,7 @@ impl Collection {
             crate::velesql::window_evaluator::evaluate(&mut results, wfs)?;
         }
         // Step 3: ORDER BY (with optional LET bindings).
-        if let Some(ref order_by) = stmt.order_by {
-            if let_bindings.is_empty() {
-                self.apply_order_by(&mut results, order_by, params)?;
-            } else {
-                let per_result_let = Self::evaluate_let_for_results(let_bindings, &results);
-                self.apply_order_by_with_let(&mut results, order_by, params, &per_result_let)?;
-            }
-        }
+        self.apply_order_by_step(stmt, &mut results, params, let_bindings)?;
         // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
         if let Some(offset) = stmt.offset {
             let skip = usize::try_from(offset).unwrap_or(usize::MAX);
@@ -317,6 +310,27 @@ impl Collection {
         }
 
         Ok(results)
+    }
+
+    /// Apply ORDER BY, choosing the plain or LET-aware path depending on
+    /// whether any LET bindings are in scope.
+    fn apply_order_by_step(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        results: &mut [SearchResult],
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        let_bindings: &[crate::velesql::LetBinding],
+    ) -> Result<()> {
+        let Some(ref order_by) = stmt.order_by else {
+            return Ok(());
+        };
+        if let_bindings.is_empty() {
+            self.apply_order_by(results, order_by, params)?;
+        } else {
+            let per_result_let = Self::evaluate_let_for_results(let_bindings, results);
+            self.apply_order_by_with_let(results, order_by, params, &per_result_let)?;
+        }
+        Ok(())
     }
 
     /// Evaluates LET bindings for every result, producing per-result binding maps.
