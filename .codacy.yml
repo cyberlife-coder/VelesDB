@@ -437,6 +437,23 @@ engines:
       - "integrations/langchain/src/langchain_velesdb/vectorstore.py"
       - "integrations/llamaindex/src/llamaindex_velesdb/vectorstore.py"
 
+      # HNSW sidecar loader — `load_sidecars` was refactored (the NLOC finding
+      # is gone; check_sidecar_generation now DRYs the three guards), but its
+      # CCN is inherent: it chains many fallible loads (`?`) of the graph /
+      # mappings / vectors sidecars, and Lizard counts every `?` as a branch
+      # (same chained-? FP as backend_adapter.rs / query_engine.rs above).
+      - "crates/velesdb-core/src/index/hnsw/persistence.rs"
+
+      # REST search handlers — multi_query_search / hybrid_search were refactored
+      # to extract helpers (parse_fusion_strategy, validate_query_vectors,
+      # parse_optional_filter), but the residual NLOC is inherent Axum handler
+      # structure: extract State+headers, record metrics, guard-rail pre-check,
+      # validate dimensions, dispatch to a blocking worker, then finish. Same
+      # rationale as the already-excluded sibling handlers/search/pipeline.rs and
+      # handlers/collections.rs above.
+      - "crates/velesdb-server/src/handlers/search/mod.rs"
+      - "crates/velesdb-server/src/handlers/search/multi.rs"
+
   opengrep:
     exclude_paths:
       # --- Test files (issue #957) ---
