@@ -170,9 +170,10 @@ fn extract_introspection_collection(parsed: &Query) -> Option<String> {
 /// Extract collection name from an admin statement.
 fn extract_admin_collection(parsed: &Query) -> Option<String> {
     parsed.admin.as_ref().map(|admin| match admin {
-        velesdb_core::velesql::AdminStatement::Flush(f) => {
-            f.collection.clone().unwrap_or_else(|| "_system".to_string())
-        }
+        velesdb_core::velesql::AdminStatement::Flush(f) => f
+            .collection
+            .clone()
+            .unwrap_or_else(|| "_system".to_string()),
         other => warn_unknown_velesql_variant("AdminStatement", other),
     })
 }

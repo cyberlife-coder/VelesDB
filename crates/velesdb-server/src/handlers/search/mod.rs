@@ -208,8 +208,10 @@ pub async fn text_search(
     let onboarding_for_work = Arc::clone(&state);
 
     let work_result = run_blocking_search(move || {
-        let filter =
-            parse_optional_filter(filter_json.as_ref(), &onboarding_for_work.onboarding_metrics)?;
+        let filter = parse_optional_filter(
+            filter_json.as_ref(),
+            &onboarding_for_work.onboarding_metrics,
+        )?;
         Ok(if let Some(f) = filter {
             collection_for_work.text_search_with_filter(&query, top_k, &f)
         } else {
