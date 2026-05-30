@@ -514,38 +514,28 @@ pub(crate) fn load_sidecars(
     bool,
 )> {
     let graph_generation = load_graph_generation(path)?;
-    if graph_generation != meta.generation {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "incomplete save detected: graph generation {} but meta generation {} \
-                 (crash between graph dump and sidecar writes, database state inconsistent)",
-                graph_generation, meta.generation,
-            ),
-        ));
-    }
+    check_sidecar_generation(
+        "graph",
+        graph_generation,
+        meta.generation,
+        "crash between graph dump and sidecar writes",
+    )?;
 
     let mappings_data = load_mappings(path)?;
-    if mappings_data.generation != meta.generation {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "incomplete save detected: mappings generation {} but meta generation {} \
-                 (crash between sidecar writes, database state inconsistent)",
-                mappings_data.generation, meta.generation,
-            ),
-        ));
-    }
+    check_sidecar_generation(
+        "mappings",
+        mappings_data.generation,
+        meta.generation,
+        "crash between sidecar writes",
+    )?;
     let (vectors, enable_vector_storage, vectors_generation) = load_vectors_or_disable(path, meta)?;
-    if enable_vector_storage && vectors_generation != meta.generation {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "incomplete save detected: vectors generation {} but meta generation {} \
-                 (crash between sidecar writes, database state inconsistent)",
-                vectors_generation, meta.generation,
-            ),
-        ));
+    if enable_vector_storage {
+        check_sidecar_generation(
+            "vectors",
+            vectors_generation,
+            meta.generation,
+            "crash between sidecar writes",
+        )?;
     }
 
     // Cross-check each mapped index against the actually-loaded vector set.
@@ -569,6 +559,23 @@ pub(crate) fn load_sidecars(
         mappings_data.next_idx,
     );
     Ok((mappings, vectors, enable_vector_storage))
+}
+
+/// Rejects a sidecar whose generation does not match the meta generation,
+/// which indicates a crash mid-save left the on-disk state inconsistent.
+fn check_sidecar_generation(
+    sidecar: &str,
+    found: u64,
+    expected: u64,
+    crash_context: &str,
+) -> std::io::Result<()> {
+    if found != expected {
+        return Err(invalid_data(format!(
+            "incomplete save detected: {sidecar} generation {found} but meta generation \
+             {expected} ({crash_context}, database state inconsistent)"
+        )));
+    }
+    Ok(())
 }
 
 /// Builds an `InvalidData` I/O error for the load-time validation paths.

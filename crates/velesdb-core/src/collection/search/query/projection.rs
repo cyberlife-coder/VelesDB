@@ -120,26 +120,52 @@ fn project_mixed(
         })
         .collect();
 
-    // Qualified wildcards expand to all payload fields + id.
     if !qualified_wildcards.is_empty() {
-        map.insert("id".to_string(), serde_json::Value::from(result.point.id));
-        if let Some(serde_json::Value::Object(payload_map)) = result.point.payload.as_ref() {
-            for (k, v) in payload_map {
-                if k != "id" && !window_aliases.contains(k.as_str()) {
-                    map.insert(k.clone(), v.clone());
-                }
+        insert_qualified_wildcards(&mut map, result, &window_aliases);
+    }
+    insert_named_columns(&mut map, result, columns);
+    insert_similarity_scores(&mut map, result, similarity_scores);
+    insert_window_values(&mut map, result, window_functions);
+
+    serde_json::Value::Object(map)
+}
+
+/// Expand a qualified wildcard (`c.*`) into id + every payload field, skipping
+/// any key shadowed by a window-function alias.
+fn insert_qualified_wildcards(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    result: &SearchResult,
+    window_aliases: &rustc_hash::FxHashSet<&str>,
+) {
+    map.insert("id".to_string(), serde_json::Value::from(result.point.id));
+    if let Some(serde_json::Value::Object(payload_map)) = result.point.payload.as_ref() {
+        for (k, v) in payload_map {
+            if k != "id" && !window_aliases.contains(k.as_str()) {
+                map.insert(k.clone(), v.clone());
             }
         }
     }
+}
 
-    // Named columns.
+/// Insert each explicitly named column (honouring its alias).
+fn insert_named_columns(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    result: &SearchResult,
+    columns: &[crate::velesql::Column],
+) {
     for col in columns {
         let output_key = col.alias.as_deref().unwrap_or(&col.name);
         let value = extract_field_value(result, &col.name);
         map.insert(output_key.to_string(), value);
     }
+}
 
-    // Similarity scores.
+/// Insert similarity-score expressions (all resolve to the result score).
+fn insert_similarity_scores(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    result: &SearchResult,
+    similarity_scores: &[SimilarityScoreExpr],
+) {
     for expr in similarity_scores {
         let key = expr.alias.as_deref().unwrap_or("similarity");
         map.insert(
@@ -147,10 +173,16 @@ fn project_mixed(
             serde_json::Value::from(f64::from(result.score)),
         );
     }
+}
 
-    // Window function values (injected into payload by window_evaluator).
-    // This is the single source of truth for window aliases — wildcard
-    // expansion above deliberately skipped them.
+/// Insert window-function values (injected into the payload by the window
+/// evaluator). This is the single source of truth for window aliases —
+/// wildcard expansion deliberately skips them.
+fn insert_window_values(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    result: &SearchResult,
+    window_functions: &[crate::velesql::WindowFunction],
+) {
     for wf in window_functions {
         let alias = wf
             .alias
@@ -165,8 +197,6 @@ fn project_mixed(
             .unwrap_or(serde_json::Value::Null);
         map.insert(alias.to_string(), value);
     }
-
-    serde_json::Value::Object(map)
 }
 
 /// Extracts a field value from a `SearchResult`, supporting nested paths.

@@ -153,7 +153,7 @@ export function streamInsert(
   collection: string,
   docs: VectorDocument[]
 ): Promise<void> {
-  validateDocsBatch(docs, doc => validateDocument(doc, config));
+  validateDocsBatch(docs, doc => { validateDocument(doc, config); });
   return backend.streamInsert(collection, docs);
 }
 
@@ -164,7 +164,7 @@ export function streamUpsertPoints(
   collection: string,
   docs: VectorDocument[]
 ): Promise<StreamUpsertResponse> {
-  validateDocsBatch(docs, doc => validateDocument(doc, config));
+  validateDocsBatch(docs, doc => { validateDocument(doc, config); });
   return backend.streamUpsertPoints(collection, docs);
 }
 

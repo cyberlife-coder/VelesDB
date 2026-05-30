@@ -43,8 +43,8 @@ export interface ColumnStatsDetail {
   name: string;
   nullCount: number;
   distinctCount: number;
-  minValue: unknown | null;
-  maxValue: unknown | null;
+  minValue: unknown;
+  maxValue: unknown;
   avgSizeBytes: number;
   histogramBuckets: number | null;
   histogramStale: boolean | null;

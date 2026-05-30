@@ -41,6 +41,19 @@ pub(crate) fn parse_filter_or_400(
     })
 }
 
+/// Parse an optional metadata filter: `None` stays `None`, `Some(json)` is
+/// parsed via [`parse_filter_or_400`] (yielding a 400 response on error).
+#[allow(clippy::result_large_err)]
+pub(crate) fn parse_optional_filter(
+    filter_json: Option<&serde_json::Value>,
+    onboarding_metrics: &crate::OnboardingMetrics,
+) -> Result<Option<velesdb_core::Filter>, axum::response::Response> {
+    match filter_json {
+        Some(fj) => parse_filter_or_400(fj, onboarding_metrics).map(Some),
+        None => Ok(None),
+    }
+}
+
 pub(crate) fn dimension_mismatch_error(
     collection_name: &str,
     expected: usize,

@@ -38,7 +38,10 @@ export function validateDocsBatch(
 
 /** Validate a single vector document (id + vector presence). */
 export function validateDocument(doc: VectorDocument, config: VelesDBConfig): void {
-  if (doc.id === undefined || doc.id === null) {
+  // Runtime guard against untyped JS callers: the compile-time type marks
+  // `id` as required, so check it as an untyped value.
+  const id: unknown = doc.id;
+  if (id === undefined || id === null) {
     throw new ValidationError('Document ID is required');
   }
 

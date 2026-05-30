@@ -367,44 +367,44 @@ export type VelesErrorCode = (typeof VELES_ERROR_CODES)[number];
  * `parseVelesError` dispatch is a single object lookup instead of a
  * 36-arm switch (lower cyclomatic complexity).
  */
-const CODE_TO_CLASS: Record<string, new (message: string) => VelesError> = {
-  'VELES-001': CollectionExistsError,
-  'VELES-002': CollectionNotFoundError,
-  'VELES-003': PointNotFoundError,
-  'VELES-004': DimensionMismatchError,
-  'VELES-005': InvalidVectorError,
-  'VELES-006': StorageError,
-  'VELES-007': IndexError,
-  'VELES-008': IndexCorruptedError,
-  'VELES-009': ConfigError,
-  'VELES-010': QueryError,
-  'VELES-011': IoError,
-  'VELES-012': SerializationError,
-  'VELES-013': InternalError,
-  'VELES-014': VectorNotAllowedError,
-  'VELES-015': SearchNotSupportedError,
-  'VELES-016': VectorRequiredError,
-  'VELES-017': SchemaValidationError,
-  'VELES-018': GraphNotSupportedError,
-  'VELES-019': EdgeExistsError,
-  'VELES-020': EdgeNotFoundError,
-  'VELES-021': InvalidEdgeLabelError,
-  'VELES-022': NodeNotFoundError,
-  'VELES-023': OverflowError,
-  'VELES-024': ColumnStoreError,
-  'VELES-025': GpuError,
-  'VELES-026': EpochMismatchError,
-  'VELES-027': GuardRailError,
-  'VELES-028': InvalidQuantizerConfigError,
-  'VELES-029': TrainingFailedError,
-  'VELES-030': SparseIndexError,
-  'VELES-031': DatabaseLockedError,
-  'VELES-032': InvalidDimensionError,
-  'VELES-033': AllocationFailedError,
-  'VELES-034': InvalidCollectionNameError,
-  'VELES-035': SnapshotBuildFailedError,
-  'VELES-036': IncompatibleSchemaVersionError,
-};
+const CODE_TO_CLASS = new Map<string, new (message: string) => VelesError>([
+  ['VELES-001', CollectionExistsError],
+  ['VELES-002', CollectionNotFoundError],
+  ['VELES-003', PointNotFoundError],
+  ['VELES-004', DimensionMismatchError],
+  ['VELES-005', InvalidVectorError],
+  ['VELES-006', StorageError],
+  ['VELES-007', IndexError],
+  ['VELES-008', IndexCorruptedError],
+  ['VELES-009', ConfigError],
+  ['VELES-010', QueryError],
+  ['VELES-011', IoError],
+  ['VELES-012', SerializationError],
+  ['VELES-013', InternalError],
+  ['VELES-014', VectorNotAllowedError],
+  ['VELES-015', SearchNotSupportedError],
+  ['VELES-016', VectorRequiredError],
+  ['VELES-017', SchemaValidationError],
+  ['VELES-018', GraphNotSupportedError],
+  ['VELES-019', EdgeExistsError],
+  ['VELES-020', EdgeNotFoundError],
+  ['VELES-021', InvalidEdgeLabelError],
+  ['VELES-022', NodeNotFoundError],
+  ['VELES-023', OverflowError],
+  ['VELES-024', ColumnStoreError],
+  ['VELES-025', GpuError],
+  ['VELES-026', EpochMismatchError],
+  ['VELES-027', GuardRailError],
+  ['VELES-028', InvalidQuantizerConfigError],
+  ['VELES-029', TrainingFailedError],
+  ['VELES-030', SparseIndexError],
+  ['VELES-031', DatabaseLockedError],
+  ['VELES-032', InvalidDimensionError],
+  ['VELES-033', AllocationFailedError],
+  ['VELES-034', InvalidCollectionNameError],
+  ['VELES-035', SnapshotBuildFailedError],
+  ['VELES-036', IncompatibleSchemaVersionError],
+]);
 
 /**
  * Instantiate the correct typed error class from a server-provided
@@ -429,7 +429,7 @@ export function parseVelesError(
   if (code === null || code === undefined) {
     return new VelesError(message, 'VELES-UNKNOWN');
   }
-  const Cls = CODE_TO_CLASS[code];
+  const Cls = CODE_TO_CLASS.get(code);
   if (Cls !== undefined) {
     return new Cls(message);
   }

@@ -325,7 +325,7 @@ export interface CommandError {
  * console.log(`Created collection with ${info.count} vectors`);
  * ```
  */
-export async function createCollection(request: CreateCollectionRequest): Promise<CollectionInfo> {
+export function createCollection(request: CreateCollectionRequest): Promise<CollectionInfo> {
   return invoke<CollectionInfo>('plugin:velesdb|create_collection', { request });
 }
 
@@ -344,7 +344,7 @@ export async function createCollection(request: CreateCollectionRequest): Promis
  * console.log(`Created metadata collection: ${info.name}`);
  * ```
  */
-export async function createMetadataCollection(request: CreateMetadataCollectionRequest): Promise<CollectionInfo> {
+export function createMetadataCollection(request: CreateMetadataCollectionRequest): Promise<CollectionInfo> {
   return invoke<CollectionInfo>('plugin:velesdb|create_metadata_collection', { request });
 }
 
@@ -360,7 +360,7 @@ export async function createMetadataCollection(request: CreateMetadataCollection
  * ```
  */
 export async function deleteCollection(name: string): Promise<void> {
-  return invoke<void>('plugin:velesdb|delete_collection', { name });
+  await invoke('plugin:velesdb|delete_collection', { name });
 }
 
 /**
@@ -374,7 +374,7 @@ export async function deleteCollection(name: string): Promise<void> {
  * collections.forEach(c => console.log(`${c.name}: ${c.count} vectors`));
  * ```
  */
-export async function listCollections(): Promise<CollectionInfo[]> {
+export function listCollections(): Promise<CollectionInfo[]> {
   return invoke<CollectionInfo[]>('plugin:velesdb|list_collections');
 }
 
@@ -391,7 +391,7 @@ export async function listCollections(): Promise<CollectionInfo[]> {
  * console.log(`Dimension: ${info.dimension}, Count: ${info.count}`);
  * ```
  */
-export async function getCollection(name: string): Promise<CollectionInfo> {
+export function getCollection(name: string): Promise<CollectionInfo> {
   return invoke<CollectionInfo>('plugin:velesdb|get_collection', { name });
 }
 
@@ -418,7 +418,7 @@ export async function getCollection(name: string): Promise<CollectionInfo> {
  * console.log(`Upserted ${count} points`);
  * ```
  */
-export async function upsert(request: UpsertRequest): Promise<number> {
+export function upsert(request: UpsertRequest): Promise<number> {
   return invoke<number>('plugin:velesdb|upsert', { request });
 }
 
@@ -443,7 +443,7 @@ export async function upsert(request: UpsertRequest): Promise<number> {
  * console.log(`Upserted ${count} metadata points`);
  * ```
  */
-export async function upsertMetadata(request: UpsertMetadataRequest): Promise<number> {
+export function upsertMetadata(request: UpsertMetadataRequest): Promise<number> {
   return invoke<number>('plugin:velesdb|upsert_metadata', { request });
 }
 
@@ -470,7 +470,7 @@ export async function upsertMetadata(request: UpsertMetadataRequest): Promise<nu
  * });
  * ```
  */
-export async function search(request: SearchRequest): Promise<SearchResponse> {
+export function search(request: SearchRequest): Promise<SearchResponse> {
   return invoke<SearchResponse>('plugin:velesdb|search', { request });
 }
 
@@ -490,7 +490,7 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
  * });
  * ```
  */
-export async function textSearch(request: TextSearchRequest): Promise<SearchResponse> {
+export function textSearch(request: TextSearchRequest): Promise<SearchResponse> {
   return invoke<SearchResponse>('plugin:velesdb|text_search', { request });
 }
 
@@ -513,7 +513,7 @@ export async function textSearch(request: TextSearchRequest): Promise<SearchResp
  * });
  * ```
  */
-export async function hybridSearch(request: HybridSearchRequest): Promise<SearchResponse> {
+export function hybridSearch(request: HybridSearchRequest): Promise<SearchResponse> {
   return invoke<SearchResponse>('plugin:velesdb|hybrid_search', { request });
 }
 
@@ -539,7 +539,7 @@ export async function hybridSearch(request: HybridSearchRequest): Promise<Search
  * });
  * ```
  */
-export async function query(request: QueryRequest): Promise<QueryResponse> {
+export function query(request: QueryRequest): Promise<QueryResponse> {
   return invoke<QueryResponse>('plugin:velesdb|query', { request });
 }
 
@@ -562,7 +562,7 @@ export async function query(request: QueryRequest): Promise<QueryResponse> {
  * });
  * ```
  */
-export async function getPoints(request: GetPointsRequest): Promise<Array<PointOutput | null>> {
+export function getPoints(request: GetPointsRequest): Promise<Array<PointOutput | null>> {
   return invoke<Array<PointOutput | null>>('plugin:velesdb|get_points', { request });
 }
 
@@ -581,7 +581,7 @@ export async function getPoints(request: GetPointsRequest): Promise<Array<PointO
  * ```
  */
 export async function deletePoints(request: DeletePointsRequest): Promise<void> {
-  return invoke<void>('plugin:velesdb|delete_points', { request });
+  await invoke('plugin:velesdb|delete_points', { request });
 }
 
 /**
@@ -605,7 +605,7 @@ export async function deletePoints(request: DeletePointsRequest): Promise<void> 
  * });
  * ```
  */
-export async function batchSearch(request: BatchSearchRequest): Promise<SearchResponse[]> {
+export function batchSearch(request: BatchSearchRequest): Promise<SearchResponse[]> {
   return invoke<SearchResponse[]>('plugin:velesdb|batch_search', { request });
 }
 
@@ -639,7 +639,7 @@ export async function batchSearch(request: BatchSearchRequest): Promise<SearchRe
  * });
  * ```
  */
-export async function multiQuerySearch(request: MultiQuerySearchRequest): Promise<SearchResponse> {
+export function multiQuerySearch(request: MultiQuerySearchRequest): Promise<SearchResponse> {
   return invoke<SearchResponse>('plugin:velesdb|multi_query_search', { request });
 }
 
@@ -656,7 +656,7 @@ export async function multiQuerySearch(request: MultiQuerySearchRequest): Promis
  * if (empty) console.log('Collection is empty');
  * ```
  */
-export async function isEmpty(name: string): Promise<boolean> {
+export function isEmpty(name: string): Promise<boolean> {
   return invoke<boolean>('plugin:velesdb|is_empty', { name });
 }
 
@@ -673,7 +673,7 @@ export async function isEmpty(name: string): Promise<boolean> {
  * ```
  */
 export async function flush(name: string): Promise<void> {
-  return invoke<void>('plugin:velesdb|flush', { name });
+  await invoke('plugin:velesdb|flush', { name });
 }
 
 // ============================================================================
@@ -755,7 +755,7 @@ export interface NodeDegreeOutput {
  * ```
  */
 export async function addEdge(request: AddEdgeRequest): Promise<void> {
-  return invoke<void>('plugin:velesdb|add_edge', { request });
+  await invoke('plugin:velesdb|add_edge', { request });
 }
 
 /**
@@ -770,7 +770,7 @@ export async function addEdge(request: AddEdgeRequest): Promise<void> {
  * const edges = await getEdges({ collection: 'social', label: 'FOLLOWS' });
  * ```
  */
-export async function getEdges(request: GetEdgesRequest): Promise<EdgeOutput[]> {
+export function getEdges(request: GetEdgesRequest): Promise<EdgeOutput[]> {
   return invoke<EdgeOutput[]>('plugin:velesdb|get_edges', { request });
 }
 
@@ -788,7 +788,7 @@ export async function getEdges(request: GetEdgesRequest): Promise<EdgeOutput[]> 
  * });
  * ```
  */
-export async function traverseGraph(request: TraverseGraphRequest): Promise<TraversalOutput[]> {
+export function traverseGraph(request: TraverseGraphRequest): Promise<TraversalOutput[]> {
   return invoke<TraversalOutput[]>('plugin:velesdb|traverse_graph', { request });
 }
 
@@ -805,7 +805,7 @@ export async function traverseGraph(request: TraverseGraphRequest): Promise<Trav
  * console.log(`In: ${degree.inDegree}, Out: ${degree.outDegree}`);
  * ```
  */
-export async function getNodeDegree(request: GetNodeDegreeRequest): Promise<NodeDegreeOutput> {
+export function getNodeDegree(request: GetNodeDegreeRequest): Promise<NodeDegreeOutput> {
   return invoke<NodeDegreeOutput>('plugin:velesdb|get_node_degree', { request });
 }
 
@@ -828,7 +828,7 @@ export async function getNodeDegree(request: GetNodeDegreeRequest): Promise<Node
  * });
  * ```
  */
-export async function createGraphCollection(request: CreateGraphCollectionRequest): Promise<CollectionInfo> {
+export function createGraphCollection(request: CreateGraphCollectionRequest): Promise<CollectionInfo> {
   return invoke<CollectionInfo>('plugin:velesdb|create_graph_collection', { request });
 }
 
@@ -873,7 +873,7 @@ export interface ScrollResponse {
  * } while (cursor !== undefined);
  * ```
  */
-export async function scrollCollection(request: ScrollRequest): Promise<ScrollResponse> {
+export function scrollCollection(request: ScrollRequest): Promise<ScrollResponse> {
   return invoke<ScrollResponse>('plugin:velesdb|scroll_collection', { request });
 }
 
@@ -916,7 +916,7 @@ export interface SemanticQueryResult {
  * @throws {CommandError} On storage failure
  */
 export async function semanticStore(request: SemanticStoreRequest): Promise<void> {
-  return invoke<void>('plugin:velesdb|semantic_store', { request });
+  await invoke('plugin:velesdb|semantic_store', { request });
 }
 
 /**
@@ -925,7 +925,7 @@ export async function semanticStore(request: SemanticStoreRequest): Promise<void
  * @param request - Semantic query request
  * @returns Array of matching knowledge facts
  */
-export async function semanticQuery(request: SemanticQueryRequest): Promise<SemanticQueryResult[]> {
+export function semanticQuery(request: SemanticQueryRequest): Promise<SemanticQueryResult[]> {
   return invoke<SemanticQueryResult[]>('plugin:velesdb|semantic_query', { request });
 }
 
@@ -970,7 +970,7 @@ export interface EpisodicResult {
  * @throws {CommandError} On storage failure
  */
 export async function episodicRecord(request: EpisodicRecordRequest): Promise<void> {
-  return invoke<void>('plugin:velesdb|episodic_record', { request });
+  await invoke('plugin:velesdb|episodic_record', { request });
 }
 
 /**
@@ -979,7 +979,7 @@ export async function episodicRecord(request: EpisodicRecordRequest): Promise<vo
  * @param request - Query parameters (limit, since_timestamp)
  * @returns Array of recent episodes
  */
-export async function episodicRecent(request: EpisodicRecentRequest): Promise<EpisodicResult[]> {
+export function episodicRecent(request: EpisodicRecentRequest): Promise<EpisodicResult[]> {
   return invoke<EpisodicResult[]>('plugin:velesdb|episodic_recent', { request });
 }
 
@@ -1032,7 +1032,7 @@ export interface ProceduralMatchResult {
  * @throws {CommandError} On storage failure
  */
 export async function proceduralLearn(request: ProceduralLearnRequest): Promise<void> {
-  return invoke<void>('plugin:velesdb|procedural_learn', { request });
+  await invoke('plugin:velesdb|procedural_learn', { request });
 }
 
 /**
@@ -1041,7 +1041,7 @@ export async function proceduralLearn(request: ProceduralLearnRequest): Promise<
  * @param request - Recall parameters
  * @returns Array of matching procedures
  */
-export async function proceduralRecall(request: ProceduralRecallRequest): Promise<ProceduralMatchResult[]> {
+export function proceduralRecall(request: ProceduralRecallRequest): Promise<ProceduralMatchResult[]> {
   return invoke<ProceduralMatchResult[]>('plugin:velesdb|procedural_recall', { request });
 }
 
