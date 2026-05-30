@@ -86,18 +86,24 @@ pub async fn batch_search(
         }
     };
 
+    finish_batch_search(&state, &name, start, all_results)
+}
+
+/// Record timing metrics and build the final batch response envelope.
+fn finish_batch_search(
+    state: &AppState,
+    name: &str,
+    start: std::time::Instant,
+    results: Vec<SearchResponse>,
+) -> axum::response::Response {
     let elapsed = start.elapsed();
     let timing_ms = elapsed.as_secs_f64() * 1000.0;
-    notify_query_timing(&state, &name, start);
+    notify_query_timing(state, name, start);
     state
         .query_duration_histogram
         .observe(elapsed.as_secs_f64());
 
-    Json(BatchSearchResponse {
-        results: all_results,
-        timing_ms,
-    })
-    .into_response()
+    Json(BatchSearchResponse { results, timing_ms }).into_response()
 }
 
 /// Validate that every query vector in a batch request matches the collection dimension.

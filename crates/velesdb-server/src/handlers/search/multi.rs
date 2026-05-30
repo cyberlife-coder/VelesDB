@@ -15,6 +15,70 @@ use super::pipeline::{finish_search_with_cb, parse_filter_or_400, validate_query
 use super::workers::run_blocking_search;
 use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
+/// Parse the fusion strategy name into a `FusionStrategy`, returning a 400
+/// response (and bumping the error counter) for an unknown strategy.
+#[allow(clippy::result_large_err)]
+fn parse_fusion_strategy(
+    req: &MultiQuerySearchRequest,
+    state: &AppState,
+) -> Result<velesdb_core::FusionStrategy, axum::response::Response> {
+    use velesdb_core::FusionStrategy;
+    match req.strategy.to_lowercase().as_str() {
+        "average" | "avg" => Ok(FusionStrategy::Average),
+        "maximum" | "max" => Ok(FusionStrategy::Maximum),
+        "rrf" => Ok(FusionStrategy::RRF { k: req.rrf_k }),
+        "weighted" => Ok(FusionStrategy::Weighted {
+            avg_weight: req.avg_weight,
+            max_weight: req.max_weight,
+            hit_weight: req.hit_weight,
+        }),
+        "relative_score" | "rsf" => Ok(FusionStrategy::RelativeScore {
+            dense_weight: req.dense_weight,
+            sparse_weight: req.sparse_weight,
+        }),
+        _ => {
+            state.operational_metrics.inc_errors();
+            Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Invalid strategy: {}. Valid: average, maximum, rrf, weighted, \
+                         relative_score",
+                        req.strategy
+                    ),
+                    code: None,
+                }),
+            )
+                .into_response())
+        }
+    }
+}
+
+/// Validate every query vector's dimension, returning a 400 on the first
+/// mismatch (with the offending index in the message).
+#[allow(clippy::result_large_err)]
+fn validate_query_vectors(
+    state: &AppState,
+    name: &str,
+    expected_dimension: usize,
+    vectors: &[Vec<f32>],
+) -> Result<(), axum::response::Response> {
+    for (idx, vector) in vectors.iter().enumerate() {
+        if let Err(error) = validate_query_dimension(state, name, expected_dimension, vector) {
+            state.operational_metrics.inc_errors();
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid query vector at index {idx}: {}", error.error),
+                    code: error.code.clone(),
+                }),
+            )
+                .into_response());
+        }
+    }
+    Ok(())
+}
+
 /// Multi-query search with fusion strategies.
 #[utoipa::path(
     post,
@@ -35,7 +99,6 @@ pub async fn multi_query_search(
     Path(name): Path<String>,
     Json(req): Json<MultiQuerySearchRequest>,
 ) -> impl IntoResponse {
-    use velesdb_core::FusionStrategy;
     state.onboarding_metrics.record_search_request();
 
     let collection: velesdb_core::collection::VectorCollection =
@@ -54,49 +117,14 @@ pub async fn multi_query_search(
         return resp;
     }
 
-    let strategy = match req.strategy.to_lowercase().as_str() {
-        "average" | "avg" => FusionStrategy::Average,
-        "maximum" | "max" => FusionStrategy::Maximum,
-        "rrf" => FusionStrategy::RRF { k: req.rrf_k },
-        "weighted" => FusionStrategy::Weighted {
-            avg_weight: req.avg_weight,
-            max_weight: req.max_weight,
-            hit_weight: req.hit_weight,
-        },
-        "relative_score" | "rsf" => FusionStrategy::RelativeScore {
-            dense_weight: req.dense_weight,
-            sparse_weight: req.sparse_weight,
-        },
-        _ => {
-            state.operational_metrics.inc_errors();
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Invalid strategy: {}. Valid: average, maximum, rrf, weighted, \
-                         relative_score",
-                        req.strategy
-                    ),
-                    code: None,
-                }),
-            )
-                .into_response();
-        }
+    let strategy = match parse_fusion_strategy(&req, &state) {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
 
     let expected_dimension = collection.config().dimension;
-    for (idx, vector) in req.vectors.iter().enumerate() {
-        if let Err(error) = validate_query_dimension(&state, &name, expected_dimension, vector) {
-            state.operational_metrics.inc_errors();
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Invalid query vector at index {idx}: {}", error.error),
-                    code: error.code.clone(),
-                }),
-            )
-                .into_response();
-        }
+    if let Err(resp) = validate_query_vectors(&state, &name, expected_dimension, &req.vectors) {
+        return resp;
     }
 
     // Parse the optional metadata filter. We need to materialise the

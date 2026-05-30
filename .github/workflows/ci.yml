@@ -25,6 +25,7 @@ on:
       - 'demos/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'sonar-project.properties'
       - '.github/workflows/**'
   pull_request:
     branches: [main, develop]
@@ -39,7 +40,12 @@ on:
       - 'demos/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'sonar-project.properties'
       - '.github/workflows/**'
+  # Manual trigger so coverage can be refreshed on demand (e.g. after a
+  # config-only commit to main that skipped the path-filtered CI, leaving the
+  # Codacy coverage badge stale).
+  workflow_dispatch:
 
 # Annuler les runs précédents pour la même branche/PR
 concurrency:
@@ -377,8 +383,12 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    # Bound the job so a lost/hung runner fails fast (and can be re-run) instead
+    # of hanging toward the 6h default — the full single-threaded suite under
+    # llvm-cov + gpu features runs well within this.
+    timeout-minutes: 45
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -397,8 +407,13 @@ jobs:
         with:
           shared-key: "velesdb-ci"
 
+      # Prebuilt binary (with built-in download retries) instead of
+      # `cargo install` from source — faster and avoids the compile/network
+      # flakes that lost the runner mid-job on earlier release runs.
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
+        uses: taiki-e/install-action@873c7452cadb7c034694a1282227095d93fbdf92 # v2.79.14
+        with:
+          tool: cargo-llvm-cov
 
       - name: Generate coverage report and enforce threshold
         run: |

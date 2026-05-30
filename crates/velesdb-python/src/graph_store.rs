@@ -352,54 +352,72 @@ impl GraphStore {
         let relationship_types = config.relationship_types.clone();
 
         py.allow_threads(|| {
-            use std::collections::HashSet;
-
             let store = self.inner.read();
-
-            let mut results = Vec::new();
-            let mut visited: HashSet<u64> = HashSet::new();
-            let mut stack: Vec<(u64, usize)> = vec![(source_id, 0)];
-
-            while let Some((node_id, depth)) = stack.pop() {
-                if visited.len() >= max_visited {
-                    break;
-                }
-
-                if visited.contains(&node_id) {
-                    continue;
-                }
-                visited.insert(node_id);
-
-                if depth < max_depth {
-                    let edges = store.get_outgoing(node_id);
-                    let filtered: Vec<_> = edges
-                        .into_iter()
-                        .filter(|e| {
-                            if let Some(ref types) = relationship_types {
-                                types.contains(&e.label().to_string())
-                            } else {
-                                true
-                            }
-                        })
-                        .filter(|e| !visited.contains(&e.target()))
-                        .collect();
-
-                    for edge in filtered.into_iter().rev() {
-                        results.push(TraversalResult {
-                            depth: depth + 1,
-                            source: edge.source(),
-                            target: edge.target(),
-                            label: edge.label().to_string(),
-                            edge_id: edge.id(),
-                        });
-                        stack.push((edge.target(), depth + 1));
-                    }
-                }
-            }
-
-            Ok(results)
+            Ok(dfs_collect(
+                &store,
+                source_id,
+                max_depth,
+                max_visited,
+                relationship_types.as_ref(),
+            ))
         })
     }
+}
+
+/// Returns true when an edge passes the optional relationship-type filter.
+fn label_matches(label: &str, relationship_types: Option<&Vec<String>>) -> bool {
+    match relationship_types {
+        Some(types) => types.contains(&label.to_string()),
+        None => true,
+    }
+}
+
+/// Collects DFS traversal results from `store` starting at `source_id`.
+///
+/// Pure logic extracted from `traverse_dfs` so the PyO3 binding stays thin.
+fn dfs_collect(
+    store: &EdgeStore,
+    source_id: u64,
+    max_depth: usize,
+    max_visited: usize,
+    relationship_types: Option<&Vec<String>>,
+) -> Vec<TraversalResult> {
+    use std::collections::HashSet;
+
+    let mut results = Vec::new();
+    let mut visited: HashSet<u64> = HashSet::new();
+    let mut stack: Vec<(u64, usize)> = vec![(source_id, 0)];
+
+    while let Some((node_id, depth)) = stack.pop() {
+        if visited.len() >= max_visited {
+            break;
+        }
+        if !visited.insert(node_id) {
+            continue;
+        }
+        if depth >= max_depth {
+            continue;
+        }
+        let filtered: Vec<_> = store
+            .get_outgoing(node_id)
+            .into_iter()
+            .filter(|e| {
+                label_matches(e.label(), relationship_types) && !visited.contains(&e.target())
+            })
+            .collect();
+        for edge in filtered.into_iter().rev() {
+            results.push(TraversalResult {
+                depth: depth + 1,
+                source: edge.source(),
+                target: edge.target(),
+                label: edge.label().to_string(),
+                edge_id: edge.id(),
+            });
+            stack.push((edge.target(), depth + 1));
+        }
+    }
+
+    results
 }
 
 #[cfg(test)]

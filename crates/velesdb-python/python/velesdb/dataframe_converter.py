@@ -54,6 +54,27 @@ def _get_backend(backend: str) -> Any:
         )
 
 
+def _resolve_safe_key(key: str, reserved: frozenset[str], payload: dict) -> str:
+    """Return a column name for a payload key, avoiding reserved-column clashes.
+
+    Keys matching a reserved structural column are prefixed with ``payload_``
+    (and further ``_`` prefixes) until the name no longer collides.
+    """
+    if key not in reserved:
+        return key
+    safe_key = f"payload_{key}"
+    while safe_key in payload:
+        safe_key = f"_{safe_key}"
+    return safe_key
+
+
+def _flatten_payload(payload: dict, reserved: frozenset[str]) -> dict[str, Any]:
+    """Flatten a dict payload into row columns, renaming reserved-key clashes."""
+    return {
+        _resolve_safe_key(k, reserved, payload): v for k, v in payload.items()
+    }
+
+
 def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
     """Convert search results to a DataFrame.
 
@@ -73,26 +94,20 @@ def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
     """
     lib = _get_backend(backend)
 
-    _SEARCH_RESERVED = frozenset({"id", "score"})
-
     if not results:
         if backend == "pandas":
             return lib.DataFrame(columns=["id", "score"])
         return lib.DataFrame(schema={"id": lib.Int64, "score": lib.Float64})
 
+    reserved = frozenset({"id", "score"})
     rows = []
     for r in results:
-        row: dict[str, Any] = {}
         payload = r.get("payload")
-        if isinstance(payload, dict):
-            for k, v in payload.items():
-                if k in _SEARCH_RESERVED:
-                    safe_key = f"payload_{k}"
-                    while safe_key in payload:
-                        safe_key = f"_{safe_key}"
-                else:
-                    safe_key = k
-                row[safe_key] = v
+        row: dict[str, Any] = (
+            _flatten_payload(payload, reserved)
+            if isinstance(payload, dict)
+            else {}
+        )
         row["id"] = r.get("id")
         row["score"] = r.get("score")
         rows.append(row)
@@ -156,32 +171,28 @@ def to_scroll_dataframe(batch: list[dict], backend: str = "pandas") -> Any:
     # - If no point has a dict payload: store raw payload under a "payload" column.
     # This guarantees a consistent schema regardless of per-point payload type.
     has_dict_payload = any(isinstance(p.get("payload"), dict) for p in batch)
+    reserved = frozenset({"id", "vector"})
 
-    _SCROLL_RESERVED = frozenset({"id", "vector"})
-
-    rows = []
-    for p in batch:
-        row: dict[str, Any] = {}
-        payload = p.get("payload")
-        if has_dict_payload:
-            if isinstance(payload, dict):
-                for k, v in payload.items():
-                    if k in _SCROLL_RESERVED:
-                        safe_key = f"payload_{k}"
-                        while safe_key in payload:
-                            safe_key = f"_{safe_key}"
-                    else:
-                        safe_key = k
-                    row[safe_key] = v
-            # Non-dict payloads in a mixed batch are silently skipped;
-            # their columns will be NaN/null in the final DataFrame.
-        else:
-            row["payload"] = payload
-        row["id"] = p.get("id")
-        row["vector"] = list(p.get("vector", []))
-        rows.append(row)
-
+    rows = [_scroll_row(p, has_dict_payload, reserved) for p in batch]
     return lib.DataFrame(rows)
+
+
+def _scroll_row(
+    point: dict, has_dict_payload: bool, reserved: frozenset[str]
+) -> dict[str, Any]:
+    """Build a single scroll-batch row, applying the chosen payload strategy."""
+    payload = point.get("payload")
+    if not has_dict_payload:
+        row: dict[str, Any] = {"payload": payload}
+    elif isinstance(payload, dict):
+        row = _flatten_payload(payload, reserved)
+    else:
+        # Non-dict payloads in a mixed batch are silently skipped;
+        # their columns will be NaN/null in the final DataFrame.
+        row = {}
+    row["id"] = point.get("id")
+    row["vector"] = list(point.get("vector", []))
+    return row
 
 
 def _df_to_records(df: Any) -> list[dict]:

@@ -115,70 +115,83 @@ pub fn validate_url(input: &str) -> Result<()> {
 /// otherwise.
 fn reject_unsafe_host(host: &url::Host<&str>, input: &str) -> Result<()> {
     match host {
-        url::Host::Ipv4(ip) => {
-            if ip.is_loopback() || ip.is_private() || ip.is_link_local() {
-                return Err(Error::Config(format!(
-                    "URL '{input}' targets a non-public IPv4 range ({ip}): \
-                     loopback, RFC 1918 private, or link-local. \
-                     Set VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS=1 for \
-                     local development."
-                )));
-            }
-            // `is_link_local()` already covers 169.254.0.0/16; the
-            // additional exact-match check produces a clearer diagnostic
-            // for the well-known cloud metadata endpoint.
-            if ip.octets() == [169, 254, 169, 254] {
-                return Err(Error::Config(format!(
-                    "URL '{input}' targets the cloud metadata endpoint \
-                     (169.254.169.254)"
-                )));
-            }
-        }
-        url::Host::Ipv6(ip) => {
-            if ip.is_loopback() || ip.is_unspecified() {
-                return Err(Error::Config(format!(
-                    "URL '{input}' targets an IPv6 loopback or unspecified \
-                     address ({ip})"
-                )));
-            }
-            // Detect fe80::/10 (link-local) and fc00::/7 (unique local) via
-            // their IPv6 prefix masks: `Ipv6Addr::is_unique_local` and
-            // `is_unicast_link_local` are still nightly-only behind
-            // `feature(ip)` at our MSRV (1.89), so we match the prefixes by
-            // hand to keep the connector buildable on stable.
-            let first = ip.segments()[0];
-            if (first & 0xffc0) == 0xfe80 {
-                return Err(Error::Config(format!(
-                    "URL '{input}' targets an IPv6 link-local address ({ip})"
-                )));
-            }
-            if (first & 0xfe00) == 0xfc00 {
-                return Err(Error::Config(format!(
-                    "URL '{input}' targets an IPv6 unique-local address ({ip})"
-                )));
-            }
-        }
-        url::Host::Domain(name) => {
-            let lower = name.to_ascii_lowercase();
-            // Reject reserved suffixes that name on-host or internal-only
-            // services. These cover both standards-reserved labels
-            // (RFC 6761 `.localhost`, RFC 8375 `.home.arpa`) and common
-            // private-DNS conventions (`.internal`, `.local`).
-            const RESERVED_SUFFIXES: &[&str] =
-                &["localhost", ".localhost", ".local", ".internal", ".arpa"];
-            let is_reserved = lower == "localhost"
-                || RESERVED_SUFFIXES
-                    .iter()
-                    .any(|s| lower == s.trim_start_matches('.') || lower.ends_with(s));
-            if is_reserved {
-                return Err(Error::Config(format!(
-                    "URL '{input}' targets reserved hostname '{lower}' \
-                     (localhost / .local / .internal / .arpa). \
-                     Set VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS=1 for \
-                     local development."
-                )));
-            }
-        }
+        url::Host::Ipv4(ip) => reject_unsafe_ipv4(*ip, input),
+        url::Host::Ipv6(ip) => reject_unsafe_ipv6(*ip, input),
+        url::Host::Domain(name) => reject_reserved_domain(name, input),
+    }
+}
+
+/// Rejects IPv4 hosts in loopback, RFC 1918 private, link-local ranges, or the
+/// cloud metadata endpoint. Helper for [`reject_unsafe_host`].
+fn reject_unsafe_ipv4(ip: std::net::Ipv4Addr, input: &str) -> Result<()> {
+    if ip.is_loopback() || ip.is_private() || ip.is_link_local() {
+        return Err(Error::Config(format!(
+            "URL '{input}' targets a non-public IPv4 range ({ip}): \
+             loopback, RFC 1918 private, or link-local. \
+             Set VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS=1 for \
+             local development."
+        )));
+    }
+    // `is_link_local()` already covers 169.254.0.0/16; the
+    // additional exact-match check produces a clearer diagnostic
+    // for the well-known cloud metadata endpoint.
+    if ip.octets() == [169, 254, 169, 254] {
+        return Err(Error::Config(format!(
+            "URL '{input}' targets the cloud metadata endpoint \
+             (169.254.169.254)"
+        )));
+    }
+    Ok(())
+}
+
+/// Rejects IPv6 loopback/unspecified, link-local (fe80::/10), and
+/// unique-local (fc00::/7) hosts. Helper for [`reject_unsafe_host`].
+fn reject_unsafe_ipv6(ip: std::net::Ipv6Addr, input: &str) -> Result<()> {
+    if ip.is_loopback() || ip.is_unspecified() {
+        return Err(Error::Config(format!(
+            "URL '{input}' targets an IPv6 loopback or unspecified \
+             address ({ip})"
+        )));
+    }
+    // Detect fe80::/10 (link-local) and fc00::/7 (unique local) via
+    // their IPv6 prefix masks: `Ipv6Addr::is_unique_local` and
+    // `is_unicast_link_local` are still nightly-only behind
+    // `feature(ip)` at our MSRV (1.89), so we match the prefixes by
+    // hand to keep the connector buildable on stable.
+    let first = ip.segments()[0];
+    if (first & 0xffc0) == 0xfe80 {
+        return Err(Error::Config(format!(
+            "URL '{input}' targets an IPv6 link-local address ({ip})"
+        )));
+    }
+    if (first & 0xfe00) == 0xfc00 {
+        return Err(Error::Config(format!(
+            "URL '{input}' targets an IPv6 unique-local address ({ip})"
+        )));
+    }
+    Ok(())
+}
+
+/// Rejects reserved hostnames that name on-host or internal-only services.
+/// Helper for [`reject_unsafe_host`].
+fn reject_reserved_domain(name: &str, input: &str) -> Result<()> {
+    let lower = name.to_ascii_lowercase();
+    // Reject reserved suffixes that name on-host or internal-only
+    // services. These cover both standards-reserved labels
+    // (RFC 6761 `.localhost`, RFC 8375 `.home.arpa`) and common
+    // private-DNS conventions (`.internal`, `.local`).
+    const RESERVED_SUFFIXES: &[&str] = &["localhost", ".localhost", ".local", ".internal", ".arpa"];
+    let is_reserved = lower == "localhost"
+        || RESERVED_SUFFIXES
+            .iter()
+            .any(|s| lower == s.trim_start_matches('.') || lower.ends_with(s));
+    if is_reserved {
+        return Err(Error::Config(format!(
+            "URL '{input}' targets reserved hostname '{lower}' \
+             (localhost / .local / .internal / .arpa). \
+             Set VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS=1 for \
+             local development."
+        )));
     }
     Ok(())
 }
