@@ -394,7 +394,11 @@ fn min_max_normalize(branch: &[(u64, f32)]) -> HashMap<u64, f32> {
     let range = max - min;
     let mut out = HashMap::with_capacity(branch.len());
     for &(id, s) in branch {
-        let norm = if range < f32::EPSILON { 0.5 } else { (s - min) / range };
+        let norm = if range < f32::EPSILON {
+            0.5
+        } else {
+            (s - min) / range
+        };
         out.insert(id, norm);
     }
     out
