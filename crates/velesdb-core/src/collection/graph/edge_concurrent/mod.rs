@@ -460,16 +460,27 @@ impl ConcurrentEdgeStore {
             if *shard_idx == node_shard {
                 guard.remove_node_edges(node_id);
             } else {
-                for (edge_id, target) in outgoing {
-                    if self.shard_index(*target) == *shard_idx {
-                        guard.remove_edge_incoming_only(*edge_id);
-                    }
-                }
-                for (edge_id, source) in incoming {
-                    if self.shard_index(*source) == *shard_idx {
-                        guard.remove_edge_outgoing_only(*edge_id);
-                    }
-                }
+                self.cleanup_cross_shard_edges(*shard_idx, guard, outgoing, incoming);
+            }
+        }
+    }
+
+    /// Removes the dangling half-edges that terminate in `shard_idx` for a cross-shard cleanup.
+    fn cleanup_cross_shard_edges(
+        &self,
+        shard_idx: usize,
+        guard: &mut parking_lot::RwLockWriteGuard<'_, super::EdgeStore>,
+        outgoing: &[(u64, u64)],
+        incoming: &[(u64, u64)],
+    ) {
+        for (edge_id, target) in outgoing {
+            if self.shard_index(*target) == shard_idx {
+                guard.remove_edge_incoming_only(*edge_id);
+            }
+        }
+        for (edge_id, source) in incoming {
+            if self.shard_index(*source) == shard_idx {
+                guard.remove_edge_outgoing_only(*edge_id);
             }
         }
     }

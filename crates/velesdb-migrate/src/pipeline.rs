@@ -179,16 +179,10 @@ impl Pipeline {
     /// # Errors
     ///
     /// Returns an error if the migration fails.
-    #[allow(clippy::cognitive_complexity)] // Reason: Pipeline orchestration requires sequential steps, refactoring would fragment the migration flow
     pub async fn run(&mut self) -> Result<MigrationStats> {
         let start = std::time::Instant::now();
         let mut stats = MigrationStats::default();
-        let checkpoint_ctx =
-            if !self.config.options.dry_run && self.config.options.checkpoint_enabled {
-                Some(CheckpointContext::new(&self.config)?)
-            } else {
-                None
-            };
+        let checkpoint_ctx = self.init_checkpoint_context()?;
         let mut offset: Option<serde_json::Value> = None;
         let mut resumed_duration_secs = 0.0;
 
@@ -201,35 +195,11 @@ impl Pipeline {
             "Source schema: {} dimension, {:?} total vectors",
             schema.dimension, schema.total_count
         );
-
-        if schema.dimension > 0 && schema.dimension != self.config.destination.dimension {
-            return Err(Error::SchemaMismatch(format!(
-                "Source dimension {} != destination dimension {}",
-                schema.dimension, self.config.destination.dimension
-            )));
-        }
-
-        check_metric_fidelity(
-            schema.metric.as_deref(),
-            self.config.destination.metric,
-            self.config.options.allow_metric_mismatch,
-        )?;
+        self.validate_source_schema(&schema)?;
 
         if let Some(ctx) = &checkpoint_ctx {
-            if let Some(state) = ctx.load().await? {
-                offset = state.next_offset;
-                stats.extracted = state.extracted;
-                stats.loaded = state.loaded;
-                stats.failed = state.failed;
-                stats.batches = state.batches;
-                resumed_duration_secs = state.duration_secs;
-                info!(
-                    "Resuming migration from checkpoint at '{}' (loaded={}, failed={})",
-                    ctx.path.display(),
-                    stats.loaded,
-                    stats.failed
-                );
-            }
+            apply_checkpoint_state(ctx, &mut offset, &mut stats, &mut resumed_duration_secs)
+                .await?;
         }
 
         let total = schema.total_count.unwrap_or(0);
@@ -240,103 +210,17 @@ impl Pipeline {
 
         let db = open_destination_db(&self.config.destination, self.config.options.dry_run).await?;
 
-        let batch_size = self.config.options.batch_size;
-        let retry_config = crate::retry::RetryConfig::for_transient_errors();
-
-        loop {
-            let connector = &mut *self.connector;
-            let batch = crate::retry::with_retry(&retry_config, "extract_batch", || {
-                connector.extract_batch(offset.clone(), batch_size)
-            })
-            .await?;
-
-            if batch.points.is_empty() {
-                break;
-            }
-
-            stats.extracted += batch.points.len() as u64;
-            stats.batches += 1;
-
-            let transformed = self.transformer.transform_batch(batch.points);
-
-            if let Some(ref db) = db {
-                let collection = db
-                    .get_vector_collection(&self.config.destination.collection)
-                    .ok_or_else(|| {
-                        Error::DestinationConnection("Collection not found".to_string())
-                    })?;
-
-                let points = crate::pipeline_points::prepare_points(
-                    transformed,
-                    self.config.options.workers,
-                    self.config.options.continue_on_error,
-                    &mut stats,
-                )?;
-
-                if !points.is_empty() {
-                    if self.config.options.continue_on_error {
-                        match collection.upsert_bulk(&points) {
-                            Ok(inserted) => {
-                                stats.loaded += inserted as u64;
-                            }
-                            Err(error) => {
-                                warn!(
-                                    "Bulk load failed for batch {}; falling back to point-by-point: {}",
-                                    stats.batches,
-                                    error
-                                );
-                                for point in points {
-                                    match collection.upsert(std::iter::once(point)) {
-                                        Ok(()) => stats.loaded += 1,
-                                        Err(load_error) => {
-                                            stats.failed += 1;
-                                            warn!(
-                                                "Failed to load point in fallback path: {}",
-                                                load_error
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        let inserted = collection
-                            .upsert_bulk(&points)
-                            .map_err(|e| Error::Loading(e.to_string()))?;
-                        stats.loaded += inserted as u64;
-                    }
-
-                    // Use flush_full to persist HNSW graph + vectors.idx
-                    // so checkpoint resume finds all previously loaded points.
-                    collection
-                        .flush_full()
-                        .map_err(|e| Error::Loading(e.to_string()))?;
-
-                    // Save checkpoint immediately after successful flush, BEFORE
-                    // the next iteration's offset update.  This ensures that if
-                    // batch N succeeds but batch N+1 fails, the checkpoint
-                    // reflects batch N's completion.
-                    if let Some(ctx) = &checkpoint_ctx {
-                        ctx.save(
-                            batch.next_offset.clone(),
-                            &stats,
-                            resumed_duration_secs + start.elapsed().as_secs_f64(),
-                        )
-                        .await?;
-                    }
-                }
-            } else {
-                // dry_run: nothing loaded, stats.loaded stays 0
-            }
-
-            progress.set_position(stats.loaded.min(total));
-
-            if !batch.has_more {
-                break;
-            }
-
-            offset = batch.next_offset.clone();
-        }
+        self.process_batches(
+            db.as_ref(),
+            checkpoint_ctx.as_ref(),
+            &progress,
+            total,
+            &mut offset,
+            &mut stats,
+            start,
+            resumed_duration_secs,
+        )
+        .await?;
 
         progress.finish_with_message("Migration complete");
 
@@ -363,6 +247,101 @@ impl Pipeline {
         Ok(stats)
     }
 
+    /// Builds the checkpoint context unless the run is a dry run or checkpoints
+    /// are disabled.
+    fn init_checkpoint_context(&self) -> Result<Option<CheckpointContext>> {
+        if !self.config.options.dry_run && self.config.options.checkpoint_enabled {
+            Ok(Some(CheckpointContext::new(&self.config)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Validates the source schema against the destination dimension and metric.
+    fn validate_source_schema(&self, schema: &crate::connectors::SourceSchema) -> Result<()> {
+        if schema.dimension > 0 && schema.dimension != self.config.destination.dimension {
+            return Err(Error::SchemaMismatch(format!(
+                "Source dimension {} != destination dimension {}",
+                schema.dimension, self.config.destination.dimension
+            )));
+        }
+
+        check_metric_fidelity(
+            schema.metric.as_deref(),
+            self.config.destination.metric,
+            self.config.options.allow_metric_mismatch,
+        )
+    }
+
+    /// Drives the extract/transform/load loop until the source is exhausted.
+    #[allow(clippy::too_many_arguments)] // Reason: orchestration loop threads run-scoped state through one helper
+    async fn process_batches(
+        &mut self,
+        db: Option<&velesdb_core::Database>,
+        checkpoint_ctx: Option<&CheckpointContext>,
+        progress: &ProgressBar,
+        total: u64,
+        offset: &mut Option<serde_json::Value>,
+        stats: &mut MigrationStats,
+        start: std::time::Instant,
+        resumed_duration_secs: f64,
+    ) -> Result<()> {
+        let batch_size = self.config.options.batch_size;
+        let retry_config = crate::retry::RetryConfig::for_transient_errors();
+
+        loop {
+            let connector = &mut *self.connector;
+            let current_offset = offset.clone();
+            let batch = crate::retry::with_retry(&retry_config, "extract_batch", || {
+                connector.extract_batch(current_offset.clone(), batch_size)
+            })
+            .await?;
+
+            if batch.points.is_empty() {
+                break;
+            }
+
+            stats.extracted += batch.points.len() as u64;
+            stats.batches += 1;
+
+            let transformed = self.transformer.transform_batch(batch.points);
+
+            if let Some(db) = db {
+                let loaded = crate::pipeline_points::load_prepared_batch(
+                    db,
+                    &self.config.destination.collection,
+                    transformed,
+                    self.config.options.workers,
+                    self.config.options.continue_on_error,
+                    stats,
+                )?;
+
+                // Save checkpoint immediately after a successful flush, BEFORE
+                // the next iteration's offset update.  This ensures that if
+                // batch N succeeds but batch N+1 fails, the checkpoint
+                // reflects batch N's completion.
+                if let Some(ctx) = checkpoint_ctx.filter(|_| loaded) {
+                    ctx.save(
+                        batch.next_offset.clone(),
+                        stats,
+                        resumed_duration_secs + start.elapsed().as_secs_f64(),
+                    )
+                    .await?;
+                }
+            }
+
+            progress.set_position(stats.loaded.min(total));
+
+            if !batch.has_more {
+                break;
+            }
+
+            *offset = batch.next_offset.clone();
+        }
+
+        Ok(())
+    }
+
     async fn run_graph_phase(
         &self,
         db: &velesdb_core::Database,
@@ -384,6 +363,31 @@ impl Pipeline {
         stats.relations_processed = graph_stats.relations_processed;
         Ok(())
     }
+}
+
+/// Restores offset, stats, and resumed duration from a previously saved
+/// checkpoint, if one exists.
+async fn apply_checkpoint_state(
+    ctx: &CheckpointContext,
+    offset: &mut Option<serde_json::Value>,
+    stats: &mut MigrationStats,
+    resumed_duration_secs: &mut f64,
+) -> Result<()> {
+    if let Some(state) = ctx.load().await? {
+        *offset = state.next_offset;
+        stats.extracted = state.extracted;
+        stats.loaded = state.loaded;
+        stats.failed = state.failed;
+        stats.batches = state.batches;
+        *resumed_duration_secs = state.duration_secs;
+        info!(
+            "Resuming migration from checkpoint at '{}' (loaded={}, failed={})",
+            ctx.path.display(),
+            stats.loaded,
+            stats.failed
+        );
+    }
+    Ok(())
 }
 
 fn map_core_metric(m: crate::config::DistanceMetric) -> velesdb_core::DistanceMetric {

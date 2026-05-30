@@ -431,21 +431,18 @@ export class VelesQLBuilder {
   }
 
   private buildWhereClause(): string {
-    if (this.state.whereClauses.length === 0) return '';
-    
-    const first = this.state.whereClauses[0];
-    if (!first) return '';
-    
-    let result = first;
-    
-    for (let i = 1; i < this.state.whereClauses.length; i++) {
-      const operator = this.state.whereOperators[i - 1] ?? 'AND';
-      const clause = this.state.whereClauses[i];
+    let result = '';
+    for (const [idx, clause] of this.state.whereClauses.entries()) {
+      if (idx === 0) {
+        if (!clause) return '';
+        result = clause;
+        continue;
+      }
+      const operator = this.state.whereOperators[idx - 1] ?? 'AND';
       if (clause) {
         result += ` ${operator} ${clause}`;
       }
     }
-    
     return result;
   }
 }

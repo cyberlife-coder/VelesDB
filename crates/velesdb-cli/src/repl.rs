@@ -98,52 +98,10 @@ pub fn run(path: PathBuf) -> Result<()> {
     let mut config = ReplConfig::default();
 
     loop {
-        // On Unix, wrap ANSI codes in \x01..\x02 so rustyline (readline
-        // backend) correctly computes the visible prompt width.
-        // On Windows, rustyline uses the crossterm backend which handles
-        // ANSI natively — the \x01\x02 markers appear as literal garbage
-        // characters there and must be omitted.
-        #[cfg(windows)]
-        let prompt = "\x1b[1;34mvelesdb> \x1b[0m".to_string();
-        #[cfg(not(windows))]
-        let prompt = "\x01\x1b[1;34m\x02velesdb> \x01\x1b[0m\x02".to_string();
-        match rl.readline(&prompt) {
+        match rl.readline(&prompt()) {
             Ok(line) => {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-
-                let _ = rl.add_history_entry(line);
-
-                if line.starts_with('.') || line.starts_with('\\') {
-                    match crate::repl_commands::handle_command(&db, line, &mut config) {
-                        crate::repl_commands::CommandResult::Continue => (),
-                        crate::repl_commands::CommandResult::Quit => break,
-                        crate::repl_commands::CommandResult::Error(e) => {
-                            println!("{} {}", "Error:".red().bold(), e);
-                        }
-                    }
-                } else {
-                    match execute_query(&db, line, config.session.active_collection()) {
-                        Ok(result) => {
-                            let fmt = match config.format {
-                                OutputFormat::Table => "table",
-                                OutputFormat::Json => "json",
-                            };
-                            print_result(&result, fmt);
-                            if config.timing {
-                                println!(
-                                    "\n{} rows ({:.2}ms)\n",
-                                    result.rows.len().to_string().green(),
-                                    result.duration_ms
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            println!("{} {}\n", "Error:".red().bold(), e);
-                        }
-                    }
+                if handle_input(&db, &mut rl, &line, &mut config) == LoopAction::Quit {
+                    break;
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -162,6 +120,87 @@ pub fn run(path: PathBuf) -> Result<()> {
     let _ = rl.save_history(&history_path);
     println!("Goodbye!");
     Ok(())
+}
+
+/// Whether the REPL loop should keep reading input or terminate.
+#[derive(PartialEq)]
+enum LoopAction {
+    Continue,
+    Quit,
+}
+
+/// Build the input prompt with platform-correct ANSI escaping.
+///
+/// On Unix, wrap ANSI codes in `\x01..\x02` so rustyline (readline backend)
+/// correctly computes the visible prompt width. On Windows, rustyline uses the
+/// crossterm backend which handles ANSI natively — the `\x01\x02` markers would
+/// appear as literal garbage there and must be omitted.
+fn prompt() -> String {
+    #[cfg(windows)]
+    {
+        "\x1b[1;34mvelesdb> \x1b[0m".to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        "\x01\x1b[1;34m\x02velesdb> \x01\x1b[0m\x02".to_string()
+    }
+}
+
+/// Handle a single line of input: dot-commands vs. `VelesQL` queries.
+fn handle_input(
+    db: &Database,
+    rl: &mut Editor<ReplHelper, DefaultHistory>,
+    line: &str,
+    config: &mut ReplConfig,
+) -> LoopAction {
+    let line = line.trim();
+    if line.is_empty() {
+        return LoopAction::Continue;
+    }
+
+    let _ = rl.add_history_entry(line);
+
+    if line.starts_with('.') || line.starts_with('\\') {
+        handle_dot_command(db, line, config)
+    } else {
+        run_query(db, line, config);
+        LoopAction::Continue
+    }
+}
+
+/// Dispatch a dot/backslash command and map its result to a [`LoopAction`].
+fn handle_dot_command(db: &Database, line: &str, config: &mut ReplConfig) -> LoopAction {
+    match crate::repl_commands::handle_command(db, line, config) {
+        crate::repl_commands::CommandResult::Continue => LoopAction::Continue,
+        crate::repl_commands::CommandResult::Quit => LoopAction::Quit,
+        crate::repl_commands::CommandResult::Error(e) => {
+            println!("{} {}", "Error:".red().bold(), e);
+            LoopAction::Continue
+        }
+    }
+}
+
+/// Execute a `VelesQL` query line and print its result or error.
+fn run_query(db: &Database, line: &str, config: &ReplConfig) {
+    match execute_query(db, line, config.session.active_collection()) {
+        Ok(result) => {
+            let fmt = match config.format {
+                OutputFormat::Table => "table",
+                OutputFormat::Json => "json",
+            };
+            print_result(&result, fmt);
+            if config.timing {
+                println!(
+                    "\n{} rows ({:.2}ms)\n",
+                    result.rows.len().to_string().green(),
+                    result.duration_ms
+                );
+            }
+        }
+        Err(e) => {
+            println!("{} {}\n", "Error:".red().bold(), e);
+        }
+    }
 }
 
 /// Execute a `VelesQL` query and return results.

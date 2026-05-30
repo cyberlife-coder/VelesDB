@@ -32,7 +32,7 @@ the roadmap but not yet available; use the steps below in the meantime.
 
 ```powershell
 # 1. Download
-Invoke-WebRequest -Uri "https://github.com/cyberlife-coder/VelesDB/releases/download/v1.14.2/velesdb-x86_64-pc-windows-msvc.zip" -OutFile velesdb.zip
+Invoke-WebRequest -Uri "https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-x86_64-pc-windows-msvc.zip" -OutFile velesdb.zip
 
 # 2. Extract anywhere you have write access (no admin required)
 Expand-Archive velesdb.zip -DestinationPath C:\VelesDB
@@ -60,10 +60,10 @@ entry.
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.14.2/velesdb-1.14.2-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.16.0/velesdb-1.16.0-amd64.deb
 
 # Install
-sudo dpkg -i velesdb-1.14.2-amd64.deb
+sudo dpkg -i velesdb-1.16.0-amd64.deb
 
 # Verify
 velesdb --version
@@ -85,7 +85,7 @@ sudo dpkg -r velesdb
 
 ```bash
 # Download and extract
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.14.2/velesdb-x86_64-unknown-linux-gnu.tar.gz
+wget https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-x86_64-unknown-linux-gnu.tar.gz
 sudo mkdir -p /opt/velesdb
 sudo tar -xzf velesdb-x86_64-unknown-linux-gnu.tar.gz -C /opt/velesdb
 
@@ -152,6 +152,24 @@ cargo install velesdb-server
 ---
 
 ## 🐳 Docker Installation
+
+### Pre-built image (recommended)
+
+Each release publishes a multi-architecture image (linux/amd64 + linux/arm64) to the
+GitHub Container Registry, so you don't need to build locally:
+
+```bash
+# Pull a specific release (recommended for reproducibility)
+docker pull ghcr.io/cyberlife-coder/velesdb:1.16.0
+
+# ...or the latest stable release
+docker pull ghcr.io/cyberlife-coder/velesdb:latest
+
+docker run -d --name velesdb -p 8080:8080 -v velesdb_data:/data \
+  ghcr.io/cyberlife-coder/velesdb:1.16.0
+```
+
+### Build locally
 
 ```bash
 # Clone and build the image locally

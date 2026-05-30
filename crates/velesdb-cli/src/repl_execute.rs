@@ -53,8 +53,29 @@ pub fn execute_query(
         });
     }
 
-    // Determine query kind for display purposes.
-    let kind = if parsed.is_ddl_query() {
+    let kind = query_kind(&parsed);
+    let params = HashMap::new();
+
+    let results = if parsed.is_match_query() {
+        execute_match_query(db, &parsed, active_collection, &params)?
+    } else {
+        db.execute_query(&parsed, &params)
+            .map_err(|e| anyhow::anyhow!("Query error: {e}"))?
+    };
+
+    let rows = results.into_iter().map(result_to_row).collect();
+    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+    Ok(QueryResult {
+        rows,
+        duration_ms,
+        kind,
+    })
+}
+
+/// Determine the [`QueryKind`] of a parsed query for display purposes.
+fn query_kind(parsed: &velesdb_core::velesql::Query) -> QueryKind {
+    if parsed.is_ddl_query() {
         QueryKind::Ddl
     } else if parsed.is_introspection_query() {
         QueryKind::Introspection
@@ -66,58 +87,44 @@ pub fn execute_query(
         QueryKind::Train
     } else {
         QueryKind::Select
-    };
+    }
+}
 
-    let params = HashMap::new();
-
-    // MATCH queries need a collection context — route via Collection::execute_query.
-    let results = if parsed.is_match_query() {
-        let col_name = active_collection.ok_or_else(|| {
-            anyhow::anyhow!(
-                "MATCH queries require an active collection. Use: .use <collection_name>"
-            )
-        })?;
-        // Try graph collection first (most likely for MATCH), then vector collection.
-        if let Some(graph_col) = db.get_graph_collection(col_name) {
-            graph_col
-                .execute_query(&parsed, &params)
-                .map_err(|e| anyhow::anyhow!("Query error: {e}"))?
-        } else if let Some(vec_col) = db.get_vector_collection(col_name) {
-            vec_col
-                .execute_query(&parsed, &params)
-                .map_err(|e| anyhow::anyhow!("Query error: {e}"))?
-        } else {
-            return Err(anyhow::anyhow!("Collection '{}' not found", col_name));
-        }
+/// Route a MATCH query to the active collection (graph first, then vector).
+fn execute_match_query(
+    db: &Database,
+    parsed: &velesdb_core::velesql::Query,
+    active_collection: Option<&str>,
+    params: &HashMap<String, serde_json::Value>,
+) -> Result<Vec<velesdb_core::SearchResult>> {
+    let col_name = active_collection.ok_or_else(|| {
+        anyhow::anyhow!("MATCH queries require an active collection. Use: .use <collection_name>")
+    })?;
+    if let Some(graph_col) = db.get_graph_collection(col_name) {
+        graph_col
+            .execute_query(parsed, params)
+            .map_err(|e| anyhow::anyhow!("Query error: {e}"))
+    } else if let Some(vec_col) = db.get_vector_collection(col_name) {
+        vec_col
+            .execute_query(parsed, params)
+            .map_err(|e| anyhow::anyhow!("Query error: {e}"))
     } else {
-        db.execute_query(&parsed, &params)
-            .map_err(|e| anyhow::anyhow!("Query error: {e}"))?
-    };
+        Err(anyhow::anyhow!("Collection '{}' not found", col_name))
+    }
+}
 
-    // Convert SearchResult to row format
-    let rows: Vec<HashMap<String, serde_json::Value>> = results
-        .into_iter()
-        .map(|r| {
-            let mut row = HashMap::new();
-            row.insert("id".to_string(), serde_json::json!(r.point.id));
-            row.insert("score".to_string(), serde_json::json!(r.score));
+/// Convert a single [`velesdb_core::SearchResult`] into a display row.
+fn result_to_row(r: velesdb_core::SearchResult) -> HashMap<String, serde_json::Value> {
+    let mut row = HashMap::new();
+    row.insert("id".to_string(), serde_json::json!(r.point.id));
+    row.insert("score".to_string(), serde_json::json!(r.score));
 
-            if let Some(serde_json::Value::Object(map)) = &r.point.payload {
-                for (k, v) in map {
-                    row.insert(k.clone(), v.clone());
-                }
-            }
-            row
-        })
-        .collect();
-
-    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-
-    Ok(QueryResult {
-        rows,
-        duration_ms,
-        kind,
-    })
+    if let Some(serde_json::Value::Object(map)) = &r.point.payload {
+        for (k, v) in map {
+            row.insert(k.clone(), v.clone());
+        }
+    }
+    row
 }
 
 pub(crate) fn contains_param_vector(condition: &velesdb_core::velesql::Condition) -> bool {

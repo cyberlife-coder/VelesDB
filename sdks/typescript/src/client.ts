@@ -84,13 +84,16 @@ export class VelesDB {
   }
 
   private validateConfig(config: VelesDBConfig): void {
-    if (!config.backend) {
+    // Runtime guard: callers from plain JS can bypass the compile-time type,
+    // so validate `backend` as an untyped value rather than the narrowed union.
+    const backend: string | undefined = config.backend;
+    if (!backend) {
       throw new ValidationError('Backend type is required');
     }
-    if (config.backend !== 'wasm' && config.backend !== 'rest') {
-      throw new ValidationError(`Invalid backend type: ${config.backend}. Use 'wasm' or 'rest'`);
+    if (backend !== 'wasm' && backend !== 'rest') {
+      throw new ValidationError(`Invalid backend type: ${backend}. Use 'wasm' or 'rest'`);
     }
-    if (config.backend === 'rest' && !config.url) {
+    if (backend === 'rest' && !config.url) {
       throw new ValidationError('URL is required for REST backend');
     }
   }
@@ -99,10 +102,14 @@ export class VelesDB {
     switch (config.backend) {
       case 'wasm':
         return new WasmBackend();
-      case 'rest':
-        return new RestBackend(config.url!, config.apiKey, config.timeout);
+      case 'rest': {
+        if (!config.url) {
+          throw new ValidationError('URL is required for REST backend');
+        }
+        return new RestBackend(config.url, config.apiKey, config.timeout);
+      }
       default:
-        throw new ValidationError(`Unknown backend: ${config.backend}`);
+        throw new ValidationError(`Unknown backend: ${String(config.backend)}`);
     }
   }
 
@@ -169,7 +176,7 @@ export class VelesDB {
 
   async upsertBatch(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
-    validateDocsBatch(docs, doc => validateDocument(doc, this.config));
+    validateDocsBatch(docs, doc => { validateDocument(doc, this.config); });
     await this.backend.upsertBatch(collection, docs);
   }
 

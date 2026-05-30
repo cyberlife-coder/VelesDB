@@ -148,34 +148,34 @@ pub async fn query(
 /// `tracing::warn!` with a stable target so it is visible in CI logs and
 /// production observability.
 fn extract_mutation_collection_name(parsed: &Query) -> String {
-    if let Some(name) = extract_ddl_collection(parsed) {
-        return name;
-    }
-    if let Some(name) = extract_dml_collection(parsed) {
-        return name;
-    }
-    if let Some(ref intro) = parsed.introspection {
-        return match intro {
-            IntrospectionStatement::DescribeCollection(d) => d.name.clone(),
-            IntrospectionStatement::ShowCollections | IntrospectionStatement::Explain(_) => {
-                "_system".to_string()
-            }
-            other => warn_unknown_velesql_variant("IntrospectionStatement", other),
-        };
-    }
-    if let Some(ref admin) = parsed.admin {
-        return match admin {
-            velesdb_core::velesql::AdminStatement::Flush(f) => f
-                .collection
-                .clone()
-                .unwrap_or_else(|| "_system".to_string()),
-            other => warn_unknown_velesql_variant("AdminStatement", other),
-        };
-    }
-    if let Some(ref train) = parsed.train {
-        return train.collection.clone();
-    }
-    "_system".to_string()
+    extract_ddl_collection(parsed)
+        .or_else(|| extract_dml_collection(parsed))
+        .or_else(|| extract_introspection_collection(parsed))
+        .or_else(|| extract_admin_collection(parsed))
+        .or_else(|| parsed.train.as_ref().map(|train| train.collection.clone()))
+        .unwrap_or_else(|| "_system".to_string())
+}
+
+/// Extract collection name from an introspection statement.
+fn extract_introspection_collection(parsed: &Query) -> Option<String> {
+    parsed.introspection.as_ref().map(|intro| match intro {
+        IntrospectionStatement::DescribeCollection(d) => d.name.clone(),
+        IntrospectionStatement::ShowCollections | IntrospectionStatement::Explain(_) => {
+            "_system".to_string()
+        }
+        other => warn_unknown_velesql_variant("IntrospectionStatement", other),
+    })
+}
+
+/// Extract collection name from an admin statement.
+fn extract_admin_collection(parsed: &Query) -> Option<String> {
+    parsed.admin.as_ref().map(|admin| match admin {
+        velesdb_core::velesql::AdminStatement::Flush(f) => f
+            .collection
+            .clone()
+            .unwrap_or_else(|| "_system".to_string()),
+        other => warn_unknown_velesql_variant("AdminStatement", other),
+    })
 }
 
 /// Extract collection name from a DDL statement.

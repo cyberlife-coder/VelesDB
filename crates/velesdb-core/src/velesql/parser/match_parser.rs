@@ -134,27 +134,33 @@ impl Parser {
                 Rule::node_alias => {
                     node.alias = Some(spec_pair.as_str().to_string());
                 }
-                Rule::node_labels => {
-                    for label_pair in spec_pair.into_inner() {
-                        if label_pair.as_rule() == Rule::label_name {
-                            node.labels.push(label_pair.as_str().to_string());
-                        }
-                    }
-                }
+                Rule::node_labels => Self::collect_node_labels(spec_pair, node),
                 Rule::node_properties => {
                     node.properties = Self::parse_node_properties(spec_pair)?;
                 }
-                Rule::collection_annotation => {
-                    for coll_pair in spec_pair.into_inner() {
-                        if coll_pair.as_rule() == Rule::collection_ref {
-                            node.collection = Some(coll_pair.as_str().to_string());
-                        }
-                    }
-                }
+                Rule::collection_annotation => Self::apply_collection_annotation(spec_pair, node),
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    /// Collects label names from a `node_labels` pest pair into the node.
+    fn collect_node_labels(spec_pair: pest::iterators::Pair<Rule>, node: &mut NodePattern) {
+        for label_pair in spec_pair.into_inner() {
+            if label_pair.as_rule() == Rule::label_name {
+                node.labels.push(label_pair.as_str().to_string());
+            }
+        }
+    }
+
+    /// Applies a `collection_annotation` pest pair to the node's collection field.
+    fn apply_collection_annotation(spec_pair: pest::iterators::Pair<Rule>, node: &mut NodePattern) {
+        for coll_pair in spec_pair.into_inner() {
+            if coll_pair.as_rule() == Rule::collection_ref {
+                node.collection = Some(coll_pair.as_str().to_string());
+            }
+        }
     }
 
     /// Parse node properties (EPIC-045 US-001).
@@ -342,26 +348,7 @@ impl Parser {
 
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::return_item_list {
-                for item_pair in inner_pair.into_inner() {
-                    if item_pair.as_rule() == Rule::return_item {
-                        let mut expression = String::new();
-                        let mut alias = None;
-
-                        for p in item_pair.into_inner() {
-                            match p.as_rule() {
-                                Rule::return_expr => {
-                                    expression = Self::parse_return_expr(p);
-                                }
-                                Rule::identifier => {
-                                    alias = Some(extract_identifier(&p));
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        items.push(ReturnItem { expression, alias });
-                    }
-                }
+                Self::collect_return_items(inner_pair, &mut items);
             }
         }
 
@@ -370,6 +357,31 @@ impl Parser {
             order_by: None,
             limit: None,
         })
+    }
+
+    /// Collects `return_item` entries from a `return_item_list` pest pair.
+    fn collect_return_items(list_pair: pest::iterators::Pair<Rule>, items: &mut Vec<ReturnItem>) {
+        for item_pair in list_pair.into_inner() {
+            if item_pair.as_rule() == Rule::return_item {
+                items.push(Self::parse_return_item(item_pair));
+            }
+        }
+    }
+
+    /// Parses a single `return_item` pest pair into a `ReturnItem`.
+    fn parse_return_item(item_pair: pest::iterators::Pair<Rule>) -> ReturnItem {
+        let mut expression = String::new();
+        let mut alias = None;
+
+        for p in item_pair.into_inner() {
+            match p.as_rule() {
+                Rule::return_expr => expression = Self::parse_return_expr(p),
+                Rule::identifier => alias = Some(extract_identifier(&p)),
+                _ => {}
+            }
+        }
+
+        ReturnItem { expression, alias }
     }
 
     /// Parse RETURN expression (EPIC-045 US-001).

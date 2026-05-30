@@ -108,28 +108,37 @@ impl Collection {
         let payload_storage = self.payload_storage.read();
         let ids = payload_storage.ids();
         for id in ids.into_iter().take(1_000) {
-            if let Ok(Some(payload)) = payload_storage.retrieve(id) {
-                if let Ok(payload_bytes) = serde_json::to_vec(&payload) {
-                    payload_size_bytes =
-                        payload_size_bytes.saturating_add(saturating_u64(payload_bytes.len()));
-                }
-
-                if let Some(obj) = payload.as_object() {
-                    for (key, value) in obj {
-                        if value.is_null() {
-                            *null_counts.entry(key.clone()).or_insert(0) += 1;
-                        } else {
-                            distinct_values
-                                .entry(key.clone())
-                                .or_default()
-                                .insert(value.to_string());
-                        }
-                    }
-                }
+            let Ok(Some(payload)) = payload_storage.retrieve(id) else {
+                continue;
+            };
+            if let Ok(payload_bytes) = serde_json::to_vec(&payload) {
+                payload_size_bytes =
+                    payload_size_bytes.saturating_add(saturating_u64(payload_bytes.len()));
+            }
+            if let Some(obj) = payload.as_object() {
+                Self::accumulate_payload_fields(obj, &mut distinct_values, &mut null_counts);
             }
         }
 
         (payload_size_bytes, distinct_values, null_counts)
+    }
+
+    /// Accumulates distinct values and null counts from one payload object's fields.
+    fn accumulate_payload_fields(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        distinct_values: &mut HashMap<String, HashSet<String>>,
+        null_counts: &mut HashMap<String, u64>,
+    ) {
+        for (key, value) in obj {
+            if value.is_null() {
+                *null_counts.entry(key.clone()).or_insert(0) += 1;
+            } else {
+                distinct_values
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(value.to_string());
+            }
+        }
     }
 
     /// Samples up to `max_samples` rows from payload storage for histogram construction.

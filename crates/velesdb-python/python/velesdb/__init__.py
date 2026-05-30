@@ -609,19 +609,25 @@ class VelesQL:
     def _normalize_legacy_query(query: str) -> str:
         normalized = query
         normalized = re.sub(
-            r"USING\s+FUSION\s+([a-zA-Z_][a-zA-Z0-9_]*)\b",
+            r"USING\s+FUSION\s+([a-z_][a-z0-9_]*)\b",
             r"USING FUSION (strategy='\1')",
             normalized,
             flags=re.IGNORECASE,
         )
+        # The FROM/JOIN look-aheads enumerate VelesQL clause keywords
+        # (JOIN/WHERE/GROUP/ORDER/LIMIT/OFFSET) to mark where an alias ends. That
+        # alternation is grammar-driven and cannot be simplified without changing
+        # what the patterns match (the common `\s+` prefix is already factored
+        # out). The resulting regex-complexity rule (python:S5843) is suppressed
+        # for this file in sonar-project.properties with that justification.
         normalized = re.sub(
-            r"\bFROM\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\b(?=\s+JOIN|\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|\s+OFFSET|$)",
+            r"\bFROM\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+(?:JOIN|WHERE|GROUP|ORDER|LIMIT|OFFSET)|$)",
             r"FROM \1 AS \2",
             normalized,
             flags=re.IGNORECASE,
         )
         normalized = re.sub(
-            r"\bJOIN\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\b(?=\s+ON|\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|\s+OFFSET|$)",
+            r"\bJOIN\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b(?=\s+(?:ON|WHERE|GROUP|ORDER|LIMIT|OFFSET)|$)",
             r"JOIN \1 AS \2",
             normalized,
             flags=re.IGNORECASE,

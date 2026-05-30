@@ -3,9 +3,9 @@
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-1.15.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
+[![Version](https://img.shields.io/badge/version-1.16.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
-Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) — a high-performance vector database for AI applications. The current published wheel is `velesdb` v1.15.0; `numpy>=1.20` ships as a hard runtime dependency since v1.13.8 so a single `pip install velesdb` is sufficient.
+Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) — a high-performance vector database for AI applications. The current published wheel is `velesdb` v1.16.0; `numpy>=1.20` ships as a hard runtime dependency since v1.13.8 so a single `pip install velesdb` is sufficient.
 
 ## Features
 
@@ -111,6 +111,37 @@ for r in results:
 # Score: 0.5621 | HNSW is an approximate nearest neighbor search algorithm.
 # Score: 0.4238 | VelesDB is a local-first vector database written in Rust.
 ```
+
+#### Built-in embedding adapters (optional)
+
+Since v1.16.0, `velesdb.embed` ships thin, opt-in adapters so you don't have to
+wire the embedding call yourself. Their backing libraries are **soft dependencies**
+loaded lazily, so the base wheel stays light — install the extra you need:
+
+```python
+# pip install "velesdb[embed-sentence-transformers]"   # local, no API key
+# pip install "velesdb[embed-openai]"                   # OpenAI-compatible API
+# pip install "velesdb[embed]"                          # both
+import velesdb
+from velesdb.embed import SentenceTransformerEmbedder  # or OpenAIEmbedder
+
+embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")  # runs on-device
+db = velesdb.Database("./rag_data")
+collection = db.create_collection("docs", dimension=embedder.dimension, metric="cosine")
+
+texts = ["VelesDB is a local-first vector database.", "HNSW powers fast ANN search."]
+vectors = embedder.embed(texts)
+collection.upsert([{"id": i, "vector": v, "payload": {"text": t}}
+                   for i, (v, t) in enumerate(zip(vectors, texts))])
+
+results = collection.search(vector=embedder.embed(["fast search"])[0], top_k=2)
+```
+
+`OpenAIEmbedder(model="text-embedding-3-small", *, api_key=..., base_url=..., dimensions=...)`
+targets OpenAI, Azure OpenAI, vLLM, or any OpenAI-compatible endpoint via `base_url`.
+Both adapters satisfy the `Embedder` protocol (`dimension: int`, `embed(texts) -> list[list[float]]`),
+so you can drop in your own implementation. `dimension` is inferred after the first
+`embed()` call when not known up front.
 
 > **Full RAG demo with PDF ingestion:** [demos/rag-pdf-demo/](../../demos/rag-pdf-demo/)
 

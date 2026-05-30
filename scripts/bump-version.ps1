@@ -144,6 +144,53 @@ $FilesToUpdate = @(
         Replacement = "version = `"$Version`""
         Description = "RAG demo"
     },
+    # RAG demo source carries two runtime version strings the bump script
+    # never touched (only the pyproject above was rewritten). Both were found
+    # frozen at 1.7.0 — nine minor versions stale — during the v1.16.0 audit:
+    # `__version__` exposed via `src.__version__`, and the FastAPI `version=`
+    # echoed in the demo's generated OpenAPI `/openapi.json`. The FastAPI
+    # pattern uses a `(?<!_)` guard so it never rewrites the `__version__`
+    # constant in the same package.
+    @{
+        Path = "demos/rag-pdf-demo/src/__init__.py"
+        Pattern = '__version__ = "\d+\.\d+\.\d+"'
+        Replacement = "__version__ = `"$Version`""
+        Description = "RAG demo __init__.py __version__"
+    },
+    @{
+        Path = "demos/rag-pdf-demo/src/main.py"
+        Pattern = '(?<!_)version="\d+\.\d+\.\d+"'
+        Replacement = "version=`"$Version`""
+        Description = "RAG demo FastAPI app version (OpenAPI /openapi.json)"
+    },
+    # Browser-demo README documents the same wasm CDN URL as its index.html;
+    # found frozen at 1.15.0 during the v1.16.0 audit (only index.html was
+    # rewritten). Like the CDN tag it resolves at runtime, so it tracks the
+    # workspace. NOTE: the npm-installed example apps (react-wasm-search,
+    # node-express-rag) are intentionally NOT rewritten here — they are `npm ci`
+    # consumers of the PUBLISHED @wiscale packages, so they are bumped after the
+    # npm publish, not in lock-step with the workspace.
+    @{
+        Path = "examples/wasm-browser-demo/README.md"
+        Pattern = '@wiscale/velesdb-wasm@\d+\.\d+\.\d+/'
+        Replacement = "@wiscale/velesdb-wasm@$Version/"
+        Description = "wasm-browser-demo README CDN URLs"
+    },
+    # Install guide DEB asset filename carries the version (the zip/tarball
+    # install URLs were de-versioned to releases/latest). Two patterns: the
+    # download tag and the .deb filename.
+    @{
+        Path = "docs/guides/INSTALLATION.md"
+        Pattern = 'releases/download/v\d+\.\d+\.\d+/velesdb-\d+\.\d+\.\d+-amd64\.deb'
+        Replacement = "releases/download/v$Version/velesdb-$Version-amd64.deb"
+        Description = "INSTALLATION.md DEB download URL"
+    },
+    @{
+        Path = "docs/guides/INSTALLATION.md"
+        Pattern = 'dpkg -i velesdb-\d+\.\d+\.\d+-amd64\.deb'
+        Replacement = "dpkg -i velesdb-$Version-amd64.deb"
+        Description = "INSTALLATION.md DEB dpkg filename"
+    },
     @{
         Path = "docs/openapi.json"
         # Match the "version" field inside the .info object. Anchored on the
@@ -312,6 +359,15 @@ $FilesToUpdate = @(
         Pattern = 'velesdb-server@\d+\.\d+\.\d+'
         Replacement = "velesdb-server@$Version"
         Description = "scripts/dx-timing/scenario_server.sh cargo pin"
+    },
+    # Install guide pins the pre-built multi-arch GHCR image (added v1.16.0).
+    # Only the `:X.Y.Z` tag is rewritten; the adjacent `:latest` example is
+    # left untouched (the \d+\.\d+\.\d+ pattern never matches `latest`).
+    @{
+        Path = "docs/guides/INSTALLATION.md"
+        Pattern = 'ghcr\.io/cyberlife-coder/velesdb:\d+\.\d+\.\d+'
+        Replacement = "ghcr.io/cyberlife-coder/velesdb:$Version"
+        Description = "docs/guides/INSTALLATION.md GHCR image pin"
     }
     # NOTE: per-crate inter-crate dependency entries (velesdb-server -> core,
     # velesdb-cli -> core, etc.) used to live here. They were removed in v1.13.6

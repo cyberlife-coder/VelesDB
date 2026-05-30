@@ -246,29 +246,35 @@ fn parse_path_pattern(input: &str) -> Result<GraphPattern, ParseError> {
     let mut pos = 0;
     let input = input.trim();
     while pos < input.len() {
-        if let Some(s) = input[pos..].find('(') {
-            let abs = pos + s;
-            let end = find_matching_paren(input, abs)?;
-            nodes.push(parse_node_pattern(&input[abs..=end])?);
-            pos = end + 1;
-            if pos < input.len() {
-                let rem = &input[pos..];
-                if rem.starts_with('-') || rem.starts_with('<') {
-                    if let Some(np) = rem.find('(') {
-                        rels.push(parse_relationship_pattern(&rem[..np])?);
-                        pos += np;
-                    }
-                }
-            }
-        } else {
+        let Some(s) = input[pos..].find('(') else {
             break;
-        }
+        };
+        let abs = pos + s;
+        let end = find_matching_paren(input, abs)?;
+        nodes.push(parse_node_pattern(&input[abs..=end])?);
+        pos = end + 1;
+        pos += parse_trailing_relationship(&input[pos.min(input.len())..], &mut rels)?;
     }
     Ok(GraphPattern {
         name: None,
         nodes,
         relationships: rels,
     })
+}
+
+/// Parses a relationship pattern that may follow a node, returning how many bytes to advance.
+fn parse_trailing_relationship(
+    rem: &str,
+    rels: &mut Vec<RelationshipPattern>,
+) -> Result<usize, ParseError> {
+    if !(rem.starts_with('-') || rem.starts_with('<')) {
+        return Ok(0);
+    }
+    let Some(np) = rem.find('(') else {
+        return Ok(0);
+    };
+    rels.push(parse_relationship_pattern(&rem[..np])?);
+    Ok(np)
 }
 
 fn find_matching_paren(input: &str, start: usize) -> Result<usize, ParseError> {

@@ -97,38 +97,10 @@ impl JsonPath {
 
         while let Some(c) = chars.next() {
             match c {
-                '.' => {
-                    // After an index like [0], a dot is valid and just separates
-                    if current.is_empty() && !last_was_index && !segments.is_empty() {
-                        return Err(JsonPathError::EmptySegment);
-                    }
-                    if !current.is_empty() {
-                        segments.push(PathSegment::Property(current.clone()));
-                        current.clear();
-                    }
-                    last_was_index = false;
-                }
+                '.' => Self::handle_dot(&mut segments, &mut current, &mut last_was_index)?,
                 '[' => {
-                    if !current.is_empty() {
-                        segments.push(PathSegment::Property(current.clone()));
-                        current.clear();
-                    }
-                    let mut idx_str = String::new();
-                    let mut closed = false;
-                    for ch in chars.by_ref() {
-                        if ch == ']' {
-                            closed = true;
-                            break;
-                        }
-                        idx_str.push(ch);
-                    }
-                    if !closed {
-                        return Err(JsonPathError::UnclosedBracket);
-                    }
-                    let index: usize = idx_str
-                        .trim()
-                        .parse()
-                        .map_err(|_| JsonPathError::InvalidArrayIndex(idx_str))?;
+                    Self::flush_property(&mut segments, &mut current);
+                    let index = Self::parse_bracket_index(&mut chars)?;
                     segments.push(PathSegment::Index(index));
                     last_was_index = true;
                 }
@@ -148,6 +120,50 @@ impl JsonPath {
         }
 
         Ok(JsonPath { segments })
+    }
+
+    /// Pushes the accumulated `current` buffer as a property segment and clears it.
+    fn flush_property(segments: &mut Vec<PathSegment>, current: &mut String) {
+        if !current.is_empty() {
+            segments.push(PathSegment::Property(std::mem::take(current)));
+        }
+    }
+
+    /// Handles a `.` separator: validates against empty segments, then flushes.
+    fn handle_dot(
+        segments: &mut Vec<PathSegment>,
+        current: &mut String,
+        last_was_index: &mut bool,
+    ) -> Result<(), JsonPathError> {
+        // After an index like [0], a dot is valid and just separates.
+        if current.is_empty() && !*last_was_index && !segments.is_empty() {
+            return Err(JsonPathError::EmptySegment);
+        }
+        Self::flush_property(segments, current);
+        *last_was_index = false;
+        Ok(())
+    }
+
+    /// Parses the contents of a `[...]` array index after the opening `[`.
+    fn parse_bracket_index(
+        chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    ) -> Result<usize, JsonPathError> {
+        let mut idx_str = String::new();
+        let mut closed = false;
+        for ch in chars.by_ref() {
+            if ch == ']' {
+                closed = true;
+                break;
+            }
+            idx_str.push(ch);
+        }
+        if !closed {
+            return Err(JsonPathError::UnclosedBracket);
+        }
+        idx_str
+            .trim()
+            .parse()
+            .map_err(|_| JsonPathError::InvalidArrayIndex(idx_str))
     }
 
     /// Returns true if this is a simple (non-nested) path with a single property.

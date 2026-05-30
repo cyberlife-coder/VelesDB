@@ -22,7 +22,7 @@ use crate::AppState;
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 use pipeline::{
     execute_search_request, finish_search_ids_with_cb, finish_search_with_cb,
-    finish_search_with_status, parse_filter_or_400, timeout_response, validate_query_dimension,
+    finish_search_with_status, parse_optional_filter, timeout_response, validate_query_dimension,
 };
 use workers::{run_blocking_search, run_search_with_optional_timeout};
 
@@ -208,13 +208,10 @@ pub async fn text_search(
     let onboarding_for_work = Arc::clone(&state);
 
     let work_result = run_blocking_search(move || {
-        let filter = match filter_json.as_ref() {
-            Some(fj) => match parse_filter_or_400(fj, &onboarding_for_work.onboarding_metrics) {
-                Ok(f) => Some(f),
-                Err(resp) => return Err(resp),
-            },
-            None => None,
-        };
+        let filter = parse_optional_filter(
+            filter_json.as_ref(),
+            &onboarding_for_work.onboarding_metrics,
+        )?;
         Ok(if let Some(f) = filter {
             collection_for_work.text_search_with_filter(&query, top_k, &f)
         } else {
@@ -298,13 +295,7 @@ pub async fn hybrid_search(
     } = req;
 
     let work_result = run_blocking_search(move || {
-        let filter = match filter.as_ref() {
-            Some(fj) => match parse_filter_or_400(fj, &state_for_work.onboarding_metrics) {
-                Ok(f) => Some(f),
-                Err(resp) => return Err(resp),
-            },
-            None => None,
-        };
+        let filter = parse_optional_filter(filter.as_ref(), &state_for_work.onboarding_metrics)?;
         Ok(if let Some(f) = filter {
             collection_for_work.hybrid_search_with_filter(
                 &vector,

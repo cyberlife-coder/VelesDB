@@ -129,3 +129,86 @@ fn build_point(point: ExtractedPoint) -> Result<velesdb_core::Point> {
         sparse_vectors,
     ))
 }
+
+/// Prepares and loads a single transformed batch into the destination
+/// collection, flushing on success.
+///
+/// Returns `Ok(true)` when points were loaded (so the caller may checkpoint),
+/// or `Ok(false)` when the batch produced no insertable points.
+pub(crate) fn load_prepared_batch(
+    db: &velesdb_core::Database,
+    collection_name: &str,
+    transformed: Vec<ExtractedPoint>,
+    workers: usize,
+    continue_on_error: bool,
+    stats: &mut MigrationStats,
+) -> Result<bool> {
+    #[allow(deprecated)] // TODO(MIGRATE-01): migrate to get_vector_collection()
+    let collection = db
+        .get_vector_collection(collection_name)
+        .ok_or_else(|| Error::DestinationConnection("Collection not found".to_string()))?;
+
+    let points = prepare_points(transformed, workers, continue_on_error, stats)?;
+    if points.is_empty() {
+        return Ok(false);
+    }
+
+    upsert_points(&collection, points, continue_on_error, stats)?;
+
+    // Use flush_full to persist HNSW graph + vectors.idx
+    // so checkpoint resume finds all previously loaded points.
+    collection
+        .flush_full()
+        .map_err(|e| Error::Loading(e.to_string()))?;
+
+    Ok(true)
+}
+
+/// Loads the prepared points, dispatching to the fail-fast or
+/// continue-on-error strategy.
+fn upsert_points(
+    collection: &velesdb_core::VectorCollection,
+    points: Vec<velesdb_core::Point>,
+    continue_on_error: bool,
+    stats: &mut MigrationStats,
+) -> Result<()> {
+    if continue_on_error {
+        upsert_points_lenient(collection, points, stats);
+        Ok(())
+    } else {
+        let inserted = collection
+            .upsert_bulk(&points)
+            .map_err(|e| Error::Loading(e.to_string()))?;
+        stats.loaded += inserted as u64;
+        Ok(())
+    }
+}
+
+/// Loads points in continue-on-error mode: tries a bulk upsert first, and on
+/// failure retries point-by-point, recording per-point successes and failures.
+fn upsert_points_lenient(
+    collection: &velesdb_core::VectorCollection,
+    points: Vec<velesdb_core::Point>,
+    stats: &mut MigrationStats,
+) {
+    match collection.upsert_bulk(&points) {
+        Ok(inserted) => {
+            stats.loaded += inserted as u64;
+        }
+        Err(error) => {
+            warn!(
+                "Bulk load failed for batch {}; falling back to point-by-point: {}",
+                stats.batches, error
+            );
+            for point in points {
+                match collection.upsert(std::iter::once(point)) {
+                    Ok(()) => stats.loaded += 1,
+                    Err(load_error) => {
+                        stats.failed += 1;
+                        warn!("Failed to load point in fallback path: {}", load_error);
+                    }
+                }
+            }
+        }
+    }
+}
