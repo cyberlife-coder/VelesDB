@@ -25,6 +25,13 @@ exclude_paths:
   - "crates/**/src/**/*_test.rs"
   - "crates/**/src/**/tests.rs"
   - "crates/**/tests/**"
+  # Test files living DIRECTLY under src/ (no intervening sub-directory). The
+  # `src/**/*` globs above require at least one path segment after `src/`, so
+  # src-root test files (alloc_guard_tests.rs, perf_optimizations_tests.rs,
+  # simd_native_tests.rs, ...) slipped through and were still graded for
+  # unsafe-usage / NLOC. These single-level globs match them.
+  - "crates/**/src/*_tests.rs"
+  - "crates/**/src/*_test.rs"
   # Benchmark harnesses (criterion) — perf code, not production
   - "crates/**/benches/**"
   # Generated code (pest parser, build scripts)
@@ -74,15 +81,22 @@ exclude_paths:
   # per-engine eslint block — Codacy ignores those). Only files whose findings
   # are 100% this `no-unused-vars` FP are listed, so no genuine issue is hidden:
   # backend.ts (50 FP, pure type definitions), types/errors.ts (2), and
-  # agent-memory.ts (2). Deliberately NOT excluded: filter.ts, errors.ts and
-  # client/validation.ts also carry their few no-unused-vars FP, but excluding
-  # them would also hide real findings (errors.ts has a `detect-object-injection`
-  # Security finding — see #955 — plus `no-unnecessary-condition` ErrorProne on
-  # all three). Those ~5 residual FP are accepted; the base `no-unused-vars`
-  # pattern can be disabled in the coding standard for a clean fix (issue #951).
+  # agent-memory.ts (2). The real findings that filter.ts, errors.ts and
+  # client/validation.ts used to carry have since been FIXED in code (Record->Map
+  # removes the detect-object-injection sink in errors.ts; type-guard widening
+  # removes the no-unnecessary-condition ErrorProne findings) — so those three
+  # files now carry ONLY the base `no-unused-vars` FP on type-position parameter
+  # names (constructor/overload/callback type signatures, which the parser
+  # mis-reads as unused bindings). They are therefore excluded here too. The
+  # clean long-term fix remains disabling the base `no-unused-vars` pattern in
+  # the coding standard (issue #951), which would let ALL of these file
+  # exclusions be dropped.
   - "sdks/typescript/src/types/backend.ts"
   - "sdks/typescript/src/types/errors.ts"
   - "sdks/typescript/src/agent-memory.ts"
+  - "sdks/typescript/src/errors.ts"
+  - "sdks/typescript/src/filter.ts"
+  - "sdks/typescript/src/client/validation.ts"
   # Integration contains_text_search helpers — Codacy's online taint analysis
   # flags VelesQL query construction as SQL injection. All user inputs are
   # sanitized BEFORE the query is built:
@@ -135,6 +149,9 @@ exclude_paths:
   - "crates/velesdb-core/src/storage/mmap.rs"
   - "crates/velesdb-core/src/storage/compaction.rs"
   - "crates/velesdb-core/src/storage/guard.rs"
+  # mmap submodule (wal_replay.rs, vector_io, ...) — MmapMut remap + raw
+  # pointer I/O, every unsafe block carries // SAFETY: documentation.
+  - "crates/velesdb-core/src/storage/mmap/**"
   # HNSW index core — get_unchecked in search loops, aligned vector access
   # Invariants documented in docs/SOUNDNESS.md. Covered by Miri CI.
   - "crates/velesdb-core/src/index/hnsw/index/mod.rs"
@@ -190,6 +207,10 @@ engines:
       - "crates/**/src/**/*_test.rs"
       - "crates/**/src/**/tests.rs"
       - "crates/**/tests/**"
+      # src-root test files (see global exclude_paths note): simd_native_tests.rs
+      # and friends live directly under src/ and the `src/**/*` glob misses them.
+      - "crates/**/src/*_tests.rs"
+      - "crates/**/src/*_test.rs"
       # --- WHERE evaluation (enum pattern matching) ---
       - "crates/velesdb-core/src/collection/search/query/match_exec/where_eval.rs"
 
@@ -374,6 +395,17 @@ engines:
       - "crates/**/src/**/*_test.rs"
       - "crates/**/src/**/tests.rs"
       - "crates/**/tests/**"
+      # src-root test files (see global exclude_paths note): alloc_guard_tests.rs
+      # and perf_optimizations_tests.rs live directly under src/, so the
+      # `src/**/*` glob misses them and unsafe-usage was still flagged.
+      - "crates/**/src/*_tests.rs"
+      - "crates/**/src/*_test.rs"
+      # Production mmap I/O — wal_replay.rs remaps MmapMut after a documented
+      # file resize (// SAFETY: comments present, verified by
+      # verify_unsafe_safety_template.py). unsafe-usage cannot distinguish
+      # audited from un-audited unsafe; the whole audited mmap submodule is
+      # excluded for this engine like the other mmap files above.
+      - "crates/velesdb-core/src/storage/mmap/**"
       # Integration memory modules — random.randint used for session-scoped
       # in-process ID counters, not security/crypto material
       - "integrations/langchain/src/langchain_velesdb/memory.py"
