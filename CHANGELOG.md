@@ -4742,7 +4742,11 @@ This change ensures VelesDB remains freely available while protecting against cl
 - API Authentication (WIS-69)
 - Starlight documentation site
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.14.2...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.16.0...HEAD
+[1.16.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.16.0
+[1.15.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.15.0
+[1.14.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.4
+[1.14.3]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.3
 [1.14.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.2
 [1.14.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.1
 [1.14.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.0

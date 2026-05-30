@@ -109,6 +109,28 @@ TARGETS: "list[tuple[str, str]]" = [
     # The `docker pull ...:X.Y.Z` example must track the workspace version so
     # readers copy a tag that actually exists; bump-version.ps1 rewrites it.
     ("docs/guides/INSTALLATION.md", "ghcr_image"),
+    # rag-pdf-demo source carries TWO runtime version strings that the bump
+    # script never touched (it only rewrote the demo's pyproject.toml). Both
+    # were found frozen at 1.7.0 — nine minor versions stale — during the
+    # v1.16.0 audit: `__version__` is exposed via `src.__version__`, and the
+    # FastAPI `version=` is echoed in the demo's OpenAPI `/openapi.json`. Same
+    # gap class as the Haystack `__init__.py` drift caught in v1.14.2.
+    ("demos/rag-pdf-demo/src/__init__.py", "py_init_version"),
+    ("demos/rag-pdf-demo/src/main.py", "fastapi_app_version"),
+    # The browser demo's README documents the same wasm CDN URL as its
+    # index.html; found frozen at 1.15.0 during the v1.16.0 audit while only
+    # index.html was policed. Like the CDN tag it resolves at runtime, so it
+    # tracks the workspace version. NOTE: the npm-installed example apps
+    # (examples/react-wasm-search, examples/node-express-rag) are deliberately
+    # NOT policed here — they are `npm ci` CONSUMERS of the PUBLISHED @wiscale
+    # packages (propagation-guard.yml builds them), so they can only pin a
+    # version that already exists on the npm registry and are bumped after the
+    # npm publish, not in lock-step with the workspace.
+    ("examples/wasm-browser-demo/README.md", "wasm_cdn_url"),
+    # Install guide's DEB asset filename carries the version (the zip/tarball
+    # were de-versioned to `releases/latest/`). Found pinned at v1.14.2 during
+    # the v1.16.0 audit — the documented `wget` URL would 404 on release.
+    ("docs/guides/INSTALLATION.md", "deb_release_tag"),
 ]
 
 
@@ -317,6 +339,32 @@ def _read_ghcr_image(path: Path) -> str:
     return match.group(1)
 
 
+def _read_fastapi_app_version(path: Path) -> str:
+    """Pull the version out of a FastAPI `version="X.Y.Z"` kwarg. This is the
+    app version surfaced in the demo's generated OpenAPI `/openapi.json`. The
+    `\b` guard avoids matching the adjacent `__version__ = "..."` constant.
+    """
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'\bversion\s*=\s*"(\d+\.\d+\.\d+)"', text)
+    if not match:
+        raise RuntimeError(f'No `version="X.Y.Z"` kwarg in {path}')
+    return match.group(1)
+
+
+def _read_deb_release_tag(path: Path) -> str:
+    """Pull the version out of the `velesdb-X.Y.Z-amd64.deb` release asset
+    referenced in the install guide. The asset filename carries the version, so
+    (unlike the version-agnostic zip/tarball which use `releases/latest/`) it
+    must track the workspace or the documented `wget` URL 404s. Found pinned at
+    v1.14.2 during the v1.16.0 audit.
+    """
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"velesdb-(\d+\.\d+\.\d+)-amd64\.deb", text)
+    if not match:
+        raise RuntimeError(f"No `velesdb-X.Y.Z-amd64.deb` reference in {path}")
+    return match.group(1)
+
+
 _READERS = {
     "toml": _read_toml_version,
     "json": _read_json_version,
@@ -335,6 +383,8 @@ _READERS = {
     "ts_sdk_banner": _read_ts_sdk_banner,
     "cargo_pin": _read_cargo_pin,
     "ghcr_image": _read_ghcr_image,
+    "fastapi_app_version": _read_fastapi_app_version,
+    "deb_release_tag": _read_deb_release_tag,
 }
 
 
