@@ -9,7 +9,11 @@ import logging
 from typing import List, Optional
 
 from langchain_core.documents import Document
-from velesdb_common.scroll import scroll_one_batch
+
+# Imported under the historical private name: ``vectorstore`` re-exports it and
+# the parity tests import/monkeypatch it. Implementation lives in
+# velesdb_common.scroll (shared with the LlamaIndex integration).
+from velesdb_common.scroll import scroll_one_batch as _scroll_one_batch
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +59,7 @@ class ScrollOpsMixin:
         """
         if self._collection is None:  # type: ignore[attr-defined]
             return [], None
-        raw_batch, next_cursor = scroll_one_batch(
+        raw_batch, next_cursor = _scroll_one_batch(
             self._collection, cursor, batch_size, filter  # type: ignore[attr-defined]
         )
         docs: List[Document] = [self._to_document(pt) for pt in raw_batch]  # type: ignore[attr-defined]
