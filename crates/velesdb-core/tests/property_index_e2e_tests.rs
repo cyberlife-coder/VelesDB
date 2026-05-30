@@ -497,7 +497,7 @@ fn test_match_where_range_filter_gt() {
 /// GIVEN: Graph collection with nodes having different labels
 /// WHEN:  MATCH filters by label (n:Person)
 /// THEN:  Only Person-labeled nodes are used as start nodes
-/// This tests that the `LabelIndex` in `store_node_payload` is auto-populated.
+/// This tests that the `LabelIndex` in `upsert_node_payload` is auto-populated.
 #[test]
 fn test_label_index_auto_populated_on_insert() {
     let (_dir, _db, gc) = setup_graph_db();
