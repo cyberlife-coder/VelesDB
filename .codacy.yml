@@ -64,6 +64,25 @@ exclude_paths:
   # SDK's own config (`@typescript-eslint/no-unused-vars`) + `tsc` enforce this
   # file correctly in CI (`npm run typecheck`).
   - "sdks/typescript/src/embed.ts"
+  # Additional TypeScript SDK source files hit by the SAME ESLint8 flat-config
+  # false positive as embed.ts above (issue #951): Codacy's bundled eslint@8.57
+  # cannot load the SDK's flat `eslint.config.mjs` (needs ESLint 9+), so it
+  # falls back to the *base* `no-unused-vars` and mis-flags type-only params /
+  # imports. tsc + the SDK's own eslint9 (`@typescript-eslint/no-unused-vars`)
+  # enforce these files correctly in CI (`npm run typecheck` + `npm run lint`).
+  # Suppressed via global exclude_paths per the documented policy (NOT a
+  # per-engine eslint block — Codacy ignores those). Only files whose findings
+  # are 100% this `no-unused-vars` FP are listed, so no genuine issue is hidden:
+  # backend.ts (50 FP, pure type definitions), types/errors.ts (2), and
+  # agent-memory.ts (2). Deliberately NOT excluded: filter.ts, errors.ts and
+  # client/validation.ts also carry their few no-unused-vars FP, but excluding
+  # them would also hide real findings (errors.ts has a `detect-object-injection`
+  # Security finding — see #955 — plus `no-unnecessary-condition` ErrorProne on
+  # all three). Those ~5 residual FP are accepted; the base `no-unused-vars`
+  # pattern can be disabled in the coding standard for a clean fix (issue #951).
+  - "sdks/typescript/src/types/backend.ts"
+  - "sdks/typescript/src/types/errors.ts"
+  - "sdks/typescript/src/agent-memory.ts"
   # Integration contains_text_search helpers — Codacy's online taint analysis
   # flags VelesQL query construction as SQL injection. All user inputs are
   # sanitized BEFORE the query is built:
@@ -161,6 +180,16 @@ engines:
     # These files are still analyzed by all OTHER Codacy tools (security,
     # duplication, style) — only complexity/NLOC metrics are excluded.
     exclude_paths:
+      # --- Test files (issue #957) ---
+      # Tests must NOT follow production complexity/NLOC rules: test harnesses
+      # are legitimately long and branchy. The GLOBAL exclude_paths above lists
+      # these globs too, but Lizard does not honour the global list — only this
+      # per-engine block — so test files (e.g. perf_optimizations_tests.rs) were
+      # still flagged for complexity until added here.
+      - "crates/**/src/**/*_tests.rs"
+      - "crates/**/src/**/*_test.rs"
+      - "crates/**/src/**/tests.rs"
+      - "crates/**/tests/**"
       # --- WHERE evaluation (enum pattern matching) ---
       - "crates/velesdb-core/src/collection/search/query/match_exec/where_eval.rs"
 
@@ -335,6 +364,16 @@ engines:
 
   opengrep:
     exclude_paths:
+      # --- Test files (issue #957) ---
+      # `unsafe-usage` and other patterns are idiomatic in test fixtures and
+      # must not be graded as production code. Opengrep (like Lizard) bypasses
+      # the global exclude_paths for its own rules, so the test globs are
+      # repeated here (e.g. simd_native_tests.rs / alloc_guard_tests.rs were
+      # flagged for unsafe-usage until added).
+      - "crates/**/src/**/*_tests.rs"
+      - "crates/**/src/**/*_test.rs"
+      - "crates/**/src/**/tests.rs"
+      - "crates/**/tests/**"
       # Integration memory modules — random.randint used for session-scoped
       # in-process ID counters, not security/crypto material
       - "integrations/langchain/src/langchain_velesdb/memory.py"
@@ -373,3 +412,8 @@ engines:
       # LangChain usage" is a self-reference false positive.
       - "integrations/langchain/src/langchain_velesdb/scroll_ops.py"
       - "integrations/langchain/src/langchain_velesdb/multi_query_ops.py"
+      # Same `detect-langchain` self-reference FP (issue #954) on the remaining
+      # LangChain integration modules.
+      - "integrations/langchain/src/langchain_velesdb/graph_retriever.py"
+      - "integrations/langchain/src/langchain_velesdb/vectorstore.py"
+      - "integrations/langchain/src/langchain_velesdb/graph_ops.py"
