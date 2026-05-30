@@ -260,7 +260,6 @@ impl Pipeline {
             let transformed = self.transformer.transform_batch(batch.points);
 
             if let Some(ref db) = db {
-                #[allow(deprecated)] // TODO(MIGRATE-01): migrate to get_vector_collection()
                 let collection = db
                     .get_vector_collection(&self.config.destination.collection)
                     .ok_or_else(|| {

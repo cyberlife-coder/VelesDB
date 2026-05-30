@@ -333,17 +333,16 @@ impl FusionStrategy {
         let norm_dense = min_max_normalize(dense);
         let norm_sparse = min_max_normalize(sparse);
 
-        // Collect all doc IDs
-        let mut all_ids: HashMap<u64, f32> = HashMap::new();
+        // Collect all doc IDs — capacity upper-bounds total unique docs.
+        let mut all_ids: HashMap<u64, f32> =
+            HashMap::with_capacity(norm_dense.len() + norm_sparse.len());
         for (&id, &nd) in &norm_dense {
             let ns = norm_sparse.get(&id).copied().unwrap_or(0.0);
             all_ids.insert(id, dense_weight * nd + sparse_weight * ns);
         }
+        // For sparse-only IDs (not in norm_dense), dense contribution is 0.
         for (&id, &ns) in &norm_sparse {
-            all_ids.entry(id).or_insert_with(|| {
-                let nd = norm_dense.get(&id).copied().unwrap_or(0.0);
-                dense_weight * nd + sparse_weight * ns
-            });
+            all_ids.entry(id).or_insert(sparse_weight * ns);
         }
 
         let mut fused: Vec<(u64, f32)> = all_ids.into_iter().collect();
@@ -387,21 +386,16 @@ fn min_max_normalize(branch: &[(u64, f32)]) -> HashMap<u64, f32> {
     if branch.is_empty() {
         return HashMap::new();
     }
-    let min = branch.iter().map(|&(_, s)| s).fold(f32::INFINITY, f32::min);
-    let max = branch
-        .iter()
-        .map(|&(_, s)| s)
-        .fold(f32::NEG_INFINITY, f32::max);
+    // Single pass to find both min and max.
+    let (min, max) = branch.iter().fold(
+        (f32::INFINITY, f32::NEG_INFINITY),
+        |(lo, hi), &(_, s)| (lo.min(s), hi.max(s)),
+    );
     let range = max - min;
-    branch
-        .iter()
-        .map(|&(id, s)| {
-            let norm = if range < f32::EPSILON {
-                0.5
-            } else {
-                (s - min) / range
-            };
-            (id, norm)
-        })
-        .collect()
+    let mut out = HashMap::with_capacity(branch.len());
+    for &(id, s) in branch {
+        let norm = if range < f32::EPSILON { 0.5 } else { (s - min) / range };
+        out.insert(id, norm);
+    }
+    out
 }
