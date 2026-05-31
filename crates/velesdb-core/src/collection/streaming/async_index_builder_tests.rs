@@ -201,48 +201,47 @@ fn test_trigger_build_async_noop_when_empty() {
     assert_eq!(index.len(), 0);
 }
 
+/// Verifies that `trigger_build_async` is a no-op when a build is already in
+/// progress.
+///
+/// The previous implementation polled `is_building()` with a sleep between the
+/// first `trigger_build_async` call and the second, which was racy: on fast
+/// hardware the background thread finished and cleared `building` before the
+/// second trigger was called, causing both triggers to run and the assertion
+/// `buffer_len() == 5` to fail with 0.
+///
+/// Fix: inject the "already building" state directly via
+/// `force_set_building(true)` without spawning a real background thread,
+/// making the test fully deterministic.
 #[test]
 fn test_trigger_build_async_skips_when_already_building() {
     let dim = 4;
     let index = std::sync::Arc::new(make_index(dim));
     let builder = AsyncIndexBuilder::new(default_config());
 
-    // Enqueue vectors
-    let vectors: Vec<(u64, Vec<f32>)> = (0..10)
+    // Simulate a build already in progress — no real thread needed.
+    builder.force_set_building(true);
+    assert!(builder.is_building());
+
+    // Enqueue vectors that should stay buffered because the trigger is skipped.
+    let vectors: Vec<(u64, Vec<f32>)> = (0..5_u64)
         .map(|i| {
             let mut v = vec![0.0_f32; dim];
-            v[i % dim] = 1.0;
-            (i as u64, v)
+            v[(i as usize) % dim] = 1.0;
+            (i, v)
         })
         .collect();
     builder.enqueue(vectors);
-
-    // Trigger first build
-    builder.trigger_build_async(&index);
-
-    // Enqueue more while building
-    let more: Vec<(u64, Vec<f32>)> = (10..15)
-        .map(|i| {
-            let mut v = vec![0.0_f32; dim];
-            v[i % dim] = 1.0;
-            (i as u64, v)
-        })
-        .collect();
-    builder.enqueue(more);
-
-    // Second trigger should be skipped (building flag is set)
-    builder.trigger_build_async(&index);
-
-    // Wait for first build to complete
-    let start = std::time::Instant::now();
-    while builder.is_building() {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        if start.elapsed() > std::time::Duration::from_secs(10) {
-            panic!("background build did not complete within 10s");
-        }
-    }
-
-    // First batch indexed, second batch still in buffer
-    assert_eq!(index.len(), 10);
     assert_eq!(builder.buffer_len(), 5);
+
+    // Call trigger — must be a no-op because `building` is already true.
+    builder.trigger_build_async(&index);
+
+    // Buffer untouched; no thread was spawned; index is empty.
+    assert_eq!(builder.buffer_len(), 5, "buffer must not be drained when already building");
+    assert_eq!(index.len(), 0, "index must not change when trigger is skipped");
+    assert!(builder.is_building(), "building flag must still be set");
+
+    // Restore invariant so builder is not left in a permanently-locked state.
+    builder.force_set_building(false);
 }
