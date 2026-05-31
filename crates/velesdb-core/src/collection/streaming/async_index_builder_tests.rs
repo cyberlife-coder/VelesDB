@@ -224,11 +224,13 @@ fn test_trigger_build_async_skips_when_already_building() {
     assert!(builder.is_building());
 
     // Enqueue vectors that should stay buffered because the trigger is skipped.
-    let vectors: Vec<(u64, Vec<f32>)> = (0..5_u64)
+    // Iterate as usize so index arithmetic stays lossless; cast to u64 for the id
+    // (usize → u64 cannot truncate on any supported target).
+    let vectors: Vec<(u64, Vec<f32>)> = (0..5_usize)
         .map(|i| {
             let mut v = vec![0.0_f32; dim];
-            v[(i as usize) % dim] = 1.0;
-            (i, v)
+            v[i % dim] = 1.0;
+            (i as u64, v)
         })
         .collect();
     builder.enqueue(vectors);
