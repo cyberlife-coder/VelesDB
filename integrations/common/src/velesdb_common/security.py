@@ -501,3 +501,37 @@ def validate_sparse_vector(sparse_vector: Any) -> dict:
     for key, value in sparse_vector.items():
         _validate_sparse_entry(key, value)
     return sparse_vector
+
+
+# Public API surface — re-exported verbatim by the framework shim modules
+# (langchain_velesdb.security / llamaindex_velesdb.security) via
+# ``from velesdb_common.security import *``.
+__all__ = [
+    "ALLOWED_STORAGE_MODES",
+    "STORAGE_MODE_ALIASES",
+    "DEFAULT_TIMEOUT_MS",
+    "MAX_BATCH_SIZE",
+    "MAX_DIMENSION",
+    "MAX_K_VALUE",
+    "MAX_PATH_LENGTH",
+    "MAX_QUERY_LENGTH",
+    "MAX_SPARSE_VECTOR_SIZE",
+    "MAX_TEXT_LENGTH",
+    "MIN_DIMENSION",
+    "SecurityError",
+    "validate_batch_size",
+    "validate_collection_name",
+    "validate_column_name",
+    "validate_dimension",
+    "validate_k",
+    "validate_metric",
+    "validate_path",
+    "validate_query",
+    "validate_search_quality",
+    "validate_sparse_vector",
+    "validate_storage_mode",
+    "validate_text",
+    "validate_timeout",
+    "validate_url",
+    "validate_weight",
+]
