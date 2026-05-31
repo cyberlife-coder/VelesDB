@@ -4,7 +4,7 @@ This roadmap commits to **what we are building**, **why**, and **when**. It is u
 
 It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` issues but **not committed** until they reach a milestone here.
 
-> **Last updated:** 2026-05-31 — covers v1.16.0 (shipped 2026-05-29) → v1.17.0 horizon.
+> **Last updated:** 2026-05-31 — covers v1.16.0 (current) → v1.17.0 horizon.
 
 ---
 
@@ -26,7 +26,7 @@ It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` i
 
 ---
 
-## Horizon 2 — ✅ Shipped (v1.15.0 → v1.16.0, released 2026-05-29)
+## Horizon 2 — ✅ Shipped (v1.15.0 → v1.16.0, released 2026-05-30)
 
 ### Theme: Performance narrative & SDK parity
 
@@ -38,7 +38,7 @@ It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` i
 | 4 | **External `unsafe` audit** (SIMD module, Cure53 / independent Rust safety expert) | Required for "data sovereignty" enterprise positioning | ❌ Pending funding (~5-15 k€); carried to v1.17.0 |
 | 5 | **`velesdb-migrate` rework decision** (12,108 LOC, 9 connectors) | Workspace inflation without measured user base — decide keep / extract / archive based on crates.io download counts, GitHub stars attributable to migration tooling, opened issues count. See `docs/reference/KNOWN_LIMITATIONS.md` § 4 | ❌ Decision deferred — carried to v1.17.0 |
 
-**Also shipped in v1.16.0 (2026-05-29):** `audit-2026q2` security hardening wave (9 PRs: HNSW on-disk validation, WAL allocation caps, PQ hardening, parser DoS bounds, sparse/BM25 agent path, graph integrity, query/cache, config validation, rate limiter — PRs [#908](https://github.com/cyberlife-coder/VelesDB/pull/908)–[#916](https://github.com/cyberlife-coder/VelesDB/pull/916)); first-party Python + TypeScript embedding adapters (PR [#917](https://github.com/cyberlife-coder/VelesDB/pull/917)); multi-arch GHCR image with OIDC attestation; 9 typed Tauri guest-JS wrappers (PR [#928](https://github.com/cyberlife-coder/VelesDB/pull/928)); 44-PR dependency refresh (Docker base `rust 1.87→1.96`, `wgpu 29`, `redis 0.26→1.2`, `dashmap 5→6`, `uniffi 0.28→0.31`); VelesQL cheat sheet.
+**Also shipped in v1.16.0 (2026-05-30):** `audit-2026q2` security hardening wave (9 PRs: HNSW on-disk validation, WAL allocation caps, PQ hardening, parser DoS bounds, sparse/BM25 agent path, graph integrity, query/cache, config validation, rate limiter — PRs [#908](https://github.com/cyberlife-coder/VelesDB/pull/908)–[#916](https://github.com/cyberlife-coder/VelesDB/pull/916)); first-party Python + TypeScript embedding adapters (PR [#917](https://github.com/cyberlife-coder/VelesDB/pull/917)); multi-arch GHCR image with OIDC attestation; 9 typed Tauri guest-JS wrappers (PR [#928](https://github.com/cyberlife-coder/VelesDB/pull/928)); 44-PR dependency refresh (Docker base `rust 1.87→1.96`, `wgpu 29`, `redis 0.26→1.2`, `dashmap 5→6`, `uniffi 0.28→0.31`); VelesQL cheat sheet.
 
 ---
 
