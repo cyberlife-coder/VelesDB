@@ -301,18 +301,20 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 
 Fresh figures on Apple Silicon (single-thread, run in isolation). They confirm the engine profile and make the *scope* of each number explicit; they are not a substitute for the x86_64/AVX2 reference figures above.
 
-| What it actually measures | Result | Reproduce |
-|---|---|---|
-| HNSW search, **index-only** (10K/768D, k=10; no WAL/payload, hot cache) | 55 µs | `... hnsw_benchmark -- hnsw_search_latency` |
-| HNSW search **scaling** (top-10, index-only) | 116 µs @100K · 128 µs @500K · 129 µs @1M | `... scalability_benchmark` |
-| **VelesQL engine** (parse→plan→execute→project, 10K) | 41 µs | `... velesql_execution_benchmark` |
-| **End-to-end via PyO3/NumPy** (10K/384D, p50; the Python production path) | 55 µs (p99 99 µs) | `python benchmarks/velesdb_benchmark.py` |
-| SIMD distance, **NEON** (768D): dot / euclidean / cosine | 31 / 35 / 47 ns | `... simd_benchmark` |
-| BM25 full-text search (10K, single / multi-term) | 23.5 / 71 µs | `... bm25_benchmark` |
-| Sparse search (top-10, 10K corpus) | 29.8 µs | `... sparse_benchmark -- top10_10k_corpus` |
-| **Recall@10** (n=10K/128D, exact brute-force ground truth) | Fast (ef96) 97.4% · Balanced (ef160) 99.8% · Accurate (ef512) 100% | `... recall_benchmark` |
+All `cargo bench` commands below are run as `cargo bench -p velesdb-core --bench <NAME>`.
 
-> On this machine the PyO3/NumPy binding overhead is negligible: end-to-end ≈ index-only ≈ 55 µs. The **450 µs** canonical figure is the i9-14900KF reference under WAL-on production conditions; per-machine results vary. Recall figures use a real exact-kNN ground truth, not approximate self-comparison.
+| What it actually measures | Result | Bench |
+|---|---|---|
+| HNSW search, **index-only** (10K/768D, k=10; no WAL/payload, hot cache) | 55 µs | `hnsw_benchmark -- hnsw_search_latency` |
+| HNSW search **scaling** (top-10, index-only) | 116 µs @100K · 128 µs @500K · 129 µs @1M | `scalability_benchmark` |
+| **VelesQL engine** (parse→plan→execute→project, 10K) | 41 µs | `velesql_execution_benchmark` |
+| **End-to-end via PyO3/NumPy** (10K/384D, p50; the Python production path) | 55 µs (p99 99 µs) | `python benchmarks/velesdb_benchmark.py` |
+| SIMD distance, **NEON** (768D): dot / euclidean / cosine | 31 / 35 / 47 ns | `simd_benchmark` |
+| BM25 full-text search (10K, single / multi-term) | 23.5 / 71 µs | `bm25_benchmark` |
+| Sparse search (top-10, 10K corpus) | 29.8 µs | `sparse_benchmark -- top10_10k_corpus` |
+| **Recall@10** (n=10K/128D, exact brute-force GT; ef sweep) | ef=96 → 97.4% · ef=160 → 99.8% · ef=512 → 100% | `recall_benchmark` |
+
+> The recall figures above are `recall_benchmark`'s internal ef sweep (96/160/512) — **distinct** from the product "Modes" table below (Fast/Balanced/Accurate use ef 64/128/512). On this machine the PyO3/NumPy binding overhead is negligible: end-to-end ≈ index-only ≈ 55 µs. The **450 µs** canonical figure is the i9-14900KF reference under WAL-on production conditions; per-machine results vary. Recall uses a real exact-kNN ground truth, not approximate self-comparison.
 
 | Mode | ef_search | Recall@10 | Use case |
 |------|-----------|-----------|----------|
