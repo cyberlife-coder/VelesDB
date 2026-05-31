@@ -117,16 +117,8 @@ class MultiQueryOpsMixin:
         k: int = 4,
         **kwargs: Any,
     ) -> List[List[Tuple[Document, float]]]:
-        """Batch search with scores for multiple queries.
-
-        Args:
-            queries: List of query strings.
-            k: Number of results per query. Defaults to 4.
-            **kwargs: Additional arguments.
-
-        Returns:
-            List of (Document, score) tuple lists, one per query.
-        """
+        """Like :meth:`batch_search` but each result is a ``(Document, score)``
+        tuple instead of a bare ``Document``."""
         if not queries:
             return []
         return [_results_to_docs_with_score(r) for r in self._run_batch_search(queries, k)]
@@ -207,19 +199,8 @@ class MultiQueryOpsMixin:
         filter: Optional[dict] = None,  # pylint: disable=redefined-builtin  # public API kwarg name, cannot rename without breaking callers
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
-        """Multi-query search with fused scores.
-
-        Args:
-            queries: List of query strings.
-            k: Number of results. Defaults to 4.
-            fusion: Fusion strategy. Defaults to "rrf".
-            fusion_params: Optional fusion parameters.
-            filter: Optional metadata filter.
-            **kwargs: Additional arguments.
-
-        Returns:
-            List of (Document, fused_score) tuples.
-        """
+        """Like :meth:`multi_query_search` but each result is a
+        ``(Document, fused_score)`` tuple instead of a bare ``Document``."""
         if not queries:
             return []
         results = self._run_multi_query(queries, k, fusion, fusion_params, query_filter=filter)
