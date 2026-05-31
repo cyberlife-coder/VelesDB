@@ -481,7 +481,17 @@ jobs:
           cd pkg
           VERSION=${{ needs.validate.outputs.version }}
           node -e "const p=require('./package.json'); p.name='@wiscale/velesdb-wasm'; p.version='$VERSION'; require('fs').writeFileSync('package.json',JSON.stringify(p,null,2))"
-          npm publish --access public || echo "⏭️ WASM already published"
+          # Publish, but only tolerate a genuine "already published" (same version
+          # on npm). Any other failure (auth/E404-on-PUT, registry) MUST fail the
+          # job — do not swallow it (regression guard: v1.16.0 npm publish failed
+          # silently on an expired token and shipped nothing).
+          if npm publish --access public; then
+            echo "✅ published @wiscale/velesdb-wasm@$VERSION"
+          elif npm view "@wiscale/velesdb-wasm@$VERSION" version >/dev/null 2>&1; then
+            echo "⏭️ @wiscale/velesdb-wasm@$VERSION already on npm — skipping"
+          else
+            echo "❌ npm publish FAILED for @wiscale/velesdb-wasm@$VERSION (auth/registry error, NOT already-published)"; exit 1
+          fi
 
       - name: Build & Publish TypeScript SDK
         if: matrix.package == 'typescript-sdk'
@@ -490,7 +500,14 @@ jobs:
         run: |
           cd sdks/typescript
           npm install && npm run build
-          npm publish --access public || echo "⏭️ SDK already published"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if npm publish --access public; then
+            echo "✅ published @wiscale/velesdb-sdk@$PKG_VERSION"
+          elif npm view "@wiscale/velesdb-sdk@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "⏭️ @wiscale/velesdb-sdk@$PKG_VERSION already on npm — skipping"
+          else
+            echo "❌ npm publish FAILED for @wiscale/velesdb-sdk@$PKG_VERSION (auth/registry error, NOT already-published)"; exit 1
+          fi
 
       - name: Build & Publish Tauri Plugin
         if: matrix.package == 'tauri-plugin'
@@ -499,7 +516,14 @@ jobs:
         run: |
           cd crates/tauri-plugin-velesdb/guest-js
           npm install && npm run build
-          npm publish --access public || echo "⏭️ Tauri plugin already published"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if npm publish --access public; then
+            echo "✅ published @wiscale/tauri-plugin-velesdb@$PKG_VERSION"
+          elif npm view "@wiscale/tauri-plugin-velesdb@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "⏭️ @wiscale/tauri-plugin-velesdb@$PKG_VERSION already on npm — skipping"
+          else
+            echo "❌ npm publish FAILED for @wiscale/tauri-plugin-velesdb@$PKG_VERSION (auth/registry error, NOT already-published)"; exit 1
+          fi
 
   # ===========================================================================
   # 6. Create GitHub Release
