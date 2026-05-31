@@ -238,8 +238,16 @@ fn test_trigger_build_async_skips_when_already_building() {
     builder.trigger_build_async(&index);
 
     // Buffer untouched; no thread was spawned; index is empty.
-    assert_eq!(builder.buffer_len(), 5, "buffer must not be drained when already building");
-    assert_eq!(index.len(), 0, "index must not change when trigger is skipped");
+    assert_eq!(
+        builder.buffer_len(),
+        5,
+        "buffer must not be drained when already building"
+    );
+    assert_eq!(
+        index.len(),
+        0,
+        "index must not change when trigger is skipped"
+    );
     assert!(builder.is_building(), "building flag must still be set");
 
     // Restore invariant so builder is not left in a permanently-locked state.
