@@ -202,4 +202,14 @@ impl AsyncIndexBuilder {
     pub fn merge_threshold(&self) -> usize {
         self.config.merge_threshold
     }
+
+    /// Directly sets the `building` flag for deterministic unit testing.
+    ///
+    /// Allows tests to inject the "already building" state without spawning a
+    /// real background thread, eliminating the race condition inherent in
+    /// timing-based probes.
+    #[cfg(test)]
+    pub(crate) fn force_set_building(&self, val: bool) {
+        self.building.store(val, Ordering::SeqCst);
+    }
 }
