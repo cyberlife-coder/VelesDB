@@ -405,6 +405,47 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Acquires locks in correct rank order: vectors (10) → layers (20).
     /// This avoids repeated lock acquire/release in tight search loops (F-03/F-04).
     ///
+    /// # Concurrent-search scalability (issue #967 — 2026-06-01)
+    ///
+    /// Benchmark (`scalability_benchmark::concurrent_queries`, M5 Pro):
+    /// 8 parallel searches achieve ~5× throughput instead of the ideal ~8×,
+    /// with per-batch latency 66% higher than single-threaded.
+    ///
+    /// Both locks are held for the **entire** HNSW traversal (~10 ms, 300-500
+    /// distance evaluations at layer 0). Analysis of potential causes:
+    ///
+    /// - **`parking_lot::RwLock` reader-counter bouncing** — each thread does
+    ///   one `fetch_add` + one `fetch_sub` on the shared atomic lock word. At
+    ///   8 threads × 2 ops = 16 atomic ops over 10 ms, this adds <1 µs
+    ///   overhead and cannot explain the 66% regression.
+    ///
+    /// - **Memory bandwidth / L3 pressure** — a 6.4 MB index (100 K × 512 B)
+    ///   fits comfortably in the M5 Pro's 32 MB L3. However on larger indices
+    ///   (≥ 512 MB for 1 M vectors) random DRAM accesses do become the
+    ///   bottleneck; the slowdown is then an inherent physical limit, not a
+    ///   software bug.
+    ///
+    /// - **Inter-cluster L2 cache traffic** — M5 Pro has two clusters of 4
+    ///   P-cores, each with 16 MB L2. Threads on different clusters accessing
+    ///   overlapping cache lines must transfer via shared L3, limiting
+    ///   effective bandwidth.
+    ///
+    /// **Recommended investigation before any code change**: profile with
+    /// `cargo bench --bench scalability_benchmark` while varying index size
+    /// (10 K, 100 K, 1 M vectors) and thread-to-cluster pinning to distinguish
+    /// bandwidth-bound from contention-bound behaviour.
+    ///
+    /// **If contention-bound**: replace the two `RwLock` guards with
+    /// `Arc`-snapshot reads — clone `Arc<ContiguousVectors>` and
+    /// `Arc<Vec<Layer>>` under a brief lock, release immediately, then run the
+    /// traversal lock-free. `arc-swap` is already a workspace dependency.
+    /// Caveat: `Arc::make_mut` on concurrent insert paths triggers
+    /// copy-on-write, which is O(N·D) for vectors and O(N·M) for layers.
+    /// Measure insert throughput regression before shipping.
+    ///
+    /// **If bandwidth-bound**: the ~5× scaling at 8 threads is expected and
+    /// not a correctness or software issue.
+    ///
     /// If vector storage is not yet initialized, the closure is **not** called
     /// and `R::default()` is returned.
     #[inline]
