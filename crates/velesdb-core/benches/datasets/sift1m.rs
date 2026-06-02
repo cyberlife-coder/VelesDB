@@ -92,12 +92,29 @@ pub enum DatasetError {
     Io(#[from] io::Error),
 }
 
-/// HTTP mirror used as the default download URL. Override with
-/// `VELESDB_SIFT1M_URL` env for corporate mirrors. `ureq` only supports
-/// HTTP/HTTPS, so the INRIA FTP endpoint cannot be used here — the HTTP
-/// mirror served by `corpus-texmex.irisa.fr` is the canonical fetch
-/// target for this loader.
+/// Primary tarball mirror (INRIA TEXMEX corpus).
+///
+/// The original HTTP mirror at `corpus-texmex.irisa.fr` has been returning 404
+/// since mid-2025.  The FTP endpoint `ftp://ftp.irisa.fr/local/texmex/corpus/
+/// sift.tar.gz` is still live but `ureq` is HTTP-only and cannot reach it.
+///
+/// This constant is kept for backward compatibility with `VELESDB_SIFT1M_URL`
+/// overrides.  If this URL continues to fail, the loader automatically falls
+/// back to downloading the three dataset files individually from the Hugging
+/// Face mirror (`HF_MIRROR`).
+///
+/// Manual workaround (no network access at bench time):
+///   ```text
+///   wget ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz
+///   tar -xzf sift.tar.gz
+///   export VELESDB_SIFT1M_DIR=/path/to/extracted/sift/
+///   ```
 const DOWNLOAD_MIRROR: &str = "http://corpus-texmex.irisa.fr/sift.tar.gz";
+
+/// Hugging Face mirror hosting the three SIFT1M files individually.
+/// Used as automatic fallback when the primary tarball download fails.
+/// Dataset: <https://huggingface.co/datasets/qbo-odp/sift1m> (public, no auth).
+const HF_MIRROR: &str = "https://huggingface.co/datasets/qbo-odp/sift1m/resolve/main";
 
 /// Base vectors: 1M × 128D.
 const BASE_FILE: &str = "sift_base.fvecs";
@@ -212,9 +229,51 @@ fn ensure_cached(cache_dir: &Path) -> Result<(), DatasetError> {
             return Err(DatasetError::NotCached);
         }
         fs::create_dir_all(cache_dir)?;
-        download_and_extract(cache_dir)?;
+        fetch_dataset(cache_dir)?;
     }
     verify_all_fingerprints(cache_dir)
+}
+
+/// Downloads the SIFT1M dataset, trying the tarball mirror first and falling
+/// back to individual file downloads from Hugging Face on failure.
+fn fetch_dataset(cache_dir: &Path) -> Result<(), DatasetError> {
+    match download_and_extract(cache_dir) {
+        Ok(()) => return Ok(()),
+        Err(e) => {
+            eprintln!(
+                "[sift1m] primary tarball download failed: {e}\n\
+                 [sift1m] Trying individual file download from Hugging Face mirror …\n\
+                 [sift1m] Tip: set VELESDB_SIFT1M_URL to override the tarball URL, or\n\
+                 [sift1m]     set VELESDB_SIFT1M_DIR to a directory with pre-extracted files.\n\
+                 [sift1m]     FTP (manual): ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz"
+            );
+        }
+    }
+    download_individual_files(cache_dir)
+}
+
+/// Downloads each of the three SIFT1M files individually from the HF mirror.
+///
+/// Skips files that are already present on disk to support partial-retry
+/// scenarios. Uses a 600-second timeout to accommodate the 516 MB base file
+/// on slow connections.
+fn download_individual_files(cache_dir: &Path) -> Result<(), DatasetError> {
+    for filename in [BASE_FILE, QUERY_FILE, GT_FILE] {
+        let dest = cache_dir.join(filename);
+        if dest.is_file() {
+            eprintln!("[sift1m] {filename} already cached — skipping");
+            continue;
+        }
+        let url = format!("{HF_MIRROR}/{filename}");
+        eprintln!("[sift1m] downloading {url} → {}", dest.display());
+        let resp = ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(600))
+            .call()
+            .map_err(|e| DatasetError::Download(format!("GET {url}: {e}")))?;
+        let mut out = File::create(&dest)?;
+        io::copy(&mut resp.into_reader(), &mut out)?;
+    }
+    Ok(())
 }
 
 /// Pinned SHA-256 fingerprints loaded from the JSON sidecar or inlined
@@ -274,7 +333,7 @@ pub fn compute_fingerprints(cache_dir: &Path) -> Result<PinnedFingerprints, Data
             return Err(DatasetError::NotCached);
         }
         fs::create_dir_all(cache_dir)?;
-        download_and_extract(cache_dir)?;
+        fetch_dataset(cache_dir)?;
     }
     Ok(PinnedFingerprints {
         base: hash_file(&cache_dir.join(BASE_FILE))?,

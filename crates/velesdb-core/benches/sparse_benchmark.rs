@@ -15,8 +15,6 @@ use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
 use velesdb_core::index::sparse::{sparse_search, ScoredDoc, SparseInvertedIndex, SparseVector};
-#[cfg(feature = "internal-bench")]
-use velesdb_core::internal_bench;
 
 /// Sample size used for the recall validation pass.
 const RECALL_SAMPLE_SIZE: usize = 20;
@@ -124,12 +122,20 @@ fn build_index(corpus: &[SparseVector]) -> SparseInvertedIndex {
 
 fn sparse_insert_benchmarks(c: &mut Criterion) {
     let corpus = generate_splade_corpus(10_000, 42);
+    // Build the (id, vector) pairs once for batch-insert benchmarks.
+    let docs: Vec<(u64, SparseVector)> = corpus
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, v)| (i as u64, v))
+        .collect();
+    let docs = Arc::new(docs);
 
     let mut group = c.benchmark_group("sparse_insert");
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(10));
 
-    // Sequential insert of 10K documents
+    // Sequential insert of 10K documents (single-thread baseline).
     group.bench_function("sequential_10k", |b| {
         b.iter(|| {
             let index = SparseInvertedIndex::new();
@@ -140,57 +146,12 @@ fn sparse_insert_benchmarks(c: &mut Criterion) {
         });
     });
 
-    // Parallel insert of 10K documents (4 threads, rayon)
-    #[cfg(feature = "persistence")]
-    group.bench_function("parallel_10k_rayon_doc_granular", |b| {
-        use rayon::prelude::*;
+    // 4 threads × 2500-doc batch insert: lock acquired once per chunk, not per document.
+    // This is the correct parallel insert pattern — see insert_batch_chunk for details.
+    group.bench_function("parallel_10k_manual_4x2500_batch", |b| {
+        let docs = Arc::clone(&docs);
         b.iter(|| {
             let index = Arc::new(SparseInvertedIndex::new());
-            corpus.par_iter().enumerate().for_each(|(i, vec)| {
-                index.insert(black_box(i as u64), black_box(vec));
-            });
-            index
-        });
-    });
-
-    group.bench_function("parallel_10k_manual_4x2500_doc_granular", |b| {
-        b.iter(|| {
-            let index = Arc::new(SparseInvertedIndex::new());
-            let corpus = Arc::new(corpus.clone());
-            let mut handles = Vec::with_capacity(4);
-
-            for chunk_id in 0..4_usize {
-                let index = Arc::clone(&index);
-                let docs = Arc::clone(&corpus);
-                handles.push(std::thread::spawn(move || {
-                    let start = chunk_id * 2500;
-                    let end = start + 2500;
-                    for i in start..end {
-                        index.insert(i as u64, &docs[i]);
-                    }
-                }));
-            }
-
-            for handle in handles {
-                handle.join().expect("thread panicked");
-            }
-
-            index
-        });
-    });
-
-    #[cfg(feature = "internal-bench")]
-    group.bench_function("parallel_10k_manual_4x2500_chunked", |b| {
-        let docs: Vec<(u64, SparseVector)> = corpus
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(i, vec)| (i as u64, vec))
-            .collect();
-
-        b.iter(|| {
-            let index = Arc::new(SparseInvertedIndex::new());
-            let docs = Arc::new(docs.clone());
             let mut handles = Vec::with_capacity(4);
 
             for chunk_id in 0..4_usize {
@@ -199,7 +160,7 @@ fn sparse_insert_benchmarks(c: &mut Criterion) {
                 handles.push(std::thread::spawn(move || {
                     let start = chunk_id * 2500;
                     let end = start + 2500;
-                    internal_bench::sparse_insert_batch(&index, &docs[start..end]);
+                    index.insert_batch_chunk(&docs[start..end]);
                 }));
             }
 
@@ -207,6 +168,21 @@ fn sparse_insert_benchmarks(c: &mut Criterion) {
                 handle.join().expect("thread panicked");
             }
 
+            index
+        });
+    });
+
+    // Rayon parallel batch insert: par_chunks dispatches 250-doc chunks across
+    // the thread pool, each acquiring the write lock once.
+    #[cfg(feature = "persistence")]
+    group.bench_function("parallel_10k_rayon_batch", |b| {
+        use rayon::prelude::*;
+        let docs = Arc::clone(&docs);
+        b.iter(|| {
+            let index = Arc::new(SparseInvertedIndex::new());
+            docs.par_chunks(250).for_each(|chunk| {
+                index.insert_batch_chunk(chunk);
+            });
             index
         });
     });
@@ -291,36 +267,46 @@ fn sparse_concurrent_benchmarks(c: &mut Criterion) {
     let corpus = generate_splade_corpus(10_000, 42);
     let queries = generate_splade_corpus(100, 123);
 
+    // Build (id, vector) pairs for batch insert in concurrent threads.
+    let all_docs: Arc<Vec<(u64, SparseVector)>> = Arc::new(
+        corpus
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, v)| (i as u64, v))
+            .collect(),
+    );
+
     let mut group = c.benchmark_group("sparse_concurrent_insert_search");
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(15));
 
-    // 16-thread benchmark: 8 inserting, 8 searching
+    // 16-thread benchmark: 8 inserting (batch), 8 searching.
+    // Insert threads use insert_batch_chunk to acquire the write lock once per
+    // 1000-doc chunk instead of 1000 times, matching production bulk-import usage.
     group.bench_function("16_threads_8_insert_8_search", |b| {
+        let all_docs = Arc::clone(&all_docs);
         b.iter(|| {
             let index = Arc::new(SparseInvertedIndex::new());
-            // Pre-load some data so searchers have something to find
-            for (i, vec) in corpus.iter().take(1000).enumerate() {
-                index.insert(i as u64, vec);
-            }
+            // Pre-load 1000 docs so search threads have something to find.
+            index.insert_batch_chunk(&all_docs[..1000]);
 
             let mut handles = Vec::with_capacity(16);
 
-            // 8 insert threads
+            // 8 insert threads — one batch per thread, no per-doc locking.
             for thread_id in 0..8_u64 {
                 let idx = Arc::clone(&index);
-                let docs = corpus.clone();
+                let docs = Arc::clone(&all_docs);
                 handles.push(std::thread::spawn(move || {
                     let start = (thread_id as usize * 1000) + 1000;
-                    let end = start + 1000;
-                    let end = end.min(docs.len());
-                    for i in start..end {
-                        idx.insert(i as u64, &docs[i % docs.len()]);
+                    let end = (start + 1000).min(docs.len());
+                    if start < end {
+                        idx.insert_batch_chunk(&docs[start..end]);
                     }
                 }));
             }
 
-            // 8 search threads
+            // 8 search threads.
             for thread_id in 0..8_u64 {
                 let idx = Arc::clone(&index);
                 let qs = queries.clone();
@@ -337,7 +323,6 @@ fn sparse_concurrent_benchmarks(c: &mut Criterion) {
                 h.join().expect("thread panicked");
             }
 
-            // Verify no deadlock occurred — index is still usable
             assert!(index.doc_count() > 0);
         });
     });
