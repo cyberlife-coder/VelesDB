@@ -128,6 +128,11 @@ const GT_K: u32 = 100;
 const BASE_COUNT: usize = 1_000_000;
 const QUERY_COUNT: usize = 10_000;
 
+/// Hard cap on bytes read per individual file download.
+/// `sift_base.fvecs` is ~492 MiB (1M × 516 B); 600 MiB gives ~22 % headroom.
+/// Prevents a misconfigured or adversarial mirror from exhausting disk space.
+const MAX_DOWNLOAD_BYTES: u64 = 600 * 1024 * 1024;
+
 // Fallback fingerprints used when the JSON sidecar is absent. The
 // official INRIA distribution does not publish checksums for the
 // uncompressed files; the recommended workflow is to run the
@@ -237,26 +242,26 @@ fn ensure_cached(cache_dir: &Path) -> Result<(), DatasetError> {
 /// Downloads the SIFT1M dataset, trying the tarball mirror first and falling
 /// back to individual file downloads from Hugging Face on failure.
 fn fetch_dataset(cache_dir: &Path) -> Result<(), DatasetError> {
-    match download_and_extract(cache_dir) {
-        Ok(()) => return Ok(()),
-        Err(e) => {
-            eprintln!(
-                "[sift1m] primary tarball download failed: {e}\n\
-                 [sift1m] Trying individual file download from Hugging Face mirror …\n\
-                 [sift1m] Tip: set VELESDB_SIFT1M_URL to override the tarball URL, or\n\
-                 [sift1m]     set VELESDB_SIFT1M_DIR to a directory with pre-extracted files.\n\
-                 [sift1m]     FTP (manual): ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz"
-            );
-        }
+    if let Err(e) = download_and_extract(cache_dir) {
+        eprintln!(
+            "[sift1m] primary tarball download failed: {e}\n\
+             [sift1m] Trying individual file download from Hugging Face mirror …\n\
+             [sift1m] Tip: set VELESDB_SIFT1M_URL to override the tarball URL, or\n\
+             [sift1m]     set VELESDB_SIFT1M_DIR to a directory with pre-extracted files.\n\
+             [sift1m]     FTP (manual): ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz"
+        );
+        return download_individual_files(cache_dir);
     }
-    download_individual_files(cache_dir)
+    Ok(())
 }
 
 /// Downloads each of the three SIFT1M files individually from the HF mirror.
 ///
-/// Skips files that are already present on disk to support partial-retry
-/// scenarios. Uses a 600-second timeout to accommodate the 516 MB base file
-/// on slow connections.
+/// Already-complete files (present on disk from a previous successful run) are
+/// skipped. Partial files written by a failed prior attempt are removed on
+/// error so the next retry starts clean. The reader is capped at
+/// [`MAX_DOWNLOAD_BYTES`] to prevent a misconfigured mirror from exhausting
+/// disk space. Uses a 600-second timeout to accommodate the 516 MB base file.
 fn download_individual_files(cache_dir: &Path) -> Result<(), DatasetError> {
     for filename in [BASE_FILE, QUERY_FILE, GT_FILE] {
         let dest = cache_dir.join(filename);
@@ -271,7 +276,11 @@ fn download_individual_files(cache_dir: &Path) -> Result<(), DatasetError> {
             .call()
             .map_err(|e| DatasetError::Download(format!("GET {url}: {e}")))?;
         let mut out = File::create(&dest)?;
-        io::copy(&mut resp.into_reader(), &mut out)?;
+        let copy_result = io::copy(&mut resp.into_reader().take(MAX_DOWNLOAD_BYTES), &mut out);
+        if let Err(e) = copy_result {
+            let _ = fs::remove_file(&dest); // remove partial file so retry re-downloads cleanly
+            return Err(DatasetError::Io(e));
+        }
     }
     Ok(())
 }
