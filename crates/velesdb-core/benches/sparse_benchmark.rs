@@ -112,11 +112,19 @@ fn generate_splade_corpus(n: usize, seed: u64) -> Vec<SparseVector> {
 }
 
 /// Build an index pre-loaded with a corpus.
+///
+/// Uses [`SparseInvertedIndex::insert_batch_chunk`] so the write lock is
+/// acquired once for the whole corpus, consistent with the production
+/// bulk-import pattern.
 fn build_index(corpus: &[SparseVector]) -> SparseInvertedIndex {
     let index = SparseInvertedIndex::new();
-    for (i, vec) in corpus.iter().enumerate() {
-        index.insert(i as u64, vec);
-    }
+    let docs: Vec<(u64, SparseVector)> = corpus
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, v)| (i as u64, v))
+        .collect();
+    index.insert_batch_chunk(&docs);
     index
 }
 
