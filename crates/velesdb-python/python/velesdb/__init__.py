@@ -418,9 +418,10 @@ class _PendingCollection:
     def _require_materialized(self, op: str) -> "Collection":
         """Return the materialised collection or raise a guiding error.
 
-        Dunder methods (``len()``, ``in``, ``with``, iteration) are resolved on
-        the type, not via :meth:`__getattr__`, so they must be forwarded
-        explicitly once the underlying collection exists.
+        Dunder methods (``len()``, ``in``, ``with``) are resolved on the type,
+        not via :meth:`__getattr__`, so they must be forwarded explicitly once
+        the underlying collection exists. (Mirrors :class:`Collection`, which is
+        not iterable — use ``scroll()`` to stream points.)
         """
         if self._collection is None:
             raise RuntimeError(
@@ -434,9 +435,6 @@ class _PendingCollection:
 
     def __contains__(self, point_id: Any) -> bool:
         return point_id in self._require_materialized("'in'")
-
-    def __iter__(self) -> Any:
-        return iter(self._require_materialized("iteration"))
 
     def __enter__(self) -> "Collection":
         return self._require_materialized("'with'").__enter__()
@@ -681,6 +679,7 @@ class VelesQL:
 __all__ = [
     "Database",
     "Collection",
+    "SearchOptions",
     "SearchResult",
     "FusionStrategy",
     "GraphStore",
