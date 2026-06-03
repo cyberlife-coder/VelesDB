@@ -281,4 +281,31 @@ impl Condition {
             | Self::GeoBbox(_) => false,
         }
     }
+
+    /// Returns `true` if this condition (or any nested sub-condition) compares
+    /// against a subquery value.
+    ///
+    /// Subqueries parse but are not yet executed; left unchecked they silently
+    /// evaluate to `NULL`, producing wrong or empty results.
+    #[must_use]
+    pub fn has_subquery(&self) -> bool {
+        self.leaf_has_subquery()
+            || match self {
+                Self::And(l, r) | Self::Or(l, r) => l.has_subquery() || r.has_subquery(),
+                Self::Group(inner) | Self::Not(inner) => inner.has_subquery(),
+                _ => false,
+            }
+    }
+
+    /// Returns `true` if a value compared directly in this condition (ignoring
+    /// nested logical operators) is a subquery.
+    fn leaf_has_subquery(&self) -> bool {
+        match self {
+            Self::Comparison(c) => c.value.is_subquery(),
+            Self::Between(c) => [&c.low, &c.high].into_iter().any(Value::is_subquery),
+            Self::In(c) => c.values.iter().any(Value::is_subquery),
+            Self::Contains(c) => c.values.iter().any(Value::is_subquery),
+            _ => false,
+        }
+    }
 }

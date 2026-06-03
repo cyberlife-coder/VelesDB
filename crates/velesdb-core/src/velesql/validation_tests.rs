@@ -1450,3 +1450,58 @@ fn test_validation_error_kind_message_invalid_let() {
         .message()
         .contains("LET"));
 }
+
+// ============================================================================
+// FU-2: Subqueries parse but are not executable (V010)
+//
+// A WHERE-clause subquery parses, then silently evaluates to NULL during
+// filtering (wrong/empty results, or a silently no-op UPDATE). Validation
+// must reject it instead.
+// ============================================================================
+
+fn validate_sql(sql: &str) -> Result<(), ValidationError> {
+    let query = super::Parser::parse(sql).expect("query should parse");
+    QueryValidator::validate(&query)
+}
+
+fn assert_subquery_rejected(sql: &str) {
+    let err = validate_sql(sql).expect_err("subquery WHERE clause should be rejected");
+    assert_eq!(err.kind, ValidationErrorKind::SubqueryNotExecutable);
+}
+
+#[test]
+fn test_scalar_subquery_in_where_is_rejected() {
+    assert_subquery_rejected(
+        "SELECT * FROM products WHERE price > (SELECT AVG(price) FROM products) LIMIT 10",
+    );
+}
+
+#[test]
+fn test_between_subquery_in_where_is_rejected() {
+    assert_subquery_rejected(
+        "SELECT * FROM docs WHERE id BETWEEN (SELECT AVG(id) FROM docs) AND 100 LIMIT 10",
+    );
+}
+
+#[test]
+fn test_subquery_nested_in_and_is_rejected() {
+    assert_subquery_rejected(
+        "SELECT * FROM docs WHERE category = 'tech' AND id > (SELECT AVG(id) FROM docs) LIMIT 10",
+    );
+}
+
+#[test]
+fn test_update_where_subquery_is_rejected() {
+    // Previously this returned "executed successfully" while matching nothing.
+    assert_subquery_rejected("UPDATE docs SET x = 1 WHERE id > (SELECT AVG(id) FROM docs)");
+}
+
+#[test]
+fn test_query_without_subquery_passes() {
+    assert!(validate_sql("SELECT * FROM docs WHERE price > 100 LIMIT 10").is_ok());
+}
+
+#[test]
+fn test_validation_error_kind_code_v010() {
+    assert_eq!(ValidationErrorKind::SubqueryNotExecutable.code(), "V010");
+}

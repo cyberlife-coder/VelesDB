@@ -4,7 +4,7 @@
 //! `ComplexityStats`) live in `validation_types.rs` to keep each file under
 //! the 500 NLOC limit.
 
-use super::ast::{ArithmeticExpr, Condition, OrderByExpr, Query, SelectColumns};
+use super::ast::{ArithmeticExpr, Condition, DmlStatement, OrderByExpr, Query, SelectColumns};
 use super::error::{ParseError, ParseErrorKind};
 
 // Re-export types so that existing `use crate::velesql::validation::*` paths
@@ -42,6 +42,10 @@ impl QueryValidator {
         query: &Query,
         config: &ValidationConfig,
     ) -> Result<(), ValidationError> {
+        // Subqueries parse but are not executable; reject them in any WHERE
+        // clause (SELECT, compound operands, or DML) before further validation.
+        reject_subqueries(query)?;
+
         // Non-SELECT statements: only check LET bindings.
         if !requires_select_validation(query) {
             return reject_let_on_non_select(query);
@@ -490,6 +494,52 @@ fn requires_select_validation(query: &Query) -> bool {
         && !query.is_train()
         && !query.is_introspection_query()
         && !query.is_admin_query()
+}
+
+/// Rejects subqueries appearing in any WHERE clause of the query.
+///
+/// Subqueries are parsed but not yet executed: left unchecked, a predicate like
+/// `WHERE price > (SELECT AVG(price) FROM products)` silently evaluates to NULL,
+/// yielding wrong/empty results (or a silently no-op UPDATE) instead of an error.
+fn reject_subqueries(query: &Query) -> Result<(), ValidationError> {
+    if where_clauses(query)
+        .into_iter()
+        .any(Condition::has_subquery)
+    {
+        return Err(ValidationError::new(
+            ValidationErrorKind::SubqueryNotExecutable,
+            None,
+            "subquery",
+            "Subqueries are parsed but not yet executed; rewrite the predicate without a subquery",
+        ));
+    }
+    Ok(())
+}
+
+/// Collects every WHERE clause in the query: the main SELECT, compound
+/// operands (UNION/INTERSECT/EXCEPT), and DML statements (UPDATE/DELETE/SELECT EDGES).
+fn where_clauses(query: &Query) -> Vec<&Condition> {
+    let mut clauses: Vec<&Condition> = query.select.where_clause.as_ref().into_iter().collect();
+    if let Some(ref compound) = query.compound {
+        clauses.extend(
+            compound
+                .operations
+                .iter()
+                .filter_map(|(_, stmt)| stmt.where_clause.as_ref()),
+        );
+    }
+    clauses.extend(dml_where_clauses(query.dml.as_ref()));
+    clauses
+}
+
+/// Returns the optional WHERE clauses carried by a DML statement.
+fn dml_where_clauses(dml: Option<&DmlStatement>) -> Vec<&Condition> {
+    match dml {
+        Some(DmlStatement::Update(u)) => u.where_clause.iter().collect(),
+        Some(DmlStatement::Delete(d)) => vec![&d.where_clause],
+        Some(DmlStatement::SelectEdges(s)) => s.where_clause.iter().collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Returns `Ok(())` if there are no LET bindings, otherwise rejects.
