@@ -208,7 +208,7 @@ db.clear_plan_cache()
 ```python
 # Get collection info
 info = collection.info()
-# {"name": "documents", "dimension": 768, "metric": "cosine", "storage_mode": "full", "point_count": 100}
+# {"name": "documents", "dimension": 768, "metric": "cosine", "storage_mode": "full", "point_count": 100, "metadata_only": False}
 
 # Insert/update vectors (with immediate flush)
 collection.upsert([
@@ -960,8 +960,8 @@ See [SERVER_SECURITY.md](../../docs/guides/SERVER_SECURITY.md) for server authen
 ## Requirements
 
 - Python 3.9+
-- No external dependencies (pure Rust engine)
-- Optional: NumPy for array support
+- NumPy >= 1.20 — a hard runtime dependency, installed automatically by `pip install velesdb`
+- No build toolchain required: prebuilt wheels bundle a self-contained Rust engine
 
 ## License
 
