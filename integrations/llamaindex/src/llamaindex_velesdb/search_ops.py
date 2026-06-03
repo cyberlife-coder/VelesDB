@@ -37,8 +37,10 @@ from llamaindex_velesdb.security import (
 # below still catch the fallback path regardless of runtime.
 try:
     from velesdb import VelesDBError as _VelesDBError
+    from velesdb import SearchOptions as _SearchOptions
 except (ImportError, AttributeError):  # pragma: no cover — optional dependency fallback
     _VelesDBError = Exception  # type: ignore[misc,assignment]
+    _SearchOptions = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +194,7 @@ class SearchOpsMixin:
                 query_embedding, quality=search_quality, top_k=k,
             )
 
-        return collection.search(query_embedding, top_k=k)
+        return collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
 
     def _run_sparse_search(
         self,
@@ -224,7 +226,7 @@ class SearchOpsMixin:
             search_kwargs["sparse_index_name"] = sparse_index_name
 
         try:
-            return collection.search(**search_kwargs)
+            return collection.search_request(_SearchOptions(**search_kwargs))
         except (RuntimeError, ValueError, _VelesDBError):
             # Since Wave 3 Commit 2, `VELES-015 SearchNotSupported` is
             # routed to `ValueError` and other sparse-search failures
@@ -239,7 +241,7 @@ class SearchOpsMixin:
                 UserWarning,
                 stacklevel=2,
             )
-            return collection.search(query_embedding, top_k=k)
+            return collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
 
     def query_with_score_threshold(
         self,
