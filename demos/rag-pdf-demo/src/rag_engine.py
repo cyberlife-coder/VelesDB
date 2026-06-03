@@ -317,7 +317,13 @@ class RAGEngine:
         # Build filter if specified
         filter_ = None
         if document_filter:
-            filter_ = {"document_name": {"eq": document_filter}}
+            filter_ = {
+                "condition": {
+                    "type": "eq",
+                    "field": "document_name",
+                    "value": document_filter,
+                }
+            }
 
         # Search VelesDB (with timing)
         t1 = time.perf_counter()

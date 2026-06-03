@@ -258,8 +258,14 @@ class TestAgentMemory:
 # =========================================================================
 
 
+@pytest.mark.slow
 class TestAgentMemoryPerformance:
-    """Performance tests: ensure latency stays within expected bounds."""
+    """Performance tests: ensure latency stays within expected bounds.
+
+    Marked ``slow``: these assert on wall-clock throughput/latency and are
+    sensitive to machine load, so they are excluded from the deterministic
+    gate (``pytest -m "not slow"``). Run explicitly with ``pytest -m slow``.
+    """
 
     def test_semantic_store_throughput(self, memory):
         """Semantic store must sustain >100 facts/sec (dim=4)."""

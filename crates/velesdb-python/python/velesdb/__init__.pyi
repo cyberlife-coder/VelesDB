@@ -132,7 +132,11 @@ class SearchOptions:
 
     Keyword-constructor style::
 
-        opts = SearchOptions(vector=my_embedding, top_k=20, filter={"lang": "en"})
+        opts = SearchOptions(
+            vector=my_embedding,
+            top_k=20,
+            filter={"condition": {"type": "eq", "field": "lang", "value": "en"}},
+        )
 
     Fluent builder style (each ``with_*`` method returns ``self``)::
 
@@ -142,12 +146,22 @@ class SearchOptions:
         vector: Dense query vector (list or numpy array).
         sparse_vector: Sparse query as dict[int, float] or scipy sparse.
         top_k: Max results to return (default: 10).
-        filter: Metadata pre-filter dict.
+        filter: Metadata pre-filter dict. Shape: ``{"condition": <cond>}`` where
+            ``<cond>`` is ``{"type": <op>, "field": ..., ...}``. Operators:
+            ``eq``/``neq``/``gt``/``gte``/``lt``/``lte`` (``field``+``value``),
+            ``in`` (``field``+``values``), ``contains`` (``field``+``value``),
+            ``like``/``ilike`` (``field``+``pattern``),
+            ``is_null``/``is_not_null`` (``field``),
+            ``array_contains`` (``field``+``value``),
+            ``array_contains_any``/``array_contains_all`` (``field``+``values``),
+            ``geo_distance``/``geo_bbox`` (geospatial), and ``and``/``or``
+            (``conditions``) / ``not`` (``condition``) for composition.
         sparse_index_name: Named sparse index to query.
         include_vectors: Include raw vectors in results (default: False).
 
     Example:
-        >>> opts = SearchOptions(vector=my_embedding, top_k=20, filter={"lang": "en"})
+        >>> cond = {"type": "eq", "field": "lang", "value": "en"}
+        >>> opts = SearchOptions(vector=my_embedding, top_k=20, filter={"condition": cond})
         >>> results = collection.search_request(opts)
     """
 
