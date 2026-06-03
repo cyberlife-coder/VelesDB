@@ -193,6 +193,36 @@ cargo run --bin uniffi-bindgen generate \
 | `analyze()` | Runs ANALYZE and returns fresh statistics |
 | `getStats()` | Returns the latest statistics snapshot |
 
+#### The `filterJson` shape
+
+The `filterJson` argument on `searchWithFilter`, `textSearchWithFilter`,
+`hybridSearchWithFilter`, and `multiQuerySearchWithFilter` is a JSON string using the
+same canonical filter shape as the core engine and REST API:
+`{"condition": {"type": <op>, "field": ..., "value"/"values"/"pattern"/"conditions": ...}}`.
+Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `like`, `ilike`,
+`is_null`, `is_not_null`, `array_contains`, `array_contains_any`, `array_contains_all`,
+`geo_distance`, `geo_bbox`, and `and`/`or`/`not` for composition.
+
+Swift:
+
+```swift
+let results = try collection.searchWithFilter(
+    vector: queryVector,
+    limit: 5,
+    filterJson: #"{"condition": {"type": "eq", "field": "category", "value": "tech"}}"#
+)
+```
+
+Kotlin:
+
+```kotlin
+val results = collection.searchWithFilter(
+    queryVector,
+    5,
+    """{"condition": {"type": "eq", "field": "category", "value": "tech"}}"""
+)
+```
+
 ### VelesSemanticMemory
 
 Agent memory for on-device AI. Stores knowledge facts as vectors with similarity search.
