@@ -1425,7 +1425,7 @@ LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
 -- Weighted fusion (70% vector, 30% graph/text)
 SELECT * FROM docs
-WHERE vector NEAR $semantic AND content MATCH $keywords
+WHERE vector NEAR $semantic AND content MATCH 'machine learning'
 LIMIT 20 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3)
 
 -- Dense + sparse hybrid with RSF
