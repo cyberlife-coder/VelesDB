@@ -117,7 +117,7 @@ print("=" * 60)
 user_question = "How do I fix a slow database connection in my Flask app?"
 single_vec = model.encode(user_question).tolist()
 
-results = collection.search(vector=single_vec, top_k=5)
+results = collection.search_request(velesdb.SearchOptions(vector=single_vec, top_k=5))
 print(f"\nQuery: \"{user_question}\"\n")
 for r in results:
     p = r["payload"]
@@ -136,15 +136,15 @@ q2 = model.encode("Flask SQLAlchemy session management setup").tolist()
 q3 = model.encode("profiling slow queries performance bottleneck").tolist()
 
 print("\nQuery 1 (database connections):")
-for r in collection.search(vector=q1, top_k=3):
+for r in collection.search_request(velesdb.SearchOptions(vector=q1, top_k=3)):
     print(f"  [{r['score']:.3f}] {r['payload']['title']}")
 
 print("\nQuery 2 (Flask patterns):")
-for r in collection.search(vector=q2, top_k=3):
+for r in collection.search_request(velesdb.SearchOptions(vector=q2, top_k=3)):
     print(f"  [{r['score']:.3f}] {r['payload']['title']}")
 
 print("\nQuery 3 (performance diagnostics):")
-for r in collection.search(vector=q3, top_k=3):
+for r in collection.search_request(velesdb.SearchOptions(vector=q3, top_k=3)):
     print(f"  [{r['score']:.3f}] {r['payload']['title']}")
 
 

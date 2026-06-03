@@ -35,13 +35,13 @@ docs.upsert([
 ])
 
 # 4. Ask: "what's most relevant to a tech query?"
-results = docs.search(vector=[1.0, 0.0, 0.0, 0.0], top_k=3)
+results = docs.search_request(velesdb.SearchOptions(vector=[1.0, 0.0, 0.0, 0.0], top_k=3))
 print('Query: "tech"')
 for r in results:
     print(f"  score={r['score']:.3f}  {r['payload']['title']}")
 
 # 5. Ask: "what's at the intersection of tech and music?"
-results = docs.search(vector=[0.7, 0.0, 0.7, 0.0], top_k=3)
+results = docs.search_request(velesdb.SearchOptions(vector=[0.7, 0.0, 0.7, 0.0], top_k=3))
 print('\nQuery: "tech + music"')
 for r in results:
     print(f"  score={r['score']:.3f}  {r['payload']['title']}")

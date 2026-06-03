@@ -168,7 +168,7 @@ GIL is released for the entire batch.
 # Slow: one GIL release + one HNSW traversal per query
 results = []
 for query in query_vectors:
-    results.append(collection.search(query.tolist(), top_k=10))
+    results.append(collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10)))
 
 # Fast: one GIL release, queries dispatched together
 searches = [{"vector": q.tolist(), "top_k": 10} for q in query_vectors]
@@ -234,7 +234,7 @@ import numpy as np
 collection = db.get_collection("docs")
 
 def search_one(query_vector: np.ndarray) -> list:
-    return collection.search(query_vector.tolist(), top_k=10)
+    return collection.search_request(velesdb.SearchOptions(vector=query_vector.tolist(), top_k=10))
 
 query_vectors = np.random.randn(100, 384).astype(np.float32)
 
@@ -268,13 +268,13 @@ import time
 
 # Warm up — results discarded
 for _ in range(5):
-    collection.search(query.tolist(), top_k=10)
+    collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
 
 # Measure
 times = []
 for _ in range(100):
     t0 = time.perf_counter_ns()
-    collection.search(query.tolist(), top_k=10)
+    collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
     times.append(time.perf_counter_ns() - t0)
 
 median_us = sorted(times)[len(times) // 2] / 1_000
@@ -314,7 +314,7 @@ returns nanoseconds and has the highest resolution available on the OS:
 import time
 
 t0 = time.perf_counter_ns()
-results = collection.search(query.tolist(), top_k=10)
+results = collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
 elapsed_ns = time.perf_counter_ns() - t0
 elapsed_us = elapsed_ns / 1_000
 
@@ -336,7 +336,7 @@ import numpy as np
 latencies_ns = []
 for _ in range(200):
     t0 = time.perf_counter_ns()
-    collection.search(query.tolist(), top_k=10)
+    collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
     latencies_ns.append(time.perf_counter_ns() - t0)
 
 arr = np.array(latencies_ns) / 1_000  # convert to µs
@@ -354,11 +354,11 @@ print(f"p99: {np.percentile(arr, 99):.1f} µs")
 ```python
 # Slow: per-element Python float -> f32 conversion at the FFI boundary
 query = [0.1, 0.2, 0.3, ...]  # list of Python floats
-results = collection.search(query, top_k=10)
+results = collection.search_request(velesdb.SearchOptions(vector=query, top_k=10))
 
 # Fast: float32 array, no per-element conversion
 query = np.array([0.1, 0.2, 0.3, ...], dtype=np.float32)
-results = collection.search(query, top_k=10)  # accepts numpy arrays directly
+results = collection.search_request(velesdb.SearchOptions(vector=query, top_k=10))  # accepts numpy arrays directly
 ```
 
 ### Antipattern 2 — `upsert()` or `upsert_bulk()` loop instead of `upsert_bulk_numpy()`
@@ -388,7 +388,7 @@ collection.upsert_bulk_numpy(vectors, ids)
 # Slow: N separate GIL release/acquire cycles, N separate Python calls
 results = []
 for query in query_batch:
-    results.append(collection.search(query.tolist(), top_k=10))
+    results.append(collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10)))
 
 # Fast: one GIL release, all traversals dispatched together
 searches = [{"vector": q.tolist(), "top_k": 10} for q in query_batch]
@@ -404,12 +404,12 @@ eliminates 31 redundant GIL release/acquire and argument-parsing cycles.
 # Unreliable: time.time() may have only millisecond resolution
 import time
 t0 = time.time()
-collection.search(query.tolist(), top_k=10)
+collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
 print(f"Latency: {(time.time() - t0) * 1e6:.1f} µs")  # may read 0 µs
 
 # Correct: perf_counter_ns() has nanosecond resolution
 t0 = time.perf_counter_ns()
-collection.search(query.tolist(), top_k=10)
+collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
 print(f"Latency: {(time.perf_counter_ns() - t0) / 1_000:.1f} µs")
 ```
 
@@ -418,17 +418,17 @@ print(f"Latency: {(time.perf_counter_ns() - t0) / 1_000:.1f} µs")
 ```python
 # Unreliable: first call includes cold-start overhead (page faults, branch predictor)
 t0 = time.perf_counter_ns()
-results = collection.search(query.tolist(), top_k=10)
+results = collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
 print(f"{(time.perf_counter_ns() - t0) / 1_000:.1f} µs")  # 3-10x the steady-state
 
 # Correct: warm up, then measure over many iterations
 for _ in range(5):
-    collection.search(query.tolist(), top_k=10)
+    collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
 
 times = [
     time.perf_counter_ns()
     - (t0 := time.perf_counter_ns())
-    or (collection.search(query.tolist(), top_k=10), time.perf_counter_ns() - t0)[1]
+    or (collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10)), time.perf_counter_ns() - t0)[1]
     for _ in range(100)
 ]
 ```
@@ -437,12 +437,12 @@ A cleaner version of the same pattern:
 
 ```python
 for _ in range(5):  # warm up
-    collection.search(query.tolist(), top_k=10)
+    collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
 
 times = []
 for _ in range(100):  # measure
     t0 = time.perf_counter_ns()
-    collection.search(query.tolist(), top_k=10)
+    collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
     times.append(time.perf_counter_ns() - t0)
 ```
 
