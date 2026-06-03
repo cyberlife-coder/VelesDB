@@ -378,6 +378,51 @@ jobs:
           python -m pytest tests/ -v --tb=short
 
   # ===========================================================================
+  # Python SDK Tests — velesdb-python (PyO3) binding functional suite.
+  #
+  # Until this job existed, crates/velesdb-python/tests/ was never run in CI:
+  # the python-integrations job above only exercises the LlamaIndex package.
+  # Runs on PRs too (no push-only gate) so binding regressions are caught
+  # before merge. The slow recall gate (test_recall_gate.py, -m slow) is
+  # excluded here — recall@10 >= 0.95 is enforced on a release wheel by
+  # perf-gate-e2e.yml; a debug build is sufficient for the functional suite.
+  # ===========================================================================
+  python-sdk-tests:
+    name: Python SDK Tests
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-pysdk-cargo-${{ hashFiles('Cargo.lock') }}
+
+      # PEP 517 source build (debug profile), identical to python-integrations.
+      # numpy is a hard runtime dependency of the binding's NumPy fast paths.
+      - name: Build & install velesdb-python from source
+        run: |
+          pip install --upgrade pip maturin numpy pytest
+          pip install ./crates/velesdb-python --force-reinstall
+
+      - name: Run velesdb-python functional tests
+        working-directory: crates/velesdb-python
+        run: python -m pytest tests/ -m "not slow" -p no:cacheprovider -q -W ignore::DeprecationWarning
+
+  # ===========================================================================
   # Coverage (main seulement)
   # ===========================================================================
   coverage:
@@ -616,7 +661,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, wasm-check, velesql-conformance, perf-smoke, bench-sift1m-compile, sonarcloud]
+    needs: [lint, test, security, wasm-check, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, sonarcloud]
     if: always()
     steps:
       - name: Check results
@@ -627,5 +672,6 @@ jobs:
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \
           [[ "${{ needs.perf-smoke.result }}" == "success" ]] && \
           [[ "${{ needs.bench-sift1m-compile.result }}" == "success" ]] && \
+          [[ "${{ needs.python-sdk-tests.result }}" == "success" ]] && \
           [[ "${{ needs.security.result }}" == "success" ]] && \
           echo "✅ CI passed" || { echo "❌ CI failed"; exit 1; }
