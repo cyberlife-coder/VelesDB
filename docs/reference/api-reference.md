@@ -567,10 +567,9 @@ FROM products AS p
 JOIN prices AS pr ON pr.product_id = p.id 
 WHERE pr.amount < 100
 
--- Hybrid search with fusion
+-- Hybrid search with fusion (USING FUSION is a trailing clause: after LIMIT)
 SELECT * FROM docs 
-USING FUSION(strategy='rrf', k=60) 
-LIMIT 20
+LIMIT 20 USING FUSION(strategy='rrf', k=60)
 
 -- Set operations
 SELECT * FROM active_users 

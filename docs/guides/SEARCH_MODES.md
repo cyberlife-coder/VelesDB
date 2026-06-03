@@ -342,17 +342,15 @@ La recherche hybride combine la recherche **dense** (embeddings semantiques) et 
 ### Exemple VelesQL
 
 ```sql
--- Hybrid search avec RRF
+-- Hybrid search avec RRF (USING FUSION est une clause finale : après LIMIT)
 SELECT * FROM products
 WHERE vector NEAR $embedding AND vector SPARSE_NEAR $bm25
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
 -- Hybrid search avec poids explicites
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
-LIMIT 20
+LIMIT 20 USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 ```
 
 ### Exemple REST API
