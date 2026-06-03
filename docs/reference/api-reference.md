@@ -228,6 +228,14 @@ Delete a point by ID.
 
 ## Search
 
+> **Point ID encoding.** Search, `search/ids`, and `scroll` responses serialize
+> point IDs as JSON **strings** (`"id": "1"`). A `u64` ID above
+> `Number.MAX_SAFE_INTEGER` (2^53 − 1) would silently lose precision when parsed
+> as a JavaScript number, so these payload-bearing result sets quote the ID.
+> Other endpoints — `GET /collections/:name/points/:id`, point insert, and the
+> VelesQL `POST /query` projected rows — return the ID in its native **integer**
+> form. Both string and number are accepted on input.
+
 ### POST /collections/:name/search
 
 Search for similar vectors.
@@ -270,7 +278,7 @@ returns `400`.
 {
   "results": [
     {
-      "id": 1,
+      "id": "1",
       "score": 0.98,
       "payload": {"title": "Hello World"}
     }
@@ -302,7 +310,7 @@ BM25 full-text search across document payloads.
 {
   "results": [
     {
-      "id": 1,
+      "id": "1",
       "score": 2.45,
       "payload": {"content": "Learn Rust programming"}
     }
@@ -339,7 +347,7 @@ Hybrid search combining vector similarity and BM25 text relevance using Reciproc
 {
   "results": [
     {
-      "id": 1,
+      "id": "1",
       "score": 0.0312,
       "payload": {"content": "Rust programming guide"}
     }
@@ -418,8 +426,8 @@ Execute multiple searches in a single request.
 ```json
 {
   "results": [
-    {"results": [{"id": 1, "score": 0.98, "payload": {...}}]},
-    {"results": [{"id": 2, "score": 0.95, "payload": {...}}]}
+    {"results": [{"id": "1", "score": 0.98, "payload": {...}}]},
+    {"results": [{"id": "2", "score": 0.95, "payload": {...}}]}
   ],
   "timing_ms": 2.34
 }
@@ -451,8 +459,8 @@ Execute multiple vector queries and merge results using Reciprocal Rank Fusion (
 ```json
 {
   "results": [
-    {"id": 1, "score": 0.0312, "payload": {...}},
-    {"id": 2, "score": 0.0298, "payload": {...}}
+    {"id": "1", "score": 0.0312, "payload": {...}},
+    {"id": "2", "score": 0.0298, "payload": {...}}
   ],
   "timing_ms": 3.45
 }
