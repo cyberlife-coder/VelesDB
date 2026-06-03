@@ -9,6 +9,7 @@ mod ddl_helpers;
 mod dml;
 mod dml_helpers;
 pub(crate) mod helpers;
+mod hints;
 mod introspection;
 mod match_parser;
 mod prescan;
@@ -114,7 +115,7 @@ impl Parser {
                 ParseErrorKind::SyntaxError,
                 position,
                 input.chars().take(50).collect::<String>(),
-                e.to_string(),
+                hints::enrich_message(input, position, &e.to_string()),
             )
         })?;
 
