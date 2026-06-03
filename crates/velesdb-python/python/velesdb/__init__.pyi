@@ -149,8 +149,12 @@ class SearchOptions:
         filter: Metadata pre-filter dict. Shape: ``{"condition": <cond>}`` where
             ``<cond>`` is ``{"type": <op>, "field": ..., ...}``. Operators:
             ``eq``/``neq``/``gt``/``gte``/``lt``/``lte`` (``field``+``value``),
-            ``in`` (``field``+``values``), ``like``/``ilike`` (``field``+``pattern``),
-            ``is_null``/``is_not_null`` (``field``), and ``and``/``or``
+            ``in`` (``field``+``values``), ``contains`` (``field``+``value``),
+            ``like``/``ilike`` (``field``+``pattern``),
+            ``is_null``/``is_not_null`` (``field``),
+            ``array_contains`` (``field``+``value``),
+            ``array_contains_any``/``array_contains_all`` (``field``+``values``),
+            ``geo_distance``/``geo_bbox`` (geospatial), and ``and``/``or``
             (``conditions``) / ``not`` (``condition``) for composition.
         sparse_index_name: Named sparse index to query.
         include_vectors: Include raw vectors in results (default: False).
