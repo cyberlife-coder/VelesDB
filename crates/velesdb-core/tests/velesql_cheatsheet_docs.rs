@@ -2,7 +2,7 @@
 //!
 //! The cheat sheet historically described a syntax the parser never accepted,
 //! which is the worst possible trap for a newcomer. This test extracts every
-//! fenced ```sql block from the cheat sheet and asserts each statement parses
+//! fenced sql code block from the cheat sheet and asserts each statement parses
 //! with the real grammar, so an example can never silently drift again.
 
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ fn cheatsheet_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/VELESQL_CHEATSHEET.md")
 }
 
-/// Collect the contents of every ```` ```sql ```` fenced block.
+/// Collect the contents of every fenced sql code block.
 fn sql_blocks(markdown: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut current: Option<String> = None;

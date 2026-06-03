@@ -7,11 +7,40 @@
 
 /// Keywords used for typo ("did you mean") suggestions at the failure point.
 const KEYWORDS: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "LIMIT", "OFFSET", "ORDER", "GROUP", "HAVING",
-    "INSERT", "UPSERT", "UPDATE", "DELETE", "INTO", "VALUES", "CREATE", "DROP",
-    "COLLECTION", "INDEX", "MATCH", "RETURN", "EXPLAIN", "ANALYZE", "TRUNCATE",
-    "FLUSH", "DESCRIBE", "DISTINCT", "JOIN", "UNION", "INTERSECT", "EXCEPT",
-    "BETWEEN", "LIKE", "ILIKE", "NEAR",
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "LIMIT",
+    "OFFSET",
+    "ORDER",
+    "GROUP",
+    "HAVING",
+    "INSERT",
+    "UPSERT",
+    "UPDATE",
+    "DELETE",
+    "INTO",
+    "VALUES",
+    "CREATE",
+    "DROP",
+    "COLLECTION",
+    "INDEX",
+    "MATCH",
+    "RETURN",
+    "EXPLAIN",
+    "ANALYZE",
+    "TRUNCATE",
+    "FLUSH",
+    "DESCRIBE",
+    "DISTINCT",
+    "JOIN",
+    "UNION",
+    "INTERSECT",
+    "EXCEPT",
+    "BETWEEN",
+    "LIKE",
+    "ILIKE",
+    "NEAR",
 ];
 
 /// Returns the identifier-like word starting at `position`, if any.
@@ -61,7 +90,7 @@ fn did_you_mean(input: &str, position: usize) -> Option<&'static str> {
 /// Builds an enriched message: plain-language lead + optional suggestion, then
 /// pest's original diagram on the following lines.
 pub(super) fn enrich_message(input: &str, position: usize, pest_message: &str) -> String {
-    let mut lead = if position == 0 {
+    let lead = if position == 0 {
         "VelesQL statements must start with a keyword such as SELECT, MATCH, \
          INSERT, UPSERT, UPDATE, DELETE, CREATE, DROP, or EXPLAIN"
             .to_string()
@@ -70,10 +99,10 @@ pub(super) fn enrich_message(input: &str, position: usize, pest_message: &str) -
     } else {
         "Unexpected syntax".to_string()
     };
-    if let Some(keyword) = did_you_mean(input, position) {
-        lead.push_str(&format!(". Did you mean `{keyword}`?"));
-    }
-    format!("{lead}.\n{pest_message}")
+    let suggestion = did_you_mean(input, position)
+        .map(|keyword| format!(". Did you mean `{keyword}`?"))
+        .unwrap_or_default();
+    format!("{lead}{suggestion}.\n{pest_message}")
 }
 
 #[cfg(test)]
