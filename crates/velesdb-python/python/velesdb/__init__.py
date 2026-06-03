@@ -415,6 +415,35 @@ class _PendingCollection:
             f"call upsert() with a vector to auto-detect dimension before calling '{name}'."
         )
 
+    def _require_materialized(self, op: str) -> "Collection":
+        """Return the materialised collection or raise a guiding error.
+
+        Dunder methods (``len()``, ``in``, ``with``, iteration) are resolved on
+        the type, not via :meth:`__getattr__`, so they must be forwarded
+        explicitly once the underlying collection exists.
+        """
+        if self._collection is None:
+            raise RuntimeError(
+                f"Collection '{self._name}' has no dimension yet — call upsert() "
+                f"with a vector to auto-detect dimension before using {op}."
+            )
+        return self._collection
+
+    def __len__(self) -> int:
+        return len(self._require_materialized("len()"))
+
+    def __contains__(self, point_id: Any) -> bool:
+        return point_id in self._require_materialized("'in'")
+
+    def __iter__(self) -> Any:
+        return iter(self._require_materialized("iteration"))
+
+    def __enter__(self) -> "Collection":
+        return self._require_materialized("'with'").__enter__()
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        return self._require_materialized("'with'").__exit__(exc_type, exc_value, traceback)
+
     def __repr__(self) -> str:
         return f"Collection(name={self._name!r}, dimension=<pending>)"
 
