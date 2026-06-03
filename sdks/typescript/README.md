@@ -349,7 +349,7 @@ Vector similarity search.
 ```typescript
 const results = await db.search('docs', queryVector, {
   k: 10,
-  filter: { category: 'tech' },
+  filter: { condition: { type: 'eq', field: 'category', value: 'tech' } },
   includeVectors: true
 });
 // Returns: SearchResult[] = [{ id, score, payload?, vector? }, ...]
@@ -362,7 +362,7 @@ Execute multiple search queries in parallel.
 ```typescript
 const batchResults = await db.searchBatch('docs', [
   { vector: queryA, k: 5 },
-  { vector: queryB, k: 10, filter: { type: 'article' } },
+  { vector: queryB, k: 10, filter: { condition: { type: 'eq', field: 'type', value: 'article' } } },
 ]);
 // Returns: SearchResult[][] (one result array per query)
 ```

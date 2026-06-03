@@ -56,7 +56,7 @@ def demo_cosine():
     ])
 
     query = [0.85, 0.75, 0.0, 0.0]
-    results = collection.search(vector=query, top_k=5)
+    results = collection.search_request(velesdb.SearchOptions(vector=query, top_k=5))
 
     print('\nQuery: "I want to learn about AI"')
     print("Cosine finds articles pointing in the same direction:\n")
@@ -97,7 +97,7 @@ def demo_euclidean():
     ])
 
     baseline = [22.0, 1013.0, 45.0, 0.3]
-    results = collection.search(vector=baseline, top_k=5)
+    results = collection.search_request(velesdb.SearchOptions(vector=baseline, top_k=5))
 
     print("\nBaseline: [22C, 1013hPa, 45%, 0.3g]")
     print("Finding closest readings to the baseline:\n")
@@ -137,7 +137,7 @@ def demo_dotproduct():
     ])
 
     user = [0.9, 0.8, 0.1, 0.0]
-    results = collection.search(vector=user, top_k=5)
+    results = collection.search_request(velesdb.SearchOptions(vector=user, top_k=5))
 
     print('\nUser profile: loves sci-fi + action')
     print("Dot product ranks by relevance AND confidence:\n")
@@ -184,7 +184,7 @@ def demo_hamming():
     ])
 
     new_upload = [1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1]
-    results = collection.search(vector=new_upload, top_k=5)
+    results = collection.search_request(velesdb.SearchOptions(vector=new_upload, top_k=5))
 
     print("\nNew image uploaded. Checking for duplicates...\n")
     for r in results:
@@ -232,7 +232,7 @@ def demo_jaccard():
     ])
 
     my_tastes = [1, 0, 1, 0, 1, 0, 0, 0, 0, 0]
-    results = collection.search(vector=my_tastes, top_k=5)
+    results = collection.search_request(velesdb.SearchOptions(vector=my_tastes, top_k=5))
 
     print("\nYou like: action, sci-fi, drama")
     print("Finding users with the most taste overlap:\n")

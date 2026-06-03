@@ -313,10 +313,10 @@ import velesdb
 db = velesdb.Database("./data")
 coll = db.get_collection("docs")
 
-results = coll.search(
+results = coll.search_request(velesdb.SearchOptions(
     sparse_vector={42: 0.8, 156: 0.3, 891: 0.5},
     top_k=10
-)
+))
 ```
 
 ---
@@ -372,11 +372,11 @@ Quand les deux champs `vector` et `sparse_vector` sont fournis, VelesDB execute 
 ### Exemple Python SDK
 
 ```python
-results = coll.search(
+results = coll.search_request(velesdb.SearchOptions(
     vector=[0.1, 0.2, 0.3, ...],
     sparse_vector={42: 0.8, 156: 0.3},
     top_k=10
-)
+))
 ```
 
 ### Execution parallele

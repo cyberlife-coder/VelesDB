@@ -69,9 +69,9 @@ coll.search(&query, 10)?;
 #### Python migration
 
 ```python
-# Before (still works, emits deprecation warning)
+# Before (legacy untyped collection)
 coll = db.get_collection("docs")
-results = coll.search(vector=query_vec, top_k=10)
+results = coll.search_request(SearchOptions(vector=query_vec, top_k=10))
 
 # After (preferred for graph collections)
 graph = db.create_graph_collection("knowledge", dimension=768)
@@ -284,7 +284,7 @@ Yes. All methods that accept vectors (`search`, `upsert`, etc.) accept both Pyth
 import numpy as np
 
 vec = np.random.randn(384).astype(np.float32)
-results = coll.search(vector=vec, top_k=10)
+results = coll.search_request(SearchOptions(vector=vec, top_k=10))
 ```
 
 ### Where are the Python examples?
