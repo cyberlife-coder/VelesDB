@@ -177,10 +177,12 @@ class VelesDBVectorStore(VectorStore):
 
         sparse_vector = kwargs.get("sparse_vector")
 
-        results = self._collection.search(
-            vector=query_embedding,
-            sparse_vector=sparse_vector,
-            top_k=k,
+        results = self._collection.search_request(
+            velesdb.SearchOptions(
+                vector=query_embedding,
+                sparse_vector=sparse_vector,
+                top_k=k,
+            )
         )
 
         docs_and_scores: list[tuple[Document, float]] = []

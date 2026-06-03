@@ -11,7 +11,7 @@ library. For new projects, use the native Python SDK instead:
     db = velesdb.Database("./my_data")
     col = db.get_or_create_collection("docs", dimension=768)
     col.upsert([{"id": 1, "vector": [...], "payload": {"title": "Doc"}}])
-    results = col.search([...], top_k=10)
+    results = col.search_request(velesdb.SearchOptions(vector=[...], top_k=10))
 
 See examples/langchain/hybrid_search.py and examples/llamaindex/hybrid_search.py
 for production-ready integration examples.
