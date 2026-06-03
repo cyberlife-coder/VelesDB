@@ -2558,6 +2558,34 @@ Parameters can be used for:
 
 ---
 
+## Execution Surfaces & CLI REPL Limitations
+
+VelesQL is accepted by the REST API (`velesdb-server`), the language SDKs, and
+the interactive CLI REPL (`velesdb-cli`). The grammar is identical across all
+three, but the **CLI REPL has two execution limitations** a newcomer should know:
+
+- **Parameterized vector search is not executed in the REPL.** A query whose
+  `WHERE` uses `vector NEAR $param` (or `MATCH ... $param`) prints
+  *"Vector search with $parameter requires REST API"* and returns **zero rows** —
+  the REPL has no way to bind an external vector. Use an **inline vector literal**
+  (`WHERE vector NEAR [0.1, 0.2, 0.3]`), a metadata-only query, or the REST API
+  with the parameter supplied in the request body.
+- **`MATCH` requires an active collection.** Run `.use <collection_name>` first;
+  otherwise the REPL reports *"MATCH queries require an active collection"*.
+
+These limitations are specific to the REPL; the REST API and SDKs execute both
+parameterized vector search and `MATCH` normally.
+
+### Divergences from standard SQL
+
+- **Table aliases require `AS`**: `FROM docs AS d`, not `FROM docs d` (the
+  no-`AS` form is intentionally rejected to avoid ambiguity with `JOIN`).
+- **`vector` and `score` are reserved keywords**, not free payload field names —
+  `vector NEAR ...` and `score` in aggregates/ordering refer to the query vector
+  and the computed similarity score.
+
+---
+
 ## Identifier Quoting
 
 ### Reserved Keywords
