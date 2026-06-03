@@ -600,32 +600,27 @@ The `USING FUSION` clause at query level combines results from multiple search s
 -- Dense vector + BM25 full-text combined with RRF
 SELECT * FROM documents
 WHERE vector NEAR $v AND content MATCH 'rust programming'
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10;
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60);
 
 -- Dense + sparse vector fusion with RSF
 SELECT * FROM documents
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-USING FUSION(strategy = 'rsf', dense_w = 0.7, sparse_w = 0.3)
-LIMIT 10;
+LIMIT 10 USING FUSION(strategy = 'rsf', dense_w = 0.7, sparse_w = 0.3);
 
 -- Weighted fusion
 SELECT * FROM docs
 WHERE vector NEAR $v
-USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3)
-LIMIT 10;
+LIMIT 10 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3);
 
 -- Maximum fusion (take best score)
 SELECT * FROM docs
 WHERE vector NEAR $v
-USING FUSION(strategy = 'maximum')
-LIMIT 10;
+LIMIT 10 USING FUSION(strategy = 'maximum');
 
 -- Default USING FUSION (defaults to RRF)
 SELECT * FROM docs
 WHERE vector NEAR $v
-USING FUSION
-LIMIT 10;
+LIMIT 10 USING FUSION;
 ```
 
 ### Graph MATCH Queries

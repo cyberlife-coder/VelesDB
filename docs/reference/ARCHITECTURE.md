@@ -427,10 +427,9 @@ WHERE status = 'active'
 -- Set operations
 SELECT * FROM active_users UNION SELECT * FROM archived_users
 
--- Hybrid fusion search
+-- Hybrid fusion search (USING FUSION is a trailing clause: after LIMIT)
 SELECT * FROM documents 
-USING FUSION(strategy='rrf', k=60)
-LIMIT 20
+LIMIT 20 USING FUSION(strategy='rrf', k=60)
 ```
 
 ## Performance Characteristics

@@ -78,6 +78,9 @@ SELECT title, similarity() AS score FROM docs
 WHERE vector NEAR $q
 ORDER BY similarity() DESC
 LIMIT 10;
+
+-- Query-time HNSW override (trade speed for recall) via WITH (after LIMIT)
+SELECT * FROM docs WHERE vector NEAR $q LIMIT 10 WITH (ef_search = 512);
 ```
 
 ---
@@ -101,6 +104,20 @@ LIMIT 10;
 
 -- Combine vector search with full-text MATCH
 SELECT * FROM docs WHERE vector NEAR $q AND content MATCH 'database' LIMIT 10;
+
+-- Hybrid dense + text with an explicit fusion strategy.
+-- USING FUSION(...) is a trailing clause: it comes AFTER LIMIT.
+SELECT * FROM docs
+WHERE vector NEAR $q AND content MATCH 'database'
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60);
+
+-- Weighted fusion (parser reads vector_weight / graph_weight, not a weights[] array)
+SELECT * FROM docs
+WHERE vector NEAR $q AND content MATCH 'database'
+LIMIT 10 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3);
+
+-- Inline NEAR_FUSED with a bare strategy string (no params)
+SELECT * FROM products WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'weighted' LIMIT 20;
 ```
 
 ---

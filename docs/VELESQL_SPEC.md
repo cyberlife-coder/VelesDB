@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | **Last Updated**: 2026-05-15 (VelesDB v1.15.0)
+**Version**: 3.10.0 | **Last Updated**: 2026-06-03 (VelesDB v1.16.0)
 
 ---
 
@@ -1408,36 +1408,35 @@ USING FUSION(strategy = 'rrf', k = 60)
 | Strategy | Description | Parameters | Use Case |
 |----------|-------------|------------|----------|
 | `rrf` | Reciprocal Rank Fusion | `k` (default: 60) | Balanced ranking (default) |
-| `weighted` | Weighted combination | `weights = [w1, w2]` | Custom importance |
+| `weighted` | Weighted combination | `vector_weight`, `graph_weight` | Custom importance |
 | `maximum` | Take highest score | (none) | Best match wins |
 | `rsf` | Reciprocal Score Fusion | `dense_weight`, `sparse_weight` | Dense + sparse blending |
 
 ### Examples
 
+> `USING FUSION(...)` is a **trailing clause**: it must come *after* `LIMIT`
+> (and `OFFSET`), not before it.
+
 ```sql
 -- Default RRF fusion
 SELECT * FROM docs
 WHERE vector NEAR $v AND content MATCH 'neural networks'
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
--- Weighted fusion (70% vector, 30% text)
+-- Weighted fusion (70% vector, 30% graph/text)
 SELECT * FROM docs
 WHERE vector NEAR $semantic AND content MATCH $keywords
-USING FUSION(strategy = 'weighted', weights = [0.7, 0.3])
-LIMIT 20
+LIMIT 20 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3)
 
 -- Dense + sparse hybrid with RSF
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 
 -- Maximum score fusion
 SELECT * FROM docs
 WHERE similarity(embedding, $q1) > 0.5
-USING FUSION(strategy = 'maximum')
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'maximum')
 ```
 
 ### FUSE BY (Planned Syntax)
@@ -1904,7 +1903,7 @@ significantly away from `0.1`.
 The CLI REPL provides the `.explain-analyze` command:
 
 ```
-velesdb> .explain-analyze SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+velesdb> .explain-analyze SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3] LIMIT 10
 
 Query Plan:
 └─ VectorSearch
@@ -2883,8 +2882,7 @@ SELECT * FROM products WHERE sku LIKE 'SKU-2024-%'
 -- Dense vector + BM25 text with RRF fusion
 SELECT * FROM docs
 WHERE vector NEAR $query AND content MATCH 'neural networks'
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
 -- With custom scoring weights
 LET score = 0.7 * vector_score + 0.3 * bm25_score
@@ -2897,13 +2895,11 @@ LIMIT 10
 -- Dense + sparse vector fusion
 SELECT * FROM docs
 WHERE vector NEAR $dense_query AND vector SPARSE_NEAR $sparse_query
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
--- Multi-vector fusion (text + image embeddings)
+-- Multi-vector fusion (text + image embeddings) — inline NEAR_FUSED form
 SELECT * FROM products
-WHERE vector NEAR_FUSED [$text_emb, $image_emb]
-USING FUSION(strategy = 'weighted')
+WHERE vector NEAR_FUSED [$text_emb, $image_emb] USING FUSION 'weighted'
 LIMIT 20
 ```
 
