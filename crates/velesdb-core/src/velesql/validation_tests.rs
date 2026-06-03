@@ -1497,6 +1497,15 @@ fn test_update_where_subquery_is_rejected() {
 }
 
 #[test]
+fn test_subquery_in_compound_operand_is_rejected() {
+    // The subquery sits in the UNION's right-hand SELECT, exercising the
+    // compound-operand branch of where_clauses().
+    assert_subquery_rejected(
+        "SELECT id FROM a WHERE x = 1 UNION SELECT id FROM b WHERE y > (SELECT AVG(z) FROM b)",
+    );
+}
+
+#[test]
 fn test_query_without_subquery_passes() {
     assert!(validate_sql("SELECT * FROM docs WHERE price > 100 LIMIT 10").is_ok());
 }

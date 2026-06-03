@@ -510,7 +510,8 @@ fn reject_subqueries(query: &Query) -> Result<(), ValidationError> {
             ValidationErrorKind::SubqueryNotExecutable,
             None,
             "subquery",
-            "Subqueries are parsed but not yet executed; rewrite the predicate without a subquery",
+            "Compute the value separately and pass it as a literal or $parameter, \
+             or rewrite the predicate without a subquery",
         ));
     }
     Ok(())
