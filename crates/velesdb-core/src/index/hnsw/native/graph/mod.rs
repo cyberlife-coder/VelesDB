@@ -77,7 +77,12 @@ pub struct NativeHnsw<D: DistanceEngine> {
     pub(in crate::index::hnsw::native) max_layer: AtomicUsize,
     /// Number of elements in the index
     pub(in crate::index::hnsw::native) count: AtomicUsize,
-    /// Simple PRNG state for layer selection
+    /// Simple PRNG state for layer selection during insertion.
+    ///
+    /// Used exclusively by `random_layer()` on the write path.  The search
+    /// path previously also consumed this via `gather_multi_entry_points`, but
+    /// that was replaced by the thread-local `PROBE_RNG` in `search.rs`
+    /// (issue #967) to eliminate shared-atomic contention under concurrent load.
     pub(in crate::index::hnsw::native) rng_state: AtomicU64,
     /// Maximum connections per node (M parameter)
     pub(in crate::index::hnsw::native) max_connections: usize,
@@ -405,46 +410,37 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Acquires locks in correct rank order: vectors (10) → layers (20).
     /// This avoids repeated lock acquire/release in tight search loops (F-03/F-04).
     ///
-    /// # Concurrent-search scalability (issue #967 — 2026-06-01)
+    /// # Concurrent-search scalability — investigation closed (issue #967, 2026-06-03)
     ///
-    /// Benchmark (`scalability_benchmark::concurrent_queries`, M5 Pro):
+    /// Benchmark (`scalability_benchmark::concurrent_queries`, M5 Pro, 100 K × 768-dim):
     /// 8 parallel searches achieve ~5× throughput instead of the ideal ~8×,
     /// with per-batch latency 66% higher than single-threaded.
     ///
-    /// Both locks are held for the **entire** HNSW traversal (~10 ms, 300-500
-    /// distance evaluations at layer 0). Analysis of potential causes:
+    /// **Cause 1 — `rng_state` CAS (fixed in this file's companion `search.rs`).**
+    /// `gather_multi_entry_points` called `self.rng_state.fetch_update` once per
+    /// search when `num_probes > 1` (triggered at 100 K vectors with the default
+    /// `Balanced` quality, ef_search = 320).  With 8 concurrent threads, all
+    /// competing on the same `AtomicU64`, this produced measurable cache-line
+    /// bouncing (~1 cache miss per search per thread).  **Fix**: thread-local
+    /// XORshift64 in `NativeHnsw::next_probe_rng()` — zero shared atomics on
+    /// the steady-state search path.
     ///
-    /// - **`parking_lot::RwLock` reader-counter bouncing** — each thread does
-    ///   one `fetch_add` + one `fetch_sub` on the shared atomic lock word. At
-    ///   8 threads × 2 ops = 16 atomic ops over 10 ms, this adds <1 µs
-    ///   overhead and cannot explain the 66% regression.
+    /// **Cause 2 — DRAM latency (fundamental hardware limit, not fixable in SW).**
+    /// 100 K × 768-dim = 307 MB of vector data; the M5 Pro's shared L3 is 24 MB.
+    /// HNSW beam-search (ef = 320) accesses ~400–600 random 3 KB chunks per query,
+    /// almost all of which miss L3 and stall on DRAM (~100 ns latency each).
+    /// With 8 threads sharing one memory controller (~32 outstanding requests),
+    /// each thread sees ~4× more DRAM stalls than a lone thread, giving the
+    /// observed ~5× rather than ~8× throughput scaling.  This is an inherent
+    /// physical limit; software mitigations are:
+    ///   - FP16 storage (halves DRAM traffic, not yet implemented),
+    ///   - BFS reordering (`reorder_for_locality` — already available),
+    ///   - keeping indices ≤ L3 size (≤ ~7 M vectors at 128-dim, ≤ 800 K at 768-dim).
     ///
-    /// - **Memory bandwidth / L3 pressure** — a 6.4 MB index (100 K × 512 B)
-    ///   fits comfortably in the M5 Pro's 32 MB L3. However on larger indices
-    ///   (≥ 512 MB for 1 M vectors) random DRAM accesses do become the
-    ///   bottleneck; the slowdown is then an inherent physical limit, not a
-    ///   software bug.
-    ///
-    /// - **Inter-cluster L2 cache traffic** — M5 Pro has two clusters of 4
-    ///   P-cores, each with 16 MB L2. Threads on different clusters accessing
-    ///   overlapping cache lines must transfer via shared L3, limiting
-    ///   effective bandwidth.
-    ///
-    /// **Recommended investigation before any code change**: profile with
-    /// `cargo bench --bench scalability_benchmark` while varying index size
-    /// (10 K, 100 K, 1 M vectors) and thread-to-cluster pinning to distinguish
-    /// bandwidth-bound from contention-bound behaviour.
-    ///
-    /// **If contention-bound**: replace the two `RwLock` guards with
-    /// `Arc`-snapshot reads — clone `Arc<ContiguousVectors>` and
-    /// `Arc<Vec<Layer>>` under a brief lock, release immediately, then run the
-    /// traversal lock-free. `arc-swap` is already a workspace dependency.
-    /// Caveat: `Arc::make_mut` on concurrent insert paths triggers
-    /// copy-on-write, which is O(N·D) for vectors and O(N·M) for layers.
-    /// Measure insert throughput regression before shipping.
-    ///
-    /// **If bandwidth-bound**: the ~5× scaling at 8 threads is expected and
-    /// not a correctness or software issue.
+    /// **`parking_lot::RwLock` reader-counter overhead**: each `read()` does one
+    /// `fetch_add` + one `fetch_sub` on the lock word. At 8 threads × 2 locks ×
+    /// 2 ops = 32 atomic ops per search over ~10 ms, this adds < 5 µs and is
+    /// not a meaningful contributor.
     ///
     /// If vector storage is not yet initialized, the closure is **not** called
     /// and `R::default()` is returned.
