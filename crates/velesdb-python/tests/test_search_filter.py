@@ -47,7 +47,7 @@ class TestSearchWithEqFilter:
         results = col.search(
             [1.0, 0.0, 0.0, 0.0],
             top_k=10,
-            filter={"must": [{"key": "category", "match": {"value": "A"}}]},
+            filter={"condition": {"type": "eq", "field": "category", "value": "A"}},
         )
 
         ids = {r["id"] for r in results}
@@ -63,7 +63,7 @@ class TestSearchWithEqFilter:
         results = col.search(
             [0.0, 1.0, 0.0, 0.0],
             top_k=10,
-            filter={"must": [{"key": "category", "match": {"value": "A"}}]},
+            filter={"condition": {"type": "eq", "field": "category", "value": "A"}},
         )
 
         for r in results:
@@ -83,7 +83,7 @@ class TestSearchWithGtFilter:
         results = col.search(
             [1.0, 0.0, 0.0, 0.0],
             top_k=10,
-            filter={"must": [{"key": "price", "range": {"gt": 50.0}}]},
+            filter={"condition": {"type": "gt", "field": "price", "value": 50.0}},
         )
 
         ids = {r["id"] for r in results}
@@ -99,7 +99,7 @@ class TestSearchWithGtFilter:
         results = col.search(
             [1.0, 0.0, 0.0, 0.0],
             top_k=10,
-            filter={"must": [{"key": "price", "range": {"gt": 999.0}}]},
+            filter={"condition": {"type": "gt", "field": "price", "value": 999.0}},
         )
 
         assert results == [], (
@@ -117,7 +117,7 @@ class TestSearchWithInFilter:
         results = col.search(
             [1.0, 0.0, 0.0, 0.0],
             top_k=10,
-            filter={"must": [{"key": "category", "match": {"any": ["A", "B"]}}]},
+            filter={"condition": {"type": "in", "field": "category", "values": ["A", "B"]}},
         )
 
         ids = {r["id"] for r in results}
@@ -132,7 +132,7 @@ class TestSearchWithInFilter:
         results = col.search(
             [0.0, 0.0, 1.0, 0.0],
             top_k=10,
-            filter={"must": [{"key": "category", "match": {"any": ["A", "B"]}}]},
+            filter={"condition": {"type": "in", "field": "category", "values": ["A", "B"]}},
         )
 
         for r in results:
@@ -153,10 +153,13 @@ class TestSearchWithCompoundAndFilter:
             [0.0, 1.0, 0.0, 0.0],
             top_k=10,
             filter={
-                "must": [
-                    {"key": "category", "match": {"value": "B"}},
-                    {"key": "price", "range": {"gt": 70.0}},
-                ]
+                "condition": {
+                    "type": "and",
+                    "conditions": [
+                        {"type": "eq", "field": "category", "value": "B"},
+                        {"type": "gt", "field": "price", "value": 70.0},
+                    ],
+                }
             },
         )
 
@@ -173,10 +176,13 @@ class TestSearchWithCompoundAndFilter:
             [1.0, 0.0, 0.0, 0.0],
             top_k=10,
             filter={
-                "must": [
-                    {"key": "category", "match": {"value": "A"}},
-                    {"key": "price", "range": {"gt": 999.0}},
-                ]
+                "condition": {
+                    "type": "and",
+                    "conditions": [
+                        {"type": "eq", "field": "category", "value": "A"},
+                        {"type": "gt", "field": "price", "value": 999.0},
+                    ],
+                }
             },
         )
 

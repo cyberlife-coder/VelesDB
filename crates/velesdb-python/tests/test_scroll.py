@@ -116,7 +116,8 @@ def test_scroll_with_filter_yields_only_matches(temp_db) -> None:
     ])
 
     kept_ids: list[int] = []
-    for batch in col.scroll(batch_size=4, filter={"category": "keep"}):
+    keep_filter = {"condition": {"type": "eq", "field": "category", "value": "keep"}}
+    for batch in col.scroll(batch_size=4, filter=keep_filter):
         kept_ids.extend(p["id"] for p in batch)
 
     assert sorted(kept_ids) == [1, 2, 3, 4, 5]
