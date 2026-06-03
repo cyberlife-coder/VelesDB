@@ -129,6 +129,7 @@ await db.upsertBatch('documents', [
 ]);
 
 // 5. Search for similar vectors
+const queryVector = new Float32Array(768).fill(0.1);
 const results = await db.search('documents', queryVector, { k: 5 });
 console.log(results);
 // [{ id: 'doc-1', score: 0.95, payload: { title: 'Hello World', ... } }, ...]
@@ -155,6 +156,7 @@ await db.init();
 // Same API as WASM backend
 await db.createCollection('products', { dimension: 1536 });
 await db.upsert('products', { id: 1, vector: embedding });
+const queryVector = new Float32Array(1536).fill(0.1);
 const results = await db.search('products', queryVector, { k: 10 });
 ```
 
@@ -575,7 +577,7 @@ const combined = await db.query('users',
 
 // Fusion strategy
 const fused = await db.query('docs',
-  "SELECT * FROM docs USING FUSION(strategy = 'rrf', k = 60) LIMIT 20"
+  "SELECT * FROM docs LIMIT 20 USING FUSION(strategy = 'rrf', k = 60)"
 );
 ```
 

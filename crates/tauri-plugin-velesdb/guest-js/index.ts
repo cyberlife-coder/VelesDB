@@ -597,7 +597,7 @@ export async function deletePoints(request: DeletePointsRequest): Promise<void> 
  *   collection: 'documents',
  *   searches: [
  *     { vector: embedding1, topK: 5 },
- *     { vector: embedding2, topK: 10, filter: { category: 'tech' } }
+ *     { vector: embedding2, topK: 10, filter: { condition: { type: 'eq', field: 'category', value: 'tech' } } }
  *   ]
  * });
  * responses.forEach((resp, i) => {

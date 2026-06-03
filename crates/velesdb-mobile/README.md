@@ -145,7 +145,7 @@ cargo run --bin uniffi-bindgen generate \
 
 | Method | Description |
 |--------|-------------|
-| `VelesDatabase(path)` | Opens or creates a database at the specified path (constructor) |
+| `VelesDatabase.open(path)` | Opens or creates a database at the specified path (named constructor — use `.open(...)`) |
 | `createCollection(name, dimension, metric)` | Creates a new vector collection |
 | `createCollectionWithStorage(name, dimension, metric, storageMode)` | Creates collection with quantized storage |
 | `createMetadataCollection(name)` | Creates a metadata-only collection (no vectors) |
