@@ -257,7 +257,9 @@ curl -X POST http://localhost:8080/collections/docs/points \
 
 curl -X POST http://localhost:8080/collections/docs/search \
   -d '{"vector": [0.9, 0.1, 0.0, 0.0], "top_k": 2}' -H "Content-Type: application/json"
-# [{"id":1,"score":0.995,"payload":{"title":"AI Intro","category":"tech"}}, ...]
+# {"results":[{"id":"1","score":0.994,"payload":{"title":"AI Intro","category":"tech"}}, ...]}
+# Results are wrapped in {"results":[...]} and point ids serialize as strings.
+# (The unified POST /query endpoint instead returns projected rows with integer ids.)
 ```
 
 </details>

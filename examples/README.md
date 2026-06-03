@@ -194,11 +194,10 @@ WHERE vector NEAR $query
   AND price < 100
 LIMIT 20
 
--- Hybrid search (vector + text)
+-- Hybrid search (vector + text) — USING FUSION is a trailing clause: after LIMIT
 SELECT * FROM docs
 WHERE vector NEAR $vec AND text MATCH 'machine learning'
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
 -- Aggregations
 SELECT category, COUNT(*), AVG(price)

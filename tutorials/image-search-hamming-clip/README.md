@@ -278,7 +278,7 @@ the lowest Hamming distance. This is a single HNSW search on binary vectors.
 SHORTLIST_K = 50  # Number of candidates for the Detective
 
 query_barcode = compute_barcode("query.jpg")
-candidates = bouncer.search(vector=query_barcode, top_k=SHORTLIST_K)
+candidates = bouncer.search_request(velesdb.SearchOptions(vector=query_barcode, top_k=SHORTLIST_K))
 
 # candidates is a list of dicts: [{"id": 42, "score": 12.0, "payload": {...}}, ...]
 # score = Hamming distance (number of differing bits out of 256)
@@ -301,7 +301,7 @@ FINAL_K = 10
 query_meaning = compute_meaning("query.jpg")
 
 # Search the full CLIP collection with enough headroom
-clip_results = detective.search(vector=query_meaning, top_k=SHORTLIST_K * 2)
+clip_results = detective.search_request(velesdb.SearchOptions(vector=query_meaning, top_k=SHORTLIST_K * 2))
 
 # Build a score lookup from CLIP results
 meaning_scores = {r["id"]: r["score"] for r in clip_results}
@@ -346,13 +346,13 @@ def find_similar(
     # Pass 1: The Bouncer
     query_barcode = compute_barcode(query_path)
     t0 = time.time()
-    candidates = bouncer.search(vector=query_barcode, top_k=shortlist_k)
+    candidates = bouncer.search_request(velesdb.SearchOptions(vector=query_barcode, top_k=shortlist_k))
     bouncer_ms = (time.time() - t0) * 1000
 
     # Pass 2: The Detective
     query_meaning = compute_meaning(query_path)
     t0 = time.time()
-    clip_results = detective.search(vector=query_meaning, top_k=shortlist_k * 2)
+    clip_results = detective.search_request(velesdb.SearchOptions(vector=query_meaning, top_k=shortlist_k * 2))
     meaning_scores = {r["id"]: r["score"] for r in clip_results}
 
     reranked = sorted(
@@ -429,7 +429,7 @@ pass1 = bouncer.query(
 shortlist_ids = [r["id"] for r in pass1]
 
 # Pass 2 -- search CLIP collection, then filter client-side
-pass2 = detective.search(vector=query_meaning, top_k=len(shortlist_ids) * 2)
+pass2 = detective.search_request(velesdb.SearchOptions(vector=query_meaning, top_k=len(shortlist_ids) * 2))
 shortlist_set = set(shortlist_ids)
 reranked = [r for r in pass2 if r["id"] in shortlist_set]
 reranked.sort(key=lambda x: x["score"], reverse=True)

@@ -159,10 +159,12 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         """
         sparse_vector = kwargs.get("sparse_vector")
 
-        results = self._collection.search(
-            vector=query.query_embedding,
-            sparse_vector=sparse_vector,
-            top_k=query.similarity_top_k,
+        results = self._collection.search_request(
+            velesdb.SearchOptions(
+                vector=query.query_embedding,
+                sparse_vector=sparse_vector,
+                top_k=query.similarity_top_k,
+            )
         )
 
         nodes: list[TextNode] = []

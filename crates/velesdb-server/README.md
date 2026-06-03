@@ -195,7 +195,7 @@ curl -X POST http://localhost:8080/collections/documents/search \
   -d '{
     "vector": [0.15, 0.25, ...],
     "top_k": 5,
-    "filter": {"type": "eq", "field": "category", "value": "tech"}
+    "filter": {"condition": {"type": "eq", "field": "category", "value": "tech"}}
   }'
 
 # Search with explicit search quality mode

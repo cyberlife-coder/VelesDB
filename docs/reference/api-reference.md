@@ -238,12 +238,30 @@ Search for similar vectors.
 |-------|------|----------|-------------|
 | vector | array[float] | Yes | Query vector |
 | top_k | integer | No | Number of results (default: 10) |
+| filter | object | No | Optional metadata filter (see shape below) |
 
 **Example:**
 ```json
 {
   "vector": [0.15, 0.25, 0.35, ...],
   "top_k": 5
+}
+```
+
+**Example with a metadata filter:**
+
+The `filter` uses the canonical VelesDB filter shape:
+`{"condition": {"type": <op>, "field": ..., "value"/"values"/"pattern"/"conditions": ...}}`.
+Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `like`, `ilike`,
+`is_null`, `is_not_null`, `array_contains`, `array_contains_any`, `array_contains_all`,
+`geo_distance`, `geo_bbox`, and `and`/`or`/`not` for composition. A malformed filter
+returns `400`.
+
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "top_k": 5,
+  "filter": {"condition": {"type": "eq", "field": "category", "value": "tech"}}
 }
 ```
 
@@ -567,10 +585,9 @@ FROM products AS p
 JOIN prices AS pr ON pr.product_id = p.id 
 WHERE pr.amount < 100
 
--- Hybrid search with fusion
+-- Hybrid search with fusion (USING FUSION is a trailing clause: after LIMIT)
 SELECT * FROM docs 
-USING FUSION(strategy='rrf', k=60) 
-LIMIT 20
+LIMIT 20 USING FUSION(strategy='rrf', k=60)
 
 -- Set operations
 SELECT * FROM active_users 
@@ -760,6 +777,6 @@ points = collection.get([1])
 collection.delete([1, 2, 3])
 
 # Search (supports numpy arrays)
-results = collection.search(vector=query_vector, top_k=10)
-results = collection.search(vector=np.array([...], dtype=np.float32), top_k=10)
+results = collection.search_request(velesdb.SearchOptions(vector=query_vector, top_k=10))
+results = collection.search_request(velesdb.SearchOptions(vector=np.array([...], dtype=np.float32), top_k=10))
 ```

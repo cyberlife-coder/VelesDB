@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | **Last Updated**: 2026-05-15 (VelesDB v1.15.0)
+**Version**: 3.10.0 | **Last Updated**: 2026-06-03 (VelesDB v1.16.0)
 
 ---
 
@@ -50,7 +50,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | DISTINCT modifier | Stable | 3.3 |
 | ILIKE case-insensitive pattern | Stable | 3.3 |
 | FROM / JOIN aliases | Stable (INNER JOIN) | 2.0 |
-| Scalar subqueries | Stable | 3.2 |
+| Scalar subqueries | Parsed only — **not executed** (see below) | 3.2 |
 | SQL comments (`--`) | Stable | 1.0 |
 | Identifier quoting (backtick, double-quote) | Stable | 1.3 |
 | SHOW COLLECTIONS | Stable | 3.4 |
@@ -873,18 +873,22 @@ SELECT * FROM logs WHERE created_at < NOW() - INTERVAL '30 days'
 
 ### Scalar Subqueries (v3.2+)
 
-Use a scalar subquery in WHERE to compare against a computed value from another
-(or the same) collection. The subquery must return exactly one row and one column.
+> ⚠️ **Parsed but not executed.** A scalar subquery in `WHERE` is accepted by the
+> parser (EPIC-039) but has **no executor support**: at evaluation time it
+> resolves to `NULL`, so the surrounding comparison silently yields empty or
+> incorrect results — no error is raised. This matches the
+> [conformance matrix](reference/VELESQL_CONFORMANCE_MATRIX.md) ("Parsed only").
+> Do not rely on subqueries in production; compute the value in your application
+> and pass it as a bind parameter instead. The syntax below documents what the
+> grammar accepts, not a working feature.
+
+A scalar subquery in WHERE is intended to compare against a computed value from
+another (or the same) collection, returning exactly one row and one column.
 
 ```sql
--- Filter where amount exceeds the average
+-- Parsed, but NOT executed — the subquery evaluates to NULL at runtime
 SELECT * FROM orders
 WHERE amount > (SELECT AVG(amount) FROM orders)
-
--- Compare against a value from another collection
-SELECT * FROM products
-WHERE price < (SELECT MAX(budget) FROM departments WHERE name = 'engineering')
-LIMIT 20
 ```
 
 A subquery is enclosed in parentheses and contains a full SELECT statement
@@ -1404,36 +1408,35 @@ USING FUSION(strategy = 'rrf', k = 60)
 | Strategy | Description | Parameters | Use Case |
 |----------|-------------|------------|----------|
 | `rrf` | Reciprocal Rank Fusion | `k` (default: 60) | Balanced ranking (default) |
-| `weighted` | Weighted combination | `weights = [w1, w2]` | Custom importance |
+| `weighted` | Weighted combination | `vector_weight`, `graph_weight` | Custom importance |
 | `maximum` | Take highest score | (none) | Best match wins |
 | `rsf` | Reciprocal Score Fusion | `dense_weight`, `sparse_weight` | Dense + sparse blending |
 
 ### Examples
 
+> `USING FUSION(...)` is a **trailing clause**: it must come *after* `LIMIT`
+> (and `OFFSET`), not before it.
+
 ```sql
 -- Default RRF fusion
 SELECT * FROM docs
 WHERE vector NEAR $v AND content MATCH 'neural networks'
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
--- Weighted fusion (70% vector, 30% text)
+-- Weighted fusion (70% vector, 30% graph/text)
 SELECT * FROM docs
-WHERE vector NEAR $semantic AND content MATCH $keywords
-USING FUSION(strategy = 'weighted', weights = [0.7, 0.3])
-LIMIT 20
+WHERE vector NEAR $semantic AND content MATCH 'machine learning'
+LIMIT 20 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3)
 
 -- Dense + sparse hybrid with RSF
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 
 -- Maximum score fusion
 SELECT * FROM docs
 WHERE similarity(embedding, $q1) > 0.5
-USING FUSION(strategy = 'maximum')
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'maximum')
 ```
 
 ### FUSE BY (Planned Syntax)
@@ -1900,7 +1903,7 @@ significantly away from `0.1`.
 The CLI REPL provides the `.explain-analyze` command:
 
 ```
-velesdb> .explain-analyze SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+velesdb> .explain-analyze SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3] LIMIT 10
 
 Query Plan:
 └─ VectorSearch
@@ -2554,6 +2557,34 @@ Parameters can be used for:
 
 ---
 
+## Execution Surfaces & CLI REPL Limitations
+
+VelesQL is accepted by the REST API (`velesdb-server`), the language SDKs, and
+the interactive CLI REPL (`velesdb-cli`). The grammar is identical across all
+three, but the **CLI REPL has two execution limitations** a newcomer should know:
+
+- **Parameterized vector search is not executed in the REPL.** A query whose
+  `WHERE` uses `vector NEAR $param` (or `MATCH ... $param`) prints
+  *"Vector search with $parameter requires REST API"* and returns **zero rows** —
+  the REPL has no way to bind an external vector. Use an **inline vector literal**
+  (`WHERE vector NEAR [0.1, 0.2, 0.3]`), a metadata-only query, or the REST API
+  with the parameter supplied in the request body.
+- **`MATCH` requires an active collection.** Run `.use <collection_name>` first;
+  otherwise the REPL reports *"MATCH queries require an active collection"*.
+
+These limitations are specific to the REPL; the REST API and SDKs execute both
+parameterized vector search and `MATCH` normally.
+
+### Divergences from standard SQL
+
+- **Table aliases require `AS`**: `FROM docs AS d`, not `FROM docs d` (the
+  no-`AS` form is intentionally rejected to avoid ambiguity with `JOIN`).
+- **`vector` and `score` are reserved keywords**, not free payload field names —
+  `vector NEAR ...` and `score` in aggregates/ordering refer to the query vector
+  and the computed similarity score.
+
+---
+
 ## Identifier Quoting
 
 ### Reserved Keywords
@@ -2708,7 +2739,7 @@ VelesQL returns structured errors:
 | BETWEEN | `column BETWEEN low AND high` | `WHERE price BETWEEN 50 AND 200` |
 | LIKE / ILIKE | `column [I]LIKE 'pattern'` | `WHERE title LIKE 'rust%'`, `WHERE name ILIKE '%rust%'` |
 | IS NULL / IS NOT NULL | `column IS [NOT] NULL` | `WHERE email IS NOT NULL` |
-| Scalar subquery | `column op (SELECT … LIMIT 1)` | `WHERE views > (SELECT AVG(views) FROM stats LIMIT 1)` |
+| Scalar subquery ⚠️ parsed only, not executed | `column op (SELECT … LIMIT 1)` | `WHERE views > (SELECT AVG(views) FROM stats LIMIT 1)` — evaluates to NULL at runtime |
 | Graph match predicate | `MATCH (...)` in WHERE | `WHERE MATCH (a:Person)-[:KNOWS]->(b) AND a.id = $u` |
 | GEO_DISTANCE | `GEO_DISTANCE(col, lat, lng) op meters` | `WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500` |
 | GEO_BBOX | `GEO_BBOX(col, lat_min, lng_min, lat_max, lng_max)` | `WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4)` |
@@ -2851,8 +2882,7 @@ SELECT * FROM products WHERE sku LIKE 'SKU-2024-%'
 -- Dense vector + BM25 text with RRF fusion
 SELECT * FROM docs
 WHERE vector NEAR $query AND content MATCH 'neural networks'
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
 -- With custom scoring weights
 LET score = 0.7 * vector_score + 0.3 * bm25_score
@@ -2865,13 +2895,11 @@ LIMIT 10
 -- Dense + sparse vector fusion
 SELECT * FROM docs
 WHERE vector NEAR $dense_query AND vector SPARSE_NEAR $sparse_query
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
--- Multi-vector fusion (text + image embeddings)
+-- Multi-vector fusion (text + image embeddings) — inline NEAR_FUSED form
 SELECT * FROM products
-WHERE vector NEAR_FUSED [$text_emb, $image_emb]
-USING FUSION(strategy = 'weighted')
+WHERE vector NEAR_FUSED [$text_emb, $image_emb] USING FUSION 'weighted'
 LIMIT 20
 ```
 

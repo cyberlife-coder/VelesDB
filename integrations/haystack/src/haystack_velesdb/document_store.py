@@ -535,10 +535,12 @@ class VelesDBDocumentStore:
             ValueError: When *filters* is structurally malformed.
         """
         veles_filter = _translate_haystack_filter(filters)
-        results: List[dict] = self._get_collection().search(
-            vector=query_embedding,
-            top_k=top_k,
-            filter=veles_filter,
+        results: List[dict] = self._get_collection().search_request(
+            velesdb.SearchOptions(
+                vector=query_embedding,
+                top_k=top_k,
+                filter=veles_filter,
+            )
         )
         return [_result_to_doc(r, scale_score=scale_score, metric=self._metric) for r in results]
 

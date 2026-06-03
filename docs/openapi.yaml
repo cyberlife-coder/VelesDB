@@ -2737,7 +2737,13 @@ components:
       - query
       properties:
         filter:
+          type: object
           description: Optional metadata filter.
+          example:
+            condition:
+              type: eq
+              field: category
+              value: tech
         query:
           type: string
           description: Text query for BM25 search.
@@ -2982,7 +2988,13 @@ components:
           description: 'Relative score fusion: weight for the dense (vector) branch.'
           example: 0.5
         filter:
+          type: object
           description: Optional metadata filter.
+          example:
+            condition:
+              type: eq
+              field: category
+              value: tech
         hit_weight:
           type: number
           format: float
@@ -3343,7 +3355,13 @@ components:
           example: 128
           minimum: 0
         filter:
+          type: object
           description: Optional metadata filter.
+          example:
+            condition:
+              type: eq
+              field: category
+              value: tech
         fusion:
           oneOf:
           - type: 'null'
@@ -3544,7 +3562,13 @@ components:
       - query
       properties:
         filter:
+          type: object
           description: Optional metadata filter.
+          example:
+            condition:
+              type: eq
+              field: category
+              value: tech
         query:
           type: string
           description: Text query for full-text search.

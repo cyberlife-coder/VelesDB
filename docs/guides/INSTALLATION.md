@@ -124,7 +124,7 @@ collection.upsert([
 ])
 
 # Search
-results = collection.search(vector=query_vector, top_k=10)
+results = collection.search_request(velesdb.SearchOptions(vector=query_vector, top_k=10))
 ```
 
 ---

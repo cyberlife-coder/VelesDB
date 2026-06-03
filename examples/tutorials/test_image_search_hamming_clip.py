@@ -88,7 +88,7 @@ def test_bouncer_hamming():
 
     # Search for beach_1
     query_path = os.path.join(PHOTO_DIR, "beach_1.jpg")
-    results = bouncer.search(vector=compute_barcode(query_path), top_k=5)
+    results = bouncer.search_request(velesdb.SearchOptions(vector=compute_barcode(query_path), top_k=5))
 
     assert len(results) == 5
     assert results[0]["payload"]["filename"] == "beach_1.jpg"
@@ -139,7 +139,7 @@ def test_detective_cosine(db, files):
         detective.upsert(i + 1, vector=emb, payload={"filename": fname, "path": path})
 
     query_path = os.path.join(PHOTO_DIR, "beach_1.jpg")
-    results = detective.search(vector=compute_meaning(query_path), top_k=5)
+    results = detective.search_request(velesdb.SearchOptions(vector=compute_meaning(query_path), top_k=5))
 
     assert len(results) == 5
     assert results[0]["payload"]["filename"] == "beach_1.jpg"
@@ -162,13 +162,13 @@ def test_combined_pipeline(bouncer, detective, compute_meaning_fn, files):
 
     # Pass 1: The Bouncer
     t0 = time.time()
-    fast_candidates = bouncer.search(vector=compute_barcode(query_path), top_k=8)
+    fast_candidates = bouncer.search_request(velesdb.SearchOptions(vector=compute_barcode(query_path), top_k=8))
     bouncer_ms = (time.time() - t0) * 1000
 
     # Pass 2: The Detective re-ranks
     query_meaning = compute_meaning_fn(query_path)
     t0 = time.time()
-    all_meanings = detective.search(vector=query_meaning, top_k=len(files))
+    all_meanings = detective.search_request(velesdb.SearchOptions(vector=query_meaning, top_k=len(files)))
     meaning_scores = {r["id"]: r["score"] for r in all_meanings}
 
     reranked = sorted(
@@ -206,7 +206,7 @@ def test_all_metrics():
     for metric in ["hamming", "jaccard", "euclidean", "cosine", "dot"]:
         col = db.get_or_create_collection(f"test_{metric}", dimension=4, metric=metric)
         col.upsert(1, vector=[0.1, 0.2, 0.3, 0.4], payload={"test": True})
-        results = col.search(vector=[0.1, 0.2, 0.3, 0.4], top_k=1)
+        results = col.search_request(velesdb.SearchOptions(vector=[0.1, 0.2, 0.3, 0.4], top_k=1))
         assert len(results) == 1, f"metric '{metric}' search failed"
         print(f"  [PASS] metric='{metric}'")
 
