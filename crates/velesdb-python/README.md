@@ -63,15 +63,22 @@ collection.upsert([
 ])
 
 # Search for similar vectors
-results = collection.search(
-    vector=[0.15, 0.25, ...],  # Query vector
-    top_k=5
+results = collection.search_request(
+    velesdb.SearchOptions(vector=[0.15, 0.25, ...], top_k=5)  # Query vector
 )
 
 for result in results:
     print(f"ID: {result['id']}, Score: {result['score']:.4f}")
     print(f"Payload: {result['payload']}")
 ```
+
+> **Search API.** `search_request(SearchOptions(...))` is the canonical search
+> entry point and is used throughout this README. The older multi-keyword
+> `collection.search(vector=..., top_k=..., filter=...)` still works but is
+> **deprecated since v1.15** (emits a `DeprecationWarning`, removed in v2.0).
+> `SearchOptions` accepts `vector`, `sparse_vector`, `top_k`, `filter`,
+> `sparse_index_name` and `include_vectors`, plus a fluent builder
+> (`SearchOptions().with_vector(v).with_top_k(10)`).
 
 ### End-to-End: Text to Search Results (RAG Pipeline)
 
@@ -104,7 +111,7 @@ collection.upsert([
 
 # 4. Search with a natural language query
 query_vector = model.encode("How does vector search work?").tolist()
-results = collection.search(vector=query_vector, top_k=2)
+results = collection.search_request(velesdb.SearchOptions(vector=query_vector, top_k=2))
 
 for r in results:
     print(f"Score: {r['score']:.4f} | {r['payload']['text']}")
@@ -134,7 +141,9 @@ vectors = embedder.embed(texts)
 collection.upsert([{"id": i, "vector": v, "payload": {"text": t}}
                    for i, (v, t) in enumerate(zip(vectors, texts))])
 
-results = collection.search(vector=embedder.embed(["fast search"])[0], top_k=2)
+results = collection.search_request(
+    velesdb.SearchOptions(vector=embedder.embed(["fast search"])[0], top_k=2)
+)
 ```
 
 `OpenAIEmbedder(model="text-embedding-3-small", *, api_key=..., base_url=..., dimensions=...)`
@@ -213,7 +222,7 @@ collection.upsert_bulk([
 ])
 
 # Vector search
-results = collection.search(vector=[...], top_k=10)
+results = collection.search_request(velesdb.SearchOptions(vector=[...], top_k=10))
 
 # Search with custom HNSW ef_search (trade speed for recall)
 results = collection.search_with_ef(vector=[...], top_k=10, ef_search=256)
@@ -271,11 +280,11 @@ results = collection.multi_query_search_ids(
 # [{"id": 1, "score": 0.85}, ...]
 
 # Hybrid dense + sparse search (fused with RRF k=60 by default)
-results = collection.search(
+results = collection.search_request(velesdb.SearchOptions(
     vector=[0.1, 0.2, ...],
     sparse_vector={0: 1.0, 42: 2.0},
-    top_k=10
-)  # uses RRF by default; see Sparse Vector Search section for details
+    top_k=10,
+))  # uses RRF by default; see Sparse Vector Search section for details
 
 # Text search (BM25)
 results = collection.text_search(query="machine learning", top_k=10)
@@ -380,17 +389,17 @@ collection.upsert([
 ])
 
 # Sparse-only search (no dense vector needed)
-results = collection.search(
+results = collection.search_request(velesdb.SearchOptions(
     sparse_vector={0: 1.0, 42: 2.0},
-    top_k=5
-)
+    top_k=5,
+))
 
 # Hybrid dense + sparse search (fused with RRF k=60 by default)
-results = collection.search(
+results = collection.search_request(velesdb.SearchOptions(
     vector=[0.15, 0.25, 0.35, 0.45],
     sparse_vector={0: 1.0, 42: 2.0},
-    top_k=10
-)
+    top_k=10,
+))
 
 # Named sparse indexes (e.g., separate SPLADE and BM25 sparse models)
 collection.upsert([
@@ -405,12 +414,12 @@ collection.upsert([
     }
 ])
 
-results = collection.search(
+results = collection.search_request(velesdb.SearchOptions(
     vector=[0.2, 0.3, 0.4, 0.5],
     sparse_vector={10: 1.5, 20: 0.8},
     top_k=10,
-    sparse_index_name="splade"  # query a specific named sparse index
-)
+    sparse_index_name="splade",  # query a specific named sparse index
+))
 ```
 
 Sparse vectors also work with scipy sparse objects:
@@ -420,7 +429,7 @@ from scipy.sparse import csr_matrix
 import numpy as np
 
 sparse_query = csr_matrix(np.array([[0.0, 1.5, 0.0, 0.8]]))
-results = collection.search(sparse_vector=sparse_query, top_k=5)
+results = collection.search_request(velesdb.SearchOptions(sparse_vector=sparse_query, top_k=5))
 ```
 
 ### Fusion Strategies
