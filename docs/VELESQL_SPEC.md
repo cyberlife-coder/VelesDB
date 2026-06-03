@@ -50,7 +50,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | DISTINCT modifier | Stable | 3.3 |
 | ILIKE case-insensitive pattern | Stable | 3.3 |
 | FROM / JOIN aliases | Stable (INNER JOIN) | 2.0 |
-| Scalar subqueries | Stable | 3.2 |
+| Scalar subqueries | Parsed only — **not executed** (see below) | 3.2 |
 | SQL comments (`--`) | Stable | 1.0 |
 | Identifier quoting (backtick, double-quote) | Stable | 1.3 |
 | SHOW COLLECTIONS | Stable | 3.4 |
@@ -873,18 +873,22 @@ SELECT * FROM logs WHERE created_at < NOW() - INTERVAL '30 days'
 
 ### Scalar Subqueries (v3.2+)
 
-Use a scalar subquery in WHERE to compare against a computed value from another
-(or the same) collection. The subquery must return exactly one row and one column.
+> ⚠️ **Parsed but not executed.** A scalar subquery in `WHERE` is accepted by the
+> parser (EPIC-039) but has **no executor support**: at evaluation time it
+> resolves to `NULL`, so the surrounding comparison silently yields empty or
+> incorrect results — no error is raised. This matches the
+> [conformance matrix](reference/VELESQL_CONFORMANCE_MATRIX.md) ("Parsed only").
+> Do not rely on subqueries in production; compute the value in your application
+> and pass it as a bind parameter instead. The syntax below documents what the
+> grammar accepts, not a working feature.
+
+A scalar subquery in WHERE is intended to compare against a computed value from
+another (or the same) collection, returning exactly one row and one column.
 
 ```sql
--- Filter where amount exceeds the average
+-- Parsed, but NOT executed — the subquery evaluates to NULL at runtime
 SELECT * FROM orders
 WHERE amount > (SELECT AVG(amount) FROM orders)
-
--- Compare against a value from another collection
-SELECT * FROM products
-WHERE price < (SELECT MAX(budget) FROM departments WHERE name = 'engineering')
-LIMIT 20
 ```
 
 A subquery is enclosed in parentheses and contains a full SELECT statement
@@ -2708,7 +2712,7 @@ VelesQL returns structured errors:
 | BETWEEN | `column BETWEEN low AND high` | `WHERE price BETWEEN 50 AND 200` |
 | LIKE / ILIKE | `column [I]LIKE 'pattern'` | `WHERE title LIKE 'rust%'`, `WHERE name ILIKE '%rust%'` |
 | IS NULL / IS NOT NULL | `column IS [NOT] NULL` | `WHERE email IS NOT NULL` |
-| Scalar subquery | `column op (SELECT … LIMIT 1)` | `WHERE views > (SELECT AVG(views) FROM stats LIMIT 1)` |
+| Scalar subquery ⚠️ parsed only, not executed | `column op (SELECT … LIMIT 1)` | `WHERE views > (SELECT AVG(views) FROM stats LIMIT 1)` — evaluates to NULL at runtime |
 | Graph match predicate | `MATCH (...)` in WHERE | `WHERE MATCH (a:Person)-[:KNOWS]->(b) AND a.id = $u` |
 | GEO_DISTANCE | `GEO_DISTANCE(col, lat, lng) op meters` | `WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500` |
 | GEO_BBOX | `GEO_BBOX(col, lat_min, lng_min, lat_max, lng_max)` | `WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4)` |
