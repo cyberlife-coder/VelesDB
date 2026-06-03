@@ -950,7 +950,7 @@ class TestSearchQualityLlamaIndex:
         assert calls[0]["top_k"] == 5
 
     def test_plain_search_called_when_quality_is_none(self, temp_dir):
-        """When search_quality is None, collection.search is called."""
+        """When search_quality is None, the canonical search_request is called."""
         from llama_index.core.vector_stores.types import VectorStoreQuery
 
         store = VelesDBVectorStore(path=temp_dir)
@@ -961,6 +961,9 @@ class TestSearchQualityLlamaIndex:
             def search(self, vector, top_k):
                 calls.append({"top_k": top_k})
                 return []
+
+            def search_request(self, opts):
+                return self.search(opts.vector, top_k=opts.top_k)
 
             def info(self):
                 return {"dimension": 4}

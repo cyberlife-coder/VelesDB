@@ -34,8 +34,10 @@ from langchain_velesdb.security import (
 # blocks below still catch the fallback path regardless of runtime.
 try:
     from velesdb import VelesDBError as _VelesDBError
+    from velesdb import SearchOptions as _SearchOptions
 except (ImportError, AttributeError):  # pragma: no cover — optional dependency fallback
     _VelesDBError = Exception  # type: ignore[misc,assignment]
+    _SearchOptions = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +154,7 @@ class SearchOpsMixin(MultiQueryOpsMixin):
             return collection.search_with_ef(query_embedding, top_k=k, ef_search=ef_search)
         if filter is not None:
             return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
-        return collection.search(query_embedding, top_k=k)
+        return collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
 
     def _run_sparse_search(
         self,
@@ -192,7 +194,7 @@ class SearchOpsMixin(MultiQueryOpsMixin):
             search_kwargs["filter"] = filter
 
         try:
-            return collection.search(**search_kwargs)
+            return collection.search_request(_SearchOptions(**search_kwargs))
         except (RuntimeError, TypeError, ValueError, _VelesDBError) as exc:
             # Since Wave 3 Commit 2, `VELES-015 SearchNotSupported` is
             # routed to `ValueError`, and other sparse-search failures
@@ -206,7 +208,7 @@ class SearchOpsMixin(MultiQueryOpsMixin):
             )
             if filter is not None:
                 return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
-            return collection.search(vector=query_embedding, top_k=k)
+            return collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
 
     def similarity_search(
         self,
