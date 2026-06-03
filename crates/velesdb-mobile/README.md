@@ -199,8 +199,9 @@ The `filterJson` argument on `searchWithFilter`, `textSearchWithFilter`,
 `hybridSearchWithFilter`, and `multiQuerySearchWithFilter` is a JSON string using the
 same canonical filter shape as the core engine and REST API:
 `{"condition": {"type": <op>, "field": ..., "value"/"values"/"pattern"/"conditions": ...}}`.
-Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `like`, `ilike`, `is_null`,
-`is_not_null`, `and`, `or`, `not`.
+Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `like`, `ilike`,
+`is_null`, `is_not_null`, `array_contains`, `array_contains_any`, `array_contains_all`,
+`geo_distance`, `geo_bbox`, and `and`/`or`/`not` for composition.
 
 Swift:
 

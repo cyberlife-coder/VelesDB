@@ -252,8 +252,10 @@ Search for similar vectors.
 
 The `filter` uses the canonical VelesDB filter shape:
 `{"condition": {"type": <op>, "field": ..., "value"/"values"/"pattern"/"conditions": ...}}`.
-Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `like`, `ilike`, `is_null`,
-`is_not_null`, `and`, `or`, `not`. A malformed filter returns `400`.
+Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `like`, `ilike`,
+`is_null`, `is_not_null`, `array_contains`, `array_contains_any`, `array_contains_all`,
+`geo_distance`, `geo_bbox`, and `and`/`or`/`not` for composition. A malformed filter
+returns `400`.
 
 ```json
 {
