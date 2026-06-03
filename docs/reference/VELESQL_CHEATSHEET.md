@@ -4,10 +4,11 @@
 > **VelesDB version:** 1.16.0
 > See the full specification in [`docs/VELESQL_SPEC.md`](../VELESQL_SPEC.md).
 
-> Every `sql` block below is verified against the real grammar by an automated
+> Every `sql` block below is **parsed** against the real grammar by an automated
 > test (`crates/velesdb-core/tests/velesql_cheatsheet_docs.rs`) — if an example
-> stops parsing, CI fails. Vectors are passed as bind parameters (`$v`); inline
-> vector literals like `[0.1, 0.2, 0.3]` are also accepted in `WHERE ... NEAR`.
+> stops parsing, CI fails. (The test guards syntax, not runtime execution.)
+> Vectors are passed as bind parameters (`$v`); inline vector literals like
+> `[0.1, 0.2, 0.3]` are also accepted in `WHERE ... NEAR`.
 
 ---
 
@@ -164,8 +165,9 @@ FROM items;
 ## Joins & set operations
 
 ```sql
--- INNER JOIN across collections (alias requires AS)
-SELECT d.name, t.tag FROM docs AS d JOIN tags AS t ON d.id = t.doc_id;
+-- INNER JOIN across collections (alias requires AS).
+-- The joined (right) table must be matched on its primary key `id`.
+SELECT d.name, t.tag FROM docs AS d JOIN tags AS t ON d.tag_id = t.id;
 
 -- Set operations
 SELECT * FROM a UNION SELECT * FROM b;
