@@ -357,4 +357,90 @@ mod tests {
         let mode = StorageModeArg::default();
         assert!(matches!(mode, StorageModeArg::Full));
     }
+
+    // =========================================================================
+    // Optional-value boolean flags: --include-vectors / --progress must default
+    // to true, accept an explicit value, AND still work bare (regression guard
+    // against the SetTrue definition that made them un-disableable no-ops).
+    // =========================================================================
+
+    fn parse_export_include_vectors(args: &[&str]) -> bool {
+        match Cli::try_parse_from(args)
+            .expect("export args should parse")
+            .command
+        {
+            Commands::Data {
+                action:
+                    DataCommands::Export {
+                        include_vectors, ..
+                    },
+            } => include_vectors,
+            _ => panic!("expected `data export`"),
+        }
+    }
+
+    fn parse_import_progress(args: &[&str]) -> bool {
+        match Cli::try_parse_from(args)
+            .expect("import args should parse")
+            .command
+        {
+            Commands::Data {
+                action: DataCommands::Import { progress, .. },
+            } => progress,
+            _ => panic!("expected `data import`"),
+        }
+    }
+
+    #[test]
+    fn test_include_vectors_defaults_true() {
+        assert!(parse_export_include_vectors(&[
+            "velesdb", "data", "export", "db", "coll"
+        ]));
+    }
+
+    #[test]
+    fn test_include_vectors_explicit_false_disables() {
+        assert!(!parse_export_include_vectors(&[
+            "velesdb",
+            "data",
+            "export",
+            "db",
+            "coll",
+            "--include-vectors",
+            "false",
+        ]));
+    }
+
+    #[test]
+    fn test_include_vectors_bare_flag_stays_true() {
+        assert!(parse_export_include_vectors(&[
+            "velesdb",
+            "data",
+            "export",
+            "db",
+            "coll",
+            "--include-vectors",
+        ]));
+    }
+
+    #[test]
+    fn test_progress_defaults_true() {
+        assert!(parse_import_progress(&[
+            "velesdb", "data", "import", "f.jsonl", "-c", "coll"
+        ]));
+    }
+
+    #[test]
+    fn test_progress_explicit_false_disables() {
+        assert!(!parse_import_progress(&[
+            "velesdb",
+            "data",
+            "import",
+            "f.jsonl",
+            "-c",
+            "coll",
+            "--progress",
+            "false",
+        ]));
+    }
 }

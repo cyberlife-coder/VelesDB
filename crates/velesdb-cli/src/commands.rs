@@ -231,8 +231,14 @@ pub enum DataCommands {
         #[arg(long, default_value = "1000")]
         batch_size: usize,
 
-        /// Show progress bar
-        #[arg(long, default_value = "true")]
+        /// Show progress bar (pass `--progress false` to disable)
+        #[arg(
+            long,
+            default_value_t = true,
+            num_args = 0..=1,
+            default_missing_value = "true",
+            action = clap::ArgAction::Set
+        )]
         progress: bool,
     },
 
@@ -248,8 +254,14 @@ pub enum DataCommands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Include vectors in export
-        #[arg(long, default_value = "true")]
+        /// Include vectors in export (pass `--include-vectors false` to omit them)
+        #[arg(
+            long,
+            default_value_t = true,
+            num_args = 0..=1,
+            default_missing_value = "true",
+            action = clap::ArgAction::Set
+        )]
         include_vectors: bool,
     },
 

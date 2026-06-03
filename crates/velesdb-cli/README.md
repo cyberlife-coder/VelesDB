@@ -325,9 +325,12 @@ velesdb data import embeddings.csv \
 
 # Export to JSON (vector collections only)
 velesdb data export ./data documents --output documents.json
+
+# Export payloads only (omit vectors)
+velesdb data export ./data documents --output meta.json --include-vectors false
 ```
 
-> **Note on `--include-vectors`:** Export always includes vectors and payloads. `--include-vectors` is accepted as a flag but currently has no off switch on the command line.
+> **Note on `--include-vectors`:** Vectors and payloads are included by default. Pass `--include-vectors false` to export payloads only (the bare `--include-vectors` form still means "include").
 
 **JSONL format for `data import`:**
 
@@ -359,14 +362,14 @@ Lines with mismatched vector dimensions are counted as errors and skipped.
 | `--id-column` | `id` | ID column name (CSV only) |
 | `--vector-column` | `vector` | Vector column name (CSV only) |
 | `--batch-size` | `1000` | Insertion batch size |
-| `--progress` | enabled | Show progress bar |
+| `--progress [true\|false]` | `true` | Show progress bar (`--progress false` to disable) |
 
 **`data export` flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-o, --output` | `<collection>.json` | Output file path |
-| `--include-vectors` | enabled | Include vector data in export |
+| `--include-vectors [true\|false]` | `true` | Include vector data (`--include-vectors false` to omit) |
 
 Export operates on **vector collections only**. Attempting to export a graph or metadata collection produces a "not found" error.
 
