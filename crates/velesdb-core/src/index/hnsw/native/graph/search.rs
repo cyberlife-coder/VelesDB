@@ -158,7 +158,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             current_ep = self.search_layer_single(query, current_ep, layer_idx);
         }
 
-        let entry_points = self.gather_multi_entry_points(current_ep, count, num_probes);
+        let entry_points = Self::gather_multi_entry_points(current_ep, count, num_probes);
 
         self.search_layer(
             query,
@@ -179,7 +179,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// bouncing proportional to the number of concurrent searchers.
     #[inline]
     fn gather_multi_entry_points(
-        &self,
         primary_ep: NodeId,
         count: usize,
         num_probes: usize,
