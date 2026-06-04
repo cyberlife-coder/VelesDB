@@ -8,7 +8,7 @@
 //!
 //! Run with: `cargo bench --bench overhead_benchmark`
 //!
-//! # WIS-45: Performance Diagnostic
+//! # Performance Diagnostic
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use velesdb_core::simd_native::{cosine_similarity_native, dot_product_native, euclidean_native};

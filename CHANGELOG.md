@@ -4446,12 +4446,12 @@ This change ensures VelesDB remains freely available while protecting against cl
   - Support for Python lists and NumPy arrays
   - Automatic `float64` → `float32` conversion
 
-- **NumPy Integration** (WIS-23):
+- **NumPy Integration**:
   - Direct support for `numpy.ndarray` in `upsert()` and `search()`
   - Zero-copy when possible for performance
   - Mixed Python list / NumPy array in same batch
 
-#### VelesQL CLI/REPL (WIS-19)
+#### VelesQL CLI/REPL
 - **Interactive REPL**: `velesdb-cli repl`
   - Syntax highlighting
   - Command history
@@ -4459,14 +4459,14 @@ This change ensures VelesDB remains freely available while protecting against cl
 - **Single Query Mode**: `velesdb-cli query "SELECT ..."`
 - **Database Info**: `velesdb-cli info ./data`
 
-#### LangChain Integration (WIS-30)
+#### LangChain Integration
 - **`langchain-velesdb` package**: LangChain VectorStore adapter
   - `VelesDBVectorStore` class
   - `add_texts()`, `similarity_search()`, `delete()`
   - `as_retriever()` for RAG pipelines
   - Full test suite (9 tests)
 
-#### Additional Distance Metrics (WIS-33)
+#### Additional Distance Metrics
 - **Hamming Distance**: For binary vectors and locality-sensitive hashing
   - Ultra-fast bit comparison (XOR + popcount)
   - Ideal for: image hashing, fingerprints, duplicate detection
@@ -4493,13 +4493,13 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### Performance Optimizations (WIS-44)
-- **Explicit SIMD** (WIS-47): 4.2x faster cosine similarity using `wide` crate
+#### Performance Optimizations
+- **Explicit SIMD**: 4.2x faster cosine similarity using `wide` crate
   - Cosine: 320ns → **76ns** (4.2x speedup)
   - Euclidean: 138ns → **47ns** (2.9x speedup)
   - Dot Product: 130ns → **45ns** (2.9x speedup)
 
-- **ColumnStore Filtering** (WIS-46): 122x faster metadata filtering
+- **ColumnStore Filtering**: 122x faster metadata filtering
   - Columnar storage for typed metadata (i64, f64, string, bool)
   - String interning for efficient string comparisons
   - RoaringBitmap for combining filters (AND/OR)
@@ -4511,7 +4511,7 @@ This change ensures VelesDB remains freely available while protecting against cl
   - Linux/macOS: `curl -fsSL .../install.sh | bash`
   - Windows: `irm .../install.ps1 | iex`
 
-- **OpenAPI/Swagger** (WIS-34): Full API documentation
+- **OpenAPI/Swagger**: Full API documentation
   - Swagger UI at `/swagger-ui`
   - OpenAPI spec at `/api-docs/openapi.json`
 
@@ -4537,7 +4537,7 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### Half-Precision Support (WIS-61)
+#### Half-Precision Support
 - **f16/bf16 vectors**: 50% memory reduction
   - `VectorPrecision` enum: F32, F16, BF16
   - `VectorData` with automatic conversions
@@ -4549,14 +4549,14 @@ This change ensures VelesDB remains freely available while protecting against cl
 | 768 (BERT)| 3.0 KB   | 1.5 KB   | 50%     |
 | 1536 (GPT)| 6.0 KB   | 3.0 KB   | 50%     |
 
-#### WASM Support (WIS-60)
+#### WASM Support
 - **`velesdb-wasm` crate**: Vector search in the browser
   - `VectorStore` with insert/search/remove
   - Cosine, Euclidean, Dot Product metrics
   - WASM SIMD128 optimizations via `wide` crate
   - JavaScript API via wasm-bindgen
 
-#### AVX-512 Optimizations (WIS-59)
+#### AVX-512 Optimizations
 - **wide32 processing**: 4x f32x8 accumulators for maximum ILP
   - 40-50% improvement on HNSW recall benchmarks
   - Automatic CPU feature detection
@@ -4575,7 +4575,7 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### BM25 Full-Text Search (WIS-55)
+#### BM25 Full-Text Search
 - **`Bm25Index`**: Full-text search with BM25 ranking algorithm
   - Tokenization with stopword removal
   - Term frequency / inverse document frequency scoring
@@ -4598,7 +4598,7 @@ This change ensures VelesDB remains freely available while protecting against cl
   - `POST /collections/{name}/search/text` - BM25 text search
   - `POST /collections/{name}/search/hybrid` - Hybrid search
 
-#### Tauri Desktop Plugin (WIS-67)
+#### Tauri Desktop Plugin
 - **`tauri-plugin-velesdb`**: Vector search in desktop applications
   - Full Tauri v2 compatibility
   - 9 commands: CRUD, search, text_search, hybrid_search, query
@@ -4650,7 +4650,7 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### TypeScript SDK (WIS-71)
+#### TypeScript SDK
 - **`@velesdb/sdk`**: Unified TypeScript client for browser and Node.js
   - WASM backend for client-side vector search
   - REST backend for server communication
@@ -4669,7 +4669,7 @@ This change ensures VelesDB remains freely available while protecting against cl
   const results = await db.search('docs', query, { k: 5 });
   ```
 
-#### IndexedDB Persistence (WIS-73)
+#### IndexedDB Persistence
 - **`export_to_bytes()`**: Serialize vector store to binary format
 - **`import_from_bytes()`**: Restore from binary data
 - Custom binary format with "VELS" magic number, versioning
@@ -4681,7 +4681,7 @@ This change ensures VelesDB remains freely available while protecting against cl
   | Export | **4479 MB/s** |
   | Import | **2943 MB/s** |
 
-#### Tauri RAG Tutorial (WIS-74)
+#### Tauri RAG Tutorial
 - **`examples/tauri-rag-app`**: Complete desktop RAG application
   - React + Tailwind UI
   - Document ingestion with chunking
@@ -4711,7 +4711,7 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### Performance Optimizations P1 (WIS-86/87)
+#### Performance Optimizations P1
 
 - **ContiguousVectors**: Cache-optimized memory layout
   - 64-byte aligned contiguous buffer for cache line efficiency

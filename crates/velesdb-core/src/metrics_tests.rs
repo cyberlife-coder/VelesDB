@@ -1,7 +1,7 @@
 //! Tests for metrics module (extracted for maintainability)
 
 // =============================================================================
-// TDD Tests - Written BEFORE implementation (following WIS-77 requirements)
+// TDD Tests - Written BEFORE implementation
 // =============================================================================
 
 use crate::metrics::*;
@@ -336,7 +336,7 @@ fn test_average_metrics_empty() {
 }
 
 // =========================================================================
-// Exact Search Recall Validation (WIS-77 requirement)
+// Exact Search Recall Validation
 // =========================================================================
 
 #[test]
@@ -395,7 +395,7 @@ fn test_recall_at_100() {
 }
 
 // =========================================================================
-// WIS-86: NDCG@k Tests
+// NDCG@k Tests
 // =========================================================================
 
 #[test]
@@ -469,7 +469,7 @@ fn test_ndcg_all_zeros() {
 }
 
 // =========================================================================
-// WIS-86: Hit Rate Tests
+// Hit Rate Tests
 // =========================================================================
 
 #[test]
@@ -530,7 +530,7 @@ fn test_hit_rate_empty() {
 }
 
 // =========================================================================
-// WIS-86: MAP (Mean Average Precision) Tests
+// MAP (Mean Average Precision) Tests
 // =========================================================================
 
 #[test]
@@ -593,7 +593,7 @@ fn test_map_empty() {
 }
 
 // =========================================================================
-// WIS-87: Latency Percentiles Tests
+// Latency Percentiles Tests
 // =========================================================================
 
 #[test]

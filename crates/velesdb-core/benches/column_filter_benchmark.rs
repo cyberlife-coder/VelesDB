@@ -2,7 +2,7 @@
 //!
 //! Run with: `cargo bench --bench column_filter_benchmark`
 //!
-//! # WIS-46: Column Store Performance Validation
+//! # Column Store Performance Validation
 
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_wrap)]

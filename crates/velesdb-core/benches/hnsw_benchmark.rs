@@ -350,7 +350,7 @@ fn bench_distance_metrics(c: &mut Criterion) {
     group.finish();
 }
 
-/// Validate recall ≥95% at different dimensions (WIS-12 acceptance criteria).
+/// Validate recall ≥95% at different dimensions (acceptance criteria).
 ///
 /// Recall = |HNSW results ∩ Brute-force results| / k
 fn bench_recall_validation(c: &mut Criterion) {

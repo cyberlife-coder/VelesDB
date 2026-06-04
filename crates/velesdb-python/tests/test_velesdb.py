@@ -212,7 +212,7 @@ class TestCollection:
 
 
 class TestNumpySupport:
-    """Tests for NumPy array support (WIS-23)."""
+    """Tests for NumPy array support."""
 
     @_SKIP_NO_NUMPY
     def test_upsert_with_numpy_vector(self, temp_db):
@@ -271,7 +271,7 @@ class TestNumpySupport:
 
 
 class TestTextSearch:
-    """Tests for BM25 text search (WIS-42)."""
+    """Tests for BM25 text search."""
 
     def test_text_search_basic(self, temp_db):
         """Test basic text search functionality."""
@@ -305,7 +305,7 @@ class TestTextSearch:
 
 
 class TestHybridSearch:
-    """Tests for hybrid search combining vector and text (WIS-43)."""
+    """Tests for hybrid search combining vector and text."""
 
     def test_hybrid_search_basic(self, temp_db):
         """Test basic hybrid search functionality."""
@@ -348,7 +348,7 @@ class TestHybridSearch:
 
 
 class TestBatchSearch:
-    """Tests for batch search functionality (WIS-44)."""
+    """Tests for batch search functionality."""
 
     def test_batch_search_basic(self, temp_db):
         """Test basic batch search with multiple queries."""
@@ -402,7 +402,7 @@ class TestBatchSearch:
 
 
 class TestStorageMode:
-    """Tests for storage mode (quantization) support (WIS-45)."""
+    """Tests for storage mode (quantization) support."""
 
     @pytest.mark.parametrize(
         "mode,expected_mode",
@@ -462,7 +462,7 @@ class TestStorageMode:
 
 
 class TestDistanceMetrics:
-    """Tests for all distance metrics including Hamming and Jaccard (WIS-46)."""
+    """Tests for all distance metrics including Hamming and Jaccard."""
 
     def test_hamming_metric(self, temp_db):
         """Test Hamming distance metric."""
