@@ -121,7 +121,7 @@ fn bench_brute_force(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark parallel insert (WIS-9: lock contention reduction)
+/// Benchmark parallel insert (lock contention reduction)
 ///
 /// Measures throughput of `insert_batch_parallel` which benefits from
 /// the `HnswMappings` refactoring (4 locks → 2 locks per insert).

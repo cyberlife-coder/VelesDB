@@ -72,7 +72,7 @@ fn test_metric_serialization() {
 }
 
 // =========================================================================
-// TDD Tests for Hamming Distance (WIS-33)
+// TDD Tests for Hamming Distance
 // =========================================================================
 
 #[test]
@@ -115,7 +115,7 @@ fn test_hamming_higher_is_better() {
 }
 
 // =========================================================================
-// TDD Tests for Jaccard Similarity (WIS-33)
+// TDD Tests for Jaccard Similarity
 // =========================================================================
 
 #[test]

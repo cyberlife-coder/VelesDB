@@ -164,7 +164,7 @@ name = "scalability_benchmark"
 harness = false
 
 [[bench]]
-name = "wis1_validation"
+name = "recall_perf_validation"
 harness = false
 
 [[bench]]

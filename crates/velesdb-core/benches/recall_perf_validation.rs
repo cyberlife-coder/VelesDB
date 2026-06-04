@@ -1,10 +1,10 @@
-//! WIS-1 Validation Benchmarks
+//! Recall and performance validation benchmarks
 //!
-//! Validates the acceptance criteria for WIS-1 (HNSW Index):
+//! Validates the HNSW index acceptance criteria:
 //! - Performance < 10ms for 100k vectors search
 //! - Recall > 95% on standard benchmarks
 //!
-//! Run with: `cargo bench --bench wis1_validation`
+//! Run with: `cargo bench --bench recall_perf_validation`
 //!
 //! ## Optimizations
 //!
@@ -140,9 +140,9 @@ fn calculate_recall(hnsw_results: &[ScoredResult], ground_truth: &[u64]) -> f64 
     }
 }
 
-/// WIS-1 Criterion 1: Performance < 10ms for 100k vectors search
+/// Criterion 1: Performance < 10ms for 100k vectors search
 fn bench_100k_search_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("wis1_100k_search");
+    let mut group = c.benchmark_group("100k_search");
     group.sample_size(20); // Reduced for stability
 
     let dim = 128;
@@ -190,10 +190,10 @@ fn bench_100k_search_latency(c: &mut Criterion) {
     group.finish();
 }
 
-/// WIS-1 Criterion 2: Recall > 95%
+/// Criterion 2: Recall > 95%
 /// Measures recall by comparing HNSW results to brute-force ground truth.
 fn bench_recall_measurement(c: &mut Criterion) {
-    let mut group = c.benchmark_group("wis1_recall");
+    let mut group = c.benchmark_group("recall");
     group.sample_size(10);
 
     let dim = 128;
@@ -242,7 +242,7 @@ fn bench_recall_measurement(c: &mut Criterion) {
     let avg_recall = total_recall / num_queries as f64;
     println!("\n🎯 Average Recall@{k}: {:.2}%", avg_recall * 100.0);
     println!(
-        "   {} WIS-1 Criterion: Recall > 95%\n",
+        "   {} Criterion: Recall > 95%\n",
         if avg_recall >= 0.95 { "✅" } else { "❌" }
     );
 
@@ -261,7 +261,7 @@ fn bench_recall_measurement(c: &mut Criterion) {
 /// Combined validation for Cosine and Euclidean metrics.
 /// Note: `DotProduct` excluded due to `hnsw_rs` constraint (requires non-negative dot products)
 fn bench_all_metrics(c: &mut Criterion) {
-    let mut group = c.benchmark_group("wis1_all_metrics");
+    let mut group = c.benchmark_group("all_metrics");
     group.sample_size(20);
 
     let dim = 128;
@@ -303,7 +303,7 @@ fn bench_all_metrics(c: &mut Criterion) {
 /// Benchmark recall on 100k vectors (validates HNSW params at scale).
 /// Note: This test is slower due to brute-force ground truth computation.
 fn bench_recall_100k(c: &mut Criterion) {
-    let mut group = c.benchmark_group("wis1_recall_100k");
+    let mut group = c.benchmark_group("recall_100k");
     group.sample_size(10);
 
     let dim = 128;
@@ -346,7 +346,7 @@ fn bench_recall_100k(c: &mut Criterion) {
         avg_recall * 100.0
     );
     println!(
-        "   {} WIS-1 Criterion: Recall > 95%\n",
+        "   {} Criterion: Recall > 95%\n",
         if avg_recall >= 0.95 { "✅" } else { "❌" }
     );
 
@@ -361,7 +361,7 @@ fn bench_recall_100k(c: &mut Criterion) {
 /// Benchmark performance across different vector dimensions.
 /// Tests if performance degrades significantly at higher dimensions.
 fn bench_dimensions(c: &mut Criterion) {
-    let mut group = c.benchmark_group("wis1_dimensions");
+    let mut group = c.benchmark_group("dimensions");
     group.sample_size(10);
 
     let num_vectors = 10_000;
