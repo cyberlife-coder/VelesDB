@@ -22,7 +22,7 @@ against the regression that would re-introduce the GIL-held
 behaviour (symptom: deadlock) or a borrow-checker refactor that
 breaks a method's contract (symptom: errors captured in the thread).
 
-Categories covered (per `.claude/rules/bdd-testing.md`):
+Categories covered:
 
 * Nominal:
     - `Database(path)` opens cleanly even under the new GIL-release

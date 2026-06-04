@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   created schemaless regardless of its value); drop it from any scripts —
   `velesdb collection create-graph <path> <name>` is unchanged in behaviour.
 
+### Changed
+- Public docs, tests, and SDK source comments no longer reference
+  maintainer-local engineering-rule files; they point to the public
+  `QUALITY_BAR.md` or describe the rule inline.
+
 ## [1.16.0] — 2026-05-29
 
 ### Summary

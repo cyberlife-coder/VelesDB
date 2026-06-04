@@ -8,8 +8,7 @@ the evidence behind the CHANGELOG claims without having to trust headline
 numbers.
 
 Future phases must use `python scripts/perf_phase_gate.py capture
---phase <ID> --stage before` before any code change, per
-[`.claude/rules/perf-phase-gate.md`](../../.claude/rules/perf-phase-gate.md).
+--phase <ID> --stage before` before any code change.
 
 ---
 
@@ -79,8 +78,7 @@ graph traversal (arXiv:2505.07621).
 - Bench: `crates/velesdb-core/benches/hnsw_benchmark.rs` and
   `prefetch_tuning_benchmark.rs` (prefetch stride tuning).
 - Recall preserved via the standing CI gate
-  `cargo test -p velesdb-core test_recall` (≥ 0.95 @ 10K,
-  see `.claude/rules/recall-quality-gate.md`).
+  `cargo test -p velesdb-core test_recall` (≥ 0.95 @ 10K).
 
 ---
 

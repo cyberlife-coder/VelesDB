@@ -53,7 +53,7 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
 
 **When this triggers:** any change to `index/hnsw/`, `simd_native/`, `quantization/`, `fusion/`, or result-conversion code in Python bindings.
 
-**See also:** [`.claude/rules/recall-quality-gate.md`](.claude/rules/recall-quality-gate.md) (internal rule), [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md).
+**See also:** [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md).
 
 ---
 
@@ -80,8 +80,6 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
 
 These are **not the same number** as the canonical 450 µs. The README explicitly disambiguates them since v1.13.3.
 
-**See also:** [`.claude/rules/perf-phase-gate.md`](.claude/rules/perf-phase-gate.md) (internal rule).
-
 ---
 
 ## Gate 3 — No `.unwrap()` in production code
@@ -105,8 +103,6 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 | `.unwrap()` | `.unwrap_or_else(\|\| ...)` | Default needs computation |
 
 **Lock acquisition:** we use `parking_lot::RwLock` / `Mutex` exclusively. These never poison, so `.read()` / `.write()` / `.lock()` return guards directly with no `.unwrap()`.
-
-**See also:** [`.claude/rules/rust-safety.md`](.claude/rules/rust-safety.md) (internal rule).
 
 ---
 
@@ -137,8 +133,6 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 - **Codacy Cloud (authoritative, blocking):** any PR introducing a function with CC > 8 fails the Codacy gate, blocks merge.
 - **Local CLI (lizard, threshold > 15):** advisory, used during development.
 - **Refactoring pattern:** Extract Function (Fowler #106) is the primary tool — if a fragment can be named, extract it.
-
-**See also:** [`.claude/rules/code-quality.md`](.claude/rules/code-quality.md), [`.claude/rules/rust-clean-code.md`](.claude/rules/rust-clean-code.md).
 
 ---
 
@@ -178,8 +172,6 @@ These are tracked but do not block release because they are SIMD intrinsics bloc
 - **Codacy Cloud:** server-side check, blocking.
 
 **Status:** enforced by Codacy Cloud on every PR; falling below the threshold blocks merge.
-
-**See also:** [`.claude/rules/no-duplication.md`](.claude/rules/no-duplication.md).
 
 ---
 
@@ -237,4 +229,4 @@ The quality bar is intentionally hard to lower. To change a threshold:
 - [`ROADMAP.md`](ROADMAP.md) — what we are building, when
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute under these gates
 - [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md) — current technical limitations
-- [`.claude/rules/`](.claude/rules/) — internal rules backing these gates (kept local; this public file is the externally-visible summary)
+- Detailed engineering rules backing these gates are kept maintainer-local; this public file is their externally-visible summary.

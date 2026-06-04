@@ -6,7 +6,7 @@
 //! - `POST /collections/{name}/vacuum`         — HNSW index vacuum
 //! - `POST /collections/{name}/compact`        — storage compaction
 //!
-//! Coverage per `.claude/rules/bdd-testing.md`:
+//! Coverage:
 //! - Nominal (~60%): happy paths, end-to-end behaviour observable from
 //!   the REST surface.
 //! - Edge (~20%): boundary conditions (empty payload, max-batch size,
