@@ -213,8 +213,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 // One-time per-thread seed: stride the global counter by a
                 // large odd constant so threads that initialise back-to-back
                 // start at well-separated points in the XORshift cycle.
-                s = PROBE_RNG_SEED_COUNTER
-                    .fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed);
+                s = PROBE_RNG_SEED_COUNTER.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed);
                 if s == 0 {
                     s = 1; // XORshift64 must not start at 0
                 }
@@ -649,7 +648,11 @@ mod probe_tests {
             assert_ne!(v, 0, "XORshift64 must never produce 0");
             seen.insert(v);
         }
-        assert_eq!(seen.len(), 64, "64 consecutive calls should all be distinct");
+        assert_eq!(
+            seen.len(),
+            64,
+            "64 consecutive calls should all be distinct"
+        );
     }
 
     /// Two threads seeded from the same global counter must diverge immediately.
@@ -673,6 +676,9 @@ mod probe_tests {
 
         let v1 = t1.join().expect("thread 1 panicked");
         let v2 = t2.join().expect("thread 2 panicked");
-        assert_ne!(v1, v2, "different threads must start with different RNG values");
+        assert_ne!(
+            v1, v2,
+            "different threads must start with different RNG values"
+        );
     }
 }
