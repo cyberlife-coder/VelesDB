@@ -32,6 +32,7 @@ pub struct EdgeQueryParams {
 pub struct TraverseRequest {
     /// Source node ID to start traversal from.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]
     pub source: u64,
     /// Traversal strategy: "bfs" or "dfs".
     #[serde(default = "default_strategy")]
@@ -123,12 +124,15 @@ pub struct EdgeResponse {
 pub struct AddEdgeRequest {
     /// Edge ID.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]
     pub id: u64,
     /// Source node ID.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]
     pub source: u64,
     /// Target node ID.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]
     pub target: u64,
     /// Edge label (relationship type).
     pub label: String,

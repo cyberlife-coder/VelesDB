@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   responses quote the ID to preserve `u64` values above `2^53-1`). Schema-only
   change, no behaviour change. A CI drift check now keeps the committed
   `docs/openapi.{json,yaml}` snapshots in sync with the generated spec.
+- OpenAPI spec now models request body `id` fields as `oneOf` integer or
+  string, matching the input contract (both forms are accepted; string avoids
+  JavaScript precision loss above `2^53-1`). Schema-only, no behaviour change.
 
 ### Removed
 - **CLI**: removed the non-functional `--schemaless` flag from
