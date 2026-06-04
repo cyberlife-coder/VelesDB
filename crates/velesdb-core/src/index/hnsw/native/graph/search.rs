@@ -217,12 +217,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                     s = 1; // XORshift64 must not start at 0
                 }
             }
-            // XORshift64 — same algorithm as NativeHnsw::random_layer()
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            cell.set(s);
-            s
+            let next = super::xorshift64(s);
+            cell.set(next);
+            next
         })
     }
 

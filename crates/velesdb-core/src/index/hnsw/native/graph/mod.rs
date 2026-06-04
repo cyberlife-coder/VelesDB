@@ -481,26 +481,35 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     fn random_layer(&self) -> usize {
         let old_state = self
             .rng_state
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut state| {
-                if state == 0 {
-                    state = 0x853c_49e6_748f_ea9b;
-                }
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-                Some(state)
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |state| {
+                let seed = if state == 0 {
+                    0x853c_49e6_748f_ea9b
+                } else {
+                    state
+                };
+                Some(xorshift64(seed))
             })
             .unwrap_or_else(|s| s);
-        let mut state = old_state;
-        if state == 0 {
-            state = 0x853c_49e6_748f_ea9b;
-        }
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        let uniform = (state as f64) / (u64::MAX as f64);
+        let seed = if old_state == 0 {
+            0x853c_49e6_748f_ea9b
+        } else {
+            old_state
+        };
+        let uniform = (xorshift64(seed) as f64) / (u64::MAX as f64);
         let uniform_safe = uniform.max(f64::MIN_POSITIVE);
         let level = (-uniform_safe.ln() * self.level_mult).floor() as usize;
         level.min(15)
     }
+}
+
+/// XORshift64 step (Marsaglia 2003): advances a non-zero PRNG `state` by one
+/// iteration with the canonical `13/7/17` shift triple. Shared by the
+/// insert-path `random_layer` (above) and the search-path `next_probe_rng`
+/// (in `search.rs`) so the generator stays identical across both paths.
+#[inline]
+fn xorshift64(mut state: u64) -> u64 {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    state
 }
