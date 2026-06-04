@@ -7,14 +7,6 @@
       "created_at": "2026-04-27T15:41:51Z",
       "repoId": 1118411810,
       "pullRequestNo": 672
-    },
-    {
-      "name": "claude",
-      "id": 81847,
-      "comment_id": 0,
-      "created_at": "2026-05-10T00:00:00Z",
-      "repoId": 1118411810,
-      "pullRequestNo": 763
     }
   ]
 }

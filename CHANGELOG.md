@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public docs, tests, and SDK source comments no longer reference
   maintainer-local engineering-rule files; they point to the public
   `QUALITY_BAR.md` or describe the rule inline.
+- Removed an unused CLA automation-bot signer and a vestigial branch-name
+  pattern from the PR-governance allowlist.
 
 ## [1.16.0] — 2026-05-29
 
@@ -127,7 +129,7 @@ The CI gate cleanup work (45 commits since v1.14.4) is the largest of any minor 
 - **`docs/sdk/ts/README.md` clarifies `sparseIndexName` vs `sparseSearchNamed`** ([#793](https://github.com/cyberlife-coder/VelesDB/pull/793)). REST backend supports both; WASM silently drops `sparseIndexName` and throws `wasmNotSupported` on `sparseSearchNamed`. Previously implicit; now explicit in JSDoc and README.
 - **`QUALITY_BAR.md` and `ARCHITECTURE.md` v1.13.2-frozen snapshots dereferenced** ([#789](https://github.com/cyberlife-coder/VelesDB/pull/789)). Counts of `unsafe` blocks, lock sites, etc. now point at the live CI verifier output instead of being hand-edited per release.
 - **`CONTRIBUTING.md` quickstart fixed** ([#787](https://github.com/cyberlife-coder/VelesDB/pull/787)): leaked WSL local path removed, placeholder clone URL replaced with the real `cyberlife-coder/VelesDB` URL.
-- **`CLAUDE.md` and `.claude/` gitignored** ([#786](https://github.com/cyberlife-coder/VelesDB/pull/786)). Author-local maintainer config no longer surfaces in the public repo.
+- **Maintainer-local author config gitignored** ([#786](https://github.com/cyberlife-coder/VelesDB/pull/786)). It no longer surfaces in the public repo.
 - **Roadmap consolidated** ([#792](https://github.com/cyberlife-coder/VelesDB/pull/792), closes [#689](https://github.com/cyberlife-coder/VelesDB/issues/689)). Hardware-accelerator backlog (GPU expansion beyond CUDA, FPGA exploration, Apple Neural Engine) collapsed into a single Horizon-3 entry with measurable decision criteria.
 
 ### Fixed
@@ -144,7 +146,7 @@ The CI gate cleanup work (45 commits since v1.14.4) is the largest of any minor 
 ### CI / Tooling
 
 - **Bumped GitHub Actions versions**: `actions/checkout 5 → 6` ([#751](https://github.com/cyberlife-coder/VelesDB/pull/751)), `actions/setup-node 6.3 → 6.4` ([#767](https://github.com/cyberlife-coder/VelesDB/pull/767)), `Swatinem/rust-cache 2.8.2 → 2.9.1` ([#769](https://github.com/cyberlife-coder/VelesDB/pull/769)), `softprops/action-gh-release 2.2 → 3.0` ([#771](https://github.com/cyberlife-coder/VelesDB/pull/771)), `pypa/gh-action-pypi-publish 1.12 → 1.14` ([#749](https://github.com/cyberlife-coder/VelesDB/pull/749)).
-- **CLA Assistant: claude bot added to signed contributors** ([12931cec](https://github.com/cyberlife-coder/VelesDB/commit/12931cec)) — unblocks future automated review comments.
+- **CLA Assistant: automation bot added to signed contributors** ([12931cec](https://github.com/cyberlife-coder/VelesDB/commit/12931cec)) — unblocks future automated review comments.
 - **`examples/react-wasm-search` Vite 7.3 + esbuild CVE remediation** ([#800](https://github.com/cyberlife-coder/VelesDB/pull/800)). Closes the moderate `GHSA-67mh-4wv8-2f99` esbuild dev-server CVE on the example toolchain; dropped the unused `vite-plugin-top-level-await` plugin (-30% bundle size). Supersedes Dependabot's [#798](https://github.com/cyberlife-coder/VelesDB/pull/798) / [#799](https://github.com/cyberlife-coder/VelesDB/pull/799) (Vite 8 incompatible with `@vitejs/plugin-react` v4).
 
 ### Refactor
@@ -207,7 +209,7 @@ Quality-of-life + correctness patch closing the post-v1.14.2 audit. Two **runtim
 - **`scripts/bump-version.ps1` and `scripts/check-version-sync.py` extended with 14 new entries + 6 new readers** so every drift listed in the v1.14.2 audit is auto-rewritten on the next release and verified by the gate. New readers: `yaml_openapi`, `ts_sdk_banner`, `roadmap_current`, `doc_guide_version_header`, `doc_last_updated_version`, `md_title_version`, `cargo_pin`. Total tracked: **37 checks across 36 unique files** in the verifier (was 22) — `docs/guides/CONFIGURATION.md` is now checked by two readers (TOML code-block header + markdown banner) since the file carries both. Bumper covers **35 manifests + Cargo workspace** (was 22). Both gates idempotent at v1.14.3 (`bump-version.ps1 -Version 1.14.3 -DryRun` reports `0 file(s) would be updated`). The `TARGETS` data structure in `check-version-sync.py` was changed from a `dict` to a list of `(path, format)` tuples — Devin caught a duplicate-key bug on the first revision where Python silently dropped the second `CONFIGURATION.md` entry, killing the TOML-header check; the list-of-tuples form makes per-file multi-reader coverage explicit and unambiguous.
 - **`scripts/check-version-sync.py` README-banner gap closed** (PR #728). Earlier post-v1.14.2 audit caught that `crates/velesdb-server/README.md` and `crates/velesdb-python/README.md` were tracked by `bump-version.ps1` but not by the verifier. Two new readers added (`doc_health_snippet` reused for the server README, new `doc_version_badge` for the Python README's shields.io banner). The two scripts still differ on two intentional entries (`sdks/typescript/package-lock.json` is only in the verifier — `npm install` regenerates it from `package.json`; `crates/velesdb-wasm/pkg/package.json` is only in the bumper — `wasm-pack build` regenerates it on every release), but the manually-tracked set now matches.
 - **`CONTRIBUTING.md` release recipe target count** updated from `17` (stale since v1.14.0) to `37 checks must align`. The CHANGELOG entry for v1.14.2 (which incorrectly claimed "21 targets") was corrected in the same PR.
-- **`.claude/rules/release-checklist.md` extended** with a new "Pre-Tag — MANDATORY Factual & Zero-Friction Audit" section (4 piliers: factualité, zero-friction, standards, vérification automatisée). Codifies the user-empathy audit that found the MSI fiction, the `__version__` constants drift, and the 11 doc banner stamps. Triggered automatically on every release request via the new `feedback_release_zero_friction_factual.md` memory entry.
+- **Release checklist extended** with a new "Pre-Tag — MANDATORY Factual & Zero-Friction Audit" section (4 piliers: factualité, zero-friction, standards, vérification automatisée). Codifies the user-empathy audit that found the MSI fiction, the `__version__` constants drift, and the 11 doc banner stamps. Triggered automatically on every release request via the new `feedback_release_zero_friction_factual.md` memory entry.
 
 ## [1.14.2] — 2026-05-01
 
@@ -513,7 +515,7 @@ restoration to keep the v1.13.x series fully backward-compatible.
 - **Tests**: `crates/velesdb-server/tests/admin_endpoints_bdd_tests.rs`
   with 13 nominal + edge + negative scenarios covering the three new
   endpoints and the delete -> vacuum -> compact lifecycle (mandatory
-  per `.claude/rules/bdd-testing.md`).
+  per the project BDD testing conventions).
 
 ### Changed
 
