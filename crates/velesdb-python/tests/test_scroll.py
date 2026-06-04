@@ -6,7 +6,7 @@ Wave 3 wraps the core call in `py.allow_threads(...)` so that two
 Python threads scrolling two different collections can progress in
 parallel instead of being serialised through the GIL.
 
-Categories covered (per `.claude/rules/bdd-testing.md`):
+Categories covered:
 
 * Nominal (happy path):
     - Single-page scroll yields the full dataset in one batch.

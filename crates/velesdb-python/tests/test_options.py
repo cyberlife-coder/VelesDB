@@ -7,7 +7,7 @@ Covers:
 - VelesConfigOptions wrapping LimitsOptions
 - Negative paths: invalid values, wrong types, missing required kwargs
 
-Test categories follow `.claude/rules/bdd-testing.md`:
+Test categories:
 - Nominal (≥ 60%): happy-path construction + create_collection flow
 - Edge (≈ 20%): None fields, boundary values, defaults pass-through
 - Negative (≥ 20%): invalid types, breaking-change guardrails

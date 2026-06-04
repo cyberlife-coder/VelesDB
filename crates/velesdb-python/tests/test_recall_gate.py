@@ -2,7 +2,7 @@
 Recall quality gate — ensures search accuracy doesn't regress.
 
 Threshold: recall@10 >= 0.95 at 10K vectors for all distance metrics.
-See .claude/rules/recall-quality-gate.md for rationale.
+See QUALITY_BAR.md (Gate 1) for rationale.
 
 Run with: pytest tests/test_recall_gate.py -v
 Run slow tests only: pytest tests/test_recall_gate.py -m slow -v

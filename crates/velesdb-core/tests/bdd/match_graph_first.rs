@@ -22,7 +22,7 @@
 //!    `Database::execute_query` and verify the returned node bindings match
 //!    what a correct GraphFirst execution must yield.
 //!
-//! Coverage breakdown (per `.claude/rules/bdd-testing.md`):
+//! Coverage breakdown:
 //!
 //! | Category | Count | Share |
 //! |----------|-------|-------|

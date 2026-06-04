@@ -283,8 +283,8 @@ All 4 functions are **Extract Function** candidates. Prioritize `pipeline.rs:run
 
 ## Related Documentation
 
-- [code-quality.md](./.claude/rules/code-quality.md) — CC ≤ 8, NLOC limits
-- [rust-clean-code.md](./.claude/rules/rust-clean-code.md) — Extract Function, Strategy, Repository patterns
+- [QUALITY_BAR.md](../../QUALITY_BAR.md) — CC ≤ 8, NLOC limits
+- Refactoring patterns — Extract Function, Strategy, Repository
 - [CONCURRENCY_MODEL.md](./docs/CONCURRENCY_MODEL.md) — Lock ordering (relevant to config + pipeline synchronization)
 - [TDD_RULES.md](./docs/contributing/TDD_RULES.md) — Test strategy for refactoring
 
