@@ -248,7 +248,7 @@ velesdb collection create ./data my_vectors \
   --storage full
 
 # Create a graph collection
-velesdb collection create-graph ./data my_graph --schemaless
+velesdb collection create-graph ./data my_graph
 
 # Create a metadata-only collection (no vectors, no graph -- structured payloads only)
 velesdb collection create-metadata ./data my_metadata

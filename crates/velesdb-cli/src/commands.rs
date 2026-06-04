@@ -117,10 +117,6 @@ pub enum CollectionCommands {
 
         /// Collection name
         name: String,
-
-        /// Create with schemaless mode (any node/edge types accepted)
-        #[arg(long, default_value = "true")]
-        schemaless: bool,
     },
 
     /// Create a metadata-only collection (no vectors)
