@@ -246,6 +246,7 @@ pub struct UpsertPointsRequest {
 pub struct PointRequest {
     /// Point ID.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]
     pub id: u64,
     /// Vector data.
     pub vector: Vec<f32>,
@@ -265,6 +266,7 @@ pub struct PointRequest {
 pub struct StreamInsertRequest {
     /// Point ID.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]
     pub id: u64,
     /// Dense vector data.
     pub vector: Vec<f32>,

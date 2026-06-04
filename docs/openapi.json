@@ -2807,10 +2807,16 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Edge ID.",
-            "minimum": 0
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           },
           "label": {
             "type": "string",
@@ -2820,16 +2826,28 @@
             "description": "Edge properties."
           },
           "source": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Source node ID.",
-            "minimum": 0
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           },
           "target": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Target node ID.",
-            "minimum": 0
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           }
         }
       },
@@ -4418,10 +4436,16 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Point ID.",
-            "minimum": 0
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           },
           "payload": {
             "description": "Optional payload."
@@ -4894,10 +4918,16 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Point ID.",
-            "minimum": 0
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           },
           "payload": {
             "description": "Optional JSON payload (metadata)."
@@ -5071,10 +5101,16 @@
             "description": "Filter by relationship types (empty = all types)."
           },
           "source": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Source node ID to start traversal from.",
-            "minimum": 0
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           },
           "strategy": {
             "type": "string",
