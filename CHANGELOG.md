@@ -4755,15 +4755,20 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ---
 
-## [Unreleased]
+## Roadmap
 
-### Planned
-- LlamaIndex integration (WIS-66)
-- Prometheus /metrics endpoint (WIS-63)
-- Product Quantization (WIS-65)
-- Multi-tenancy (WIS-68)
-- API Authentication (WIS-69)
-- Starlight documentation site
+Community roadmap and timelines live in [`ROADMAP.md`](ROADMAP.md). LlamaIndex
+integration, the Prometheus `/metrics` endpoint, Product Quantization, and
+API-key authentication previously listed here have all shipped. The one item
+still genuinely pending is:
+
+- Unified documentation site (Astro/Starlight) — the reference docs currently
+  ship as Markdown under `docs/`.
+
+> Distributed replication, lock-free concurrent-WAL writes, and production
+> RBAC / multi-tenant isolation are **VelesDB Enterprise** features (a separate
+> product), not part of the open-source Community roadmap — see the
+> "Scope & boundaries" section of the README.
 
 [Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.16.0...HEAD
 [1.16.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.16.0
