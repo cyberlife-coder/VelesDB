@@ -156,8 +156,8 @@ Response:
 ```json
 {
   "results": [
-    {"id": 1, "score": 0.98, "payload": {"title": "Introduction to AI"}},
-    {"id": 2, "score": 0.85, "payload": {"title": "Machine Learning Guide"}}
+    {"id": "1", "score": 0.98, "payload": {"title": "Introduction to AI"}},
+    {"id": "2", "score": 0.85, "payload": {"title": "Machine Learning Guide"}}
   ]
 }
 ```

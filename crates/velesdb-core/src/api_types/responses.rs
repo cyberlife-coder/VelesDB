@@ -86,6 +86,7 @@ pub struct CollectionConfigResponse {
 pub struct SearchResultResponse {
     /// Point ID.
     #[serde(serialize_with = "serde_id::serialize_id_as_string")]
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub id: u64,
     /// Similarity score.
     pub score: f32,
@@ -128,6 +129,7 @@ pub struct IdScoreResult {
         serialize_with = "serde_id::serialize_id_as_string",
         deserialize_with = "serde_id::deserialize_id_from_string_or_number"
     )]
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub id: u64,
     /// Similarity score.
     pub score: f32,
@@ -355,6 +357,7 @@ pub struct ScrollPoint {
         serialize_with = "serde_id::serialize_id_as_string",
         deserialize_with = "serde_id::deserialize_id_from_string_or_number"
     )]
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub id: u64,
     /// Vector data.
     pub vector: Vec<f32>,

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- OpenAPI spec now types point `id` as `string` for `/search`, `/search/ids`,
+  `/scroll` and graph result endpoints, matching the on-the-wire format (these
+  responses quote the ID to preserve `u64` values above `2^53-1`). Schema-only
+  change, no behaviour change. A CI drift check now keeps the committed
+  `docs/openapi.{json,yaml}` snapshots in sync with the generated spec.
+
+### Removed
+- **CLI**: removed the non-functional `--schemaless` flag from
+  `collection create-graph`. The flag was a no-op (graphs were always
+  created schemaless regardless of its value); drop it from any scripts —
+  `velesdb collection create-graph <path> <name>` is unchanged in behaviour.
+
 ## [1.16.0] — 2026-05-29
 
 ### Summary
