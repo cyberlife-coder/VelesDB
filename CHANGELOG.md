@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change, no behaviour change. A CI drift check now keeps the committed
   `docs/openapi.{json,yaml}` snapshots in sync with the generated spec.
 
+### Removed
+- **CLI**: removed the non-functional `--schemaless` flag from
+  `collection create-graph`. The flag was a no-op (graphs were always
+  created schemaless regardless of its value); drop it from any scripts —
+  `velesdb collection create-graph <path> <name>` is unchanged in behaviour.
+
 ## [1.16.0] — 2026-05-29
 
 ### Summary
