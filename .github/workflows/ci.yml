@@ -286,6 +286,33 @@ jobs:
         run: cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
 
   # ===========================================================================
+  # OpenAPI Drift Check
+  # Regenerates the committed docs/openapi.{json,yaml} snapshots from the
+  # utoipa-derived schema and fails if they differ from what is checked in,
+  # so the spec can never silently drift from the code.
+  # ===========================================================================
+  openapi-drift:
+    name: OpenAPI Drift Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: "velesdb-ci-openapi"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      - name: Regenerate OpenAPI snapshots
+        run: cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --test-threads=1
+
+      - name: Check OpenAPI snapshots are up to date
+        run: git diff --exit-code docs/openapi.json docs/openapi.yaml
+
+  # ===========================================================================
   # Bench-sift1m Compile Check
   # Compiles (does NOT run) the SIFT1M bench and its unit tests with
   # `--features bench-sift1m` so API drift vs HnswIndex is caught on every
@@ -661,7 +688,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, wasm-check, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, sonarcloud]
+    needs: [lint, test, security, wasm-check, openapi-drift, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, sonarcloud]
     if: always()
     steps:
       - name: Check results
@@ -669,6 +696,7 @@ jobs:
           [[ "${{ needs.lint.result }}" == "success" ]] && \
           [[ "${{ needs.test.result }}" == "success" ]] && \
           [[ "${{ needs.wasm-check.result }}" == "success" ]] && \
+          [[ "${{ needs.openapi-drift.result }}" == "success" ]] && \
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \
           [[ "${{ needs.perf-smoke.result }}" == "success" ]] && \
           [[ "${{ needs.bench-sift1m-compile.result }}" == "success" ]] && \

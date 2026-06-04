@@ -3324,10 +3324,8 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Edge ID.",
-            "minimum": 0
+            "type": "string",
+            "description": "Edge ID."
           },
           "label": {
             "type": "string",
@@ -3337,16 +3335,12 @@
             "description": "Edge properties."
           },
           "source": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Source node ID.",
-            "minimum": 0
+            "type": "string",
+            "description": "Source node ID."
           },
           "target": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Target node ID.",
-            "minimum": 0
+            "type": "string",
+            "description": "Target node ID."
           }
         }
       },
@@ -3753,10 +3747,8 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Node ID.",
-            "minimum": 0
+            "type": "string",
+            "description": "Node ID."
           },
           "payload": {
             "description": "Node payload (if any)."
@@ -3906,7 +3898,15 @@
         ],
         "properties": {
           "filter": {
-            "description": "Optional metadata filter."
+            "type": "object",
+            "description": "Optional metadata filter.",
+            "example": {
+              "condition": {
+                "field": "category",
+                "type": "eq",
+                "value": "tech"
+              }
+            }
           },
           "query": {
             "type": "string",
@@ -3944,10 +3944,8 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Point ID.",
-            "minimum": 0
+            "type": "string",
+            "description": "Point ID."
           },
           "score": {
             "type": "number",
@@ -4231,7 +4229,15 @@
             "example": 0.5
           },
           "filter": {
-            "description": "Optional metadata filter."
+            "type": "object",
+            "description": "Optional metadata filter.",
+            "example": {
+              "condition": {
+                "field": "category",
+                "type": "eq",
+                "value": "tech"
+              }
+            }
           },
           "hit_weight": {
             "type": "number",
@@ -4314,10 +4320,8 @@
         ],
         "properties": {
           "node_id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Node ID.",
-            "minimum": 0
+            "type": "string",
+            "description": "Node ID."
           },
           "payload": {
             "description": "Stored payload (null if none)."
@@ -4592,10 +4596,8 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Point ID.",
-            "minimum": 0
+            "type": "string",
+            "description": "Point ID."
           },
           "payload": {
             "description": "Optional payload."
@@ -4689,7 +4691,15 @@
             "minimum": 0
           },
           "filter": {
-            "description": "Optional metadata filter."
+            "type": "object",
+            "description": "Optional metadata filter.",
+            "example": {
+              "condition": {
+                "field": "category",
+                "type": "eq",
+                "value": "tech"
+              }
+            }
           },
           "fusion": {
             "oneOf": [
@@ -4791,10 +4801,8 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Point ID.",
-            "minimum": 0
+            "type": "string",
+            "description": "Point ID."
           },
           "payload": {
             "description": "Point payload."
@@ -4920,10 +4928,8 @@
             "minimum": 0
           },
           "id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Target node ID.",
-            "minimum": 0
+            "type": "string",
+            "description": "Target node ID."
           },
           "path": {
             "type": "array",
@@ -4965,7 +4971,15 @@
         ],
         "properties": {
           "filter": {
-            "description": "Optional metadata filter."
+            "type": "object",
+            "description": "Optional metadata filter.",
+            "example": {
+              "condition": {
+                "field": "category",
+                "type": "eq",
+                "value": "tech"
+              }
+            }
           },
           "query": {
             "type": "string",
@@ -5005,10 +5019,8 @@
             "description": "Path taken (list of edge IDs)."
           },
           "target_id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Target node ID reached.",
-            "minimum": 0
+            "type": "string",
+            "description": "Target node ID reached."
           }
         }
       },

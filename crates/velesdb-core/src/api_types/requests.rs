@@ -13,6 +13,25 @@ use super::{
     default_sparse_weight, default_storage_mode, default_top_k, default_vector_weight, serde_id,
 };
 
+/// `OpenAPI` schema for the free-form metadata `filter` fields: a generic JSON
+/// object with a canonical example. Defined as a helper because utoipa drops
+/// the `example` when a primitive `value_type` override is used.
+#[cfg(feature = "openapi")]
+// `ObjectBuilder::example` is deprecated in favour of `examples`, but the
+// derive-generated fields across this spec all emit the singular `example`
+// key; keeping it here matches that form for a consistent document.
+#[allow(deprecated)]
+fn metadata_filter_schema() -> utoipa::openapi::schema::Object {
+    use utoipa::openapi::schema::{ObjectBuilder, Type};
+    ObjectBuilder::new()
+        .schema_type(Type::Object)
+        .description(Some("Optional metadata filter."))
+        .example(Some(serde_json::json!({
+            "condition": {"type": "eq", "field": "category", "value": "tech"}
+        })))
+        .build()
+}
+
 // ============================================================================
 // Collection Types
 // ============================================================================
@@ -282,6 +301,7 @@ pub struct SearchRequest {
     pub timeout_ms: Option<u64>,
     /// Optional metadata filter.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(schema_with = metadata_filter_schema))]
     pub filter: Option<serde_json::Value>,
     /// Single sparse query vector.
     #[serde(default)]
@@ -318,6 +338,7 @@ pub struct TextSearchRequest {
     pub top_k: usize,
     /// Optional metadata filter.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(schema_with = metadata_filter_schema))]
     pub filter: Option<serde_json::Value>,
 }
 
@@ -340,6 +361,7 @@ pub struct HybridSearchRequest {
     pub vector_weight: f32,
     /// Optional metadata filter.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(schema_with = metadata_filter_schema))]
     pub filter: Option<serde_json::Value>,
 }
 
@@ -383,6 +405,7 @@ pub struct MultiQuerySearchRequest {
     pub sparse_weight: f32,
     /// Optional metadata filter.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(schema_with = metadata_filter_schema))]
     pub filter: Option<serde_json::Value>,
 }
 
