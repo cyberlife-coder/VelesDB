@@ -180,8 +180,11 @@ def bump_cargo_workspace(ver: str) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or not re.fullmatch(VERSION_RE + r"(-[0-9A-Za-z.]+)?", sys.argv[1]):
-        print("usage: bump_version.py X.Y.Z", file=sys.stderr)
+    if len(sys.argv) != 2 or not re.fullmatch(VERSION_RE, sys.argv[1]):
+        # Strict X.Y.Z only: the rewrite patterns target a bare `\d+\.\d+\.\d+`,
+        # and a pre-release suffix cannot be matched safely without colliding
+        # with trailing `-amd64`/`-blue`-style tokens. Reject rather than mangle.
+        print("usage: bump_version.py X.Y.Z  (release versions only, no pre-release suffix)", file=sys.stderr)
         return 2
     ver = sys.argv[1]
 

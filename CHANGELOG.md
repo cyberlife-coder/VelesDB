@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anything `>= 1.0`) is unaffected.
 - **CLI flag toggles (#997)**: `--include-vectors` and `--progress` are now
   real toggles instead of no-ops.
+- **Python SDK onboarding (#986)**: canonical metadata-filter format, search-API
+  migration off the deprecated `collection.search()`, auto-dimension detection,
+  and dunder forwarding on the lazy `_PendingCollection` proxy after it
+  materialises.
 - OpenAPI spec now types point `id` as `string` for `/search`, `/search/ids`,
   `/scroll` and graph result endpoints, matching the on-the-wire format (these
   responses quote the ID to preserve `u64` values above `2^53-1`). Schema-only
