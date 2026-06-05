@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.0] — 2026-06-05
+
 ### Fixed
+- **Payload WAL crash recovery (#1011)**: a crash mid-append no longer leaves a
+  collection unopenable — replay now stops cleanly at a torn-tail record and
+  keeps every prior entry (mirrors the vector WAL's torn-tail policy).
+- **Vector retrieve overflow guard (#1012)**: the copy-path bounds check now
+  uses checked arithmetic so a corrupt near-`usize::MAX` index offset returns an
+  error instead of panicking on the slice.
+- **Hybrid fusion weight validation (#1013)**: `Weighted` / `RelativeScore`
+  weights are now validated on the `fuse()` path, so strategies built directly
+  from server/CLI/SDK request fields can no longer yield unnormalized scores.
+- **HNSW alpha validation (#1015)**: an out-of-range `alpha` (`< 1.0` or
+  non-finite) is now rejected at the REST (`400 Bad Request`), Python
+  (`ValueError`) and Tauri boundaries instead of silently degrading recall or
+  violating the `HnswParams` `Eq` invariant. Valid `alpha` (default `1.2`,
+  anything `>= 1.0`) is unaffected.
 - OpenAPI spec now types point `id` as `string` for `/search`, `/search/ids`,
   `/scroll` and graph result endpoints, matching the on-the-wire format (these
   responses quote the ID to preserve `u64` values above `2^53-1`). Schema-only

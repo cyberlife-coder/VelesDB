@@ -299,7 +299,7 @@ curl http://localhost:8080/health
 ```json
 {
   "status": "ok",
-  "version": "1.16.0"
+  "version": "1.17.0"
 }
 ```
 

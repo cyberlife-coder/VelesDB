@@ -1,6 +1,6 @@
 # 💻 CLI & REPL Reference
 
-*Version 1.16.0 — May 2026*
+*Version 1.17.0 — May 2026*
 
 Guide complet pour l'interface en ligne de commande VelesDB et le REPL interactif.
 

@@ -3,4 +3,4 @@
 from haystack_velesdb.document_store import VelesDBDocumentStore
 
 __all__ = ["VelesDBDocumentStore"]
-__version__ = "1.16.0"
+__version__ = "1.17.0"
