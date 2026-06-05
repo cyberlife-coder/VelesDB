@@ -258,10 +258,6 @@ engines:
       - "crates/velesdb-core/src/collection/search/query/join.rs"
 
       # --- CLI / REPL (interactive tool, not production engine) ---
-      # The `**` glob only matches files in sub-directories; src-root files
-      # (license.rs, etc.) need the single-level `*` twin or they slip through
-      # and are graded for complexity despite the CLI-wide exclusion policy.
-      - "crates/velesdb-cli/src/*"
       - "crates/velesdb-cli/src/**"
 
       # --- Examples, benchmarks, fuzz targets ---
