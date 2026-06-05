@@ -383,6 +383,25 @@ fn test_retrieve_ref_returns_invalid_data_on_misaligned_offset() {
     }
 }
 
+#[test]
+fn test_retrieve_returns_invalid_data_on_overflowing_offset() {
+    let dir = tempdir().unwrap();
+    let mut storage = MmapStorage::new(dir.path(), 3).unwrap();
+    storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
+
+    // Inject a corrupted, near-usize::MAX offset. On the copy path
+    // `offset + vector_size` wraps, slipping past an unchecked bound check
+    // and panicking on the subsequent slice. `retrieve` must return Err.
+    let vector_size = 3 * std::mem::size_of::<f32>();
+    storage.index.insert(42, usize::MAX - vector_size + 1);
+
+    let result = storage.retrieve(42);
+    match result {
+        Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::InvalidData),
+        Ok(_) => panic!("overflowing offset must not succeed"),
+    }
+}
+
 // =========================================================================
 // TS-CORE-004: Compaction Tests
 // =========================================================================

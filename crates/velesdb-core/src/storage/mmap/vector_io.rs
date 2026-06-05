@@ -253,14 +253,23 @@ impl VectorStorage for MmapStorage {
         let mmap = self.mmap.read();
         let vector_size = self.dimension * std::mem::size_of::<f32>();
 
-        if offset + vector_size > mmap.len() {
+        // Use checked arithmetic so a corrupt near-`usize::MAX` index offset
+        // cannot wrap past the bound check and panic on the slice below
+        // (mirrors `validate_offset` on the zero-copy `retrieve_ref` path).
+        let end = offset.checked_add(vector_size).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Offset arithmetic overflow while reading vector",
+            )
+        })?;
+        if end > mmap.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Offset out of bounds",
             ));
         }
 
-        let bytes = &mmap[offset..offset + vector_size];
+        let bytes = &mmap[offset..end];
         Ok(Some(bytes_to_vector(bytes, self.dimension)))
     }
 
