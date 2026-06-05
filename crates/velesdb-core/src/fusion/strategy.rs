@@ -171,13 +171,13 @@ impl FusionStrategy {
                 avg_weight,
                 max_weight,
                 hit_weight,
-            } => Ok(Self::fuse_weighted(
+            } => Self::fuse_weighted(
                 results,
                 *avg_weight,
                 *max_weight,
                 *hit_weight,
                 total_queries,
-            )),
+            ),
             Self::RelativeScore {
                 dense_weight,
                 sparse_weight,
@@ -279,6 +279,13 @@ impl FusionStrategy {
     }
 
     /// Weighted fusion: combination of avg, max, and hit ratio.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the weights are negative or do not sum to 1.0
+    /// (within 0.001 tolerance). Validation runs here as well as in the
+    /// `weighted()` constructor so that direct enum-literal construction
+    /// (e.g. from server/CLI request fields) cannot bypass it.
     #[allow(clippy::cast_precision_loss)]
     // Reason: total_queries and scores.len() are small counts (number of
     // queries/hits per document); both fit exactly in f32.
@@ -288,7 +295,10 @@ impl FusionStrategy {
         max_weight: f32,
         hit_weight: f32,
         total_queries: usize,
-    ) -> Vec<(u64, f32)> {
+    ) -> Result<Vec<(u64, f32)>, FusionError> {
+        validate_non_negative(&[avg_weight, max_weight, hit_weight])?;
+        validate_weight_sum(avg_weight + max_weight + hit_weight)?;
+
         let total_q = total_queries as f32;
 
         let mut fused: Vec<(u64, f32)> = Self::collect_doc_scores(results)
@@ -304,7 +314,7 @@ impl FusionStrategy {
             .collect();
 
         Self::sort_descending(&mut fused);
-        fused
+        Ok(fused)
     }
 
     /// Relative Score Fusion: per-branch min-max normalization + weighted sum.
@@ -313,11 +323,21 @@ impl FusionStrategy {
     /// If more branches are provided, only the first two are used; the extras
     /// are silently discarded. A warning is emitted so callers can detect the
     /// accidental multi-branch case during development.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the weights are negative or do not sum to 1.0
+    /// (within 0.001 tolerance). Validation runs here as well as in the
+    /// `relative_score()` constructor so that direct enum-literal construction
+    /// (e.g. from server/CLI request fields) cannot bypass it.
     fn fuse_relative_score(
         results: &[Vec<(u64, f32)>],
         dense_weight: f32,
         sparse_weight: f32,
     ) -> Result<Vec<(u64, f32)>, FusionError> {
+        validate_non_negative(&[dense_weight, sparse_weight])?;
+        validate_weight_sum(dense_weight + sparse_weight)?;
+
         if results.len() > 2 {
             tracing::warn!(
                 branch_count = results.len(),
