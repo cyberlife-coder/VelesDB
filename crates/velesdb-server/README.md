@@ -659,7 +659,7 @@ curl http://localhost:8080/health
 Response:
 
 ```json
-{"status": "ok", "version": "1.16.0"}
+{"status": "ok", "version": "1.17.0"}
 ```
 
 ### `GET /ready` -- Readiness Probe

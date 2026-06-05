@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-05-29 (v1.16.0 — Mobile graph collection creation parity correction)
+Last updated: 2026-05-29 (v1.17.0 — Mobile graph collection creation parity correction)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
