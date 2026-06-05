@@ -204,8 +204,8 @@ LIMIT 10
 ```json
 {
   "results": [
-    {"id": 42, "score": 0.91, "fusion_details": {"rrf_rank": 1, "sources": 2}},
-    {"id": 17, "score": 0.87, "fusion_details": {"rrf_rank": 2, "sources": 2}}
+    {"id": "42", "score": 0.91, "fusion_details": {"rrf_rank": 1, "sources": 2}},
+    {"id": "17", "score": 0.87, "fusion_details": {"rrf_rank": 2, "sources": 2}}
   ],
   "timing_ms": 1.2
 }

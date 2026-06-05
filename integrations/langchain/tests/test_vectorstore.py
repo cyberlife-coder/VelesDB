@@ -1047,7 +1047,8 @@ class TestSearchQualityLangChain:
         assert len(results) == 1
 
     def test_plain_search_called_when_quality_is_none(self, embeddings):
-        """When search_quality is None, collection.search is called (not search_with_quality)."""
+        """When search_quality is None, the canonical search_request is called
+        (not the deprecated search, and not search_with_quality)."""
         store = VelesDBVectorStore(
             embedding=embeddings,
             path="./unused",
@@ -1060,6 +1061,9 @@ class TestSearchQualityLangChain:
             def search(self, vector, top_k):
                 calls.append({"top_k": top_k})
                 return [{"payload": {"text": "world"}, "score": 0.8}]
+
+            def search_request(self, opts):
+                return self.search(opts.vector, top_k=opts.top_k)
 
         store._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
         results = store.similarity_search("test query", k=3)

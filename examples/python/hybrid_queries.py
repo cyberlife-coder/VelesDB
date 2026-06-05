@@ -62,7 +62,7 @@ def example_basic_vector_search(coll: velesdb.Collection):
     print("\n=== Basic Vector Search ===")
 
     query = generate_embedding(seed=42)
-    results = coll.search(vector=query, top_k=5)
+    results = coll.search_request(velesdb.SearchOptions(vector=query, top_k=5))
 
     print(f"Top {len(results)} results:")
     for r in results:

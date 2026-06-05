@@ -54,6 +54,30 @@ pub fn deserialize_id_from_string_or_number<'de, D: Deserializer<'de>>(
     deserializer.deserialize_any(IdVisitor)
 }
 
+/// `OpenAPI` schema for input `id` fields that accept either a JSON integer
+/// (native form) or a string. Mirrors [`deserialize_id_from_string_or_number`]:
+/// clients may send `12345` or `"12345"`, the latter being precision-safe for
+/// `u64` values above 2^53-1.
+///
+/// Apply with
+/// `#[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]`.
+#[cfg(feature = "openapi")]
+#[must_use]
+pub fn id_input_schema() -> utoipa::openapi::schema::OneOfBuilder {
+    use utoipa::openapi::schema::{KnownFormat, ObjectBuilder, OneOfBuilder, SchemaFormat, Type};
+    OneOfBuilder::new()
+        .item(
+            ObjectBuilder::new()
+                .schema_type(Type::Integer)
+                .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int64))),
+        )
+        .item(ObjectBuilder::new().schema_type(Type::String))
+        .description(Some(
+            "Point ID. Accepts a JSON integer (native form) or a string; use a \
+             string for u64 values above 2^53-1 to avoid JavaScript precision loss.",
+        ))
+}
+
 /// Serializes an `Option<u64>` as a JSON string when `Some`, or `null` when `None`.
 ///
 /// Emits `"12345"` for `Some(12345)` and `null` for `None`.

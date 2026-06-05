@@ -120,6 +120,8 @@ pub enum ValidationErrorKind {
     UnsupportedArithmeticSimilarity,
     /// LET bindings used with DDL or DML statements (nonsensical).
     InvalidLetBinding,
+    /// Subquery used in a WHERE clause; parsed but not yet executable.
+    SubqueryNotExecutable,
 }
 
 impl ValidationErrorKind {
@@ -136,6 +138,7 @@ impl ValidationErrorKind {
             Self::UndeclaredAlias => "V007",
             Self::UnsupportedArithmeticSimilarity => "V008",
             Self::InvalidLetBinding => "V009",
+            Self::SubqueryNotExecutable => "V010",
         }
     }
 
@@ -157,6 +160,7 @@ impl ValidationErrorKind {
                  is not yet supported"
             }
             Self::InvalidLetBinding => "LET bindings are not supported with DDL or DML statements",
+            Self::SubqueryNotExecutable => "Subqueries are parsed but not yet executable",
         }
     }
 }

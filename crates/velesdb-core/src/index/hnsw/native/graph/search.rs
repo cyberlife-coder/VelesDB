@@ -9,9 +9,9 @@ use super::{NativeHnsw, NO_ENTRY_POINT};
 use crate::perf_optimizations::ContiguousVectors;
 use smallvec::SmallVec;
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // Thread-local reusable buffer for cosine query normalization.
 //
@@ -20,6 +20,22 @@ use std::sync::atomic::Ordering;
 // search, subsequent searches reuse the same allocation (zero-alloc hot path).
 thread_local! {
     static QUERY_BUF: RefCell<Vec<f32>> = RefCell::new(Vec::with_capacity(1536));
+}
+
+/// Global counter for seeding per-thread probe RNGs (issue #967).
+///
+/// Each thread increments this exactly once at first use and never again.
+/// `Relaxed` ordering suffices: we need distinct initial seeds, not ordering
+/// guarantees between threads.
+static PROBE_RNG_SEED_COUNTER: AtomicU64 = AtomicU64::new(0x5DEE_CE66_D1A4_B5B5);
+
+thread_local! {
+    /// Per-thread XORshift64 state for multi-probe entry-point selection.
+    ///
+    /// Seeded lazily from `PROBE_RNG_SEED_COUNTER` on first use, then
+    /// advanced entirely in thread-local storage.  The steady-state search
+    /// path therefore touches zero shared atomics for probe randomisation.
+    static PROBE_RNG: Cell<u64> = const { Cell::new(0) };
 }
 
 impl<D: DistanceEngine> NativeHnsw<D> {
@@ -142,7 +158,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             current_ep = self.search_layer_single(query, current_ep, layer_idx);
         }
 
-        let entry_points = self.gather_multi_entry_points(current_ep, count, num_probes);
+        let entry_points = Self::gather_multi_entry_points(current_ep, count, num_probes);
 
         self.search_layer(
             query,
@@ -156,9 +172,13 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Gathers multiple entry points by adding random probes alongside the
     /// greedy-descent entry point.
+    ///
+    /// Probe IDs are drawn from the **thread-local** XORshift64 RNG (issue #967).
+    /// This eliminates the shared `rng_state.fetch_update` CAS that previously
+    /// ran once per search on every thread simultaneously, causing cache-line
+    /// bouncing proportional to the number of concurrent searchers.
     #[inline]
     fn gather_multi_entry_points(
-        &self,
         primary_ep: NodeId,
         count: usize,
         num_probes: usize,
@@ -166,28 +186,41 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let mut entry_points = vec![primary_ep];
         if num_probes > 1 && count > 10 {
             for _ in 1..num_probes.min(4) {
-                let old_state = self
-                    .rng_state
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut state| {
-                        state ^= state << 13;
-                        state ^= state >> 7;
-                        state ^= state << 17;
-                        Some(state)
-                    })
-                    .unwrap_or_else(|s| s);
-
-                let mut state = old_state;
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-
-                let random_id = (state as usize) % count;
+                let random_id = (Self::next_probe_rng() as usize) % count;
                 if !entry_points.contains(&random_id) {
                     entry_points.push(random_id);
                 }
             }
         }
         entry_points
+    }
+
+    /// Advances the thread-local probe RNG and returns the next value.
+    ///
+    /// **First call per thread**: one `Relaxed` `fetch_add` on the global
+    /// `PROBE_RNG_SEED_COUNTER` to obtain a unique starting seed.  This cost
+    /// is amortised over millions of subsequent search calls.
+    ///
+    /// **All later calls**: pure thread-local XORshift64, touching no shared
+    /// memory.  Eight concurrent threads therefore generate independent random
+    /// sequences with zero inter-thread synchronisation.
+    #[inline]
+    fn next_probe_rng() -> u64 {
+        PROBE_RNG.with(|cell| {
+            let mut s = cell.get();
+            if s == 0 {
+                // One-time per-thread seed: stride the global counter by a
+                // large odd constant so threads that initialise back-to-back
+                // start at well-separated points in the XORshift cycle.
+                s = PROBE_RNG_SEED_COUNTER.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed);
+                if s == 0 {
+                    s = 1; // XORshift64 must not start at 0
+                }
+            }
+            let next = super::xorshift64(s);
+            cell.set(next);
+            next
+        })
     }
 
     /// Returns a `Cow`'s owned buffer to the thread-local pool for reuse.
@@ -594,5 +627,54 @@ mod probe_tests {
     fn four_probes_for_large_ef_at_scale() {
         let hnsw = empty_hnsw();
         assert_eq!(hnsw.adaptive_num_probes(50_000, 1024, 10), 4);
+    }
+
+    // =========================================================================
+    // Thread-local probe RNG (issue #967)
+    // =========================================================================
+
+    /// `next_probe_rng` must never return 0 (XORshift64 invariant) and must
+    /// produce at least 64 distinct values over 64 consecutive calls on the
+    /// same thread (i.e. no short cycle in any reachable range).
+    #[test]
+    fn probe_rng_no_zero_and_no_short_cycle() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..64 {
+            let v = NativeHnsw::<CpuDistance>::next_probe_rng();
+            assert_ne!(v, 0, "XORshift64 must never produce 0");
+            seen.insert(v);
+        }
+        assert_eq!(
+            seen.len(),
+            64,
+            "64 consecutive calls should all be distinct"
+        );
+    }
+
+    /// Two threads seeded from the same global counter must diverge immediately.
+    #[test]
+    fn probe_rng_threads_diverge() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let barrier = Arc::new(Barrier::new(2));
+        let b1 = Arc::clone(&barrier);
+        let b2 = Arc::clone(&barrier);
+
+        let t1 = thread::spawn(move || {
+            b1.wait();
+            NativeHnsw::<CpuDistance>::next_probe_rng()
+        });
+        let t2 = thread::spawn(move || {
+            b2.wait();
+            NativeHnsw::<CpuDistance>::next_probe_rng()
+        });
+
+        let v1 = t1.join().expect("thread 1 panicked");
+        let v2 = t2.join().expect("thread 2 panicked");
+        assert_ne!(
+            v1, v2,
+            "different threads must start with different RNG values"
+        );
     }
 }

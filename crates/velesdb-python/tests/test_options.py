@@ -7,7 +7,7 @@ Covers:
 - VelesConfigOptions wrapping LimitsOptions
 - Negative paths: invalid values, wrong types, missing required kwargs
 
-Test categories follow `.claude/rules/bdd-testing.md`:
+Test categories:
 - Nominal (≥ 60%): happy-path construction + create_collection flow
 - Edge (≈ 20%): None fields, boundary values, defaults pass-through
 - Negative (≥ 20%): invalid types, breaking-change guardrails
@@ -73,6 +73,22 @@ def test_hnsw_options_create_collection_round_trip(tmp_db_path):
     col = db.create_collection(
         "docs", dimension=4, hnsw=HnswOptions(m=16, ef_construction=200)
     )
+    assert col is not None
+
+
+@pytest.mark.parametrize("bad_alpha", [0.5, 0.0, -1.0, float("nan"), float("inf")])
+def test_hnsw_options_create_collection_rejects_invalid_alpha(tmp_db_path, bad_alpha):
+    # alpha must be finite and >= 1.0 (valid VAMANA range); an out-of-range
+    # value from Python must raise ValueError at create_collection, not silently
+    # build a recall-degrading or NaN-bearing index.
+    db = Database(str(tmp_db_path))
+    with pytest.raises(ValueError):
+        db.create_collection("bad", dimension=4, hnsw=HnswOptions(alpha=bad_alpha))
+
+
+def test_hnsw_options_create_collection_accepts_valid_alpha(tmp_db_path):
+    db = Database(str(tmp_db_path))
+    col = db.create_collection("ok", dimension=4, hnsw=HnswOptions(alpha=1.5))
     assert col is not None
 
 

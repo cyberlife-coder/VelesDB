@@ -145,7 +145,7 @@ cargo run --bin uniffi-bindgen generate \
 
 | Method | Description |
 |--------|-------------|
-| `VelesDatabase(path)` | Opens or creates a database at the specified path (constructor) |
+| `VelesDatabase.open(path)` | Opens or creates a database at the specified path (named constructor — use `.open(...)`) |
 | `createCollection(name, dimension, metric)` | Creates a new vector collection |
 | `createCollectionWithStorage(name, dimension, metric, storageMode)` | Creates collection with quantized storage |
 | `createMetadataCollection(name)` | Creates a metadata-only collection (no vectors) |
@@ -192,6 +192,36 @@ cargo run --bin uniffi-bindgen generate \
 | `indexesMemoryUsage()` | Returns memory used by indexes (bytes) |
 | `analyze()` | Runs ANALYZE and returns fresh statistics |
 | `getStats()` | Returns the latest statistics snapshot |
+
+#### The `filterJson` shape
+
+The `filterJson` argument on `searchWithFilter`, `textSearchWithFilter`,
+`hybridSearchWithFilter`, and `multiQuerySearchWithFilter` is a JSON string using the
+same canonical filter shape as the core engine and REST API:
+`{"condition": {"type": <op>, "field": ..., "value"/"values"/"pattern"/"conditions": ...}}`.
+Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `like`, `ilike`,
+`is_null`, `is_not_null`, `array_contains`, `array_contains_any`, `array_contains_all`,
+`geo_distance`, `geo_bbox`, and `and`/`or`/`not` for composition.
+
+Swift:
+
+```swift
+let results = try collection.searchWithFilter(
+    vector: queryVector,
+    limit: 5,
+    filterJson: #"{"condition": {"type": "eq", "field": "category", "value": "tech"}}"#
+)
+```
+
+Kotlin:
+
+```kotlin
+val results = collection.searchWithFilter(
+    queryVector,
+    5,
+    """{"condition": {"type": "eq", "field": "category", "value": "tech"}}"""
+)
+```
 
 ### VelesSemanticMemory
 

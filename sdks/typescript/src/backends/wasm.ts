@@ -442,6 +442,6 @@ export class WasmBackend implements IVelesDBBackend {
 }
 
 // Node-only init helpers (`isNodeRuntime`, `loadWasmBytesNode`) live in
-// `./wasm-node-loader` so this file stays under the .claude/rules
-// code-quality.md 500-NLOC ceiling. Browser bundles never reach the
+// `./wasm-node-loader` so this file stays under the project's
+// 500-NLOC code-quality ceiling. Browser bundles never reach the
 // loader because `init()` gates the import on `isNodeRuntime()`.

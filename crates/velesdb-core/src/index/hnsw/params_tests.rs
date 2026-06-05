@@ -438,3 +438,41 @@ fn test_hnsw_params_alpha_backward_compat_missing_field() {
         params.alpha
     );
 }
+
+#[test]
+fn test_validate_accepts_valid_alpha() {
+    // The default and any alpha in the valid VAMANA range (>= 1.0) must pass
+    // unchanged — validate() is a no-op on well-formed configs.
+    for alpha in [1.0_f32, 1.2, 2.0, 10.0] {
+        let params = HnswParams::auto(768).with_alpha(alpha);
+        assert!(
+            params.validate().is_ok(),
+            "alpha {alpha} is in range and must validate"
+        );
+    }
+}
+
+#[test]
+fn test_validate_rejects_alpha_below_one() {
+    // alpha < 1.0 under-diversifies the graph and silently degrades recall.
+    for alpha in [0.99_f32, 0.5, 0.0, -1.0] {
+        let params = HnswParams::auto(768).with_alpha(alpha);
+        let err = params.validate().expect_err("alpha < 1.0 must be rejected");
+        assert!(
+            matches!(err, crate::error::Error::Config(_)),
+            "expected Config error for alpha {alpha}, got {err:?}"
+        );
+    }
+}
+
+#[test]
+fn test_validate_rejects_non_finite_alpha() {
+    // Non-finite alpha (NaN/Inf) would break the Eq invariant; reject it.
+    for alpha in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let params = HnswParams::auto(768).with_alpha(alpha);
+        assert!(
+            params.validate().is_err(),
+            "non-finite alpha {alpha} must be rejected"
+        );
+    }
+}

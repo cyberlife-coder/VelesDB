@@ -286,6 +286,33 @@ jobs:
         run: cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
 
   # ===========================================================================
+  # OpenAPI Drift Check
+  # Regenerates the committed docs/openapi.{json,yaml} snapshots from the
+  # utoipa-derived schema and fails if they differ from what is checked in,
+  # so the spec can never silently drift from the code.
+  # ===========================================================================
+  openapi-drift:
+    name: OpenAPI Drift Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: "velesdb-ci-openapi"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      - name: Regenerate OpenAPI snapshots
+        run: cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --test-threads=1
+
+      - name: Check OpenAPI snapshots are up to date
+        run: git diff --exit-code docs/openapi.json docs/openapi.yaml
+
+  # ===========================================================================
   # Bench-sift1m Compile Check
   # Compiles (does NOT run) the SIFT1M bench and its unit tests with
   # `--features bench-sift1m` so API drift vs HnswIndex is caught on every
@@ -378,6 +405,51 @@ jobs:
           python -m pytest tests/ -v --tb=short
 
   # ===========================================================================
+  # Python SDK Tests — velesdb-python (PyO3) binding functional suite.
+  #
+  # Until this job existed, crates/velesdb-python/tests/ was never run in CI:
+  # the python-integrations job above only exercises the LlamaIndex package.
+  # Runs on PRs too (no push-only gate) so binding regressions are caught
+  # before merge. The slow recall gate (test_recall_gate.py, -m slow) is
+  # excluded here — recall@10 >= 0.95 is enforced on a release wheel by
+  # perf-gate-e2e.yml; a debug build is sufficient for the functional suite.
+  # ===========================================================================
+  python-sdk-tests:
+    name: Python SDK Tests
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-pysdk-cargo-${{ hashFiles('Cargo.lock') }}
+
+      # PEP 517 source build (debug profile), identical to python-integrations.
+      # numpy is a hard runtime dependency of the binding's NumPy fast paths.
+      - name: Build & install velesdb-python from source
+        run: |
+          pip install --upgrade pip maturin numpy pytest
+          pip install ./crates/velesdb-python --force-reinstall
+
+      - name: Run velesdb-python functional tests
+        working-directory: crates/velesdb-python
+        run: python -m pytest tests/ -m "not slow" -p no:cacheprovider -q -W ignore::DeprecationWarning
+
+  # ===========================================================================
   # Coverage (main seulement)
   # ===========================================================================
   coverage:
@@ -411,7 +483,7 @@ jobs:
       # `cargo install` from source — faster and avoids the compile/network
       # flakes that lost the runner mid-job on earlier release runs.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@873c7452cadb7c034694a1282227095d93fbdf92 # v2.79.14
+        uses: taiki-e/install-action@e49978b799e49ff429d162b7a30601a569ab6538 # v2.81.1
         with:
           tool: cargo-llvm-cov
 
@@ -616,7 +688,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, wasm-check, velesql-conformance, perf-smoke, bench-sift1m-compile, sonarcloud]
+    needs: [lint, test, security, wasm-check, openapi-drift, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, sonarcloud]
     if: always()
     steps:
       - name: Check results
@@ -624,8 +696,10 @@ jobs:
           [[ "${{ needs.lint.result }}" == "success" ]] && \
           [[ "${{ needs.test.result }}" == "success" ]] && \
           [[ "${{ needs.wasm-check.result }}" == "success" ]] && \
+          [[ "${{ needs.openapi-drift.result }}" == "success" ]] && \
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \
           [[ "${{ needs.perf-smoke.result }}" == "success" ]] && \
           [[ "${{ needs.bench-sift1m-compile.result }}" == "success" ]] && \
+          [[ "${{ needs.python-sdk-tests.result }}" == "success" ]] && \
           [[ "${{ needs.security.result }}" == "success" ]] && \
           echo "✅ CI passed" || { echo "❌ CI failed"; exit 1; }

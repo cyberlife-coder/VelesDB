@@ -142,14 +142,15 @@ impl SparseInvertedIndex {
 
     /// Inserts a batch of sparse vectors while acquiring the mutable lock once.
     ///
+    /// Acquires the write lock once for the entire slice, making this significantly
+    /// faster than calling [`insert`] per document in a parallel/bulk context.
+    /// Callers building a parallel bulk-import pipeline should chunk their input
+    /// and call this method once per chunk rather than calling `insert` per document.
+    ///
     /// Preserves the current per-term upsert semantics of repeated `insert()`:
     /// later entries in the batch overwrite earlier entries for the same
     /// `(term_id, doc_id)` pair, while untouched terms from prior inserts remain.
-    // Reason: called from `collection::core::crud::upsert_bulk` and `internal_bench::sparse_insert_batch`.
-    // The dead_code lint has a false positive because the call site reaches this method through
-    // a `RwLockWriteGuard<BTreeMap<_,SparseInvertedIndex>>` deref chain which the lint does not trace.
-    #[allow(dead_code)] // Reason: False positive — called via RwLockWriteGuard deref chain
-    pub(crate) fn insert_batch_chunk(&self, docs: &[(u64, SparseVector)]) {
+    pub fn insert_batch_chunk(&self, docs: &[(u64, SparseVector)]) {
         if docs.is_empty() {
             return;
         }

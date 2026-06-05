@@ -140,3 +140,22 @@ class TestAutoDimensionDetection:
         col.upsert([{"id": 3, "vector": [0.5, 0.6]}])
 
         assert len(col) == 3
+
+    def test_dunders_forward_after_materialisation(self, temp_db):
+        """len(), `in` and `with` must delegate once the collection exists."""
+        col = temp_db.create_collection("pending_dunders")
+        col.upsert([{"id": 7, "vector": [0.1, 0.2]}])
+
+        assert len(col) == 1
+        assert 7 in col
+        assert 999 not in col
+        with col as c:
+            assert c.count() == 1
+
+    def test_dunders_before_upsert_raise_runtime_error(self, temp_db):
+        """len()/in/with on a not-yet-materialised collection must guide the user."""
+        col = temp_db.create_collection("pending_dunders_err")
+        with pytest.raises(RuntimeError, match="dimension"):
+            len(col)
+        with pytest.raises(RuntimeError, match="dimension"):
+            1 in col

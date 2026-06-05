@@ -12,6 +12,46 @@ All error types are defined in `crates/velesdb-core/src/error.rs` and derive fro
 
 ---
 
+## Error code schemes
+
+VelesDB exposes **three independent error-code schemes**. They surface at different
+layers and **do not share a numbering space** — they only look similar.
+
+| Scheme | Where it surfaces | Format | Example |
+|--------|-------------------|--------|---------|
+| Parser codes | VelesQL syntax & query validation (parse stage) | `E0XX` | `E001` SyntaxError, `E004` DimensionMismatch |
+| Engine/runtime codes | Core engine errors and the REST `code` field | `VELES-XXX` | `VELES-001` CollectionExists, `VELES-004` DimensionMismatch |
+| REST VelesQL codes | Semantic/runtime errors on the REST `/query` (and `/aggregate`) VelesQL endpoints | `VELESQL_*` string identifiers | `VELESQL_MISSING_COLLECTION`, `VELESQL_AGGREGATION_ERROR` |
+
+**The numbers do NOT align across schemes — there is no 1:1 numeric mapping.**
+For example parser `E001` is a *syntax error*, whereas `VELES-001` is *CollectionExists*;
+they are entirely separate numbering spaces (`E0XX` ≠ `VELES-0XX`). Likewise parser
+`E004` (DimensionMismatch) and `VELES-004` (DimensionMismatch) happen to describe the
+same condition, but this is coincidental, not a guaranteed correspondence.
+
+Sources of truth:
+
+- Parser `E0XX`: `crates/velesdb-core/src/velesql/error.rs`
+  (`E001` SyntaxError/UnexpectedToken, `E002` UnknownColumn, `E003` CollectionNotFound,
+  `E004` DimensionMismatch, `E005` MissingParameter, `E006` TypeMismatch,
+  `E007` ComplexityLimit).
+- Engine/runtime `VELES-XXX`: this document (and `crates/velesdb-core/src/error.rs`).
+- REST VelesQL `VELESQL_*`: `docs/reference/VELESQL_CONTRACT.md`.
+
+Which scheme is canonical for which surface:
+
+- A **VelesQL parse/validation failure** is reported with an `E0XX` code (parser-specific
+  payload with `type`/`message`/`position`/`query`). It is also wrapped by the engine as
+  `VELES-010` (`Query`) when it propagates through the engine API.
+- A **core engine / general REST error** carries a `VELES-XXX` code in the `code` field
+  (e.g. `{"error": "...", "code": "VELES-004"}`).
+- A **semantic/runtime error on the REST VelesQL `/query` or `/aggregate` endpoints**
+  carries a `VELESQL_*` string identifier in the structured `error.code` field
+  (see `VELESQL_CONTRACT.md`). Syntax errors on those endpoints still use the
+  parser-specific `E0XX` payload.
+
+---
+
 ## Recoverability
 
 Most errors are recoverable (the caller can fix the input and retry). The following

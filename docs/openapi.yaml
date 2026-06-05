@@ -8,7 +8,7 @@ info:
   license:
     name: VelesDB Core License 1.0
     url: https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE
-  version: 1.16.0
+  version: 1.17.0
 servers:
 - url: /
   description: Local server
@@ -1849,25 +1849,28 @@ components:
       - label
       properties:
         id:
-          type: integer
-          format: int64
-          description: Edge ID.
-          minimum: 0
+          oneOf:
+          - type: integer
+            format: int64
+          - type: string
+          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         label:
           type: string
           description: Edge label (relationship type).
         properties:
           description: Edge properties.
         source:
-          type: integer
-          format: int64
-          description: Source node ID.
-          minimum: 0
+          oneOf:
+          - type: integer
+            format: int64
+          - type: string
+          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         target:
-          type: integer
-          format: int64
-          description: Target node ID.
-          minimum: 0
+          oneOf:
+          - type: integer
+            format: int64
+          - type: string
+          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
     AggregationResponse:
       type: object
       description: Response from `VelesQL` aggregation query execution.
@@ -2292,25 +2295,19 @@ components:
       - properties
       properties:
         id:
-          type: integer
-          format: int64
+          type: string
           description: Edge ID.
-          minimum: 0
         label:
           type: string
           description: Edge label (relationship type).
         properties:
           description: Edge properties.
         source:
-          type: integer
-          format: int64
+          type: string
           description: Source node ID.
-          minimum: 0
         target:
-          type: integer
-          format: int64
+          type: string
           description: Target node ID.
-          minimum: 0
     EdgesResponse:
       type: object
       description: Response containing edges.
@@ -2616,10 +2613,8 @@ components:
       - score
       properties:
         id:
-          type: integer
-          format: int64
+          type: string
           description: Node ID.
-          minimum: 0
         payload:
           description: Node payload (if any).
         score:
@@ -2737,7 +2732,13 @@ components:
       - query
       properties:
         filter:
+          type: object
           description: Optional metadata filter.
+          example:
+            condition:
+              field: category
+              type: eq
+              value: tech
         query:
           type: string
           description: Text query for BM25 search.
@@ -2766,10 +2767,8 @@ components:
       - score
       properties:
         id:
-          type: integer
-          format: int64
+          type: string
           description: Point ID.
-          minimum: 0
         score:
           type: number
           format: float
@@ -2982,7 +2981,13 @@ components:
           description: 'Relative score fusion: weight for the dense (vector) branch.'
           example: 0.5
         filter:
+          type: object
           description: Optional metadata filter.
+          example:
+            condition:
+              field: category
+              type: eq
+              value: tech
         hit_weight:
           type: number
           format: float
@@ -3046,10 +3051,8 @@ components:
       - node_id
       properties:
         node_id:
-          type: integer
-          format: int64
+          type: string
           description: Node ID.
-          minimum: 0
         payload:
           description: Stored payload (null if none).
     NodeStatsResponse:
@@ -3137,10 +3140,11 @@ components:
       - vector
       properties:
         id:
-          type: integer
-          format: int64
-          description: Point ID.
-          minimum: 0
+          oneOf:
+          - type: integer
+            format: int64
+          - type: string
+          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         payload:
           description: Optional payload.
         sparse_vector:
@@ -3272,10 +3276,8 @@ components:
       - vector
       properties:
         id:
-          type: integer
-          format: int64
+          type: string
           description: Point ID.
-          minimum: 0
         payload:
           description: Optional payload.
         vector:
@@ -3343,7 +3345,13 @@ components:
           example: 128
           minimum: 0
         filter:
+          type: object
           description: Optional metadata filter.
+          example:
+            condition:
+              field: category
+              type: eq
+              value: tech
         fusion:
           oneOf:
           - type: 'null'
@@ -3411,10 +3419,8 @@ components:
       - score
       properties:
         id:
-          type: integer
-          format: int64
+          type: string
           description: Point ID.
-          minimum: 0
         payload:
           description: Point payload.
         score:
@@ -3484,10 +3490,11 @@ components:
       - vector
       properties:
         id:
-          type: integer
-          format: int64
-          description: Point ID.
-          minimum: 0
+          oneOf:
+          - type: integer
+            format: int64
+          - type: string
+          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         payload:
           description: Optional JSON payload (metadata).
         vector:
@@ -3510,10 +3517,8 @@ components:
           description: Depth from source.
           minimum: 0
         id:
-          type: integer
-          format: int64
+          type: string
           description: Target node ID.
-          minimum: 0
         path:
           type: array
           items:
@@ -3544,7 +3549,13 @@ components:
       - query
       properties:
         filter:
+          type: object
           description: Optional metadata filter.
+          example:
+            condition:
+              field: category
+              type: eq
+              value: tech
         query:
           type: string
           description: Text query for full-text search.
@@ -3575,10 +3586,8 @@ components:
             minimum: 0
           description: Path taken (list of edge IDs).
         target_id:
-          type: integer
-          format: int64
+          type: string
           description: Target node ID reached.
-          minimum: 0
     TraversalStats:
       type: object
       description: Statistics from traversal operation.
@@ -3616,10 +3625,11 @@ components:
             type: string
           description: Filter by relationship types (empty = all types).
         source:
-          type: integer
-          format: int64
-          description: Source node ID to start traversal from.
-          minimum: 0
+          oneOf:
+          - type: integer
+            format: int64
+          - type: string
+          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         strategy:
           type: string
           description: 'Traversal strategy: "bfs" or "dfs".'

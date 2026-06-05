@@ -138,7 +138,9 @@ class VelesDBClient:
             raise velesdb.CollectionNotFoundError(
                 f"Collection '{collection}' not found"
             )
-        results = col.search(vector=query_vector, top_k=top_k, filter=filter_)
+        results = col.search_request(
+            velesdb.SearchOptions(vector=query_vector, top_k=top_k, filter=filter_)
+        )
         return {"results": results}
 
     def delete_point(

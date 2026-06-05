@@ -57,10 +57,10 @@ velesdb repl
 velesdb repl ./my_database
 
 # Execute a one-shot query
-velesdb query ./my_database "SELECT * FROM documents LIMIT 10"
+velesdb query execute ./my_database "SELECT * FROM documents LIMIT 10"
 
 # List all collections
-velesdb list ./my_database
+velesdb collection list ./my_database
 ```
 
 ## Getting Started
@@ -69,19 +69,19 @@ End-to-end example: create a collection, insert vectors, search, and query the g
 
 ```bash
 # 1. Create a vector collection (384-dimensional, cosine similarity)
-velesdb create-vector-collection ./data docs --dimension 384 --metric cosine
+velesdb collection create ./data docs --dimension 384 --metric cosine
 
 # 2. Upsert a few points
-velesdb upsert ./data docs --id 1 --vector '[0.1, 0.2, ..., 0.384]' \
+velesdb data upsert ./data docs --id 1 --vector '[0.1, 0.2, ..., 0.384]' \
   --payload '{"title": "Intro to VelesDB", "category": "tech"}'
-velesdb upsert ./data docs --id 2 --vector '[0.3, 0.4, ..., 0.384]' \
+velesdb data upsert ./data docs --id 2 --vector '[0.3, 0.4, ..., 0.384]' \
   --payload '{"title": "Graph Databases 101", "category": "tech"}'
 
 # 3. Search by vector similarity
-velesdb query ./data "SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, ..., 0.384] LIMIT 5"
+velesdb query execute ./data "SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, ..., 0.384] LIMIT 5"
 
 # 4. Create a graph collection and add edges
-velesdb create-graph-collection ./data my_graph
+velesdb collection create-graph ./data my_graph
 velesdb graph add-edge ./data my_graph 1 100 200 "AUTHORED_BY"
 
 # 5. Query the graph
@@ -242,48 +242,48 @@ All subcommands operate offline against the database directory -- no running ser
 
 ```bash
 # Create a vector collection
-velesdb create-vector-collection ./data my_vectors \
+velesdb collection create ./data my_vectors \
   --dimension 384 \
   --metric cosine \
   --storage full
 
 # Create a graph collection
-velesdb create-graph-collection ./data my_graph --schemaless true
+velesdb collection create-graph ./data my_graph
 
 # Create a metadata-only collection (no vectors, no graph -- structured payloads only)
-velesdb create-metadata-collection ./data my_metadata
+velesdb collection create-metadata ./data my_metadata
 
 # List all collections
-velesdb list ./data
-velesdb list ./data --format json
+velesdb collection list ./data
+velesdb collection list ./data --format json
 
 # Show collection details
-velesdb show ./data my_vectors
-velesdb show ./data my_vectors --samples 5 --format json
+velesdb collection show ./data my_vectors
+velesdb collection show ./data my_vectors --samples 5 --format json
 
 # Delete a collection (interactive confirmation)
-velesdb delete-collection ./data my_vectors
-velesdb delete-collection ./data my_vectors --force
+velesdb collection delete ./data my_vectors
+velesdb collection delete ./data my_vectors --force
 
 # Database overview
 velesdb info ./data
 ```
 
-**`create-vector-collection` flags:**
+**`collection create` flags:**
 
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
 | `-d, --dimension` | integer | (required) | Vector dimension |
-| `-m, --metric` | `cosine`, `euclidean`, `dot` (aliases: `dotproduct`, `inner`, `ip`), `hamming`, `jaccard` | `cosine` | Distance metric |
-| `-s, --storage` | `full` (`f32`), `sq8` (`int8`), `binary` (`bit`), `pq`, `rabitq` | `full` | Storage/quantization mode |
+| `-m, --metric` | `cosine`, `euclidean`, `dot`, `hamming`, `jaccard` | `cosine` | Distance metric |
+| `-s, --storage` | `full`, `sq8`, `binary`, `pq`, `rabitq` | `full` | Storage/quantization mode |
 
-**`create-metadata-collection`:** Creates a collection that stores only structured JSON payloads -- no vectors, no graph edges. Useful for reference tables, configuration, or any metadata that does not need similarity search. There are no additional flags beyond the database path and collection name.
+**`collection create-metadata`:** Creates a collection that stores only structured JSON payloads -- no vectors, no graph edges. Useful for reference tables, configuration, or any metadata that does not need similarity search. There are no additional flags beyond the database path and collection name.
 
 ### Points
 
 ```bash
 # Upsert a point with vector and payload
-velesdb upsert ./data my_vectors \
+velesdb data upsert ./data my_vectors \
   --id 1 \
   --vector '[0.1, 0.2, 0.3]' \
   --payload '{"title": "Hello World"}'
@@ -291,25 +291,25 @@ velesdb upsert ./data my_vectors \
 # Upsert with payload only (no --vector flag)
 # The vector defaults to an empty array. This will fail if the collection
 # expects a specific dimension -- the collection validates vector dimensions.
-velesdb upsert ./data my_vectors \
+velesdb data upsert ./data my_vectors \
   --id 2 \
   --payload '{"title": "No vector"}'
 
 # Get a point by ID (default output format: json)
-velesdb get ./data my_vectors 42
-velesdb get ./data my_vectors 42 --format table
+velesdb data get ./data my_vectors 42
+velesdb data get ./data my_vectors 42 --format table
 
 # Delete points
-velesdb delete-points ./data my_vectors 1 2 3
+velesdb data delete ./data my_vectors 1 2 3
 ```
 
-The `upsert` subcommand operates on **vector collections only**. The `--vector` flag is optional (an empty vector is used when omitted), but the collection will reject vectors whose dimension does not match the configured dimension -- this produces a dimension mismatch error. The `--id` flag is required.
+The `data upsert` subcommand operates on **vector collections only**. The `--vector` flag is optional (an empty vector is used when omitted), but the collection will reject vectors whose dimension does not match the configured dimension -- this produces a dimension mismatch error. The `--id` flag is required.
 
 ### Import / Export
 
 ```bash
 # Import from JSONL
-velesdb import data.jsonl \
+velesdb data import data.jsonl \
   --database ./data \
   --collection documents \
   --dimension 768 \
@@ -317,22 +317,22 @@ velesdb import data.jsonl \
   --batch-size 1000
 
 # Import from CSV (custom column names)
-velesdb import embeddings.csv \
+velesdb data import embeddings.csv \
   --database ./data \
   --collection docs \
   --id-column doc_id \
   --vector-column embedding
 
 # Export to JSON (vector collections only)
-velesdb export ./data documents --output documents.json
+velesdb data export ./data documents --output documents.json
 
-# Export metadata only (no vectors)
-velesdb export ./data documents --output meta.json --no-include-vectors
+# Export payloads only (omit vectors)
+velesdb data export ./data documents --output meta.json --include-vectors false
 ```
 
-> **Note on `--include-vectors`:** This is a Clap boolean flag that defaults to `true`. To disable it, use `--no-include-vectors` (Clap's automatic negation syntax). Writing `--include-vectors false` does **not** work as expected with Clap.
+> **Note on `--include-vectors`:** Vectors and payloads are included by default. Pass `--include-vectors false` to export payloads only (the bare `--include-vectors` form still means "include").
 
-**JSONL format for `import`:**
+**JSONL format for `data import`:**
 
 Each line must be a valid JSON object with the following fields:
 
@@ -350,26 +350,26 @@ Each line must be a valid JSON object with the following fields:
 
 Lines with mismatched vector dimensions are counted as errors and skipped.
 
-**`import` flags:**
+**`data import` flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-d, --database` | `./data` | Database directory |
 | `-c, --collection` | (required) | Target collection name |
 | `--dimension` | auto-detected | Vector dimension (detected from first record if omitted) |
-| `--metric` | `cosine` | Distance metric (`cosine`, `euclidean`, `dot`/`ip`, `hamming`, `jaccard`) |
-| `--storage-mode` | `full` | Storage mode (`full`/`f32`, `sq8`/`int8`, `binary`/`bit`, `pq`, `rabitq`) |
+| `--metric` | `cosine` | Distance metric (`cosine`, `euclidean`, `dot`, `hamming`, `jaccard`) |
+| `--storage-mode` | `full` | Storage mode (`full`, `sq8`, `binary`, `pq`, `rabitq`) |
 | `--id-column` | `id` | ID column name (CSV only) |
 | `--vector-column` | `vector` | Vector column name (CSV only) |
 | `--batch-size` | `1000` | Insertion batch size |
-| `--progress` | `true` | Show progress bar |
+| `--progress [true\|false]` | `true` | Show progress bar (`--progress false` to disable) |
 
-**`export` flags:**
+**`data export` flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-o, --output` | `<collection>.json` | Output file path |
-| `--include-vectors` / `--no-include-vectors` | `true` | Include vector data in export |
+| `--include-vectors [true\|false]` | `true` | Include vector data (`--include-vectors false` to omit) |
 
 Export operates on **vector collections only**. Attempting to export a graph or metadata collection produces a "not found" error.
 
@@ -377,22 +377,22 @@ Export operates on **vector collections only**. Attempting to export a graph or 
 
 ```bash
 # Execute a single VelesQL query
-velesdb query ./data "SELECT * FROM documents LIMIT 10"
-velesdb query ./data "SELECT * FROM docs WHERE category = 'tech' LIMIT 5" --format json
+velesdb query execute ./data "SELECT * FROM documents LIMIT 10"
+velesdb query execute ./data "SELECT * FROM docs WHERE category = 'tech' LIMIT 5" --format json
 
 # Multi-query fusion search
-velesdb multi-search ./data my_vectors \
+velesdb query search ./data my_vectors \
   '[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]' \
   -k 10 \
   --strategy rrf \
   --rrf-k 60
 
 # Explain a query plan (default format: tree)
-velesdb explain ./data "SELECT * FROM docs WHERE vector NEAR [0.1, 0.2] LIMIT 5"
-velesdb explain ./data "SELECT * FROM docs LIMIT 10" --format json
+velesdb query explain ./data "SELECT * FROM docs WHERE vector NEAR [0.1, 0.2] LIMIT 5"
+velesdb query explain ./data "SELECT * FROM docs LIMIT 10" --format json
 ```
 
-**`multi-search` flags:**
+**`query search` flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -401,11 +401,11 @@ velesdb explain ./data "SELECT * FROM docs LIMIT 10" --format json
 | `--rrf-k` | `60` | RRF k parameter (only used with `rrf` strategy) |
 | `-f, --format` | `table` | Output format (`table`, `json`) |
 
-**`multi-search` strategies:** `average` (also `avg`), `maximum` (also `max`), `rrf` (default), `weighted`
+**`query search` strategies:** `average` (also `avg`), `maximum` (also `max`), `rrf` (default), `weighted`
 
 The `weighted` strategy uses fixed weights (`avg_weight=0.5`, `max_weight=0.3`, `hit_weight=0.2`) that are not configurable via the CLI.
 
-**`explain` formats:**
+**`query explain` formats:**
 
 The default format is `tree`, which renders a human-readable execution plan tree. Use `--format json` for machine-readable output.
 
@@ -424,8 +424,8 @@ Plan:
 
 ```bash
 # Collection statistics (point count, deletion ratio, index stats, column stats)
-velesdb analyze ./data my_vectors
-velesdb analyze ./data my_vectors --format json
+velesdb collection analyze ./data my_vectors
+velesdb collection analyze ./data my_vectors --format json
 ```
 
 ### Graph
@@ -600,32 +600,27 @@ The `USING FUSION` clause at query level combines results from multiple search s
 -- Dense vector + BM25 full-text combined with RRF
 SELECT * FROM documents
 WHERE vector NEAR $v AND content MATCH 'rust programming'
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10;
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60);
 
 -- Dense + sparse vector fusion with RSF
 SELECT * FROM documents
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-USING FUSION(strategy = 'rsf', dense_w = 0.7, sparse_w = 0.3)
-LIMIT 10;
+LIMIT 10 USING FUSION(strategy = 'rsf', dense_w = 0.7, sparse_w = 0.3);
 
 -- Weighted fusion
 SELECT * FROM docs
 WHERE vector NEAR $v
-USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3)
-LIMIT 10;
+LIMIT 10 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3);
 
 -- Maximum fusion (take best score)
 SELECT * FROM docs
 WHERE vector NEAR $v
-USING FUSION(strategy = 'maximum')
-LIMIT 10;
+LIMIT 10 USING FUSION(strategy = 'maximum');
 
 -- Default USING FUSION (defaults to RRF)
 SELECT * FROM docs
 WHERE vector NEAR $v
-USING FUSION
-LIMIT 10;
+LIMIT 10 USING FUSION;
 ```
 
 ### Graph MATCH Queries
@@ -991,7 +986,7 @@ velesdb> SELECT * FROM documents LIMIT 3;
 ```
 
 ```bash
-velesdb query ./data "SELECT * FROM docs LIMIT 3" --format json
+velesdb query execute ./data "SELECT * FROM docs LIMIT 3" --format json
 ```
 
 ## Shell Completions
@@ -1019,8 +1014,8 @@ velesdb completions elvish > ~/.config/elvish/lib/velesdb.elv
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `Collection 'X' not found` | The collection does not exist, or you used a command that expects a specific type (e.g., `upsert` requires a vector collection but 'X' is a graph collection). | Check the name with `.collections`. Use the correct command for the collection type. |
-| `Vector collection 'X' not found` | A vector-specific command (`upsert`, `export`, `delete-points`, `get`) was used on a graph or metadata collection. | Use the correct collection type or create a vector collection. |
+| `Collection 'X' not found` | The collection does not exist, or you used a command that expects a specific type (e.g., `data upsert` requires a vector collection but 'X' is a graph collection). | Check the name with `.collections`. Use the correct command for the collection type. |
+| `Vector collection 'X' not found` | A vector-specific command (`data upsert`, `data export`, `data delete`, `data get`) was used on a graph or metadata collection. | Use the correct collection type or create a vector collection. |
 | `Graph collection 'X' not found` | A graph command was used but the collection is not a graph collection. | Verify the collection type with `.schema X`. |
 | Dimension mismatch on upsert/import | The vector length does not match the collection's configured dimension. | Ensure all vectors have the correct number of elements. During import, mismatched lines are skipped and counted in `errors`. |
 | `Failed to open database` | The database path is incorrect, the directory does not exist, or insufficient permissions. | Verify the path exists and is writable. |

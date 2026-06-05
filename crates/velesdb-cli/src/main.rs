@@ -123,11 +123,9 @@ fn dispatch_collection(action: CollectionCommands) -> anyhow::Result<()> {
             metric,
             storage,
         } => handlers::handle_create_vector_collection(&path, &name, dimension, metric, storage),
-        CollectionCommands::CreateGraph {
-            path,
-            name,
-            schemaless,
-        } => handlers::handle_create_graph_collection(&path, &name, schemaless),
+        CollectionCommands::CreateGraph { path, name } => {
+            handlers::handle_create_graph_collection(&path, &name)
+        }
         CollectionCommands::CreateMetadata { path, name } => {
             handlers::handle_create_metadata_collection(&path, &name)
         }
@@ -262,99 +260,6 @@ fn dispatch_query(path: &std::path::Path, query: &str, format: &str) -> anyhow::
     Ok(())
 }
 
-// ============================================================================
-// Unit Tests
-// ============================================================================
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use cli_types::{MetricArg, StorageModeArg};
-    use velesdb_core::{DistanceMetric, StorageMode};
-
-    #[test]
-    fn test_commands_enum_size_below_threshold() {
-        let size = std::mem::size_of::<Commands>();
-        eprintln!("Commands enum size: {} bytes", size);
-        // Sub-enum grouping should keep the enum well under 1 KB.
-        assert!(
-            size < 1024,
-            "Commands enum is {} bytes, expected < 1024",
-            size
-        );
-    }
-
-    // =========================================================================
-    // Tests for MetricArg conversions
-    // =========================================================================
-
-    #[test]
-    fn test_metric_arg_cosine() {
-        let metric: DistanceMetric = MetricArg::Cosine.into();
-        assert_eq!(metric, DistanceMetric::Cosine);
-    }
-
-    #[test]
-    fn test_metric_arg_euclidean() {
-        let metric: DistanceMetric = MetricArg::Euclidean.into();
-        assert_eq!(metric, DistanceMetric::Euclidean);
-    }
-
-    #[test]
-    fn test_metric_arg_dot() {
-        let metric: DistanceMetric = MetricArg::Dot.into();
-        assert_eq!(metric, DistanceMetric::DotProduct);
-    }
-
-    #[test]
-    fn test_metric_arg_hamming() {
-        let metric: DistanceMetric = MetricArg::Hamming.into();
-        assert_eq!(metric, DistanceMetric::Hamming);
-    }
-
-    #[test]
-    fn test_metric_arg_jaccard() {
-        let metric: DistanceMetric = MetricArg::Jaccard.into();
-        assert_eq!(metric, DistanceMetric::Jaccard);
-    }
-
-    // =========================================================================
-    // Tests for StorageModeArg conversions (Phase 1.2)
-    // =========================================================================
-
-    #[test]
-    fn test_storage_mode_arg_full() {
-        let mode: StorageMode = StorageModeArg::Full.into();
-        assert_eq!(mode, StorageMode::Full);
-    }
-
-    #[test]
-    fn test_storage_mode_arg_sq8() {
-        let mode: StorageMode = StorageModeArg::Sq8.into();
-        assert_eq!(mode, StorageMode::SQ8);
-    }
-
-    #[test]
-    fn test_storage_mode_arg_binary() {
-        let mode: StorageMode = StorageModeArg::Binary.into();
-        assert_eq!(mode, StorageMode::Binary);
-    }
-
-    #[test]
-    fn test_storage_mode_arg_pq() {
-        let mode: StorageMode = StorageModeArg::Pq.into();
-        assert_eq!(mode, StorageMode::ProductQuantization);
-    }
-
-    #[test]
-    fn test_storage_mode_arg_rabitq() {
-        let mode: StorageMode = StorageModeArg::Rabitq.into();
-        assert_eq!(mode, StorageMode::RaBitQ);
-    }
-
-    #[test]
-    fn test_storage_mode_arg_default_is_full() {
-        let mode = StorageModeArg::default();
-        assert!(matches!(mode, StorageModeArg::Full));
-    }
-}
+#[path = "main_tests.rs"]
+mod main_tests;

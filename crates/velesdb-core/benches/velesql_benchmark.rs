@@ -204,7 +204,7 @@ fn bench_realistic_workload(c: &mut Criterion) {
 }
 
 // =============================================================================
-// EXPLAIN Query Plan Benchmarks (WIS-22)
+// EXPLAIN Query Plan Benchmarks
 // =============================================================================
 
 fn bench_explain_simple(c: &mut Criterion) {

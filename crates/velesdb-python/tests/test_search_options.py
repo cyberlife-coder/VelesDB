@@ -98,7 +98,11 @@ def test_search_request_matches_search(collection):
 
 def test_search_request_with_filter(collection):
     query = [0.5, 0.5, 0.5, 0.1]
-    opts = SearchOptions(vector=query, top_k=5, filter={"idx": 2})
+    opts = SearchOptions(
+        vector=query,
+        top_k=5,
+        filter={"condition": {"type": "eq", "field": "idx", "value": 2}},
+    )
     results = collection.search_request(opts)
     # Filter should restrict to the single point with idx=2
     for r in results:

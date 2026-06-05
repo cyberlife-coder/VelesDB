@@ -156,6 +156,15 @@ impl IntervalValue {
 }
 
 impl Value {
+    /// Returns `true` if this value is a subquery.
+    ///
+    /// Subqueries parse but are not yet executable; callers use this to reject
+    /// them before they silently evaluate to `Value::Null`.
+    #[must_use]
+    pub fn is_subquery(&self) -> bool {
+        matches!(self, Self::Subquery(_))
+    }
+
     /// Converts this VelesQL value to a JSON value.
     ///
     /// Literal values (integer, float, string, boolean, null) map directly

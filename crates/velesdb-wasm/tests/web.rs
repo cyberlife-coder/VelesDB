@@ -358,7 +358,7 @@ fn test_with_capacity_constructor() {
 }
 
 // =============================================================================
-// IndexedDB Persistence Tests (TDD - WIS-73)
+// IndexedDB Persistence Tests (TDD)
 // =============================================================================
 
 // Note: These tests require browser environment with IndexedDB support

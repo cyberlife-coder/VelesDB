@@ -1,6 +1,6 @@
 //! Tests for `FusionStrategy` implementations.
 
-use super::strategy::FusionStrategy;
+use super::strategy::{FusionError, FusionStrategy};
 
 // =============================================================================
 // Test helpers
@@ -522,6 +522,67 @@ fn test_rsf_validation_negative_weight() {
 fn test_rsf_validation_sum_not_one() {
     let result = FusionStrategy::relative_score(0.3, 0.3);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_weighted_fuse_rejects_invalid_weight_sum_from_literal() {
+    // Direct enum-literal construction bypasses `FusionStrategy::weighted()`,
+    // so the validating constructor cannot guard against unnormalized weights.
+    // The fuse path must reject a weight sum that is not 1.0.
+    let strategy = FusionStrategy::Weighted {
+        avg_weight: 0.9,
+        max_weight: 0.9,
+        hit_weight: 0.9,
+    };
+    let results = vec![vec![(1_u64, 1.0_f32)]];
+    let result = strategy.fuse(results);
+    assert!(
+        matches!(result, Err(FusionError::InvalidWeightSum { .. })),
+        "Weighted fuse must reject weights that do not sum to 1.0, got {result:?}"
+    );
+}
+
+#[test]
+fn test_weighted_fuse_rejects_negative_weight_from_literal() {
+    let strategy = FusionStrategy::Weighted {
+        avg_weight: -0.5,
+        max_weight: 0.75,
+        hit_weight: 0.75,
+    };
+    let results = vec![vec![(1_u64, 1.0_f32)]];
+    let result = strategy.fuse(results);
+    assert!(
+        matches!(result, Err(FusionError::NegativeWeight { .. })),
+        "Weighted fuse must reject negative weights, got {result:?}"
+    );
+}
+
+#[test]
+fn test_rsf_fuse_rejects_invalid_weight_sum_from_literal() {
+    let strategy = FusionStrategy::RelativeScore {
+        dense_weight: 0.3,
+        sparse_weight: 0.3,
+    };
+    let results = vec![vec![(1_u64, 1.0_f32)], vec![(2_u64, 1.0_f32)]];
+    let result = strategy.fuse(results);
+    assert!(
+        matches!(result, Err(FusionError::InvalidWeightSum { .. })),
+        "RelativeScore fuse must reject weights that do not sum to 1.0, got {result:?}"
+    );
+}
+
+#[test]
+fn test_rsf_fuse_rejects_negative_weight_from_literal() {
+    let strategy = FusionStrategy::RelativeScore {
+        dense_weight: -0.1,
+        sparse_weight: 1.1,
+    };
+    let results = vec![vec![(1_u64, 1.0_f32)], vec![(2_u64, 1.0_f32)]];
+    let result = strategy.fuse(results);
+    assert!(
+        matches!(result, Err(FusionError::NegativeWeight { .. })),
+        "RelativeScore fuse must reject negative weights, got {result:?}"
+    );
 }
 
 #[test]

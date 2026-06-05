@@ -8,7 +8,7 @@
 //! `upsert_bulk_inner` that consults the attached manager after every
 //! successful batch.
 //!
-//! Test categories (per `.claude/rules/bdd-testing.md`):
+//! Test categories:
 //! - Nominal (≥ 60%): attach → upsert → query divergence
 //! - Edge (≈ 20%): detach / re-attach / disabled config / cooldown
 //! - Negative (≥ 20%): no attachment = no state leak, divergence without

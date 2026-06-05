@@ -850,7 +850,7 @@ fn test_search_with_rerank_euclidean_metric() {
 }
 
 // =========================================================================
-// WIS-8: Memory Leak Fix Tests
+// Memory Leak Fix Tests
 // Tests for multi-tenant scenarios and proper Drop behavior
 // =========================================================================
 

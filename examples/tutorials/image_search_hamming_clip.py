@@ -174,14 +174,14 @@ def find_similar(
     # --- Pass 1: The Bouncer (instant) ---
     query_barcode = compute_barcode(query_path)
     t0 = time.time()
-    fast_candidates = bouncer.search(vector=query_barcode, top_k=shortlist_k)
+    fast_candidates = bouncer.search_request(velesdb.SearchOptions(vector=query_barcode, top_k=shortlist_k))
     bouncer_ms = (time.time() - t0) * 1000
 
     # --- Pass 2: The Detective (thorough) ---
     # ONE single CLIP query. Not N. This is what makes it scale.
     query_meaning = compute_meaning(query_path, model, preprocess)
     t0 = time.time()
-    all_meanings = detective.search(vector=query_meaning, top_k=shortlist_k * 2)
+    all_meanings = detective.search_request(velesdb.SearchOptions(vector=query_meaning, top_k=shortlist_k * 2))
     meaning_scores = {r["id"]: r["score"] for r in all_meanings}
 
     # Re-rank the Bouncer's shortlist with the Detective's scores

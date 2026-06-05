@@ -14,7 +14,11 @@ from typing import Any, List, Optional, Tuple
 
 from langchain_core.documents import Document
 
-from langchain_velesdb._common import payload_to_doc_parts
+from langchain_velesdb._common import (
+    payload_to_doc_parts,
+    _results_to_docs,
+    _results_to_docs_with_score,
+)
 from langchain_velesdb.multi_query_ops import MultiQueryOpsMixin
 from langchain_velesdb.security import (
     validate_k,
@@ -34,26 +38,12 @@ from langchain_velesdb.security import (
 # blocks below still catch the fallback path regardless of runtime.
 try:
     from velesdb import VelesDBError as _VelesDBError
+    from velesdb import SearchOptions as _SearchOptions
 except (ImportError, AttributeError):  # pragma: no cover — optional dependency fallback
     _VelesDBError = Exception  # type: ignore[misc,assignment]
+    _SearchOptions = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
-
-
-def _payload_to_doc(result: dict) -> Document:
-    """Convert a single search result dict to a LangChain Document."""
-    text, metadata = payload_to_doc_parts(result)
-    return Document(page_content=text, metadata=metadata)
-
-
-def _results_to_docs(results: List[dict]) -> List[Document]:
-    """Convert a list of search result dicts to Documents."""
-    return [_payload_to_doc(r) for r in results]
-
-
-def _results_to_docs_with_score(results: List[dict]) -> List[Tuple[Document, float]]:
-    """Convert a list of search result dicts to (Document, score) tuples."""
-    return [(_payload_to_doc(r), r.get("score", 0.0)) for r in results]
 
 
 class SearchOpsMixin(MultiQueryOpsMixin):
@@ -152,7 +142,7 @@ class SearchOpsMixin(MultiQueryOpsMixin):
             return collection.search_with_ef(query_embedding, top_k=k, ef_search=ef_search)
         if filter is not None:
             return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
-        return collection.search(query_embedding, top_k=k)
+        return collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
 
     def _run_sparse_search(
         self,
@@ -192,7 +182,7 @@ class SearchOpsMixin(MultiQueryOpsMixin):
             search_kwargs["filter"] = filter
 
         try:
-            return collection.search(**search_kwargs)
+            return collection.search_request(_SearchOptions(**search_kwargs))
         except (RuntimeError, TypeError, ValueError, _VelesDBError) as exc:
             # Since Wave 3 Commit 2, `VELES-015 SearchNotSupported` is
             # routed to `ValueError`, and other sparse-search failures
@@ -206,7 +196,7 @@ class SearchOpsMixin(MultiQueryOpsMixin):
             )
             if filter is not None:
                 return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
-            return collection.search(vector=query_embedding, top_k=k)
+            return collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
 
     def similarity_search(
         self,

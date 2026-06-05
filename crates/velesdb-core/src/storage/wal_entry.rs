@@ -11,6 +11,15 @@
 //! marker values, preserving backward-compatible reading of older entries.
 //! No separate schema-version header is needed because the per-entry
 //! marker already encodes the wire format.
+//!
+//! ## Torn-tail policy
+//!
+//! A crash mid-append leaves a partially-written final record. Because the WAL
+//! is append-only and replayed sequentially, a truncation can only ever be the
+//! last record. [`WalEntry::read`] / [`WalEntry::apply`] therefore signal such a
+//! tail by returning `Ok(None)` instead of an error, so the caller stops replay
+//! cleanly and keeps every prior entry rather than failing the collection open.
+//! This mirrors the vector WAL's `#898` policy (`storage::mmap::wal_replay`).
 
 use super::log_payload_io::{
     compute_delete_crc, compute_store_crc, CRC_DELETE_MARKER, CRC_STORE_MARKER,
@@ -44,7 +53,10 @@ impl WalEntry {
         }
 
         let mut id_bytes = [0u8; 8];
-        reader.read_exact(&mut id_bytes)?;
+        if reader.read_exact(&mut id_bytes).is_err() {
+            // Torn tail: crashed after the marker but before the full id.
+            return Ok(None);
+        }
         let id = u64::from_le_bytes(id_bytes);
         let pos_after_header = pos + 1 + 8;
 
@@ -70,6 +82,10 @@ impl WalEntry {
 
     /// Applies this entry to the index, returning the new file position.
     ///
+    /// Returns `Ok(None)` for a torn tail (a record truncated by a crash
+    /// mid-append) so the caller stops replay cleanly; see the module-level
+    /// torn-tail policy.
+    ///
     /// `wal_end` is the logical end of the WAL being replayed; it bounds the
     /// declared payload length so a corrupt length field cannot drive an
     /// unbounded allocation (#897/#898).
@@ -78,10 +94,10 @@ impl WalEntry {
         index: &mut FxHashMap<u64, u64>,
         reader: &mut BufReader<File>,
         wal_end: u64,
-    ) -> io::Result<u64> {
+    ) -> io::Result<Option<u64>> {
         match self.op {
             WalOp::Store { id } => self.apply_store(id, index, reader, wal_end),
-            WalOp::Delete { id } => self.apply_delete(id, index, reader),
+            WalOp::Delete { id } => Ok(self.apply_delete(id, index, reader)),
         }
     }
 
@@ -91,22 +107,24 @@ impl WalEntry {
         index: &mut FxHashMap<u64, u64>,
         reader: &mut BufReader<File>,
         wal_end: u64,
-    ) -> io::Result<u64> {
+    ) -> io::Result<Option<u64>> {
         let len_offset = self.pos_after_header;
         let mut len_bytes = [0u8; 4];
-        reader.read_exact(&mut len_bytes)?;
+        if reader.read_exact(&mut len_bytes).is_err() {
+            // Torn tail: crashed after the id but before the full length field.
+            return Ok(None);
+        }
         let payload_len = u64::from(u32::from_le_bytes(len_bytes));
 
         // OOM guard (#897/#898): the payload (plus the 4-byte CRC for v2
-        // records) cannot extend past the WAL end. Reject before allocating.
+        // records) cannot extend past the WAL end. A length running past EOF is
+        // a torn tail (crashed before the payload landed) — stop cleanly rather
+        // than failing the open, and never allocate the oversized buffer.
         let payload_start = self.pos_after_header + 4;
         let crc_bytes = u64::from(self.has_crc) * 4;
         let max_payload = wal_end.saturating_sub(payload_start);
         if payload_len.saturating_add(crc_bytes) > max_payload {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "WAL payload length exceeds remaining file",
-            ));
+            return Ok(None);
         }
 
         let end_pos = if self.has_crc {
@@ -119,7 +137,7 @@ impl WalEntry {
             self.pos_after_header + 4 + payload_len
         };
 
-        Ok(end_pos)
+        Ok(Some(end_pos))
     }
 
     fn apply_store_with_crc(
@@ -157,10 +175,13 @@ impl WalEntry {
         id: u64,
         index: &mut FxHashMap<u64, u64>,
         reader: &mut BufReader<File>,
-    ) -> io::Result<u64> {
+    ) -> Option<u64> {
         if self.has_crc {
             let mut crc_bytes = [0u8; 4];
-            reader.read_exact(&mut crc_bytes)?;
+            if reader.read_exact(&mut crc_bytes).is_err() {
+                // Torn tail: crashed after the id but before the CRC.
+                return None;
+            }
             let stored_crc = u32::from_le_bytes(crc_bytes);
             let computed_crc = compute_delete_crc(id);
 
@@ -173,10 +194,10 @@ impl WalEntry {
                 );
             }
 
-            Ok(self.pos_after_header + 4)
+            Some(self.pos_after_header + 4)
         } else {
             index.remove(&id);
-            Ok(self.pos_after_header)
+            Some(self.pos_after_header)
         }
     }
 }

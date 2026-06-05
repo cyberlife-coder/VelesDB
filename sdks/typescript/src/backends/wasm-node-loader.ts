@@ -6,7 +6,7 @@
  * `default()` because Node's stdlib `fetch` has no `file://` scheme handler
  * (the import explodes with "not implemented... yet..."). This module
  * isolates the Node detection + bytes-loader so `wasm.ts` stays under the
- * 500 NLOC limit (.claude/rules/code-quality.md).
+ * 500 NLOC limit (see QUALITY_BAR.md).
  *
  * The functions here are referenced from `wasm.ts#init()` exactly when
  * {@link isNodeRuntime} returns true; in browser bundles the readdir/fs/

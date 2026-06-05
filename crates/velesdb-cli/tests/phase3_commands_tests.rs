@@ -201,7 +201,8 @@ fn test_create_graph_collection_help() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("schemaless"));
+        // The removed `--schemaless` flag must not reappear in the help output.
+        .stdout(predicate::str::contains("schemaless").not());
 }
 
 // =============================================================================

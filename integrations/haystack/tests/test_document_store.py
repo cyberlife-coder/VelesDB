@@ -43,6 +43,27 @@ class DuplicateDocumentError(Exception):
 # ---------------------------------------------------------------------------
 
 
+class _FakeSearchOptions:
+    """Minimal stand-in for velesdb.SearchOptions used by search_request."""
+
+    def __init__(
+        self,
+        vector: Any = None,
+        *,
+        sparse_vector: Any = None,
+        top_k: int = 10,
+        filter: Any = None,  # pylint: disable=redefined-builtin
+        sparse_index_name: Any = None,
+        include_vectors: bool = False,
+    ) -> None:
+        self.vector = vector
+        self.sparse_vector = sparse_vector
+        self.top_k = top_k
+        self.filter = filter
+        self.sparse_index_name = sparse_index_name
+        self.include_vectors = include_vectors
+
+
 class _FakeCollection:
     def __init__(self) -> None:
         self._points: dict = {}  # int_id -> point dict
@@ -69,6 +90,10 @@ class _FakeCollection:
             {"id": p["id"], "score": 0.9, "payload": p.get("payload", {})}
             for p in list(self._points.values())[:top_k]
         ]
+
+    def search_request(self, opts: Any) -> list:
+        """Canonical search entry point — delegate to the legacy `search`."""
+        return self.search(opts.vector, top_k=opts.top_k, filter=opts.filter)
 
     def scroll(  # pylint: disable=redefined-builtin
         self,
@@ -146,7 +171,9 @@ def _load_module() -> types.ModuleType:
     errors_mod.DuplicateDocumentError = DuplicateDocumentError  # type: ignore[attr-defined]
     sys.modules["haystack.document_stores.errors"] = errors_mod
 
-    sys.modules["velesdb"] = types.SimpleNamespace(Database=_FakeDatabase)  # type: ignore
+    sys.modules["velesdb"] = types.SimpleNamespace(  # type: ignore
+        Database=_FakeDatabase, SearchOptions=_FakeSearchOptions
+    )
 
     # Stub velesdb_common.security with no-op validators (real package has its own tests).
     def _passthrough(value: Any, *args: Any, **kwargs: Any) -> Any:
@@ -727,7 +754,9 @@ def test_embedding_retrieval_translates_haystack_filter_to_veles_shape() -> None
 
     original_velesdb = _MOD.velesdb
     try:
-        _MOD.velesdb = types.SimpleNamespace(Database=_CapturingDatabase)  # type: ignore
+        _MOD.velesdb = types.SimpleNamespace(  # type: ignore
+            Database=_CapturingDatabase, SearchOptions=_FakeSearchOptions
+        )
         store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_search_translate")
         store.write_documents([
             Document(id="y", content="world", embedding=[0.5])

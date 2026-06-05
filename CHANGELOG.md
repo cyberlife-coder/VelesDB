@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.0] — 2026-06-05
+
+### Fixed
+- **Payload WAL crash recovery (#1011)**: a crash mid-append no longer leaves a
+  collection unopenable — replay now stops cleanly at a torn-tail record and
+  keeps every prior entry (mirrors the vector WAL's torn-tail policy).
+- **Vector retrieve overflow guard (#1012)**: the copy-path bounds check now
+  uses checked arithmetic so a corrupt near-`usize::MAX` index offset returns an
+  error instead of panicking on the slice.
+- **Hybrid fusion weight validation (#1013)**: `Weighted` / `RelativeScore`
+  weights are now validated on the `fuse()` path, so strategies built directly
+  from server/CLI/SDK request fields can no longer yield unnormalized scores.
+- **HNSW alpha validation (#1015)**: an out-of-range `alpha` (`< 1.0` or
+  non-finite) is now rejected at the REST (`400 Bad Request`), Python
+  (`ValueError`) and Tauri boundaries instead of silently degrading recall or
+  violating the `HnswParams` `Eq` invariant. Valid `alpha` (default `1.2`,
+  anything `>= 1.0`) is unaffected.
+- OpenAPI spec now types point `id` as `string` for `/search`, `/search/ids`,
+  `/scroll` and graph result endpoints, matching the on-the-wire format (these
+  responses quote the ID to preserve `u64` values above `2^53-1`). Schema-only
+  change, no behaviour change. A CI drift check now keeps the committed
+  `docs/openapi.{json,yaml}` snapshots in sync with the generated spec.
+- OpenAPI spec now models request body `id` fields as `oneOf` integer or
+  string, matching the input contract (both forms are accepted; string avoids
+  JavaScript precision loss above `2^53-1`). Schema-only, no behaviour change.
+
+### Removed
+- **CLI**: removed the non-functional `--schemaless` flag from
+  `collection create-graph`. The flag was a no-op (graphs were always
+  created schemaless regardless of its value); drop it from any scripts —
+  `velesdb collection create-graph <path> <name>` is unchanged in behaviour.
+
+### Changed
+- Public docs, tests, and SDK source comments no longer reference
+  maintainer-local engineering-rule files; they point to the public
+  `QUALITY_BAR.md` or describe the rule inline.
+- Removed an unused CLA automation-bot signer and a vestigial branch-name
+  pattern from the PR-governance allowlist.
+
 ## [1.16.0] — 2026-05-29
 
 ### Summary
@@ -109,7 +148,7 @@ The CI gate cleanup work (45 commits since v1.14.4) is the largest of any minor 
 - **`docs/sdk/ts/README.md` clarifies `sparseIndexName` vs `sparseSearchNamed`** ([#793](https://github.com/cyberlife-coder/VelesDB/pull/793)). REST backend supports both; WASM silently drops `sparseIndexName` and throws `wasmNotSupported` on `sparseSearchNamed`. Previously implicit; now explicit in JSDoc and README.
 - **`QUALITY_BAR.md` and `ARCHITECTURE.md` v1.13.2-frozen snapshots dereferenced** ([#789](https://github.com/cyberlife-coder/VelesDB/pull/789)). Counts of `unsafe` blocks, lock sites, etc. now point at the live CI verifier output instead of being hand-edited per release.
 - **`CONTRIBUTING.md` quickstart fixed** ([#787](https://github.com/cyberlife-coder/VelesDB/pull/787)): leaked WSL local path removed, placeholder clone URL replaced with the real `cyberlife-coder/VelesDB` URL.
-- **`CLAUDE.md` and `.claude/` gitignored** ([#786](https://github.com/cyberlife-coder/VelesDB/pull/786)). Author-local maintainer config no longer surfaces in the public repo.
+- **Maintainer-local author config gitignored** ([#786](https://github.com/cyberlife-coder/VelesDB/pull/786)). It no longer surfaces in the public repo.
 - **Roadmap consolidated** ([#792](https://github.com/cyberlife-coder/VelesDB/pull/792), closes [#689](https://github.com/cyberlife-coder/VelesDB/issues/689)). Hardware-accelerator backlog (GPU expansion beyond CUDA, FPGA exploration, Apple Neural Engine) collapsed into a single Horizon-3 entry with measurable decision criteria.
 
 ### Fixed
@@ -126,7 +165,7 @@ The CI gate cleanup work (45 commits since v1.14.4) is the largest of any minor 
 ### CI / Tooling
 
 - **Bumped GitHub Actions versions**: `actions/checkout 5 → 6` ([#751](https://github.com/cyberlife-coder/VelesDB/pull/751)), `actions/setup-node 6.3 → 6.4` ([#767](https://github.com/cyberlife-coder/VelesDB/pull/767)), `Swatinem/rust-cache 2.8.2 → 2.9.1` ([#769](https://github.com/cyberlife-coder/VelesDB/pull/769)), `softprops/action-gh-release 2.2 → 3.0` ([#771](https://github.com/cyberlife-coder/VelesDB/pull/771)), `pypa/gh-action-pypi-publish 1.12 → 1.14` ([#749](https://github.com/cyberlife-coder/VelesDB/pull/749)).
-- **CLA Assistant: claude bot added to signed contributors** ([12931cec](https://github.com/cyberlife-coder/VelesDB/commit/12931cec)) — unblocks future automated review comments.
+- **CLA Assistant: automation bot added to signed contributors** ([12931cec](https://github.com/cyberlife-coder/VelesDB/commit/12931cec)) — unblocks future automated review comments.
 - **`examples/react-wasm-search` Vite 7.3 + esbuild CVE remediation** ([#800](https://github.com/cyberlife-coder/VelesDB/pull/800)). Closes the moderate `GHSA-67mh-4wv8-2f99` esbuild dev-server CVE on the example toolchain; dropped the unused `vite-plugin-top-level-await` plugin (-30% bundle size). Supersedes Dependabot's [#798](https://github.com/cyberlife-coder/VelesDB/pull/798) / [#799](https://github.com/cyberlife-coder/VelesDB/pull/799) (Vite 8 incompatible with `@vitejs/plugin-react` v4).
 
 ### Refactor
@@ -189,7 +228,7 @@ Quality-of-life + correctness patch closing the post-v1.14.2 audit. Two **runtim
 - **`scripts/bump-version.ps1` and `scripts/check-version-sync.py` extended with 14 new entries + 6 new readers** so every drift listed in the v1.14.2 audit is auto-rewritten on the next release and verified by the gate. New readers: `yaml_openapi`, `ts_sdk_banner`, `roadmap_current`, `doc_guide_version_header`, `doc_last_updated_version`, `md_title_version`, `cargo_pin`. Total tracked: **37 checks across 36 unique files** in the verifier (was 22) — `docs/guides/CONFIGURATION.md` is now checked by two readers (TOML code-block header + markdown banner) since the file carries both. Bumper covers **35 manifests + Cargo workspace** (was 22). Both gates idempotent at v1.14.3 (`bump-version.ps1 -Version 1.14.3 -DryRun` reports `0 file(s) would be updated`). The `TARGETS` data structure in `check-version-sync.py` was changed from a `dict` to a list of `(path, format)` tuples — Devin caught a duplicate-key bug on the first revision where Python silently dropped the second `CONFIGURATION.md` entry, killing the TOML-header check; the list-of-tuples form makes per-file multi-reader coverage explicit and unambiguous.
 - **`scripts/check-version-sync.py` README-banner gap closed** (PR #728). Earlier post-v1.14.2 audit caught that `crates/velesdb-server/README.md` and `crates/velesdb-python/README.md` were tracked by `bump-version.ps1` but not by the verifier. Two new readers added (`doc_health_snippet` reused for the server README, new `doc_version_badge` for the Python README's shields.io banner). The two scripts still differ on two intentional entries (`sdks/typescript/package-lock.json` is only in the verifier — `npm install` regenerates it from `package.json`; `crates/velesdb-wasm/pkg/package.json` is only in the bumper — `wasm-pack build` regenerates it on every release), but the manually-tracked set now matches.
 - **`CONTRIBUTING.md` release recipe target count** updated from `17` (stale since v1.14.0) to `37 checks must align`. The CHANGELOG entry for v1.14.2 (which incorrectly claimed "21 targets") was corrected in the same PR.
-- **`.claude/rules/release-checklist.md` extended** with a new "Pre-Tag — MANDATORY Factual & Zero-Friction Audit" section (4 piliers: factualité, zero-friction, standards, vérification automatisée). Codifies the user-empathy audit that found the MSI fiction, the `__version__` constants drift, and the 11 doc banner stamps. Triggered automatically on every release request via the new `feedback_release_zero_friction_factual.md` memory entry.
+- **Release checklist extended** with a new "Pre-Tag — MANDATORY Factual & Zero-Friction Audit" section (4 piliers: factualité, zero-friction, standards, vérification automatisée). Codifies the user-empathy audit that found the MSI fiction, the `__version__` constants drift, and the 11 doc banner stamps. Triggered automatically on every release request via the new `feedback_release_zero_friction_factual.md` memory entry.
 
 ## [1.14.2] — 2026-05-01
 
@@ -495,7 +534,7 @@ restoration to keep the v1.13.x series fully backward-compatible.
 - **Tests**: `crates/velesdb-server/tests/admin_endpoints_bdd_tests.rs`
   with 13 nominal + edge + negative scenarios covering the three new
   endpoints and the delete -> vacuum -> compact lifecycle (mandatory
-  per `.claude/rules/bdd-testing.md`).
+  per the project BDD testing conventions).
 
 ### Changed
 
@@ -4423,12 +4462,12 @@ This change ensures VelesDB remains freely available while protecting against cl
   - Support for Python lists and NumPy arrays
   - Automatic `float64` → `float32` conversion
 
-- **NumPy Integration** (WIS-23):
+- **NumPy Integration**:
   - Direct support for `numpy.ndarray` in `upsert()` and `search()`
   - Zero-copy when possible for performance
   - Mixed Python list / NumPy array in same batch
 
-#### VelesQL CLI/REPL (WIS-19)
+#### VelesQL CLI/REPL
 - **Interactive REPL**: `velesdb-cli repl`
   - Syntax highlighting
   - Command history
@@ -4436,14 +4475,14 @@ This change ensures VelesDB remains freely available while protecting against cl
 - **Single Query Mode**: `velesdb-cli query "SELECT ..."`
 - **Database Info**: `velesdb-cli info ./data`
 
-#### LangChain Integration (WIS-30)
+#### LangChain Integration
 - **`langchain-velesdb` package**: LangChain VectorStore adapter
   - `VelesDBVectorStore` class
   - `add_texts()`, `similarity_search()`, `delete()`
   - `as_retriever()` for RAG pipelines
   - Full test suite (9 tests)
 
-#### Additional Distance Metrics (WIS-33)
+#### Additional Distance Metrics
 - **Hamming Distance**: For binary vectors and locality-sensitive hashing
   - Ultra-fast bit comparison (XOR + popcount)
   - Ideal for: image hashing, fingerprints, duplicate detection
@@ -4470,13 +4509,13 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### Performance Optimizations (WIS-44)
-- **Explicit SIMD** (WIS-47): 4.2x faster cosine similarity using `wide` crate
+#### Performance Optimizations
+- **Explicit SIMD**: 4.2x faster cosine similarity using `wide` crate
   - Cosine: 320ns → **76ns** (4.2x speedup)
   - Euclidean: 138ns → **47ns** (2.9x speedup)
   - Dot Product: 130ns → **45ns** (2.9x speedup)
 
-- **ColumnStore Filtering** (WIS-46): 122x faster metadata filtering
+- **ColumnStore Filtering**: 122x faster metadata filtering
   - Columnar storage for typed metadata (i64, f64, string, bool)
   - String interning for efficient string comparisons
   - RoaringBitmap for combining filters (AND/OR)
@@ -4488,7 +4527,7 @@ This change ensures VelesDB remains freely available while protecting against cl
   - Linux/macOS: `curl -fsSL .../install.sh | bash`
   - Windows: `irm .../install.ps1 | iex`
 
-- **OpenAPI/Swagger** (WIS-34): Full API documentation
+- **OpenAPI/Swagger**: Full API documentation
   - Swagger UI at `/swagger-ui`
   - OpenAPI spec at `/api-docs/openapi.json`
 
@@ -4514,7 +4553,7 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### Half-Precision Support (WIS-61)
+#### Half-Precision Support
 - **f16/bf16 vectors**: 50% memory reduction
   - `VectorPrecision` enum: F32, F16, BF16
   - `VectorData` with automatic conversions
@@ -4526,14 +4565,14 @@ This change ensures VelesDB remains freely available while protecting against cl
 | 768 (BERT)| 3.0 KB   | 1.5 KB   | 50%     |
 | 1536 (GPT)| 6.0 KB   | 3.0 KB   | 50%     |
 
-#### WASM Support (WIS-60)
+#### WASM Support
 - **`velesdb-wasm` crate**: Vector search in the browser
   - `VectorStore` with insert/search/remove
   - Cosine, Euclidean, Dot Product metrics
   - WASM SIMD128 optimizations via `wide` crate
   - JavaScript API via wasm-bindgen
 
-#### AVX-512 Optimizations (WIS-59)
+#### AVX-512 Optimizations
 - **wide32 processing**: 4x f32x8 accumulators for maximum ILP
   - 40-50% improvement on HNSW recall benchmarks
   - Automatic CPU feature detection
@@ -4552,7 +4591,7 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### BM25 Full-Text Search (WIS-55)
+#### BM25 Full-Text Search
 - **`Bm25Index`**: Full-text search with BM25 ranking algorithm
   - Tokenization with stopword removal
   - Term frequency / inverse document frequency scoring
@@ -4575,7 +4614,7 @@ This change ensures VelesDB remains freely available while protecting against cl
   - `POST /collections/{name}/search/text` - BM25 text search
   - `POST /collections/{name}/search/hybrid` - Hybrid search
 
-#### Tauri Desktop Plugin (WIS-67)
+#### Tauri Desktop Plugin
 - **`tauri-plugin-velesdb`**: Vector search in desktop applications
   - Full Tauri v2 compatibility
   - 9 commands: CRUD, search, text_search, hybrid_search, query
@@ -4627,7 +4666,7 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### TypeScript SDK (WIS-71)
+#### TypeScript SDK
 - **`@velesdb/sdk`**: Unified TypeScript client for browser and Node.js
   - WASM backend for client-side vector search
   - REST backend for server communication
@@ -4646,7 +4685,7 @@ This change ensures VelesDB remains freely available while protecting against cl
   const results = await db.search('docs', query, { k: 5 });
   ```
 
-#### IndexedDB Persistence (WIS-73)
+#### IndexedDB Persistence
 - **`export_to_bytes()`**: Serialize vector store to binary format
 - **`import_from_bytes()`**: Restore from binary data
 - Custom binary format with "VELS" magic number, versioning
@@ -4658,7 +4697,7 @@ This change ensures VelesDB remains freely available while protecting against cl
   | Export | **4479 MB/s** |
   | Import | **2943 MB/s** |
 
-#### Tauri RAG Tutorial (WIS-74)
+#### Tauri RAG Tutorial
 - **`examples/tauri-rag-app`**: Complete desktop RAG application
   - React + Tailwind UI
   - Document ingestion with chunking
@@ -4688,7 +4727,7 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### Performance Optimizations P1 (WIS-86/87)
+#### Performance Optimizations P1
 
 - **ContiguousVectors**: Cache-optimized memory layout
   - 64-byte aligned contiguous buffer for cache line efficiency
@@ -4732,15 +4771,20 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ---
 
-## [Unreleased]
+## Roadmap
 
-### Planned
-- LlamaIndex integration (WIS-66)
-- Prometheus /metrics endpoint (WIS-63)
-- Product Quantization (WIS-65)
-- Multi-tenancy (WIS-68)
-- API Authentication (WIS-69)
-- Starlight documentation site
+Community roadmap and timelines live in [`ROADMAP.md`](ROADMAP.md). LlamaIndex
+integration, the Prometheus `/metrics` endpoint, Product Quantization, and
+API-key authentication previously listed here have all shipped. The one item
+still genuinely pending is:
+
+- Unified documentation site (Astro/Starlight) — the reference docs currently
+  ship as Markdown under `docs/`.
+
+> Distributed replication, lock-free concurrent-WAL writes, and production
+> RBAC / multi-tenant isolation are **VelesDB Enterprise** features (a separate
+> product), not part of the open-source Community roadmap — see the
+> "Scope & boundaries" section of the README.
 
 [Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.16.0...HEAD
 [1.16.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.16.0

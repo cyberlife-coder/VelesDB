@@ -77,7 +77,12 @@ pub struct NativeHnsw<D: DistanceEngine> {
     pub(in crate::index::hnsw::native) max_layer: AtomicUsize,
     /// Number of elements in the index
     pub(in crate::index::hnsw::native) count: AtomicUsize,
-    /// Simple PRNG state for layer selection
+    /// Simple PRNG state for layer selection during insertion.
+    ///
+    /// Used exclusively by `random_layer()` on the write path.  The search
+    /// path previously also consumed this via `gather_multi_entry_points`, but
+    /// that was replaced by the thread-local `PROBE_RNG` in `search.rs`
+    /// (issue #967) to eliminate shared-atomic contention under concurrent load.
     pub(in crate::index::hnsw::native) rng_state: AtomicU64,
     /// Maximum connections per node (M parameter)
     pub(in crate::index::hnsw::native) max_connections: usize,
@@ -405,6 +410,38 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Acquires locks in correct rank order: vectors (10) → layers (20).
     /// This avoids repeated lock acquire/release in tight search loops (F-03/F-04).
     ///
+    /// # Concurrent-search scalability — investigation closed (issue #967, 2026-06-03)
+    ///
+    /// Benchmark (`scalability_benchmark::concurrent_queries`, M5 Pro, 100 K × 768-dim):
+    /// 8 parallel searches achieve ~5× throughput instead of the ideal ~8×,
+    /// with per-batch latency 66% higher than single-threaded.
+    ///
+    /// **Cause 1 — `rng_state` CAS (fixed in this file's companion `search.rs`).**
+    /// `gather_multi_entry_points` called `self.rng_state.fetch_update` once per
+    /// search when `num_probes > 1` (triggered at 100 K vectors with the default
+    /// `Balanced` quality, ef_search = 320).  With 8 concurrent threads, all
+    /// competing on the same `AtomicU64`, this produced measurable cache-line
+    /// bouncing (~1 cache miss per search per thread).  **Fix**: thread-local
+    /// XORshift64 in `NativeHnsw::next_probe_rng()` — zero shared atomics on
+    /// the steady-state search path.
+    ///
+    /// **Cause 2 — DRAM latency (fundamental hardware limit, not fixable in SW).**
+    /// 100 K × 768-dim = 307 MB of vector data; the M5 Pro's shared L3 is 24 MB.
+    /// HNSW beam-search (ef = 320) accesses ~400–600 random 3 KB chunks per query,
+    /// almost all of which miss L3 and stall on DRAM (~100 ns latency each).
+    /// With 8 threads sharing one memory controller (~32 outstanding requests),
+    /// each thread sees ~4× more DRAM stalls than a lone thread, giving the
+    /// observed ~5× rather than ~8× throughput scaling.  This is an inherent
+    /// physical limit; software mitigations are:
+    ///   - FP16 storage (halves DRAM traffic, not yet implemented),
+    ///   - BFS reordering (`reorder_for_locality` — already available),
+    ///   - keeping indices ≤ L3 size (≤ ~7 M vectors at 128-dim, ≤ 800 K at 768-dim).
+    ///
+    /// **`parking_lot::RwLock` reader-counter overhead**: each `read()` does one
+    /// `fetch_add` + one `fetch_sub` on the lock word. At 8 threads × 2 locks ×
+    /// 2 ops = 32 atomic ops per search over ~10 ms, this adds < 5 µs and is
+    /// not a meaningful contributor.
+    ///
     /// If vector storage is not yet initialized, the closure is **not** called
     /// and `R::default()` is returned.
     #[inline]
@@ -444,26 +481,35 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     fn random_layer(&self) -> usize {
         let old_state = self
             .rng_state
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut state| {
-                if state == 0 {
-                    state = 0x853c_49e6_748f_ea9b;
-                }
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-                Some(state)
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |state| {
+                let seed = if state == 0 {
+                    0x853c_49e6_748f_ea9b
+                } else {
+                    state
+                };
+                Some(xorshift64(seed))
             })
             .unwrap_or_else(|s| s);
-        let mut state = old_state;
-        if state == 0 {
-            state = 0x853c_49e6_748f_ea9b;
-        }
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        let uniform = (state as f64) / (u64::MAX as f64);
+        let seed = if old_state == 0 {
+            0x853c_49e6_748f_ea9b
+        } else {
+            old_state
+        };
+        let uniform = (xorshift64(seed) as f64) / (u64::MAX as f64);
         let uniform_safe = uniform.max(f64::MIN_POSITIVE);
         let level = (-uniform_safe.ln() * self.level_mult).floor() as usize;
         level.min(15)
     }
+}
+
+/// XORshift64 step (Marsaglia 2003): advances a non-zero PRNG `state` by one
+/// iteration with the canonical `13/7/17` shift triple. Shared by the
+/// insert-path `random_layer` (above) and the search-path `next_probe_rng`
+/// (in `search.rs`) so the generator stays identical across both paths.
+#[inline]
+fn xorshift64(mut state: u64) -> u64 {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    state
 }

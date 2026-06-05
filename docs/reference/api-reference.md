@@ -53,7 +53,7 @@ Check server health status.
 ```json
 {
   "status": "ok",
-  "version": "1.16.0"
+  "version": "1.17.0"
 }
 ```
 
@@ -228,6 +228,14 @@ Delete a point by ID.
 
 ## Search
 
+> **Point ID encoding.** Search, `search/ids`, and `scroll` responses serialize
+> point IDs as JSON **strings** (`"id": "1"`). A `u64` ID above
+> `Number.MAX_SAFE_INTEGER` (2^53 − 1) would silently lose precision when parsed
+> as a JavaScript number, so these payload-bearing result sets quote the ID.
+> Other endpoints — `GET /collections/:name/points/:id`, point insert, and the
+> VelesQL `POST /query` projected rows — return the ID in its native **integer**
+> form. Both string and number are accepted on input.
+
 ### POST /collections/:name/search
 
 Search for similar vectors.
@@ -238,6 +246,7 @@ Search for similar vectors.
 |-------|------|----------|-------------|
 | vector | array[float] | Yes | Query vector |
 | top_k | integer | No | Number of results (default: 10) |
+| filter | object | No | Optional metadata filter (see shape below) |
 
 **Example:**
 ```json
@@ -247,12 +256,29 @@ Search for similar vectors.
 }
 ```
 
+**Example with a metadata filter:**
+
+The `filter` uses the canonical VelesDB filter shape:
+`{"condition": {"type": <op>, "field": ..., "value"/"values"/"pattern"/"conditions": ...}}`.
+Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `like`, `ilike`,
+`is_null`, `is_not_null`, `array_contains`, `array_contains_any`, `array_contains_all`,
+`geo_distance`, `geo_bbox`, and `and`/`or`/`not` for composition. A malformed filter
+returns `400`.
+
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "top_k": 5,
+  "filter": {"condition": {"type": "eq", "field": "category", "value": "tech"}}
+}
+```
+
 **Response:**
 ```json
 {
   "results": [
     {
-      "id": 1,
+      "id": "1",
       "score": 0.98,
       "payload": {"title": "Hello World"}
     }
@@ -284,7 +310,7 @@ BM25 full-text search across document payloads.
 {
   "results": [
     {
-      "id": 1,
+      "id": "1",
       "score": 2.45,
       "payload": {"content": "Learn Rust programming"}
     }
@@ -321,7 +347,7 @@ Hybrid search combining vector similarity and BM25 text relevance using Reciproc
 {
   "results": [
     {
-      "id": 1,
+      "id": "1",
       "score": 0.0312,
       "payload": {"content": "Rust programming guide"}
     }
@@ -400,8 +426,8 @@ Execute multiple searches in a single request.
 ```json
 {
   "results": [
-    {"results": [{"id": 1, "score": 0.98, "payload": {...}}]},
-    {"results": [{"id": 2, "score": 0.95, "payload": {...}}]}
+    {"results": [{"id": "1", "score": 0.98, "payload": {...}}]},
+    {"results": [{"id": "2", "score": 0.95, "payload": {...}}]}
   ],
   "timing_ms": 2.34
 }
@@ -433,8 +459,8 @@ Execute multiple vector queries and merge results using Reciprocal Rank Fusion (
 ```json
 {
   "results": [
-    {"id": 1, "score": 0.0312, "payload": {...}},
-    {"id": 2, "score": 0.0298, "payload": {...}}
+    {"id": "1", "score": 0.0312, "payload": {...}},
+    {"id": "2", "score": 0.0298, "payload": {...}}
   ],
   "timing_ms": 3.45
 }
@@ -567,10 +593,9 @@ FROM products AS p
 JOIN prices AS pr ON pr.product_id = p.id 
 WHERE pr.amount < 100
 
--- Hybrid search with fusion
+-- Hybrid search with fusion (USING FUSION is a trailing clause: after LIMIT)
 SELECT * FROM docs 
-USING FUSION(strategy='rrf', k=60) 
-LIMIT 20
+LIMIT 20 USING FUSION(strategy='rrf', k=60)
 
 -- Set operations
 SELECT * FROM active_users 
@@ -760,6 +785,6 @@ points = collection.get([1])
 collection.delete([1, 2, 3])
 
 # Search (supports numpy arrays)
-results = collection.search(vector=query_vector, top_k=10)
-results = collection.search(vector=np.array([...], dtype=np.float32), top_k=10)
+results = collection.search_request(velesdb.SearchOptions(vector=query_vector, top_k=10))
+results = collection.search_request(velesdb.SearchOptions(vector=np.array([...], dtype=np.float32), top_k=10))
 ```

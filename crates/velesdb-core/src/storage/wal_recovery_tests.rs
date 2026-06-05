@@ -21,12 +21,19 @@
 //!
 //! `LogPayloadStorage::new()` → `load_snapshot()` (if exists) → `replay_wal_from()`
 //!
-//! `replay_wal_from()` iterates WAL entries:
-//! - Reads marker (1B) — `read_exact` failure → break (tolerant at entry boundary)
-//! - Reads id (8B) — failure → propagated as error
-//! - marker=1/0xC3 → reads len (4B), payload; if 0xC3, reads + verifies CRC32
-//! - marker=2/0xC4 → removes from index; if 0xC4, reads + verifies CRC32
-//! - unknown marker → returns `InvalidData` error
+//! `replay_wal_from()` iterates WAL entries. A crash mid-append can only
+//! truncate the *last* record, so any truncation (a short id/len/payload/crc
+//! field, or a declared length running past EOF) is treated as a torn tail:
+//! replay stops cleanly and keeps every prior entry rather than failing the
+//! collection open (mirrors the vector WAL's `#898` policy):
+//! - Reads marker (1B) — `read_exact` failure → clean stop at entry boundary
+//! - Reads id (8B) — failure → torn tail → clean stop
+//! - marker=1/0xC3 → reads len (4B), payload; if 0xC3, reads + verifies CRC32.
+//!   A truncated len/payload/crc or an over-EOF declared length → clean stop
+//! - marker=2/0xC4 → removes from index; if 0xC4, reads + verifies CRC32;
+//!   a truncated crc → clean stop
+//! - unknown marker → returns `InvalidData` error (genuine corruption: a torn
+//!   tail cannot produce a wrong marker byte under sequential append)
 //! - CRC mismatch → entry skipped (not inserted/deleted), warning logged
 //!
 //! # Snapshot Format
@@ -861,34 +868,43 @@ fn test_crc_entries_survive_snapshot_cycle() {
 // ===========================================================================
 
 #[test]
-fn test_898_replay_rejects_oversized_payload_length_no_huge_alloc() {
-    // Legacy store entry whose declared length is 4 GiB but with no payload:
-    // replay must reject it (not allocate 4 GiB), without panicking.
+fn test_898_replay_tolerates_oversized_payload_length_as_torn_tail() {
+    // Legacy store entry whose declared length is 4 GiB but with no payload —
+    // the exact shape a crash leaves after writing the length field. The OOM
+    // guard must still short-circuit BEFORE allocating 4 GiB (the #898 security
+    // property), but replay now treats the record as a torn tail: the open
+    // succeeds and the bogus record is dropped rather than aborting recovery.
     let mut wal = vec![1u8];
     wal.extend_from_slice(&1u64.to_le_bytes());
     wal.extend_from_slice(&u32::MAX.to_le_bytes()); // bogus 4 GiB length
                                                     // no payload bytes follow
 
-    let result = open_storage_with_wal(&wal);
-    assert!(
-        result.is_err(),
-        "oversized declared payload length must be rejected as corrupt"
+    let (_dir, storage) =
+        open_storage_with_wal(&wal).expect("oversized length must be tolerated as a torn tail");
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "the torn record must be dropped, leaving an empty index"
     );
 }
 
 #[test]
-fn test_898_replay_rejects_oversized_crc_payload_no_huge_alloc() {
+fn test_898_replay_tolerates_oversized_crc_payload_as_torn_tail() {
     // CRC-framed store entry declaring an impossibly large payload length.
+    // Same contract: no huge allocation, and the torn record is dropped while
+    // the open succeeds.
     let mut wal = Vec::new();
     wal.push(0xC3u8);
     wal.extend_from_slice(&1u64.to_le_bytes());
     wal.extend_from_slice(&u32::MAX.to_le_bytes());
     // no payload / crc follow
 
-    let result = open_storage_with_wal(&wal);
-    assert!(
-        result.is_err(),
-        "oversized CRC payload length must be rejected before allocation"
+    let (_dir, storage) =
+        open_storage_with_wal(&wal).expect("oversized CRC length must be tolerated as a torn tail");
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "the torn record must be dropped, leaving an empty index"
     );
 }
 

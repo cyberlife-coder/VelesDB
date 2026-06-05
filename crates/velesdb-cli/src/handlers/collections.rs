@@ -31,21 +31,15 @@ pub fn handle_create_vector_collection(
 }
 
 /// Handles the `create-graph-collection` subcommand.
-pub fn handle_create_graph_collection(path: &Path, name: &str, schemaless: bool) -> Result<()> {
+pub fn handle_create_graph_collection(path: &Path, name: &str) -> Result<()> {
     let db = velesdb_core::Database::open(path)?;
-    let schema = if schemaless {
-        velesdb_core::GraphSchema::schemaless()
-    } else {
-        // Reason: Strict schema from file is planned for future; default to schemaless.
-        velesdb_core::GraphSchema::schemaless()
-    };
+    let schema = velesdb_core::GraphSchema::schemaless();
     db.create_graph_collection(name, schema)?;
 
     println!(
-        "{} Graph collection '{}' created (schemaless: {})",
+        "{} Graph collection '{}' created (schemaless)",
         "\u{2705}".green(),
         name.cyan(),
-        schemaless,
     );
     Ok(())
 }

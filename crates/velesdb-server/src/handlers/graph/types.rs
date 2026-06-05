@@ -11,6 +11,7 @@ use velesdb_core::api_types::serde_id;
 pub struct TraversalResultItem {
     /// Target node ID reached.
     #[serde(serialize_with = "serde_id::serialize_id_as_string")]
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub target_id: u64,
     /// Depth of traversal (number of hops from source).
     pub depth: u32,
@@ -31,6 +32,7 @@ pub struct EdgeQueryParams {
 pub struct TraverseRequest {
     /// Source node ID to start traversal from.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]
     pub source: u64,
     /// Traversal strategy: "bfs" or "dfs".
     #[serde(default = "default_strategy")]
@@ -101,12 +103,15 @@ pub struct EdgesResponse {
 pub struct EdgeResponse {
     /// Edge ID.
     #[serde(serialize_with = "serde_id::serialize_id_as_string")]
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub id: u64,
     /// Source node ID.
     #[serde(serialize_with = "serde_id::serialize_id_as_string")]
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub source: u64,
     /// Target node ID.
     #[serde(serialize_with = "serde_id::serialize_id_as_string")]
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub target: u64,
     /// Edge label (relationship type).
     pub label: String,
@@ -119,12 +124,15 @@ pub struct EdgeResponse {
 pub struct AddEdgeRequest {
     /// Edge ID.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]
     pub id: u64,
     /// Source node ID.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]
     pub source: u64,
     /// Target node ID.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_input_schema))]
     pub target: u64,
     /// Edge label (relationship type).
     pub label: String,
@@ -181,6 +189,7 @@ pub struct UpsertNodePayloadRequest {
 pub struct NodePayloadResponse {
     /// Node ID.
     #[serde(serialize_with = "serde_id::serialize_id_as_string")]
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub node_id: u64,
     /// Stored payload (null if none).
     pub payload: Option<serde_json::Value>,
@@ -228,6 +237,7 @@ pub struct GraphSearchResponse {
 pub struct GraphSearchResultItem {
     /// Node ID.
     #[serde(serialize_with = "serde_id::serialize_id_as_string")]
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub id: u64,
     /// Similarity score.
     pub score: f32,
@@ -281,6 +291,7 @@ fn default_stream_limit() -> usize {
 pub struct StreamNodeEvent {
     /// Target node ID.
     #[serde(serialize_with = "serde_id::serialize_id_as_string")]
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub id: u64,
     /// Depth from source.
     pub depth: u32,

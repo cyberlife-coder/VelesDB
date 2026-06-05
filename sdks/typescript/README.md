@@ -2,7 +2,7 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.16.0** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.17.0** | Node.js >= 18 | Browser (WASM) | MIT License
 
 ## What's New in v1.16.0
 
@@ -129,6 +129,7 @@ await db.upsertBatch('documents', [
 ]);
 
 // 5. Search for similar vectors
+const queryVector = new Float32Array(768).fill(0.1);
 const results = await db.search('documents', queryVector, { k: 5 });
 console.log(results);
 // [{ id: 'doc-1', score: 0.95, payload: { title: 'Hello World', ... } }, ...]
@@ -155,6 +156,7 @@ await db.init();
 // Same API as WASM backend
 await db.createCollection('products', { dimension: 1536 });
 await db.upsert('products', { id: 1, vector: embedding });
+const queryVector = new Float32Array(1536).fill(0.1);
 const results = await db.search('products', queryVector, { k: 10 });
 ```
 
@@ -349,7 +351,7 @@ Vector similarity search.
 ```typescript
 const results = await db.search('docs', queryVector, {
   k: 10,
-  filter: { category: 'tech' },
+  filter: { condition: { type: 'eq', field: 'category', value: 'tech' } },
   includeVectors: true
 });
 // Returns: SearchResult[] = [{ id, score, payload?, vector? }, ...]
@@ -362,7 +364,7 @@ Execute multiple search queries in parallel.
 ```typescript
 const batchResults = await db.searchBatch('docs', [
   { vector: queryA, k: 5 },
-  { vector: queryB, k: 10, filter: { type: 'article' } },
+  { vector: queryB, k: 10, filter: { condition: { type: 'eq', field: 'type', value: 'article' } } },
 ]);
 // Returns: SearchResult[][] (one result array per query)
 ```
@@ -575,7 +577,7 @@ const combined = await db.query('users',
 
 // Fusion strategy
 const fused = await db.query('docs',
-  "SELECT * FROM docs USING FUSION(strategy = 'rrf', k = 60) LIMIT 20"
+  "SELECT * FROM docs LIMIT 20 USING FUSION(strategy = 'rrf', k = 60)"
 );
 ```
 
