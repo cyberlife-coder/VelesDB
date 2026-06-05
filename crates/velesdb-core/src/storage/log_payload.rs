@@ -214,7 +214,12 @@ impl LogPayloadStorage {
             let Some(entry) = WalEntry::read(&mut reader_buf, pos)? else {
                 break;
             };
-            pos = entry.apply(&mut index, &mut reader_buf, end_pos)?;
+            // `None` signals a torn tail (crash mid-append): stop cleanly,
+            // keeping every entry replayed so far.
+            let Some(next_pos) = entry.apply(&mut index, &mut reader_buf, end_pos)? else {
+                break;
+            };
+            pos = next_pos;
         }
 
         Ok(index)
