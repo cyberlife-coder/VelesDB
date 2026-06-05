@@ -47,10 +47,12 @@ pub struct HnswParams {
     pub alpha: f32,
 }
 
-// Eq is safe because alpha values are always finite: they come from
-// `default_alpha()` (1.2), `with_alpha()` (caller-chosen), or serde
-// deserialization which rejects NaN/Inf for f32. No code path produces
-// NaN, so reflexivity (a == a) always holds.
+// Eq is sound because `alpha` is finite in every supported path: the preset
+// constructors and `default_alpha()` produce 1.2, JSON deserialization cannot
+// carry NaN/Inf, and any `alpha` arriving from untrusted public input
+// (REST/Python/Tauri) is rejected by [`HnswParams::validate`] before the params
+// reach the engine. Embedders that build the struct directly via its public
+// fields are responsible for passing a finite value, as with any `pub` float.
 impl Eq for HnswParams {}
 
 impl Default for HnswParams {
@@ -284,6 +286,28 @@ impl HnswParams {
     #[must_use]
     pub const fn with_alpha(self, alpha: f32) -> Self {
         Self { alpha, ..self }
+    }
+
+    /// Validates parameters that can originate from untrusted public input
+    /// (REST, Python, Tauri) before they reach the engine.
+    ///
+    /// `alpha` must be finite and `>= 1.0` — the valid VAMANA range. Values
+    /// below 1.0 under-diversify the graph and silently degrade recall, while
+    /// non-finite values (`NaN`/`inf`) would break the [`Eq`] invariant. Valid
+    /// alpha (the default 1.2 and anything `>= 1.0`) passes unchanged, so this
+    /// is a no-op on every well-formed configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::Config`] when `alpha` is out of range.
+    pub fn validate(&self) -> crate::error::Result<()> {
+        if !self.alpha.is_finite() || self.alpha < 1.0 {
+            return Err(crate::error::Error::Config(format!(
+                "hnsw alpha must be finite and >= 1.0 (VAMANA range), got {}",
+                self.alpha
+            )));
+        }
+        Ok(())
     }
 }
 

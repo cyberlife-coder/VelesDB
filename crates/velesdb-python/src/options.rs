@@ -178,15 +178,22 @@ impl HnswOptions {
 impl HnswOptions {
     /// Materializes this options dataclass into a concrete
     /// [`HnswParams`] by filling in defaults for any unset field.
-    pub(crate) fn to_hnsw_params(&self) -> HnswParams {
+    ///
+    /// Rejects an out-of-range `alpha` (must be finite and `>= 1.0`) with a
+    /// `ValueError`, mirroring the REST and Tauri boundaries.
+    pub(crate) fn to_hnsw_params(&self) -> PyResult<HnswParams> {
         let base = HnswParams::default();
-        HnswParams {
+        let params = HnswParams {
             max_connections: self.m.unwrap_or(base.max_connections),
             ef_construction: self.ef_construction.unwrap_or(base.ef_construction),
             max_elements: self.max_elements.unwrap_or(base.max_elements),
             alpha: self.alpha.unwrap_or(base.alpha),
             storage_mode: base.storage_mode,
-        }
+        };
+        params
+            .validate()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(params)
     }
 
     /// Shared conversion from a concrete [`HnswParams`] to a fully-

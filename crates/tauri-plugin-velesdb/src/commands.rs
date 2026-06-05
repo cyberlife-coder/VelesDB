@@ -63,6 +63,9 @@ pub async fn create_collection<R: Runtime>(
         .with_db(|db| {
             if has_advanced_params(&request) {
                 let hnsw_params = build_hnsw_params(&request, storage_mode);
+                // Reject out-of-range tunables (e.g. hnsw_alpha < 1.0 or
+                // non-finite) before creating the collection.
+                hnsw_params.validate()?;
                 db.create_vector_collection_with_params(
                     &request.name,
                     request.dimension,
