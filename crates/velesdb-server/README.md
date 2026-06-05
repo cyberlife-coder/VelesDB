@@ -673,13 +673,13 @@ curl http://localhost:8080/ready
 Response (ready):
 
 ```json
-{"status": "ready", "version": "1.16.0"}
+{"status": "ready", "version": "1.17.0"}
 ```
 
 Response (not ready):
 
 ```json
-{"status": "not_ready", "version": "1.16.0"}
+{"status": "not_ready", "version": "1.17.0"}
 ```
 
 ### Kubernetes Example

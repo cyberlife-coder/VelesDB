@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.17.0] — 2026-06-05
 
+### Added
+- **VelesQL parser error hints (#987)**: syntax errors now carry friendlier
+  messages with "did-you-mean" suggestions, making malformed queries far easier
+  to fix from the CLI/REST error response.
+
 ### Fixed
 - **Payload WAL crash recovery (#1011)**: a crash mid-append no longer leaves a
   collection unopenable — replay now stops cleanly at a torn-tail record and
@@ -24,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ValueError`) and Tauri boundaries instead of silently degrading recall or
   violating the `HnswParams` `Eq` invariant. Valid `alpha` (default `1.2`,
   anything `>= 1.0`) is unaffected.
+- **CLI flag toggles (#997)**: `--include-vectors` and `--progress` are now
+  real toggles instead of no-ops.
+- **Python SDK onboarding (#986)**: canonical metadata-filter format, search-API
+  migration off the deprecated `collection.search()`, auto-dimension detection,
+  and dunder forwarding on the lazy `_PendingCollection` proxy after it
+  materialises.
 - OpenAPI spec now types point `id` as `string` for `/search`, `/search/ids`,
   `/scroll` and graph result endpoints, matching the on-the-wire format (these
   responses quote the ID to preserve `u64` values above `2^53-1`). Schema-only
@@ -40,11 +51,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `velesdb collection create-graph <path> <name>` is unchanged in behaviour.
 
 ### Changed
+- **VelesQL subqueries (#993)**: a WHERE-clause subquery is now rejected at
+  validation with a clear error instead of silently returning NULL.
 - Public docs, tests, and SDK source comments no longer reference
   maintainer-local engineering-rule files; they point to the public
   `QUALITY_BAR.md` or describe the rule inline.
 - Removed an unused CLA automation-bot signer and a vestigial branch-name
   pattern from the PR-governance allowlist.
+
+### Performance
+- **HNSW search (#1001)**: replaced the shared probe-RNG CAS in the search path
+  with a thread-local XORshift64, removing per-search lock contention.
 
 ## [1.16.0] — 2026-05-29
 
