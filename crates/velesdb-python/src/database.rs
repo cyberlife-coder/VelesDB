@@ -173,7 +173,7 @@ impl Database {
         // Compute the dispatch plan under the GIL — cheap.
         let plan = if let Some(opts) = hnsw {
             CreatePlan::Full {
-                hnsw_params: opts.to_hnsw_params(),
+                hnsw_params: opts.to_hnsw_params()?,
                 pq_rescore_oversampling: opts.pq_rescore_oversampling,
             }
         } else {

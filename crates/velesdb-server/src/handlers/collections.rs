@@ -154,6 +154,11 @@ fn create_vector_collection(
     let base_result = if let Some(hnsw_params) =
         build_hnsw_params_override(req, dimension, storage_mode)
     {
+        // Reject out-of-range tunables (e.g. hnsw_alpha < 1.0 or non-finite)
+        // before any collection is created on disk.
+        hnsw_params
+            .validate()
+            .map_err(|e| error_response(StatusCode::BAD_REQUEST, e.to_string()))?;
         state.db.create_vector_collection_with_params(
             &req.name,
             dimension,
