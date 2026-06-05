@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Bump the workspace version across every policed manifest.
 
-Python port of `bump-version.ps1` (pwsh is unavailable on some maintainer
-machines). The set of files and the per-format patterns are kept in lock-step
-with `check-version-sync.py`, which is the authoritative gate: run this script,
-then run `check-version-sync.py` to prove every location landed on the new
-version.
+The canonical version bumper (it replaced the former `bump-version.ps1`, which
+required pwsh). The set of files and the per-format patterns are kept in
+lock-step with `check-version-sync.py`, which is the authoritative gate: run
+this script, then run `check-version-sync.py` to prove every location landed on
+the new version.
 
 `docs/openapi.{json,yaml}` are intentionally NOT rewritten here — they are
 generated from the crate version. Regenerate them after bumping Cargo.toml with:
@@ -66,6 +66,13 @@ TARGETS: "list[tuple[str, str]]" = [
     ("demos/rag-pdf-demo/src/main.py", "fastapi_app_version"),
     ("examples/wasm-browser-demo/README.md", "wasm_cdn_url"),
     ("docs/guides/INSTALLATION.md", "deb_release_tag"),
+    # Found stale at 1.16.0 in the 1.17.0 review (unpoliced current-version
+    # markers). The VELESQL_SPEC stamp uses a `**Last Updated**: ... (VelesDB
+    # vX.Y.Z)` form; CHEATSHEET a `**VelesDB version:** X.Y.Z` label; CLI_REPL
+    # echoes the version in four example-output strings.
+    ("docs/VELESQL_SPEC.md", "doc_last_updated_version"),
+    ("docs/reference/VELESQL_CHEATSHEET.md", "md_version_label"),
+    ("docs/guides/CLI_REPL.md", "cli_repl_version"),
 ]
 
 
@@ -83,7 +90,8 @@ def _bump_last_updated(text: str, ver: str) -> "tuple[str, int]":
 
     Prefer the disambiguated `VelesDB vX.Y.Z`; otherwise the first `(vX.Y.Z`.
     """
-    m = re.search(r"Last updated:[^\n]*", text)
+    # Case-insensitive and tolerant of markdown bold (`**Last Updated**:`).
+    m = re.search(r"(?i)last updated\*{0,2}:[^\n]*", text)
     if not m:
         return text, 0
     line = m.group(0)
@@ -115,7 +123,22 @@ def bump_file(path: Path, fmt: str, ver: str) -> int:
         text, b = _sub_first(text, r'("":\s*\{(?:[^{}])*?"version":\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
         n = a + b
     elif fmt == "doc_health_snippet":
-        text, n = _sub_first(text, r'("version":\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
+        # ALL `"version": "X.Y.Z"` snippets — a doc often has /health + /ready +
+        # /not_ready bodies; bumping only the first leaves the rest stale.
+        text, n = _sub_all(text, r'("version":\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
+    elif fmt == "md_version_label":
+        text, n = _sub_first(text, r"(\*\*VelesDB version:\*\*\s*)" + VERSION_RE, r"\g<1>" + ver)
+    elif fmt == "cli_repl_version":
+        # Four example-output strings that echo the current version.
+        n = 0
+        for pat in (
+            r"(?m)^(# velesdb )" + VERSION_RE,
+            r"(│ Version\s+│ )" + VERSION_RE,
+            r"(VelesDB v)" + VERSION_RE + r"( - Interactive REPL)",
+            r"(Documentation VelesDB v)" + VERSION_RE,
+        ):
+            text, c = _sub_all(text, pat, r"\g<1>" + ver + (r"\g<2>" if "Interactive" in pat else ""))
+            n += c
     elif fmt == "py_init_version":
         text, n = _sub_first(text, r'(__version__\s*=\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
     elif fmt == "wasm_cdn_url":

@@ -16,15 +16,16 @@ VelesDB utilise **3 workflows GitHub Actions** :
 
 ### 1. Bump version (automatisé)
 
-```powershell
-# Preview changes (dry run) -- replace X.Y.Z with the target version
-.\scripts\bump-version.ps1 -Version "X.Y.Z" -DryRun
-
-# Apply changes to all 9 package files
-.\scripts\bump-version.ps1 -Version "X.Y.Z"
+```bash
+# Apply the bump to every policed manifest (X.Y.Z = target release version)
+python3 scripts/bump_version.py X.Y.Z
+# Regenerate the OpenAPI snapshots (derived from the crate version)
+cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --test-threads=1
+cargo build  # refresh Cargo.lock
+python3 scripts/check-version-sync.py  # must report: All versions match
 ```
 
-Le script `bump-version.ps1` met à jour automatiquement :
+Le script `bump_version.py` met à jour automatiquement :
 - `Cargo.toml` (workspace)
 - `sdks/typescript/package.json`
 - `crates/velesdb-python/pyproject.toml`
