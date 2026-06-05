@@ -1,6 +1,7 @@
 //! Tests for `log_payload` module
 
 use super::log_payload::{DurabilityMode, LogPayloadStorage, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
+use super::log_payload_io::CRC_STORE_MARKER;
 use super::traits::PayloadStorage;
 
 use serde_json::json;
@@ -817,4 +818,92 @@ fn test_store_batch_deferred_empty() {
         .expect("test: empty deferred batch");
 
     assert_eq!(storage.ids().len(), 0);
+}
+
+// -------------------------------------------------------------------------
+// Crash recovery: torn-tail tolerance.
+//
+// A crash mid-append leaves a partially-written final record in the payload
+// WAL. Replay must stop cleanly at that tail and keep every prior entry — it
+// must NOT abort the whole collection open, which would make the data
+// unreachable after a perfectly survivable crash. Mirrors the vector WAL's
+// `#898` torn-tail policy (`storage::mmap::wal_replay`).
+// -------------------------------------------------------------------------
+
+/// Appends raw bytes to an existing payload WAL, simulating a crash that left a
+/// partially-written final record on disk.
+fn append_raw_to_wal(wal_path: &std::path::Path, bytes: &[u8]) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(wal_path)
+        .expect("open WAL for append");
+    f.write_all(bytes).expect("append torn-tail bytes");
+    f.sync_all().expect("sync torn-tail");
+}
+
+/// Stores ids 1..=3 with full durability, then drops the storage to close the
+/// WAL. Returns the temp dir (kept alive by the caller) so a torn tail can be
+/// appended and the collection reopened.
+fn storage_with_three_entries() -> TempDir {
+    let temp = TempDir::new().expect("temp dir");
+    let mut storage = LogPayloadStorage::new_with_durability(temp.path(), DurabilityMode::Fsync)
+        .expect("create storage");
+    for i in 1..=3 {
+        storage.store(i, &json!({ "id": i })).expect("store");
+    }
+    drop(storage);
+    temp
+}
+
+#[test]
+fn test_torn_tail_truncated_header_recovers_prior_entries() {
+    // Crash after the marker byte but before the full 8-byte id was written:
+    // a 1-byte marker plus a partial id. Reopen must stop at the tail and keep
+    // entries 1..=3 rather than propagating the `UnexpectedEof`.
+    let temp = storage_with_three_entries();
+    let wal_path = temp.path().join("payloads.log");
+    append_raw_to_wal(&wal_path, &[CRC_STORE_MARKER, 0xAA, 0xBB, 0xCC]);
+
+    let storage =
+        LogPayloadStorage::new(temp.path()).expect("torn header must not fail collection open");
+
+    let mut ids = storage.ids();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec![1, 2, 3],
+        "prior entries must survive a torn header"
+    );
+    assert_eq!(
+        storage.retrieve(2).expect("retrieve"),
+        Some(json!({ "id": 2 })),
+        "a pre-crash payload must still be readable after torn-tail recovery"
+    );
+}
+
+#[test]
+fn test_torn_tail_declared_length_past_eof_recovers_prior_entries() {
+    // Crash after writing marker + id + length field but before the payload:
+    // the declared length runs past EOF. This used to return `InvalidData` and
+    // abort the open; replay must instead stop cleanly and drop only the torn
+    // record (id 42 was never durably written).
+    let temp = storage_with_three_entries();
+    let wal_path = temp.path().join("payloads.log");
+
+    let mut torn = vec![CRC_STORE_MARKER];
+    torn.extend_from_slice(&42u64.to_le_bytes()); // id
+    torn.extend_from_slice(&1_000_000u32.to_le_bytes()); // length far past EOF, no payload
+    append_raw_to_wal(&wal_path, &torn);
+
+    let storage = LogPayloadStorage::new(temp.path())
+        .expect("oversized length on the last record must not fail collection open");
+
+    let mut ids = storage.ids();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec![1, 2, 3],
+        "a torn record must drop only itself, never prior entries"
+    );
 }
