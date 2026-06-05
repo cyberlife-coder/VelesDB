@@ -260,7 +260,6 @@ fn dispatch_query(path: &std::path::Path, query: &str, format: &str) -> anyhow::
     Ok(())
 }
 
-// NOTE: Tests moved to main_tests.rs (per-file grade-A refactor).
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod main_tests;
