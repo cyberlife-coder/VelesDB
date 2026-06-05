@@ -408,8 +408,7 @@ impl ConcurrentEdgeStore {
     }
 }
 
-// Node-cascade cleanup helpers (collect_node_edges, gather_affected_shards,
-// cleanup_shard_edges, deregister_edge_ids) are in cascade.rs
+// Node-cascade helpers are in cascade.rs
 // Persistence (from_edge_store, save_to_file, load_from_file) is in persistence.rs
 // CSR snapshot management (invalidate, rebuild, build) is in snapshot.rs
 

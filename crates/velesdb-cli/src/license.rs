@@ -264,7 +264,6 @@ pub fn display_license_info(info: &LicenseInfo) {
     println!();
 }
 
-// NOTE: Tests moved to license_tests.rs (per-file grade-A refactor).
 #[cfg(test)]
 #[path = "license_tests.rs"]
 mod license_tests;

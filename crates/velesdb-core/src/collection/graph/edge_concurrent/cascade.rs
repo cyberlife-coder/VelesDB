@@ -11,8 +11,10 @@
 //! order before calling these helpers; the helpers themselves only operate on
 //! guards already held by the caller.
 
-use super::ConcurrentEdgeStore;
+use super::{ConcurrentEdgeStore, EdgeStore};
+use parking_lot::RwLockWriteGuard;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::BTreeSet;
 
 impl ConcurrentEdgeStore {
     /// Collects all outgoing and incoming edges for a node (read-only).
@@ -42,8 +44,8 @@ impl ConcurrentEdgeStore {
         node_shard: usize,
         outgoing: &[(u64, u64)],
         incoming: &[(u64, u64)],
-    ) -> std::collections::BTreeSet<usize> {
-        let mut shards = std::collections::BTreeSet::new();
+    ) -> BTreeSet<usize> {
+        let mut shards = BTreeSet::new();
         shards.insert(node_shard);
         for (_, target) in outgoing {
             shards.insert(self.shard_index(*target));
@@ -58,7 +60,7 @@ impl ConcurrentEdgeStore {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn cleanup_shard_edges(
         &self,
-        guards: &mut [(usize, parking_lot::RwLockWriteGuard<'_, super::EdgeStore>)],
+        guards: &mut [(usize, RwLockWriteGuard<'_, EdgeStore>)],
         node_shard: usize,
         node_id: u64,
         outgoing: &[(u64, u64)],
