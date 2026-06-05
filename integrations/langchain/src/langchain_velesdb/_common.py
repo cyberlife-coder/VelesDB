@@ -9,6 +9,8 @@ import json
 import logging
 from typing import Any, List, Tuple
 
+from langchain_core.documents import Document
+
 # Re-export shared helpers so existing intra-package imports keep working.
 from velesdb_common.ids import make_initial_id_counter  # noqa: F401
 from velesdb_common.graph import (  # noqa: F401
@@ -58,6 +60,22 @@ def payload_to_doc_parts(result: dict) -> Tuple[str, dict]:
     if isinstance(point_id, int):
         metadata["_int_id"] = point_id
     return text, metadata
+
+
+def _payload_to_doc(result: dict) -> Document:
+    """Convert a single search result dict to a LangChain Document."""
+    text, metadata = payload_to_doc_parts(result)
+    return Document(page_content=text, metadata=metadata)
+
+
+def _results_to_docs(results: List[dict]) -> List[Document]:
+    """Convert a list of search result dicts to Documents."""
+    return [_payload_to_doc(r) for r in results]
+
+
+def _results_to_docs_with_score(results: List[dict]) -> List[Tuple[Document, float]]:
+    """Convert a list of search result dicts to (Document, score) tuples."""
+    return [(_payload_to_doc(r), r.get("score", 0.0)) for r in results]
 
 
 # ---------------------------------------------------------------------------

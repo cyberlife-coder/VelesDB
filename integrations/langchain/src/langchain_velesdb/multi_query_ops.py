@@ -12,7 +12,11 @@ from typing import Any, List, Optional, Tuple
 
 from langchain_core.documents import Document
 
-from langchain_velesdb._common import payload_to_doc_parts, validate_queries_batch
+from langchain_velesdb._common import (
+    validate_queries_batch,
+    _results_to_docs,
+    _results_to_docs_with_score,
+)
 from velesdb_common.fusion import build_fusion_strategy as _build_fusion_strategy_fn
 from langchain_velesdb.security import (
     validate_k,
@@ -21,22 +25,6 @@ from langchain_velesdb.security import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _payload_to_doc(result: dict) -> Document:
-    """Convert a single search result dict to a LangChain Document."""
-    text, metadata = payload_to_doc_parts(result)
-    return Document(page_content=text, metadata=metadata)
-
-
-def _results_to_docs(results: List[dict]) -> List[Document]:
-    """Convert a list of search result dicts to Documents."""
-    return [_payload_to_doc(r) for r in results]
-
-
-def _results_to_docs_with_score(results: List[dict]) -> List[Tuple[Document, float]]:
-    """Convert a list of search result dicts to (Document, score) tuples."""
-    return [(_payload_to_doc(r), r.get("score", 0.0)) for r in results]
 
 
 class MultiQueryOpsMixin:
