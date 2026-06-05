@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Bump the workspace version across every policed manifest.
 
-Python port of `bump-version.ps1` (pwsh is unavailable on some maintainer
-machines). The set of files and the per-format patterns are kept in lock-step
-with `check-version-sync.py`, which is the authoritative gate: run this script,
-then run `check-version-sync.py` to prove every location landed on the new
-version.
+The canonical version bumper (it replaced the former `bump-version.ps1`, which
+required pwsh). The set of files and the per-format patterns are kept in
+lock-step with `check-version-sync.py`, which is the authoritative gate: run
+this script, then run `check-version-sync.py` to prove every location landed on
+the new version.
 
 `docs/openapi.{json,yaml}` are intentionally NOT rewritten here — they are
 generated from the crate version. Regenerate them after bumping Cargo.toml with:
@@ -39,7 +39,7 @@ TARGETS: "list[tuple[str, str]]" = [
     ("crates/velesdb-python/README.md", "doc_version_badge"),
     ("demos/rag-pdf-demo/pyproject.toml", "toml"),
     ("sdks/typescript/package.json", "json"),
-    ("sdks/typescript/package-lock.json", "json"),
+    ("sdks/typescript/package-lock.json", "npm_lock"),
     ("docs/getting-started.md", "doc_health_snippet"),
     ("docs/reference/api-reference.md", "doc_health_snippet"),
     ("docs/guides/SERVER_SECURITY.md", "doc_health_snippet"),
@@ -66,6 +66,13 @@ TARGETS: "list[tuple[str, str]]" = [
     ("demos/rag-pdf-demo/src/main.py", "fastapi_app_version"),
     ("examples/wasm-browser-demo/README.md", "wasm_cdn_url"),
     ("docs/guides/INSTALLATION.md", "deb_release_tag"),
+    # Found stale at 1.16.0 in the 1.17.0 review (unpoliced current-version
+    # markers). The VELESQL_SPEC stamp uses a `**Last Updated**: ... (VelesDB
+    # vX.Y.Z)` form; CHEATSHEET a `**VelesDB version:** X.Y.Z` label; CLI_REPL
+    # echoes the version in four example-output strings.
+    ("docs/VELESQL_SPEC.md", "doc_last_updated_version"),
+    ("docs/reference/VELESQL_CHEATSHEET.md", "md_version_label"),
+    ("docs/guides/CLI_REPL.md", "cli_repl_version"),
 ]
 
 
@@ -83,17 +90,20 @@ def _bump_last_updated(text: str, ver: str) -> "tuple[str, int]":
 
     Prefer the disambiguated `VelesDB vX.Y.Z`; otherwise the first `(vX.Y.Z`.
     """
-    m = re.search(r"Last updated:[^\n]*", text)
+    # Case-insensitive and tolerant of markdown bold (`**Last Updated**:`).
+    m = re.search(r"(?i)last updated\*{0,2}:[^\n]*", text)
     if not m:
         return text, 0
     line = m.group(0)
+    # Count the MATCH, not whether the text changed — a re-bump to the same
+    # version is a legitimate no-op match (count 1), not a MISS (count 0).
     if re.search(r"VelesDB v" + VERSION_RE, line):
-        new_line = re.sub(r"(VelesDB v)" + VERSION_RE, r"\g<1>" + ver, line, count=1)
+        new_line, c = re.subn(r"(VelesDB v)" + VERSION_RE, r"\g<1>" + ver, line, count=1)
     else:
-        new_line = re.sub(r"(\(v)" + VERSION_RE, r"\g<1>" + ver, line, count=1)
-    if new_line == line:
-        return text, 0
-    return text[: m.start()] + new_line + text[m.end():], 1
+        new_line, c = re.subn(r"(\(v)" + VERSION_RE, r"\g<1>" + ver, line, count=1)
+    if c:
+        text = text[: m.start()] + new_line + text[m.end():]
+    return text, c
 
 
 def bump_file(path: Path, fmt: str, ver: str) -> int:
@@ -104,8 +114,31 @@ def bump_file(path: Path, fmt: str, ver: str) -> int:
         text, n = _sub_first(text, r'(?m)^(\s*version\s*=\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
     elif fmt == "json":
         text, n = _sub_first(text, r'("version"\s*:\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
+    elif fmt == "npm_lock":
+        # npm lockfile carries the package version TWICE: the root `version`
+        # and `packages[""].version`. `npm ci` fails if they diverge, and the
+        # nested one is a known unpoliced drift trap — bump both. The
+        # `node_modules/@wiscale/*` tarball pins are left untouched (own track).
+        text, a = _sub_first(text, r'(^\s*"version"\s*:\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>", ML)
+        text, b = _sub_first(text, r'("":\s*\{(?:[^{}])*?"version":\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
+        n = a + b
     elif fmt == "doc_health_snippet":
-        text, n = _sub_first(text, r'("version":\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
+        # ALL `"version": "X.Y.Z"` snippets — a doc often has /health + /ready +
+        # /not_ready bodies; bumping only the first leaves the rest stale.
+        text, n = _sub_all(text, r'("version":\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
+    elif fmt == "md_version_label":
+        text, n = _sub_first(text, r"(\*\*VelesDB version:\*\*\s*)" + VERSION_RE, r"\g<1>" + ver)
+    elif fmt == "cli_repl_version":
+        # Four example-output strings that echo the current version.
+        n = 0
+        for pat in (
+            r"(?m)^(# velesdb )" + VERSION_RE,
+            r"(│ Version\s+│ )" + VERSION_RE,
+            r"(VelesDB v)" + VERSION_RE + r"( - Interactive REPL)",
+            r"(Documentation VelesDB v)" + VERSION_RE,
+        ):
+            text, c = _sub_all(text, pat, r"\g<1>" + ver + (r"\g<2>" if "Interactive" in pat else ""))
+            n += c
     elif fmt == "py_init_version":
         text, n = _sub_first(text, r'(__version__\s*=\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
     elif fmt == "wasm_cdn_url":
@@ -115,7 +148,9 @@ def bump_file(path: Path, fmt: str, ver: str) -> int:
     elif fmt == "doc_version_badge":
         text, n = _sub_first(text, r"(version-)" + VERSION_RE + r"(-blue)", r"\g<1>" + ver + r"\g<2>")
     elif fmt == "dockerfile_label":
-        text, n = _sub_first(text, r'(?m)^(LABEL\s+version=")[^"]+(")', r"\g<1>" + ver + r"\g<2>")
+        # Replace EVERY `LABEL version="..."` — multi-stage Dockerfiles carry one
+        # per stage and the runtime-stage label is what `docker inspect` shows.
+        text, n = _sub_all(text, r'(?m)^(LABEL\s+version=")[^"]+(")', r"\g<1>" + ver + r"\g<2>")
     elif fmt == "doc_guide_version_header":
         text, n = _sub_first(text, r"(?m)^(\*(?:Version|Stable since v) )" + VERSION_RE, r"\g<1>" + ver)
     elif fmt == "md_title_version":
@@ -131,7 +166,11 @@ def bump_file(path: Path, fmt: str, ver: str) -> int:
     elif fmt == "fastapi_app_version":
         text, n = _sub_first(text, r'(\bversion\s*=\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
     elif fmt == "deb_release_tag":
-        text, n = _sub_all(text, r"(velesdb-)" + VERSION_RE + r"(-amd64\.deb)", r"\g<1>" + ver + r"\g<2>")
+        # Bump BOTH the asset filename AND the `releases/download/vX.Y.Z/` tag
+        # segment — a filename-only bump yields a 404 download URL.
+        text, a = _sub_all(text, r"(releases/download/v)" + VERSION_RE + r"(/)", r"\g<1>" + ver + r"\g<2>")
+        text, b = _sub_all(text, r"(velesdb-)" + VERSION_RE + r"(-amd64\.deb)", r"\g<1>" + ver + r"\g<2>")
+        n = a + b
     elif fmt == "doc_last_updated_version":
         text, n = _bump_last_updated(text, ver)
     else:
@@ -150,19 +189,31 @@ def bump_cargo_workspace(ver: str) -> int:
         raise RuntimeError("No [workspace.package] section in Cargo.toml")
     head, section = text[:idx], text[idx:]
     section, n = re.subn(r'(?m)^(version\s*=\s*")[^"]+(")', r"\g<1>" + ver + r"\g<2>", section, count=1)
-    if n:
-        path.write_text(head + section, encoding="utf-8")
-    return n
+    full = head + section
+    # Also bump intra-workspace path-dep pins like
+    # `velesdb-core = { path = "crates/...", version = "X.Y.Z", ... }` — these
+    # are not under [workspace.package] and were a silent drift trap.
+    full, m = re.subn(
+        r'(path = "crates/[^"]+", version = ")' + VERSION_RE + r'(")',
+        r"\g<1>" + ver + r"\g<2>", full,
+    )
+    if n or m:
+        path.write_text(full, encoding="utf-8")
+    return n + m
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or not re.fullmatch(VERSION_RE + r"(-[0-9A-Za-z.]+)?", sys.argv[1]):
-        print("usage: bump_version.py X.Y.Z", file=sys.stderr)
+    if len(sys.argv) != 2 or not re.fullmatch(VERSION_RE, sys.argv[1]):
+        # Strict X.Y.Z only: the rewrite patterns target a bare `\d+\.\d+\.\d+`,
+        # and a pre-release suffix cannot be matched safely without colliding
+        # with trailing `-amd64`/`-blue`-style tokens. Reject rather than mangle.
+        print("usage: bump_version.py X.Y.Z  (release versions only, no pre-release suffix)", file=sys.stderr)
         return 2
     ver = sys.argv[1]
 
     total = bump_cargo_workspace(ver)
-    print(f"  Cargo.toml [workspace.package]: {total} change(s)")
+    print(f"  Cargo.toml [workspace.package] + dep pins: {total} change(s)")
+    misses: "list[str]" = []
     for rel, fmt in TARGETS:
         path = REPO_ROOT / rel
         if not path.exists():
@@ -172,7 +223,14 @@ def main() -> int:
         total += n
         flag = "OK  " if n else "MISS"  # MISS = pattern matched nothing; investigate
         print(f"  {flag} {rel} [{fmt}]: {n}")
+        if not n:
+            misses.append(f"{rel} [{fmt}]")
     print(f"\nBumped {total} location(s) to {ver}.")
+    if misses:
+        print("\nFAIL: pattern matched nothing in existing file(s) — likely format drift:")
+        for m in misses:
+            print(f"  - {m}")
+        return 1
     print("Next: regenerate OpenAPI, refresh Cargo.lock, then run check-version-sync.py.")
     return 0
 

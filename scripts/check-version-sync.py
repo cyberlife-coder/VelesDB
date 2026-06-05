@@ -46,6 +46,15 @@ TARGETS: "list[tuple[str, str]]" = [
     # lockfile because no script policed it; v1.13.7 caught the same drift
     # via Devin Review (PR #710). Now this checker fails fast if we forget.
     ("sdks/typescript/package-lock.json", "json"),
+    # npm lockfiles carry the package version a SECOND time at `packages[""]`;
+    # `npm ci` fails if it diverges from the root `version`. The v1.17.0 bump
+    # left it stale at 1.16.0 (the root reader above never inspected it) —
+    # policing it here so that blind spot cannot recur.
+    ("sdks/typescript/package-lock.json", "npm_lock_pkg"),
+    # Intra-workspace path-dep pin `velesdb-core = { ..., version = "X.Y.Z" }`
+    # in root Cargo.toml. Not under [workspace.package], so the cargo-version
+    # reader never saw it; found stale at 1.16.0 during the v1.17.0 audit.
+    ("Cargo.toml", "cargo_dep_pin"),
     ("docs/openapi.json", "json_openapi"),
     # Doc snippets that mirror the /health and /ready REST responses. The
     # server echoes the workspace version, so the example in the docs has
@@ -131,6 +140,17 @@ TARGETS: "list[tuple[str, str]]" = [
     # were de-versioned to `releases/latest/`). Found pinned at v1.14.2 during
     # the v1.16.0 audit — the documented `wget` URL would 404 on release.
     ("docs/guides/INSTALLATION.md", "deb_release_tag"),
+    # The `releases/download/vX.Y.Z/` tag segment of the same DEB URL. The
+    # v1.17.0 bump updated the filename but left this at v1.16.0 → 404. Policing
+    # both halves so the documented download URL always resolves.
+    ("docs/guides/INSTALLATION.md", "deb_download_path"),
+    # Current-version markers found stale at 1.16.0 in the 1.17.0 review, each
+    # unpoliced (the first-match doc_health/guide readers never saw them):
+    # VELESQL_SPEC `**Last Updated**: ... (VelesDB vX.Y.Z)`, the cheat-sheet
+    # `**VelesDB version:** X.Y.Z` label, and CLI_REPL's four example outputs.
+    ("docs/VELESQL_SPEC.md", "doc_last_updated_version"),
+    ("docs/reference/VELESQL_CHEATSHEET.md", "md_version_label"),
+    ("docs/guides/CLI_REPL.md", "cli_repl_version"),
 ]
 
 
@@ -174,15 +194,45 @@ def _read_openapi_version(path: Path) -> str:
 
 
 def _read_doc_health_snippet(path: Path) -> str:
-    """Pull the version out of the first `"version": "X.Y.Z"` JSON snippet
-    in a docs/ markdown file. These snippets mirror the /health and /ready
-    REST response bodies, which echo the workspace version.
+    """Pull the version out of EVERY `"version": "X.Y.Z"` JSON snippet in a
+    docs/ markdown file (the /health, /ready and /not_ready response bodies all
+    echo the workspace version) and verify they agree. The first-match-only
+    reader let the /ready and /not_ready snippets drift to 1.16.0 while the
+    /health snippet was bumped — so check ALL of them now.
     """
     text = path.read_text(encoding="utf-8")
-    match = re.search(r'"version":\s*"(\d+\.\d+\.\d+)"', text)
-    if not match:
+    matches = re.findall(r'"version":\s*"(\d+\.\d+\.\d+)"', text)
+    if not matches:
         raise RuntimeError(f'No `"version": "..."` snippet in {path}')
+    uniq = set(matches)
+    return matches[0] if len(uniq) == 1 else "/".join(matches)
+
+
+def _read_md_version_label(path: Path) -> str:
+    """Pull the version out of a `**VelesDB version:** X.Y.Z` markdown label."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"\*\*VelesDB version:\*\*\s*(\d+\.\d+\.\d+)", text)
+    if not match:
+        raise RuntimeError(f"No `**VelesDB version:** X.Y.Z` label in {path}")
     return match.group(1)
+
+
+def _read_cli_repl_version(path: Path) -> str:
+    """Pull the version out of the four CLI-output example strings in
+    `CLI_REPL.md` (the `--version` line, the `\\info` table row, the REPL
+    banner, and the doc footer) and verify they agree."""
+    text = path.read_text(encoding="utf-8")
+    pats = (
+        r"(?m)^# velesdb (\d+\.\d+\.\d+)",
+        r"│ Version\s+│ (\d+\.\d+\.\d+)",
+        r"VelesDB v(\d+\.\d+\.\d+) - Interactive REPL",
+        r"Documentation VelesDB v(\d+\.\d+\.\d+)",
+    )
+    found = [m.group(1) for p in pats if (m := re.search(p, text))]
+    if not found:
+        raise RuntimeError(f"No CLI version-output strings in {path}")
+    uniq = set(found)
+    return found[0] if len(uniq) == 1 else "/".join(found)
 
 
 def _read_py_init_version(path: Path) -> str:
@@ -231,11 +281,46 @@ def _read_doc_version_badge(path: Path) -> str:
 
 
 def _read_dockerfile_label(path: Path) -> str:
-    """Pull the version out of the first `LABEL version="X.Y.Z"` line."""
+    """Pull the version out of `LABEL version="X.Y.Z"` lines, verifying ALL of
+    them agree. Multi-stage Dockerfiles carry one label per stage and the
+    runtime-stage label is the one `docker inspect` reports; the v1.17.0 bump
+    left the second-stage label stale because only the first was matched. If the
+    labels disagree, return them joined so the caller reports a mismatch.
+    """
     text = path.read_text(encoding="utf-8")
-    match = re.search(r'^LABEL\s+version="([^"]+)"', text, re.MULTILINE)
-    if not match:
+    matches = re.findall(r'^LABEL\s+version="([^"]+)"', text, re.MULTILINE)
+    if not matches:
         raise RuntimeError(f"No `LABEL version=\"...\"` line in {path}")
+    uniq = set(matches)
+    return matches[0] if len(uniq) == 1 else "/".join(matches)
+
+
+def _read_npm_lock_pkg_version(path: Path) -> str:
+    """Read `packages[""].version` from an npm lockfile (the copy `npm ci`
+    validates against `package.json`)."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    root_pkg = (data.get("packages") or {}).get("")
+    if not root_pkg or "version" not in root_pkg:
+        raise RuntimeError(f'No `packages[""].version` in {path}')
+    return str(root_pkg["version"])
+
+
+def _read_cargo_dep_pin(path: Path) -> str:
+    """Read the intra-workspace `velesdb-core = { path = ..., version = "X" }`
+    dependency pin from the root Cargo.toml."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'path = "crates/velesdb-core", version = "(\d+\.\d+\.\d+)"', text)
+    if not match:
+        raise RuntimeError(f"No velesdb-core path-dep version pin in {path}")
+    return match.group(1)
+
+
+def _read_deb_download_path(path: Path) -> str:
+    """Read the `releases/download/vX.Y.Z/` tag segment of the DEB wget URL."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"releases/download/v(\d+\.\d+\.\d+)/", text)
+    if not match:
+        raise RuntimeError(f"No `releases/download/vX.Y.Z/` URL in {path}")
     return match.group(1)
 
 
@@ -274,7 +359,8 @@ def _read_doc_last_updated_version(path: Path) -> str:
     appears on the stamp line.
     """
     text = path.read_text(encoding="utf-8")
-    line_match = re.search(r"Last updated:[^\n]*", text)
+    # Case-insensitive and tolerant of markdown bold (`**Last Updated**:`).
+    line_match = re.search(r"(?i)last updated\*{0,2}:[^\n]*", text)
     if not line_match:
         raise RuntimeError(f"No `Last updated:` stamp in {path}")
     line = line_match.group(0)
@@ -385,6 +471,11 @@ _READERS = {
     "ghcr_image": _read_ghcr_image,
     "fastapi_app_version": _read_fastapi_app_version,
     "deb_release_tag": _read_deb_release_tag,
+    "npm_lock_pkg": _read_npm_lock_pkg_version,
+    "cargo_dep_pin": _read_cargo_dep_pin,
+    "deb_download_path": _read_deb_download_path,
+    "md_version_label": _read_md_version_label,
+    "cli_repl_version": _read_cli_repl_version,
 }
 
 
