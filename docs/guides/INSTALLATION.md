@@ -60,7 +60,7 @@ entry.
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.16.0/velesdb-1.17.0-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.17.0/velesdb-1.17.0-amd64.deb
 
 # Install
 sudo dpkg -i velesdb-1.17.0-amd64.deb

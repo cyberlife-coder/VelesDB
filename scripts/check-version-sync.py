@@ -46,6 +46,15 @@ TARGETS: "list[tuple[str, str]]" = [
     # lockfile because no script policed it; v1.13.7 caught the same drift
     # via Devin Review (PR #710). Now this checker fails fast if we forget.
     ("sdks/typescript/package-lock.json", "json"),
+    # npm lockfiles carry the package version a SECOND time at `packages[""]`;
+    # `npm ci` fails if it diverges from the root `version`. The v1.17.0 bump
+    # left it stale at 1.16.0 (the root reader above never inspected it) —
+    # policing it here so that blind spot cannot recur.
+    ("sdks/typescript/package-lock.json", "npm_lock_pkg"),
+    # Intra-workspace path-dep pin `velesdb-core = { ..., version = "X.Y.Z" }`
+    # in root Cargo.toml. Not under [workspace.package], so the cargo-version
+    # reader never saw it; found stale at 1.16.0 during the v1.17.0 audit.
+    ("Cargo.toml", "cargo_dep_pin"),
     ("docs/openapi.json", "json_openapi"),
     # Doc snippets that mirror the /health and /ready REST responses. The
     # server echoes the workspace version, so the example in the docs has
@@ -131,6 +140,10 @@ TARGETS: "list[tuple[str, str]]" = [
     # were de-versioned to `releases/latest/`). Found pinned at v1.14.2 during
     # the v1.16.0 audit — the documented `wget` URL would 404 on release.
     ("docs/guides/INSTALLATION.md", "deb_release_tag"),
+    # The `releases/download/vX.Y.Z/` tag segment of the same DEB URL. The
+    # v1.17.0 bump updated the filename but left this at v1.16.0 → 404. Policing
+    # both halves so the documented download URL always resolves.
+    ("docs/guides/INSTALLATION.md", "deb_download_path"),
 ]
 
 
@@ -231,11 +244,46 @@ def _read_doc_version_badge(path: Path) -> str:
 
 
 def _read_dockerfile_label(path: Path) -> str:
-    """Pull the version out of the first `LABEL version="X.Y.Z"` line."""
+    """Pull the version out of `LABEL version="X.Y.Z"` lines, verifying ALL of
+    them agree. Multi-stage Dockerfiles carry one label per stage and the
+    runtime-stage label is the one `docker inspect` reports; the v1.17.0 bump
+    left the second-stage label stale because only the first was matched. If the
+    labels disagree, return them joined so the caller reports a mismatch.
+    """
     text = path.read_text(encoding="utf-8")
-    match = re.search(r'^LABEL\s+version="([^"]+)"', text, re.MULTILINE)
-    if not match:
+    matches = re.findall(r'^LABEL\s+version="([^"]+)"', text, re.MULTILINE)
+    if not matches:
         raise RuntimeError(f"No `LABEL version=\"...\"` line in {path}")
+    uniq = set(matches)
+    return matches[0] if len(uniq) == 1 else "/".join(matches)
+
+
+def _read_npm_lock_pkg_version(path: Path) -> str:
+    """Read `packages[""].version` from an npm lockfile (the copy `npm ci`
+    validates against `package.json`)."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    root_pkg = (data.get("packages") or {}).get("")
+    if not root_pkg or "version" not in root_pkg:
+        raise RuntimeError(f'No `packages[""].version` in {path}')
+    return str(root_pkg["version"])
+
+
+def _read_cargo_dep_pin(path: Path) -> str:
+    """Read the intra-workspace `velesdb-core = { path = ..., version = "X" }`
+    dependency pin from the root Cargo.toml."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'path = "crates/velesdb-core", version = "(\d+\.\d+\.\d+)"', text)
+    if not match:
+        raise RuntimeError(f"No velesdb-core path-dep version pin in {path}")
+    return match.group(1)
+
+
+def _read_deb_download_path(path: Path) -> str:
+    """Read the `releases/download/vX.Y.Z/` tag segment of the DEB wget URL."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"releases/download/v(\d+\.\d+\.\d+)/", text)
+    if not match:
+        raise RuntimeError(f"No `releases/download/vX.Y.Z/` URL in {path}")
     return match.group(1)
 
 
@@ -385,6 +433,9 @@ _READERS = {
     "ghcr_image": _read_ghcr_image,
     "fastapi_app_version": _read_fastapi_app_version,
     "deb_release_tag": _read_deb_release_tag,
+    "npm_lock_pkg": _read_npm_lock_pkg_version,
+    "cargo_dep_pin": _read_cargo_dep_pin,
+    "deb_download_path": _read_deb_download_path,
 }
 
 

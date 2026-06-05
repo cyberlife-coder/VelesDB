@@ -39,7 +39,7 @@ TARGETS: "list[tuple[str, str]]" = [
     ("crates/velesdb-python/README.md", "doc_version_badge"),
     ("demos/rag-pdf-demo/pyproject.toml", "toml"),
     ("sdks/typescript/package.json", "json"),
-    ("sdks/typescript/package-lock.json", "json"),
+    ("sdks/typescript/package-lock.json", "npm_lock"),
     ("docs/getting-started.md", "doc_health_snippet"),
     ("docs/reference/api-reference.md", "doc_health_snippet"),
     ("docs/guides/SERVER_SECURITY.md", "doc_health_snippet"),
@@ -87,13 +87,15 @@ def _bump_last_updated(text: str, ver: str) -> "tuple[str, int]":
     if not m:
         return text, 0
     line = m.group(0)
+    # Count the MATCH, not whether the text changed — a re-bump to the same
+    # version is a legitimate no-op match (count 1), not a MISS (count 0).
     if re.search(r"VelesDB v" + VERSION_RE, line):
-        new_line = re.sub(r"(VelesDB v)" + VERSION_RE, r"\g<1>" + ver, line, count=1)
+        new_line, c = re.subn(r"(VelesDB v)" + VERSION_RE, r"\g<1>" + ver, line, count=1)
     else:
-        new_line = re.sub(r"(\(v)" + VERSION_RE, r"\g<1>" + ver, line, count=1)
-    if new_line == line:
-        return text, 0
-    return text[: m.start()] + new_line + text[m.end():], 1
+        new_line, c = re.subn(r"(\(v)" + VERSION_RE, r"\g<1>" + ver, line, count=1)
+    if c:
+        text = text[: m.start()] + new_line + text[m.end():]
+    return text, c
 
 
 def bump_file(path: Path, fmt: str, ver: str) -> int:
@@ -104,6 +106,14 @@ def bump_file(path: Path, fmt: str, ver: str) -> int:
         text, n = _sub_first(text, r'(?m)^(\s*version\s*=\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
     elif fmt == "json":
         text, n = _sub_first(text, r'("version"\s*:\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
+    elif fmt == "npm_lock":
+        # npm lockfile carries the package version TWICE: the root `version`
+        # and `packages[""].version`. `npm ci` fails if they diverge, and the
+        # nested one is a known unpoliced drift trap — bump both. The
+        # `node_modules/@wiscale/*` tarball pins are left untouched (own track).
+        text, a = _sub_first(text, r'(^\s*"version"\s*:\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>", ML)
+        text, b = _sub_first(text, r'("":\s*\{(?:[^{}])*?"version":\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
+        n = a + b
     elif fmt == "doc_health_snippet":
         text, n = _sub_first(text, r'("version":\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
     elif fmt == "py_init_version":
@@ -115,7 +125,9 @@ def bump_file(path: Path, fmt: str, ver: str) -> int:
     elif fmt == "doc_version_badge":
         text, n = _sub_first(text, r"(version-)" + VERSION_RE + r"(-blue)", r"\g<1>" + ver + r"\g<2>")
     elif fmt == "dockerfile_label":
-        text, n = _sub_first(text, r'(?m)^(LABEL\s+version=")[^"]+(")', r"\g<1>" + ver + r"\g<2>")
+        # Replace EVERY `LABEL version="..."` — multi-stage Dockerfiles carry one
+        # per stage and the runtime-stage label is what `docker inspect` shows.
+        text, n = _sub_all(text, r'(?m)^(LABEL\s+version=")[^"]+(")', r"\g<1>" + ver + r"\g<2>")
     elif fmt == "doc_guide_version_header":
         text, n = _sub_first(text, r"(?m)^(\*(?:Version|Stable since v) )" + VERSION_RE, r"\g<1>" + ver)
     elif fmt == "md_title_version":
@@ -131,7 +143,11 @@ def bump_file(path: Path, fmt: str, ver: str) -> int:
     elif fmt == "fastapi_app_version":
         text, n = _sub_first(text, r'(\bversion\s*=\s*")' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>")
     elif fmt == "deb_release_tag":
-        text, n = _sub_all(text, r"(velesdb-)" + VERSION_RE + r"(-amd64\.deb)", r"\g<1>" + ver + r"\g<2>")
+        # Bump BOTH the asset filename AND the `releases/download/vX.Y.Z/` tag
+        # segment — a filename-only bump yields a 404 download URL.
+        text, a = _sub_all(text, r"(releases/download/v)" + VERSION_RE + r"(/)", r"\g<1>" + ver + r"\g<2>")
+        text, b = _sub_all(text, r"(velesdb-)" + VERSION_RE + r"(-amd64\.deb)", r"\g<1>" + ver + r"\g<2>")
+        n = a + b
     elif fmt == "doc_last_updated_version":
         text, n = _bump_last_updated(text, ver)
     else:
@@ -150,9 +166,17 @@ def bump_cargo_workspace(ver: str) -> int:
         raise RuntimeError("No [workspace.package] section in Cargo.toml")
     head, section = text[:idx], text[idx:]
     section, n = re.subn(r'(?m)^(version\s*=\s*")[^"]+(")', r"\g<1>" + ver + r"\g<2>", section, count=1)
-    if n:
-        path.write_text(head + section, encoding="utf-8")
-    return n
+    full = head + section
+    # Also bump intra-workspace path-dep pins like
+    # `velesdb-core = { path = "crates/...", version = "X.Y.Z", ... }` — these
+    # are not under [workspace.package] and were a silent drift trap.
+    full, m = re.subn(
+        r'(path = "crates/[^"]+", version = ")' + VERSION_RE + r'(")',
+        r"\g<1>" + ver + r"\g<2>", full,
+    )
+    if n or m:
+        path.write_text(full, encoding="utf-8")
+    return n + m
 
 
 def main() -> int:
@@ -162,7 +186,8 @@ def main() -> int:
     ver = sys.argv[1]
 
     total = bump_cargo_workspace(ver)
-    print(f"  Cargo.toml [workspace.package]: {total} change(s)")
+    print(f"  Cargo.toml [workspace.package] + dep pins: {total} change(s)")
+    misses: "list[str]" = []
     for rel, fmt in TARGETS:
         path = REPO_ROOT / rel
         if not path.exists():
@@ -172,7 +197,14 @@ def main() -> int:
         total += n
         flag = "OK  " if n else "MISS"  # MISS = pattern matched nothing; investigate
         print(f"  {flag} {rel} [{fmt}]: {n}")
+        if not n:
+            misses.append(f"{rel} [{fmt}]")
     print(f"\nBumped {total} location(s) to {ver}.")
+    if misses:
+        print("\nFAIL: pattern matched nothing in existing file(s) — likely format drift:")
+        for m in misses:
+            print(f"  - {m}")
+        return 1
     print("Next: regenerate OpenAPI, refresh Cargo.lock, then run check-version-sync.py.")
     return 0
 
