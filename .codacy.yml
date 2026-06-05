@@ -520,3 +520,6 @@ engines:
       - "integrations/langchain/src/langchain_velesdb/graph_retriever.py"
       - "integrations/langchain/src/langchain_velesdb/vectorstore.py"
       - "integrations/langchain/src/langchain_velesdb/graph_ops.py"
+      # _common.py imports `from langchain_core.documents import Document` for the
+      # shared result-to-Document helpers — same self-reference FP.
+      - "integrations/langchain/src/langchain_velesdb/_common.py"
