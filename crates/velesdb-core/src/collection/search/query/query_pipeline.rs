@@ -231,10 +231,9 @@ impl Collection {
         stmt: &crate::velesql::SelectStatement,
         results: &[SearchResult],
     ) -> Vec<SearchResult> {
-        let group_by = stmt
-            .group_by
-            .as_ref()
-            .expect("invariant: execute_vector_group_by_query requires stmt.group_by.is_some()");
+        let Some(group_by) = stmt.group_by.as_ref() else {
+            return results.to_vec();
+        };
         let aggregations = Self::extract_aggregations(&stmt.columns);
         let limit_hint = stmt.limit.map(|l| usize::try_from(l).unwrap_or(MAX_LIMIT));
         let config = vector_group_by::VectorGroupByConfig {

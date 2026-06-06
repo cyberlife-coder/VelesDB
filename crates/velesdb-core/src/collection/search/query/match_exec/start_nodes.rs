@@ -6,7 +6,7 @@
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::storage::{PayloadStorage, VectorStorage};
-use crate::velesql::GraphPattern;
+use crate::velesql::{GraphPattern, NodePattern};
 use std::collections::HashMap;
 
 impl Collection {
@@ -145,9 +145,9 @@ impl Collection {
     }
 
     /// Returns true if a node matches the label and property filters of a pattern.
-    fn node_matches_pattern(
+    pub(super) fn node_matches_pattern(
         id: u64,
-        node: &crate::velesql::NodePattern,
+        node: &NodePattern,
         needs_payload: bool,
         payload_storage: &crate::storage::LogPayloadStorage,
     ) -> bool {
@@ -161,6 +161,22 @@ impl Collection {
         }
         node.properties.is_empty()
             || Self::node_matches_properties(payload_opt.as_ref(), &node.properties)
+    }
+
+    /// Returns true if a bound node satisfies its pattern.
+    ///
+    /// `@collection` annotations are resolved after traversal by the database
+    /// enrichment layer, so they do not change traversal scope here.
+    pub(super) fn node_matches_bound_pattern(
+        id: u64,
+        node: &NodePattern,
+        payload_storage: &crate::storage::LogPayloadStorage,
+    ) -> bool {
+        if node.collection.is_some() {
+            return true;
+        }
+        let needs_payload = !node.properties.is_empty() || !node.labels.is_empty();
+        Self::node_matches_pattern(id, node, needs_payload, payload_storage)
     }
 
     /// Builds a `(node_id, bindings)` pair for a start node.

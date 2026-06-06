@@ -11,14 +11,17 @@ import type { DistanceMetric } from './core';
 // Knowledge Graph Types (EPIC-016 US-041)
 // ============================================================================
 
+/** Graph node/edge ID. Large u64 IDs may be returned as strings to preserve precision. */
+export type GraphNodeId = number | string;
+
 /** Graph edge representing a relationship between nodes */
 export interface GraphEdge {
   /** Unique edge ID */
-  id: number;
+  id: GraphNodeId;
   /** Source node ID */
-  source: number;
+  source: GraphNodeId;
   /** Target node ID */
-  target: number;
+  target: GraphNodeId;
   /** Edge label (relationship type, e.g., "KNOWS", "FOLLOWS") */
   label: string;
   /** Edge properties */
@@ -49,7 +52,7 @@ export interface GetEdgesOptions {
 /** Request for graph traversal (EPIC-016 US-050) */
 export interface TraverseRequest {
   /** Source node ID to start traversal from */
-  source: number;
+  source: GraphNodeId;
   /** Traversal strategy: 'bfs' or 'dfs' */
   strategy?: 'bfs' | 'dfs';
   /** Maximum traversal depth */
@@ -65,7 +68,7 @@ export interface TraverseRequest {
 /** Request for multi-source parallel BFS traversal */
 export interface TraverseParallelRequest {
   /** Source node IDs to start traversal from */
-  sources: number[];
+  sources: GraphNodeId[];
   /** Maximum traversal depth */
   maxDepth?: number;
   /** Maximum number of results to return */
@@ -77,11 +80,11 @@ export interface TraverseParallelRequest {
 /** A single traversal result item */
 export interface TraversalResultItem {
   /** Target node ID reached */
-  targetId: number;
+  targetId: GraphNodeId;
   /** Depth of traversal (number of hops from source) */
   depth: number;
   /** Path taken (list of edge IDs) */
-  path: number[];
+  path: GraphNodeId[];
 }
 
 /** Statistics from traversal operation */

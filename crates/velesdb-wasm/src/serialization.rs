@@ -30,9 +30,9 @@ pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
     bytes.push(1);
 
     // Dimension
-    // Reason: WASM vector dimensions are always < 100K (model constraints), safely < u32::MAX
-    let dim_u32 = u32::try_from(store.dimension)
-        .expect("dimension fits in u32: WASM model dimensions are always well below 2^32");
+    let Ok(dim_u32) = u32::try_from(store.dimension) else {
+        return Vec::new();
+    };
     bytes.extend_from_slice(&dim_u32.to_le_bytes());
 
     // Metric
@@ -40,9 +40,9 @@ pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
     bytes.push(metric_byte);
 
     // Vector count
-    // Reason: WASM memory limits (4GB) prevent > u64::MAX vectors anyway
-    let count_u64 =
-        u64::try_from(count).expect("count fits in u64: usize <= u64 on all WASM targets");
+    let Ok(count_u64) = u64::try_from(count) else {
+        return Vec::new();
+    };
     bytes.extend_from_slice(&count_u64.to_le_bytes());
 
     // Data

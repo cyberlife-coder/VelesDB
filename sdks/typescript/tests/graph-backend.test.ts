@@ -157,13 +157,30 @@ describe('getEdges', () => {
 
     expect(edges).toEqual([
       {
-        id: 42,
-        source: 10,
-        target: 20,
+        id: '42',
+        source: '10',
+        target: '20',
         label: 'KNOWS',
         properties: { k: 1 },
       },
     ]);
+  });
+
+  it('preserves graph ids above Number.MAX_SAFE_INTEGER', async () => {
+    const transport = buildTransport();
+    const largeId = '9007199254740993';
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {
+        edges: [{ id: largeId, source: largeId, target: '9007199254740995', label: 'KNOWS' }],
+        count: 1,
+      },
+    });
+
+    const edges = await getEdges(transport, 'kg');
+
+    expect(edges[0].id).toBe(largeId);
+    expect(edges[0].source).toBe(largeId);
+    expect(edges[0].target).toBe('9007199254740995');
   });
 
   it('passes through numeric ids unchanged', async () => {

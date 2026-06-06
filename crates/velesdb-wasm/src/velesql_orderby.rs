@@ -122,12 +122,10 @@ fn compare_json_with_nulls(
         (true, true) => Ordering::Equal,
         (true, false) => Ordering::Greater,
         (false, true) => Ordering::Less,
-        (false, false) => {
-            // Safe to unwrap: both are Some and non-null per the match arms.
-            let l = left.expect("left is non-null here");
-            let r = right.expect("right is non-null here");
-            json_values_cmp(l, r).unwrap_or(Ordering::Equal)
-        }
+        (false, false) => match (left, right) {
+            (Some(l), Some(r)) => json_values_cmp(l, r).unwrap_or(Ordering::Equal),
+            _ => Ordering::Equal,
+        },
     }
 }
 

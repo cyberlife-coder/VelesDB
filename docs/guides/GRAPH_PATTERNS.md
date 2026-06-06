@@ -98,7 +98,7 @@ MATCH only sees edges in the current collection's edge store. If edges were crea
 
 ### 3. Expecting cross-collection traversal
 
-MATCH is scoped to a single collection. It does not join across collections. **Fix**: store all relevant points and edges in one collection, or use the direct graph API to query each collection separately and merge results in application code.
+MATCH traversal is scoped to the primary collection. `@collection` annotations can enrich bound node payloads from another collection after traversal, but they do not make edges span multiple graph stores. **Fix**: keep edges in the primary graph collection, then use `alias@collection` for payload enrichment when needed.
 
 ### 4. Label mismatch (case-sensitive)
 
@@ -113,7 +113,7 @@ Labels are case-sensitive. `"Product"` and `"product"` are different labels. Ens
 | **Scope** | Single collection | Single `GraphCollection` |
 | **Query style** | Declarative (SQL-like) | Imperative (method calls) |
 | **Vector + graph fusion** | Built-in (`similarity()` in WHERE) | Manual (search + traverse separately) |
-| **Cross-collection** | Not supported | Possible via application code |
+| **Cross-collection** | Payload enrichment via `@collection` | Possible via application code |
 
 **Use MATCH when**: you need graph patterns combined with vector similarity or metadata filtering in a single query within one collection.
 

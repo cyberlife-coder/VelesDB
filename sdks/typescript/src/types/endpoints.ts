@@ -6,6 +6,8 @@
  * @packageDocumentation
  */
 
+import type { GraphNodeId } from './graph';
+
 // ============================================================================
 // Additional endpoint types (Sprint 2 Wave 4 -- S2-NEW-10)
 // ============================================================================
@@ -61,7 +63,7 @@ export interface GetNodeEdgesOptions {
 /** Result of `GET /collections/{name}/graph/nodes/{id}/payload`. */
 export interface NodePayloadResponse {
   /** Node ID. */
-  nodeId: number;
+  nodeId: GraphNodeId;
   /** Stored payload -- `null` if no payload has been set. */
   payload: Record<string, unknown> | null;
 }
@@ -77,7 +79,7 @@ export interface GraphSearchRequest {
 /** Single result item from `graphSearch`. */
 export interface GraphSearchResultItem {
   /** Node ID. */
-  id: number;
+  id: GraphNodeId;
   /** Similarity score. */
   score: number;
   /** Optional node payload (mirror of `GraphSearchResultItem.payload`). */

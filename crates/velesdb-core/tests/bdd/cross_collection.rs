@@ -339,6 +339,13 @@ fn test_cross_collection_match_enrichment() {
                 !res.is_empty(),
                 "Cross-collection MATCH should return results"
             );
+            let payload = res[0]
+                .point
+                .payload
+                .as_ref()
+                .expect("test: enriched payload should exist");
+            assert_eq!(payload.get("w.price"), Some(&json!(99.99)));
+            assert_eq!(payload.get("w.stock"), Some(&json!(50)));
         }
         Err(e) => {
             let msg = e.to_string();
