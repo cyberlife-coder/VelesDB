@@ -4193,14 +4193,16 @@
         "properties": {
           "bindings": {
             "type": "object",
-            "description": "Variable bindings from pattern matching.",
             "additionalProperties": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
-            },
-            "propertyNames": {
-              "type": "string"
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                {
+                  "type": "string"
+                }
+              ]
             }
           },
           "depth": {
@@ -4964,11 +4966,16 @@
           "path": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
-            },
-            "description": "Path of edge IDs taken to reach this node."
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
           }
         }
       },
@@ -5042,11 +5049,16 @@
           "path": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
-            },
-            "description": "Path taken (list of edge IDs)."
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
           },
           "target_id": {
             "type": "string",

@@ -22,7 +22,7 @@
 //! ```
 
 use serde::de::{self, Unexpected, Visitor};
-use serde::{Deserializer, Serializer};
+use serde::{Deserialize, Deserializer, Serializer};
 use std::fmt;
 
 /// Serializes a `u64` as a JSON string to prevent JavaScript precision loss.
@@ -64,6 +64,18 @@ pub fn deserialize_id_from_string_or_number<'de, D: Deserializer<'de>>(
 #[cfg(feature = "openapi")]
 #[must_use]
 pub fn id_input_schema() -> utoipa::openapi::schema::OneOfBuilder {
+    id_oneof().description(Some(
+        "Point ID. Accepts a JSON integer (native form) or a string; use a \
+         string for u64 values above 2^53-1 to avoid JavaScript precision loss.",
+    ))
+}
+
+/// Shared `int | string` oneOf used by all ID schema helpers.
+///
+/// An ID is emitted as a string on the wire (precision-safe) but accepted as
+/// either an integer or a string on input.
+#[cfg(feature = "openapi")]
+fn id_oneof() -> utoipa::openapi::schema::OneOfBuilder {
     use utoipa::openapi::schema::{KnownFormat, ObjectBuilder, OneOfBuilder, SchemaFormat, Type};
     OneOfBuilder::new()
         .item(
@@ -72,10 +84,100 @@ pub fn id_input_schema() -> utoipa::openapi::schema::OneOfBuilder {
                 .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int64))),
         )
         .item(ObjectBuilder::new().schema_type(Type::String))
-        .description(Some(
-            "Point ID. Accepts a JSON integer (native form) or a string; use a \
-             string for u64 values above 2^53-1 to avoid JavaScript precision loss.",
-        ))
+}
+
+/// `OpenAPI` schema for an array of IDs whose elements accept an integer or a
+/// string (precision-safe), mirroring [`serialize_ids_as_strings`].
+///
+/// Apply with
+/// `#[cfg_attr(feature = "openapi", schema(schema_with = serde_id::ids_array_schema))]`.
+#[cfg(feature = "openapi")]
+#[must_use]
+pub fn ids_array_schema() -> utoipa::openapi::schema::ArrayBuilder {
+    utoipa::openapi::schema::ArrayBuilder::new().items(id_oneof())
+}
+
+/// `OpenAPI` schema for a map whose values are IDs accepting an integer or a
+/// string (precision-safe), mirroring [`serialize_id_map_as_strings`].
+///
+/// Apply with
+/// `#[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_map_schema))]`.
+#[cfg(feature = "openapi")]
+#[must_use]
+pub fn id_map_schema() -> utoipa::openapi::schema::ObjectBuilder {
+    use utoipa::openapi::schema::Schema;
+    utoipa::openapi::schema::ObjectBuilder::new()
+        .additional_properties(Some(Schema::OneOf(id_oneof().build())))
+}
+
+/// Serializes a slice of `u64` IDs as an array of JSON strings.
+///
+/// Emits `["1","2"]` instead of `[1,2]` to keep IDs above 2^53-1 precise in
+/// JavaScript. Usable as `serialize_with` for a `Vec<u64>` field.
+///
+/// # Errors
+///
+/// Returns `S::Error` if the serializer rejects the sequence.
+pub fn serialize_ids_as_strings<S: Serializer>(
+    values: &[u64],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(values.iter().map(u64::to_string))
+}
+
+/// Serializes a `HashMap<String, u64>` as a JSON object whose values are
+/// strings, keeping IDs above 2^53-1 precise in JavaScript.
+///
+/// Emits `{"k":"1"}` instead of `{"k":1}`.
+///
+/// # Errors
+///
+/// Returns `S::Error` if the serializer rejects the map.
+#[allow(clippy::implicit_hasher)] // applied to a concrete `HashMap<String, u64>` field
+pub fn serialize_id_map_as_strings<S: Serializer>(
+    map: &std::collections::HashMap<String, u64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_map(map.iter().map(|(k, v)| (k, v.to_string())))
+}
+
+/// Deserializes a `Vec<u64>` whose elements may be JSON strings or numbers.
+///
+/// Accepts `["1","2"]` and `[1,2]` for backward compatibility.
+///
+/// # Errors
+///
+/// Returns `D::Error` if any element is not a valid u64 string or number.
+pub fn deserialize_ids_from_string_or_number<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<u64>, D::Error> {
+    let fields = Vec::<IdField>::deserialize(deserializer)?;
+    Ok(fields.into_iter().map(|f| f.0).collect())
+}
+
+/// Deserializes a `HashMap<String, u64>` whose values may be JSON strings or
+/// numbers.
+///
+/// Accepts `{"k":"1"}` and `{"k":1}` for backward compatibility.
+///
+/// # Errors
+///
+/// Returns `D::Error` if any value is not a valid u64 string or number.
+pub fn deserialize_id_map_from_string_or_number<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<std::collections::HashMap<String, u64>, D::Error> {
+    let fields = std::collections::HashMap::<String, IdField>::deserialize(deserializer)?;
+    Ok(fields.into_iter().map(|(k, f)| (k, f.0)).collect())
+}
+
+/// Newtype reusing [`deserialize_id_from_string_or_number`] so collection
+/// deserializers (`Vec`, `HashMap`) stay trivial and complexity-safe.
+struct IdField(u64);
+
+impl<'de> serde::Deserialize<'de> for IdField {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserialize_id_from_string_or_number(deserializer).map(IdField)
+    }
 }
 
 /// Serializes an `Option<u64>` as a JSON string when `Some`, or `null` when `None`.

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use utoipa::ToSchema;
+use velesdb_core::api_types::serde_id;
 
 use crate::types::VELESQL_CONTRACT_VERSION;
 use crate::AppState;
@@ -37,6 +38,8 @@ pub struct MatchQueryRequest {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MatchQueryResultItem {
     /// Variable bindings from pattern matching.
+    #[serde(serialize_with = "serde_id::serialize_id_map_as_strings")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_map_schema))]
     pub bindings: HashMap<String, u64>,
     /// Similarity score (if similarity() was used).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -313,6 +316,31 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("bindings"));
         assert!(json.contains("0.95"));
+    }
+
+    #[test]
+    fn test_match_query_bindings_serialized_as_strings() {
+        let above_safe = (1_u64 << 53) + 1; // 9_007_199_254_740_993
+        let response = MatchQueryResponse {
+            results: vec![MatchQueryResultItem {
+                bindings: HashMap::from([("a".to_string(), above_safe)]),
+                score: None,
+                depth: 0,
+                projected: HashMap::new(),
+            }],
+            took_ms: 0,
+            count: 1,
+            meta: MatchQueryMeta {
+                velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
+            },
+        };
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            json["results"][0]["bindings"]["a"],
+            serde_json::json!("9007199254740993"),
+            "binding IDs must serialize as JSON strings for JS precision safety"
+        );
     }
 
     #[test]

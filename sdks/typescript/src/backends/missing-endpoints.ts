@@ -189,7 +189,7 @@ export async function aggregate(
 /** Raw wire shape of `POST /collections/{name}/match`. */
 interface MatchQueryResponseWire {
   results: Array<{
-    bindings: Record<string, number>;
+    bindings: Record<string, number | string>;
     score?: number;
     depth: number;
     projected?: Record<string, unknown>;
