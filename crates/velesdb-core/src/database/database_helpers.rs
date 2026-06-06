@@ -127,7 +127,7 @@ impl Database {
         let stripped = Self::strip_table_prefix_from_condition(combined);
         let filter = crate::Filter::new(crate::Condition::from(stripped));
 
-        let ids = collection.all_ids();
+        let ids = Self::join_candidate_ids(collection, &filter);
         let points: Vec<_> = collection.get(&ids).into_iter().flatten().collect();
         let matching: Vec<_> = points
             .iter()
@@ -135,6 +135,24 @@ impl Database {
             .collect();
 
         Self::build_column_store_from_points(&matching)
+    }
+
+    /// Enumerates the join-side candidate IDs to feed into the post-filter.
+    ///
+    /// When the pushed-down `filter` references secondary-indexed fields,
+    /// `build_prefilter_bitmap` resolves it to a Roaring bitmap of candidate IDs,
+    /// avoiding the O(N) `all_ids()` scan. The bitmap is an exact-or-superset
+    /// candidate set: `point_matches_filter` still runs on every returned point,
+    /// so results are identical to the scan path. Falls back to `all_ids()` when
+    /// no index can resolve the predicate (`None`).
+    fn join_candidate_ids(
+        collection: &crate::collection::Collection,
+        filter: &crate::Filter,
+    ) -> Vec<u64> {
+        match collection.build_prefilter_bitmap(filter) {
+            Some(bitmap) => bitmap.iter().map(u64::from).collect(),
+            None => collection.all_ids(),
+        }
     }
 
     /// Evaluates a filter against a point's payload with `id` injected.
