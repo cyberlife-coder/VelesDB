@@ -155,22 +155,14 @@ impl Condition {
             Self::Neq { field, value } => {
                 get_field(payload, field).is_none_or(|v| !values_equal(v, value))
             }
-            Self::Gt { field, value } => {
-                get_field(payload, field)
-                    .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_gt()))
-            }
-            Self::Gte { field, value } => {
-                get_field(payload, field)
-                    .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_ge()))
-            }
-            Self::Lt { field, value } => {
-                get_field(payload, field)
-                    .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_lt()))
-            }
-            Self::Lte { field, value } => {
-                get_field(payload, field)
-                    .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_le()))
-            }
+            Self::Gt { field, value } => get_field(payload, field)
+                .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_gt())),
+            Self::Gte { field, value } => get_field(payload, field)
+                .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_ge())),
+            Self::Lt { field, value } => get_field(payload, field)
+                .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_lt())),
+            Self::Lte { field, value } => get_field(payload, field)
+                .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_le())),
             Self::In { field, values } => {
                 get_field(payload, field).is_some_and(|v| in_list_matches(v, values))
             }
@@ -250,9 +242,10 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 /// matches SQL three-valued logic where `NULL op X` yields `UNKNOWN` (false).
 fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => {
-            a.as_f64().zip(b.as_f64()).and_then(|(fa, fb)| fa.partial_cmp(&fb))
-        }
+        (Value::Number(a), Value::Number(b)) => a
+            .as_f64()
+            .zip(b.as_f64())
+            .and_then(|(fa, fb)| fa.partial_cmp(&fb)),
         (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
         _ => None,
     }
@@ -402,10 +395,26 @@ mod tests {
         let p = payload(json!({"price": null}));
         let n = json!(100);
 
-        assert!(!Condition::Gt { field: "price".into(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Gte { field: "price".into(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lt { field: "price".into(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lte { field: "price".into(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Gt {
+            field: "price".into(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Gte {
+            field: "price".into(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lt {
+            field: "price".into(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lte {
+            field: "price".into(),
+            value: n.clone()
+        }
+        .matches(&p));
     }
 
     // A boolean field must not match numeric ordering predicates.
@@ -414,10 +423,26 @@ mod tests {
         let p = payload(json!({"active": true}));
         let n = json!(1);
 
-        assert!(!Condition::Gte { field: "active".into(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lte { field: "active".into(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Gt  { field: "active".into(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lt  { field: "active".into(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Gte {
+            field: "active".into(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lte {
+            field: "active".into(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Gt {
+            field: "active".into(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lt {
+            field: "active".into(),
+            value: n.clone()
+        }
+        .matches(&p));
     }
 
     // A string field must not match a numeric comparison operand.
@@ -426,10 +451,26 @@ mod tests {
         let p = payload(json!({"name": "alice"}));
         let n = json!(100);
 
-        assert!(!Condition::Gt  { field: "name".into(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Gte { field: "name".into(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lt  { field: "name".into(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lte { field: "name".into(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Gt {
+            field: "name".into(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Gte {
+            field: "name".into(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lt {
+            field: "name".into(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lte {
+            field: "name".into(),
+            value: n.clone()
+        }
+        .matches(&p));
     }
 
     // Sanity: numeric ordering still works for same-type comparisons.
@@ -437,12 +478,36 @@ mod tests {
     fn numeric_ordering_same_type() {
         let p = payload(json!({"price": 50}));
 
-        assert!( Condition::Gt  { field: "price".into(), value: json!(10)  }.matches(&p));
-        assert!( Condition::Gte { field: "price".into(), value: json!(50)  }.matches(&p));
-        assert!(!Condition::Gt  { field: "price".into(), value: json!(50)  }.matches(&p));
-        assert!( Condition::Lt  { field: "price".into(), value: json!(100) }.matches(&p));
-        assert!( Condition::Lte { field: "price".into(), value: json!(50)  }.matches(&p));
-        assert!(!Condition::Lt  { field: "price".into(), value: json!(50)  }.matches(&p));
+        assert!(Condition::Gt {
+            field: "price".into(),
+            value: json!(10)
+        }
+        .matches(&p));
+        assert!(Condition::Gte {
+            field: "price".into(),
+            value: json!(50)
+        }
+        .matches(&p));
+        assert!(!Condition::Gt {
+            field: "price".into(),
+            value: json!(50)
+        }
+        .matches(&p));
+        assert!(Condition::Lt {
+            field: "price".into(),
+            value: json!(100)
+        }
+        .matches(&p));
+        assert!(Condition::Lte {
+            field: "price".into(),
+            value: json!(50)
+        }
+        .matches(&p));
+        assert!(!Condition::Lt {
+            field: "price".into(),
+            value: json!(50)
+        }
+        .matches(&p));
     }
 
     // Sanity: string ordering still works.
@@ -450,9 +515,25 @@ mod tests {
     fn string_ordering_same_type() {
         let p = payload(json!({"name": "bob"}));
 
-        assert!( Condition::Gt  { field: "name".into(), value: json!("alice") }.matches(&p));
-        assert!( Condition::Gte { field: "name".into(), value: json!("bob")   }.matches(&p));
-        assert!( Condition::Lt  { field: "name".into(), value: json!("charlie")}.matches(&p));
-        assert!( Condition::Lte { field: "name".into(), value: json!("bob")   }.matches(&p));
+        assert!(Condition::Gt {
+            field: "name".into(),
+            value: json!("alice")
+        }
+        .matches(&p));
+        assert!(Condition::Gte {
+            field: "name".into(),
+            value: json!("bob")
+        }
+        .matches(&p));
+        assert!(Condition::Lt {
+            field: "name".into(),
+            value: json!("charlie")
+        }
+        .matches(&p));
+        assert!(Condition::Lte {
+            field: "name".into(),
+            value: json!("bob")
+        }
+        .matches(&p));
     }
 }

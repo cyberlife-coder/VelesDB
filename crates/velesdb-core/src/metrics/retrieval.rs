@@ -201,13 +201,12 @@ pub fn ndcg_at_k(relevances: &[f64], k: usize) -> f64 {
 
     let mut sorted_relevances = relevances.to_vec();
     sorted_relevances.sort_unstable_by(|a, b| {
-        b.partial_cmp(a).unwrap_or_else(|| {
-            match (a.is_nan(), b.is_nan()) {
+        b.partial_cmp(a)
+            .unwrap_or_else(|| match (a.is_nan(), b.is_nan()) {
                 (true, false) => std::cmp::Ordering::Greater,
                 (false, true) => std::cmp::Ordering::Less,
                 _ => std::cmp::Ordering::Equal,
-            }
-        })
+            })
     });
     let idcg = compute_dcg(&sorted_relevances, k);
 

@@ -184,7 +184,9 @@ impl PlanGenerator {
     pub fn select_best(&self, plans: Vec<CandidatePlan>) -> Option<CandidatePlan> {
         // total_cmp gives a true total order; NaN cost (should never occur) sorts
         // last (highest), so it is never selected as the minimum-cost plan.
-        plans.into_iter().min_by(|a, b| a.cost.total.total_cmp(&b.cost.total))
+        plans
+            .into_iter()
+            .min_by(|a, b| a.cost.total.total_cmp(&b.cost.total))
     }
 
     /// Generates and selects the best plan in one step.
