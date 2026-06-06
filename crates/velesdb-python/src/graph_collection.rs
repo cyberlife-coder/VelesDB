@@ -576,6 +576,7 @@ fn build_traversal_config(
         max_depth: max_depth.unwrap_or(3),
         limit: limit.unwrap_or(100),
         rel_types: rel_types.unwrap_or_default(),
+        deadline: None,
     }
 }
 

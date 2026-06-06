@@ -226,6 +226,7 @@ impl GraphStore {
             max_visited_size: config.max_visited,
             rel_types,
             limit: Some(config.max_visited),
+            deadline: None,
         };
 
         // Release GIL during traversal (no PyObject involved)

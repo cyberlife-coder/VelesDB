@@ -354,6 +354,7 @@ mod property_tests {
                 max_depth,
                 limit,
                 rel_types: Vec::new(),
+                deadline: None,
             }
         })
     }
