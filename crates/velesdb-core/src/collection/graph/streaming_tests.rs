@@ -2,6 +2,7 @@
 
 use super::streaming::*;
 use super::{EdgeStore, GraphEdge, DEFAULT_MAX_DEPTH};
+use std::time::{Duration, Instant};
 
 fn create_test_edge_store() -> EdgeStore {
     let mut store = EdgeStore::new();
@@ -158,6 +159,50 @@ fn test_streaming_config_defaults() {
     assert!(config.limit.is_none());
     assert_eq!(config.max_visited_size, 100_000);
     assert!(config.rel_types.is_empty());
+}
+
+// =============================================================================
+// Wall-clock deadline: streaming BFS terminates instead of looping forever
+// =============================================================================
+
+#[test]
+fn test_bfs_iterator_expired_deadline_terminates() {
+    // GIVEN: a cyclic store and an already-expired deadline
+    let store = create_cyclic_edge_store();
+    let expired = Instant::now()
+        .checked_sub(Duration::from_millis(1))
+        .expect("test: clock before epoch");
+    let config = StreamingConfig::default()
+        .with_max_depth(5)
+        .with_limit(10)
+        .with_deadline(expired);
+
+    // WHEN: the iterator is fully drained
+    let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+
+    // THEN: it terminates immediately with a bounded (empty) result — the
+    // counter is seeded at the check threshold so the first pop aborts.
+    assert!(
+        results.is_empty(),
+        "expired deadline must terminate the iterator before expanding"
+    );
+}
+
+#[test]
+fn test_bfs_iterator_far_future_deadline_no_premature_abort() {
+    // GIVEN: a far-future deadline (effectively disabled)
+    let store = create_test_edge_store();
+    let future = Instant::now() + Duration::from_secs(3600);
+    let with_deadline = StreamingConfig::default()
+        .with_max_depth(3)
+        .with_deadline(future);
+    let without = StreamingConfig::default().with_max_depth(3);
+
+    // WHEN / THEN: the result set matches the no-deadline run.
+    let a: Vec<_> = BfsIterator::new(&store, 1, with_deadline).collect();
+    let b: Vec<_> = BfsIterator::new(&store, 1, without).collect();
+    assert_eq!(a.len(), b.len(), "far-future deadline must not truncate");
+    assert!(a.iter().any(|r| r.target_id == 4 && r.depth == 3));
 }
 
 // =============================================================================

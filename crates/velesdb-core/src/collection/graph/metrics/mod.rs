@@ -227,6 +227,19 @@ impl GraphMetrics {
         self.edge_insert_latency.observe(latency);
     }
 
+    /// Records a batch edge insertion.
+    ///
+    /// Bumps the insert/edge counters by `count` and observes the batch
+    /// `latency` once, avoiding a per-edge `Instant::now()` on the bulk path.
+    pub fn record_edge_inserts_batch(&self, count: u64, latency: Duration) {
+        if count == 0 {
+            return;
+        }
+        self.edge_inserts_total.fetch_add(count, Ordering::Relaxed);
+        self.edges_total.fetch_add(count, Ordering::Relaxed);
+        self.edge_insert_latency.observe(latency);
+    }
+
     /// Records an edge deletion with latency.
     ///
     /// Uses saturating subtraction to prevent underflow.

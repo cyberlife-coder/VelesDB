@@ -179,6 +179,7 @@ fn cmd_graph_traverse(db: &Database, parts: &[&str]) -> CommandResult {
         max_depth,
         limit,
         rel_types,
+        deadline: None,
     };
 
     let algo_label = match algo.as_str() {

@@ -5,6 +5,7 @@ mod tests {
     use crate::collection::graph::{GraphEdge, TraversalConfig};
     use crate::collection::types::Collection;
     use crate::DistanceMetric;
+    use std::time::{Duration, Instant};
     use tempfile::TempDir;
 
     fn create_test_collection() -> (Collection, TempDir) {
@@ -314,6 +315,7 @@ mod tests {
             min_depth: 0,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_bfs_config(1, &config);
         assert!(!results.is_empty());
@@ -329,6 +331,7 @@ mod tests {
             min_depth: 2,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_bfs_config(1, &config);
         // min_depth=2 so only nodes at depth >= 2 are returned
@@ -345,6 +348,7 @@ mod tests {
             min_depth: 0,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_dfs_config(1, &config);
         assert!(!results.is_empty());
@@ -361,10 +365,109 @@ mod tests {
             min_depth: 0,
             rel_types: vec!["NEXT".to_string()],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_dfs_config(1, &config);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].target_id, 2);
+    }
+
+    // =========================================================================
+    // Wall-clock deadline on config traversal + GraphMetrics wiring
+    // =========================================================================
+
+    #[test]
+    fn test_traverse_dfs_config_expired_deadline_returns_partial() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let config = TraversalConfig::with_range(1, 3)
+            .with_limit(100)
+            .with_deadline(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(1))
+                    .expect("test: clock before epoch"),
+            );
+
+        // Expired deadline aborts before expanding (counter seeded at threshold).
+        let results = collection.traverse_dfs_config(1, &config);
+        assert!(results.is_empty(), "expired deadline aborts DFS traversal");
+    }
+
+    #[test]
+    fn test_traverse_bfs_config_expired_deadline_returns_partial() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let config = TraversalConfig::with_range(1, 3)
+            .with_limit(100)
+            .with_deadline(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(1))
+                    .expect("test: clock before epoch"),
+            );
+
+        let results = collection.traverse_bfs_config(1, &config);
+        assert!(results.is_empty(), "expired deadline aborts BFS traversal");
+    }
+
+    #[test]
+    fn test_traverse_config_far_future_deadline_no_premature_abort() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let future = Instant::now() + Duration::from_secs(3600);
+        let with_deadline = TraversalConfig::with_range(1, 3)
+            .with_limit(100)
+            .with_deadline(future);
+        let without = TraversalConfig::with_range(1, 3).with_limit(100);
+
+        let a = collection.traverse_bfs_config(1, &with_deadline);
+        let b = collection.traverse_bfs_config(1, &without);
+        assert_eq!(a.len(), b.len(), "far-future deadline must not truncate");
+        assert!(!a.is_empty());
+    }
+
+    #[test]
+    fn test_traverse_bfs_config_records_metrics() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let before = collection.edge_store.metrics().traversals_total();
+        let config = TraversalConfig::with_range(1, 3).with_limit(100);
+        let results = collection.traverse_bfs_config(1, &config);
+        assert!(!results.is_empty());
+
+        let metrics = collection.edge_store.metrics();
+        assert_eq!(
+            metrics.traversals_total(),
+            before + 1,
+            "BFS config traversal increments the counter"
+        );
+        assert!(
+            metrics.traversal_latency.count() > 0,
+            "traversal latency observed"
+        );
+        assert!(
+            metrics.traversal_nodes_visited() >= results.len() as u64,
+            "nodes_visited recorded"
+        );
+    }
+
+    #[test]
+    fn test_traverse_dfs_config_records_metrics() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let before = collection.edge_store.metrics().traversals_total();
+        let config = TraversalConfig::with_range(1, 3).with_limit(100);
+        let _ = collection.traverse_dfs_config(1, &config);
+
+        assert_eq!(
+            collection.edge_store.metrics().traversals_total(),
+            before + 1,
+            "DFS config traversal increments the counter"
+        );
     }
 
     // =========================================================================
@@ -381,6 +484,7 @@ mod tests {
             min_depth: 1,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_bfs_parallel(&[1], &config);
         assert!(!results.is_empty(), "parallel BFS should find neighbors");
@@ -406,6 +510,7 @@ mod tests {
             min_depth: 1,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_bfs_parallel(&[1, 10], &config);
 
@@ -445,6 +550,7 @@ mod tests {
             min_depth: 1,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_bfs_parallel(&[1], &config);
         assert!(results.iter().all(|r| r.depth <= 1));
@@ -596,6 +702,7 @@ mod tests {
             min_depth: 0,
             rel_types: vec![],
             limit: usize::MAX,
+            deadline: None,
         };
         let results = collection.traverse_dfs_config(0, &config);
 
@@ -686,6 +793,7 @@ mod tests {
             min_depth: 2,
             rel_types: vec![],
             limit: usize::MAX,
+            deadline: None,
         };
         let results = collection.traverse_dfs_config(0, &config);
         assert!(
