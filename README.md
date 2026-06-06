@@ -371,7 +371,9 @@ RETURN author.name, doc.title
 ORDER BY similarity() DESC LIMIT 5
 ```
 
-Cross-collection MATCH with `@collection` annotation:
+Cross-collection MATCH with `@collection` annotation — traversal runs on the
+primary collection's edge store; `@collection` enriches the matched node's
+payload from another collection (it is not a distributed cross-graph traversal):
 
 ```sql
 MATCH (p:Product@products)-[:STORED_IN]->(inv:Inventory@inventory)

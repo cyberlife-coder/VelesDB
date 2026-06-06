@@ -104,18 +104,10 @@ impl Database {
         point: &crate::Point,
         filter: Option<&crate::Filter>,
     ) -> bool {
-        let Some(filter) = filter else {
-            return true;
-        };
-
-        let mut obj = point
-            .payload
-            .as_ref()
-            .and_then(serde_json::Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        obj.insert("id".to_string(), serde_json::json!(point.id));
-        filter.matches(&serde_json::Value::Object(obj))
+        match filter {
+            Some(filter) => Self::point_matches_filter(point, filter),
+            None => true,
+        }
     }
 
     /// Builds a `ColumnStore` from a collection, filtering points by pushed-down conditions.
@@ -162,7 +154,9 @@ impl Database {
         filters: &[crate::velesql::Condition],
     ) -> crate::velesql::Condition {
         let mut iter = filters.iter().cloned();
-        let first = iter.next().expect("filters is non-empty");
+        let Some(first) = iter.next() else {
+            unreachable!("caller must pass at least one filter");
+        };
         iter.fold(first, |acc, c| {
             crate::velesql::Condition::And(Box::new(acc), Box::new(c))
         })

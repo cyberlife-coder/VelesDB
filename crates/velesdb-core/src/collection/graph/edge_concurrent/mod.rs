@@ -108,11 +108,12 @@ impl ConcurrentEdgeStore {
     ///
     /// Uses `DEFAULT_NUM_SHARDS` (compile-time constant > 0), so this
     /// constructor cannot fail in practice.
-    #[allow(clippy::missing_panics_doc)] // Invariant: DEFAULT_NUM_SHARDS > 0
     #[must_use]
     pub fn new() -> Self {
-        // DEFAULT_NUM_SHARDS is a compile-time constant > 0, so this cannot fail.
-        Self::with_shards(DEFAULT_NUM_SHARDS).expect("invariant: DEFAULT_NUM_SHARDS > 0")
+        match Self::with_shards(DEFAULT_NUM_SHARDS) {
+            Ok(store) => store,
+            Err(_) => unreachable!("DEFAULT_NUM_SHARDS must be greater than zero"),
+        }
     }
 
     /// Creates a new concurrent edge store with a specific number of shards.
@@ -145,7 +146,6 @@ impl ConcurrentEdgeStore {
     /// Creates a concurrent edge store with optimal shard count for estimated edge count.
     ///
     /// **FLAG-6: Uses integer bit manipulation for ceiling log2.**
-    #[allow(clippy::missing_panics_doc)] // Invariant: optimal_shards >= 1 (clamped)
     #[must_use]
     pub fn with_estimated_edges(estimated_edges: usize) -> Self {
         let optimal_shards = if estimated_edges < MIN_EDGES_PER_SHARD {
@@ -159,8 +159,10 @@ impl ConcurrentEdgeStore {
             };
             (1usize << power_of_2).clamp(1, MAX_SHARDS)
         };
-        // optimal_shards is always >= 1 (clamped above), so this cannot fail.
-        Self::with_shards(optimal_shards).expect("invariant: optimal_shards >= 1")
+        match Self::with_shards(optimal_shards) {
+            Ok(store) => store,
+            Err(_) => unreachable!("optimal_shards must be greater than zero"),
+        }
     }
 
     /// Returns the shard index for a given node ID.

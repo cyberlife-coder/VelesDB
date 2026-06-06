@@ -126,18 +126,15 @@ pub async fn match_query(
 ) -> Result<Json<MatchQueryResponse>, (StatusCode, Json<MatchQueryError>)> {
     let start = std::time::Instant::now();
 
-    let collection = state
-        .db
-        .get_vector_collection(&collection_name)
-        .ok_or_else(|| {
-            mk_match_error(
-                StatusCode::NOT_FOUND,
-                format!("Collection '{}' not found", collection_name),
-                "COLLECTION_NOT_FOUND",
-                "Create the collection first or correct the collection name in the route",
-                Some(serde_json::json!({ "collection": collection_name })),
-            )
-        })?;
+    let collection = resolve_match_collection(&state, &collection_name).ok_or_else(|| {
+        mk_match_error(
+            StatusCode::NOT_FOUND,
+            format!("Collection '{}' not found", collection_name),
+            "COLLECTION_NOT_FOUND",
+            "Create the collection first or correct the collection name in the route",
+            Some(serde_json::json!({ "collection": collection_name })),
+        )
+    })?;
 
     let match_clause = parse_match_clause(&request.query)?;
     validate_threshold(request.threshold)?;
@@ -218,17 +215,44 @@ fn validate_threshold(threshold: Option<f32>) -> Result<(), (StatusCode, Json<Ma
     Ok(())
 }
 
-/// Execute a MATCH query, dispatching to similarity or plain variant.
+enum MatchCollection {
+    Vector(velesdb_core::collection::VectorCollection),
+    Graph(velesdb_core::collection::GraphCollection),
+}
+
+fn resolve_match_collection(state: &AppState, name: &str) -> Option<MatchCollection> {
+    state
+        .db
+        .get_vector_collection(name)
+        .map(MatchCollection::Vector)
+        .or_else(|| {
+            state
+                .db
+                .get_graph_collection(name)
+                .map(MatchCollection::Graph)
+        })
+}
+
 fn execute_match(
-    collection: &velesdb_core::collection::VectorCollection,
+    collection: &MatchCollection,
     match_clause: &velesdb_core::velesql::MatchClause,
     request: &MatchQueryRequest,
 ) -> Result<Vec<MatchQueryResultItem>, (StatusCode, Json<MatchQueryError>)> {
     let raw_results = if let Some(ref vector) = request.vector {
         let threshold = request.threshold.unwrap_or(0.0);
-        collection.execute_match_with_similarity(match_clause, vector, threshold, &request.params)
+        match collection {
+            MatchCollection::Vector(coll) => {
+                coll.execute_match_with_similarity(match_clause, vector, threshold, &request.params)
+            }
+            MatchCollection::Graph(coll) => {
+                coll.execute_match_with_similarity(match_clause, vector, threshold, &request.params)
+            }
+        }
     } else {
-        collection.execute_match(match_clause, &request.params)
+        match collection {
+            MatchCollection::Vector(coll) => coll.execute_match(match_clause, &request.params),
+            MatchCollection::Graph(coll) => coll.execute_match(match_clause, &request.params),
+        }
     };
 
     raw_results

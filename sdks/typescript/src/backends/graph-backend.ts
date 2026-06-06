@@ -48,10 +48,8 @@ export async function addEdge(
  * `id`/`source`/`target` arrive as **strings** because the server's
  * `EdgeResponse` struct uses `serialize_id_as_string` to avoid
  * JavaScript `Number.MAX_SAFE_INTEGER` precision loss on u64 values.
- * The `toGraphEdge` helper coerces them back to the `number` shape
- * declared on the public `GraphEdge` interface (PR #586 fix applied
- * to the pre-existing `getEdges` wrapper for consistency with the
- * `getNodeEdges` fix landed earlier in the same PR).
+ * The `toGraphEdge` helper preserves string IDs so u64 values above
+ * `Number.MAX_SAFE_INTEGER` remain exact in JavaScript.
  */
 interface EdgeWire {
   id: number | string;
@@ -62,14 +60,42 @@ interface EdgeWire {
 }
 
 function toGraphEdge(e: EdgeWire): GraphEdge {
-  const toNum = (v: number | string): number =>
-    typeof v === 'string' ? Number(v) : v;
   return {
-    id: toNum(e.id),
-    source: toNum(e.source),
-    target: toNum(e.target),
+    id: e.id,
+    source: e.source,
+    target: e.target,
     label: e.label,
     properties: e.properties,
+  };
+}
+
+/**
+ * Raw wire shape of a traverse / traverse-parallel response.
+ *
+ * `target_id` and `path` arrive as `number | string` to preserve u64 node IDs
+ * above `Number.MAX_SAFE_INTEGER` (see {@link EdgeWire}).
+ */
+interface TraverseWire {
+  results: Array<{ target_id: number | string; depth: number; path: Array<number | string> }>;
+  next_cursor: string | null;
+  has_more: boolean;
+  stats: { visited: number; depth_reached: number };
+}
+
+/** Maps a raw traverse wire response to the public {@link TraverseResponse}. */
+function toTraverseResponse(data: TraverseWire): TraverseResponse {
+  return {
+    results: data.results.map(r => ({
+      targetId: r.target_id,
+      depth: r.depth,
+      path: r.path,
+    })),
+    nextCursor: data.next_cursor ?? undefined,
+    hasMore: data.has_more,
+    stats: {
+      visited: data.stats.visited,
+      depthReached: data.stats.depth_reached,
+    },
   };
 }
 
@@ -95,12 +121,7 @@ export async function traverseGraph(
   collection: string,
   request: TraverseRequest
 ): Promise<TraverseResponse> {
-  const response = await transport.requestJson<{
-    results: Array<{ target_id: number; depth: number; path: number[] }>;
-    next_cursor: string | null;
-    has_more: boolean;
-    stats: { visited: number; depth_reached: number };
-  }>(
+  const response = await transport.requestJson<TraverseWire>(
     'POST',
     `${collectionPath(collection)}/graph/traverse`,
     {
@@ -115,20 +136,7 @@ export async function traverseGraph(
 
   throwOnError(response, `Collection '${collection}'`);
 
-  const data = response.data!;
-  return {
-    results: data.results.map(r => ({
-      targetId: r.target_id,
-      depth: r.depth,
-      path: r.path,
-    })),
-    nextCursor: data.next_cursor ?? undefined,
-    hasMore: data.has_more,
-    stats: {
-      visited: data.stats.visited,
-      depthReached: data.stats.depth_reached,
-    },
-  };
+  return toTraverseResponse(response.data!);
 }
 
 export async function getNodeDegree(
@@ -170,12 +178,7 @@ export async function traverseParallel(
   collection: string,
   request: TraverseParallelRequest
 ): Promise<TraverseResponse> {
-  const response = await transport.requestJson<{
-    results: Array<{ target_id: number; depth: number; path: number[] }>;
-    next_cursor: string | null;
-    has_more: boolean;
-    stats: { visited: number; depth_reached: number };
-  }>(
+  const response = await transport.requestJson<TraverseWire>(
     'POST',
     `${collectionPath(collection)}/graph/traverse/parallel`,
     {
@@ -188,18 +191,5 @@ export async function traverseParallel(
 
   throwOnError(response, `Collection '${collection}'`);
 
-  const data = response.data!;
-  return {
-    results: data.results.map(r => ({
-      targetId: r.target_id,
-      depth: r.depth,
-      path: r.path,
-    })),
-    nextCursor: data.next_cursor ?? undefined,
-    hasMore: data.has_more,
-    stats: {
-      visited: data.stats.visited,
-      depthReached: data.stats.depth_reached,
-    },
-  };
+  return toTraverseResponse(response.data!);
 }

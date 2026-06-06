@@ -96,8 +96,8 @@ fn encode_text_len(text_bytes: &[u8]) -> Result<u32> {
 /// overflows `u32`.
 #[inline]
 fn add_entry_body_len(text_len: u32) -> Result<u32> {
-    let header =
-        u32::try_from(ADD_ENTRY_HEADER).expect("ADD_ENTRY_HEADER fits in u32 (compile-time)");
+    let header = u32::try_from(ADD_ENTRY_HEADER)
+        .map_err(|_| Error::Index("BM25 WAL: add header too large".to_string()))?;
     header.checked_add(text_len).ok_or_else(|| {
         Error::Index(format!(
             "BM25 WAL: entry too large (text_len={text_len}) to fit in u32 prefix"
@@ -131,8 +131,8 @@ fn write_add_entry_body(
 /// written.
 #[inline]
 pub(crate) fn wal_append_remove_document(wal_path: &Path, id: u64) -> Result<()> {
-    // Fits in a `u32` by construction — constant header size = 9.
-    let body_len = u32::try_from(REMOVE_ENTRY_HEADER).expect("REMOVE_ENTRY_HEADER <= u32::MAX");
+    let body_len = u32::try_from(REMOVE_ENTRY_HEADER)
+        .map_err(|_| Error::Index("BM25 WAL: remove header too large".to_string()))?;
     let mut w = open_wal_writer(wal_path)?;
     wal_write(&mut w, &body_len.to_le_bytes())?;
     wal_write(&mut w, &[WAL_OP_REMOVE])?;

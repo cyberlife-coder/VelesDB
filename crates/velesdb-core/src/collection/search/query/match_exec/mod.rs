@@ -11,19 +11,19 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
+mod expand;
 mod index_prefilter;
 mod similarity;
 mod start_nodes;
 mod vector_first;
 mod where_eval;
 
-use crate::collection::graph::{concurrent_bfs_stream, StreamingConfig};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::guardrails::QueryContext;
 use crate::storage::LogPayloadStorage;
 use crate::velesql::{GraphPattern, MatchClause};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Result of a MATCH query traversal.
 #[derive(Debug, Clone)]
@@ -70,6 +70,12 @@ impl MatchResult {
         self.projected = projected;
         self
     }
+}
+
+enum AliasBinding {
+    Unchanged,
+    Inserted(String),
+    Conflict,
 }
 
 /// A parsed RETURN clause projection item (Fix #489).
@@ -161,11 +167,11 @@ struct TraversalCtx<'a> {
     params: &'a HashMap<String, serde_json::Value>,
     payload_guard: &'a LogPayloadStorage,
     guardrail: Option<&'a QueryContext>,
-    seen_pairs: &'a mut std::collections::HashSet<(u64, u64)>,
     all_results: &'a mut Vec<MatchResult>,
     limit: usize,
     iteration_count: &'a mut u32,
     reported_cardinality: &'a mut usize,
+    seen_bindings: &'a mut HashSet<Vec<(String, u64)>>,
 }
 
 impl Collection {
@@ -300,106 +306,13 @@ impl Collection {
             params,
             payload_guard,
             guardrail: ctx,
-            seen_pairs: &mut seen_pairs,
             all_results,
             limit,
             iteration_count,
             reported_cardinality,
+            seen_bindings: &mut HashSet::new(),
         };
         self.traverse_pattern(pattern, &start_nodes, edge_store, &mut trav_ctx)
-    }
-
-    /// Traverses a single graph pattern via BFS for each start node.
-    fn traverse_pattern(
-        &self,
-        pattern: &GraphPattern,
-        start_nodes: &[(u64, HashMap<String, u64>)],
-        edge_store: &crate::collection::graph::ConcurrentEdgeStore,
-        ctx: &mut TraversalCtx<'_>,
-    ) -> Result<()> {
-        let max_depth = Self::compute_max_depth(pattern);
-        let rel_types = Self::extract_rel_types(pattern);
-
-        for (start_id, start_bindings) in start_nodes {
-            if ctx.all_results.len() >= ctx.limit {
-                break;
-            }
-
-            let config = StreamingConfig::default()
-                .with_limit(ctx.limit.saturating_sub(ctx.all_results.len()))
-                .with_max_depth(max_depth)
-                .with_rel_types(rel_types.clone());
-
-            for traversal_result in concurrent_bfs_stream(edge_store, *start_id, config) {
-                if ctx.all_results.len() >= ctx.limit {
-                    break;
-                }
-
-                *ctx.iteration_count += 1;
-                self.check_periodic_guardrails(
-                    ctx.guardrail,
-                    *ctx.iteration_count,
-                    ctx.all_results,
-                    ctx.reported_cardinality,
-                )?;
-
-                self.accept_traversal_hit(
-                    *start_id,
-                    &traversal_result,
-                    start_bindings,
-                    pattern,
-                    ctx,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Evaluates a single BFS hit: guard-rails, WHERE filter, dedup, and projection.
-    ///
-    /// Uses the pre-acquired `payload_guard` from the traversal context
-    /// to avoid per-node lock acquisitions.
-    fn accept_traversal_hit(
-        &self,
-        start_id: u64,
-        traversal_result: &crate::collection::graph::TraversalResult,
-        start_bindings: &HashMap<String, u64>,
-        pattern: &GraphPattern,
-        ctx: &mut TraversalCtx<'_>,
-    ) -> Result<()> {
-        let match_result = self.build_traversal_match_result(
-            traversal_result,
-            start_bindings,
-            pattern,
-            ctx.guardrail,
-        )?;
-
-        if let Some(ref where_clause) = ctx.match_clause.where_clause {
-            if !self.evaluate_where_condition(
-                traversal_result.target_id,
-                Some(&match_result.bindings),
-                where_clause,
-                ctx.params,
-                ctx.payload_guard,
-            )? {
-                return Ok(());
-            }
-        }
-
-        let pair = (start_id, traversal_result.target_id);
-        if !ctx.seen_pairs.insert(pair) {
-            return Ok(());
-        }
-
-        let mut final_result = match_result;
-        final_result.projected = self.project_properties(
-            &final_result.bindings,
-            &ctx.match_clause.return_clause,
-            ctx.payload_guard,
-        );
-
-        ctx.all_results.push(final_result);
-        Ok(())
     }
 
     /// Collects results for single-node patterns (no relationships).
@@ -469,38 +382,6 @@ impl Collection {
             *reported_cardinality = all_results.len();
         }
         Ok(())
-    }
-
-    /// Builds a `MatchResult` from a traversal result with bindings and depth check.
-    #[allow(clippy::unused_self)]
-    fn build_traversal_match_result(
-        &self,
-        traversal_result: &crate::collection::graph::TraversalResult,
-        start_bindings: &HashMap<String, u64>,
-        pattern: &GraphPattern,
-        ctx: Option<&QueryContext>,
-    ) -> Result<MatchResult> {
-        let mut match_result = MatchResult::new(
-            traversal_result.target_id,
-            traversal_result.depth,
-            traversal_result.path.clone(),
-        );
-        match_result.bindings.clone_from(start_bindings);
-
-        if let Some(ctx) = ctx {
-            ctx.check_depth(traversal_result.depth)
-                .map_err(|e| Error::GuardRail(e.to_string()))?;
-        }
-
-        if let Some(target_pattern) = pattern.nodes.get(traversal_result.depth as usize) {
-            if let Some(ref alias) = target_pattern.alias {
-                match_result
-                    .bindings
-                    .insert(alias.clone(), traversal_result.target_id);
-            }
-        }
-
-        Ok(match_result)
     }
 }
 

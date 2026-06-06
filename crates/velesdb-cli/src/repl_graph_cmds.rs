@@ -59,6 +59,25 @@ fn resolve_graph_collection(
         .ok_or_else(|| CommandResult::Error(format!("Graph collection '{name}' not found")))
 }
 
+/// Resolves the `<collection> <node_id>` argument prefix shared by node-scoped
+/// `.graph` subcommands. Prints `usage` and returns `Err(Continue)` when fewer
+/// than `min_arity` arguments are supplied; otherwise propagates any
+/// resolve/parse error.
+fn resolve_collection_and_node(
+    db: &Database,
+    parts: &[&str],
+    min_arity: usize,
+    usage: &str,
+) -> Result<(velesdb_core::GraphCollection, u64), CommandResult> {
+    if parts.len() < min_arity {
+        println!("{usage}\n");
+        return Err(CommandResult::Continue);
+    }
+    let col = resolve_graph_collection(db, parts, 2)?;
+    let node_id = parse_node_id(parts, 3)?;
+    Ok((col, node_id))
+}
+
 fn cmd_graph_add_edge(db: &Database, parts: &[&str]) -> CommandResult {
     if parts.len() < 7 {
         println!("Usage: .graph add-edge <collection> <id> <source> <target> <label>\n");
@@ -118,15 +137,12 @@ fn cmd_graph_edges(db: &Database, parts: &[&str]) -> CommandResult {
 }
 
 fn cmd_graph_degree(db: &Database, parts: &[&str]) -> CommandResult {
-    if parts.len() < 4 {
-        println!("Usage: .graph degree <collection> <node_id>\n");
-        return CommandResult::Continue;
-    }
-    let col = match resolve_graph_collection(db, parts, 2) {
-        Ok(c) => c,
-        Err(r) => return r,
-    };
-    let node_id: u64 = match parse_node_id(parts, 3) {
+    let (col, node_id) = match resolve_collection_and_node(
+        db,
+        parts,
+        4,
+        "Usage: .graph degree <collection> <node_id>",
+    ) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -137,15 +153,12 @@ fn cmd_graph_degree(db: &Database, parts: &[&str]) -> CommandResult {
 }
 
 fn cmd_graph_traverse(db: &Database, parts: &[&str]) -> CommandResult {
-    if parts.len() < 4 {
-        println!("Usage: .graph traverse <collection> <source> [--algo bfs|dfs] [--depth N] [--limit N] [--rel-types X,Y]\n");
-        return CommandResult::Continue;
-    }
-    let col = match resolve_graph_collection(db, parts, 2) {
-        Ok(c) => c,
-        Err(r) => return r,
-    };
-    let source: u64 = match parse_node_id(parts, 3) {
+    let (col, source) = match resolve_collection_and_node(
+        db,
+        parts,
+        4,
+        "Usage: .graph traverse <collection> <source> [--algo bfs|dfs] [--depth N] [--limit N] [--rel-types X,Y]",
+    ) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -183,15 +196,12 @@ fn cmd_graph_traverse(db: &Database, parts: &[&str]) -> CommandResult {
 }
 
 fn cmd_graph_neighbors(db: &Database, parts: &[&str]) -> CommandResult {
-    if parts.len() < 4 {
-        println!("Usage: .graph neighbors <collection> <node_id> [--direction in|out|both]\n");
-        return CommandResult::Continue;
-    }
-    let col = match resolve_graph_collection(db, parts, 2) {
-        Ok(c) => c,
-        Err(r) => return r,
-    };
-    let node_id: u64 = match parse_node_id(parts, 3) {
+    let (col, node_id) = match resolve_collection_and_node(
+        db,
+        parts,
+        4,
+        "Usage: .graph neighbors <collection> <node_id> [--direction in|out|both]",
+    ) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -329,15 +339,12 @@ fn cmd_graph_search(db: &Database, parts: &[&str]) -> CommandResult {
 }
 
 fn cmd_graph_store_payload(db: &Database, parts: &[&str]) -> CommandResult {
-    if parts.len() < 5 {
-        println!("Usage: .graph store-payload <collection> <node_id> <json_payload>\n");
-        return CommandResult::Continue;
-    }
-    let col = match resolve_graph_collection(db, parts, 2) {
-        Ok(c) => c,
-        Err(r) => return r,
-    };
-    let node_id: u64 = match parse_node_id(parts, 3) {
+    let (col, node_id) = match resolve_collection_and_node(
+        db,
+        parts,
+        5,
+        "Usage: .graph store-payload <collection> <node_id> <json_payload>",
+    ) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -362,27 +369,23 @@ fn cmd_graph_store_payload(db: &Database, parts: &[&str]) -> CommandResult {
 }
 
 fn cmd_graph_get_payload(db: &Database, parts: &[&str]) -> CommandResult {
-    if parts.len() < 4 {
-        println!("Usage: .graph get-payload <collection> <node_id>\n");
-        return CommandResult::Continue;
-    }
-    let col = match resolve_graph_collection(db, parts, 2) {
-        Ok(c) => c,
-        Err(r) => return r,
-    };
-    let node_id: u64 = match parse_node_id(parts, 3) {
+    let (col, node_id) = match resolve_collection_and_node(
+        db,
+        parts,
+        4,
+        "Usage: .graph get-payload <collection> <node_id>",
+    ) {
         Ok(v) => v,
         Err(r) => return r,
     };
 
     match col.get_node_payload(node_id) {
         Ok(Some(val)) => {
-            // SAFETY invariant: serde_json::Value always serializes successfully.
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&val)
-                    .expect("invariant: serde_json::Value serializes")
-            );
+            let json = match serde_json::to_string_pretty(&val) {
+                Ok(json) => json,
+                Err(e) => return CommandResult::Error(format!("{e}")),
+            };
+            println!("{json}");
         }
         Ok(None) => println!("null"),
         Err(e) => return CommandResult::Error(format!("{e}")),

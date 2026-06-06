@@ -12,6 +12,7 @@ import type {
   AddEdgeRequest,
   GetEdgesOptions,
   GraphEdge,
+  GraphNodeId,
   TraverseRequest,
   TraverseParallelRequest,
   TraverseResponse,
@@ -28,6 +29,10 @@ import type {
 import { ValidationError } from '../types';
 import { requireNonEmptyString } from './validation';
 
+function isGraphNodeId(value: unknown): value is GraphNodeId {
+  return typeof value === 'number' || typeof value === 'string';
+}
+
 /** Add an edge to the collection's knowledge graph. */
 export function addEdge(
   backend: IVelesDBBackend,
@@ -38,8 +43,8 @@ export function addEdge(
     throw new ValidationError('Edge label is required and must be a string');
   }
 
-  if (typeof edge.source !== 'number' || typeof edge.target !== 'number') {
-    throw new ValidationError('Edge source and target must be numbers');
+  if (!isGraphNodeId(edge.source) || !isGraphNodeId(edge.target)) {
+    throw new ValidationError('Edge source and target must be numbers or strings');
   }
 
   return backend.addEdge(collection, edge);
@@ -60,8 +65,8 @@ export function traverseGraph(
   collection: string,
   request: TraverseRequest
 ): Promise<TraverseResponse> {
-  if (typeof request.source !== 'number') {
-    throw new ValidationError('Source node ID must be a number');
+  if (!isGraphNodeId(request.source)) {
+    throw new ValidationError('Source node ID must be a number or string');
   }
 
   if (request.strategy && !['bfs', 'dfs'].includes(request.strategy)) {
@@ -79,6 +84,9 @@ export function traverseParallel(
 ): Promise<TraverseResponse> {
   if (!Array.isArray(request.sources) || request.sources.length === 0) {
     throw new ValidationError('At least one source node ID is required');
+  }
+  if (!request.sources.every(isGraphNodeId)) {
+    throw new ValidationError('Source node IDs must be numbers or strings');
   }
 
   return backend.traverseParallel(collection, request);

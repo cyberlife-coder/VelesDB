@@ -676,16 +676,26 @@ Analyze query execution plan without running the query.
 
 ## Graph API
 
-### POST /collections/:name/graph/nodes
+### GET /collections/:name/graph/nodes
 
-Add nodes to the knowledge graph.
+List node IDs present in a graph collection.
+
+**Response:**
+```json
+{
+  "node_ids": [1, 2, 3],
+  "count": 3
+}
+```
+
+### PUT /collections/:name/graph/nodes/:id/payload
+
+Create or replace the JSON payload attached to a graph node.
 
 **Request Body:**
 ```json
 {
-  "nodes": [
-    {"id": "doc1", "label": "Document", "properties": {"title": "AI Guide"}}
-  ]
+  "payload": {"_labels": ["Document"], "title": "AI Guide"}
 }
 ```
 
@@ -696,11 +706,15 @@ Add edges between nodes.
 **Request Body:**
 ```json
 {
-  "edges": [
-    {"source": "doc1", "target": "author1", "label": "AUTHORED_BY", "properties": {}}
-  ]
+  "id": 100,
+  "source": 1,
+  "target": 2,
+  "label": "AUTHORED_BY",
+  "properties": {"year": 2026}
 }
 ```
+
+`id`, `source`, and `target` accept either JSON numbers or strings. Responses serialize graph IDs as strings to preserve full `u64` precision in JavaScript clients.
 
 ### POST /collections/:name/graph/traverse
 
@@ -710,31 +724,30 @@ Traverse the graph using BFS or DFS.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| start_node | string | Yes | Starting node ID |
-| direction | string | No | `outgoing`, `incoming`, or `both` (default) |
+| source | integer/string | Yes | Starting node ID |
+| strategy | string | No | `bfs` or `dfs` (default: `bfs`) |
 | max_depth | integer | No | Maximum traversal depth (default: 3) |
-| edge_filter | string | No | Filter edges by label |
+| limit | integer | No | Maximum number of results (default: 100) |
+| rel_types | array[string] | No | Filter by relationship labels |
 
 **Example:**
 ```json
 {
-  "start_node": "doc1",
-  "direction": "outgoing",
+  "source": 1,
+  "strategy": "bfs",
   "max_depth": 2,
-  "edge_filter": "AUTHORED_BY"
+  "rel_types": ["AUTHORED_BY"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "nodes": [
-    {"id": "doc1", "label": "Document", "depth": 0},
-    {"id": "author1", "label": "Person", "depth": 1}
+  "results": [
+    {"target_id": "2", "depth": 1, "path": [100]}
   ],
-  "edges": [
-    {"source": "doc1", "target": "author1", "label": "AUTHORED_BY"}
-  ]
+  "has_more": false,
+  "stats": {"visited": 1, "depth_reached": 1}
 }
 ```
 

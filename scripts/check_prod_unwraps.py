@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Detect `.unwrap()` calls in production Rust code.
+Detect `.unwrap()` and `.expect(...)` calls in production Rust code.
 
-Scans all workspace crate `src/` directories for `.unwrap()` in production code.
+Scans all workspace crate `src/` directories for fallible panics in production code.
 Skips test code, comments, and doc examples.
 
 Exit code 0 = clean, 1 = violations found.
@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-UNWRAP_RE = re.compile(r"\.unwrap\(\)")
+PANIC_RE = re.compile(r"\.(unwrap|expect)\s*\(")
 
 SCAN_DIRS = [
     Path("crates/velesdb-core/src"),
@@ -38,7 +38,7 @@ def is_production_file(path: Path) -> bool:
 
 
 def scan_file(path: Path) -> list[tuple[int, str]]:
-    """Return list of (line_number, line_text) with .unwrap() in production code."""
+    """Return list of (line_number, line_text) with fallible panics."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except Exception:
@@ -87,7 +87,7 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
                 in_cfg_test = False
             continue
 
-        if UNWRAP_RE.search(line):
+        if PANIC_RE.search(line):
             violations.append((line_no, stripped))
 
     return violations
@@ -107,16 +107,19 @@ def main() -> int:
                 all_violations.append(f"{path}:{line_no}: {text}")
 
     if all_violations:
-        print(f"FAILED: found {len(all_violations)} .unwrap() call(s) in production code:")
+        print(
+            f"FAILED: found {len(all_violations)} .unwrap()/.expect() call(s) "
+            "in production code:"
+        )
         for v in all_violations:
             print(f"  {v}")
         print(
-            "\nUse ? / .expect(\"reason\") / .unwrap_or() / match instead.",
+            "\nUse ? / unwrap_or() / match instead.",
             file=sys.stderr,
         )
         return 1
 
-    print("PASSED: no .unwrap() in production code.")
+    print("PASSED: no .unwrap()/.expect() in production code.")
     return 0
 
 

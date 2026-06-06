@@ -388,8 +388,8 @@ describe('VelesDB Client', () => {
           .rejects.toThrow(ValidationError);
       });
 
-      it('should validate source and target are numbers', async () => {
-        await expect(db.addEdge('test', { id: 1, source: 'a' as any, target: 200, label: 'KNOWS' }))
+      it('should validate source and target are graph IDs', async () => {
+        await expect(db.addEdge('test', { id: 1, source: {} as any, target: 200, label: 'KNOWS' }))
           .rejects.toThrow(ValidationError);
       });
 
