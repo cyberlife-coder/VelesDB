@@ -19,11 +19,13 @@ use super::clustered_index::ClusteredIndex;
 use super::csr_snapshot::{CsrSnapshot, SnapshotBuilder};
 use super::edge::{EdgeStore, GraphEdge};
 use super::label_table::LabelTable;
+use super::metrics::GraphMetrics;
 use crate::error::{Error, Result};
 use arc_swap::ArcSwap;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::time::Instant;
 
 /// Number of pending edge mutations that may accumulate before the lazy CSR
 /// rebuild is forced (issue #905 debounce).
@@ -101,6 +103,11 @@ pub struct ConcurrentEdgeStore {
     pending_writes: AtomicU64,
     /// Shared label table for interning edge labels during snapshot builds.
     label_table: RwLock<LabelTable>,
+    /// Lock-free operational metrics (edge inserts/deletes, traversals).
+    ///
+    /// Atomic counters and histograms only; observed on the Ok tail of each
+    /// mutation after all shard locks have been released.
+    metrics: GraphMetrics,
 }
 
 impl ConcurrentEdgeStore {
@@ -140,7 +147,16 @@ impl ConcurrentEdgeStore {
             csr_dirty: AtomicBool::new(false),
             pending_writes: AtomicU64::new(0),
             label_table: RwLock::new(LabelTable::new()),
+            metrics: GraphMetrics::new(),
         })
+    }
+
+    /// Returns the operational metrics for this edge store.
+    ///
+    /// Counters/histograms cover edge inserts, deletes, and traversals.
+    #[must_use]
+    pub fn metrics(&self) -> &GraphMetrics {
+        &self.metrics
     }
 
     /// Creates a concurrent edge store with optimal shard count for estimated edge count.
@@ -185,6 +201,7 @@ impl ConcurrentEdgeStore {
     /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
         let edge_id = edge.id();
+        let start = Instant::now();
 
         {
             // CRITICAL: Hold edge_ids lock throughout the entire operation to prevent race
@@ -233,6 +250,8 @@ impl ConcurrentEdgeStore {
         } // All locks dropped here.
         self.invalidate_snapshot();
         self.rebuild_snapshot_best_effort();
+        // Record after all shard locks drop so the atomic ops never overlap a held lock.
+        self.metrics.record_edge_insert(start.elapsed());
         Ok(())
     }
 
@@ -253,6 +272,7 @@ impl ConcurrentEdgeStore {
             return 0;
         }
 
+        let start = Instant::now();
         let mut count = 0usize;
         {
             let mut ids = self.edge_ids.write();
@@ -280,6 +300,10 @@ impl ConcurrentEdgeStore {
             // keep a bulk-loaded graph permanently below the rebuild
             // threshold, so the CSR fast path would never engage.
             self.record_pending_writes(count as u64);
+            // Counters bumped by count, batch latency observed once (no
+            // per-edge Instant::now()).
+            self.metrics
+                .record_edge_inserts_batch(count as u64, start.elapsed());
         }
         count
     }
@@ -328,6 +352,7 @@ impl ConcurrentEdgeStore {
     ///
     /// Lock ordering: edge_ids FIRST, then shards in ascending order.
     pub fn remove_edge(&self, edge_id: u64) -> bool {
+        let start = Instant::now();
         {
             let mut ids = self.edge_ids.write();
 
@@ -372,6 +397,8 @@ impl ConcurrentEdgeStore {
         } // All locks dropped here.
         self.invalidate_snapshot();
         self.rebuild_snapshot_best_effort();
+        // Record after all shard locks drop (true path only).
+        self.metrics.record_edge_delete(start.elapsed());
         true
     }
 

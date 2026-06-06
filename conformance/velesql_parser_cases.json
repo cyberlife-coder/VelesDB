@@ -656,6 +656,48 @@
       "query": "SELECT id, NTILE() OVER () FROM items",
       "should_parse": false,
       "comment": "PR #629: NTILE is not among supported window functions (ROW_NUMBER/RANK/DENSE_RANK only)"
+    },
+    {
+      "id": "P128",
+      "query": "MATCH (a), (b) RETURN a",
+      "should_parse": false,
+      "comment": "GRAPH_PATTERNS.md: no comma-separated multi-pattern MATCH; graph_pattern is a single linear chain"
+    },
+    {
+      "id": "P129",
+      "query": "MATCH (a) RETURN count(a)",
+      "should_parse": false,
+      "comment": "GRAPH_PATTERNS.md: no aggregation/arbitrary function calls in MATCH RETURN (only similarity())"
+    },
+    {
+      "id": "P130",
+      "query": "MATCH (a)-[:R]->(b) RETURN similarity() AS s",
+      "should_parse": true,
+      "comment": "GRAPH_PATTERNS.md: zero-arg similarity() is the only callable form allowed in MATCH RETURN"
+    },
+    {
+      "id": "P131",
+      "query": "MATCH (a)-[*1..50]->(b) RETURN b",
+      "should_parse": false,
+      "comment": "GRAPH_PATTERNS.md: variable-length upper bound exceeds DEFAULT_MAX_GRAPH_EXPANSION (32) -> E007 at parse time"
+    },
+    {
+      "id": "P132",
+      "query": "MATCH (a)-[*]->(b) RETURN b",
+      "should_parse": false,
+      "comment": "GRAPH_PATTERNS.md: unbounded variable-length defaults to u32::MAX and exceeds the 32-hop parse budget"
+    },
+    {
+      "id": "P133",
+      "query": "MATCH (a)-[*1..5]->(b) RETURN b",
+      "should_parse": true,
+      "comment": "GRAPH_PATTERNS.md: a bounded variable-length range within the 32-hop budget parses"
+    },
+    {
+      "id": "P134",
+      "query": "LET x = 0.5 MATCH (a)-[:R]->(b) RETURN b",
+      "should_parse": true,
+      "comment": "GRAPH_PATTERNS.md: LET before MATCH parses (binding attaches but has no effect inside MATCH); not rejected"
     }
   ]
 }

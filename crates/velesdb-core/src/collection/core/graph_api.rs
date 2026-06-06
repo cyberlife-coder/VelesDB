@@ -12,6 +12,7 @@ use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 
+use super::graph_property_index_wiring::extract_labels;
 use super::graph_traversal_helpers::{
     bfs_pop, bfs_push, dfs_pop, dfs_push, expand_dfs_neighbors, reconstruct_path,
     traverse_with_frontier, DfsFrontier, TraversalEntry, TraversalParams,
@@ -39,6 +40,11 @@ impl Collection {
     /// collection.add_edge(edge)?;
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
+        // Strict-schema referential integrity: reject before any mutation so a
+        // violation leaves no partial write and does not bump write_generation.
+        // Schemaless collections (the default) short-circuit at zero added cost.
+        self.validate_edge_referential_integrity(&edge)?;
+
         let edge_id = edge.id();
         let rel_type = edge.label().to_string();
         let properties = edge.properties().clone();
@@ -141,6 +147,47 @@ impl Collection {
             self.edge_store.build_read_snapshot();
         }
         Ok(replayed)
+    }
+
+    /// Enforces strict-schema referential integrity for an edge write.
+    ///
+    /// In schemaless mode (the default), this is a no-op and returns
+    /// immediately. In strict mode it verifies that both endpoint nodes exist
+    /// and that the edge type / endpoint types satisfy the declared schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SchemaValidation` if an endpoint node is missing, has no
+    /// `_labels`, or the edge violates the schema's edge-type constraints.
+    fn validate_edge_referential_integrity(&self, edge: &GraphEdge) -> Result<()> {
+        let schema = match self.config.read().graph_schema.clone() {
+            Some(s) if !s.is_schemaless() => s,
+            _ => return Ok(()),
+        };
+
+        let from_type = self.endpoint_node_type(edge.source())?;
+        let to_type = self.endpoint_node_type(edge.target())?;
+        schema.validate_edge_type(edge.label(), &from_type, &to_type)
+    }
+
+    /// Resolves the node type (first `_labels` entry) for a graph node,
+    /// requiring the node to exist and carry a label (strict-mode helper).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SchemaValidation` if the node has no stored payload
+    /// (referential integrity violation) or the payload declares no `_labels`.
+    fn endpoint_node_type(&self, node_id: u64) -> Result<String> {
+        let payload = self.payload_storage.read().retrieve(node_id)?;
+        let Some(payload) = payload else {
+            return Err(Error::SchemaValidation(format!(
+                "edge references non-existent node {node_id}"
+            )));
+        };
+        extract_labels(&payload)
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::SchemaValidation(format!("node {node_id} has no '_labels' type")))
     }
 
     /// Gets all edges from the collection's knowledge graph.
@@ -432,8 +479,25 @@ impl Collection {
     // -------------------------------------------------------------------------
 
     /// BFS traversal using the core `concurrent_bfs_stream` iterator.
+    ///
+    /// Wraps [`Self::traverse_bfs_config_inner`] with traversal metrics timing.
     #[must_use]
     pub fn traverse_bfs_config(
+        &self,
+        source_id: u64,
+        config: &TraversalConfig,
+    ) -> Vec<TraversalResult> {
+        let start = std::time::Instant::now();
+        let results = self.traverse_bfs_config_inner(source_id, config);
+        self.edge_store
+            .metrics()
+            .record_traversal(start.elapsed(), results.len() as u64);
+        results
+    }
+
+    /// Inner BFS traversal without metrics (see [`Self::traverse_bfs_config`]).
+    #[must_use]
+    fn traverse_bfs_config_inner(
         &self,
         source_id: u64,
         config: &TraversalConfig,
@@ -464,6 +528,7 @@ impl Collection {
             rel_types: config.rel_types.clone(),
             limit: Some(config.limit),
             max_visited_size: MAX_VISITED_SIZE,
+            deadline: config.deadline,
         };
         concurrent_bfs_stream(&self.edge_store, source_id, streaming)
             .filter(|result| result.depth >= config.min_depth)
@@ -473,9 +538,26 @@ impl Collection {
 
     /// DFS traversal (iterative) using `TraversalConfig`.
     ///
-    /// Uses parent-pointer map for zero-clone path reconstruction (G4).
+    /// Wraps [`Self::traverse_dfs_config_inner`] with traversal metrics timing.
     #[must_use]
     pub fn traverse_dfs_config(
+        &self,
+        source_id: u64,
+        config: &TraversalConfig,
+    ) -> Vec<TraversalResult> {
+        let start = std::time::Instant::now();
+        let results = self.traverse_dfs_config_inner(source_id, config);
+        self.edge_store
+            .metrics()
+            .record_traversal(start.elapsed(), results.len() as u64);
+        results
+    }
+
+    /// Inner DFS traversal without metrics (see [`Self::traverse_dfs_config`]).
+    ///
+    /// Uses parent-pointer map for zero-clone path reconstruction (G4).
+    #[must_use]
+    fn traverse_dfs_config_inner(
         &self,
         source_id: u64,
         config: &TraversalConfig,
@@ -487,8 +569,14 @@ impl Collection {
         let mut parent_map: FxHashMap<u64, (u64, u64)> = FxHashMap::default();
         let mut stack: Vec<TraversalEntry> = vec![(source_id, 0)];
 
+        // Start at the threshold so an already-expired deadline aborts on the
+        // first pop; otherwise the clock is only read every N pops.
+        let mut nodes_since_check = crate::collection::graph::DEADLINE_CHECK_INTERVAL;
         while let Some((node_id, depth)) = stack.pop() {
             if results.len() >= config.limit {
+                break;
+            }
+            if crate::collection::graph::deadline_reached(config.deadline, &mut nodes_since_check) {
                 break;
             }
             // Issue #906: bound the visited set / parent map. A highly-connected
