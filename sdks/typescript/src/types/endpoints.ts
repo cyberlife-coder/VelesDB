@@ -121,7 +121,7 @@ export interface MatchQueryResponse {
 /** Single row of a `MatchQueryResponse`. */
 export interface MatchQueryResultItem {
   /** Variable-binding map from the MATCH pattern. */
-  bindings: Record<string, number>;
+  bindings: Record<string, GraphNodeId>;
   /** Similarity score, present only when `similarity()` was used. */
   score?: number;
   /** Traversal depth reached to produce this row. */

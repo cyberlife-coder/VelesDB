@@ -12,6 +12,43 @@ use super::EdgeStore;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::collections::VecDeque;
+use std::time::Instant;
+
+/// Number of queue pops between wall-clock deadline checks.
+///
+/// Gating `Instant::now()` behind this counter keeps the per-node clock cost
+/// negligible while still aborting a runaway dense-graph traversal within a
+/// bounded number of expansions.
+pub(crate) const DEADLINE_CHECK_INTERVAL: u32 = 1024;
+
+/// Returns `true` when a wall-clock `deadline` is set and has been reached.
+///
+/// Callers gate this behind a per-node counter (every
+/// [`DEADLINE_CHECK_INTERVAL`] pops) so `Instant::now()` is not called per
+/// node; the `None` case is a single branch with no clock read.
+#[inline]
+pub(super) fn deadline_exceeded(deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|d| Instant::now() >= d)
+}
+
+/// Periodic wall-clock deadline gate for a BFS/DFS loop head.
+///
+/// Increments `nodes_since_check`; only every [`DEADLINE_CHECK_INTERVAL`] pops
+/// does it read the clock via [`deadline_exceeded`]. Returns `true` when the
+/// deadline has been reached (caller should `break`). When `deadline` is
+/// `None` this is a single branch with no clock read or counter cost.
+#[inline]
+pub(crate) fn deadline_reached(deadline: Option<Instant>, nodes_since_check: &mut u32) -> bool {
+    if deadline.is_none() {
+        return false;
+    }
+    *nodes_since_check += 1;
+    if *nodes_since_check < DEADLINE_CHECK_INTERVAL {
+        return false;
+    }
+    *nodes_since_check = 0;
+    deadline_exceeded(deadline)
+}
 
 /// Default maximum depth for unbounded traversals.
 pub const DEFAULT_MAX_DEPTH: u32 = 3;
@@ -92,6 +129,11 @@ pub struct TraversalConfig {
     pub limit: usize,
     /// Filter by relationship types (empty = all types).
     pub rel_types: Vec<String>,
+    /// Optional wall-clock deadline. When set and reached, traversal stops
+    /// expanding and returns the partial result accumulated so far (same
+    /// convention as the `limit` / `MAX_VISITED_SIZE` guards). `None` (the
+    /// default) disables the time bound entirely.
+    pub deadline: Option<Instant>,
 }
 
 impl Default for TraversalConfig {
@@ -101,6 +143,7 @@ impl Default for TraversalConfig {
             max_depth: DEFAULT_MAX_DEPTH,
             limit: 100,
             rel_types: Vec::new(),
+            deadline: None,
         }
     }
 }
@@ -149,6 +192,14 @@ impl TraversalConfig {
     #[must_use]
     pub fn with_max_depth(mut self, max_depth: u32) -> Self {
         self.max_depth = max_depth;
+        self
+    }
+
+    /// Sets a wall-clock deadline after which traversal returns its partial
+    /// result instead of continuing to expand.
+    #[must_use]
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
         self
     }
 }
@@ -239,8 +290,14 @@ fn bfs_traverse_directed(
     // Use CSR zero-copy path for forward traversal when snapshot exists.
     let use_csr = direction == BfsDirection::Forward && edge_store.has_csr_snapshot();
 
+    // Start at the threshold so an already-expired deadline aborts on the
+    // first pop; otherwise the clock is only read every N pops.
+    let mut nodes_since_check = DEADLINE_CHECK_INTERVAL;
     while let Some(state) = queue.pop_front() {
         if results.len() >= config.limit {
+            break;
+        }
+        if deadline_reached(config.deadline, &mut nodes_since_check) {
             break;
         }
         if use_csr {

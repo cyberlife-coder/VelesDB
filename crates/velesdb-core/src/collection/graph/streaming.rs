@@ -4,10 +4,11 @@
 //! avoiding the need to load all visited nodes into memory at once.
 
 use super::edge_concurrent::ConcurrentEdgeStore;
-use super::traversal::{reconstruct_path, BfsState};
+use super::traversal::{deadline_reached, reconstruct_path, BfsState, DEADLINE_CHECK_INTERVAL};
 use super::{EdgeStore, TraversalResult, DEFAULT_MAX_DEPTH};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
+use std::time::Instant;
 
 /// Default upper bound on the visited-set / parent-map size for a single
 /// traversal (issue #906).
@@ -33,6 +34,10 @@ pub struct StreamingConfig {
     pub max_visited_size: usize,
     /// Filter by relationship types (empty = all types).
     pub rel_types: Vec<String>,
+    /// Optional wall-clock deadline. When set and reached, the iterator stops
+    /// expanding and terminates (returns `None`), yielding the partial result
+    /// accumulated so far. `None` (the default) disables the time bound.
+    pub deadline: Option<Instant>,
 }
 
 impl Default for StreamingConfig {
@@ -42,6 +47,7 @@ impl Default for StreamingConfig {
             limit: None,
             max_visited_size: MAX_VISITED_SIZE, // ~800KB for FxHashSet<u64>
             rel_types: Vec::new(),
+            deadline: None,
         }
     }
 }
@@ -74,6 +80,14 @@ impl StreamingConfig {
         self.rel_types = types;
         self
     }
+
+    /// Sets a wall-clock deadline after which the iterator terminates,
+    /// yielding only the results accumulated so far.
+    #[must_use]
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
 }
 
 /// Shared BFS bookkeeping for the streaming iterators.
@@ -93,6 +107,8 @@ struct BfsBookkeeping {
     parent_map: FxHashMap<u64, (u64, u64)>,
     source_id: u64,
     yielded: usize,
+    /// Pops since the last wall-clock deadline check (see `drive`).
+    nodes_since_check: u32,
 }
 
 impl BfsBookkeeping {
@@ -116,6 +132,9 @@ impl BfsBookkeeping {
             parent_map: FxHashMap::default(),
             source_id: start_id,
             yielded: 0,
+            // Start at the threshold so an already-expired deadline aborts on
+            // the first pop; otherwise the clock is read every N pops.
+            nodes_since_check: DEADLINE_CHECK_INTERVAL,
         }
     }
 
@@ -197,7 +216,13 @@ impl BfsBookkeeping {
         if let Some(result) = self.next_pending() {
             return Some(result);
         }
+        let deadline = self.config.deadline;
         while let Some(state) = self.queue.pop_front() {
+            if deadline_reached(deadline, &mut self.nodes_since_check) {
+                // Clear the frontier so the iterator is permanently terminated.
+                self.queue.clear();
+                return None;
+            }
             expand(self, &state);
             if let Some(result) = self.next_pending() {
                 return Some(result);

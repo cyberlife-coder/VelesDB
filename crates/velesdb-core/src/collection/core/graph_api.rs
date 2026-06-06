@@ -370,8 +370,25 @@ impl Collection {
     // -------------------------------------------------------------------------
 
     /// BFS traversal using the core `concurrent_bfs_stream` iterator.
+    ///
+    /// Wraps [`Self::traverse_bfs_config_inner`] with traversal metrics timing.
     #[must_use]
     pub fn traverse_bfs_config(
+        &self,
+        source_id: u64,
+        config: &TraversalConfig,
+    ) -> Vec<TraversalResult> {
+        let start = std::time::Instant::now();
+        let results = self.traverse_bfs_config_inner(source_id, config);
+        self.edge_store
+            .metrics()
+            .record_traversal(start.elapsed(), results.len() as u64);
+        results
+    }
+
+    /// Inner BFS traversal without metrics (see [`Self::traverse_bfs_config`]).
+    #[must_use]
+    fn traverse_bfs_config_inner(
         &self,
         source_id: u64,
         config: &TraversalConfig,
@@ -402,6 +419,7 @@ impl Collection {
             rel_types: config.rel_types.clone(),
             limit: Some(config.limit),
             max_visited_size: MAX_VISITED_SIZE,
+            deadline: config.deadline,
         };
         concurrent_bfs_stream(&self.edge_store, source_id, streaming)
             .filter(|result| result.depth >= config.min_depth)
@@ -411,9 +429,26 @@ impl Collection {
 
     /// DFS traversal (iterative) using `TraversalConfig`.
     ///
-    /// Uses parent-pointer map for zero-clone path reconstruction (G4).
+    /// Wraps [`Self::traverse_dfs_config_inner`] with traversal metrics timing.
     #[must_use]
     pub fn traverse_dfs_config(
+        &self,
+        source_id: u64,
+        config: &TraversalConfig,
+    ) -> Vec<TraversalResult> {
+        let start = std::time::Instant::now();
+        let results = self.traverse_dfs_config_inner(source_id, config);
+        self.edge_store
+            .metrics()
+            .record_traversal(start.elapsed(), results.len() as u64);
+        results
+    }
+
+    /// Inner DFS traversal without metrics (see [`Self::traverse_dfs_config`]).
+    ///
+    /// Uses parent-pointer map for zero-clone path reconstruction (G4).
+    #[must_use]
+    fn traverse_dfs_config_inner(
         &self,
         source_id: u64,
         config: &TraversalConfig,
@@ -425,8 +460,14 @@ impl Collection {
         let mut parent_map: FxHashMap<u64, (u64, u64)> = FxHashMap::default();
         let mut stack: Vec<TraversalEntry> = vec![(source_id, 0)];
 
+        // Start at the threshold so an already-expired deadline aborts on the
+        // first pop; otherwise the clock is only read every N pops.
+        let mut nodes_since_check = crate::collection::graph::DEADLINE_CHECK_INTERVAL;
         while let Some((node_id, depth)) = stack.pop() {
             if results.len() >= config.limit {
+                break;
+            }
+            if crate::collection::graph::deadline_reached(config.deadline, &mut nodes_since_check) {
                 break;
             }
             // Issue #906: bound the visited set / parent map. A highly-connected
