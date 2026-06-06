@@ -195,11 +195,7 @@ impl IndexAdvisor {
             });
         }
 
-        suggestions.sort_unstable_by(|a, b| {
-            b.priority_score
-                .partial_cmp(&a.priority_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        suggestions.sort_unstable_by(|a, b| b.priority_score.total_cmp(&a.priority_score));
 
         suggestions
     }

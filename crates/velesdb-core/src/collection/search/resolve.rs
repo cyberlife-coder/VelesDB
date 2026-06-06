@@ -70,13 +70,21 @@ pub(crate) fn resolve_scored_results(
 pub(crate) fn sort_results_by_metric(results: &mut [SearchResult], higher_is_better: bool) {
     results.sort_unstable_by(|a, b| {
         if higher_is_better {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            // Descending: NaN treated as worst (placed at the end).
+            // partial_cmp returns None for NaN; the unwrap_or arms put any NaN
+            // result after all finite scores, preserving result quality when a
+            // score is accidentally NaN (e.g. zero-norm vector in SIMD path).
+            b.score.partial_cmp(&a.score).unwrap_or_else(|| {
+                match (a.score.is_nan(), b.score.is_nan()) {
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    _ => std::cmp::Ordering::Equal,
+                }
+            })
         } else {
-            a.score
-                .partial_cmp(&b.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            // Ascending (lower distance = better): total_cmp gives a true total
+            // order; NaN sorts after +∞, so NaN distances end up last (worst).
+            a.score.total_cmp(&b.score)
         }
     });
 }
@@ -87,13 +95,15 @@ pub(crate) fn sort_results_by_metric(results: &mut [SearchResult], higher_is_bet
 pub(crate) fn sort_scored_by_metric(results: &mut [ScoredResult], higher_is_better: bool) {
     results.sort_unstable_by(|a, b| {
         if higher_is_better {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            b.score.partial_cmp(&a.score).unwrap_or_else(|| {
+                match (a.score.is_nan(), b.score.is_nan()) {
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    _ => std::cmp::Ordering::Equal,
+                }
+            })
         } else {
-            a.score
-                .partial_cmp(&b.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a.score.total_cmp(&b.score)
         }
     });
 }
@@ -107,9 +117,13 @@ pub(crate) fn sort_scored_by_metric(results: &mut [ScoredResult], higher_is_bett
 #[allow(dead_code)] // Reason: BM25/sparse search utility — callers exist in test suite; future SDK wiring pending
 pub(crate) fn sort_results_descending(results: &mut [SearchResult]) {
     results.sort_unstable_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        b.score.partial_cmp(&a.score).unwrap_or_else(|| {
+            match (a.score.is_nan(), b.score.is_nan()) {
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
+                _ => std::cmp::Ordering::Equal,
+            }
+        })
     });
 }
 
