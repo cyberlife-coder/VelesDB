@@ -73,7 +73,7 @@ impl Collection {
         // edge store retains dangling edges pointing at (or from) a node that
         // no longer exists, silently corrupting the graph. Gated to graph
         // collections; no-op for vector / metadata-only collections.
-        self.cascade_delete_node_edges(ids);
+        self.cascade_delete_node_edges(ids)?;
 
         self.invalidate_caches_and_bump_generation();
         Ok(())
@@ -95,9 +95,9 @@ impl Collection {
     /// ascending order, per `docs/CONCURRENCY_MODEL.md`), acquired here with no
     /// other collection lock held — so taking them respects the documented
     /// ascending lock order and cannot deadlock.
-    fn cascade_delete_node_edges(&self, ids: &[u64]) {
+    fn cascade_delete_node_edges(&self, ids: &[u64]) -> Result<()> {
         if self.config.read().graph_schema.is_none() {
-            return;
+            return Ok(());
         }
         let mut removed_any = false;
         for &id in ids {
@@ -105,6 +105,13 @@ impl Collection {
             // edges so no dangling edge references the deleted node.
             let before = self.edge_store.outgoing_degree(id) + self.edge_store.incoming_degree(id);
             if before > 0 {
+                // WAL-before-apply (crash durability): log the cascade remove
+                // before mutating the store so a crash replays the tombstone.
+                #[cfg(feature = "persistence")]
+                crate::collection::graph::edge_wal::wal_append_remove_node(
+                    &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+                    id,
+                )?;
                 self.edge_store.remove_node_edges(id);
                 removed_any = true;
             }
@@ -115,6 +122,7 @@ impl Collection {
             self.write_generation
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+        Ok(())
     }
 
     /// Collects current payloads for the given IDs (for histogram decrements on delete).

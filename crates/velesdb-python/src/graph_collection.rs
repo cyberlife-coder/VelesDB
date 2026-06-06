@@ -184,7 +184,7 @@ impl PyGraphCollection {
             .iter()
             .map(|e| dict_to_edge(py, e))
             .collect::<PyResult<Vec<_>>>()?;
-        py.allow_threads(|| Ok(self.inner.add_edges_batch(graph_edges)))
+        py.allow_threads(|| self.inner.add_edges_batch(graph_edges).map_err(core_err))
     }
 
     /// Get edges, optionally filtered by label.

@@ -20,6 +20,8 @@ mod posting_list_tests;
 pub mod secondary;
 pub mod sparse;
 pub mod trigram;
+#[cfg(feature = "persistence")]
+pub(crate) mod wal_framing;
 
 pub use bm25::{Bm25Index, Bm25Params};
 pub use hnsw::{HnswIndex, HnswParams, SearchQuality};

@@ -28,11 +28,14 @@
 //!
 //! All functions here are gated behind `#[cfg(feature = "persistence")]`.
 
-use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::index::bm25::Bm25Index;
+use crate::index::wal_framing;
+
+/// Error-message context prefix for the shared framing helpers.
+const CTX: &str = "BM25 WAL";
 
 const WAL_OP_ADD: u8 = 0x01;
 const WAL_OP_REMOVE: u8 = 0x02;
@@ -71,10 +74,10 @@ pub(crate) fn wal_append_add_document(wal_path: &Path, id: u64, text: &str) -> R
     let text_len = encode_text_len(text_bytes)?;
     let body_len = add_entry_body_len(text_len)?;
 
-    let mut w = open_wal_writer(wal_path)?;
-    wal_write(&mut w, &body_len.to_le_bytes())?;
+    let mut w = wal_framing::open_wal_writer(wal_path, CTX)?;
+    wal_framing::wal_write(&mut w, &body_len.to_le_bytes(), CTX)?;
     write_add_entry_body(&mut w, id, text_len, text_bytes)?;
-    flush_wal(&mut w)
+    wal_framing::flush_wal(&mut w, CTX)
 }
 
 /// Validates that `text_bytes.len()` fits in a `u32` and returns the cast.
@@ -114,10 +117,10 @@ fn write_add_entry_body(
     text_len: u32,
     text_bytes: &[u8],
 ) -> Result<()> {
-    wal_write(w, &[WAL_OP_ADD])?;
-    wal_write(w, &id.to_le_bytes())?;
-    wal_write(w, &text_len.to_le_bytes())?;
-    wal_write(w, text_bytes)
+    wal_framing::wal_write(w, &[WAL_OP_ADD], CTX)?;
+    wal_framing::wal_write(w, &id.to_le_bytes(), CTX)?;
+    wal_framing::wal_write(w, &text_len.to_le_bytes(), CTX)?;
+    wal_framing::wal_write(w, text_bytes, CTX)
 }
 
 /// Appends a `remove_document(id)` mutation to the BM25 WAL.
@@ -133,11 +136,11 @@ fn write_add_entry_body(
 pub(crate) fn wal_append_remove_document(wal_path: &Path, id: u64) -> Result<()> {
     let body_len = u32::try_from(REMOVE_ENTRY_HEADER)
         .map_err(|_| Error::Index("BM25 WAL: remove header too large".to_string()))?;
-    let mut w = open_wal_writer(wal_path)?;
-    wal_write(&mut w, &body_len.to_le_bytes())?;
-    wal_write(&mut w, &[WAL_OP_REMOVE])?;
-    wal_write(&mut w, &id.to_le_bytes())?;
-    flush_wal(&mut w)
+    let mut w = wal_framing::open_wal_writer(wal_path, CTX)?;
+    wal_framing::wal_write(&mut w, &body_len.to_le_bytes(), CTX)?;
+    wal_framing::wal_write(&mut w, &[WAL_OP_REMOVE], CTX)?;
+    wal_framing::wal_write(&mut w, &id.to_le_bytes(), CTX)?;
+    wal_framing::flush_wal(&mut w, CTX)
 }
 
 /// Truncates the BM25 WAL file to zero length.
@@ -150,15 +153,7 @@ pub(crate) fn wal_append_remove_document(wal_path: &Path, id: u64) -> Result<()>
 /// Returns [`Error::Index`] if the WAL file exists but cannot be
 /// truncated.
 pub(crate) fn wal_truncate(wal_path: &Path) -> Result<()> {
-    if !wal_path.exists() {
-        return Ok(());
-    }
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .open(wal_path)
-        .map_err(|e| Error::Index(format!("BM25 WAL truncate open: {e}")))?;
-    file.set_len(0)
-        .map_err(|e| Error::Index(format!("BM25 WAL truncate: {e}")))
+    wal_framing::wal_truncate(wal_path, CTX)
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +183,7 @@ pub(crate) fn wal_replay(wal_path: &Path, index: &Bm25Index) -> Result<u64> {
     let mut count = 0u64;
 
     while pos < data.len() {
-        let Some((body_start, body_len)) = read_entry_header(&data, pos) else {
+        let Some((body_start, body_len)) = wal_framing::read_entry_header(&data, pos, CTX) else {
             break;
         };
         pos = body_start;
@@ -211,17 +206,6 @@ pub(crate) fn wal_replay(wal_path: &Path, index: &Bm25Index) -> Result<u64> {
     }
 
     Ok(count)
-}
-
-/// Reads the `u32` length prefix, returning `(body_start, body_len)`.
-fn read_entry_header(data: &[u8], pos: usize) -> Option<(usize, usize)> {
-    if pos + 4 > data.len() {
-        tracing::warn!("BM25 WAL truncated at offset {pos}: not enough bytes for length prefix");
-        return None;
-    }
-    let bytes: [u8; 4] = data[pos..pos + 4].try_into().ok()?;
-    let body_len = u32::from_le_bytes(bytes) as usize;
-    Some((pos + 4, body_len))
 }
 
 /// Dispatches a single WAL entry to the appropriate in-memory mutation.
@@ -296,30 +280,4 @@ fn read_le_u32(data: &[u8], pos: usize) -> Result<u32> {
         .try_into()
         .map(u32::from_le_bytes)
         .map_err(|_| Error::Index(format!("BM25 WAL: corrupt u32 at offset {pos}")))
-}
-
-// ---------------------------------------------------------------------------
-// File-open helpers
-// ---------------------------------------------------------------------------
-
-fn open_wal_writer(wal_path: &Path) -> Result<BufWriter<std::fs::File>> {
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(wal_path)
-        .map_err(|e| Error::Index(format!("BM25 WAL open: {e}")))?;
-    Ok(BufWriter::new(file))
-}
-
-fn wal_write(w: &mut BufWriter<std::fs::File>, bytes: &[u8]) -> Result<()> {
-    w.write_all(bytes)
-        .map_err(|e| Error::Index(format!("BM25 WAL write: {e}")))
-}
-
-fn flush_wal(w: &mut BufWriter<std::fs::File>) -> Result<()> {
-    w.flush()
-        .map_err(|e| Error::Index(format!("BM25 WAL flush: {e}")))?;
-    w.get_ref()
-        .sync_all()
-        .map_err(|e| Error::Index(format!("BM25 WAL fsync: {e}")))
 }
