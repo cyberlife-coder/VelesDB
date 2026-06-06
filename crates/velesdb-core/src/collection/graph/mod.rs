@@ -42,6 +42,8 @@ mod edge;
 mod edge_concurrent;
 mod edge_persistence;
 mod edge_removal;
+#[cfg(feature = "persistence")]
+pub(crate) mod edge_wal;
 pub(crate) mod helpers;
 mod label_index;
 #[cfg(test)]

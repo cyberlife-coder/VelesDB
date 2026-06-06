@@ -21,6 +21,8 @@ mod flush_defer_tests;
 mod graph_api;
 #[cfg(test)]
 mod graph_api_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod graph_edge_wal_recovery_tests;
 mod graph_property_index_wiring;
 mod graph_traversal_helpers;
 mod index_management;

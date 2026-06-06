@@ -262,6 +262,14 @@ impl Collection {
         if self.config.read().graph_schema.is_some() {
             let edge_store_path = self.path.join("edge_store.bin");
             self.edge_store.save_to_file(&edge_store_path)?;
+            // The snapshot now contains every edge, so the edge WAL delta is
+            // redundant — truncate it AFTER the snapshot is durably written so
+            // a crash between the two still replays the edges (never loses
+            // them). Mirrors the BM25 snapshot → wal_truncate contract.
+            #[cfg(feature = "persistence")]
+            crate::collection::graph::edge_wal::wal_truncate(
+                &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+            )?;
             // Rebuild CSR read snapshot after flush so that subsequent reads
             // benefit from zero-copy neighbor lookups (EPIC-020 US-004).
             self.edge_store.build_read_snapshot();
