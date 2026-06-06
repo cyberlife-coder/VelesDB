@@ -156,13 +156,13 @@ impl Condition {
                 get_field(payload, field).is_none_or(|v| !values_equal(v, value))
             }
             Self::Gt { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_gt())),
+                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_gt)),
             Self::Gte { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_ge())),
+                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_ge)),
             Self::Lt { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_lt())),
+                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_lt)),
             Self::Lte { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(|o| o.is_le())),
+                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_le)),
             Self::In { field, values } => {
                 get_field(payload, field).is_some_and(|v| in_list_matches(v, values))
             }

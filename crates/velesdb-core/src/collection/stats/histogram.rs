@@ -302,7 +302,7 @@ impl HistogramBuilder {
         if valid.is_empty() {
             return Histogram::default();
         }
-        valid.sort_unstable_by(|a, b| a.total_cmp(b));
+        valid.sort_unstable_by(f64::total_cmp);
         let distinct = count_distinct(valid);
         let buckets = if distinct == 1 {
             build_single_value_buckets(valid)
