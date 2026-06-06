@@ -9,7 +9,7 @@
 //! and `AsyncIndexBuilder` defers HNSW construction for higher throughput.
 
 use crate::collection::types::Collection;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::index::hnsw::direct_writer::DirectVectorWriter;
 use crate::point::Point;
 use crate::storage::VectorStorage;
@@ -106,10 +106,11 @@ impl Collection {
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
         fsync: bool,
     ) -> Result<usize> {
-        let aib = self
-            .async_index_builder
-            .as_ref()
-            .expect("invariant: caller checked async_index_builder.is_some()");
+        let Some(aib) = self.async_index_builder.as_ref() else {
+            return Err(Error::Config(
+                "bulk v2 path requires async index builder".to_string(),
+            ));
+        };
 
         // Collect pre-batch payloads before overwriting — used for histogram decrements.
         let old_payloads = {
@@ -142,14 +143,7 @@ impl Collection {
         }
 
         let count = vector_refs.len();
-        self.config.write().point_count = self.vector_storage.read().len();
-        self.apply_sparse_batch_bulk(sparse_batch)?;
-
-        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
-        // so only the final payload counts, then atomic decrement + increment.
-        self.apply_histogram_replace_dedup(points, &old_payloads);
-
-        self.invalidate_caches_and_bump_generation();
+        self.finalize_bulk_upsert(points, &old_payloads, sparse_batch)?;
 
         // Track inserts for periodic HNSW save (Issue #423 Component 3).
         #[allow(clippy::cast_possible_truncation)]
@@ -180,17 +174,27 @@ impl Collection {
         self.store_vectors_and_payloads_inner(vector_refs, points, fsync)?;
 
         let inserted = self.bulk_index_or_defer(vector_refs);
-        self.config.write().point_count = self.vector_storage.read().len();
-
-        self.apply_sparse_batch_bulk(sparse_batch)?;
-
-        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
-        // so only the final payload counts, then atomic decrement + increment.
-        self.apply_histogram_replace_dedup(points, &old_payloads);
-
-        self.invalidate_caches_and_bump_generation();
+        self.finalize_bulk_upsert(points, &old_payloads, sparse_batch)?;
 
         Ok(inserted)
+    }
+
+    /// Post-write bookkeeping shared by the V2 and standard bulk paths:
+    /// refreshes the point count, applies the sparse batch, replaces payload
+    /// histograms (dedup by id), and invalidates caches.
+    fn finalize_bulk_upsert(
+        &self,
+        points: &[Point],
+        old_payloads: &[Option<serde_json::Value>],
+        sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
+    ) -> Result<()> {
+        self.config.write().point_count = self.vector_storage.read().len();
+        self.apply_sparse_batch_bulk(sparse_batch)?;
+        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
+        // so only the final payload counts, then atomic decrement + increment.
+        self.apply_histogram_replace_dedup(points, old_payloads);
+        self.invalidate_caches_and_bump_generation();
+        Ok(())
     }
 
     /// Writes vectors and payloads with configurable fsync behavior.

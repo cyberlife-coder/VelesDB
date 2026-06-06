@@ -341,10 +341,8 @@ export async function listNodes(
  * `EdgeResponse` struct uses `#[serde(serialize_with =
  * "serde_id::serialize_id_as_string")]` to avoid JavaScript's
  * `Number.MAX_SAFE_INTEGER` (2^53-1) precision loss on u64 values.
- * The `idToNumber` helper coerces them back to the `number` shape
- * declared on the public `GraphEdge` interface; callers that need
- * u64-safe IDs should migrate to the TypeScript `bigint` surface
- * (tracked as a follow-up for Sprint 3+ streaming API commit).
+ * The mapper preserves string IDs so u64 values above
+ * `Number.MAX_SAFE_INTEGER` remain exact in JavaScript.
  */
 interface EdgeWire {
   id: number | string;
@@ -354,15 +352,8 @@ interface EdgeWire {
   properties?: Record<string, unknown>;
 }
 
-/**
- * Coerce a wire-format node/edge ID (which may arrive as a string
- * because of `serialize_id_as_string`) into the `number` shape
- * declared on the public `GraphEdge` interface. IDs above
- * `Number.MAX_SAFE_INTEGER` (2^53-1) will lose precision — this is
- * an accepted limitation of the current `id: number` contract.
- */
-function idToNumber(id: number | string): number {
-  return typeof id === 'string' ? Number(id) : id;
+function idToGraphId(id: number | string): number | string {
+  return id;
 }
 
 /**
@@ -389,9 +380,9 @@ export async function getNodeEdges(
   throwOnError(response, `Collection '${collection}'`);
 
   return (response.data?.edges ?? []).map((e) => ({
-    id: idToNumber(e.id),
-    source: idToNumber(e.source),
-    target: idToNumber(e.target),
+    id: e.id,
+    source: e.source,
+    target: e.target,
     label: e.label,
     properties: e.properties,
   }));
@@ -410,7 +401,7 @@ export async function getNodePayload(
   throwOnError(response, `Collection '${collection}'`);
   const data = response.data!;
   return {
-    nodeId: idToNumber(data.node_id),
+    nodeId: idToGraphId(data.node_id),
     payload: data.payload,
   };
 }
@@ -459,7 +450,7 @@ export async function graphSearch(
   throwOnError(response, `Collection '${collection}'`);
   const items: GraphSearchResultItem[] = (response.data?.results ?? []).map(
     (r) => ({
-      id: idToNumber(r.id),
+      id: idToGraphId(r.id),
       score: r.score,
       payload: r.payload,
     })

@@ -255,28 +255,7 @@ fn execute_mutation_query(
     match state.db.execute_query(parsed, params) {
         Ok(results) => {
             let coll_name = extract_mutation_collection_name(parsed);
-            notify_query_timing(state, &coll_name, start);
-            let elapsed = start.elapsed();
-            let timing_ms = elapsed.as_secs_f64() * 1000.0;
-            #[allow(clippy::cast_possible_truncation)]
-            // Reason: timing_ms is always < u64::MAX (query durations < 585 millennia)
-            let took_ms = timing_ms.round() as u64;
-            state
-                .query_duration_histogram
-                .observe(elapsed.as_secs_f64());
-            let projected = projection::project_results(&results, &parsed.select.columns);
-            let rows_returned = projected.len();
-            Json(QueryResponse {
-                results: projected,
-                timing_ms,
-                took_ms,
-                rows_returned,
-                meta: QueryResponseMeta {
-                    velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
-                    count: rows_returned,
-                },
-            })
-            .into_response()
+            build_query_response(state, &coll_name, start, results, &parsed.select.columns)
         }
         Err(e) => {
             state.operational_metrics.inc_errors();
@@ -329,19 +308,11 @@ fn execute_standard_query(
     req: &QueryRequest,
 ) -> Result<Vec<velesdb_core::SearchResult>, axum::response::Response> {
     let execute_result = if parsed.is_match_query() {
-        // MATCH queries need a collection instance for execute_query.
-        // Route through typed registries: vector → graph → metadata.
-        if let Some(vc) = state.db.get_vector_collection(collection_name) {
-            vc.execute_query(parsed, &req.params)
-        } else if let Some(gc) = state.db.get_graph_collection(collection_name) {
-            gc.execute_query(parsed, &req.params)
-        } else if let Some(mc) = state.db.get_metadata_collection(collection_name) {
-            mc.execute_query(parsed, &req.params)
-        } else {
-            Err(velesdb_core::Error::CollectionNotFound(
-                collection_name.to_string(),
-            ))
-        }
+        let mut params = req.params.clone();
+        params
+            .entry("_collection".to_string())
+            .or_insert_with(|| serde_json::json!(collection_name));
+        state.db.execute_query(parsed, &params)
     } else {
         state.db.execute_query(parsed, &req.params)
     };

@@ -297,9 +297,9 @@ fn process_bfs_csr(
     queue: &mut VecDeque<BfsState>,
     parent_map: &mut FxHashMap<u64, (u64, u64)>,
 ) {
-    let snapshot = edge_store
-        .csr_snapshot()
-        .expect("invariant: CSR snapshot checked before calling process_bfs_csr");
+    let Some(snapshot) = edge_store.csr_snapshot() else {
+        return;
+    };
     let targets = snapshot.neighbors(state.node_id);
     let edge_ids = snapshot.edge_ids(state.node_id);
 

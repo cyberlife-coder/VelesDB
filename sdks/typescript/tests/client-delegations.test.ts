@@ -331,11 +331,11 @@ describe('VelesDB — graph delegations (graph-methods.ts)', () => {
     ).rejects.toThrow(ValidationError);
   });
 
-  it('addEdge rejects non-numeric source/target', async () => {
+  it('addEdge rejects invalid source/target ids', async () => {
     await expect(
       db.addEdge('c', {
         id: 1,
-        source: 'a' as unknown as number,
+        source: {} as never,
         target: 20,
         label: 'L',
       })
@@ -344,7 +344,7 @@ describe('VelesDB — graph delegations (graph-methods.ts)', () => {
       db.addEdge('c', {
         id: 1,
         source: 10,
-        target: 'a' as unknown as number,
+        target: {} as never,
         label: 'L',
       })
     ).rejects.toThrow(ValidationError);
@@ -370,12 +370,12 @@ describe('VelesDB — graph delegations (graph-methods.ts)', () => {
     expect(backend.createGraphCollection).toHaveBeenCalled();
   });
 
-  it('traverseGraph rejects invalid strategy and non-numeric source', async () => {
+  it('traverseGraph rejects invalid strategy and source id', async () => {
     await expect(
       db.traverseGraph('c', { source: 1, strategy: 'bad' as never })
     ).rejects.toThrow(ValidationError);
     await expect(
-      db.traverseGraph('c', { source: 'x' as unknown as number })
+      db.traverseGraph('c', { source: {} as never })
     ).rejects.toThrow(ValidationError);
   });
 

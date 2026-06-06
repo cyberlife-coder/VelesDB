@@ -1,7 +1,7 @@
 #![allow(clippy::doc_markdown)]
 //! `VelesDB` Server - REST API for the `VelesDB` vector database.
 
-use axum::{middleware::Next, Router};
+use axum::{http::HeaderValue, middleware::Next, Router};
 use clap::Parser;
 use std::future::IntoFuture;
 use std::net::SocketAddr;
@@ -134,10 +134,10 @@ async fn deprecation_header(
 ) -> axum::response::Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert("deprecation", "true".parse().expect("static header value"));
+    headers.insert("deprecation", HeaderValue::from_static("true"));
     headers.insert(
         "x-api-deprecated",
-        "Use /v1/ prefix".parse().expect("static header value"),
+        HeaderValue::from_static("Use /v1/ prefix"),
     );
     response
 }
@@ -206,10 +206,11 @@ fn warn_if_exposed(host: &str) {
 async fn sigterm() {
     #[cfg(unix)]
     {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
+        if let Ok(mut signal) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            signal.recv().await;
+        }
     }
     #[cfg(not(unix))]
     std::future::pending::<()>().await;

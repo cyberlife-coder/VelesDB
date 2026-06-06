@@ -26,9 +26,9 @@
 //!
 //! | Category | Count | Share |
 //! |----------|-------|-------|
-//! | Nominal  |   3   |  50%  |
-//! | Edge     |   2   |  33%  |
-//! | Negative |   1   |  17%  |
+//! | Nominal  |  10   |  77%  |
+//! | Edge     |   2   |  15%  |
+//! | Negative |   1   |   8%  |
 
 use std::collections::HashMap;
 
@@ -115,6 +115,55 @@ fn setup_graph_first_collection(db: &Database) {
     vc.add_edge(edge).expect("test: add edge 1->2 CITES");
 }
 
+fn setup_ordered_pattern_collection(db: &Database) {
+    db.create_vector_collection("patterns", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create patterns collection");
+    let vc = db
+        .get_vector_collection("patterns")
+        .expect("test: get patterns collection");
+
+    vc.upsert(vec![
+        Point::new(
+            10,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(json!({"_labels": ["Step"], "name": "start"})),
+        ),
+        Point::new(
+            11,
+            vec![0.0, 1.0, 0.0, 0.0],
+            Some(json!({"_labels": ["Step"], "name": "wrong-middle"})),
+        ),
+        Point::new(
+            12,
+            vec![0.0, 0.0, 1.0, 0.0],
+            Some(json!({"_labels": ["Step"], "name": "end"})),
+        ),
+        Point::new(
+            13,
+            vec![0.0, 0.0, 0.0, 1.0],
+            Some(json!({"_labels": ["Step"], "name": "right-middle"})),
+        ),
+        Point::new(
+            14,
+            vec![0.5, 0.5, 0.0, 0.0],
+            Some(json!({"_labels": ["Other"], "name": "wrong-label"})),
+        ),
+    ])
+    .expect("test: upsert patterns");
+
+    for (id, source, target, label) in [
+        (201, 10, 11, "R2"),
+        (202, 11, 12, "R1"),
+        (203, 10, 13, "R1"),
+        (204, 13, 12, "R2"),
+        (205, 10, 14, "R1"),
+        (206, 14, 12, "R2"),
+    ] {
+        vc.add_edge(GraphEdge::new(id, source, target, label).expect("test: edge"))
+            .expect("test: add edge");
+    }
+}
+
 /// Builds a params map with only the `_collection` routing key.
 fn collection_param(collection: &str) -> HashMap<String, serde_json::Value> {
     let mut params = HashMap::new();
@@ -149,6 +198,13 @@ fn assert_graph_first_planned(sql: &str) {
         matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
         "planner must select GraphFirst for '{sql}', got: {strategy:?}"
     );
+}
+
+fn payload_field<'a>(
+    result: &'a velesdb_core::SearchResult,
+    key: &str,
+) -> Option<&'a serde_json::Value> {
+    result.point.payload.as_ref()?.get(key)
 }
 
 // =========================================================================
@@ -191,6 +247,207 @@ fn test_match_graph_first_basic_traversal_returns_connected_pair() {
     assert!(
         !ids.contains(&3) && !ids.contains(&4),
         "isolated Documents 3 and 4 must not appear as traversal targets, got: {ids:?}"
+    );
+}
+
+#[test]
+fn test_match_graph_first_enforces_relationship_order_and_node_labels() {
+    let (_dir, db) = create_test_db();
+    setup_ordered_pattern_collection(&db);
+
+    let sql = "MATCH (a:Step)-[:R1]->(b:Step)-[:R2]->(c:Step) \
+               RETURN a, b, c LIMIT 10";
+    let query = velesdb_core::velesql::Parser::parse(sql).expect("test: parse ordered MATCH");
+    let results = db
+        .execute_query(&query, &collection_param("patterns"))
+        .expect("test: ordered MATCH should succeed");
+
+    assert_eq!(results.len(), 1, "only the ordered Step path should match");
+    assert_eq!(results[0].point.id, 12);
+    assert_eq!(
+        payload_field(&results[0], "b.name"),
+        Some(&json!("right-middle")),
+        "intermediate binding must be the R1 then R2 Step node"
+    );
+    assert_eq!(
+        payload_field(&results[0], "_bindings").and_then(|v| v.get("b")),
+        Some(&json!(13)),
+        "bindings must retain the intermediate node alias"
+    );
+}
+
+#[test]
+fn test_match_graph_first_rejects_wrong_relationship_order() {
+    let (_dir, db) = create_test_db();
+    setup_ordered_pattern_collection(&db);
+
+    let sql = "MATCH (a:Step)-[:R2]->(b:Step)-[:R2]->(c:Step) \
+               RETURN a, b, c LIMIT 10";
+    let query = velesdb_core::velesql::Parser::parse(sql).expect("test: parse wrong order MATCH");
+    let results = db
+        .execute_query(&query, &collection_param("patterns"))
+        .expect("test: wrong order MATCH should execute");
+
+    assert!(
+        results.is_empty(),
+        "flattened relationship labels must not create a false multi-hop match"
+    );
+}
+
+#[test]
+fn test_match_graph_first_supports_incoming_direction() {
+    let (_dir, db) = create_test_db();
+    setup_graph_first_collection(&db);
+
+    let sql = "MATCH (ref:Reference)<-[:CITES]-(doc:Document) \
+               RETURN doc, ref LIMIT 10";
+    let query = velesdb_core::velesql::Parser::parse(sql).expect("test: parse incoming MATCH");
+    let results = db
+        .execute_query(&query, &collection_param("papers"))
+        .expect("test: incoming MATCH should succeed");
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        payload_field(&results[0], "_bindings").and_then(|v| v.get("doc")),
+        Some(&json!(1))
+    );
+    assert_eq!(
+        payload_field(&results[0], "_bindings").and_then(|v| v.get("ref")),
+        Some(&json!(2))
+    );
+}
+
+#[test]
+fn test_match_graph_first_variable_length_binds_terminal_node() {
+    let (_dir, db) = create_test_db();
+    setup_ordered_pattern_collection(&db);
+
+    let sql = "MATCH (a:Step)-[*1..2]->(c:Step) RETURN a, c LIMIT 10";
+    let query =
+        velesdb_core::velesql::Parser::parse(sql).expect("test: parse variable length MATCH");
+    let results = db
+        .execute_query(&query, &collection_param("patterns"))
+        .expect("test: variable length MATCH should succeed");
+
+    let terminal_ids: std::collections::HashSet<u64> =
+        results.iter().map(|result| result.point.id).collect();
+    assert!(
+        terminal_ids.contains(&12),
+        "variable-length traversal must bind the terminal Step node"
+    );
+}
+
+/// Collects the `(a, b)` binding pairs from `_bindings` across all results.
+fn binding_pairs(
+    results: &[velesdb_core::SearchResult],
+    first: &str,
+    second: &str,
+) -> std::collections::HashSet<(u64, u64)> {
+    results
+        .iter()
+        .filter_map(|r| {
+            let b = payload_field(r, "_bindings")?;
+            Some((b.get(first)?.as_u64()?, b.get(second)?.as_u64()?))
+        })
+        .collect()
+}
+
+#[test]
+fn test_match_graph_first_undirected_traverses_both_directions() {
+    let (_dir, db) = create_test_db();
+    setup_ordered_pattern_collection(&db);
+
+    let sql = "MATCH (a:Step)-[:R2]-(b:Step) RETURN a, b LIMIT 20";
+    let query = velesdb_core::velesql::Parser::parse(sql).expect("test: parse undirected MATCH");
+    let results = db
+        .execute_query(&query, &collection_param("patterns"))
+        .expect("test: undirected MATCH should succeed");
+
+    let pairs = binding_pairs(&results, "a", "b");
+    // R2 edges between Step nodes: 10->11 and 13->12. Undirected `-[:R2]-` must
+    // bind BOTH orientations of each (the reverse pairs are impossible directed).
+    assert!(
+        pairs.contains(&(10, 11)) && pairs.contains(&(11, 10)),
+        "undirected R2 must bind the 10/11 edge both ways, got: {pairs:?}"
+    );
+    assert!(
+        pairs.contains(&(13, 12)) && pairs.contains(&(12, 13)),
+        "undirected R2 must bind the 13/12 edge both ways, got: {pairs:?}"
+    );
+    assert_eq!(
+        pairs.len(),
+        4,
+        "exactly the two Step R2 edges, each in both directions, got: {pairs:?}"
+    );
+}
+
+#[test]
+fn test_match_graph_first_multi_type_relationship_matches_either() {
+    let (_dir, db) = create_test_db();
+    setup_ordered_pattern_collection(&db);
+
+    let sql = "MATCH (a:Step)-[:R1|R2]->(b:Step) RETURN a, b LIMIT 20";
+    let query = velesdb_core::velesql::Parser::parse(sql).expect("test: parse multi-type MATCH");
+    let results = db
+        .execute_query(&query, &collection_param("patterns"))
+        .expect("test: multi-type MATCH should succeed");
+
+    let pairs = binding_pairs(&results, "a", "b");
+    // From node 10 the union of types must surface BOTH the R2 edge (10->11)
+    // and the R1 edge (10->13).
+    assert!(
+        pairs.contains(&(10, 11)),
+        "R2 edge 10->11 must match via the multi-type relationship, got: {pairs:?}"
+    );
+    assert!(
+        pairs.contains(&(10, 13)),
+        "R1 edge 10->13 must match via the multi-type relationship, got: {pairs:?}"
+    );
+    // Outgoing R1|R2 Step->Step edges: 10->11, 10->13, 11->12, 13->12
+    // (10->14 excluded: node 14 is :Other).
+    assert_eq!(
+        pairs.len(),
+        4,
+        "exactly the four Step->Step R1/R2 edges, got: {pairs:?}"
+    );
+}
+
+#[test]
+fn test_match_graph_first_intermediate_node_property_filters() {
+    let (_dir, db) = create_test_db();
+    setup_ordered_pattern_collection(&db);
+
+    // Node 13 ("right-middle") is the only R1-reachable Step with an outgoing R2.
+    let matching = "MATCH (a:Step)-[:R1]->(b:Step {name: 'right-middle'})-[:R2]->(c:Step) \
+                    RETURN a, b, c LIMIT 10";
+    let query = velesdb_core::velesql::Parser::parse(matching).expect("test: parse matching MATCH");
+    let results = db
+        .execute_query(&query, &collection_param("patterns"))
+        .expect("test: intermediate-property MATCH should succeed");
+
+    assert_eq!(
+        results.len(),
+        1,
+        "only the right-middle path satisfies the intermediate property"
+    );
+    assert_eq!(
+        payload_field(&results[0], "_bindings").and_then(|v| v.get("b")),
+        Some(&json!(13)),
+        "intermediate binding must be the property-matched node"
+    );
+
+    // Same shape, non-existent intermediate property: the predicate on the
+    // bound intermediate node must reject the otherwise-valid 10->13->12 path.
+    let mismatch = "MATCH (a:Step)-[:R1]->(b:Step {name: 'no-such-name'})-[:R2]->(c:Step) \
+                    RETURN a, b, c LIMIT 10";
+    let query = velesdb_core::velesql::Parser::parse(mismatch).expect("test: parse mismatch MATCH");
+    let results = db
+        .execute_query(&query, &collection_param("patterns"))
+        .expect("test: mismatch MATCH should execute");
+    assert!(
+        results.is_empty(),
+        "an intermediate-node property predicate must filter the path, got {} rows",
+        results.len()
     );
 }
 
