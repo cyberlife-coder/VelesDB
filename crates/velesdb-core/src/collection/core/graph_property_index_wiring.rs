@@ -21,7 +21,7 @@ fn edge_index_key(rel_type: &str, property: &str) -> String {
 }
 
 /// Extracts the `_labels` array from a node payload.
-fn extract_labels(payload: &Value) -> Vec<String> {
+pub(crate) fn extract_labels(payload: &Value) -> Vec<String> {
     payload
         .get("_labels")
         .and_then(Value::as_array)
