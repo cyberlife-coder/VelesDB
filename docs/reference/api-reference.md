@@ -621,7 +621,7 @@ Execute collection-scoped graph `MATCH` queries.
 {
   "results": [
     {
-      "bindings": {"doc": 123, "author": 456},
+      "bindings": {"doc": "123", "author": "456"},
       "score": 0.95,
       "depth": 1,
       "projected": {"author.name": "John Doe"}
@@ -744,7 +744,7 @@ Traverse the graph using BFS or DFS.
 ```json
 {
   "results": [
-    {"target_id": "2", "depth": 1, "path": [100]}
+    {"target_id": "2", "depth": 1, "path": ["100"]}
   ],
   "has_more": false,
   "stats": {"visited": 1, "depth_reached": 1}
