@@ -12,6 +12,7 @@ use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 
+use super::graph_property_index_wiring::extract_labels;
 use super::graph_traversal_helpers::{
     bfs_pop, bfs_push, dfs_pop, dfs_push, expand_dfs_neighbors, reconstruct_path,
     traverse_with_frontier, DfsFrontier, TraversalEntry, TraversalParams,
@@ -39,6 +40,11 @@ impl Collection {
     /// collection.add_edge(edge)?;
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
+        // Strict-schema referential integrity: reject before any mutation so a
+        // violation leaves no partial write and does not bump write_generation.
+        // Schemaless collections (the default) short-circuit at zero added cost.
+        self.validate_edge_referential_integrity(&edge)?;
+
         let edge_id = edge.id();
         let rel_type = edge.label().to_string();
         let properties = edge.properties().clone();
@@ -53,6 +59,47 @@ impl Collection {
         self.write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Enforces strict-schema referential integrity for an edge write.
+    ///
+    /// In schemaless mode (the default), this is a no-op and returns
+    /// immediately. In strict mode it verifies that both endpoint nodes exist
+    /// and that the edge type / endpoint types satisfy the declared schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SchemaValidation` if an endpoint node is missing, has no
+    /// `_labels`, or the edge violates the schema's edge-type constraints.
+    fn validate_edge_referential_integrity(&self, edge: &GraphEdge) -> Result<()> {
+        let schema = match self.config.read().graph_schema.clone() {
+            Some(s) if !s.is_schemaless() => s,
+            _ => return Ok(()),
+        };
+
+        let from_type = self.endpoint_node_type(edge.source())?;
+        let to_type = self.endpoint_node_type(edge.target())?;
+        schema.validate_edge_type(edge.label(), &from_type, &to_type)
+    }
+
+    /// Resolves the node type (first `_labels` entry) for a graph node,
+    /// requiring the node to exist and carry a label (strict-mode helper).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SchemaValidation` if the node has no stored payload
+    /// (referential integrity violation) or the payload declares no `_labels`.
+    fn endpoint_node_type(&self, node_id: u64) -> Result<String> {
+        let payload = self.payload_storage.read().retrieve(node_id)?;
+        let Some(payload) = payload else {
+            return Err(Error::SchemaValidation(format!(
+                "edge references non-existent node {node_id}"
+            )));
+        };
+        extract_labels(&payload)
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::SchemaValidation(format!("node {node_id} has no '_labels' type")))
     }
 
     /// Gets all edges from the collection's knowledge graph.

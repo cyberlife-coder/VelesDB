@@ -362,6 +362,20 @@ fn test_graph_typed_schema_lifecycle() {
         "Should have KNOWS edge type"
     );
 
+    // Insert the typed endpoint nodes first: strict-schema referential
+    // integrity requires both endpoints to exist with a declared type before
+    // an edge can reference them.
+    gc.upsert_node_payload(
+        1,
+        &serde_json::json!({"name": "Alice", "_labels": ["Person"]}),
+    )
+    .expect("test: upsert node 1");
+    gc.upsert_node_payload(
+        2,
+        &serde_json::json!({"name": "Bob", "_labels": ["Person"]}),
+    )
+    .expect("test: upsert node 2");
+
     // INSERT EDGE via SQL
     execute_sql(
         &db,

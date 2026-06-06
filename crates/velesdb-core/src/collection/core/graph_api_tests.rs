@@ -823,4 +823,100 @@ mod tests {
         );
         assert!(!results.is_empty());
     }
+
+    // =========================================================================
+    // Referential integrity + schema enforcement (strict graph schema mode)
+    // =========================================================================
+
+    fn create_strict_graph_collection() -> (Collection, TempDir) {
+        use crate::collection::graph::{EdgeType, GraphSchema, NodeType};
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let schema = GraphSchema::new()
+            .with_node_type(NodeType::new("Person"))
+            .with_node_type(NodeType::new("Company"))
+            .with_edge_type(EdgeType::new("KNOWS", "Person", "Person"));
+        let collection = Collection::create_graph_collection(
+            temp_dir.path().to_path_buf(),
+            "kg_strict",
+            schema,
+            None,
+            DistanceMetric::Cosine,
+        )
+        .expect("Failed to create strict graph collection");
+        (collection, temp_dir)
+    }
+
+    fn store_typed_node(collection: &Collection, id: u64, node_type: &str) {
+        collection
+            .store_node_payload(id, &serde_json::json!({ "_labels": [node_type] }))
+            .expect("store node payload");
+    }
+
+    fn assert_schema_violation(result: crate::error::Result<()>) {
+        match result {
+            Err(crate::error::Error::SchemaValidation(_)) => {}
+            other => panic!("expected SchemaValidation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_strict_mode_rejects_dangling_edge() {
+        let (collection, _temp) = create_strict_graph_collection();
+        // No node payloads stored: endpoints do not exist.
+        assert_schema_violation(collection.add_edge(make_edge(1, 100, 200, "KNOWS")));
+        assert_eq!(collection.edge_count(), 0, "no partial write on rejection");
+    }
+
+    #[test]
+    fn test_strict_mode_rejects_bad_edge_type() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Person");
+        assert_schema_violation(collection.add_edge(make_edge(1, 100, 200, "UNKNOWN_REL")));
+        assert_eq!(collection.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_strict_mode_rejects_endpoint_type_mismatch() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Company");
+        // KNOWS is Person->Person; target is a Company.
+        assert_schema_violation(collection.add_edge(make_edge(1, 100, 200, "KNOWS")));
+        assert_eq!(collection.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_strict_mode_rejects_node_without_labels() {
+        let (collection, _temp) = create_strict_graph_collection();
+        // Node exists but carries no `_labels` -> type cannot be resolved.
+        collection
+            .store_node_payload(100, &serde_json::json!({ "name": "A" }))
+            .unwrap();
+        store_typed_node(&collection, 200, "Person");
+        assert_schema_violation(collection.add_edge(make_edge(1, 100, 200, "KNOWS")));
+        assert_eq!(collection.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_strict_mode_accepts_valid_edge() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Person");
+        collection
+            .add_edge(make_edge(1, 100, 200, "KNOWS"))
+            .expect("valid edge should be accepted");
+        assert_eq!(collection.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_schemaless_mode_allows_dangling_edge() {
+        // Regression guard: default schemaless path is unchanged — no endpoint
+        // payloads, arbitrary edge label, still accepted.
+        let (collection, _temp) = create_graph_test_collection();
+        collection
+            .add_edge(make_edge(1, 100, 200, "ANY_REL"))
+            .expect("schemaless collection must accept dangling edges");
+        assert_eq!(collection.edge_count(), 1);
+    }
 }
