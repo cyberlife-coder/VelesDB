@@ -42,15 +42,7 @@ impl Eq for OrderedFloat {}
 
 impl Ord for OrderedFloat {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.partial_cmp(&other.0).unwrap_or_else(|| {
-            // Handle NaN: NaN sorts after everything
-            match (self.0.is_nan(), other.0.is_nan()) {
-                (true, true) => std::cmp::Ordering::Equal,
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                (false, false) => unreachable!(),
-            }
-        })
+        self.0.total_cmp(&other.0)
     }
 }
 

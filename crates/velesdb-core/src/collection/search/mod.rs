@@ -48,8 +48,9 @@ impl PartialOrd for OrderedFloat {
 
 impl Ord for OrderedFloat {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0
-            .partial_cmp(&other.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        // total_cmp gives a true total order: NaN sorts after all finite values.
+        // Callers wrap in Reverse<(OrderedFloat, _)> for a min-heap, so
+        // Reverse(NaN) is the smallest element and is evicted first.
+        self.0.total_cmp(&other.0)
     }
 }

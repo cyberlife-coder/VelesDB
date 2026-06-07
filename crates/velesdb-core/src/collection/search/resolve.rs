@@ -61,22 +61,27 @@ pub(crate) fn resolve_scored_results(
         .collect()
 }
 
+/// Descending f32 comparator with NaN-last semantics.
+///
+/// `bool::cmp` trick: `a.is_nan().cmp(&b.is_nan())` maps (NaN,finite)→Greater
+/// and (finite,NaN)→Less, placing NaN after all real scores in the sort order.
+#[inline]
+fn cmp_f32_desc_nan_last(a: f32, b: f32) -> std::cmp::Ordering {
+    b.partial_cmp(&a).unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
+}
+
 /// Sorts `SearchResult` values by score according to metric direction.
 ///
-/// - `higher_is_better = true`: descending (cosine, dot product)
-/// - `higher_is_better = false`: ascending (euclidean distance)
+/// - `higher_is_better = true`: descending (cosine, dot product), NaN last
+/// - `higher_is_better = false`: ascending (euclidean distance), NaN last
 ///
 /// Uses unstable sort: equal-score tie-breaking order is irrelevant for ranking.
 pub(crate) fn sort_results_by_metric(results: &mut [SearchResult], higher_is_better: bool) {
     results.sort_unstable_by(|a, b| {
         if higher_is_better {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            cmp_f32_desc_nan_last(a.score, b.score)
         } else {
-            a.score
-                .partial_cmp(&b.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a.score.total_cmp(&b.score)
         }
     });
 }
@@ -87,18 +92,14 @@ pub(crate) fn sort_results_by_metric(results: &mut [SearchResult], higher_is_bet
 pub(crate) fn sort_scored_by_metric(results: &mut [ScoredResult], higher_is_better: bool) {
     results.sort_unstable_by(|a, b| {
         if higher_is_better {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            cmp_f32_desc_nan_last(a.score, b.score)
         } else {
-            a.score
-                .partial_cmp(&b.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a.score.total_cmp(&b.score)
         }
     });
 }
 
-/// Sorts `SearchResult` values by score descending (higher scores first).
+/// Sorts `SearchResult` values by score descending (higher scores first), NaN last.
 ///
 /// Used for BM25 text search, sparse search, and fusion results where
 /// higher scores always indicate better matches.
@@ -106,11 +107,7 @@ pub(crate) fn sort_scored_by_metric(results: &mut [ScoredResult], higher_is_bett
 /// Uses unstable sort: equal-score tie-breaking order is irrelevant for ranking.
 #[allow(dead_code)] // Reason: BM25/sparse search utility — callers exist in test suite; future SDK wiring pending
 pub(crate) fn sort_results_descending(results: &mut [SearchResult]) {
-    results.sort_unstable_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    results.sort_unstable_by(|a, b| cmp_f32_desc_nan_last(a.score, b.score));
 }
 
 /// Creates a "sparse index not found" error with consistent formatting.
@@ -183,6 +180,31 @@ mod tests {
     }
 
     // --- sort_results_descending ---
+
+    // NaN scores must sort last in descending mode, not float-undefined.
+    #[test]
+    fn sort_results_by_metric_nan_sorts_last_descending() {
+        let mut results = vec![
+            make_search_result(1, f32::NAN),
+            make_search_result(2, 0.9),
+            make_search_result(3, 0.3),
+        ];
+        sort_results_by_metric(&mut results, true);
+        // Finite scores first, NaN last regardless of insertion order.
+        assert_eq!(results[2].point.id, 1, "NaN score must be last");
+    }
+
+    // NaN distances must sort last in ascending mode (total_cmp: NaN > +∞).
+    #[test]
+    fn sort_results_by_metric_nan_sorts_last_ascending() {
+        let mut results = vec![
+            make_search_result(1, f32::NAN),
+            make_search_result(2, 0.3),
+            make_search_result(3, 0.9),
+        ];
+        sort_results_by_metric(&mut results, false);
+        assert_eq!(results[2].point.id, 1, "NaN distance must be last");
+    }
 
     #[test]
     fn sort_results_descending_always_highest_first() {

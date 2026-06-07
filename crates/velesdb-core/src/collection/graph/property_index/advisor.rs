@@ -198,7 +198,7 @@ impl IndexAdvisor {
         suggestions.sort_unstable_by(|a, b| {
             b.priority_score
                 .partial_cmp(&a.priority_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or_else(|| a.priority_score.is_nan().cmp(&b.priority_score.is_nan()))
         });
 
         suggestions

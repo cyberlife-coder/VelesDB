@@ -377,7 +377,7 @@ fn compare_json_values(a: &serde_json::Value, b: &serde_json::Value) -> std::cmp
         (serde_json::Value::Null, _) => std::cmp::Ordering::Greater, // NULLs sort last
         (_, serde_json::Value::Null) => std::cmp::Ordering::Less,
         _ => match (a.as_f64(), b.as_f64()) {
-            (Some(fa), Some(fb)) => fa.partial_cmp(&fb).unwrap_or(std::cmp::Ordering::Equal),
+            (Some(fa), Some(fb)) => fa.total_cmp(&fb),
             _ => a.to_string().cmp(&b.to_string()),
         },
     }
