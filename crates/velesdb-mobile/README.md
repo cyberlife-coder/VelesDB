@@ -232,7 +232,8 @@ Agent memory for on-device AI. Stores knowledge facts as vectors with similarity
 | `VelesSemanticMemory(db, dimension)` | Creates semantic memory with the given embedding dimension (constructor) |
 | `store(id, content, embedding)` | Stores a knowledge fact with its embedding |
 | `query(embedding, topK)` | Queries by similarity, returns `SemanticResult` list |
-| `remove(id)` | Removes a knowledge fact by ID |
+| `delete(id)` | Deletes a knowledge fact by ID |
+| `remove(id)` | Deprecated alias for `delete(id)` |
 | `clear()` | Clears all knowledge facts |
 | `len()` | Returns the number of stored facts |
 | `isEmpty()` | Returns true if no facts are stored |
