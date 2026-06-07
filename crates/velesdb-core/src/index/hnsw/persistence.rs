@@ -23,10 +23,9 @@
 //!   (generation=0) accepted on load.
 
 use crate::distance::DistanceMetric;
+use crate::storage::atomic_write::atomic_write;
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// HNSW index metadata as stored on disk.
 ///
@@ -227,44 +226,8 @@ pub(crate) fn load_vectors(path: &Path) -> std::io::Result<HnswVectorsData> {
     })
 }
 
-/// Writes `data` to a unique temp file, fsyncs, then renames to `final_path`.
-///
-/// This provides crash-safe persistence: readers always see either the
-/// previous complete file or the new complete file, never a torn write.
-///
-/// Each call generates a unique temporary filename using process ID, thread ID,
-/// and a global counter to prevent races both within a process (concurrent
-/// threads) and across processes sharing the same data directory.
-fn atomic_write(final_path: &Path, data: &[u8]) -> std::io::Result<()> {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    let tid = std::thread::current().id();
-
-    // Build temp file in the same directory as the target, with a unique suffix
-    // derived from PID + thread ID + global counter to avoid concurrent-write
-    // races both intra-process and cross-process.
-    let file_name = final_path.file_name().unwrap_or_default().to_string_lossy();
-    let tmp_name = format!("{file_name}.tmp.{pid}.{tid:?}.{seq}");
-    let tmp_path = final_path.with_file_name(&tmp_name);
-
-    let result = atomic_write_inner(&tmp_path, final_path, data);
-    if result.is_err() {
-        // Best-effort cleanup of the temp file on failure.
-        let _ = std::fs::remove_file(&tmp_path);
-    }
-    result
-}
-
-/// Inner write-fsync-rename step for [`atomic_write`].
-fn atomic_write_inner(tmp_path: &Path, final_path: &Path, data: &[u8]) -> std::io::Result<()> {
-    let file = std::fs::File::create(tmp_path)?;
-    let mut writer = std::io::BufWriter::new(file);
-    writer.write_all(data)?;
-    writer.flush()?;
-    writer.get_ref().sync_all()?;
-    std::fs::rename(tmp_path, final_path)
-}
+// Crash-safe persistence (write-tmp + fsync + rename) is provided by the shared
+// `crate::storage::atomic_write` helper, imported above.
 
 /// Loads vectors from disk, disabling vector storage gracefully when the file
 /// is missing (e.g., index was saved in fast-insert mode before vectors existed).
