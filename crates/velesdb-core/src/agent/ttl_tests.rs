@@ -40,6 +40,18 @@ mod tests {
     }
 
     #[test]
+    fn test_memory_ttl_expired_count() {
+        let ttl = MemoryTtl::new();
+        ttl.set_ttl(1, 0);
+        ttl.set_ttl(2, 0);
+        ttl.set_ttl(3, 3600);
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        assert_eq!(ttl.expired_count(), 2);
+        assert_eq!(ttl.expired_count(), ttl.get_expired().len());
+    }
+
+    #[test]
     fn test_memory_ttl_expire() {
         let ttl = MemoryTtl::new();
         ttl.set_ttl(1, 0);

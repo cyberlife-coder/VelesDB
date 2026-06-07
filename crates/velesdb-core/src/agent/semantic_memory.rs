@@ -144,6 +144,11 @@ impl SemanticMemory {
     /// Each tuple is `(id, content, embedding)`. All embeddings are
     /// dimension-validated before any write occurs.
     ///
+    /// This is best-effort, not transactional: if `upsert_points` fails partway
+    /// the already-persisted points are kept and `stored_ids` is left untouched
+    /// (it is only updated after a fully successful upsert), matching the
+    /// single-`store` behaviour.
+    ///
     /// # Errors
     ///
     /// Returns an error when any embedding dimension is invalid, collection

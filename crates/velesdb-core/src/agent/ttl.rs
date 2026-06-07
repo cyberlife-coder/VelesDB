@@ -93,7 +93,12 @@ impl MemoryTtl {
     /// live results.
     #[must_use]
     pub fn expired_count(&self) -> usize {
-        self.get_expired().len()
+        let now = Self::now();
+        self.entries
+            .read()
+            .values()
+            .filter(|entry| entry.expires_at <= now)
+            .count()
     }
 
     /// Removes expired entries from tracking and returns their IDs.
