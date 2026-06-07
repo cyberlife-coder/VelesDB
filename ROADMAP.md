@@ -4,7 +4,7 @@ This roadmap commits to **what we are building**, **why**, and **when**. It is u
 
 It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` issues but **not committed** until they reach a milestone here.
 
-> **Last updated:** 2026-06-05 — covers v1.17.0 (current) → v1.18.0 horizon.
+> **Last updated:** 2026-06-05 — covers v1.18.0 (current) → v1.18.0 horizon.
 
 ---
 
