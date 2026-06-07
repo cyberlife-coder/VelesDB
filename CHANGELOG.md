@@ -7,13 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.18.0] — 2026-06-07
+
 ### Changed
+- **Licensing — engine-embedding artifacts realigned to VelesDB Core License 1.0
+  (#1053)**: every first-party artifact that ships the compiled engine
+  (`velesdb-{wasm,python,mobile,cli,migrate}`, `tauri-plugin-velesdb` + its
+  guest-js, `@wiscale/velesdb-sdk`) is now governed by the source-available
+  VelesDB Core License instead of MIT. Glue/connectors/examples without the
+  engine (`integrations/*`, `examples/*`, `demos/*`) stay MIT. New
+  `docs/LICENSING.md` documents the matrix and the rule.
 - **BREAKING (TypeScript SDK) — `ProceduralPattern.embedding` is now required
   (#1039)**: procedural patterns were stored without a vector, so procedural
   recall (a pure vector search) could never return them. Patterns now persist
   their `embedding` as the point vector and the field is required on the
   `ProceduralPattern` type. Migration: pass your model's embedding when learning
   a procedure, exactly as you already do for semantic and episodic memory.
+
+### Added
+- **Python agent-memory bindings (#1045)**: expose TTL, snapshots, serialize and
+  the VelesQL memory bridges from the PyO3 SDK, all routed through the shared
+  core memory instance.
+- **Tauri agent-memory commands (#1046)**: add the missing semantic/episodic/
+  procedural commands (TTL store, delete, serialize/deserialize, recall-similar,
+  reinforce, list) with typed error propagation via `From<AgentMemoryError>`.
+- **Core semantic-memory CRUD helpers (#1044)**: batch store, get, list, count,
+  is-empty and clear helpers on `SemanticMemory`.
+
+### Fixed
+- **Agent memory TTL & expiry hardening (#1040, #1043)**: over-fetch before
+  truncation so expired-but-present top-k entries no longer crowd out live
+  results; `store_with_ttl(.., 0)` now eagerly deletes instead of shadow-expiring
+  a live point; `auto_expire` only drops a TTL entry once its delete succeeds.
+- **Procedural memory recall returned empty (TypeScript SDK, #1039)**: see the
+  breaking change above — patterns are now recallable via vector search.
+- **Mobile/WASM semantic memory lost content (#1041)**: knowledge content is now
+  persisted in the point payload and survives reload; adds `delete` and keeps
+  `clear` at parity across mobile and wasm.
 
 ## [1.17.0] — 2026-06-05
 
