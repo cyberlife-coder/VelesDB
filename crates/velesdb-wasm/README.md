@@ -1,7 +1,7 @@
 # VelesDB WASM
 
 [![npm](https://img.shields.io/npm/v/@wiscale/velesdb-wasm)](https://www.npmjs.com/package/@wiscale/velesdb-wasm)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](LICENSE)
 
 WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vector search in the browser.
 
@@ -452,6 +452,6 @@ Typical latencies on modern browsers:
 
 ## License
 
-MIT License (bindings). The core engine (`velesdb-core` and `velesdb-server`) is under VelesDB Core License 1.0.
+Licensed under the [VelesDB Core License 1.0](LICENSE) (source-available). `velesdb-wasm` compiles the VelesDB engine to WebAssembly, so the published artifact embeds the engine and is governed by the Core License.
 
 See [LICENSE](./LICENSE) for WASM bindings license, [root LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for core engine.

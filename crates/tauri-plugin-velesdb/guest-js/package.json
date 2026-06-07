@@ -14,7 +14,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup index.ts --format cjs,esm --dts",
@@ -33,7 +34,7 @@
     "desktop"
   ],
   "author": "Cyberlife Coder",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "https://github.com/cyberlife-coder/VelesDB.git",

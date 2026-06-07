@@ -1,7 +1,7 @@
 # tauri-plugin-velesdb
 
 [![Crates.io](https://img.shields.io/crates/v/tauri-plugin-velesdb.svg)](https://crates.io/crates/tauri-plugin-velesdb)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](LICENSE)
 
 A Tauri plugin for **VelesDB** — Vector search in desktop applications.
 
@@ -443,6 +443,6 @@ See [`demos/tauri-rag-app`](../../../demos/tauri-rag-app) for a complete desktop
 
 ## License
 
-MIT License (plugin bindings). The core engine (`velesdb-core` and `velesdb-server`) is under VelesDB Core License 1.0.
+Licensed under the [VelesDB Core License 1.0](LICENSE) (source-available). The plugin embeds the VelesDB engine and is governed by the Core License.
 
 See [LICENSE](./LICENSE) for plugin license, [root LICENSE](../../LICENSE) for core engine.

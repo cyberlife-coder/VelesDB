@@ -349,6 +349,6 @@ Used with `multiQuerySearch()` for combining results from multiple query vectors
 
 ## License
 
-MIT License (mobile bindings). The core engine (velesdb-core and velesdb-server) is under VelesDB Core License 1.0.
+Licensed under the [VelesDB Core License 1.0](./LICENSE) (source-available). The compiled mobile bindings embed the VelesDB engine and are governed by the Core License.
 
 See [LICENSE](./LICENSE) for bindings license, [root LICENSE](../../LICENSE) for core engine.

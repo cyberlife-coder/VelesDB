@@ -790,4 +790,4 @@ velesdb-server --port 8080
 
 ## 📄 License
 
-MIT License
+Licensed under the [VelesDB Core License 1.0](./LICENSE) (source-available).

@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/velesdb-cli.svg)](https://crates.io/crates/velesdb-cli)
 [![Build](https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main)](https://github.com/cyberlife-coder/VelesDB/actions)
-[![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](./LICENSE)
 
 Interactive VelesQL REPL and CLI for VelesDB.
 
@@ -1025,6 +1025,6 @@ velesdb completions elvish > ~/.config/elvish/lib/velesdb.elv
 
 ## License
 
-MIT License
+Licensed under the [VelesDB Core License 1.0](./LICENSE) (source-available).
 
 See [LICENSE](./LICENSE) for details.
