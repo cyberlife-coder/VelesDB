@@ -444,5 +444,3 @@ See [`demos/tauri-rag-app`](../../../demos/tauri-rag-app) for a complete desktop
 ## License
 
 Licensed under the [VelesDB Core License 1.0](LICENSE) (source-available). The plugin embeds the VelesDB engine and is governed by the Core License.
-
-See [LICENSE](./LICENSE) for plugin license, [root LICENSE](../../LICENSE) for core engine.

@@ -453,5 +453,3 @@ Typical latencies on modern browsers:
 ## License
 
 Licensed under the [VelesDB Core License 1.0](LICENSE) (source-available). `velesdb-wasm` compiles the VelesDB engine to WebAssembly, so the published artifact embeds the engine and is governed by the Core License.
-
-See [LICENSE](./LICENSE) for WASM bindings license, [root LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for core engine.
