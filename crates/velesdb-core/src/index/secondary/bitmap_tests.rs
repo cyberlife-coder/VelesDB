@@ -20,7 +20,7 @@ mod tests {
         let key = JsonValue::String("tech".to_string());
         let index = make_btree_index(vec![(key.clone(), vec![1, 5, 42])]);
 
-        let bm = index.to_bitmap(&key);
+        let bm = index.to_bitmap(&key).expect("test: ids within u32 range");
         assert_eq!(bm.len(), 3);
         assert!(bm.contains(1));
         assert!(bm.contains(5));
@@ -33,21 +33,41 @@ mod tests {
         let missing = JsonValue::String("science".to_string());
         let index = make_btree_index(vec![(key, vec![1, 2, 3])]);
 
-        let bm = index.to_bitmap(&missing);
+        let bm = index
+            .to_bitmap(&missing)
+            .expect("test: ids within u32 range");
         assert!(bm.is_empty());
     }
 
     #[test]
-    fn test_to_bitmap_skips_ids_exceeding_u32_max() {
+    fn test_to_bitmap_returns_none_when_id_exceeds_u32_max() {
         let key = JsonValue::String("mixed".to_string());
         let large_id = u64::from(u32::MAX) + 1;
         let index = make_btree_index(vec![(key.clone(), vec![10, large_id, 20])]);
 
-        let bm = index.to_bitmap(&key);
-        // Only u32-representable IDs should be in the bitmap
-        assert_eq!(bm.len(), 2);
-        assert!(bm.contains(10));
-        assert!(bm.contains(20));
+        // An ID above u32::MAX cannot be represented in the Roaring bitmap.
+        // Rather than silently drop it (which would make a bitmap-only caller
+        // miss a real match), `to_bitmap` must signal incompleteness via `None`
+        // so the caller falls back to a full scan.
+        assert!(
+            index.to_bitmap(&key).is_none(),
+            "bitmap must be None (incomplete) when an ID exceeds u32::MAX"
+        );
+    }
+
+    #[test]
+    fn test_range_bitmap_returns_none_when_id_exceeds_u32_max() {
+        use std::ops::Bound;
+        let key = JsonValue::Number(crate::index::secondary::F64Key::from(5.0));
+        let large_id = u64::from(u32::MAX) + 7;
+        let index = make_btree_index(vec![(key, vec![large_id])]);
+
+        assert!(
+            index
+                .range_bitmap(Bound::Unbounded, Bound::Unbounded)
+                .is_none(),
+            "range bitmap must be None when an in-range ID exceeds u32::MAX"
+        );
     }
 
     #[test]
@@ -55,7 +75,7 @@ mod tests {
         let key = JsonValue::String("empty".to_string());
         let index = make_btree_index(vec![(key.clone(), vec![])]);
 
-        let bm = index.to_bitmap(&key);
+        let bm = index.to_bitmap(&key).expect("test: ids within u32 range");
         assert!(bm.is_empty());
     }
 
@@ -64,7 +84,7 @@ mod tests {
         let key = JsonValue::Number(crate::index::secondary::F64Key::from(42.0));
         let index = make_btree_index(vec![(key.clone(), vec![100, 200])]);
 
-        let bm = index.to_bitmap(&key);
+        let bm = index.to_bitmap(&key).expect("test: ids within u32 range");
         assert_eq!(bm.len(), 2);
         assert!(bm.contains(100));
         assert!(bm.contains(200));
@@ -75,7 +95,7 @@ mod tests {
         let key = JsonValue::Bool(true);
         let index = make_btree_index(vec![(key.clone(), vec![7, 13])]);
 
-        let bm = index.to_bitmap(&key);
+        let bm = index.to_bitmap(&key).expect("test: ids within u32 range");
         assert_eq!(bm.len(), 2);
         assert!(bm.contains(7));
         assert!(bm.contains(13));
@@ -105,7 +125,9 @@ mod tests {
         let key30 = JsonValue::Number(crate::index::secondary::F64Key::from(30.0));
 
         // (30, +inf) => IDs 4, 5
-        let bm = index.range_bitmap(Bound::Excluded(&key30), Bound::Unbounded);
+        let bm = index
+            .range_bitmap(Bound::Excluded(&key30), Bound::Unbounded)
+            .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 2);
         assert!(bm.contains(4));
         assert!(bm.contains(5));
@@ -118,7 +140,9 @@ mod tests {
         let key30 = JsonValue::Number(crate::index::secondary::F64Key::from(30.0));
 
         // [30, +inf) => IDs 3, 4, 5
-        let bm = index.range_bitmap(Bound::Included(&key30), Bound::Unbounded);
+        let bm = index
+            .range_bitmap(Bound::Included(&key30), Bound::Unbounded)
+            .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 3);
         assert!(bm.contains(3));
         assert!(bm.contains(4));
@@ -132,7 +156,9 @@ mod tests {
         let key30 = JsonValue::Number(crate::index::secondary::F64Key::from(30.0));
 
         // (-inf, 30) => IDs 1, 2
-        let bm = index.range_bitmap(Bound::Unbounded, Bound::Excluded(&key30));
+        let bm = index
+            .range_bitmap(Bound::Unbounded, Bound::Excluded(&key30))
+            .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 2);
         assert!(bm.contains(1));
         assert!(bm.contains(2));
@@ -145,7 +171,9 @@ mod tests {
         let key30 = JsonValue::Number(crate::index::secondary::F64Key::from(30.0));
 
         // (-inf, 30] => IDs 1, 2, 3
-        let bm = index.range_bitmap(Bound::Unbounded, Bound::Included(&key30));
+        let bm = index
+            .range_bitmap(Bound::Unbounded, Bound::Included(&key30))
+            .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 3);
         assert!(bm.contains(1));
         assert!(bm.contains(2));
@@ -160,7 +188,9 @@ mod tests {
         let key40 = JsonValue::Number(crate::index::secondary::F64Key::from(40.0));
 
         // [20, 40] => IDs 2, 3, 4
-        let bm = index.range_bitmap(Bound::Included(&key20), Bound::Included(&key40));
+        let bm = index
+            .range_bitmap(Bound::Included(&key20), Bound::Included(&key40))
+            .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 3);
         assert!(bm.contains(2));
         assert!(bm.contains(3));
@@ -174,7 +204,9 @@ mod tests {
         let key999 = JsonValue::Number(crate::index::secondary::F64Key::from(999.0));
 
         // (999, +inf) => empty
-        let bm = index.range_bitmap(Bound::Excluded(&key999), Bound::Unbounded);
+        let bm = index
+            .range_bitmap(Bound::Excluded(&key999), Bound::Unbounded)
+            .expect("test: ids within u32 range");
         assert!(bm.is_empty());
     }
 
@@ -184,12 +216,14 @@ mod tests {
         let index = make_price_index();
 
         // (-inf, +inf) => all IDs
-        let bm = index.range_bitmap(Bound::Unbounded, Bound::Unbounded);
+        let bm = index
+            .range_bitmap(Bound::Unbounded, Bound::Unbounded)
+            .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 5);
     }
 
     #[test]
-    fn test_range_bitmap_skips_u64_overflow() {
+    fn test_range_bitmap_none_when_in_range_id_overflows_u32() {
         use std::ops::Bound;
         let large_id = u64::from(u32::MAX) + 1;
         let index = make_btree_index(vec![
@@ -202,12 +236,24 @@ mod tests {
                 vec![2],
             ),
         ]);
-        let key5 = JsonValue::Number(crate::index::secondary::F64Key::from(5.0));
+        let low_bound = JsonValue::Number(crate::index::secondary::F64Key::from(5.0));
 
-        // (5, +inf) => IDs 1, 2 (large_id skipped)
-        let bm = index.range_bitmap(Bound::Excluded(&key5), Bound::Unbounded);
-        assert_eq!(bm.len(), 2);
-        assert!(bm.contains(1));
+        // (5, +inf) spans key 10 whose posting list contains an id > u32::MAX.
+        // The range bitmap cannot represent it, so it must signal `None`
+        // (incomplete) instead of silently dropping the high id.
+        assert!(
+            index
+                .range_bitmap(Bound::Excluded(&low_bound), Bound::Unbounded)
+                .is_none(),
+            "range bitmap must be None when any in-range id overflows u32"
+        );
+
+        // A sub-range that excludes the overflowing posting list stays exact.
+        let above_overflow_bound = JsonValue::Number(crate::index::secondary::F64Key::from(15.0));
+        let bm = index
+            .range_bitmap(Bound::Excluded(&above_overflow_bound), Bound::Unbounded)
+            .expect("test: ids within u32 range");
+        assert_eq!(bm.len(), 1);
         assert!(bm.contains(2));
     }
 }
