@@ -1,8 +1,13 @@
 /**
- * Agent Memory SDK Tests (Issues #6, #7 from PR 306)
+ * Agent Memory SDK Tests
  *
- * - #6: storeProceduralPattern must NOT send a vector field
- * - #7: generateUniqueId() must produce unique IDs under rapid-fire calls
+ * - #1039: storeProceduralPattern MUST send the pattern embedding as the
+ *   point vector, otherwise matchProceduralPatterns (a vector search)
+ *   can never recall it.
+ * - #1047: recordEvent/learnProcedure return the generated point ID; the
+ *   facade exposes a delete method; reserved payload keys cannot be
+ *   clobbered by caller metadata.
+ * - generateUniqueId() must produce unique IDs under rapid-fire calls.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -92,16 +97,18 @@ describe('Agent Memory REST methods', () => {
     vi.restoreAllMocks();
   });
 
-  describe('storeProceduralPattern (Issue #6)', () => {
-    it('should NOT include a vector field in the request body', async () => {
+  describe('storeProceduralPattern (Issue #1039)', () => {
+    it('should store the pattern embedding as the point vector', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({}),
       });
 
-      await backend.storeProceduralPattern('patterns', {
+      const embedding = [0.1, 0.2, 0.3];
+      const id = await backend.storeProceduralPattern('patterns', {
         name: 'deploy',
         steps: ['build', 'test', 'push'],
+        embedding,
         metadata: { env: 'prod' },
       });
 
@@ -109,13 +116,36 @@ describe('Agent Memory REST methods', () => {
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
       const point = body.points[0];
 
-      // vector must be absent
-      expect(point).not.toHaveProperty('vector');
+      // vector must be the supplied embedding so vector search can recall it
+      expect(point.vector).toEqual(embedding);
       // payload must still be present
       expect(point.payload._memory_type).toBe('procedural');
       expect(point.payload.name).toBe('deploy');
       expect(point.payload.steps).toEqual(['build', 'test', 'push']);
       expect(point.payload.env).toBe('prod');
+      // store returns the generated point ID
+      expect(point.id).toBe(id);
+    });
+  });
+
+  describe('reserved payload keys (Issue #1047)', () => {
+    it('should not let caller metadata clobber reserved keys', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      await backend.storeProceduralPattern('patterns', {
+        name: 'real-name',
+        steps: ['a'],
+        embedding: [0.1],
+        metadata: { _memory_type: 'hacked', name: 'spoofed', steps: ['evil'] },
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.payload._memory_type).toBe('procedural');
+      expect(point.payload.name).toBe('real-name');
+      expect(point.payload.steps).toEqual(['a']);
     });
   });
 
@@ -162,16 +192,52 @@ describe('Agent Memory REST methods', () => {
       await backend.storeProceduralPattern('patterns', {
         name: 'a',
         steps: ['1'],
+        embedding: [0.1],
       });
       await backend.storeProceduralPattern('patterns', {
         name: 'b',
         steps: ['2'],
+        embedding: [0.2],
       });
 
       const id1 = JSON.parse(mockFetch.mock.calls[0][1].body).points[0].id;
       const id2 = JSON.parse(mockFetch.mock.calls[1][1].body).points[0].id;
 
       expect(id1).not.toBe(id2);
+    });
+  });
+
+  describe('learn -> recall round-trip (Issue #1039)', () => {
+    it('should recall a stored procedural pattern via vector search', async () => {
+      const embedding = [0.1, 0.2, 0.3];
+
+      // 1. learnProcedure -> store point (with vector)
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+      const id = await backend.storeProceduralPattern('patterns', {
+        name: 'deploy',
+        steps: ['build', 'push'],
+        embedding,
+      });
+
+      const stored = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(stored.vector).toEqual(embedding);
+
+      // 2. matchProceduralPatterns -> vector search returns the stored point
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          results: [
+            { id, score: 1.0, payload: { _memory_type: 'procedural', name: 'deploy' } },
+          ],
+        }),
+      });
+
+      const matches = await backend.matchProceduralPatterns('patterns', embedding, 5);
+
+      // Before the fix the point had no vector and search returned [].
+      expect(matches).toHaveLength(1);
+      expect(matches[0].id).toBe(id);
+      expect(matches[0].payload?.name).toBe('deploy');
     });
   });
 });

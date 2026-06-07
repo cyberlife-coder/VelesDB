@@ -23,7 +23,16 @@ export class AgentMemoryClient {
     private readonly config?: AgentMemoryConfig
   ) {}
 
-  /** Configured embedding dimension (default: 384) */
+  /**
+   * Advisory embedding dimension passed at construction (default: 384).
+   *
+   * This value is **not** enforced and does not create or size any
+   * collection — the dimension that actually governs storage and search
+   * is the one fixed when the collection was created
+   * (`db.createCollection(name, { dimension, metric: 'cosine' })`).
+   * Embeddings you pass to `storeFact` / `recordEvent` / `learnProcedure`
+   * must match that collection dimension.
+   */
   get dimension(): number {
     return this.config?.dimension ?? 384;
   }
@@ -38,8 +47,8 @@ export class AgentMemoryClient {
     return this.backend.searchSemanticMemory(collection, embedding, k);
   }
 
-  /** Record an episodic event */
-  async recordEvent(collection: string, event: EpisodicEvent): Promise<void> {
+  /** Record an episodic event. Returns the generated point ID. */
+  async recordEvent(collection: string, event: EpisodicEvent): Promise<number> {
     return this.backend.recordEpisodicEvent(collection, event);
   }
 
@@ -48,13 +57,18 @@ export class AgentMemoryClient {
     return this.backend.recallEpisodicEvents(collection, embedding, k);
   }
 
-  /** Store a procedural pattern */
-  async learnProcedure(collection: string, pattern: ProceduralPattern): Promise<void> {
+  /** Store a procedural pattern. Returns the generated point ID. */
+  async learnProcedure(collection: string, pattern: ProceduralPattern): Promise<number> {
     return this.backend.storeProceduralPattern(collection, pattern);
   }
 
   /** Match procedural patterns */
   async recallProcedures(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
     return this.backend.matchProceduralPatterns(collection, embedding, k);
+  }
+
+  /** Delete a memory entry (fact, event, or procedure) by its point ID. */
+  async deleteMemory(collection: string, id: number): Promise<boolean> {
+    return this.backend.delete(collection, id);
   }
 }

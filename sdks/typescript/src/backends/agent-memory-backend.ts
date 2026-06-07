@@ -81,9 +81,11 @@ export async function storeSemanticFact(
         id: entry.id,
         vector: entry.embedding,
         payload: {
+          // Caller metadata is spread first so the reserved keys below
+          // (`_memory_type`, `text`) always win and cannot be clobbered.
+          ...entry.metadata,
           _memory_type: 'semantic',
           text: entry.text,
-          ...entry.metadata,
         },
       }],
     }
@@ -105,7 +107,7 @@ export async function recordEpisodicEvent(
   transport: AgentMemoryTransport,
   collection: string,
   event: EpisodicEvent
-): Promise<void> {
+): Promise<number> {
   const id = generateUniqueId();
 
   const response = await transport.requestJson(
@@ -116,17 +118,21 @@ export async function recordEpisodicEvent(
         id,
         vector: event.embedding,
         payload: {
+          // Caller-supplied data/metadata is spread first so the reserved
+          // keys below (`_memory_type`, `event_type`, `timestamp`) always
+          // win and cannot be clobbered.
+          ...event.data,
+          ...event.metadata,
           _memory_type: 'episodic',
           event_type: event.eventType,
           timestamp: new Date().toISOString(),
-          ...event.data,
-          ...event.metadata,
         },
       }],
     }
   );
 
   throwOnError(response);
+  return id;
 }
 
 export async function recallEpisodicEvents(
@@ -142,7 +148,7 @@ export async function storeProceduralPattern(
   transport: AgentMemoryTransport,
   collection: string,
   pattern: ProceduralPattern
-): Promise<void> {
+): Promise<number> {
   const id = generateUniqueId();
 
   const response = await transport.requestJson(
@@ -151,17 +157,22 @@ export async function storeProceduralPattern(
     {
       points: [{
         id,
+        vector: pattern.embedding,
         payload: {
+          // Caller metadata is spread first so the reserved keys below
+          // (`_memory_type`, `name`, `steps`) always win and cannot be
+          // clobbered.
+          ...pattern.metadata,
           _memory_type: 'procedural',
           name: pattern.name,
           steps: pattern.steps,
-          ...pattern.metadata,
         },
       }],
     }
   );
 
   throwOnError(response);
+  return id;
 }
 
 export async function matchProceduralPatterns(

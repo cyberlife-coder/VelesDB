@@ -275,8 +275,8 @@ export interface IVelesDBBackend {
     k?: number
   ): Promise<SearchResult[]>;
 
-  /** Record an episodic event */
-  recordEpisodicEvent(collection: string, event: EpisodicEvent): Promise<void>;
+  /** Record an episodic event. Returns the generated point ID. */
+  recordEpisodicEvent(collection: string, event: EpisodicEvent): Promise<number>;
 
   /** Recall episodic events */
   recallEpisodicEvents(
@@ -285,8 +285,8 @@ export interface IVelesDBBackend {
     k?: number
   ): Promise<SearchResult[]>;
 
-  /** Store a procedural pattern */
-  storeProceduralPattern(collection: string, pattern: ProceduralPattern): Promise<void>;
+  /** Store a procedural pattern. Returns the generated point ID. */
+  storeProceduralPattern(collection: string, pattern: ProceduralPattern): Promise<number>;
 
   /** Match procedural patterns */
   matchProceduralPatterns(
