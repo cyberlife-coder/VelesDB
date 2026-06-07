@@ -155,18 +155,14 @@ impl Condition {
             Self::Neq { field, value } => {
                 get_field(payload, field).is_none_or(|v| !values_equal(v, value))
             }
-            Self::Gt { field, value } => {
-                get_field(payload, field).is_some_and(|v| compare_values(v, value) > 0)
-            }
-            Self::Gte { field, value } => {
-                get_field(payload, field).is_some_and(|v| compare_values(v, value) >= 0)
-            }
-            Self::Lt { field, value } => {
-                get_field(payload, field).is_some_and(|v| compare_values(v, value) < 0)
-            }
-            Self::Lte { field, value } => {
-                get_field(payload, field).is_some_and(|v| compare_values(v, value) <= 0)
-            }
+            Self::Gt { field, value } => get_field(payload, field)
+                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_gt)),
+            Self::Gte { field, value } => get_field(payload, field)
+                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_ge)),
+            Self::Lt { field, value } => get_field(payload, field)
+                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_lt)),
+            Self::Lte { field, value } => get_field(payload, field)
+                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_le)),
             Self::In { field, values } => {
                 get_field(payload, field).is_some_and(|v| in_list_matches(v, values))
             }
@@ -238,16 +234,19 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Compares two JSON values, returning -1, 0, or 1.
-/// Returns 0 if values are not comparable.
-fn compare_values(a: &Value, b: &Value) -> i32 {
+/// Compares two JSON values for ordering predicates (Gt, Gte, Lt, Lte).
+///
+/// Returns `None` for incompatible types (e.g. Number vs String, any vs Null)
+/// and for NaN number values. Callers must treat `None` as false — matching
+/// SQL three-valued logic where `NULL op X` yields UNKNOWN (not true).
+fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => match (a.as_f64(), b.as_f64()) {
-            (Some(a), Some(b)) => a.partial_cmp(&b).map_or(0, |ord| ord as i32),
-            _ => 0,
-        },
-        (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
-        _ => 0,
+        (Value::Number(a), Value::Number(b)) => a
+            .as_f64()
+            .zip(b.as_f64())
+            .and_then(|(fa, fb)| fa.partial_cmp(&fb)),
+        (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
+        _ => None,
     }
 }
 
@@ -363,6 +362,75 @@ fn haversine_distance_m(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
     let dlng = lng2 - lng1;
     let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlng / 2.0).sin().powi(2);
     EARTH_RADIUS_M * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::Condition;
+    use serde_json::json;
+
+    // Null field must never match any ordering predicate — SQL three-valued logic.
+    // Previously compare_values returned 0 for incompatible types, so `null >= N`
+    // and `null <= N` spuriously returned true.
+    #[test]
+    fn null_field_never_matches_ordering_predicates() {
+        let p = json!({"price": null});
+        let n = json!(100);
+        let field = "price".to_string();
+        assert!(!Condition::Gt { field: field.clone(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Gte { field: field.clone(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Lt { field: field.clone(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Lte { field: field.clone(), value: n }.matches(&p));
+    }
+
+    // A boolean field must not match numeric ordering predicates.
+    #[test]
+    fn bool_field_never_matches_numeric_ordering() {
+        let p = json!({"active": true});
+        let n = json!(1);
+        let field = "active".to_string();
+        assert!(!Condition::Gt { field: field.clone(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Gte { field: field.clone(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Lt { field: field.clone(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Lte { field: field.clone(), value: n }.matches(&p));
+    }
+
+    // A string field must not match a numeric operand.
+    #[test]
+    fn string_field_never_matches_number_operand() {
+        let p = json!({"name": "alice"});
+        let n = json!(100);
+        let field = "name".to_string();
+        assert!(!Condition::Gt { field: field.clone(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Gte { field: field.clone(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Lt { field: field.clone(), value: n.clone() }.matches(&p));
+        assert!(!Condition::Lte { field: field.clone(), value: n }.matches(&p));
+    }
+
+    // Numeric ordering works correctly for same-type comparisons.
+    #[test]
+    fn numeric_ordering_same_type() {
+        let p = json!({"price": 50});
+        let f = "price".to_string();
+        assert!(Condition::Gt  { field: f.clone(), value: json!(10) }.matches(&p));
+        assert!(Condition::Gte { field: f.clone(), value: json!(50) }.matches(&p));
+        assert!(!Condition::Gt { field: f.clone(), value: json!(50) }.matches(&p));
+        assert!(Condition::Lt  { field: f.clone(), value: json!(100) }.matches(&p));
+        assert!(Condition::Lte { field: f.clone(), value: json!(50) }.matches(&p));
+        assert!(!Condition::Lt { field: f.clone(), value: json!(50) }.matches(&p));
+    }
+
+    // String ordering works correctly for same-type comparisons.
+    #[test]
+    fn string_ordering_same_type() {
+        let p = json!({"name": "bob"});
+        let f = "name".to_string();
+        assert!(Condition::Gt  { field: f.clone(), value: json!("alice") }.matches(&p));
+        assert!(Condition::Gte { field: f.clone(), value: json!("bob") }.matches(&p));
+        assert!(Condition::Lt  { field: f.clone(), value: json!("charlie") }.matches(&p));
+        assert!(Condition::Lte { field: f.clone(), value: json!("bob") }.matches(&p));
+    }
 }
 
 /// Applies a comparison operator to a geo-distance value and threshold.
