@@ -16,6 +16,12 @@ Premium features are injected via the `DatabaseObserver` trait -- no code forks 
 - **Multi-platform SDKs**: Python (PyO3), WASM, Mobile (iOS/Android), Tauri, TypeScript
 - **Ecosystem Integrations**: LangChain, LlamaIndex connectors
 
+> **Component licensing.** Every artifact that embeds the engine (the SDKs above
+> compile or bundle `velesdb-core`) ships under the VelesDB Core License 1.0.
+> Only the ecosystem connectors (`integrations/*`) and sample code
+> (`examples/*`, `demos/*`) are MIT. See [LICENSING.md](LICENSING.md) for the
+> full matrix and the rule that decides it.
+
 ## Premium Features (Commercial License)
 
 Premium capabilities are delivered through the `DatabaseObserver` hook system:
