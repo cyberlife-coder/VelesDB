@@ -2,8 +2,6 @@
 //!
 //! Provides semantic memory for AI agents on iOS/Android.
 
-use parking_lot::RwLock;
-
 use super::{DistanceMetric, VelesCollection, VelesDatabase, VelesError, VelesPoint};
 
 /// Result from semantic memory query.
@@ -21,6 +19,9 @@ pub struct SemanticResult {
 ///
 /// Stores knowledge facts as vectors with similarity search.
 ///
+/// Fact content text is persisted in the point payload (mirroring the core
+/// `SemanticMemory`), so content survives a database reload.
+///
 /// # Example (Swift)
 ///
 /// ```swift
@@ -31,7 +32,19 @@ pub struct SemanticResult {
 #[derive(uniffi::Object)]
 pub struct VelesSemanticMemory {
     collection: std::sync::Arc<VelesCollection>,
-    contents: RwLock<std::collections::HashMap<u64, String>>,
+}
+
+impl VelesSemanticMemory {
+    /// Extracts the `content` text from a stored point's JSON payload.
+    fn content_from_payload(payload: Option<&String>) -> String {
+        payload
+            .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+            .as_ref()
+            .and_then(|v| v.get("content"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    }
 }
 
 #[uniffi::export]
@@ -57,25 +70,32 @@ impl VelesSemanticMemory {
             }
         };
 
-        Ok(Self {
-            collection,
-            contents: RwLock::new(std::collections::HashMap::new()),
-        })
+        Ok(Self { collection })
     }
 
     /// Stores a knowledge fact with its embedding vector.
+    ///
+    /// The content text is persisted in the point payload as `{"content": ...}`
+    /// so it survives a database reload.
     pub fn store(&self, id: u64, content: String, embedding: Vec<f32>) -> Result<(), VelesError> {
+        let payload =
+            serde_json::to_string(&serde_json::json!({ "content": content })).map_err(|e| {
+                VelesError::Database {
+                    message: format!("Failed to encode content payload: {e}"),
+                }
+            })?;
         let point = VelesPoint {
             id,
             vector: embedding,
-            payload: None,
+            payload: Some(payload),
         };
         self.collection.upsert(point)?;
-        self.contents.write().insert(id, content);
         Ok(())
     }
 
     /// Queries semantic memory by similarity search.
+    ///
+    /// Content text is read back from each matched point's payload.
     pub fn query(
         &self,
         embedding: Vec<f32>,
@@ -83,7 +103,13 @@ impl VelesSemanticMemory {
     ) -> Result<Vec<SemanticResult>, VelesError> {
         let results = self.collection.search(embedding, top_k)?;
 
-        let contents = self.contents.read();
+        let ids: Vec<u64> = results.iter().map(|r| r.id).collect();
+        let contents: std::collections::HashMap<u64, String> = self
+            .collection
+            .get(ids)
+            .into_iter()
+            .map(|p| (p.id, Self::content_from_payload(p.payload.as_ref())))
+            .collect();
 
         Ok(results
             .into_iter()
@@ -97,8 +123,7 @@ impl VelesSemanticMemory {
 
     /// Returns the number of stored knowledge facts.
     pub fn len(&self) -> Result<u64, VelesError> {
-        let contents = self.contents.read();
-        Ok(contents.len() as u64)
+        Ok(self.collection.count())
     }
 
     /// Returns true if no knowledge facts are stored.
@@ -106,37 +131,17 @@ impl VelesSemanticMemory {
         Ok(self.len()? == 0)
     }
 
-    /// Removes a knowledge fact by ID.
-    pub fn remove(&self, id: u64) -> Result<bool, VelesError> {
-        self.collection.delete(id)?;
-        let mut contents = self.contents.write();
-        Ok(contents.remove(&id).is_some())
+    /// Deletes a knowledge fact by ID.
+    pub fn delete(&self, id: u64) -> Result<(), VelesError> {
+        self.collection.delete(id)
     }
 
-    /// Clears all knowledge facts.
+    /// Removes a knowledge fact by ID.
     ///
-    /// The in-memory content map is cleared eagerly before issuing deletes
-    /// to the underlying collection. This avoids a desync if a delete fails
-    /// mid-loop — the map stays consistent at the cost of possibly leaving
-    /// orphaned vectors in the collection (acceptable for an in-memory-only
-    /// content map).
-    pub fn clear(&self) -> Result<(), VelesError> {
-        let ids: Vec<u64> = {
-            let contents = self.contents.read();
-            contents.keys().copied().collect()
-        };
-
-        // Clear the in-memory map first to avoid desync on partial delete failure
-        {
-            let mut contents = self.contents.write();
-            contents.clear();
-        }
-
-        // Delete from collection — failures are non-fatal since the map is already cleared
-        for id in ids {
-            let _ = self.collection.delete(id);
-        }
-        Ok(())
+    /// Deprecated alias for [`Self::delete`], kept for backward compatibility
+    /// and naming parity with prior mobile releases.
+    pub fn remove(&self, id: u64) -> Result<(), VelesError> {
+        self.delete(id)
     }
 
     /// Returns the embedding dimension.
@@ -186,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_memory_remove() {
+    fn test_semantic_memory_delete() {
         let (_dir, db) = create_test_db();
         let memory = VelesSemanticMemory::new(&db, 4).expect("test: construct semantic memory");
 
@@ -195,8 +200,37 @@ mod tests {
             .expect("test: store knowledge fact");
         assert_eq!(memory.len().expect("test: read len"), 1);
 
-        let removed = memory.remove(1).expect("test: remove knowledge fact");
-        assert!(removed);
-        assert!(memory.is_empty().expect("test: is_empty after remove"));
+        memory.delete(1).expect("test: delete knowledge fact");
+        assert!(memory.is_empty().expect("test: is_empty after delete"));
+    }
+
+    #[test]
+    fn test_semantic_memory_content_survives_reload() {
+        let dir = TempDir::new().expect("test: create temp dir");
+        let path = dir.path().to_string_lossy().to_string();
+
+        // Store a fact, then drop the database handle entirely.
+        {
+            let db = VelesDatabase::open(path.clone()).expect("test: open database");
+            let memory = VelesSemanticMemory::new(&db, 4).expect("test: construct semantic memory");
+            memory
+                .store(
+                    7,
+                    "Paris is the capital of France".to_string(),
+                    vec![0.1, 0.2, 0.3, 0.4],
+                )
+                .expect("test: store knowledge fact");
+        }
+
+        // Re-open the database from disk and recover the content text.
+        let db = VelesDatabase::open(path).expect("test: re-open database");
+        let memory = VelesSemanticMemory::new(&db, 4).expect("test: re-construct semantic memory");
+
+        let results = memory
+            .query(vec![0.1, 0.2, 0.3, 0.4], 5)
+            .expect("test: query after reload");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, 7);
+        assert_eq!(results[0].content, "Paris is the capital of France");
     }
 }
