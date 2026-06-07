@@ -144,6 +144,17 @@ impl VelesSemanticMemory {
         self.delete(id)
     }
 
+    /// Removes all stored knowledge facts.
+    ///
+    /// Best-effort: individual delete failures are non-fatal so the operation
+    /// clears as much as possible.
+    pub fn clear(&self) -> Result<(), VelesError> {
+        for id in self.collection.all_ids() {
+            let _ = self.collection.delete(id);
+        }
+        Ok(())
+    }
+
     /// Returns the embedding dimension.
     pub fn dimension(&self) -> u32 {
         self.collection.dimension()
@@ -202,6 +213,23 @@ mod tests {
 
         memory.delete(1).expect("test: delete knowledge fact");
         assert!(memory.is_empty().expect("test: is_empty after delete"));
+    }
+
+    #[test]
+    fn test_semantic_memory_clear() {
+        let (_dir, db) = create_test_db();
+        let memory = VelesSemanticMemory::new(&db, 4).expect("test: construct semantic memory");
+
+        memory
+            .store(1, "First".to_string(), vec![0.1, 0.2, 0.3, 0.4])
+            .expect("test: store first fact");
+        memory
+            .store(2, "Second".to_string(), vec![0.5, 0.6, 0.7, 0.8])
+            .expect("test: store second fact");
+        assert_eq!(memory.len().expect("test: read len"), 2);
+
+        memory.clear().expect("test: clear knowledge facts");
+        assert!(memory.is_empty().expect("test: is_empty after clear"));
     }
 
     #[test]
