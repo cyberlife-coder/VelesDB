@@ -447,4 +447,12 @@ describe('VelesDB — agent memory factory', () => {
     const db = new VelesDB({ backend: 'wasm' });
     expect(() => db.agentMemory()).toThrow(ValidationError);
   });
+
+  it('deleteMemory delegates to backend.delete and returns its result', async () => {
+    const { db, backend } = setup();
+    const mem = db.agentMemory();
+    const result = await mem.deleteMemory('facts', 42);
+    expect(backend.delete).toHaveBeenCalledWith('facts', 42);
+    expect(result).toBe(true);
+  });
 });

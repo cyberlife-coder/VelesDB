@@ -223,8 +223,8 @@ export class RestBackend implements IVelesDBBackend {
   // Agent Memory
   async storeSemanticFact(c: string, e: SemanticEntry): Promise<void> { this.ensureInitialized(); return _storeSemanticFact(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e); }
   async searchSemanticMemory(c: string, e: number[], k = 5): Promise<SearchResult[]> { this.ensureInitialized(); return _searchSemanticMemory(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e, k); }
-  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<void> { this.ensureInitialized(); return _recordEpisodicEvent(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e); }
+  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<number> { this.ensureInitialized(); return _recordEpisodicEvent(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e); }
   async recallEpisodicEvents(c: string, e: number[], k = 5): Promise<SearchResult[]> { this.ensureInitialized(); return _recallEpisodicEvents(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e, k); }
-  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<void> { this.ensureInitialized(); return _storeProceduralPattern(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, p); }
+  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<number> { this.ensureInitialized(); return _storeProceduralPattern(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, p); }
   async matchProceduralPatterns(c: string, e: number[], k = 5): Promise<SearchResult[]> { this.ensureInitialized(); return _matchProceduralPatterns(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e, k); }
 }

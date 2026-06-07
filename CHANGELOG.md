@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING (TypeScript SDK) — `ProceduralPattern.embedding` is now required
+  (#1039)**: procedural patterns were stored without a vector, so procedural
+  recall (a pure vector search) could never return them. Patterns now persist
+  their `embedding` as the point vector and the field is required on the
+  `ProceduralPattern` type. Migration: pass your model's embedding when learning
+  a procedure, exactly as you already do for semantic and episodic memory.
+
 ## [1.17.0] — 2026-06-05
 
 ### Added
