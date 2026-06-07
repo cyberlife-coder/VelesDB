@@ -641,3 +641,75 @@ fn test_indexed_join_empty_bitmap_returns_empty() {
         "no review has rating 999; empty bitmap must yield empty JOIN"
     );
 }
+
+/// GIVEN: a review row MISSING the `rating` field, with `rating` indexed
+/// WHEN: a `!=` (NEQ) predicate runs on the indexed field
+/// THEN: the indexed path returns the SAME rows as the unindexed scan path,
+///       INCLUDING the field-absent row.
+///
+/// Regression: NEQ used to be pre-filtered as `universe - eq` where `universe`
+/// came from the secondary index, which only stores points that HAVE a value
+/// for the field. NEQ semantics also match field-absent rows, so the bitmap was
+/// a strict subset and the JOIN (which fetches only bitmap ids) dropped them.
+/// `build_prefilter_bitmap` now returns `None` for NEQ/NOT IN, forcing the
+/// correct full-scan + post-filter.
+#[test]
+fn test_indexed_join_neq_includes_field_absent_rows() {
+    fn setup(index: bool) -> (TempDir, Database) {
+        let (dir, db) = create_test_db();
+        execute_sql(
+            &db,
+            "CREATE COLLECTION products (dimension = 4, metric = 'cosine');",
+        )
+        .expect("test: CREATE products");
+        let products = db
+            .get_vector_collection("products")
+            .expect("test: get products");
+        products
+            .upsert(vec![
+                Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(json!({"category": "a"}))),
+                Point::new(2, vec![0.0, 1.0, 0.0, 0.0], Some(json!({"category": "a"}))),
+                Point::new(3, vec![0.0, 0.0, 1.0, 0.0], Some(json!({"category": "b"}))),
+            ])
+            .expect("test: upsert products");
+
+        execute_sql(&db, "CREATE METADATA COLLECTION reviews;").expect("test: CREATE reviews");
+        let reviews = db
+            .get_metadata_collection("reviews")
+            .expect("test: get reviews");
+        reviews
+            .upsert(vec![
+                Point::metadata_only(1, json!({"rating": 5, "reviewer": "Alice"})),
+                Point::metadata_only(2, json!({"rating": 3, "reviewer": "Bob"})),
+                // id=3 deliberately has NO `rating` field.
+                Point::metadata_only(3, json!({"reviewer": "Charlie"})),
+            ])
+            .expect("test: upsert reviews");
+        if index {
+            execute_sql(&db, "CREATE INDEX ON reviews (rating)").expect("test: CREATE INDEX");
+        }
+        (dir, db)
+    }
+
+    let sql = "SELECT * FROM products \
+               JOIN reviews ON products.id = reviews.id \
+               WHERE reviews.rating != 5 \
+               LIMIT 10";
+
+    let (_di, db_indexed) = setup(true);
+    let indexed = execute_sql(&db_indexed, sql).expect("test: indexed NEQ JOIN");
+    let (_ds, db_scan) = setup(false);
+    let scan = execute_sql(&db_scan, sql).expect("test: scan NEQ JOIN");
+
+    assert_eq!(
+        result_ids(&indexed),
+        result_ids(&scan),
+        "indexed NEQ path must equal scan path (field-absent rows included)"
+    );
+    // rating != 5: Bob(id=2, rating=3) and Charlie(id=3, rating absent); Alice(id=1, rating=5) excluded.
+    assert_eq!(
+        result_ids(&indexed),
+        HashSet::from([2, 3]),
+        "NEQ must include the field-absent row (id=3)"
+    );
+}

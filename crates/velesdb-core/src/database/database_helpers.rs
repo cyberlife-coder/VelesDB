@@ -141,10 +141,14 @@ impl Database {
     ///
     /// When the pushed-down `filter` references secondary-indexed fields,
     /// `build_prefilter_bitmap` resolves it to a Roaring bitmap of candidate IDs,
-    /// avoiding the O(N) `all_ids()` scan. The bitmap is an exact-or-superset
-    /// candidate set: `point_matches_filter` still runs on every returned point,
-    /// so results are identical to the scan path. Falls back to `all_ids()` when
-    /// no index can resolve the predicate (`None`).
+    /// avoiding the O(N) `all_ids()` scan. The bitmap is a guaranteed SUPERSET of
+    /// the matches — `point_matches_filter` re-checks every returned point, so
+    /// results are identical to the scan path. The superset guarantee holds
+    /// because `build_prefilter_bitmap` returns `None` (forcing the `all_ids()`
+    /// fallback) for any predicate it cannot resolve completely: `!=` / `NOT IN`
+    /// (whose matches include field-absent points the index does not store) and
+    /// any field carrying an ID above `u32::MAX` (unrepresentable in the bitmap).
+    /// Falls back to `all_ids()` whenever no index can resolve the predicate.
     fn join_candidate_ids(
         collection: &crate::collection::Collection,
         filter: &crate::Filter,
