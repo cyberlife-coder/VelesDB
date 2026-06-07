@@ -9,6 +9,8 @@ mod responses;
 mod responses_explain;
 pub mod serde_id;
 #[cfg(test)]
+mod serde_id_collection_tests;
+#[cfg(test)]
 mod tests;
 
 pub use requests::*;

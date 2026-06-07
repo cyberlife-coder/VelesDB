@@ -4,10 +4,11 @@
 //! avoiding the need to load all visited nodes into memory at once.
 
 use super::edge_concurrent::ConcurrentEdgeStore;
-use super::traversal::{reconstruct_path, BfsState};
+use super::traversal::{deadline_reached, reconstruct_path, BfsState, DEADLINE_CHECK_INTERVAL};
 use super::{EdgeStore, TraversalResult, DEFAULT_MAX_DEPTH};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
+use std::time::Instant;
 
 /// Default upper bound on the visited-set / parent-map size for a single
 /// traversal (issue #906).
@@ -33,6 +34,10 @@ pub struct StreamingConfig {
     pub max_visited_size: usize,
     /// Filter by relationship types (empty = all types).
     pub rel_types: Vec<String>,
+    /// Optional wall-clock deadline. When set and reached, the iterator stops
+    /// expanding and terminates (returns `None`), yielding the partial result
+    /// accumulated so far. `None` (the default) disables the time bound.
+    pub deadline: Option<Instant>,
 }
 
 impl Default for StreamingConfig {
@@ -42,6 +47,7 @@ impl Default for StreamingConfig {
             limit: None,
             max_visited_size: MAX_VISITED_SIZE, // ~800KB for FxHashSet<u64>
             rel_types: Vec::new(),
+            deadline: None,
         }
     }
 }
@@ -73,6 +79,199 @@ impl StreamingConfig {
     pub fn with_rel_types(mut self, types: Vec<String>) -> Self {
         self.rel_types = types;
         self
+    }
+
+    /// Sets a wall-clock deadline after which the iterator terminates,
+    /// yielding only the results accumulated so far.
+    #[must_use]
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
+}
+
+/// Shared BFS bookkeeping for the streaming iterators.
+///
+/// Owns the traversal frontier, the visited set (with overflow handling), the
+/// rel-type filter, the parent-pointer map, and the pending-result buffer. Both
+/// [`BfsIterator`] and [`ConcurrentBfsIterator`] delegate per-edge processing
+/// and result pumping here, so the filter/visit/record logic lives in exactly
+/// one place regardless of the underlying edge store.
+struct BfsBookkeeping {
+    config: StreamingConfig,
+    queue: VecDeque<BfsState>,
+    visited: FxHashSet<u64>,
+    rel_types_set: FxHashSet<String>,
+    visited_overflow: bool,
+    pending_results: VecDeque<TraversalResult>,
+    parent_map: FxHashMap<u64, (u64, u64)>,
+    source_id: u64,
+    yielded: usize,
+    /// Pops since the last wall-clock deadline check (see `drive`).
+    nodes_since_check: u32,
+}
+
+impl BfsBookkeeping {
+    /// Seeds the frontier and visited set with `start_id`.
+    fn new(start_id: u64, config: StreamingConfig) -> Self {
+        let rel_types_set: FxHashSet<String> = config.rel_types.iter().cloned().collect();
+        let mut visited = FxHashSet::default();
+        visited.insert(start_id);
+        let mut queue = VecDeque::new();
+        queue.push_back(BfsState {
+            node_id: start_id,
+            depth: 0,
+        });
+        Self {
+            config,
+            queue,
+            visited,
+            rel_types_set,
+            visited_overflow: false,
+            pending_results: VecDeque::new(),
+            parent_map: FxHashMap::default(),
+            source_id: start_id,
+            yielded: 0,
+            // Start at the threshold so an already-expired deadline aborts on
+            // the first pop; otherwise the clock is read every N pops.
+            nodes_since_check: DEADLINE_CHECK_INTERVAL,
+        }
+    }
+
+    /// Checks whether `label` passes the rel-type filter (empty filter = all).
+    #[inline]
+    fn label_passes_filter(&self, label: &str) -> bool {
+        self.rel_types_set.is_empty() || self.rel_types_set.contains(label)
+    }
+
+    /// Records a visited target, handling overflow when the visited set exceeds
+    /// `max_visited_size`. Returns `true` if the target should be processed.
+    #[inline]
+    fn try_visit(&mut self, target: u64) -> bool {
+        if self.visited_overflow {
+            return true;
+        }
+        if self.visited.contains(&target) {
+            return false;
+        }
+        if self.visited.len() >= self.config.max_visited_size {
+            self.visited_overflow = true;
+            self.visited.clear();
+            return true;
+        }
+        self.visited.insert(target);
+        true
+    }
+
+    /// Processes one candidate edge: applies the rel-type (when `label` is
+    /// `Some`), depth, and visited filters, then on acceptance records the
+    /// parent pointer, enqueues the target, and buffers a pending result.
+    fn process_candidate(
+        &mut self,
+        parent_id: u64,
+        target: u64,
+        edge_id: u64,
+        parent_depth: u32,
+        label: Option<&str>,
+    ) {
+        if let Some(label) = label {
+            if !self.label_passes_filter(label) {
+                return;
+            }
+        }
+        let new_depth = parent_depth + 1;
+        if new_depth > self.config.max_depth {
+            return;
+        }
+        if !self.try_visit(target) {
+            return;
+        }
+        self.parent_map.insert(target, (parent_id, edge_id));
+        if new_depth < self.config.max_depth {
+            self.queue.push_back(BfsState {
+                node_id: target,
+                depth: new_depth,
+            });
+        }
+        let path = reconstruct_path(target, self.source_id, &self.parent_map);
+        self.pending_results
+            .push_back(TraversalResult::new(target, path, new_depth));
+    }
+
+    /// Pops the next buffered result, incrementing the yielded counter.
+    #[inline]
+    fn next_pending(&mut self) -> Option<TraversalResult> {
+        let result = self.pending_results.pop_front()?;
+        self.yielded += 1;
+        Some(result)
+    }
+
+    /// Pumps the BFS: yields any buffered result, otherwise expands queued
+    /// nodes (via `expand`) until one yields. `expand` supplies the edge-store
+    /// access, keeping this driver independent of the store type.
+    fn drive(&mut self, mut expand: impl FnMut(&mut Self, &BfsState)) -> Option<TraversalResult> {
+        if self.config.limit.is_some_and(|limit| self.yielded >= limit) {
+            return None;
+        }
+        if let Some(result) = self.next_pending() {
+            return Some(result);
+        }
+        let deadline = self.config.deadline;
+        while let Some(state) = self.queue.pop_front() {
+            if deadline_reached(deadline, &mut self.nodes_since_check) {
+                // Clear the frontier so the iterator is permanently terminated.
+                self.queue.clear();
+                return None;
+            }
+            expand(self, &state);
+            if let Some(result) = self.next_pending() {
+                return Some(result);
+            }
+        }
+        None
+    }
+}
+
+/// Expands a node over the CSR zero-copy path (contiguous `&[u64]` neighbours).
+fn expand_csr(edge_store: &EdgeStore, core: &mut BfsBookkeeping, state: &BfsState) {
+    let Some(snapshot) = edge_store.csr_snapshot() else {
+        return;
+    };
+    let targets = snapshot.neighbors(state.node_id);
+    let edge_ids = snapshot.edge_ids(state.node_id);
+    for (i, (&target, &eid)) in targets.iter().zip(edge_ids.iter()).enumerate() {
+        let label = snapshot.label_at(state.node_id, i);
+        core.process_candidate(state.node_id, target, eid, state.depth, label);
+    }
+}
+
+/// Expands a node over the legacy `EdgeStore` path (owned `GraphEdge` values).
+fn expand_legacy(edge_store: &EdgeStore, core: &mut BfsBookkeeping, state: &BfsState) {
+    for edge in edge_store.get_outgoing(state.node_id) {
+        core.process_candidate(
+            state.node_id,
+            edge.target(),
+            edge.id(),
+            state.depth,
+            Some(edge.label()),
+        );
+    }
+}
+
+/// Expands a node over a [`ConcurrentEdgeStore`] (per-shard locked reads).
+fn expand_concurrent(
+    edge_store: &ConcurrentEdgeStore,
+    core: &mut BfsBookkeeping,
+    state: &BfsState,
+) {
+    for edge in &edge_store.get_outgoing(state.node_id) {
+        core.process_candidate(
+            state.node_id,
+            edge.target(),
+            edge.id(),
+            state.depth,
+            Some(edge.label()),
+        );
     }
 }
 
@@ -108,60 +307,23 @@ impl StreamingConfig {
 /// ```
 pub struct BfsIterator<'a> {
     edge_store: &'a EdgeStore,
-    queue: VecDeque<BfsState>,
-    visited: FxHashSet<u64>,
-    config: StreamingConfig,
-    /// Pre-built set for O(1) relationship-type filtering without per-edge allocation.
-    /// Empty when no filter is configured (all edge types accepted).
-    rel_types_set: FxHashSet<String>,
-    yielded: usize,
-    visited_overflow: bool,
-    /// Buffer for pending results from current node being processed.
-    /// This ensures all edges from a node are yielded before moving to next node.
-    pending_results: VecDeque<TraversalResult>,
-    /// Parent-pointer map: target_node -> (parent_node, edge_id).
-    /// Replaces per-state path cloning with O(visited_nodes) memory.
-    parent_map: FxHashMap<u64, (u64, u64)>,
-    /// Source node ID for path reconstruction.
-    source_id: u64,
+    core: BfsBookkeeping,
 }
 
 impl<'a> BfsIterator<'a> {
     /// Creates a new BFS iterator starting from the given node.
     #[must_use]
     pub fn new(edge_store: &'a EdgeStore, start_id: u64, config: StreamingConfig) -> Self {
-        // Pre-build FxHashSet from Vec<String> once, not per-edge.
-        let rel_types_set: FxHashSet<String> = config.rel_types.iter().cloned().collect();
-
-        let mut iter = Self {
+        Self {
             edge_store,
-            queue: VecDeque::new(),
-            visited: FxHashSet::default(),
-            config,
-            rel_types_set,
-            yielded: 0,
-            visited_overflow: false,
-            pending_results: VecDeque::new(),
-            parent_map: FxHashMap::default(),
-            source_id: start_id,
-        };
-        iter.init_first_level(start_id);
-        iter
-    }
-
-    /// Seeds the BFS queue and visited set with the start node.
-    fn init_first_level(&mut self, start_id: u64) {
-        self.visited.insert(start_id);
-        self.queue.push_back(BfsState {
-            node_id: start_id,
-            depth: 0,
-        });
+            core: BfsBookkeeping::new(start_id, config),
+        }
     }
 
     /// Returns the number of results yielded so far.
     #[must_use]
     pub fn yielded_count(&self) -> usize {
-        self.yielded
+        self.core.yielded
     }
 
     /// Returns true if the visited set has overflowed its limit.
@@ -170,110 +332,13 @@ impl<'a> BfsIterator<'a> {
     /// may be visited multiple times.
     #[must_use]
     pub fn is_visited_overflow(&self) -> bool {
-        self.visited_overflow
+        self.core.visited_overflow
     }
 
     /// Returns the current size of the visited set.
     #[must_use]
     pub fn visited_size(&self) -> usize {
-        self.visited.len()
-    }
-
-    /// Checks whether the given label passes the rel-type filter.
-    ///
-    /// Empty filter = accept all labels.
-    #[inline]
-    fn label_passes_filter(&self, label: &str) -> bool {
-        self.rel_types_set.is_empty() || self.rel_types_set.contains(label)
-    }
-
-    /// Records a visited target, handling overflow when the visited set
-    /// exceeds `max_visited_size`.
-    ///
-    /// Returns `true` if the target should be processed (not already visited).
-    #[inline]
-    fn try_visit(&mut self, target: u64) -> bool {
-        if self.visited_overflow {
-            return true;
-        }
-        if self.visited.contains(&target) {
-            return false;
-        }
-        if self.visited.len() >= self.config.max_visited_size {
-            self.visited_overflow = true;
-            self.visited.clear();
-            return true;
-        }
-        self.visited.insert(target);
-        true
-    }
-
-    /// Processes outgoing edges using CSR zero-copy path.
-    ///
-    /// Uses `CsrSnapshot` for contiguous `&[u64]` access to target IDs,
-    /// edge IDs, and interned labels — no `GraphEdge` cloning.
-    /// Uses parent-pointer insertion instead of path cloning.
-    fn expand_node_csr(&mut self, state: &BfsState) {
-        let snapshot = self
-            .edge_store
-            .csr_snapshot()
-            .expect("invariant: CSR snapshot checked before calling expand_node_csr");
-        let targets = snapshot.neighbors(state.node_id);
-        let edge_ids = snapshot.edge_ids(state.node_id);
-
-        for (i, (&target, &eid)) in targets.iter().zip(edge_ids.iter()).enumerate() {
-            let new_depth = state.depth + 1;
-            if new_depth > self.config.max_depth {
-                continue;
-            }
-            if let Some(label) = snapshot.label_at(state.node_id, i) {
-                if !self.label_passes_filter(label) {
-                    continue;
-                }
-            }
-            if !self.try_visit(target) {
-                continue;
-            }
-            self.parent_map.insert(target, (state.node_id, eid));
-            if new_depth < self.config.max_depth {
-                self.queue.push_back(BfsState {
-                    node_id: target,
-                    depth: new_depth,
-                });
-            }
-            let path = reconstruct_path(target, self.source_id, &self.parent_map);
-            self.pending_results
-                .push_back(TraversalResult::new(target, path, new_depth));
-        }
-    }
-
-    /// Processes outgoing edges using the legacy path (clones `GraphEdge`).
-    /// Uses parent-pointer insertion instead of path cloning.
-    fn expand_node_legacy(&mut self, state: &BfsState) {
-        let edges = self.edge_store.get_outgoing(state.node_id);
-        for edge in edges {
-            if !self.label_passes_filter(edge.label()) {
-                continue;
-            }
-            let target = edge.target();
-            let new_depth = state.depth + 1;
-            if new_depth > self.config.max_depth {
-                continue;
-            }
-            if !self.try_visit(target) {
-                continue;
-            }
-            self.parent_map.insert(target, (state.node_id, edge.id()));
-            if new_depth < self.config.max_depth {
-                self.queue.push_back(BfsState {
-                    node_id: target,
-                    depth: new_depth,
-                });
-            }
-            let path = reconstruct_path(target, self.source_id, &self.parent_map);
-            self.pending_results
-                .push_back(TraversalResult::new(target, path, new_depth));
-        }
+        self.core.visited.len()
     }
 }
 
@@ -281,36 +346,15 @@ impl Iterator for BfsIterator<'_> {
     type Item = TraversalResult;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Check limit
-        if let Some(limit) = self.config.limit {
-            if self.yielded >= limit {
-                return None;
-            }
-        }
-
-        // First, yield any pending results from previous node processing
-        if let Some(result) = self.pending_results.pop_front() {
-            self.yielded += 1;
-            return Some(result);
-        }
-
-        // Process nodes from queue until we have results to yield
-        while let Some(state) = self.queue.pop_front() {
-            // Dispatch: CSR zero-copy path when snapshot exists, legacy otherwise.
-            if self.edge_store.has_csr_snapshot() {
-                self.expand_node_csr(&state);
+        let edge_store = self.edge_store;
+        // Dispatch: CSR zero-copy path when a snapshot exists, legacy otherwise.
+        self.core.drive(|core, state| {
+            if edge_store.has_csr_snapshot() {
+                expand_csr(edge_store, core, state);
             } else {
-                self.expand_node_legacy(&state);
+                expand_legacy(edge_store, core, state);
             }
-
-            // After processing all edges from this node, yield first pending result if any
-            if let Some(result) = self.pending_results.pop_front() {
-                self.yielded += 1;
-                return Some(result);
-            }
-        }
-
-        None
+        })
     }
 }
 
@@ -337,17 +381,7 @@ pub fn bfs_stream(
 /// Uses parent-pointer map for zero-clone path reconstruction.
 pub struct ConcurrentBfsIterator<'a> {
     edge_store: &'a ConcurrentEdgeStore,
-    queue: VecDeque<BfsState>,
-    visited: FxHashSet<u64>,
-    config: StreamingConfig,
-    rel_types_set: FxHashSet<String>,
-    yielded: usize,
-    visited_overflow: bool,
-    pending_results: VecDeque<TraversalResult>,
-    /// Parent-pointer map: target_node -> (parent_node, edge_id).
-    parent_map: FxHashMap<u64, (u64, u64)>,
-    /// Source node ID for path reconstruction.
-    source_id: u64,
+    core: BfsBookkeeping,
 }
 
 impl<'a> ConcurrentBfsIterator<'a> {
@@ -358,95 +392,9 @@ impl<'a> ConcurrentBfsIterator<'a> {
         start_id: u64,
         config: StreamingConfig,
     ) -> Self {
-        let mut visited = FxHashSet::default();
-        visited.insert(start_id);
-
-        let mut queue = VecDeque::new();
-        queue.push_back(BfsState {
-            node_id: start_id,
-            depth: 0,
-        });
-
-        let rel_types_set: FxHashSet<String> = config.rel_types.iter().cloned().collect();
-
         Self {
             edge_store,
-            queue,
-            visited,
-            config,
-            rel_types_set,
-            yielded: 0,
-            visited_overflow: false,
-            pending_results: VecDeque::new(),
-            parent_map: FxHashMap::default(),
-            source_id: start_id,
-        }
-    }
-}
-
-impl ConcurrentBfsIterator<'_> {
-    /// Checks whether the given label passes the rel-type filter.
-    ///
-    /// Empty filter = accept all labels.
-    #[inline]
-    fn label_passes_filter(&self, label: &str) -> bool {
-        self.rel_types_set.is_empty() || self.rel_types_set.contains(label)
-    }
-
-    /// Records a visited target, handling overflow when the visited set
-    /// exceeds `max_visited_size`.
-    ///
-    /// Returns `true` if the target should be processed (not already visited).
-    #[inline]
-    fn try_visit(&mut self, target: u64) -> bool {
-        if self.visited_overflow {
-            return true;
-        }
-        if self.visited.contains(&target) {
-            return false;
-        }
-        if self.visited.len() >= self.config.max_visited_size {
-            self.visited_overflow = true;
-            self.visited.clear();
-            return true;
-        }
-        self.visited.insert(target);
-        true
-    }
-
-    /// Expands a single BFS node: filters edges, records parent pointers,
-    /// enqueues unvisited targets, and buffers pending results.
-    fn expand_node(&mut self, state: &BfsState) {
-        let edges = self.edge_store.get_outgoing(state.node_id);
-
-        for edge in &edges {
-            if !self.label_passes_filter(edge.label()) {
-                continue;
-            }
-
-            let target = edge.target();
-            let new_depth = state.depth + 1;
-
-            if new_depth > self.config.max_depth {
-                continue;
-            }
-
-            if !self.try_visit(target) {
-                continue;
-            }
-
-            self.parent_map.insert(target, (state.node_id, edge.id()));
-
-            if new_depth < self.config.max_depth {
-                self.queue.push_back(BfsState {
-                    node_id: target,
-                    depth: new_depth,
-                });
-            }
-
-            let path = reconstruct_path(target, self.source_id, &self.parent_map);
-            self.pending_results
-                .push_back(TraversalResult::new(target, path, new_depth));
+            core: BfsBookkeeping::new(start_id, config),
         }
     }
 }
@@ -455,27 +403,9 @@ impl Iterator for ConcurrentBfsIterator<'_> {
     type Item = TraversalResult;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(limit) = self.config.limit {
-            if self.yielded >= limit {
-                return None;
-            }
-        }
-
-        if let Some(result) = self.pending_results.pop_front() {
-            self.yielded += 1;
-            return Some(result);
-        }
-
-        while let Some(state) = self.queue.pop_front() {
-            self.expand_node(&state);
-
-            if let Some(result) = self.pending_results.pop_front() {
-                self.yielded += 1;
-                return Some(result);
-            }
-        }
-
-        None
+        let edge_store = self.edge_store;
+        self.core
+            .drive(|core, state| expand_concurrent(edge_store, core, state))
     }
 }
 

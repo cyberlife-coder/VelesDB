@@ -32,6 +32,27 @@ function lastCall(): { url: string; method: string; body?: Record<string, unknow
   return { url, method: init?.method as string, body };
 }
 
+/**
+ * Queues a guardrails wire response with sensible defaults; pass `overrides`
+ * to vary only the fields a test cares about.
+ */
+function mockGuardrailsResponse(overrides: Record<string, number> = {}): void {
+  mockFetch.mockResolvedValueOnce({
+    ok: true,
+    json: () =>
+      Promise.resolve({
+        max_depth: 10,
+        max_cardinality: 100_000,
+        memory_limit_bytes: 104_857_600,
+        timeout_ms: 30_000,
+        rate_limit_qps: 100,
+        circuit_failure_threshold: 5,
+        circuit_recovery_seconds: 30,
+        ...overrides,
+      }),
+  });
+}
+
 // ============================================================================
 // Admin endpoints
 // ============================================================================
@@ -74,19 +95,7 @@ describe('getGuardrails', () => {
   });
 
   it('GETs /guardrails and maps snake_case → camelCase', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          max_depth: 10,
-          max_cardinality: 100_000,
-          memory_limit_bytes: 104_857_600,
-          timeout_ms: 30_000,
-          rate_limit_qps: 100,
-          circuit_failure_threshold: 5,
-          circuit_recovery_seconds: 30,
-        }),
-    });
+    mockGuardrailsResponse();
 
     const cfg = await backend.getGuardrails();
     expect(lastCall().method).toBe('GET');
@@ -109,19 +118,7 @@ describe('updateGuardrails', () => {
   });
 
   it('PUTs only the supplied fields as snake_case', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          max_depth: 15,
-          max_cardinality: 100_000,
-          memory_limit_bytes: 104_857_600,
-          timeout_ms: 30_000,
-          rate_limit_qps: 200,
-          circuit_failure_threshold: 5,
-          circuit_recovery_seconds: 30,
-        }),
-    });
+    mockGuardrailsResponse({ max_depth: 15, rate_limit_qps: 200 });
 
     const updated = await backend.updateGuardrails({
       maxDepth: 15,
@@ -136,19 +133,7 @@ describe('updateGuardrails', () => {
   });
 
   it('omits unset fields entirely from the PUT body', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          max_depth: 10,
-          max_cardinality: 100_000,
-          memory_limit_bytes: 104_857_600,
-          timeout_ms: 30_000,
-          rate_limit_qps: 100,
-          circuit_failure_threshold: 5,
-          circuit_recovery_seconds: 30,
-        }),
-    });
+    mockGuardrailsResponse();
 
     await backend.updateGuardrails({});
     expect(lastCall().body).toEqual({});
@@ -448,13 +433,7 @@ describe('getNodeEdges', () => {
     expect(edges[0].label).toBe('KNOWS');
   });
 
-  it('coerces string-typed IDs from serialize_id_as_string back to number', async () => {
-    // The server's `EdgeResponse` struct uses
-    // `#[serde(serialize_with = "serde_id::serialize_id_as_string")]`
-    // on `id`/`source`/`target`, so the wire format carries strings
-    // even though the TS `GraphEdge` interface declares `id: number`.
-    // This guards against the regression where the raw string would
-    // leak into the public API (PR #586 Devin 4th-wave scan finding).
+  it('preserves string-typed IDs from serialize_id_as_string', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () =>
@@ -474,12 +453,9 @@ describe('getNodeEdges', () => {
 
     const edges = await backend.getNodeEdges('kg', 10);
     expect(edges).toHaveLength(1);
-    expect(typeof edges[0].id).toBe('number');
-    expect(edges[0].id).toBe(42);
-    expect(typeof edges[0].source).toBe('number');
-    expect(edges[0].source).toBe(10);
-    expect(typeof edges[0].target).toBe('number');
-    expect(edges[0].target).toBe(20);
+    expect(edges[0].id).toBe('42');
+    expect(edges[0].source).toBe('10');
+    expect(edges[0].target).toBe('20');
     expect(edges[0].properties).toEqual({ since: '2020' });
   });
 
@@ -500,7 +476,7 @@ describe('getNodePayload', () => {
     backend = await initBackend();
   });
 
-  it('GETs /graph/nodes/{id}/payload and coerces node_id string → number', async () => {
+  it('GETs /graph/nodes/{id}/payload and preserves node_id string', async () => {
     // Server uses `serialize_id_as_string` so `node_id` arrives as a string.
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -513,8 +489,7 @@ describe('getNodePayload', () => {
 
     const result = await backend.getNodePayload('kg', 42);
     expect(lastCall().url).toContain('/graph/nodes/42/payload');
-    expect(typeof result.nodeId).toBe('number');
-    expect(result.nodeId).toBe(42);
+    expect(result.nodeId).toBe('42');
     expect(result.payload).toEqual({ name: 'Alice' });
   });
 
@@ -555,7 +530,7 @@ describe('graphSearch', () => {
     backend = await initBackend();
   });
 
-  it('POSTs vector + top_k to /graph/search and maps id → number', async () => {
+  it('POSTs vector + top_k to /graph/search and preserves id strings', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () =>
@@ -578,12 +553,11 @@ describe('graphSearch', () => {
     expect(call.body?.vector).toEqual([0.1, 0.2, 0.3]);
     expect(call.body?.top_k).toBe(5);
     expect(res.results).toHaveLength(2);
-    expect(res.results[0].id).toBe(10);
-    expect(typeof res.results[0].id).toBe('number');
+    expect(res.results[0].id).toBe('10');
     expect(res.results[0].score).toBe(0.92);
     // Payload must round-trip (not dropped by the mapper).
     expect(res.results[0].payload).toEqual({ name: 'Alice' });
-    expect(res.results[1].id).toBe(20);
+    expect(res.results[1].id).toBe('20');
     expect(res.results[1].payload).toBeUndefined();
   });
 

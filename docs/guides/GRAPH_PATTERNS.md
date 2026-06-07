@@ -1,6 +1,6 @@
 # Graph Patterns Guide
 
-*Version 1.17.0 -- May 2026*
+*Version 1.18.0 -- May 2026*
 
 Practical guide for using VelesQL `MATCH` graph patterns in VelesDB.
 
@@ -98,7 +98,7 @@ MATCH only sees edges in the current collection's edge store. If edges were crea
 
 ### 3. Expecting cross-collection traversal
 
-MATCH is scoped to a single collection. It does not join across collections. **Fix**: store all relevant points and edges in one collection, or use the direct graph API to query each collection separately and merge results in application code.
+MATCH traversal is scoped to the primary collection. `@collection` annotations can enrich bound node payloads from another collection after traversal, but they do not make edges span multiple graph stores. **Fix**: keep edges in the primary graph collection, then use `alias@collection` for payload enrichment when needed.
 
 ### 4. Label mismatch (case-sensitive)
 
@@ -113,7 +113,7 @@ Labels are case-sensitive. `"Product"` and `"product"` are different labels. Ens
 | **Scope** | Single collection | Single `GraphCollection` |
 | **Query style** | Declarative (SQL-like) | Imperative (method calls) |
 | **Vector + graph fusion** | Built-in (`similarity()` in WHERE) | Manual (search + traverse separately) |
-| **Cross-collection** | Not supported | Possible via application code |
+| **Cross-collection** | Payload enrichment via `@collection` | Possible via application code |
 
 **Use MATCH when**: you need graph patterns combined with vector similarity or metadata filtering in a single query within one collection.
 
@@ -222,6 +222,87 @@ curl -X POST http://localhost:8080/query \
 - Cross-collection vector search (`similarity()` on an annotated node) is not yet supported
 
 ---
+
+## VelesQL MATCH / Cypher Support Surface
+
+VelesQL's `MATCH` is a focused subset of Cypher, not a full implementation. The
+supported surface is defined by the grammar (`crates/velesdb-core/src/velesql/grammar.pest`)
+and the parser's complexity validation. The limits below are verified against the
+grammar and parser; queries that violate them are rejected at parse time.
+
+### Supported
+
+- **A single linear pattern**: `(node)-[rel]->(node)` chains, e.g.
+  `MATCH (a:A)-[:R]->(b:B)-[:S]->(c:C)`. The pattern is one connected path.
+- **Directed and undirected relationships**: `-[:R]->`, `<-[:R]-`, `-[:R]-`.
+- **Relationship type alternation**: `-[:R|S|T]->`.
+- **Relationship aliases and inline properties**: `-[r:R {year: 2026}]->`.
+- **`WHERE`** filtering, including `similarity(node.embedding, $param)`.
+- **`RETURN`** of: an alias (`a`), a property access (`a.title`), `*`, or the
+  zero-argument `similarity()` pseudo-function — each optionally `AS`-aliased.
+- **`ORDER BY`** (including `ORDER BY similarity() DESC`) and **`LIMIT`**.
+- **Cross-collection payload enrichment** via `alias@collection` (see above).
+
+### Not supported
+
+- **No comma-separated multi-pattern MATCH.** `MATCH (a), (b) RETURN a` is a
+  parse error. The grammar's `graph_pattern` is one node-relationship chain only.
+- **No `OPTIONAL MATCH`, no `WITH` pipeline, no `UNWIND`, no subqueries.** The
+  `match_query` rule is `MATCH pattern [WHERE] RETURN [ORDER BY] [LIMIT]` — none
+  of those keywords appear in it.
+- **No aggregation over a MATCH in `RETURN`.** `RETURN count(a)` or any arbitrary
+  function call (`RETURN upper(a.name)`) is a parse error. The only callable form
+  in a MATCH `RETURN` is the zero-arg `similarity()`.
+
+### Variable-length relationships — depth limits
+
+Variable-length is written with an explicit bounded range: `-[*1..5]->`,
+`-[*3]->` (exact), `-[:R*2..4]->`. Two limits apply, and they are easy to confuse:
+
+- **Parse-time complexity budget — 32.** The largest range upper bound in a query
+  may not exceed `DEFAULT_MAX_GRAPH_EXPANSION = 32`
+  (`crates/velesdb-core/src/velesql/validation_types.rs`). `MATCH (a)-[*1..50]->(b)`
+  is rejected with `[E007] Graph expansion exceeded: max=32`. An **unbounded**
+  range (`-[*]->` or `-[*1..]->`) defaults to `u32::MAX` and is therefore rejected
+  too — you must give an explicit upper bound `<= 32`. This budget is per
+  relationship (the *maximum* single range bound), not a sum across the path, so
+  `(a)-[*1..20]->(b)-[*1..20]->(c)` parses.
+- **Runtime traversal guardrail — default 10.** On the standard VelesQL query path
+  a `QueryContext` guardrail is installed with `DEFAULT_MAX_DEPTH = 10`
+  (`crates/velesdb-core/src/guardrails/limits.rs`); a traversal exceeding that depth
+  raises a guard-rail error. This is configurable (`QueryLimits::with_max_depth`),
+  and the direct `execute_match` API (no context) does not apply it.
+
+Net effect for everyday queries: keep variable-length upper bounds within the
+runtime guardrail (default 10), and never above the parse-time budget of 32.
+
+> Note: earlier drafts of this guide referenced a "10-hop" or "100-hop" cap. The
+> precise picture is the two distinct limits above (32 at parse time, 10 by
+> default at run time); `SAFETY_MAX_DEPTH = 100` in
+> `crates/velesdb-core/src/collection/graph/traversal.rs` is only
+> the cap applied by the imperative `with_unbounded_range` traversal builder, not
+> by the VelesQL MATCH path.
+
+### `LET` before `MATCH`
+
+`LET x = 0.5 MATCH (a)-[:R]->(b) RETURN b` **parses** — the `LET` binding is
+attached to the statement (the grammar allows `let_clause*` before any statement).
+However, `LET` bindings are only consumed by `SELECT` arithmetic; they have **no
+effect inside a `MATCH`**. The clause is not rejected, but referencing the binding
+from within the MATCH does nothing.
+
+### Hybrid fusion entry points
+
+Two distinct fusion paths exist, with different reach:
+
+- The **everyday vector + BM25 hybrid** (`hybrid_search`) uses **weighted RRF**:
+  reciprocal-rank fusion with a `vector_weight`/`text_weight` split (default
+  0.5/0.5), constant `k = 60`, and 0-based ranks. This is what a plain
+  `MATCH ... NEAR ...` hybrid query uses.
+- The **richer `fusion::FusionStrategy`** (RRF, RSF, weighted, average, max) is
+  currently reachable only through dense+sparse fusion and `NEAR_FUSED`. RSF /
+  weighted / avg / max are **not** selectable for the plain vector + BM25 hybrid;
+  use `NEAR_FUSED` (or dense+sparse) to choose a non-RRF strategy.
 
 ## Related Documentation
 

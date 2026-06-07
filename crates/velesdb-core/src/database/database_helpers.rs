@@ -104,18 +104,10 @@ impl Database {
         point: &crate::Point,
         filter: Option<&crate::Filter>,
     ) -> bool {
-        let Some(filter) = filter else {
-            return true;
-        };
-
-        let mut obj = point
-            .payload
-            .as_ref()
-            .and_then(serde_json::Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        obj.insert("id".to_string(), serde_json::json!(point.id));
-        filter.matches(&serde_json::Value::Object(obj))
+        match filter {
+            Some(filter) => Self::point_matches_filter(point, filter),
+            None => true,
+        }
     }
 
     /// Builds a `ColumnStore` from a collection, filtering points by pushed-down conditions.
@@ -135,7 +127,7 @@ impl Database {
         let stripped = Self::strip_table_prefix_from_condition(combined);
         let filter = crate::Filter::new(crate::Condition::from(stripped));
 
-        let ids = collection.all_ids();
+        let ids = Self::join_candidate_ids(collection, &filter);
         let points: Vec<_> = collection.get(&ids).into_iter().flatten().collect();
         let matching: Vec<_> = points
             .iter()
@@ -143,6 +135,28 @@ impl Database {
             .collect();
 
         Self::build_column_store_from_points(&matching)
+    }
+
+    /// Enumerates the join-side candidate IDs to feed into the post-filter.
+    ///
+    /// When the pushed-down `filter` references secondary-indexed fields,
+    /// `build_prefilter_bitmap` resolves it to a Roaring bitmap of candidate IDs,
+    /// avoiding the O(N) `all_ids()` scan. The bitmap is a guaranteed SUPERSET of
+    /// the matches — `point_matches_filter` re-checks every returned point, so
+    /// results are identical to the scan path. The superset guarantee holds
+    /// because `build_prefilter_bitmap` returns `None` (forcing the `all_ids()`
+    /// fallback) for any predicate it cannot resolve completely: `!=` / `NOT IN`
+    /// (whose matches include field-absent points the index does not store) and
+    /// any field carrying an ID above `u32::MAX` (unrepresentable in the bitmap).
+    /// Falls back to `all_ids()` whenever no index can resolve the predicate.
+    fn join_candidate_ids(
+        collection: &crate::collection::Collection,
+        filter: &crate::Filter,
+    ) -> Vec<u64> {
+        match collection.build_prefilter_bitmap(filter) {
+            Some(bitmap) => bitmap.iter().map(u64::from).collect(),
+            None => collection.all_ids(),
+        }
     }
 
     /// Evaluates a filter against a point's payload with `id` injected.
@@ -162,7 +176,9 @@ impl Database {
         filters: &[crate::velesql::Condition],
     ) -> crate::velesql::Condition {
         let mut iter = filters.iter().cloned();
-        let first = iter.next().expect("filters is non-empty");
+        let Some(first) = iter.next() else {
+            unreachable!("caller must pass at least one filter");
+        };
         iter.fold(first, |acc, c| {
             crate::velesql::Condition::And(Box::new(acc), Box::new(c))
         })

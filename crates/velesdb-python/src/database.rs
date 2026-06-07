@@ -346,6 +346,8 @@ impl Database {
     ///
     /// Args:
     ///     dimension: Embedding dimension (default: 384)
+    ///     snapshot_dir: Optional directory to enable versioned snapshots
+    ///     max_snapshots: Number of snapshots to retain (default: 10)
     ///
     /// Returns:
     ///     AgentMemory instance with semantic, episodic, and procedural subsystems
@@ -353,9 +355,14 @@ impl Database {
     /// Example:
     ///     >>> memory = db.agent_memory()
     ///     >>> memory.semantic.store(1, "Paris is in France", embedding)
-    #[pyo3(signature = (dimension = None))]
-    fn agent_memory(&self, dimension: Option<usize>) -> PyResult<agent::AgentMemory> {
-        agent::AgentMemory::new(self, dimension)
+    #[pyo3(signature = (dimension = None, snapshot_dir = None, max_snapshots = 10))]
+    fn agent_memory(
+        &self,
+        dimension: Option<usize>,
+        snapshot_dir: Option<String>,
+        max_snapshots: usize,
+    ) -> PyResult<agent::AgentMemory> {
+        agent::AgentMemory::new(self, dimension, snapshot_dir, max_snapshots)
     }
 
     /// Train product quantization on a collection.

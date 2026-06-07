@@ -74,7 +74,7 @@ impl SelectItemAccumulator {
 
     /// Converts when exactly one item type is present.
     /// Falls back to `Mixed` for multi-element similarity/wildcard.
-    fn into_single_type(self) -> SelectColumns {
+    fn into_single_type(mut self) -> SelectColumns {
         if !self.columns.is_empty() {
             return SelectColumns::Columns(self.columns);
         }
@@ -82,20 +82,14 @@ impl SelectItemAccumulator {
             return SelectColumns::Aggregations(self.aggregations);
         }
         if self.similarity_scores.len() == 1 {
-            return SelectColumns::SimilarityScore(
-                self.similarity_scores
-                    .into_iter()
-                    .next()
-                    .expect("checked len==1"),
-            );
+            if let Some(score) = self.similarity_scores.pop() {
+                return SelectColumns::SimilarityScore(score);
+            }
         }
         if self.qualified_wildcards.len() == 1 {
-            return SelectColumns::QualifiedWildcard(
-                self.qualified_wildcards
-                    .into_iter()
-                    .next()
-                    .expect("checked len==1"),
-            );
+            if let Some(wildcard) = self.qualified_wildcards.pop() {
+                return SelectColumns::QualifiedWildcard(wildcard);
+            }
         }
         // Multiple similarity scores, wildcards, or window functions without other types -> Mixed
         SelectColumns::Mixed {

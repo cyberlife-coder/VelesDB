@@ -2,7 +2,7 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.17.0** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.18.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
 ## What's New in v1.16.0
 
@@ -772,7 +772,21 @@ const result = await db.trainPq('embeddings', {
 
 ### Agent Memory API
 
-The Agent Memory API provides three memory types for AI agents, built on top of VelesDB's vector and graph storage.
+The Agent Memory API provides three memory types for AI agents, built on top of
+VelesDB's vector storage. In the TypeScript/JavaScript SDK it is accessed **over
+REST** against a running `velesdb-server` (the Python and Rust bindings use the
+embedded engine instead).
+
+> **You must create the collection first.** The TS facade does **not**
+> auto-create a collection for you. Create it with the dimension that matches
+> your embedding model and the metric you want (`'cosine'` is the usual choice
+> for normalized text embeddings), then call `storeFact` / `recordEvent` /
+> `learnProcedure` against that same collection name.
+
+> **Embeddings are caller-supplied.** There is no auto-embedding: every
+> `embedding` you pass must come from your own embedding model (see
+> [Embedding helper](#embedding-helper)) and its length must equal the
+> collection dimension.
 
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
@@ -780,13 +794,39 @@ import { VelesDB } from '@wiscale/velesdb-sdk';
 const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
 await db.init();
 
+// 1. Create the backing collection FIRST (nothing auto-creates it).
+//    The dimension must match your embedding model; cosine is typical.
+await db.createCollection('knowledge', { dimension: 384, metric: 'cosine' });
+
+// 2. Open the agent-memory facade.
 const memory = db.agentMemory({ dimension: 384 });
+
+// 3. Store and recall (embedding is your own model's output, length 384).
+await memory.storeFact('knowledge', {
+  id: 1,
+  text: 'VelesDB uses HNSW for vector indexing',
+  embedding: factEmbedding,
+});
+const facts = await memory.searchFacts('knowledge', queryEmbedding, 5);
 ```
+
+Each recall method returns `SearchResult[]`:
+
+```typescript
+// SearchResult = { id: number; score: number; payload?: Record<string, unknown>; vector?: number[] }
+```
+
+- `score` is the cosine similarity in `[0, 1]` (for a `cosine` collection);
+  higher means more similar.
+- `payload` carries the stored fields (`text`, `event_type`, `name`, `steps`,
+  plus your metadata). The reserved keys `_memory_type` / `text` /
+  `event_type` / `timestamp` / `name` / `steps` always take precedence over
+  caller `metadata`/`data` of the same name, so they cannot be clobbered.
 
 #### Semantic Memory (facts and knowledge)
 
 ```typescript
-// Store a fact
+// Store a fact (id is caller-assigned; reusing an id upserts)
 await memory.storeFact('knowledge', {
   id: 1,
   text: 'VelesDB uses HNSW for vector indexing',
@@ -801,12 +841,11 @@ const facts = await memory.searchFacts('knowledge', queryEmbedding, 5);
 #### Episodic Memory (events and experiences)
 
 ```typescript
-// Record an event
-await memory.recordEvent('events', {
+// Record an event — returns the generated point id
+const eventId = await memory.recordEvent('events', {
   eventType: 'user_query',
   data: { query: 'How does HNSW work?', response: '...' },
   embedding: eventEmbedding,
-  metadata: { timestamp: Date.now() }
 });
 
 // Recall similar events
@@ -816,16 +855,34 @@ const events = await memory.recallEvents('events', queryEmbedding, 5);
 #### Procedural Memory (learned patterns)
 
 ```typescript
-// Store a procedure
-await memory.learnProcedure('procedures', {
+// Store a procedure — embedding is required so the pattern is recallable,
+// and the generated point id is returned
+const procId = await memory.learnProcedure('procedures', {
   name: 'deploy-to-prod',
   steps: ['Run tests', 'Build artifacts', 'Push to registry', 'Deploy'],
+  embedding: procedureEmbedding,
   metadata: { lastUsed: Date.now() }
 });
 
 // Find matching procedures
 const procs = await memory.recallProcedures('procedures', queryEmbedding, 3);
 ```
+
+#### Deleting memories
+
+```typescript
+// Works for facts, events, and procedures — returns true if a point was removed
+await memory.deleteMemory('procedures', procId);
+```
+
+> **`dimension` is advisory.** `db.agentMemory({ dimension })` records a hint you
+> can read back via `memory.dimension`, but it does **not** create or size any
+> collection — the collection's own dimension (set at `createCollection`)
+> governs storage and search, and your embeddings must match it.
+
+> **TTL & snapshots.** Per-entry TTL (in **seconds**) and versioned snapshots are
+> exposed by the embedded Rust API only; the REST-backed TypeScript facade does
+> not surface them. See the [Agent Memory guide](../../docs/guides/AGENT_MEMORY.md).
 
 ---
 
@@ -924,6 +981,6 @@ import {
 
 ## License
 
-MIT License -- See [LICENSE](./LICENSE) for details.
+Licensed under the [VelesDB Core License 1.0](./LICENSE) (source-available). The SDK bundles the VelesDB WASM engine and is governed by the Core License.
 
 VelesDB Core and Server are licensed under VelesDB Core License 1.0 (source-available).

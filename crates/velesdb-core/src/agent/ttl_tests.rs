@@ -40,6 +40,18 @@ mod tests {
     }
 
     #[test]
+    fn test_memory_ttl_expired_count() {
+        let ttl = MemoryTtl::new();
+        ttl.set_ttl(1, 0);
+        ttl.set_ttl(2, 0);
+        ttl.set_ttl(3, 3600);
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        assert_eq!(ttl.expired_count(), 2);
+        assert_eq!(ttl.expired_count(), ttl.get_expired().len());
+    }
+
+    #[test]
     fn test_memory_ttl_expire() {
         let ttl = MemoryTtl::new();
         ttl.set_ttl(1, 0);
@@ -71,20 +83,6 @@ mod tests {
         assert_eq!(config.consolidation_age_threshold, 7 * 24 * 60 * 60);
         assert!((config.min_confidence_threshold - 0.1).abs() < 0.001);
         assert_eq!(config.max_entries_per_cycle, 1000);
-    }
-
-    #[test]
-    fn test_memory_ttl_merge_from() {
-        let ttl1 = MemoryTtl::new();
-        ttl1.set_ttl(1, 3600);
-
-        let ttl2 = MemoryTtl::new();
-        ttl2.set_ttl(2, 7200);
-
-        ttl1.merge_from(&ttl2);
-
-        assert!(ttl1.get(1).is_some());
-        assert!(ttl1.get(2).is_some());
     }
 
     #[test]

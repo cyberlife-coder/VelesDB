@@ -3,7 +3,10 @@
 //! Extracted from `traversal.rs` to reduce NLOC.
 
 use super::csr_snapshot::{CsrSnapshot, EdgePredicate};
-use super::traversal::{reconstruct_path, BfsState, TraversalConfig, TraversalResult};
+use super::traversal::{
+    deadline_reached, reconstruct_path, BfsState, TraversalConfig, TraversalResult,
+    DEADLINE_CHECK_INTERVAL,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 
@@ -85,8 +88,12 @@ pub fn bfs_traverse_csr(
         parent_map: &mut parent_map,
     };
 
+    let mut nodes_since_check = DEADLINE_CHECK_INTERVAL;
     while let Some(state) = ctx.queue.pop_front() {
         if ctx.results.len() >= ctx.config.limit {
+            break;
+        }
+        if deadline_reached(ctx.config.deadline, &mut nodes_since_check) {
             break;
         }
 
@@ -172,8 +179,12 @@ pub fn bfs_traverse_csr_filtered<P: EdgePredicate>(
         parent_map: &mut parent_map,
     };
 
+    let mut nodes_since_check = DEADLINE_CHECK_INTERVAL;
     while let Some(state) = ctx.queue.pop_front() {
         if ctx.results.len() >= ctx.config.limit {
+            break;
+        }
+        if deadline_reached(ctx.config.deadline, &mut nodes_since_check) {
             break;
         }
 

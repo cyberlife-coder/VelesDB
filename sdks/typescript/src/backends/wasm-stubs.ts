@@ -206,7 +206,7 @@ export async function wasmSearchSemanticMemory(
 
 export async function wasmRecordEpisodicEvent(
   _collection: string, _event: EpisodicEvent
-): Promise<void> {
+): Promise<number> {
   wasmNotSupported('Agent memory');
 }
 
@@ -218,7 +218,7 @@ export async function wasmRecallEpisodicEvents(
 
 export async function wasmStoreProceduralPattern(
   _collection: string, _pattern: ProceduralPattern
-): Promise<void> {
+): Promise<number> {
   wasmNotSupported('Agent memory');
 }
 

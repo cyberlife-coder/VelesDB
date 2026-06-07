@@ -21,7 +21,8 @@ Complete guide for using VelesDB's Agent Memory SDK. Covers the three memory sub
 11. [Performance & Limits](#performance--limits)
 12. [Thread Safety & Concurrency](#thread-safety--concurrency)
 13. [Rust API](#rust-api)
-14. [FAQ](#faq)
+14. [TypeScript / JavaScript (REST)](#typescript--javascript-rest)
+15. [FAQ](#faq)
 
 ---
 
@@ -83,7 +84,7 @@ memory.episodic     # -> EpisodicMemory
 memory.procedural   # -> ProceduralMemory
 ```
 
-> **Note**: `AgentMemory` works in **embedded mode** (same process). It is not accessible via the VelesDB REST API server.
+> **Note**: The **Python and Rust** `AgentMemory` runs in **embedded mode** (same process), shown above. The **TypeScript/JavaScript SDK** accesses agent memory **over REST** against a running `velesdb-server` instead — see [TypeScript / JavaScript (REST)](#typescript--javascript-rest) below. The two share the same three memory subsystems but differ in transport.
 
 ### File Structure Created
 
@@ -673,30 +674,93 @@ memory.load_latest_snapshot()?;
 
 ### API Availability by Binding
 
-| Method | Python | Rust |
-|--------|--------|------|
-| `semantic.store()` | Yes | Yes |
-| `semantic.query()` | Yes | Yes |
-| `semantic.delete()` | Yes | Yes |
-| `episodic.record()` | Yes | Yes |
-| `episodic.recent()` | Yes | Yes |
-| `episodic.recall_similar()` | Yes | Yes |
-| `episodic.older_than()` | Yes | Yes |
-| `episodic.delete()` | Yes | Yes |
-| `procedural.learn()` | Yes | Yes |
-| `procedural.recall()` | Yes | Yes |
-| `procedural.reinforce()` | Yes | Yes |
-| `procedural.list_all()` | Yes | Yes |
-| `procedural.delete()` | Yes | Yes |
-| TTL management | No | Yes |
-| Snapshots | No | Yes |
+The **Python** and **Rust** bindings run embedded; the **TypeScript** SDK is
+REST-backed (`db.agentMemory(...)`, methods named `storeFact` / `searchFacts` /
+`recordEvent` / `recallEvents` / `learnProcedure` / `recallProcedures` /
+`deleteMemory`). The TS facade covers vector store + similarity recall over the
+three subsystems; temporal/confidence-only queries, reinforcement, TTL, and
+snapshots are embedded-only.
+
+| Method | Python | Rust | TypeScript (REST) |
+|--------|--------|------|-------------------|
+| `semantic.store()` | Yes | Yes | Yes (`storeFact`) |
+| `semantic.query()` | Yes | Yes | Yes (`searchFacts`) |
+| `semantic.delete()` | Yes | Yes | Yes (`deleteMemory`) |
+| `episodic.record()` | Yes | Yes | Yes (`recordEvent`, returns id) |
+| `episodic.recent()` | Yes | Yes | No (no temporal query) |
+| `episodic.recall_similar()` | Yes | Yes | Yes (`recallEvents`) |
+| `episodic.older_than()` | Yes | Yes | No |
+| `episodic.delete()` | Yes | Yes | Yes (`deleteMemory`) |
+| `procedural.learn()` | Yes | Yes | Yes (`learnProcedure`, returns id) |
+| `procedural.recall()` | Yes | Yes | Yes (`recallProcedures`) |
+| `procedural.reinforce()` | Yes | Yes | No |
+| `procedural.list_all()` | Yes | Yes | No |
+| `procedural.delete()` | Yes | Yes | Yes (`deleteMemory`) |
+| TTL management | No | Yes | No |
+| Snapshots | No | Yes | No |
+
+---
+
+## TypeScript / JavaScript (REST)
+
+The TypeScript/JavaScript SDK (`@wiscale/velesdb-sdk`) accesses agent memory
+**over REST** against a running `velesdb-server`. There is no embedded engine in
+JS; the three memory subsystems are stored as filtered points in regular
+collections you create yourself.
+
+```typescript
+import { VelesDB } from '@wiscale/velesdb-sdk';
+
+const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+await db.init();
+
+// Create the backing collection FIRST — the facade does not auto-create it.
+// The dimension must match your embedding model; cosine is typical.
+await db.createCollection('knowledge', { dimension: 384, metric: 'cosine' });
+
+const memory = db.agentMemory({ dimension: 384 });
+
+// Store / recall (embeddings are caller-supplied — no auto-embed)
+await memory.storeFact('knowledge', { id: 1, text: 'fact', embedding });
+const facts = await memory.searchFacts('knowledge', queryEmbedding, 5);
+
+// record/learn return the generated point id
+const eventId = await memory.recordEvent('events', {
+  eventType: 'user_query', data: {}, embedding,
+});
+const procId = await memory.learnProcedure('procedures', {
+  name: 'deploy', steps: ['build', 'push'], embedding,
+});
+
+// delete works for any memory type
+await memory.deleteMemory('procedures', procId);
+```
+
+Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
+
+- **`score`** is cosine similarity in `[0, 1]` for a `cosine` collection;
+  higher is more similar.
+- **Embeddings are caller-supplied** — no auto-embedding; each `embedding`
+  length must equal the collection dimension.
+- **`procedural.learn()` requires an embedding** in the TS SDK so the pattern is
+  recallable by similarity search.
+- The **`dimension`** passed to `db.agentMemory({ dimension })` is advisory
+  (readable via `memory.dimension`); the collection's own dimension governs
+  storage and search.
+- **TTL and snapshots are not exposed over REST** — they are embedded-only
+  (Rust). When used, TTL durations are in **seconds**.
+
+> **Standalone `SemanticMemory`.** If you use a standalone in-memory
+> `SemanticMemory` (without a backing `Database`), it has **no auto-snapshot and
+> no auto-load**, and any TTL is enforced **in memory only** — entries are not
+> persisted and expiry state is lost on restart.
 
 ---
 
 ## FAQ
 
 **Q: Does the SDK work via the REST API?**
-No. Agent Memory is an embedded SDK -- it runs in your process. The underlying collections (`_semantic_memory`, etc.) are visible on disk but not exposed via REST endpoints.
+It depends on the binding. The **Python and Rust** Agent Memory runs **embedded** in your process — the underlying embedded collections (`_semantic_memory`, etc.) are visible on disk but are not the REST surface. The **TypeScript/JavaScript** SDK is **REST-only**: it accesses agent memory over HTTP against a running `velesdb-server`, storing each memory type as filtered points in a collection you create yourself. See [TypeScript / JavaScript (REST)](#typescript--javascript-rest).
 
 **Q: Can I change the dimension after creation?**
 No. The dimension is fixed when the collection is created. If you switch embedding models, create a new database.
@@ -711,7 +775,7 @@ Yes. VelesDB uses a Write-Ahead Log (WAL) with fsync. Data is durable as soon as
 Yes. Multiple `AgentMemory` instances on the same `Database` share the same collections. Useful for multi-threading.
 
 **Q: Does the SDK work in WASM or on mobile?**
-Not currently. The SDK requires the `persistence` feature (mmap, filesystem), which is disabled for WASM. Mobile support is possible via native bindings but not yet documented.
+The **embedded** SDK (Python/Rust) requires the `persistence` feature (mmap, filesystem), which is disabled for WASM, so embedded agent memory does not run in-browser. The browser/WASM build of the TypeScript SDK does not support agent memory either (`capabilities().agentMemory` is `false` for the WASM backend). To use agent memory from JavaScript, point the SDK at a `velesdb-server` over **REST** (`backend: 'rest'`). Mobile support is possible via native bindings but not yet documented.
 
 **Q: How do I migrate from another memory system?**
 Export your data (text + embeddings) and import via `semantic.store()` / `episodic.record()` / `procedural.learn()`. There is no automated migration tool.

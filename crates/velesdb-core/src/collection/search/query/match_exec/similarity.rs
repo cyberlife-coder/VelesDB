@@ -389,11 +389,13 @@ impl Collection {
         let mut results = Vec::new();
 
         for mr in match_results {
-            // Get vector and payload for the node
             let vector = vector_storage
                 .retrieve(mr.node_id)?
                 .unwrap_or_else(Vec::new);
-            let payload = payload_storage.retrieve(mr.node_id).ok().flatten();
+            let payload = Some(build_match_payload(
+                payload_storage.retrieve(mr.node_id).ok().flatten(),
+                &mr,
+            ));
 
             let point = crate::Point {
                 id: mr.node_id,
@@ -410,4 +412,25 @@ impl Collection {
 
         Ok(results)
     }
+}
+
+fn build_match_payload(
+    base_payload: Option<serde_json::Value>,
+    result: &MatchResult,
+) -> serde_json::Value {
+    let mut object = match base_payload {
+        Some(serde_json::Value::Object(map)) => map,
+        Some(value) => {
+            let mut map = serde_json::Map::new();
+            map.insert("_payload".to_string(), value);
+            map
+        }
+        None => serde_json::Map::new(),
+    };
+
+    for (key, value) in &result.projected {
+        object.insert(key.clone(), value.clone());
+    }
+    object.insert("_bindings".to_string(), serde_json::json!(result.bindings));
+    serde_json::Value::Object(object)
 }

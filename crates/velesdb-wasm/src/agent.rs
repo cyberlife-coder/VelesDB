@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-use crate::VectorStore;
+use crate::{store_insert, VectorStore};
 
 /// Semantic memory result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,7 +21,18 @@ pub struct SemanticResult {
 
 /// Semantic Memory for AI agents in WASM.
 ///
-/// Stores knowledge facts as vectors with similarity search.
+/// Stores knowledge facts as vectors with similarity search. Fact content text
+/// is kept in the underlying [`VectorStore`] payload (mirroring the core
+/// `SemanticMemory`) rather than in a separate map, so the payload is the single
+/// source of truth for content while the store is live.
+///
+/// # Durability
+///
+/// **In-memory only.** The WASM crate has no `persistence` feature. The
+/// `VectorStore` binary format used by `export_to_bytes`/`save`/`load` does
+/// **not** serialize payloads, so fact content does **not** survive a
+/// store reload. Persist content out-of-band (e.g. in application state or
+/// IndexedDB) if durability is required.
 ///
 /// # Example (JavaScript)
 ///
@@ -35,7 +46,22 @@ pub struct SemanticResult {
 #[wasm_bindgen]
 pub struct SemanticMemory {
     store: VectorStore,
-    contents: std::collections::HashMap<u64, String>,
+}
+
+impl SemanticMemory {
+    /// Reads the `content` text for `id` from the store payload.
+    fn content_for(&self, id: u64) -> String {
+        self.store
+            .ids
+            .iter()
+            .position(|&x| x == id)
+            .and_then(|idx| self.store.payloads.get(idx))
+            .and_then(Option::as_ref)
+            .and_then(|p| p.get("content"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    }
 }
 
 #[wasm_bindgen]
@@ -44,13 +70,12 @@ impl SemanticMemory {
     #[wasm_bindgen(constructor)]
     pub fn new(dimension: usize) -> Result<SemanticMemory, JsValue> {
         let store = VectorStore::new(dimension, "cosine")?;
-        Ok(Self {
-            store,
-            contents: std::collections::HashMap::new(),
-        })
+        Ok(Self { store })
     }
 
     /// Stores a knowledge fact with its embedding vector.
+    ///
+    /// The content text is kept in the point payload as `{"content": ...}`.
     ///
     /// # Arguments
     ///
@@ -59,8 +84,9 @@ impl SemanticMemory {
     /// * `embedding` - Vector representation (`Float32Array`)
     #[wasm_bindgen]
     pub fn store(&mut self, id: u64, content: &str, embedding: &[f32]) -> Result<(), JsValue> {
-        self.store.insert(id, embedding)?;
-        self.contents.insert(id, content.to_string());
+        crate::store_search::validate_dimension(embedding.len(), self.store.dimension)?;
+        let payload = serde_json::json!({ "content": content });
+        store_insert::insert_with_payload(&mut self.store, id, embedding, Some(payload));
         Ok(())
     }
 
@@ -84,7 +110,7 @@ impl SemanticMemory {
             .map(|r| SemanticResult {
                 id: r.id,
                 score: r.score,
-                content: self.contents.get(&r.id).cloned().unwrap_or_default(),
+                content: self.content_for(r.id),
             })
             .collect();
 
@@ -95,27 +121,34 @@ impl SemanticMemory {
     /// Returns the number of stored knowledge facts.
     #[wasm_bindgen]
     pub fn len(&self) -> usize {
-        self.contents.len()
+        self.store.ids.len()
     }
 
     /// Returns true if no knowledge facts are stored.
     #[wasm_bindgen]
     pub fn is_empty(&self) -> bool {
-        self.contents.is_empty()
+        self.store.ids.is_empty()
+    }
+
+    /// Deletes a knowledge fact by ID. Returns true if a fact was removed.
+    #[wasm_bindgen]
+    pub fn delete(&mut self, id: u64) -> bool {
+        self.store.remove(id)
     }
 
     /// Removes a knowledge fact by ID.
+    ///
+    /// Deprecated alias for [`Self::delete`], kept for backward compatibility
+    /// and naming parity with prior WASM releases.
     #[wasm_bindgen]
     pub fn remove(&mut self, id: u64) -> bool {
-        self.store.remove(id);
-        self.contents.remove(&id).is_some()
+        self.delete(id)
     }
 
     /// Clears all knowledge facts.
     #[wasm_bindgen]
     pub fn clear(&mut self) {
         self.store.clear();
-        self.contents.clear();
     }
 
     /// Returns the embedding dimension.
@@ -148,14 +181,24 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_memory_remove() {
+    fn test_semantic_memory_content_in_payload() {
+        let mut memory = SemanticMemory::new(4).unwrap();
+        let embedding = vec![0.1, 0.2, 0.3, 0.4];
+
+        memory.store(1, "Paris is the capital", &embedding).unwrap();
+
+        assert_eq!(memory.content_for(1), "Paris is the capital");
+    }
+
+    #[test]
+    fn test_semantic_memory_delete() {
         let mut memory = SemanticMemory::new(4).unwrap();
         let embedding = vec![0.1, 0.2, 0.3, 0.4];
 
         memory.store(1, "Test content", &embedding).unwrap();
         assert_eq!(memory.len(), 1);
 
-        let removed = memory.remove(1);
+        let removed = memory.delete(1);
         assert!(removed);
         assert!(memory.is_empty());
     }

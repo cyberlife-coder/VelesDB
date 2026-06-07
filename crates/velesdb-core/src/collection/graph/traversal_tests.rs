@@ -1,8 +1,12 @@
 //! Tests for `traversal` module - Graph traversal algorithms.
 
+use super::csr_snapshot::SnapshotBuilder;
+use super::label_table::LabelTable;
 use super::traversal::*;
 use super::traversal_bidir::bfs_traverse_both;
+use super::traversal_csr::bfs_traverse_csr;
 use super::{EdgeStore, GraphEdge};
+use std::time::{Duration, Instant};
 
 fn create_test_edge_store() -> EdgeStore {
     let mut store = EdgeStore::new();
@@ -329,6 +333,99 @@ fn test_parent_pointer_reverse_path() {
         .find(|r| r.target_id == 2 && r.depth == 2)
         .expect("test: node 2 at depth 2 (reverse)");
     assert_eq!(node2.path, vec![102, 101], "4<-3<-2 via edges 102,101");
+}
+
+// =========================================================================
+// Wall-clock deadline: eager BFS / CSR BFS abort cleanly (partial result)
+// =========================================================================
+
+#[test]
+fn test_bfs_traverse_expired_deadline_returns_partial() {
+    // GIVEN: a cyclic store and an already-expired deadline
+    let store = create_cyclic_edge_store();
+    let expired = Instant::now()
+        .checked_sub(Duration::from_millis(1))
+        .expect("test: clock before epoch");
+    let config = TraversalConfig::with_range(1, 5)
+        .with_limit(100)
+        .with_deadline(expired);
+
+    // WHEN: BFS runs with the expired deadline
+    let results = bfs_traverse(&store, 1, &config);
+
+    // THEN: it aborts immediately (counter seeded at threshold) with no hang.
+    // The first pop triggers the check, so no neighbours are expanded.
+    assert!(
+        results.is_empty(),
+        "expired deadline must abort before expanding, got {} results",
+        results.len()
+    );
+}
+
+#[test]
+fn test_bfs_traverse_far_future_deadline_no_premature_abort() {
+    // GIVEN: a far-future deadline (effectively disabled)
+    let store = create_test_edge_store();
+    let future = Instant::now() + Duration::from_secs(3600);
+    let with_deadline = TraversalConfig::with_range(1, 3)
+        .with_limit(100)
+        .with_deadline(future);
+    let without = TraversalConfig::with_range(1, 3).with_limit(100);
+
+    // WHEN: BFS runs with and without the deadline
+    let a = bfs_traverse(&store, 1, &with_deadline);
+    let b = bfs_traverse(&store, 1, &without);
+
+    // THEN: a far-future deadline yields the identical full result set.
+    assert_eq!(a.len(), b.len(), "far-future deadline must not truncate");
+    assert!(a.iter().any(|r| r.target_id == 4 && r.depth == 3));
+}
+
+#[test]
+fn test_bfs_traverse_csr_expired_deadline_returns_partial() {
+    // GIVEN: a CSR snapshot over a chain and an expired deadline
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(100, 1, 2, "KNOWS").unwrap())
+        .unwrap();
+    store
+        .add_edge(GraphEdge::new(101, 2, 3, "KNOWS").unwrap())
+        .unwrap();
+    let snapshot = SnapshotBuilder::build(&store, &LabelTable::new());
+
+    let expired = Instant::now()
+        .checked_sub(Duration::from_millis(1))
+        .expect("test: clock before epoch");
+    let config = TraversalConfig::with_range(1, 3)
+        .with_limit(100)
+        .with_deadline(expired);
+
+    // WHEN / THEN: CSR BFS aborts immediately with a bounded (empty) result.
+    let results = bfs_traverse_csr(&snapshot, 1, &config);
+    assert!(results.is_empty(), "expired deadline aborts CSR BFS");
+}
+
+#[test]
+fn test_bfs_traverse_csr_far_future_deadline_no_premature_abort() {
+    // GIVEN: a CSR snapshot and a far-future deadline
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(100, 1, 2, "KNOWS").unwrap())
+        .unwrap();
+    store
+        .add_edge(GraphEdge::new(101, 2, 3, "KNOWS").unwrap())
+        .unwrap();
+    let snapshot = SnapshotBuilder::build(&store, &LabelTable::new());
+
+    let future = Instant::now() + Duration::from_secs(3600);
+    let with_deadline = TraversalConfig::with_range(1, 3).with_deadline(future);
+    let without = TraversalConfig::with_range(1, 3);
+
+    // WHEN / THEN: far-future deadline yields the same full result set.
+    let a = bfs_traverse_csr(&snapshot, 1, &with_deadline);
+    let b = bfs_traverse_csr(&snapshot, 1, &without);
+    assert_eq!(a.len(), b.len());
+    assert!(a.iter().any(|r| r.target_id == 3 && r.depth == 2));
 }
 
 #[test]

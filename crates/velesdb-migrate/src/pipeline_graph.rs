@@ -95,7 +95,9 @@ impl<'a> GraphMigrationPhase<'a> {
                 .await?;
 
             let total = edges.len() as u64;
-            let inserted = gc.add_edges_batch(edges) as u64;
+            let inserted = gc.add_edges_batch(edges).map_err(|e| {
+                Error::DestinationConnection(format!("Edge batch insert failed: {e}"))
+            })? as u64;
             stats.edges_created += inserted;
             stats.edges_failed += total.saturating_sub(inserted);
             stats.relations_processed += 1;

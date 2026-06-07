@@ -16,6 +16,8 @@ pub struct TraversalResultItem {
     /// Depth of traversal (number of hops from source).
     pub depth: u32,
     /// Path taken (list of edge IDs).
+    #[serde(serialize_with = "serde_id::serialize_ids_as_strings")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::ids_array_schema))]
     pub path: Vec<u64>,
 }
 
@@ -171,7 +173,9 @@ fn default_direction() -> String {
 /// Response containing all node IDs in the graph.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct NodeListResponse {
-    /// List of node IDs.
+    /// List of node IDs (serialized as strings to preserve u64 precision in JS).
+    #[serde(serialize_with = "serde_id::serialize_ids_as_strings")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::ids_array_schema))]
     pub node_ids: Vec<u64>,
     /// Total count of nodes.
     pub count: usize,
@@ -198,7 +202,10 @@ pub struct NodePayloadResponse {
 /// Request for parallel multi-source BFS traversal.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ParallelTraverseRequest {
-    /// Source node IDs to start traversal from.
+    /// Source node IDs to start traversal from (accepts strings or numbers so
+    /// JS clients can send precision-safe u64 IDs above `Number.MAX_SAFE_INTEGER`).
+    #[serde(deserialize_with = "serde_id::deserialize_ids_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::ids_array_schema))]
     pub sources: Vec<u64>,
     /// Maximum traversal depth.
     #[serde(default = "default_max_depth")]
@@ -296,6 +303,8 @@ pub struct StreamNodeEvent {
     /// Depth from source.
     pub depth: u32,
     /// Path of edge IDs taken to reach this node.
+    #[serde(serialize_with = "serde_id::serialize_ids_as_strings")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::ids_array_schema))]
     pub path: Vec<u64>,
 }
 
@@ -324,4 +333,64 @@ pub struct StreamDoneEvent {
 pub struct StreamErrorEvent {
     /// Error message.
     pub error: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Path edge IDs above 2^53 must serialize as a JSON string array.
+    #[test]
+    fn test_traversal_path_serialized_as_strings() {
+        let above_safe = (1_u64 << 53) + 1; // 9_007_199_254_740_993
+        let item = TraversalResultItem {
+            target_id: 2,
+            depth: 1,
+            path: vec![above_safe],
+        };
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["path"], serde_json::json!(["9007199254740993"]));
+    }
+
+    /// Streamed node path edge IDs above 2^53 must serialize as strings.
+    #[test]
+    fn test_stream_node_event_path_serialized_as_strings() {
+        let above_safe = (1_u64 << 53) + 1;
+        let event = StreamNodeEvent {
+            id: 1,
+            depth: 1,
+            path: vec![above_safe],
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["path"], serde_json::json!(["9007199254740993"]));
+    }
+
+    /// Node-list ids above 2^53 must serialize as a JSON string array.
+    #[test]
+    fn test_node_list_ids_serialized_as_strings() {
+        let above_safe = (1_u64 << 53) + 1;
+        let response = NodeListResponse {
+            node_ids: vec![1, above_safe],
+            count: 2,
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            json["node_ids"],
+            serde_json::json!(["1", "9007199254740993"])
+        );
+    }
+
+    /// Parallel-traverse sources must deserialize from BOTH strings and numbers.
+    #[test]
+    fn test_parallel_sources_accepts_strings_and_numbers() {
+        let from_strings: ParallelTraverseRequest =
+            serde_json::from_value(serde_json::json!({ "sources": ["9007199254740993", "2"] }))
+                .expect("string sources must deserialize");
+        assert_eq!(from_strings.sources, vec![(1_u64 << 53) + 1, 2]);
+
+        let from_numbers: ParallelTraverseRequest =
+            serde_json::from_value(serde_json::json!({ "sources": [3, 4] }))
+                .expect("numeric sources must still deserialize");
+        assert_eq!(from_numbers.sources, vec![3, 4]);
+    }
 }

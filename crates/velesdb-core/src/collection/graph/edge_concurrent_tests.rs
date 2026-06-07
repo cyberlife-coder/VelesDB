@@ -1369,6 +1369,7 @@ fn test_csr_debounce_rebuilds_after_threshold() {
         min_depth: 1,
         rel_types: vec![],
         limit: 100,
+        deadline: None,
     };
     let results = store.traverse_bfs_csr(0, &config);
     let targets: std::collections::HashSet<u64> = results.iter().map(|r| r.target_id).collect();
@@ -1418,6 +1419,7 @@ fn test_add_edges_batch_counts_each_edge_toward_csr_debounce() {
         min_depth: 1,
         rel_types: vec![],
         limit: 100,
+        deadline: None,
     };
     let results = store.traverse_bfs_csr(0, &config);
     let targets: std::collections::HashSet<u64> = results.iter().map(|r| r.target_id).collect();
@@ -1433,4 +1435,87 @@ fn test_add_edges_batch_counts_each_edge_toward_csr_debounce() {
         store.csr_is_authoritative(),
         "CSR snapshot is authoritative after the batch-triggered rebuild"
     );
+}
+
+// =============================================================================
+// GraphMetrics wiring (edge insert / delete / batch)
+// =============================================================================
+
+#[test]
+fn test_metrics_record_edge_inserts() {
+    let store = ConcurrentEdgeStore::new();
+    for i in 1..=3 {
+        store
+            .add_edge(GraphEdge::new(i, i, i + 100, "KNOWS").expect("valid"))
+            .expect("add");
+    }
+
+    let m = store.metrics();
+    assert_eq!(m.edge_inserts_total(), 3, "3 inserts recorded");
+    assert_eq!(m.edges_total(), 3, "3 live edges");
+    assert_eq!(m.edge_insert_latency.count(), 3, "3 latency observations");
+}
+
+#[test]
+fn test_metrics_record_edge_delete() {
+    let store = ConcurrentEdgeStore::new();
+    for i in 1..=3 {
+        store
+            .add_edge(GraphEdge::new(i, i, i + 100, "KNOWS").expect("valid"))
+            .expect("add");
+    }
+
+    assert!(store.remove_edge(1), "edge 1 removed");
+
+    let m = store.metrics();
+    assert_eq!(m.edge_deletes_total(), 1, "1 delete recorded");
+    assert_eq!(m.edges_total(), 2, "edges_total decremented to 2");
+    assert_eq!(
+        m.edge_delete_latency.count(),
+        1,
+        "1 delete latency observed"
+    );
+}
+
+#[test]
+fn test_metrics_record_missing_edge_delete_is_noop() {
+    let store = ConcurrentEdgeStore::new();
+    assert!(
+        !store.remove_edge(999),
+        "removing absent edge returns false"
+    );
+    assert_eq!(
+        store.metrics().edge_deletes_total(),
+        0,
+        "no delete recorded for a missing edge"
+    );
+}
+
+#[test]
+fn test_metrics_record_batch_inserts() {
+    let store = ConcurrentEdgeStore::new();
+    let edges: Vec<GraphEdge> = (1..=5)
+        .map(|i| GraphEdge::new(i, i, i + 100, "LINK").expect("valid"))
+        .collect();
+
+    let added = store.add_edges_batch(edges);
+    assert_eq!(added, 5);
+
+    let m = store.metrics();
+    assert_eq!(m.edge_inserts_total(), 5, "batch bumps inserts by N");
+    assert_eq!(m.edges_total(), 5, "batch bumps edges by N");
+    assert_eq!(
+        m.edge_insert_latency.count(),
+        1,
+        "batch observes latency once (no per-edge clock read)"
+    );
+}
+
+#[test]
+fn test_metrics_empty_batch_records_nothing() {
+    let store = ConcurrentEdgeStore::new();
+    let added = store.add_edges_batch(Vec::new());
+    assert_eq!(added, 0);
+    assert_eq!(store.metrics().edge_inserts_total(), 0);
+    assert_eq!(store.metrics().edge_insert_latency.count(), 0);
 }

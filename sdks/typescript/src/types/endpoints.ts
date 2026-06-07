@@ -6,6 +6,8 @@
  * @packageDocumentation
  */
 
+import type { GraphNodeId } from './graph';
+
 // ============================================================================
 // Additional endpoint types (Sprint 2 Wave 4 -- S2-NEW-10)
 // ============================================================================
@@ -44,8 +46,8 @@ export interface GuardRailsConfigResponse {
 
 /** Options for `listNodes`. */
 export interface ListNodesResponse {
-  /** Node IDs in insertion order. */
-  nodeIds: number[];
+  /** Node IDs in insertion order (string|number to preserve u64 precision). */
+  nodeIds: GraphNodeId[];
   /** Total count -- matches `nodeIds.length`. */
   count: number;
 }
@@ -61,7 +63,7 @@ export interface GetNodeEdgesOptions {
 /** Result of `GET /collections/{name}/graph/nodes/{id}/payload`. */
 export interface NodePayloadResponse {
   /** Node ID. */
-  nodeId: number;
+  nodeId: GraphNodeId;
   /** Stored payload -- `null` if no payload has been set. */
   payload: Record<string, unknown> | null;
 }
@@ -77,7 +79,7 @@ export interface GraphSearchRequest {
 /** Single result item from `graphSearch`. */
 export interface GraphSearchResultItem {
   /** Node ID. */
-  id: number;
+  id: GraphNodeId;
   /** Similarity score. */
   score: number;
   /** Optional node payload (mirror of `GraphSearchResultItem.payload`). */
@@ -119,7 +121,7 @@ export interface MatchQueryResponse {
 /** Single row of a `MatchQueryResponse`. */
 export interface MatchQueryResultItem {
   /** Variable-binding map from the MATCH pattern. */
-  bindings: Record<string, number>;
+  bindings: Record<string, GraphNodeId>;
   /** Similarity score, present only when `similarity()` was used. */
   score?: number;
   /** Traversal depth reached to produce this row. */

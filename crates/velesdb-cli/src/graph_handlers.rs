@@ -109,6 +109,7 @@ pub(crate) fn handle_traverse(
         max_depth,
         limit,
         rel_types: rel_vec,
+        deadline: None,
     };
     let algo_label = match algorithm {
         TraverseAlgo::Bfs => "BFS",

@@ -42,6 +42,8 @@ mod edge;
 mod edge_concurrent;
 mod edge_persistence;
 mod edge_removal;
+#[cfg(feature = "persistence")]
+pub(crate) mod edge_wal;
 pub(crate) mod helpers;
 mod label_index;
 #[cfg(test)]
@@ -100,6 +102,7 @@ pub use streaming::{
     bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,
     MAX_VISITED_SIZE,
 };
+pub(crate) use traversal::{deadline_reached, DEADLINE_CHECK_INTERVAL};
 pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH};
 pub use traversal_bidir::bfs_traverse_both;
 pub use traversal_csr::{bfs_traverse_csr, bfs_traverse_csr_filtered};

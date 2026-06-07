@@ -39,6 +39,14 @@ export interface ProceduralPattern {
   name: string;
   /** Ordered steps */
   steps: string[];
+  /**
+   * Embedding vector for the pattern.
+   *
+   * Required so that `matchProceduralPatterns` (a vector search) can
+   * recall the pattern — a point stored without a vector is invisible
+   * to similarity search.
+   */
+  embedding: number[];
   /** Optional metadata */
   metadata?: Record<string, unknown>;
 }

@@ -106,18 +106,21 @@ pub(crate) enum SecondaryIndex {
 impl SecondaryIndex {
     /// Returns a [`RoaringBitmap`] of all point IDs matching the given value.
     ///
-    /// The bitmap is built on-the-fly from the B-tree leaf. Returns an empty
-    /// bitmap when the value has no entries. Callers should check
-    /// [`RoaringBitmap::is_empty`] before using the result as a pre-filter.
+    /// The bitmap is built on-the-fly from the B-tree leaf. Returns
+    /// `Some(empty)` when the value has no entries (a valid "no matches"
+    /// pre-filter). Returns `None` when any matching ID exceeds [`u32::MAX`] and
+    /// therefore cannot be represented in the bitmap — signalling an
+    /// **incomplete** result so callers fall back to a full scan rather than
+    /// silently dropping the high ID (correctness over the optimization).
     #[must_use]
-    pub fn to_bitmap(&self, value: &JsonValue) -> roaring::RoaringBitmap {
+    pub fn to_bitmap(&self, value: &JsonValue) -> Option<roaring::RoaringBitmap> {
         match self {
             Self::BTree(tree) => {
                 let guard = tree.read();
-                guard
-                    .get(value)
-                    .map(|ids| ids_to_bitmap(ids))
-                    .unwrap_or_default()
+                match guard.get(value) {
+                    Some(ids) => ids_to_bitmap(ids),
+                    None => Some(roaring::RoaringBitmap::new()),
+                }
             }
         }
     }
@@ -126,47 +129,25 @@ impl SecondaryIndex {
     /// the given range bounds.
     ///
     /// Uses `BTreeMap::range()` for efficient ordered iteration. This powers
-    /// Gt, Gte, Lt, Lte, and BETWEEN pre-filters. Returns an empty bitmap
-    /// when no keys fall within the range.
+    /// Gt, Gte, Lt, Lte, and BETWEEN pre-filters. Returns `Some(empty)` when no
+    /// keys fall within the range, and `None` when any in-range ID exceeds
+    /// [`u32::MAX`] (incomplete — callers must fall back to a full scan).
     #[must_use]
     pub fn range_bitmap(
         &self,
         from: Bound<&JsonValue>,
         to: Bound<&JsonValue>,
-    ) -> roaring::RoaringBitmap {
+    ) -> Option<roaring::RoaringBitmap> {
         match self {
             Self::BTree(tree) => {
                 let guard = tree.read();
                 let mut bm = roaring::RoaringBitmap::new();
                 for ids in guard.range((from, to)).map(|(_, v)| v) {
                     for &id in ids {
-                        if let Ok(id32) = u32::try_from(id) {
-                            bm.insert(id32);
-                        }
+                        bm.insert(u32::try_from(id).ok()?);
                     }
                 }
-                bm
-            }
-        }
-    }
-
-    /// Returns a [`RoaringBitmap`] containing ALL point IDs in this index.
-    ///
-    /// Used as the "universe" for NEQ operations: `NEQ(field, value) = universe - EQ(field, value)`.
-    #[must_use]
-    pub fn all_ids_bitmap(&self) -> roaring::RoaringBitmap {
-        match self {
-            Self::BTree(tree) => {
-                let guard = tree.read();
-                let mut bm = roaring::RoaringBitmap::new();
-                for ids in guard.values() {
-                    for &id in ids {
-                        if let Ok(id32) = u32::try_from(id) {
-                            bm.insert(id32);
-                        }
-                    }
-                }
-                bm
+                Some(bm)
             }
         }
     }
@@ -174,15 +155,14 @@ impl SecondaryIndex {
 
 /// Converts a slice of `u64` point IDs into a [`RoaringBitmap`].
 ///
-/// `RoaringBitmap` stores `u32` values. IDs exceeding `u32::MAX` are silently
-/// skipped because the bitmap is a best-effort optimization hint — the
-/// post-filter still catches all matches.
-fn ids_to_bitmap(ids: &[u64]) -> roaring::RoaringBitmap {
+/// `RoaringBitmap` stores `u32` values. Returns `None` if any ID exceeds
+/// [`u32::MAX`]: the bitmap would silently omit that ID, so callers that fetch
+/// only the bitmap's IDs (e.g. the JOIN pre-filter) would drop a real match.
+/// Signalling `None` forces those callers to fall back to a full scan.
+fn ids_to_bitmap(ids: &[u64]) -> Option<roaring::RoaringBitmap> {
     let mut bm = roaring::RoaringBitmap::new();
     for &id in ids {
-        if let Ok(id32) = u32::try_from(id) {
-            bm.insert(id32);
-        }
+        bm.insert(u32::try_from(id).ok()?);
     }
-    bm
+    Some(bm)
 }

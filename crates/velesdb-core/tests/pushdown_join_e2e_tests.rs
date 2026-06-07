@@ -488,3 +488,228 @@ fn test_pushdown_with_limit_truncates_correctly() {
         assert!(rating > 3.0, "all results should have rating > 3");
     }
 }
+
+// =========================================================================
+// Index-accelerated JOIN side: indexed path == scan path
+// =========================================================================
+
+/// Builds the standard setup and (optionally) indexes `reviews.rating`.
+///
+/// With `index = true`, the JOIN side resolves candidates via the secondary
+/// index bitmap; with `index = false`, it scans `all_ids()`. Both paths must
+/// produce identical JOIN results — that equivalence is the regression guard.
+fn setup_with_optional_rating_index(index: bool) -> (TempDir, Database) {
+    let (dir, db) = create_test_db();
+    setup_products_and_reviews(&db);
+    if index {
+        execute_sql(&db, "CREATE INDEX ON reviews (rating)").expect("test: CREATE INDEX rating");
+    }
+    (dir, db)
+}
+
+/// Merged (reviewer, rating, category) projection of a joined row, for deep equality.
+type JoinPayload = (Option<String>, Option<f64>, Option<String>);
+
+/// Maps each result id to its merged payload fields for deep equality.
+fn join_payload_map(results: &[SearchResult]) -> HashMap<u64, JoinPayload> {
+    results
+        .iter()
+        .map(|r| {
+            (
+                r.point.id,
+                (
+                    payload_str(r, "reviewer").map(str::to_owned),
+                    payload_f64(r, "rating"),
+                    payload_str(r, "category").map(str::to_owned),
+                ),
+            )
+        })
+        .collect()
+}
+
+/// GIVEN: `reviews.rating` is secondary-indexed in one DB, not in another
+/// WHEN: The IDENTICAL equality-predicate JOIN runs against both
+/// THEN: result ids AND merged payloads are identical (indexed path == scan path).
+#[test]
+fn test_indexed_join_matches_scan_path() {
+    let sql = "SELECT * FROM products \
+               JOIN reviews ON products.id = reviews.id \
+               WHERE reviews.rating = 5 \
+               LIMIT 10";
+
+    let (_dir_i, db_indexed) = setup_with_optional_rating_index(true);
+    let indexed = execute_sql(&db_indexed, sql).expect("test: indexed JOIN");
+
+    let (_dir_s, db_scan) = setup_with_optional_rating_index(false);
+    let scan = execute_sql(&db_scan, sql).expect("test: scan JOIN");
+
+    assert_eq!(
+        result_ids(&indexed),
+        result_ids(&scan),
+        "indexed path ids must equal scan path ids"
+    );
+    assert_eq!(
+        join_payload_map(&indexed),
+        join_payload_map(&scan),
+        "merged payload fields must match per id across paths"
+    );
+    // rating = 5: Alice(id=1) and Eve(id=5).
+    assert_eq!(result_ids(&indexed), HashSet::from([1, 5]));
+}
+
+/// GIVEN: `reviews.rating` indexed
+/// WHEN: Range (`> 3`) and `IN (1, 5)` predicates run via the index bitmap
+/// THEN: Results equal the unindexed scan baseline for the same SQL.
+#[test]
+fn test_indexed_join_range_and_in() {
+    let range_sql = "SELECT * FROM products \
+                     JOIN reviews ON products.id = reviews.id \
+                     WHERE reviews.rating > 3 \
+                     LIMIT 10";
+    let in_sql = "SELECT * FROM products \
+                  JOIN reviews ON products.id = reviews.id \
+                  WHERE reviews.rating IN (1, 5) \
+                  LIMIT 10";
+
+    let (_dir_i, db_indexed) = setup_with_optional_rating_index(true);
+    let (_dir_s, db_scan) = setup_with_optional_rating_index(false);
+
+    for sql in [range_sql, in_sql] {
+        let indexed = execute_sql(&db_indexed, sql).expect("test: indexed JOIN");
+        let scan = execute_sql(&db_scan, sql).expect("test: scan JOIN");
+        assert_eq!(
+            result_ids(&indexed),
+            result_ids(&scan),
+            "indexed path must equal scan path for `{sql}`"
+        );
+        assert_eq!(
+            join_payload_map(&indexed),
+            join_payload_map(&scan),
+            "merged payloads must match for `{sql}`"
+        );
+    }
+
+    // Sanity on the index path itself:
+    //   rating > 3 -> id 1(r5), 3(r4), 5(r5) = {1,3,5}
+    //   rating IN (1,5) -> id 1(r5), 5(r5), 6(r1) = {1,5,6}
+    assert_eq!(
+        result_ids(&execute_sql(&db_indexed, range_sql).expect("test: range")),
+        HashSet::from([1, 3, 5])
+    );
+    assert_eq!(
+        result_ids(&execute_sql(&db_indexed, in_sql).expect("test: in")),
+        HashSet::from([1, 5, 6])
+    );
+}
+
+/// GIVEN: `rating` is indexed but the pushed predicate targets non-indexed `reviewer`
+/// WHEN: The JOIN runs
+/// THEN: `build_prefilter_bitmap` returns None -> `all_ids()` scan fallback, correct results.
+#[test]
+fn test_join_no_index_falls_back_to_scan() {
+    let (_dir, db) = setup_with_optional_rating_index(true);
+
+    let sql = "SELECT * FROM products \
+               JOIN reviews ON products.id = reviews.id \
+               WHERE reviews.reviewer = 'Alice' \
+               LIMIT 10";
+
+    let results = execute_sql(&db, sql).expect("test: non-indexed predicate falls back to scan");
+    assert_eq!(
+        result_ids(&results),
+        HashSet::from([1]),
+        "only Alice (id=1)"
+    );
+    assert_eq!(payload_str(&results[0], "reviewer"), Some("Alice"));
+}
+
+/// GIVEN: `rating` indexed
+/// WHEN: An equality predicate matches no indexed key (`rating = 999`)
+/// THEN: `build_prefilter_bitmap` yields an empty bitmap -> zero `get()` work -> empty result, no panic.
+#[test]
+fn test_indexed_join_empty_bitmap_returns_empty() {
+    let (_dir, db) = setup_with_optional_rating_index(true);
+
+    let sql = "SELECT * FROM products \
+               JOIN reviews ON products.id = reviews.id \
+               WHERE reviews.rating = 999 \
+               LIMIT 10";
+
+    let results = execute_sql(&db, sql).expect("test: empty bitmap short-circuit");
+    assert!(
+        results.is_empty(),
+        "no review has rating 999; empty bitmap must yield empty JOIN"
+    );
+}
+
+/// GIVEN: a review row MISSING the `rating` field, with `rating` indexed
+/// WHEN: a `!=` (NEQ) predicate runs on the indexed field
+/// THEN: the indexed path returns the SAME rows as the unindexed scan path,
+///       INCLUDING the field-absent row.
+///
+/// Regression: NEQ used to be pre-filtered as `universe - eq` where `universe`
+/// came from the secondary index, which only stores points that HAVE a value
+/// for the field. NEQ semantics also match field-absent rows, so the bitmap was
+/// a strict subset and the JOIN (which fetches only bitmap ids) dropped them.
+/// `build_prefilter_bitmap` now returns `None` for NEQ/NOT IN, forcing the
+/// correct full-scan + post-filter.
+#[test]
+fn test_indexed_join_neq_includes_field_absent_rows() {
+    fn setup(index: bool) -> (TempDir, Database) {
+        let (dir, db) = create_test_db();
+        execute_sql(
+            &db,
+            "CREATE COLLECTION products (dimension = 4, metric = 'cosine');",
+        )
+        .expect("test: CREATE products");
+        let products = db
+            .get_vector_collection("products")
+            .expect("test: get products");
+        products
+            .upsert(vec![
+                Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(json!({"category": "a"}))),
+                Point::new(2, vec![0.0, 1.0, 0.0, 0.0], Some(json!({"category": "a"}))),
+                Point::new(3, vec![0.0, 0.0, 1.0, 0.0], Some(json!({"category": "b"}))),
+            ])
+            .expect("test: upsert products");
+
+        execute_sql(&db, "CREATE METADATA COLLECTION reviews;").expect("test: CREATE reviews");
+        let reviews = db
+            .get_metadata_collection("reviews")
+            .expect("test: get reviews");
+        reviews
+            .upsert(vec![
+                Point::metadata_only(1, json!({"rating": 5, "reviewer": "Alice"})),
+                Point::metadata_only(2, json!({"rating": 3, "reviewer": "Bob"})),
+                // id=3 deliberately has NO `rating` field.
+                Point::metadata_only(3, json!({"reviewer": "Charlie"})),
+            ])
+            .expect("test: upsert reviews");
+        if index {
+            execute_sql(&db, "CREATE INDEX ON reviews (rating)").expect("test: CREATE INDEX");
+        }
+        (dir, db)
+    }
+
+    let sql = "SELECT * FROM products \
+               JOIN reviews ON products.id = reviews.id \
+               WHERE reviews.rating != 5 \
+               LIMIT 10";
+
+    let (_di, db_indexed) = setup(true);
+    let indexed = execute_sql(&db_indexed, sql).expect("test: indexed NEQ JOIN");
+    let (_ds, db_scan) = setup(false);
+    let scan = execute_sql(&db_scan, sql).expect("test: scan NEQ JOIN");
+
+    assert_eq!(
+        result_ids(&indexed),
+        result_ids(&scan),
+        "indexed NEQ path must equal scan path (field-absent rows included)"
+    );
+    // rating != 5: Bob(id=2, rating=3) and Charlie(id=3, rating absent); Alice(id=1, rating=5) excluded.
+    assert_eq!(
+        result_ids(&indexed),
+        HashSet::from([2, 3]),
+        "NEQ must include the field-absent row (id=3)"
+    );
+}

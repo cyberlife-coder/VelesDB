@@ -1,6 +1,6 @@
 {
   "name": "@wiscale/tauri-plugin-velesdb",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "description": "TypeScript bindings for the VelesDB Tauri plugin - Vector search in desktop apps",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -14,7 +14,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup index.ts --format cjs,esm --dts",
@@ -33,7 +34,7 @@
     "desktop"
   ],
   "author": "Cyberlife Coder",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "https://github.com/cyberlife-coder/VelesDB.git",

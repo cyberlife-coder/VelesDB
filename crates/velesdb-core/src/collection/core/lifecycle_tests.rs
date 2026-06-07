@@ -389,8 +389,11 @@ fn test_open_without_edge_store_bin_recovers_gracefully() {
     let col_path = temp_dir.path().join("graph_col");
 
     // 1. Create a graph collection, flush to persist config.json, then drop.
+    //    Schemaless: this test exercises edge_store.bin recovery, not strict
+    //    referential-integrity enforcement (which would reject this dangling
+    //    edge with no endpoint node payloads).
     {
-        let schema = GraphSchema::new();
+        let schema = GraphSchema::schemaless();
         let collection = Collection::create_graph_collection(
             col_path.clone(),
             "graph_col",

@@ -173,15 +173,17 @@ impl Collection {
             crate::filter::Condition::Eq { field, value } => {
                 Self::bitmap_for_eq_field(indexes, field, value)
             }
-            crate::filter::Condition::Neq { field, value } => {
-                // NEQ = universe - eq_matches
-                // Build the universe from all keys in the index for this field,
-                // then subtract the matching IDs. If the value doesn't exist in
-                // the index, eq_bitmap defaults to empty — every indexed ID matches.
-                let universe = Self::bitmap_universe_for_field(indexes, field)?;
-                let eq_bitmap =
-                    Self::bitmap_for_eq_field(indexes, field, value).unwrap_or_default();
-                Some(universe - eq_bitmap)
+            crate::filter::Condition::Neq { .. } => {
+                // NEQ cannot be safely pre-filtered from this index. A `universe
+                // - eq` complement would be built from `all_ids_bitmap`, which
+                // only contains points that HAVE a primitive value for the field
+                // — but NEQ semantics also match points where the field is
+                // ABSENT (see `Condition::Neq` in filter::matching, which is true
+                // for a missing field). Those points are not in the universe, so
+                // the complement is a strict subset and a bitmap-only caller
+                // (e.g. the JOIN pre-filter) would drop them. Return `None` to
+                // force a correct full-scan + post-filter.
+                None
             }
             crate::filter::Condition::Gt { field, value }
             | crate::filter::Condition::Gte { field, value }
@@ -205,18 +207,6 @@ impl Collection {
         }
     }
 
-    /// Builds a universe bitmap containing ALL IDs indexed for a given field.
-    fn bitmap_universe_for_field(
-        indexes: &std::sync::Arc<
-            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
-        >,
-        field: &str,
-    ) -> Option<roaring::RoaringBitmap> {
-        let guard = indexes.read();
-        let index = guard.get(field)?;
-        Some(index.all_ids_bitmap())
-    }
-
     /// Looks up a single equality field in the secondary indexes.
     fn bitmap_for_eq_field(
         indexes: &std::sync::Arc<
@@ -228,11 +218,10 @@ impl Collection {
         let key = JsonValue::from_json(value)?;
         let guard = indexes.read();
         let index = guard.get(field)?;
-        let bm = index.to_bitmap(&key);
-        if bm.is_empty() {
-            return Some(bm); // Empty bitmap = no matches (valid pre-filter)
-        }
-        Some(bm)
+        // `None` here means an indexed ID exceeded u32::MAX (incomplete bitmap);
+        // propagate it so the caller falls back to a full scan. An empty bitmap
+        // is a valid "no matches" pre-filter and is returned as-is.
+        index.to_bitmap(&key)
     }
 
     /// Builds a bitmap for `IN(field, values)` by unioning per-value B-tree lookups.
@@ -258,29 +247,28 @@ impl Collection {
         let mut acc = roaring::RoaringBitmap::new();
         for v in values {
             if let Some(key) = JsonValue::from_json(v) {
-                acc |= index.to_bitmap(&key);
+                // Propagate `None` (id > u32::MAX) so the whole IN falls back to scan.
+                acc |= index.to_bitmap(&key)?;
             }
         }
         Some(acc)
     }
 
-    /// Handles `Condition::Not` by pattern-matching the inner condition.
+    /// `Not` conditions cannot be safely pre-filtered from this index.
     ///
-    /// Currently only `Not { In { field, values } }` is supported — computes
-    /// `universe - in_bitmap`. All other `Not` variants return `None`.
+    /// Like NEQ, a `universe - in` complement is built from `all_ids_bitmap`,
+    /// which omits points whose field is absent — yet `NOT IN` matches those
+    /// absent-field points. The complement would be a strict subset, so a
+    /// bitmap-only caller (e.g. the JOIN pre-filter) would drop real matches.
+    /// Always return `None` to force a correct full-scan + post-filter.
+    #[allow(clippy::unnecessary_wraps)] // Reason: uniform Option return for bitmap_from_condition dispatch
     fn bitmap_for_not_in(
-        indexes: &std::sync::Arc<
+        _indexes: &std::sync::Arc<
             parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
         >,
-        inner: &crate::filter::Condition,
+        _inner: &crate::filter::Condition,
     ) -> Option<roaring::RoaringBitmap> {
-        if let crate::filter::Condition::In { field, values } = inner {
-            let universe = Self::bitmap_universe_for_field(indexes, field)?;
-            let in_bm = Self::bitmap_for_in_field(indexes, field, values).unwrap_or_default();
-            Some(universe - in_bm)
-        } else {
-            None
-        }
+        None
     }
 
     /// Builds a range bitmap for Gt/Gte/Lt/Lte using `SecondaryIndex::range_bitmap`.
@@ -304,7 +292,7 @@ impl Collection {
             crate::filter::Condition::Lte { .. } => (Bound::Unbounded, Bound::Included(&key)),
             _ => return None,
         };
-        Some(index.range_bitmap(from, to))
+        index.range_bitmap(from, to)
     }
 
     /// Intersects bitmaps from AND-ed conditions.

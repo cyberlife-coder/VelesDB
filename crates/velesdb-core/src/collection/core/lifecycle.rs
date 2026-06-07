@@ -290,7 +290,7 @@ impl Collection {
 
         super::recovery::run_crash_recovery(&config, &vector_storage, &index)?;
 
-        Ok(Self::assemble(CollectionParts {
+        let collection = Self::assemble(CollectionParts {
             path,
             config,
             vector_storage,
@@ -302,7 +302,15 @@ impl Collection {
             range_index,
             edge_store,
             sparse_indexes,
-        }))
+        });
+
+        // Edge crash durability: replay the edge WAL on top of the loaded
+        // edge_store snapshot so edge mutations since the last flush survive
+        // a crash. No-op when edges.wal is absent (legacy / non-graph DBs).
+        #[cfg(feature = "persistence")]
+        collection.replay_edge_wal()?;
+
+        Ok(collection)
     }
 
     // create_graph_collection is in lifecycle_create.rs

@@ -12,6 +12,7 @@ use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 
+use super::graph_property_index_wiring::extract_labels;
 use super::graph_traversal_helpers::{
     bfs_pop, bfs_push, dfs_pop, dfs_push, expand_dfs_neighbors, reconstruct_path,
     traverse_with_frontier, DfsFrontier, TraversalEntry, TraversalParams,
@@ -39,9 +40,25 @@ impl Collection {
     /// collection.add_edge(edge)?;
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
+        // Strict-schema referential integrity: reject before any mutation so a
+        // violation leaves no partial write and does not bump write_generation.
+        // Schemaless collections (the default) short-circuit at zero added cost.
+        self.validate_edge_referential_integrity(&edge)?;
+
         let edge_id = edge.id();
         let rel_type = edge.label().to_string();
         let properties = edge.properties().clone();
+
+        // WAL-before-apply (crash durability): log the edge to the edge WAL
+        // before mutating the in-memory store, so a crash between the two
+        // replays the edge on the next open. Gated to graph collections.
+        #[cfg(feature = "persistence")]
+        if self.config.read().graph_schema.is_some() {
+            crate::collection::graph::edge_wal::wal_append_add(
+                &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+                &edge,
+            )?;
+        }
 
         self.edge_store.add_edge(edge)?;
 
@@ -53,6 +70,132 @@ impl Collection {
         self.write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Adds multiple edges in batch with crash-durable WAL logging.
+    ///
+    /// Appends one ADD record per edge to the edge WAL (single open +
+    /// fsync) BEFORE applying the batch to the in-memory store, then
+    /// populates edge property indexes for the successfully added edges.
+    ///
+    /// # Returns
+    ///
+    /// Number of edges successfully added (duplicates are skipped).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if WAL logging fails (fail-closed: the in-memory
+    /// store is not mutated when the WAL append fails).
+    pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> Result<usize> {
+        if edges.is_empty() {
+            return Ok(0);
+        }
+
+        // Strict-schema referential integrity: validate the ENTIRE batch before
+        // any mutation (WAL append or store write), so a single violating edge
+        // fails the whole batch with no partial write and no orphaned WAL entry.
+        // Schemaless collections (the default) short-circuit at zero added cost.
+        for edge in &edges {
+            self.validate_edge_referential_integrity(edge)?;
+        }
+
+        #[cfg(feature = "persistence")]
+        if self.config.read().graph_schema.is_some() {
+            crate::collection::graph::edge_wal::wal_append_add_batch(
+                &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+                &edges,
+            )?;
+        }
+
+        // Capture property metadata before the edges are moved into the store.
+        let index_meta: Vec<(u64, String, _)> = edges
+            .iter()
+            .filter(|e| !e.properties().is_empty())
+            .map(|e| (e.id(), e.label().to_string(), e.properties().clone()))
+            .collect();
+
+        let count = self.edge_store.add_edges_batch(edges);
+
+        for (edge_id, rel_type, properties) in &index_meta {
+            self.index_edge_properties(*edge_id, rel_type, properties);
+        }
+
+        if count > 0 {
+            self.write_generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(count)
+    }
+
+    /// Replays the edge WAL on top of the loaded `edge_store` snapshot,
+    /// re-running edge-property indexing for replayed ADD entries.
+    ///
+    /// Called from `Collection::open` AFTER `assemble`, so the snapshot is
+    /// already loaded into `self.edge_store`. A missing WAL file is a cheap
+    /// no-op (legacy DBs predate this feature). The edge store is mutated
+    /// in place via its `&self` methods; the closure indexes edge
+    /// properties into `self.edge_range_indexes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the WAL file exists but cannot be read.
+    #[cfg(feature = "persistence")]
+    pub(crate) fn replay_edge_wal(&self) -> Result<u64> {
+        use crate::collection::graph::edge_wal::{wal_path_for_edges, wal_replay, ReplayOp};
+        let wal_path = wal_path_for_edges(&self.path);
+        let replayed = wal_replay(&wal_path, &self.edge_store, |op| {
+            if let ReplayOp::Add(edge) = op {
+                if !edge.properties().is_empty() {
+                    self.index_edge_properties(edge.id(), edge.label(), edge.properties());
+                }
+            }
+        })?;
+        if replayed > 0 {
+            // Refresh the CSR read snapshot so traversals see replayed edges.
+            self.edge_store.build_read_snapshot();
+        }
+        Ok(replayed)
+    }
+
+    /// Enforces strict-schema referential integrity for an edge write.
+    ///
+    /// In schemaless mode (the default), this is a no-op and returns
+    /// immediately. In strict mode it verifies that both endpoint nodes exist
+    /// and that the edge type / endpoint types satisfy the declared schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SchemaValidation` if an endpoint node is missing, has no
+    /// `_labels`, or the edge violates the schema's edge-type constraints.
+    fn validate_edge_referential_integrity(&self, edge: &GraphEdge) -> Result<()> {
+        let schema = match self.config.read().graph_schema.clone() {
+            Some(s) if !s.is_schemaless() => s,
+            _ => return Ok(()),
+        };
+
+        let from_type = self.endpoint_node_type(edge.source())?;
+        let to_type = self.endpoint_node_type(edge.target())?;
+        schema.validate_edge_type(edge.label(), &from_type, &to_type)
+    }
+
+    /// Resolves the node type (first `_labels` entry) for a graph node,
+    /// requiring the node to exist and carry a label (strict-mode helper).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SchemaValidation` if the node has no stored payload
+    /// (referential integrity violation) or the payload declares no `_labels`.
+    fn endpoint_node_type(&self, node_id: u64) -> Result<String> {
+        let payload = self.payload_storage.read().retrieve(node_id)?;
+        let Some(payload) = payload else {
+            return Err(Error::SchemaValidation(format!(
+                "edge references non-existent node {node_id}"
+            )));
+        };
+        extract_labels(&payload)
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::SchemaValidation(format!("node {node_id} has no '_labels' type")))
     }
 
     /// Gets all edges from the collection's knowledge graph.
@@ -227,6 +370,22 @@ impl Collection {
     /// `true` if the edge existed and was removed, `false` if it didn't exist.
     #[must_use]
     pub fn remove_edge(&self, edge_id: u64) -> bool {
+        // WAL-before-apply (crash durability): log the remove intent before
+        // mutating the store. A remove of a non-existent id replays as a
+        // harmless no-op. Fail-closed: if the WAL append fails we do NOT
+        // mutate the store and report `false` (no panic — matches the
+        // no-unwrap policy and the bool return contract).
+        #[cfg(feature = "persistence")]
+        if self.config.read().graph_schema.is_some() {
+            if let Err(e) = crate::collection::graph::edge_wal::wal_append_remove(
+                &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+                edge_id,
+            ) {
+                tracing::error!("Edge WAL append remove failed for edge {edge_id}: {e}");
+                return false;
+            }
+        }
+
         // Atomic check-and-remove — no TOCTOU race.
         let removed = self.edge_store.remove_edge(edge_id);
         if removed {
@@ -280,6 +439,15 @@ impl Collection {
     ///
     /// Returns an error if storage fails.
     pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
+        // TODO(EPIC-015): in strict-schema mode, validate the node's `_labels`
+        // against `GraphSchema::validate_node_type` here (and on INSERT NODE) to
+        // reject undeclared node types. Today only edge writes are validated
+        // (`validate_edge_referential_integrity`); node writes are unchecked.
+        // Crash durability for node payloads is already provided by the
+        // payload WAL: `storage.store(node_id, payload)` below appends a
+        // CRC-checked record to `payloads.log` and fsyncs (LogPayloadStorage,
+        // DurabilityMode::Fsync), replayed on open. No edge-WAL work is
+        // needed here — only graph EDGES lacked WAL coverage.
         // LOCK ORDER: payload_storage(3) → label_index(7) → graph_range_indexes(7).
         let mut storage = self.payload_storage.write();
 
@@ -323,8 +491,25 @@ impl Collection {
     // -------------------------------------------------------------------------
 
     /// BFS traversal using the core `concurrent_bfs_stream` iterator.
+    ///
+    /// Wraps [`Self::traverse_bfs_config_inner`] with traversal metrics timing.
     #[must_use]
     pub fn traverse_bfs_config(
+        &self,
+        source_id: u64,
+        config: &TraversalConfig,
+    ) -> Vec<TraversalResult> {
+        let start = std::time::Instant::now();
+        let results = self.traverse_bfs_config_inner(source_id, config);
+        self.edge_store
+            .metrics()
+            .record_traversal(start.elapsed(), results.len() as u64);
+        results
+    }
+
+    /// Inner BFS traversal without metrics (see [`Self::traverse_bfs_config`]).
+    #[must_use]
+    fn traverse_bfs_config_inner(
         &self,
         source_id: u64,
         config: &TraversalConfig,
@@ -355,6 +540,7 @@ impl Collection {
             rel_types: config.rel_types.clone(),
             limit: Some(config.limit),
             max_visited_size: MAX_VISITED_SIZE,
+            deadline: config.deadline,
         };
         concurrent_bfs_stream(&self.edge_store, source_id, streaming)
             .filter(|result| result.depth >= config.min_depth)
@@ -364,9 +550,26 @@ impl Collection {
 
     /// DFS traversal (iterative) using `TraversalConfig`.
     ///
-    /// Uses parent-pointer map for zero-clone path reconstruction (G4).
+    /// Wraps [`Self::traverse_dfs_config_inner`] with traversal metrics timing.
     #[must_use]
     pub fn traverse_dfs_config(
+        &self,
+        source_id: u64,
+        config: &TraversalConfig,
+    ) -> Vec<TraversalResult> {
+        let start = std::time::Instant::now();
+        let results = self.traverse_dfs_config_inner(source_id, config);
+        self.edge_store
+            .metrics()
+            .record_traversal(start.elapsed(), results.len() as u64);
+        results
+    }
+
+    /// Inner DFS traversal without metrics (see [`Self::traverse_dfs_config`]).
+    ///
+    /// Uses parent-pointer map for zero-clone path reconstruction (G4).
+    #[must_use]
+    fn traverse_dfs_config_inner(
         &self,
         source_id: u64,
         config: &TraversalConfig,
@@ -378,8 +581,14 @@ impl Collection {
         let mut parent_map: FxHashMap<u64, (u64, u64)> = FxHashMap::default();
         let mut stack: Vec<TraversalEntry> = vec![(source_id, 0)];
 
+        // Start at the threshold so an already-expired deadline aborts on the
+        // first pop; otherwise the clock is only read every N pops.
+        let mut nodes_since_check = crate::collection::graph::DEADLINE_CHECK_INTERVAL;
         while let Some((node_id, depth)) = stack.pop() {
             if results.len() >= config.limit {
+                break;
+            }
+            if crate::collection::graph::deadline_reached(config.deadline, &mut nodes_since_check) {
                 break;
             }
             // Issue #906: bound the visited set / parent map. A highly-connected

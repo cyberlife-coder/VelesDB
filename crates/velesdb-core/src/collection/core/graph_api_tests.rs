@@ -5,6 +5,7 @@ mod tests {
     use crate::collection::graph::{GraphEdge, TraversalConfig};
     use crate::collection::types::Collection;
     use crate::DistanceMetric;
+    use std::time::{Duration, Instant};
     use tempfile::TempDir;
 
     fn create_test_collection() -> (Collection, TempDir) {
@@ -314,6 +315,7 @@ mod tests {
             min_depth: 0,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_bfs_config(1, &config);
         assert!(!results.is_empty());
@@ -329,6 +331,7 @@ mod tests {
             min_depth: 2,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_bfs_config(1, &config);
         // min_depth=2 so only nodes at depth >= 2 are returned
@@ -345,6 +348,7 @@ mod tests {
             min_depth: 0,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_dfs_config(1, &config);
         assert!(!results.is_empty());
@@ -361,10 +365,109 @@ mod tests {
             min_depth: 0,
             rel_types: vec!["NEXT".to_string()],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_dfs_config(1, &config);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].target_id, 2);
+    }
+
+    // =========================================================================
+    // Wall-clock deadline on config traversal + GraphMetrics wiring
+    // =========================================================================
+
+    #[test]
+    fn test_traverse_dfs_config_expired_deadline_returns_partial() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let config = TraversalConfig::with_range(1, 3)
+            .with_limit(100)
+            .with_deadline(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(1))
+                    .expect("test: clock before epoch"),
+            );
+
+        // Expired deadline aborts before expanding (counter seeded at threshold).
+        let results = collection.traverse_dfs_config(1, &config);
+        assert!(results.is_empty(), "expired deadline aborts DFS traversal");
+    }
+
+    #[test]
+    fn test_traverse_bfs_config_expired_deadline_returns_partial() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let config = TraversalConfig::with_range(1, 3)
+            .with_limit(100)
+            .with_deadline(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(1))
+                    .expect("test: clock before epoch"),
+            );
+
+        let results = collection.traverse_bfs_config(1, &config);
+        assert!(results.is_empty(), "expired deadline aborts BFS traversal");
+    }
+
+    #[test]
+    fn test_traverse_config_far_future_deadline_no_premature_abort() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let future = Instant::now() + Duration::from_secs(3600);
+        let with_deadline = TraversalConfig::with_range(1, 3)
+            .with_limit(100)
+            .with_deadline(future);
+        let without = TraversalConfig::with_range(1, 3).with_limit(100);
+
+        let a = collection.traverse_bfs_config(1, &with_deadline);
+        let b = collection.traverse_bfs_config(1, &without);
+        assert_eq!(a.len(), b.len(), "far-future deadline must not truncate");
+        assert!(!a.is_empty());
+    }
+
+    #[test]
+    fn test_traverse_bfs_config_records_metrics() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let before = collection.edge_store.metrics().traversals_total();
+        let config = TraversalConfig::with_range(1, 3).with_limit(100);
+        let results = collection.traverse_bfs_config(1, &config);
+        assert!(!results.is_empty());
+
+        let metrics = collection.edge_store.metrics();
+        assert_eq!(
+            metrics.traversals_total(),
+            before + 1,
+            "BFS config traversal increments the counter"
+        );
+        assert!(
+            metrics.traversal_latency.count() > 0,
+            "traversal latency observed"
+        );
+        assert!(
+            metrics.traversal_nodes_visited() >= results.len() as u64,
+            "nodes_visited recorded"
+        );
+    }
+
+    #[test]
+    fn test_traverse_dfs_config_records_metrics() {
+        let (collection, _temp) = create_test_collection();
+        build_chain(&collection);
+
+        let before = collection.edge_store.metrics().traversals_total();
+        let config = TraversalConfig::with_range(1, 3).with_limit(100);
+        let _ = collection.traverse_dfs_config(1, &config);
+
+        assert_eq!(
+            collection.edge_store.metrics().traversals_total(),
+            before + 1,
+            "DFS config traversal increments the counter"
+        );
     }
 
     // =========================================================================
@@ -381,6 +484,7 @@ mod tests {
             min_depth: 1,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_bfs_parallel(&[1], &config);
         assert!(!results.is_empty(), "parallel BFS should find neighbors");
@@ -406,6 +510,7 @@ mod tests {
             min_depth: 1,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_bfs_parallel(&[1, 10], &config);
 
@@ -445,6 +550,7 @@ mod tests {
             min_depth: 1,
             rel_types: vec![],
             limit: 100,
+            deadline: None,
         };
         let results = collection.traverse_bfs_parallel(&[1], &config);
         assert!(results.iter().all(|r| r.depth <= 1));
@@ -596,6 +702,7 @@ mod tests {
             min_depth: 0,
             rel_types: vec![],
             limit: usize::MAX,
+            deadline: None,
         };
         let results = collection.traverse_dfs_config(0, &config);
 
@@ -686,6 +793,7 @@ mod tests {
             min_depth: 2,
             rel_types: vec![],
             limit: usize::MAX,
+            deadline: None,
         };
         let results = collection.traverse_dfs_config(0, &config);
         assert!(
@@ -714,5 +822,160 @@ mod tests {
             "cannot exceed distinct reachable nodes"
         );
         assert!(!results.is_empty());
+    }
+
+    // =========================================================================
+    // Referential integrity + schema enforcement (strict graph schema mode)
+    // =========================================================================
+
+    fn create_strict_graph_collection() -> (Collection, TempDir) {
+        use crate::collection::graph::{EdgeType, GraphSchema, NodeType};
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let schema = GraphSchema::new()
+            .with_node_type(NodeType::new("Person"))
+            .with_node_type(NodeType::new("Company"))
+            .with_edge_type(EdgeType::new("KNOWS", "Person", "Person"));
+        let collection = Collection::create_graph_collection(
+            temp_dir.path().to_path_buf(),
+            "kg_strict",
+            schema,
+            None,
+            DistanceMetric::Cosine,
+        )
+        .expect("Failed to create strict graph collection");
+        (collection, temp_dir)
+    }
+
+    fn store_typed_node(collection: &Collection, id: u64, node_type: &str) {
+        collection
+            .store_node_payload(id, &serde_json::json!({ "_labels": [node_type] }))
+            .expect("store node payload");
+    }
+
+    fn assert_schema_violation(result: crate::error::Result<()>) {
+        match result {
+            Err(crate::error::Error::SchemaValidation(_)) => {}
+            other => panic!("expected SchemaValidation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_strict_mode_rejects_dangling_edge() {
+        let (collection, _temp) = create_strict_graph_collection();
+        // No node payloads stored: endpoints do not exist.
+        assert_schema_violation(collection.add_edge(make_edge(1, 100, 200, "KNOWS")));
+        assert_eq!(collection.edge_count(), 0, "no partial write on rejection");
+    }
+
+    #[test]
+    fn test_strict_mode_rejects_bad_edge_type() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Person");
+        assert_schema_violation(collection.add_edge(make_edge(1, 100, 200, "UNKNOWN_REL")));
+        assert_eq!(collection.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_strict_mode_rejects_endpoint_type_mismatch() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Company");
+        // KNOWS is Person->Person; target is a Company.
+        assert_schema_violation(collection.add_edge(make_edge(1, 100, 200, "KNOWS")));
+        assert_eq!(collection.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_strict_mode_rejects_node_without_labels() {
+        let (collection, _temp) = create_strict_graph_collection();
+        // Node exists but carries no `_labels` -> type cannot be resolved.
+        collection
+            .store_node_payload(100, &serde_json::json!({ "name": "A" }))
+            .unwrap();
+        store_typed_node(&collection, 200, "Person");
+        assert_schema_violation(collection.add_edge(make_edge(1, 100, 200, "KNOWS")));
+        assert_eq!(collection.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_strict_mode_accepts_valid_edge() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Person");
+        collection
+            .add_edge(make_edge(1, 100, 200, "KNOWS"))
+            .expect("valid edge should be accepted");
+        assert_eq!(collection.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_schemaless_mode_allows_dangling_edge() {
+        // Regression guard: default schemaless path is unchanged — no endpoint
+        // payloads, arbitrary edge label, still accepted.
+        let (collection, _temp) = create_graph_test_collection();
+        collection
+            .add_edge(make_edge(1, 100, 200, "ANY_REL"))
+            .expect("schemaless collection must accept dangling edges");
+        assert_eq!(collection.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_strict_mode_batch_rejects_dangling_edge() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Person");
+        // First edge is valid, second references non-existent endpoints (300/400).
+        let batch = vec![
+            make_edge(1, 100, 200, "KNOWS"),
+            make_edge(2, 300, 400, "KNOWS"),
+        ];
+        assert_schema_violation(collection.add_edges_batch(batch).map(|_| ()));
+        // Whole batch rejected before any mutation — no partial write.
+        assert_eq!(
+            collection.edge_count(),
+            0,
+            "a violating edge must fail the whole batch with no partial write"
+        );
+    }
+
+    #[test]
+    fn test_strict_mode_batch_rejects_bad_edge_type() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Person");
+        let batch = vec![make_edge(1, 100, 200, "UNKNOWN_REL")];
+        assert_schema_violation(collection.add_edges_batch(batch).map(|_| ()));
+        assert_eq!(collection.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_strict_mode_batch_accepts_valid() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Person");
+        store_typed_node(&collection, 300, "Person");
+        let added = collection
+            .add_edges_batch(vec![
+                make_edge(1, 100, 200, "KNOWS"),
+                make_edge(2, 200, 300, "KNOWS"),
+            ])
+            .expect("valid batch should be accepted in strict mode");
+        assert_eq!(added, 2);
+        assert_eq!(collection.edge_count(), 2);
+    }
+
+    #[test]
+    fn test_schemaless_batch_allows_dangling_edges() {
+        // Regression guard: schemaless batch path unchanged.
+        let (collection, _temp) = create_graph_test_collection();
+        let added = collection
+            .add_edges_batch(vec![
+                make_edge(1, 100, 200, "ANY_REL"),
+                make_edge(2, 300, 400, "OTHER_REL"),
+            ])
+            .expect("schemaless collection must accept dangling edges in batch");
+        assert_eq!(added, 2);
+        assert_eq!(collection.edge_count(), 2);
     }
 }

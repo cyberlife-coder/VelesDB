@@ -599,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_prefilter_bitmap_neq_uses_universe_subtraction() {
+    fn test_build_prefilter_bitmap_neq_returns_none() {
         let (collection, _temp) = create_test_collection();
         collection
             .create_index("category")
@@ -625,13 +625,13 @@ mod tests {
             field: "category".to_string(),
             value: serde_json::Value::String("tech".to_string()),
         });
-        let bitmap = collection.build_prefilter_bitmap(&filter);
-        assert!(bitmap.is_some(), "Neq should return Some (universe - eq)");
-        let bm = bitmap.unwrap();
-        // Universe = {1,2,5,7,10}, eq("tech") = {1,5,10}, NEQ = {2,7}
-        assert_eq!(bm.len(), 2, "Neq should exclude tech points");
-        assert!(bm.contains(2));
-        assert!(bm.contains(7));
+        // NEQ is no longer pre-filtered: a `universe - eq` complement built from
+        // the index omits points whose `category` field is ABSENT, yet NEQ
+        // matches those points. Returning `None` forces a correct full scan.
+        assert!(
+            collection.build_prefilter_bitmap(&filter).is_none(),
+            "NEQ must return None (field-absent points would be dropped otherwise)"
+        );
     }
 
     // =========================================================================
@@ -913,13 +913,13 @@ mod tests {
             field: "category".to_string(),
             values: vec![serde_json::Value::String("tech".to_string())],
         });
-        let bitmap = collection.build_prefilter_bitmap(&filter);
-        assert!(bitmap.is_some());
-        let bm = bitmap.unwrap();
-        // large_id should be silently skipped
-        assert_eq!(bm.len(), 2);
-        assert!(bm.contains(1));
-        assert!(bm.contains(5));
+        // An ID above u32::MAX cannot live in the bitmap. Rather than silently
+        // skip it (a bitmap-only caller would drop a real match), the builder
+        // returns None so the caller falls back to a full scan.
+        assert!(
+            collection.build_prefilter_bitmap(&filter).is_none(),
+            "IN with an id > u32::MAX must return None (incomplete bitmap)"
+        );
     }
 
     // =========================================================================
@@ -927,7 +927,7 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_not_in_bitmap_returns_universe_minus_in() {
+    fn test_not_in_bitmap_returns_none() {
         // GIVEN: index with tech=[1,5,10], science=[2,7], art=[3]
         let (collection, _temp) = create_test_collection();
         collection
@@ -945,16 +945,14 @@ mod tests {
                 ],
             }),
         });
-        let bitmap = collection.build_prefilter_bitmap(&filter);
 
-        // THEN: universe={1,2,3,5,7,10}, IN={1,2,5,7,10}, NOT IN={3}
+        // THEN: NOT IN cannot be safely pre-filtered. A `universe - in` complement
+        // built from the index omits field-absent points, which NOT IN matches —
+        // so the builder returns None and the caller falls back to a full scan.
         assert!(
-            bitmap.is_some(),
-            "NOT IN on indexed field should produce bitmap"
+            collection.build_prefilter_bitmap(&filter).is_none(),
+            "NOT IN must return None (field-absent points would be dropped otherwise)"
         );
-        let bm = bitmap.unwrap();
-        assert_eq!(bm.len(), 1);
-        assert!(bm.contains(3), "only art ID=3 should remain");
     }
 
     #[test]
@@ -973,7 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn test_not_in_empty_list_returns_universe() {
+    fn test_not_in_empty_list_returns_none() {
         // GIVEN: index with tech=[1,5,10], science=[2,7], art=[3]
         let (collection, _temp) = create_test_collection();
         collection
@@ -988,22 +986,17 @@ mod tests {
                 values: vec![],
             }),
         });
-        let bitmap = collection.build_prefilter_bitmap(&filter);
 
-        // THEN: universe - empty = full universe {1,2,3,5,7,10}
-        assert!(bitmap.is_some(), "NOT IN () should return full universe");
-        let bm = bitmap.unwrap();
-        assert_eq!(bm.len(), 6);
-        assert!(bm.contains(1));
-        assert!(bm.contains(2));
-        assert!(bm.contains(3));
-        assert!(bm.contains(5));
-        assert!(bm.contains(7));
-        assert!(bm.contains(10));
+        // THEN: all `Not` conditions return None now (full-scan fallback). The
+        // post-filter evaluates the predicate correctly, including field-absent rows.
+        assert!(
+            collection.build_prefilter_bitmap(&filter).is_none(),
+            "NOT IN () must return None (conservative scan fallback)"
+        );
     }
 
     #[test]
-    fn test_not_in_all_values_returns_empty() {
+    fn test_not_in_all_values_returns_none() {
         // GIVEN: index with tech=[1,5,10], science=[2,7], art=[3]
         let (collection, _temp) = create_test_collection();
         collection
@@ -1022,13 +1015,11 @@ mod tests {
                 ],
             }),
         });
-        let bitmap = collection.build_prefilter_bitmap(&filter);
 
-        // THEN: universe - universe = empty
-        assert!(bitmap.is_some(), "NOT IN (all) should return Some(empty)");
+        // THEN: None (scan fallback) — the post-filter yields the empty set.
         assert!(
-            bitmap.unwrap().is_empty(),
-            "excluding all values => empty bitmap"
+            collection.build_prefilter_bitmap(&filter).is_none(),
+            "NOT IN (all) must return None (conservative scan fallback)"
         );
     }
 

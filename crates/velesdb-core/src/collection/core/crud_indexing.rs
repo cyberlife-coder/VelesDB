@@ -209,10 +209,9 @@ impl Collection {
                     crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
                 cached = Some((name, wal_path));
             }
-            let wal_path = &cached
-                .as_ref()
-                .expect("cache populated on first iteration")
-                .1;
+            let Some((_, wal_path)) = cached.as_ref() else {
+                continue;
+            };
             crate::index::sparse::persistence::wal_append_upsert(wal_path, point_id, sv)?;
         }
         Ok(())

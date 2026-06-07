@@ -1,6 +1,6 @@
 {
   "name": "@wiscale/velesdb-sdk",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "description": "VelesDB TypeScript SDK: The Local Vector Database for AI & RAG. Microsecond semantic search in Browser & Node.js.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -14,7 +14,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts",
@@ -43,7 +44,7 @@
     "llm"
   ],
   "author": "Wiscale France",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "https://github.com/cyberlife-coder/VelesDB.git",

@@ -87,14 +87,11 @@ impl<'a> BatchImporter<'a> {
 pub fn create_progress_bar(total: usize, show: bool) -> ProgressBar {
     if show {
         let pb = ProgressBar::new(total as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(
-                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
-                )
-                .expect("hardcoded progress bar template is valid")
-                .progress_chars("#>-"),
-        );
+        if let Ok(style) = ProgressStyle::default_bar().template(
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+        ) {
+            pb.set_style(style.progress_chars("#>-"));
+        }
         pb
     } else {
         ProgressBar::hidden()

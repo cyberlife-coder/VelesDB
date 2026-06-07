@@ -209,10 +209,16 @@ pub(super) fn search_filtered(
 ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
     validate_dimension(dimension, query_embedding.len())?;
     let collection = get_collection(db, collection_name)?;
-    let results = search_collection(&collection, query_embedding, k)?;
+    // Over-fetch so that expired-but-not-yet-deleted points evicted by the
+    // post-search TTL filter do not shrink the result set below `k`. Expired
+    // ids occupy at most `expired_count` of the top-k slots, so fetching
+    // `k + expired_count` and then filtering guarantees up to `k` live results.
+    let fetch_k = k.saturating_add(ttl.expired_count());
+    let results = search_collection(&collection, query_embedding, fetch_k)?;
     Ok(results
         .into_iter()
         .filter(|r| !ttl.is_expired(r.point.id))
+        .take(k)
         .collect())
 }
 

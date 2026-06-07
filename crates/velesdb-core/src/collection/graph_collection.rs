@@ -157,15 +157,13 @@ impl GraphCollection {
     /// # Returns
     ///
     /// Number of edges successfully added.
-    #[must_use]
-    pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> usize {
-        let count = self.inner.edge_store.add_edges_batch(edges);
-        if count > 0 {
-            self.inner
-                .write_generation
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        count
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if WAL durability logging fails for graph
+    /// collections (fail-closed: the in-memory store is not mutated).
+    pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> Result<usize> {
+        self.inner.add_edges_batch(edges)
     }
 
     /// Returns edges, optionally filtered by label.

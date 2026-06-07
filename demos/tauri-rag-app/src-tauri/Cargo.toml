@@ -23,3 +23,9 @@ tokio = { version = "1", features = ["sync", "rt"] }
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# Standalone workspace root: this demo is excluded from the repo workspace
+# (root Cargo.toml `workspace.exclude`) and keeps its own Cargo.lock so its
+# heavy Tauri dependency tree stays isolated. Declaring an empty `[workspace]`
+# lets cargo resolve/update this lockfile independently of the parent.
+[workspace]

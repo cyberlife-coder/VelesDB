@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use utoipa::ToSchema;
+use velesdb_core::api_types::serde_id;
 
 use crate::types::VELESQL_CONTRACT_VERSION;
 use crate::AppState;
@@ -37,6 +38,8 @@ pub struct MatchQueryRequest {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MatchQueryResultItem {
     /// Variable bindings from pattern matching.
+    #[serde(serialize_with = "serde_id::serialize_id_map_as_strings")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::id_map_schema))]
     pub bindings: HashMap<String, u64>,
     /// Similarity score (if similarity() was used).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,18 +129,15 @@ pub async fn match_query(
 ) -> Result<Json<MatchQueryResponse>, (StatusCode, Json<MatchQueryError>)> {
     let start = std::time::Instant::now();
 
-    let collection = state
-        .db
-        .get_vector_collection(&collection_name)
-        .ok_or_else(|| {
-            mk_match_error(
-                StatusCode::NOT_FOUND,
-                format!("Collection '{}' not found", collection_name),
-                "COLLECTION_NOT_FOUND",
-                "Create the collection first or correct the collection name in the route",
-                Some(serde_json::json!({ "collection": collection_name })),
-            )
-        })?;
+    let collection = resolve_match_collection(&state, &collection_name).ok_or_else(|| {
+        mk_match_error(
+            StatusCode::NOT_FOUND,
+            format!("Collection '{}' not found", collection_name),
+            "COLLECTION_NOT_FOUND",
+            "Create the collection first or correct the collection name in the route",
+            Some(serde_json::json!({ "collection": collection_name })),
+        )
+    })?;
 
     let match_clause = parse_match_clause(&request.query)?;
     validate_threshold(request.threshold)?;
@@ -218,17 +218,44 @@ fn validate_threshold(threshold: Option<f32>) -> Result<(), (StatusCode, Json<Ma
     Ok(())
 }
 
-/// Execute a MATCH query, dispatching to similarity or plain variant.
+enum MatchCollection {
+    Vector(velesdb_core::collection::VectorCollection),
+    Graph(velesdb_core::collection::GraphCollection),
+}
+
+fn resolve_match_collection(state: &AppState, name: &str) -> Option<MatchCollection> {
+    state
+        .db
+        .get_vector_collection(name)
+        .map(MatchCollection::Vector)
+        .or_else(|| {
+            state
+                .db
+                .get_graph_collection(name)
+                .map(MatchCollection::Graph)
+        })
+}
+
 fn execute_match(
-    collection: &velesdb_core::collection::VectorCollection,
+    collection: &MatchCollection,
     match_clause: &velesdb_core::velesql::MatchClause,
     request: &MatchQueryRequest,
 ) -> Result<Vec<MatchQueryResultItem>, (StatusCode, Json<MatchQueryError>)> {
     let raw_results = if let Some(ref vector) = request.vector {
         let threshold = request.threshold.unwrap_or(0.0);
-        collection.execute_match_with_similarity(match_clause, vector, threshold, &request.params)
+        match collection {
+            MatchCollection::Vector(coll) => {
+                coll.execute_match_with_similarity(match_clause, vector, threshold, &request.params)
+            }
+            MatchCollection::Graph(coll) => {
+                coll.execute_match_with_similarity(match_clause, vector, threshold, &request.params)
+            }
+        }
     } else {
-        collection.execute_match(match_clause, &request.params)
+        match collection {
+            MatchCollection::Vector(coll) => coll.execute_match(match_clause, &request.params),
+            MatchCollection::Graph(coll) => coll.execute_match(match_clause, &request.params),
+        }
     };
 
     raw_results
@@ -289,6 +316,31 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("bindings"));
         assert!(json.contains("0.95"));
+    }
+
+    #[test]
+    fn test_match_query_bindings_serialized_as_strings() {
+        let above_safe = (1_u64 << 53) + 1; // 9_007_199_254_740_993
+        let response = MatchQueryResponse {
+            results: vec![MatchQueryResultItem {
+                bindings: HashMap::from([("a".to_string(), above_safe)]),
+                score: None,
+                depth: 0,
+                projected: HashMap::new(),
+            }],
+            took_ms: 0,
+            count: 1,
+            meta: MatchQueryMeta {
+                velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
+            },
+        };
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            json["results"][0]["bindings"]["a"],
+            serde_json::json!("9007199254740993"),
+            "binding IDs must serialize as JSON strings for JS precision safety"
+        );
     }
 
     #[test]

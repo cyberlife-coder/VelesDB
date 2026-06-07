@@ -15,6 +15,7 @@
 #![allow(clippy::doc_markdown)] // Storage docs include API and platform identifiers.
 
 pub mod async_ops;
+pub(crate) mod atomic_write;
 mod compaction;
 mod guard;
 mod histogram;
