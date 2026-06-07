@@ -23,10 +23,13 @@ fn test_match_request_json_format() {
 /// Test response JSON format with projected properties.
 #[test]
 fn test_match_response_json_format() {
+    // Binding values are emitted as STRINGS over the wire (u64 ids are
+    // serialized via serde_id to avoid JS Number.MAX_SAFE_INTEGER precision
+    // loss). This fixture mirrors that real shape.
     let response = json!({
         "results": [
             {
-                "bindings": {"doc": 123, "author": 456},
+                "bindings": {"doc": "123", "author": "456"},
                 "score": 0.95,
                 "depth": 1,
                 "projected": {
@@ -44,7 +47,10 @@ fn test_match_response_json_format() {
     assert_eq!(results.len(), 1);
 
     let first = &results[0];
-    assert!(first["bindings"]["doc"].as_u64().is_some());
+    assert!(
+        first["bindings"]["doc"].as_str().is_some(),
+        "binding ids are serialized as strings (JS precision safety)"
+    );
     assert!(first["score"].as_f64().is_some());
     assert_eq!(first["projected"]["author.name"], "John Doe");
 }

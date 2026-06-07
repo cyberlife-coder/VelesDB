@@ -3038,10 +3038,10 @@ components:
         node_ids:
           type: array
           items:
-            type: integer
-            format: int64
-            minimum: 0
-          description: List of node IDs.
+            oneOf:
+            - type: integer
+              format: int64
+            - type: string
     NodePayloadResponse:
       type: object
       description: Response for a node payload retrieval.
@@ -3126,10 +3126,10 @@ components:
         sources:
           type: array
           items:
-            type: integer
-            format: int64
-            minimum: 0
-          description: Source node IDs to start traversal from.
+            oneOf:
+            - type: integer
+              format: int64
+            - type: string
     PointRequest:
       type: object
       description: A point in an upsert request.
