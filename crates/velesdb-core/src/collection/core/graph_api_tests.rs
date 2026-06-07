@@ -919,4 +919,63 @@ mod tests {
             .expect("schemaless collection must accept dangling edges");
         assert_eq!(collection.edge_count(), 1);
     }
+
+    #[test]
+    fn test_strict_mode_batch_rejects_dangling_edge() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Person");
+        // First edge is valid, second references non-existent endpoints (300/400).
+        let batch = vec![
+            make_edge(1, 100, 200, "KNOWS"),
+            make_edge(2, 300, 400, "KNOWS"),
+        ];
+        assert_schema_violation(collection.add_edges_batch(batch).map(|_| ()));
+        // Whole batch rejected before any mutation — no partial write.
+        assert_eq!(
+            collection.edge_count(),
+            0,
+            "a violating edge must fail the whole batch with no partial write"
+        );
+    }
+
+    #[test]
+    fn test_strict_mode_batch_rejects_bad_edge_type() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Person");
+        let batch = vec![make_edge(1, 100, 200, "UNKNOWN_REL")];
+        assert_schema_violation(collection.add_edges_batch(batch).map(|_| ()));
+        assert_eq!(collection.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_strict_mode_batch_accepts_valid() {
+        let (collection, _temp) = create_strict_graph_collection();
+        store_typed_node(&collection, 100, "Person");
+        store_typed_node(&collection, 200, "Person");
+        store_typed_node(&collection, 300, "Person");
+        let added = collection
+            .add_edges_batch(vec![
+                make_edge(1, 100, 200, "KNOWS"),
+                make_edge(2, 200, 300, "KNOWS"),
+            ])
+            .expect("valid batch should be accepted in strict mode");
+        assert_eq!(added, 2);
+        assert_eq!(collection.edge_count(), 2);
+    }
+
+    #[test]
+    fn test_schemaless_batch_allows_dangling_edges() {
+        // Regression guard: schemaless batch path unchanged.
+        let (collection, _temp) = create_graph_test_collection();
+        let added = collection
+            .add_edges_batch(vec![
+                make_edge(1, 100, 200, "ANY_REL"),
+                make_edge(2, 300, 400, "OTHER_REL"),
+            ])
+            .expect("schemaless collection must accept dangling edges in batch");
+        assert_eq!(added, 2);
+        assert_eq!(collection.edge_count(), 2);
+    }
 }

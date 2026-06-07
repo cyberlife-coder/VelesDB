@@ -91,6 +91,14 @@ impl Collection {
             return Ok(0);
         }
 
+        // Strict-schema referential integrity: validate the ENTIRE batch before
+        // any mutation (WAL append or store write), so a single violating edge
+        // fails the whole batch with no partial write and no orphaned WAL entry.
+        // Schemaless collections (the default) short-circuit at zero added cost.
+        for edge in &edges {
+            self.validate_edge_referential_integrity(edge)?;
+        }
+
         #[cfg(feature = "persistence")]
         if self.config.read().graph_schema.is_some() {
             crate::collection::graph::edge_wal::wal_append_add_batch(
@@ -431,6 +439,10 @@ impl Collection {
     ///
     /// Returns an error if storage fails.
     pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
+        // TODO(EPIC-015): in strict-schema mode, validate the node's `_labels`
+        // against `GraphSchema::validate_node_type` here (and on INSERT NODE) to
+        // reject undeclared node types. Today only edge writes are validated
+        // (`validate_edge_referential_integrity`); node writes are unchecked.
         // Crash durability for node payloads is already provided by the
         // payload WAL: `storage.store(node_id, payload)` below appends a
         // CRC-checked record to `payloads.log` and fsyncs (LogPayloadStorage,
