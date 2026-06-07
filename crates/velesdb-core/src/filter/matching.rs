@@ -364,6 +364,19 @@ fn haversine_distance_m(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
     EARTH_RADIUS_M * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())
 }
 
+/// Applies a comparison operator to a geo-distance value and threshold.
+fn compare_geo_distance(dist: f64, threshold: f64, op: crate::velesql::CompareOp) -> bool {
+    use crate::velesql::CompareOp;
+    match op {
+        CompareOp::Eq => (dist - threshold).abs() < f64::EPSILON,
+        CompareOp::NotEq => (dist - threshold).abs() >= f64::EPSILON,
+        CompareOp::Gt => dist > threshold,
+        CompareOp::Gte => dist >= threshold,
+        CompareOp::Lt => dist < threshold,
+        CompareOp::Lte => dist <= threshold,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::filter::Condition;
@@ -517,18 +530,5 @@ mod tests {
             value: json!("bob")
         }
         .matches(&p));
-    }
-}
-
-/// Applies a comparison operator to a geo-distance value and threshold.
-fn compare_geo_distance(dist: f64, threshold: f64, op: crate::velesql::CompareOp) -> bool {
-    use crate::velesql::CompareOp;
-    match op {
-        CompareOp::Eq => (dist - threshold).abs() < f64::EPSILON,
-        CompareOp::NotEq => (dist - threshold).abs() >= f64::EPSILON,
-        CompareOp::Gt => dist > threshold,
-        CompareOp::Gte => dist >= threshold,
-        CompareOp::Lt => dist < threshold,
-        CompareOp::Lte => dist <= threshold,
     }
 }
