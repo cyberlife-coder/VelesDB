@@ -531,6 +531,28 @@ pub struct SemanticQueryResult {
     pub content: String,
 }
 
+/// Request to store knowledge in semantic memory with a TTL.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticStoreWithTtlRequest {
+    /// Unique ID for this knowledge fact.
+    pub id: u64,
+    /// Text content of the knowledge.
+    pub content: String,
+    /// Embedding vector for the content.
+    pub embedding: Vec<f32>,
+    /// Time-to-live in seconds before the entry expires.
+    pub ttl_seconds: u64,
+}
+
+/// Request to delete a semantic memory entry by ID.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticDeleteRequest {
+    /// Knowledge fact ID to delete.
+    pub id: u64,
+}
+
 /// Request to record an episode in episodic memory.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -567,6 +589,50 @@ pub struct EpisodicResult {
     pub content: String,
     /// Timestamp (epoch seconds).
     pub timestamp: i64,
+}
+
+/// Request to delete an episode by ID.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodicDeleteRequest {
+    /// Episode event ID to delete.
+    pub event_id: u64,
+}
+
+/// Request to recall episodes similar to a query embedding.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodicRecallSimilarRequest {
+    /// Query embedding vector.
+    pub embedding: Vec<f32>,
+    /// Number of results to return.
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+}
+
+/// Request to fetch episodes older than a timestamp.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodicOlderThanRequest {
+    /// Upper timestamp bound (epoch seconds); only older events are returned.
+    pub timestamp: i64,
+    /// Maximum number of results to return.
+    #[serde(default = "default_top_k")]
+    pub limit: usize,
+}
+
+/// Result from a similarity-based episodic recall.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodicSimilarResult {
+    /// Episode ID.
+    pub id: u64,
+    /// Episode content.
+    pub content: String,
+    /// Timestamp (epoch seconds).
+    pub timestamp: i64,
+    /// Similarity score from the vector search.
+    pub score: f32,
 }
 
 // ============================================================================
@@ -624,6 +690,48 @@ pub struct ProceduralMatchResult {
     pub confidence: f32,
     /// Similarity score from vector search.
     pub score: f32,
+}
+
+/// Request to reinforce a stored procedure.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProceduralReinforceRequest {
+    /// Procedure ID to reinforce.
+    pub procedure_id: u64,
+    /// Whether the procedure execution succeeded.
+    pub success: bool,
+}
+
+/// Request to delete a procedure by ID.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProceduralDeleteRequest {
+    /// Procedure ID to delete.
+    pub procedure_id: u64,
+}
+
+// ============================================================================
+// Snapshot DTOs (serialize / deserialize)
+// ============================================================================
+
+/// Request to serialize a memory subsystem to snapshot bytes.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySnapshotRequest {
+    /// Embedding dimension of the target memory collection.
+    #[serde(default = "default_dimension")]
+    pub dimension: usize,
+}
+
+/// Request to restore a memory subsystem from snapshot bytes.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryRestoreRequest {
+    /// Embedding dimension of the target memory collection.
+    #[serde(default = "default_dimension")]
+    pub dimension: usize,
+    /// Snapshot bytes previously produced by the matching serialize command.
+    pub data: Vec<u8>,
 }
 
 // ============================================================================

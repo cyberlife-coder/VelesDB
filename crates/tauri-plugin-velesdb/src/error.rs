@@ -14,6 +14,19 @@ pub enum Error {
     #[error("Collection '{0}' not found")]
     CollectionNotFound(String),
 
+    /// A requested memory entry does not exist.
+    #[error("Not found: {0}")]
+    NotFound(String),
+
+    /// A provided embedding dimension does not match the stored dimension.
+    #[error("Invalid embedding dimension: expected {expected}, got {actual}")]
+    DimensionMismatch {
+        /// Expected embedding dimension.
+        expected: usize,
+        /// Actual embedding dimension provided.
+        actual: usize,
+    },
+
     /// Invalid configuration.
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
@@ -41,6 +54,8 @@ impl From<Error> for CommandError {
         let code = match &err {
             Error::Database(core_err) => core_err.code(),
             Error::CollectionNotFound(_) => "VELES-002",
+            Error::NotFound(_) => "NOT_FOUND",
+            Error::DimensionMismatch { .. } => "DIMENSION_MISMATCH",
             Error::InvalidConfig(_) => "INVALID_CONFIG",
             Error::Serialization(_) => "SERIALIZATION_ERROR",
             Error::Io(_) => "VELES-011",
@@ -55,6 +70,20 @@ impl From<Error> for CommandError {
 impl From<serde_json::Error> for Error {
     fn from(err: serde_json::Error) -> Self {
         Self::Serialization(err.to_string())
+    }
+}
+
+impl From<velesdb_core::agent::AgentMemoryError> for Error {
+    fn from(err: velesdb_core::agent::AgentMemoryError) -> Self {
+        use velesdb_core::agent::AgentMemoryError as A;
+        match err {
+            A::NotFound(msg) => Self::NotFound(msg),
+            A::DimensionMismatch { expected, actual } => {
+                Self::DimensionMismatch { expected, actual }
+            }
+            A::DatabaseError(core_err) => Self::Database(core_err),
+            other => Self::InvalidConfig(other.to_string()),
+        }
     }
 }
 
@@ -127,6 +156,52 @@ mod tests {
         let cmd_err: CommandError = err.into();
 
         // Assert — should forward the core VELES-XXX code
+        assert_eq!(cmd_err.code, "VELES-001");
+    }
+
+    #[test]
+    fn test_agent_error_preserves_not_found() {
+        // Arrange — agent NotFound must not be flattened to InvalidConfig
+        let agent_err = velesdb_core::agent::AgentMemoryError::NotFound("proc 7".to_string());
+
+        // Act
+        let err: Error = agent_err.into();
+        let cmd_err: CommandError = err.into();
+
+        // Assert
+        assert_eq!(cmd_err.code, "NOT_FOUND");
+        assert!(cmd_err.message.contains("proc 7"));
+    }
+
+    #[test]
+    fn test_agent_error_preserves_dimension_mismatch() {
+        // Arrange
+        let agent_err = velesdb_core::agent::AgentMemoryError::DimensionMismatch {
+            expected: 384,
+            actual: 128,
+        };
+
+        // Act
+        let err: Error = agent_err.into();
+        let cmd_err: CommandError = err.into();
+
+        // Assert
+        assert_eq!(cmd_err.code, "DIMENSION_MISMATCH");
+        assert!(cmd_err.message.contains("384"));
+        assert!(cmd_err.message.contains("128"));
+    }
+
+    #[test]
+    fn test_agent_error_database_forwards_core_code() {
+        // Arrange — DatabaseError must surface the core VELES-XXX code
+        let core_err = velesdb_core::Error::CollectionExists("m".to_string());
+        let agent_err = velesdb_core::agent::AgentMemoryError::DatabaseError(core_err);
+
+        // Act
+        let err: Error = agent_err.into();
+        let cmd_err: CommandError = err.into();
+
+        // Assert
         assert_eq!(cmd_err.code, "VELES-001");
     }
 
