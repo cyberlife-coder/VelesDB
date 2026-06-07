@@ -278,7 +278,8 @@ runtime guardrail (default 10), and never above the parse-time budget of 32.
 
 > Note: earlier drafts of this guide referenced a "10-hop" or "100-hop" cap. The
 > precise picture is the two distinct limits above (32 at parse time, 10 by
-> default at run time); `SAFETY_MAX_DEPTH = 100` in `graph/traversal.rs` is only
+> default at run time); `SAFETY_MAX_DEPTH = 100` in
+> `crates/velesdb-core/src/collection/graph/traversal.rs` is only
 > the cap applied by the imperative `with_unbounded_range` traversal builder, not
 > by the VelesQL MATCH path.
 
