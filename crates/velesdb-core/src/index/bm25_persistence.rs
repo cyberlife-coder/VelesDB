@@ -28,12 +28,11 @@
 //! See issue #618 for the Devin learning that motivates this
 //! fail-fast contract.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{Error, Result};
 use crate::index::bm25::{Bm25Index, Bm25Snapshot};
+use crate::storage::atomic_write::atomic_write;
 
 /// Snapshot filename under a collection directory.
 pub(crate) const BM25_SNAPSHOT_FILENAME: &str = "bm25.snapshot";
@@ -85,42 +84,5 @@ pub(crate) fn load_snapshot(dir: &Path) -> Result<Option<Bm25Index>> {
     Ok(Some(Bm25Index::from_snapshot(snapshot)?))
 }
 
-// ---------------------------------------------------------------------------
-// Atomic write (write-tmp-fsync-rename)
-// ---------------------------------------------------------------------------
-
-/// Process-wide counter to produce unique tmp suffixes even when two
-/// threads race to save the same snapshot.
-static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Writes `data` to `final_path` atomically: stage to a uniquely-named
-/// tmp file in the same directory, flush + fsync, then rename over.
-///
-/// Mirrors the pattern in `index::hnsw::persistence::atomic_write`. The
-/// tmp suffix combines PID, thread ID and a monotonically-increasing
-/// counter to avoid collisions under concurrent saves.
-fn atomic_write(final_path: &Path, data: &[u8]) -> std::io::Result<()> {
-    let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    let tid = std::thread::current().id();
-
-    let file_name = final_path.file_name().unwrap_or_default().to_string_lossy();
-    let tmp_name = format!("{file_name}.tmp.{pid}.{tid:?}.{seq}");
-    let tmp_path = final_path.with_file_name(&tmp_name);
-
-    let result = atomic_write_inner(&tmp_path, final_path, data);
-    if result.is_err() {
-        // Best-effort cleanup — ignore any follow-up error.
-        let _ = std::fs::remove_file(&tmp_path);
-    }
-    result
-}
-
-fn atomic_write_inner(tmp_path: &Path, final_path: &Path, data: &[u8]) -> std::io::Result<()> {
-    let file = std::fs::File::create(tmp_path)?;
-    let mut writer = std::io::BufWriter::new(file);
-    writer.write_all(data)?;
-    writer.flush()?;
-    writer.get_ref().sync_all()?;
-    std::fs::rename(tmp_path, final_path)
-}
+// Atomic snapshot writes use the shared `crate::storage::atomic_write` helper
+// (write-tmp + fsync + rename), so the crash-safety logic lives in one place.

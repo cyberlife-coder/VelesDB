@@ -33,7 +33,13 @@ pub(crate) trait PostcardPersistence: Serialize + DeserializeOwned + Sized {
         postcard::from_bytes(bytes)
     }
 
-    /// Saves this value to a file.
+    /// Saves this value to a file **atomically**.
+    ///
+    /// Serializes to a sibling `*.tmp` file, fsyncs it, then renames it over the
+    /// target. On the same filesystem `rename` is atomic, so a crash mid-write
+    /// leaves the *previous* good snapshot intact rather than a torn file that
+    /// `load_from_file` would reject (and callers would fall back to an empty
+    /// store, losing data). Mirrors the durability the WAL already provides.
     ///
     /// # Errors
     ///
@@ -42,7 +48,7 @@ pub(crate) trait PostcardPersistence: Serialize + DeserializeOwned + Sized {
         let bytes = self
             .to_bytes()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        std::fs::write(path, bytes)
+        crate::storage::atomic_write::atomic_write(path, &bytes)
     }
 
     /// Loads a value from a file.
@@ -109,5 +115,46 @@ mod tests {
         let (l, p) = make_label_prop_key("", "");
         assert_eq!(l, "");
         assert_eq!(p, "");
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+    struct Sample {
+        ids: Vec<u64>,
+    }
+    impl PostcardPersistence for Sample {}
+
+    #[test]
+    fn test_atomic_save_round_trips_and_leaves_no_temp() {
+        let dir = tempfile::TempDir::new().expect("test: temp dir");
+        let path = dir.path().join("snapshot.bin");
+        let value = Sample {
+            ids: vec![1, 2, 9_007_199_254_740_993],
+        };
+
+        value.save_to_file(&path).expect("test: save");
+        // No leftover temp file after a successful atomic save.
+        assert!(
+            !path.with_extension("tmp").exists(),
+            "the .tmp sibling must be renamed away, not left behind"
+        );
+        let loaded = Sample::load_from_file(&path).expect("test: load");
+        assert_eq!(loaded, value);
+    }
+
+    #[test]
+    fn test_atomic_save_overwrites_existing_snapshot() {
+        let dir = tempfile::TempDir::new().expect("test: temp dir");
+        let path = dir.path().join("snapshot.bin");
+
+        Sample { ids: vec![1] }
+            .save_to_file(&path)
+            .expect("test: first save");
+        let second = Sample {
+            ids: vec![10, 20, 30],
+        };
+        second.save_to_file(&path).expect("test: overwrite save");
+
+        assert_eq!(Sample::load_from_file(&path).expect("test: load"), second);
+        assert!(!path.with_extension("tmp").exists());
     }
 }
