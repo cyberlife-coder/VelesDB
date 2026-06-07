@@ -9,6 +9,7 @@ VELESDB_AVAILABLE / pytestmark / temp_db fixture are provided by conftest.py.
 Run with: pytest tests/test_agent_memory.py -v
 """
 
+import tempfile
 import time
 
 import pytest
@@ -251,6 +252,227 @@ class TestAgentMemory:
         results = mem2.semantic.query([0.1, 0.2, 0.3, 0.4], top_k=1)
         assert len(results) == 1
         assert results[0]["content"] == "shared fact"
+
+
+# =========================================================================
+# TTL / Eviction
+# =========================================================================
+
+
+class TestTtlAndEviction:
+    """Tests for TTL helpers and eviction controls on AgentMemory."""
+
+    def test_store_with_ttl_immediately_queryable(self, memory):
+        """store_with_ttl stores a fact that is still queryable before expiry.
+
+        Note: the TTL registry lives on the SemanticMemory instance, so the
+        same ``semantic`` handle must be reused for store and query.
+        """
+        semantic = memory.semantic
+        semantic.store_with_ttl(1, "ephemeral", [0.1, 0.2, 0.3, 0.4], 3600)
+        results = semantic.query([0.1, 0.2, 0.3, 0.4], top_k=1)
+        assert len(results) == 1
+        assert results[0]["content"] == "ephemeral"
+
+    def test_store_with_ttl_zero_expires_on_query(self, memory):
+        """A TTL of 0 seconds makes the fact expire and be filtered on query.
+
+        The same ``semantic`` handle is reused so the in-memory TTL registry
+        set by ``store_with_ttl`` is honoured by the subsequent ``query``.
+        """
+        semantic = memory.semantic
+        semantic.store_with_ttl(1, "already stale", [0.1, 0.2, 0.3, 0.4], 0)
+        results = semantic.query([0.1, 0.2, 0.3, 0.4], top_k=10)
+        ids = [r["id"] for r in results]
+        assert 1 not in ids
+
+    def test_set_ttl_helpers_do_not_raise(self, memory):
+        """set_*_ttl helpers accept ids/seconds without raising."""
+        memory.semantic.store(1, "fact", [0.1, 0.2, 0.3, 0.4])
+        memory.episodic.record(2, "event", int(time.time()))
+        memory.procedural.learn(3, "proc", ["s1"])
+        memory.set_semantic_ttl(1, 3600)
+        memory.set_episodic_ttl(2, 3600)
+        memory.set_procedural_ttl(3, 3600)
+
+    def test_auto_expire_returns_stats_dict(self, memory):
+        """auto_expire returns a dict with the expected counter keys."""
+        result = memory.auto_expire()
+        for key in (
+            "semantic_expired",
+            "episodic_expired",
+            "procedural_expired",
+            "episodic_consolidated",
+            "procedural_evicted",
+        ):
+            assert key in result
+            assert isinstance(result[key], int)
+
+    def test_auto_expire_removes_expired_entry(self, memory):
+        """set_semantic_ttl(0) + auto_expire deletes the entry from storage."""
+        memory.semantic.store(1, "to expire", [0.1, 0.2, 0.3, 0.4])
+        memory.set_semantic_ttl(1, 0)
+        result = memory.auto_expire()
+        assert result["semantic_expired"] >= 1
+
+    def test_evict_low_confidence_procedures(self, memory):
+        """Procedures below the confidence threshold are evicted."""
+        memory.procedural.learn(1, "reliable", ["s1"], [0.5, 0.5, 0.0, 0.0], 0.9)
+        memory.procedural.learn(2, "weak", ["s1"], [0.5, 0.5, 0.0, 0.0], 0.2)
+        evicted = memory.evict_low_confidence_procedures(0.5)
+        assert evicted == 1
+        ids = [p["id"] for p in memory.procedural.list_all()]
+        assert 1 in ids
+        assert 2 not in ids
+
+
+# =========================================================================
+# Serialize / Deserialize
+# =========================================================================
+
+
+class TestSemanticSerialization:
+    """Tests for SemanticMemory.serialize / deserialize round-trip."""
+
+    def test_serialize_returns_bytes(self, memory):
+        """serialize returns a bytes blob."""
+        memory.semantic.store(1, "fact", [0.1, 0.2, 0.3, 0.4])
+        blob = memory.semantic.serialize()
+        assert isinstance(blob, (bytes, bytearray))
+
+    def test_serialize_deserialize_round_trip(self, temp_db):
+        """deserialize restores facts captured by serialize."""
+        source = temp_db.agent_memory(dimension=4)
+        source.semantic.store(1, "restored fact", [0.1, 0.2, 0.3, 0.4])
+        blob = source.semantic.serialize()
+
+        target = temp_db.agent_memory(dimension=4)
+        target.semantic.delete(1)
+        target.semantic.deserialize(blob)
+        results = target.semantic.query([0.1, 0.2, 0.3, 0.4], top_k=1)
+        assert len(results) == 1
+        assert results[0]["content"] == "restored fact"
+
+
+# =========================================================================
+# Snapshots
+# =========================================================================
+
+
+class TestSnapshots:
+    """Tests for the versioned snapshot suite on AgentMemory."""
+
+    def _memory_with_snapshots(self, temp_db, snapshot_dir):
+        return temp_db.agent_memory(dimension=4, snapshot_dir=snapshot_dir)
+
+    def test_snapshot_returns_version(self, temp_db):
+        """snapshot returns a monotonically increasing version number."""
+        with tempfile.TemporaryDirectory() as snap_dir:
+            mem = self._memory_with_snapshots(temp_db, snap_dir)
+            mem.semantic.store(1, "v1 fact", [0.1, 0.2, 0.3, 0.4])
+            v1 = mem.snapshot()
+            v2 = mem.snapshot()
+            assert v2 > v1
+
+    def test_list_snapshot_versions(self, temp_db):
+        """list_snapshot_versions reports every created version."""
+        with tempfile.TemporaryDirectory() as snap_dir:
+            mem = self._memory_with_snapshots(temp_db, snap_dir)
+            mem.semantic.store(1, "fact", [0.1, 0.2, 0.3, 0.4])
+            v1 = mem.snapshot()
+            v2 = mem.snapshot()
+            versions = mem.list_snapshot_versions()
+            assert v1 in versions
+            assert v2 in versions
+
+    def test_load_latest_snapshot_returns_version(self, temp_db):
+        """load_latest_snapshot returns the version it restored.
+
+        The snapshot captures whatever the AgentMemory's own subsystems track;
+        here we assert the load mechanics (version returned, no error) rather
+        than getter-stored round-trips, which use independent TTL/tracking.
+        """
+        with tempfile.TemporaryDirectory() as snap_dir:
+            mem = self._memory_with_snapshots(temp_db, snap_dir)
+            mem.semantic.store(1, "snapshotted", [0.1, 0.2, 0.3, 0.4])
+            created = mem.snapshot()
+            loaded = mem.load_latest_snapshot()
+            assert loaded == created
+
+    def test_load_snapshot_version_does_not_raise(self, temp_db):
+        """load_snapshot_version restores a known version without error."""
+        with tempfile.TemporaryDirectory() as snap_dir:
+            mem = self._memory_with_snapshots(temp_db, snap_dir)
+            mem.semantic.store(1, "first", [0.1, 0.2, 0.3, 0.4])
+            v1 = mem.snapshot()
+            mem.snapshot()
+            mem.load_snapshot_version(v1)
+
+    def test_load_unknown_snapshot_version_raises(self, temp_db):
+        """Loading a non-existent version raises."""
+        with tempfile.TemporaryDirectory() as snap_dir:
+            mem = self._memory_with_snapshots(temp_db, snap_dir)
+            mem.semantic.store(1, "fact", [0.1, 0.2, 0.3, 0.4])
+            mem.snapshot()
+            with pytest.raises(Exception):
+                mem.load_snapshot_version(999_999)
+
+    def test_snapshot_without_dir_raises(self, memory):
+        """snapshot raises when no snapshot_dir was configured."""
+        with pytest.raises(RuntimeError):
+            memory.snapshot()
+
+
+# =========================================================================
+# VelesQL bridges
+# =========================================================================
+
+
+class TestVelesQlBridges:
+    """Tests for query_semantic / query_episodic / query_procedural."""
+
+    def test_query_semantic(self, memory):
+        """query_semantic runs VelesQL against the semantic collection."""
+        memory.semantic.store(1, "the sky is blue", [1.0, 0.0, 0.0, 0.0])
+        memory.semantic.store(2, "grass is green", [0.0, 1.0, 0.0, 0.0])
+        results = memory.query_semantic(
+            "SELECT * FROM _semantic_memory WHERE vector NEAR $v LIMIT 5",
+            params={"v": [1.0, 0.0, 0.0, 0.0]},
+        )
+        assert len(results) >= 1
+        assert results[0]["id"] == 1
+
+    def test_query_episodic(self, memory):
+        """query_episodic runs VelesQL against the episodic collection."""
+        memory.episodic.record(1, "event one", 1_000_000, [1.0, 0.0, 0.0, 0.0])
+        memory.episodic.record(2, "event two", 2_000_000, [0.0, 1.0, 0.0, 0.0])
+        results = memory.query_episodic(
+            "SELECT * FROM _episodic_memory WHERE vector NEAR $v LIMIT 5",
+            params={"v": [1.0, 0.0, 0.0, 0.0]},
+        )
+        assert len(results) >= 1
+        assert results[0]["id"] == 1
+
+    def test_query_procedural(self, memory):
+        """query_procedural runs a scan VelesQL against the procedural collection."""
+        memory.procedural.learn(1, "proc1", ["s1"], [1.0, 0.0, 0.0, 0.0], 0.8)
+        results = memory.query_procedural(
+            "SELECT * FROM _procedural_memory LIMIT 10"
+        )
+        assert len(results) == 1
+
+    def test_query_semantic_empty(self, memory):
+        """query_semantic on empty memory returns an empty list."""
+        results = memory.query_semantic(
+            "SELECT * FROM _semantic_memory WHERE vector NEAR $v LIMIT 5",
+            params={"v": [1.0, 0.0, 0.0, 0.0]},
+        )
+        assert results == []
+
+    def test_query_invalid_sql_raises(self, memory):
+        """Invalid VelesQL raises an exception."""
+        with pytest.raises(Exception):
+            memory.query_semantic("THIS IS NOT SQL")
 
 
 # =========================================================================

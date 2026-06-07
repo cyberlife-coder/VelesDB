@@ -8,6 +8,7 @@
 use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
+use std::collections::HashMap;
 use std::sync::Arc;
 use velesdb_core::agent::{
     AgentMemory as CoreAgentMemory, AgentMemoryError, EpisodicMemory as CoreEpisodicMemory,
@@ -16,7 +17,8 @@ use velesdb_core::agent::{
 };
 use velesdb_core::Database as CoreDatabase;
 
-use crate::collection_helpers::core_err;
+use crate::collection::query::convert_params;
+use crate::collection_helpers::{core_err, search_results_to_multimodel_dicts};
 use crate::exceptions::DimensionMismatchError;
 
 /// Convert procedural memory matches to a Python list of dicts.
@@ -94,6 +96,10 @@ fn to_py_err(e: AgentMemoryError) -> PyErr {
 #[pyclass]
 pub struct AgentMemory {
     db: Arc<CoreDatabase>,
+    /// Persistent core handle that owns the shared TTL registry, eviction
+    /// config, and (optional) snapshot manager. TTL/eviction/snapshot and the
+    /// VelesQL bridges route through this instance so state stays coherent.
+    core: Arc<CoreAgentMemory>,
     dimension: usize,
 }
 
@@ -104,13 +110,20 @@ impl AgentMemory {
     /// Args:
     ///     db: Database instance
     ///     dimension: Embedding dimension (default: 384)
+    ///     snapshot_dir: Optional directory to enable versioned snapshots
+    ///     max_snapshots: Number of snapshots to retain (default: 10)
     ///
     /// Example:
     ///     >>> memory = AgentMemory(db)
     ///     >>> memory = AgentMemory(db, dimension=768)
     #[new]
-    #[pyo3(signature = (db, dimension = None))]
-    pub fn new(db: &crate::Database, dimension: Option<usize>) -> PyResult<Self> {
+    #[pyo3(signature = (db, dimension = None, snapshot_dir = None, max_snapshots = 10))]
+    pub fn new(
+        db: &crate::Database,
+        dimension: Option<usize>,
+        snapshot_dir: Option<String>,
+        max_snapshots: usize,
+    ) -> PyResult<Self> {
         let dim = dimension.unwrap_or(DEFAULT_DIMENSION);
 
         // PyO3 classes cannot hold lifetime parameters, so we open an
@@ -119,11 +132,17 @@ impl AgentMemory {
         let owned_db = db.open_shared().map_err(PyRuntimeError::new_err)?;
 
         // Initialize memory subsystems — this creates the underlying collections
-        // if they do not already exist.
-        CoreAgentMemory::with_dimension(Arc::clone(&owned_db), dim).map_err(to_py_err)?;
+        // if they do not already exist. The returned handle owns the shared TTL
+        // registry used by set_*_ttl / auto_expire and the snapshot manager.
+        let mut core =
+            CoreAgentMemory::with_dimension(Arc::clone(&owned_db), dim).map_err(to_py_err)?;
+        if let Some(dir) = snapshot_dir {
+            core = core.with_snapshots(&dir, max_snapshots);
+        }
 
         Ok(Self {
             db: owned_db,
+            core: Arc::new(core),
             dimension: dim,
         })
     }
@@ -158,9 +177,171 @@ impl AgentMemory {
         self.dimension
     }
 
+    /// Sets a TTL (in seconds) for a semantic memory entry.
+    #[pyo3(signature = (id, ttl_seconds))]
+    fn set_semantic_ttl(&self, id: u64, ttl_seconds: u64) {
+        self.core.set_semantic_ttl(id, ttl_seconds);
+    }
+
+    /// Sets a TTL (in seconds) for an episodic memory entry.
+    #[pyo3(signature = (id, ttl_seconds))]
+    fn set_episodic_ttl(&self, id: u64, ttl_seconds: u64) {
+        self.core.set_episodic_ttl(id, ttl_seconds);
+    }
+
+    /// Sets a TTL (in seconds) for a procedural memory entry.
+    #[pyo3(signature = (id, ttl_seconds))]
+    fn set_procedural_ttl(&self, id: u64, ttl_seconds: u64) {
+        self.core.set_procedural_ttl(id, ttl_seconds);
+    }
+
+    /// Expires entries past their TTL and consolidates old episodes.
+    ///
+    /// Returns:
+    ///     Dict with 'semantic_expired', 'episodic_expired', 'procedural_expired',
+    ///     'episodic_consolidated', 'procedural_evicted' counts.
+    fn auto_expire(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let result = py.allow_threads(|| self.core.auto_expire().map_err(to_py_err))?;
+        Ok(expire_result_to_dict(py, &result))
+    }
+
+    /// Evicts procedures whose confidence is below the threshold.
+    ///
+    /// Returns:
+    ///     Number of procedures evicted.
+    #[pyo3(signature = (min_confidence))]
+    fn evict_low_confidence_procedures(
+        &self,
+        py: Python<'_>,
+        min_confidence: f32,
+    ) -> PyResult<usize> {
+        py.allow_threads(|| {
+            self.core
+                .evict_low_confidence_procedures(min_confidence)
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Creates a versioned snapshot of the current memory state.
+    ///
+    /// Requires `snapshot_dir` to have been provided at construction.
+    ///
+    /// Returns:
+    ///     The version number of the created snapshot.
+    fn snapshot(&self, py: Python<'_>) -> PyResult<u64> {
+        py.allow_threads(|| self.core.snapshot().map_err(to_py_err))
+    }
+
+    /// Loads the most recent snapshot, restoring all memory subsystems.
+    ///
+    /// Returns:
+    ///     The version number of the loaded snapshot.
+    fn load_latest_snapshot(&self, py: Python<'_>) -> PyResult<u64> {
+        py.allow_threads(|| self.core.load_latest_snapshot().map_err(to_py_err))
+    }
+
+    /// Loads a specific snapshot version, restoring all memory subsystems.
+    #[pyo3(signature = (version))]
+    fn load_snapshot_version(&self, py: Python<'_>, version: u64) -> PyResult<()> {
+        py.allow_threads(|| self.core.load_snapshot_version(version).map_err(to_py_err))
+    }
+
+    /// Lists all available snapshot version numbers.
+    fn list_snapshot_versions(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
+        py.allow_threads(|| self.core.list_snapshot_versions().map_err(to_py_err))
+    }
+
+    /// Executes a VelesQL query against the semantic memory collection.
+    ///
+    /// Args:
+    ///     query_str: VelesQL query string (e.g. WHERE vector NEAR $v)
+    ///     params: Optional query parameters (vectors as lists, scalars)
+    ///
+    /// Returns:
+    ///     List of result dicts.
+    #[pyo3(signature = (query_str, params = None))]
+    fn query_semantic(
+        &self,
+        py: Python<'_>,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+    ) -> PyResult<Vec<PyObject>> {
+        self.run_memory_query(py, query_str, params, |c, sql, p| c.query_semantic(sql, p))
+    }
+
+    /// Executes a VelesQL query against the episodic memory collection.
+    #[pyo3(signature = (query_str, params = None))]
+    fn query_episodic(
+        &self,
+        py: Python<'_>,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+    ) -> PyResult<Vec<PyObject>> {
+        self.run_memory_query(py, query_str, params, |c, sql, p| c.query_episodic(sql, p))
+    }
+
+    /// Executes a VelesQL query against the procedural memory collection.
+    #[pyo3(signature = (query_str, params = None))]
+    fn query_procedural(
+        &self,
+        py: Python<'_>,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+    ) -> PyResult<Vec<PyObject>> {
+        self.run_memory_query(py, query_str, params, |c, sql, p| {
+            c.query_procedural(sql, p)
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!("AgentMemory(dimension={})", self.dimension)
     }
+}
+
+impl AgentMemory {
+    /// Shared driver for the three VelesQL memory bridges: converts params,
+    /// runs the core query off the GIL, then builds result dicts.
+    fn run_memory_query<F>(
+        &self,
+        py: Python<'_>,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+        execute: F,
+    ) -> PyResult<Vec<PyObject>>
+    where
+        F: FnOnce(
+                &CoreAgentMemory,
+                &str,
+                &HashMap<String, serde_json::Value>,
+            ) -> Result<Vec<velesdb_core::SearchResult>, AgentMemoryError>
+            + Send,
+    {
+        let rust_params = convert_params(py, params)?;
+        let core = Arc::clone(&self.core);
+        let results =
+            py.allow_threads(|| execute(&core, query_str, &rust_params).map_err(to_py_err))?;
+        Ok(search_results_to_multimodel_dicts(py, results))
+    }
+}
+
+/// Builds a Python dict from an `ExpireResult`.
+fn expire_result_to_dict(py: Python<'_>, r: &velesdb_core::agent::ExpireResult) -> PyObject {
+    let dict = PyDict::new(py);
+    let _ = dict.set_item(PyString::intern(py, "semantic_expired"), r.semantic_expired);
+    let _ = dict.set_item(PyString::intern(py, "episodic_expired"), r.episodic_expired);
+    let _ = dict.set_item(
+        PyString::intern(py, "procedural_expired"),
+        r.procedural_expired,
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "episodic_consolidated"),
+        r.episodic_consolidated,
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "procedural_evicted"),
+        r.procedural_evicted,
+    );
+    dict.into()
 }
 
 /// Python wrapper for SemanticMemory.
@@ -194,6 +375,36 @@ impl PySemanticMemory {
         py.allow_threads(|| {
             self.inner
                 .store(id, &content_owned, &embedding)
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Store a knowledge fact with its embedding and a TTL.
+    ///
+    /// The entry is automatically eligible for expiry once `ttl_seconds`
+    /// have elapsed (enforced on query and by `AgentMemory.auto_expire`).
+    ///
+    /// Args:
+    ///     id: Unique identifier for the fact
+    ///     content: Text content of the knowledge
+    ///     embedding: Vector representation (list of floats)
+    ///     ttl_seconds: Time-to-live in seconds
+    ///
+    /// Example:
+    ///     >>> memory.semantic.store_with_ttl(1, "ephemeral", embedding, 60)
+    #[pyo3(signature = (id, content, embedding, ttl_seconds))]
+    fn store_with_ttl(
+        &self,
+        py: Python<'_>,
+        id: u64,
+        content: &str,
+        embedding: Vec<f32>,
+        ttl_seconds: u64,
+    ) -> PyResult<()> {
+        let content_owned = content.to_string();
+        py.allow_threads(|| {
+            self.inner
+                .store_with_ttl(id, &content_owned, &embedding, ttl_seconds)
                 .map_err(to_py_err)
         })
     }
@@ -239,6 +450,24 @@ impl PySemanticMemory {
     #[pyo3(signature = (id,))]
     fn delete(&self, py: Python<'_>, id: u64) -> PyResult<()> {
         py.allow_threads(|| self.inner.delete(id).map_err(to_py_err))
+    }
+
+    /// Serializes all stored facts to a bytes blob for snapshotting.
+    ///
+    /// Returns:
+    ///     A `bytes` object that can be passed back to `deserialize`.
+    fn serialize(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let bytes = py.allow_threads(|| self.inner.serialize().map_err(to_py_err))?;
+        Ok(pyo3::types::PyBytes::new(py, &bytes).into())
+    }
+
+    /// Replaces semantic memory state from a `serialize()` blob.
+    ///
+    /// Args:
+    ///     data: Bytes previously produced by `serialize()`.
+    #[pyo3(signature = (data))]
+    fn deserialize(&self, py: Python<'_>, data: Vec<u8>) -> PyResult<()> {
+        py.allow_threads(|| self.inner.deserialize(&data).map_err(to_py_err))
     }
 
     fn __repr__(&self) -> String {
