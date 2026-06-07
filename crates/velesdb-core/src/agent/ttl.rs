@@ -69,17 +69,6 @@ impl MemoryTtl {
         self.entries.write().insert(id, entry);
     }
 
-    /// Sets a TTL with a specific creation timestamp.
-    ///
-    /// Useful for entries that were created in the past.
-    pub fn set_ttl_with_created_at(&self, id: u64, ttl_seconds: u64, created_at: u64) {
-        let entry = TtlEntry {
-            expires_at: created_at.saturating_add(ttl_seconds),
-            created_at,
-        };
-        self.entries.write().insert(id, entry);
-    }
-
     /// Removes TTL tracking for an entry.
     pub fn remove(&self, id: u64) {
         self.entries.write().remove(&id);
@@ -97,20 +86,14 @@ impl MemoryTtl {
             .collect()
     }
 
-    /// Returns IDs of entries older than the specified age.
+    /// Returns the number of currently-expired tracked entries.
     ///
-    /// # Arguments
-    ///
-    /// * `max_age_seconds` - Maximum age in seconds
+    /// Used by the search path to over-fetch enough candidates so that
+    /// filtering out expired-but-not-yet-deleted points still yields up to `k`
+    /// live results.
     #[must_use]
-    pub fn get_older_than(&self, max_age_seconds: u64) -> Vec<u64> {
-        let cutoff = Self::now().saturating_sub(max_age_seconds);
-        self.entries
-            .read()
-            .iter()
-            .filter(|(_, entry)| entry.created_at < cutoff)
-            .map(|(&id, _)| id)
-            .collect()
+    pub fn expired_count(&self) -> usize {
+        self.get_expired().len()
     }
 
     /// Removes expired entries from tracking and returns their IDs.
@@ -161,15 +144,6 @@ impl MemoryTtl {
     /// Clears all TTL entries.
     pub fn clear(&self) {
         self.entries.write().clear();
-    }
-
-    /// Merges entries from another `MemoryTtl` instance.
-    pub fn merge_from(&self, other: &MemoryTtl) {
-        let other_entries = other.entries.read();
-        let mut self_entries = self.entries.write();
-        for (&id, entry) in other_entries.iter() {
-            self_entries.insert(id, entry.clone());
-        }
     }
 
     /// Replaces all entries with those from another `MemoryTtl` instance.

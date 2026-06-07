@@ -85,6 +85,12 @@ impl SemanticMemory {
 
     /// Stores a semantic memory point and assigns a TTL.
     ///
+    /// A `ttl_seconds` of `0` means "expire immediately": rather than persisting
+    /// a live point that then occupies an index slot until the next
+    /// `auto_expire`, the point is eagerly removed (and any pre-existing point
+    /// for `id` deleted). The embedding is still dimension-validated so callers
+    /// get the same error contract as a real store.
+    ///
     /// # Errors
     ///
     /// Returns the same errors as [`Self::store`].
@@ -95,6 +101,10 @@ impl SemanticMemory {
         embedding: &[f32],
         ttl_seconds: u64,
     ) -> Result<(), AgentMemoryError> {
+        if ttl_seconds == 0 {
+            memory_helpers::validate_dimension(self.dimension, embedding.len())?;
+            return self.delete(id);
+        }
         self.store(id, content, embedding)?;
         self.ttl.set_ttl(id, ttl_seconds);
         Ok(())
@@ -123,17 +133,106 @@ impl SemanticMemory {
         Ok(results
             .into_iter()
             .map(|r| {
-                let content = r
-                    .point
-                    .payload
-                    .as_ref()
-                    .and_then(|p| p.get("content"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                let content = extract_content(&r.point);
                 (r.point.id, r.score, content)
             })
             .collect())
+    }
+
+    /// Stores multiple semantic memory points in one batch.
+    ///
+    /// Each tuple is `(id, content, embedding)`. All embeddings are
+    /// dimension-validated before any write occurs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any embedding dimension is invalid, collection
+    /// access fails, or persistence fails.
+    pub fn store_batch(&self, facts: &[(u64, &str, &[f32])]) -> Result<(), AgentMemoryError> {
+        let mut points = Vec::with_capacity(facts.len());
+        for (id, content, embedding) in facts {
+            memory_helpers::validate_dimension(self.dimension, embedding.len())?;
+            points.push(Point::new(
+                *id,
+                embedding.to_vec(),
+                Some(json!({ "content": content })),
+            ));
+        }
+
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        memory_helpers::upsert_points(&collection, points)?;
+
+        let mut ids = self.stored_ids.write();
+        for (id, _, _) in facts {
+            ids.insert(*id);
+        }
+        Ok(())
+    }
+
+    /// Retrieves a fact's content and embedding by id.
+    ///
+    /// Returns `None` when the id is unknown or has expired.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection access fails.
+    pub fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, AgentMemoryError> {
+        if self.ttl.is_expired(id) {
+            return Ok(None);
+        }
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let Some(point) = collection.get(&[id]).into_iter().flatten().next() else {
+            return Ok(None);
+        };
+        Ok(Some((extract_content(&point), point.vector.clone())))
+    }
+
+    /// Lists all live (non-expired) tracked facts as `(id, content)` pairs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection access fails.
+    pub fn list_all(&self) -> Result<Vec<(u64, String)>, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let all_ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();
+
+        Ok(collection
+            .get(&all_ids)
+            .into_iter()
+            .flatten()
+            .filter(|p| !self.ttl.is_expired(p.id))
+            .map(|p| (p.id, extract_content(&p)))
+            .collect())
+    }
+
+    /// Returns the number of tracked facts.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.stored_ids.read().len()
+    }
+
+    /// Returns `true` when no facts are tracked.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.stored_ids.read().is_empty()
+    }
+
+    /// Removes all facts and their tracking entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection access or deletion fails.
+    pub fn clear(&self) -> Result<(), AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();
+        if !ids.is_empty() {
+            memory_helpers::delete_from_collection(&collection, &ids)?;
+        }
+        for id in &ids {
+            self.ttl.remove(*id);
+        }
+        self.stored_ids.write().clear();
+        Ok(())
     }
 
     /// Deletes a semantic memory point by id.
@@ -152,6 +251,18 @@ impl SemanticMemory {
     }
 
     /// Serializes semantic memory points for snapshot persistence.
+    ///
+    /// # TTL limitation
+    ///
+    /// The returned bytes contain only the stored points (id, embedding,
+    /// content) and intentionally **omit TTL state**. TTL is tracked in a single
+    /// `MemoryTtl` map shared across the semantic, episodic, and procedural
+    /// subsystems (see [`AgentMemory`](crate::agent::AgentMemory)), so it cannot
+    /// be partitioned per subsystem here. TTL is persisted and restored globally
+    /// by [`AgentMemory::snapshot`](crate::agent::AgentMemory::snapshot) /
+    /// `restore_state`. Calling [`Self::deserialize`] in isolation therefore
+    /// restores facts but not their expiry; use the snapshot manager for a full
+    /// round-trip including TTL.
     ///
     /// # Errors
     ///
@@ -174,4 +285,15 @@ impl SemanticMemory {
             &self.stored_ids,
         )
     }
+}
+
+/// Extracts the `content` string from a point's payload, or `""` when absent.
+fn extract_content(point: &Point) -> String {
+    point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string()
 }

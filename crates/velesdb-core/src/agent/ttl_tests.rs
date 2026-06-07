@@ -74,20 +74,6 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_ttl_merge_from() {
-        let ttl1 = MemoryTtl::new();
-        ttl1.set_ttl(1, 3600);
-
-        let ttl2 = MemoryTtl::new();
-        ttl2.set_ttl(2, 7200);
-
-        ttl1.merge_from(&ttl2);
-
-        assert!(ttl1.get(1).is_some());
-        assert!(ttl1.get(2).is_some());
-    }
-
-    #[test]
     fn test_memory_ttl_replace_from() {
         let ttl1 = MemoryTtl::new();
         ttl1.set_ttl(1, 3600);

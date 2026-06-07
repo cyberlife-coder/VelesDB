@@ -172,7 +172,13 @@ impl AgentMemory {
     ///
     /// Returns an error when consolidation operations fail.
     pub fn auto_expire(&self) -> Result<ExpireResult, AgentMemoryError> {
-        let expired_ids = self.ttl.expire();
+        // Read expired ids WITHOUT dropping their TTL entries yet. The entry is
+        // removed (via the subsystem `delete`, which calls `ttl.remove`) only
+        // after the point is actually deleted, so a failed delete leaves the TTL
+        // entry intact and the id is retried on the next `auto_expire`. This
+        // preserves the expiry invariant: a tracked-expired id is never forgotten
+        // while its point still exists.
+        let expired_ids = self.ttl.get_expired();
         let mut result = ExpireResult::default();
 
         for id in &expired_ids {
