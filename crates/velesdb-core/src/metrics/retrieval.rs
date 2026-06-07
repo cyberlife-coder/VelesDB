@@ -200,8 +200,10 @@ pub fn ndcg_at_k(relevances: &[f64], k: usize) -> f64 {
     let dcg = compute_dcg(relevances, k);
 
     let mut sorted_relevances = relevances.to_vec();
-    sorted_relevances
-        .sort_unstable_by(|a, b| b.partial_cmp(a).unwrap_or_else(|| a.is_nan().cmp(&b.is_nan())));
+    sorted_relevances.sort_unstable_by(|a, b| {
+        b.partial_cmp(a)
+            .unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
+    });
     let idcg = compute_dcg(&sorted_relevances, k);
 
     if idcg == 0.0 {

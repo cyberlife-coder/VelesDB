@@ -67,7 +67,8 @@ pub(crate) fn resolve_scored_results(
 /// and (finite,NaN)→Less, placing NaN after all real scores in the sort order.
 #[inline]
 fn cmp_f32_desc_nan_last(a: f32, b: f32) -> std::cmp::Ordering {
-    b.partial_cmp(&a).unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
+    b.partial_cmp(&a)
+        .unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
 }
 
 /// Sorts `SearchResult` values by score according to metric direction.

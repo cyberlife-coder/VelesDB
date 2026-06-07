@@ -366,7 +366,6 @@ fn haversine_distance_m(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::filter::Condition;
     use serde_json::json;
 
@@ -378,10 +377,26 @@ mod tests {
         let p = json!({"price": null});
         let n = json!(100);
         let field = "price".to_string();
-        assert!(!Condition::Gt { field: field.clone(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Gte { field: field.clone(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lt { field: field.clone(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lte { field: field.clone(), value: n }.matches(&p));
+        assert!(!Condition::Gt {
+            field: field.clone(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Gte {
+            field: field.clone(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lt {
+            field: field.clone(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lte {
+            field: field.clone(),
+            value: n
+        }
+        .matches(&p));
     }
 
     // A boolean field must not match numeric ordering predicates.
@@ -390,10 +405,26 @@ mod tests {
         let p = json!({"active": true});
         let n = json!(1);
         let field = "active".to_string();
-        assert!(!Condition::Gt { field: field.clone(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Gte { field: field.clone(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lt { field: field.clone(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lte { field: field.clone(), value: n }.matches(&p));
+        assert!(!Condition::Gt {
+            field: field.clone(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Gte {
+            field: field.clone(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lt {
+            field: field.clone(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lte {
+            field: field.clone(),
+            value: n
+        }
+        .matches(&p));
     }
 
     // A string field must not match a numeric operand.
@@ -402,10 +433,26 @@ mod tests {
         let p = json!({"name": "alice"});
         let n = json!(100);
         let field = "name".to_string();
-        assert!(!Condition::Gt { field: field.clone(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Gte { field: field.clone(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lt { field: field.clone(), value: n.clone() }.matches(&p));
-        assert!(!Condition::Lte { field: field.clone(), value: n }.matches(&p));
+        assert!(!Condition::Gt {
+            field: field.clone(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Gte {
+            field: field.clone(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lt {
+            field: field.clone(),
+            value: n.clone()
+        }
+        .matches(&p));
+        assert!(!Condition::Lte {
+            field: field.clone(),
+            value: n
+        }
+        .matches(&p));
     }
 
     // Numeric ordering works correctly for same-type comparisons.
@@ -413,12 +460,36 @@ mod tests {
     fn numeric_ordering_same_type() {
         let p = json!({"price": 50});
         let f = "price".to_string();
-        assert!(Condition::Gt  { field: f.clone(), value: json!(10) }.matches(&p));
-        assert!(Condition::Gte { field: f.clone(), value: json!(50) }.matches(&p));
-        assert!(!Condition::Gt { field: f.clone(), value: json!(50) }.matches(&p));
-        assert!(Condition::Lt  { field: f.clone(), value: json!(100) }.matches(&p));
-        assert!(Condition::Lte { field: f.clone(), value: json!(50) }.matches(&p));
-        assert!(!Condition::Lt { field: f.clone(), value: json!(50) }.matches(&p));
+        assert!(Condition::Gt {
+            field: f.clone(),
+            value: json!(10)
+        }
+        .matches(&p));
+        assert!(Condition::Gte {
+            field: f.clone(),
+            value: json!(50)
+        }
+        .matches(&p));
+        assert!(!Condition::Gt {
+            field: f.clone(),
+            value: json!(50)
+        }
+        .matches(&p));
+        assert!(Condition::Lt {
+            field: f.clone(),
+            value: json!(100)
+        }
+        .matches(&p));
+        assert!(Condition::Lte {
+            field: f.clone(),
+            value: json!(50)
+        }
+        .matches(&p));
+        assert!(!Condition::Lt {
+            field: f.clone(),
+            value: json!(50)
+        }
+        .matches(&p));
     }
 
     // String ordering works correctly for same-type comparisons.
@@ -426,10 +497,26 @@ mod tests {
     fn string_ordering_same_type() {
         let p = json!({"name": "bob"});
         let f = "name".to_string();
-        assert!(Condition::Gt  { field: f.clone(), value: json!("alice") }.matches(&p));
-        assert!(Condition::Gte { field: f.clone(), value: json!("bob") }.matches(&p));
-        assert!(Condition::Lt  { field: f.clone(), value: json!("charlie") }.matches(&p));
-        assert!(Condition::Lte { field: f.clone(), value: json!("bob") }.matches(&p));
+        assert!(Condition::Gt {
+            field: f.clone(),
+            value: json!("alice")
+        }
+        .matches(&p));
+        assert!(Condition::Gte {
+            field: f.clone(),
+            value: json!("bob")
+        }
+        .matches(&p));
+        assert!(Condition::Lt {
+            field: f.clone(),
+            value: json!("charlie")
+        }
+        .matches(&p));
+        assert!(Condition::Lte {
+            field: f.clone(),
+            value: json!("bob")
+        }
+        .matches(&p));
     }
 }
 
