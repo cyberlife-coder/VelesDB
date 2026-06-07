@@ -325,12 +325,13 @@ export async function listNodes(
   transport: BaseTransport,
   collection: string
 ): Promise<ListNodesResponse> {
-  const response = await transport.requestJson<{ node_ids: number[]; count: number }>(
-    'GET',
-    `${collectionPath(collection)}/graph/nodes`
-  );
+  const response = await transport.requestJson<{
+    node_ids: Array<number | string>;
+    count: number;
+  }>('GET', `${collectionPath(collection)}/graph/nodes`);
   throwOnError(response, `Collection '${collection}'`);
   const data = response.data!;
+  // Pass node ids through unchanged (string|number) — no lossy Number() coercion.
   return { nodeIds: data.node_ids, count: data.count };
 }
 

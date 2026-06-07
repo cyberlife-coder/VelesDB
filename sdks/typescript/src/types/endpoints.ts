@@ -46,8 +46,8 @@ export interface GuardRailsConfigResponse {
 
 /** Options for `listNodes`. */
 export interface ListNodesResponse {
-  /** Node IDs in insertion order. */
-  nodeIds: number[];
+  /** Node IDs in insertion order (string|number to preserve u64 precision). */
+  nodeIds: GraphNodeId[];
   /** Total count -- matches `nodeIds.length`. */
   count: number;
 }
