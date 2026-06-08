@@ -45,7 +45,7 @@ jobs:
             case "$src" in
               feature/*|feat/*|fix/*|bugfix/*|refactor/*|chore/*) return 0 ;;
               docs/*|style/*|perf/*|test/*|build/*|ci/*) return 0 ;;
-              dependabot/*) return 0 ;;
+              dependabot/*|claude/*) return 0 ;;
               *) return 1 ;;
             esac
           }
