@@ -12,7 +12,8 @@ Premium features are injected via the `DatabaseObserver` trait -- no code forks 
 - **Knowledge Graph**: Full graph engine with BFS/DFS traversal, MATCH queries
 - **VelesQL**: SQL-like query language with `similarity()` and graph pattern matching
 - **Hybrid Search**: Dense + sparse (BM25) fusion with RRF/RSF strategies
-- **Agent Memory SDK**: Semantic, episodic, and procedural memory patterns for AI agents
+- **Agent Memory SDK**: Semantic, episodic, and procedural memory patterns for AI agents,
+  including in-process state serialization (`AgentMemory::snapshot()`) for Rust
 - **Multi-platform SDKs**: Python (PyO3), WASM, Mobile (iOS/Android), Tauri, TypeScript
 - **Ecosystem Integrations**: LangChain, LlamaIndex connectors
 
@@ -28,6 +29,12 @@ Premium capabilities are delivered through the `DatabaseObserver` hook system:
 
 - **Encryption at Rest**: AES-256-GCM for data-at-rest protection
 - **High Availability**: Raft-based cluster consensus for fault tolerance
+- **Database Snapshots**: Managed point-in-time backups of the full database state,
+  with retention policies and restore workflows. Available under Enterprise.
+  > **Distinct from Agent Memory serialization**: the `AgentMemory::snapshot()` /
+  > `load_latest_snapshot()` API in the Rust SDK is a **Core** primitive that
+  > persists only agent memory subsystem state (semantic/episodic/procedural +
+  > TTL). It is entirely separate from database-level backups.
 - **Agent Hooks & Triggers**: Event-driven callbacks (on_upsert, on_query, on_collection_created)
 - **Multi-tenancy**: Namespace isolation with per-tenant resource quotas
 - **Advanced Analytics**: EXPLAIN ANALYZE with query plan visualization
