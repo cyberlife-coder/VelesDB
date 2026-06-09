@@ -404,6 +404,174 @@ mod tests {
         assert!(sm.store_batch(&facts).is_err());
     }
 
+    // ── #1044: store_with_metadata / update_metadata / query_filtered ───────────
+
+    #[test]
+    fn test_store_with_metadata_persists_extra_fields() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let mut meta = serde_json::Map::new();
+        meta.insert("tag".to_string(), serde_json::json!("science"));
+        sm.store_with_metadata(1, "Photosynthesis", &emb, &meta)
+            .unwrap();
+
+        let results = sm.query(&emb, 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 1);
+        // content field still set correctly
+        assert!(results[0].2.contains("Photosynthesis"));
+    }
+
+    #[test]
+    fn test_store_with_metadata_content_wins_on_collision() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let mut meta = serde_json::Map::new();
+        // caller tries to inject a different content via metadata
+        meta.insert(
+            "content".to_string(),
+            serde_json::json!("should be overwritten"),
+        );
+        sm.store_with_metadata(1, "canonical content", &emb, &meta)
+            .unwrap();
+
+        let results = sm.query(&emb, 1).unwrap();
+        assert_eq!(results[0].2, "canonical content", "content param must win");
+    }
+
+    #[test]
+    fn test_update_metadata_merges_fields() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "original", &emb).unwrap();
+
+        let mut updates = serde_json::Map::new();
+        updates.insert("tag".to_string(), serde_json::json!("updated"));
+        sm.update_metadata(1, &updates).unwrap();
+
+        // content field must still be present after update
+        let results = sm.query(&emb, 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].2.contains("original"));
+    }
+
+    #[test]
+    fn test_update_metadata_unknown_id_errors() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let updates = serde_json::Map::new();
+        assert!(
+            sm.update_metadata(9999, &updates).is_err(),
+            "unknown id must return NotFound"
+        );
+    }
+
+    #[test]
+    fn test_update_metadata_expired_id_errors() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let ttl = Arc::new(super::super::ttl::MemoryTtl::new());
+        let sm = SemanticMemory::new(Arc::clone(&db), 4, Arc::clone(&ttl)).expect("init failed");
+
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "fact", &emb).unwrap();
+        ttl.set_ttl(MemoryKind::Semantic, 1, 0); // immediate expiry
+
+        let updates = serde_json::Map::new();
+        assert!(
+            sm.update_metadata(1, &updates).is_err(),
+            "expired id must return NotFound"
+        );
+    }
+
+    #[test]
+    fn test_query_filtered_matches_tag() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let mut meta_a = serde_json::Map::new();
+        meta_a.insert("category".to_string(), serde_json::json!("physics"));
+        let mut meta_b = serde_json::Map::new();
+        meta_b.insert("category".to_string(), serde_json::json!("biology"));
+
+        sm.store_with_metadata(1, "gravity", &emb, &meta_a).unwrap();
+        sm.store_with_metadata(2, "photosynthesis", &emb, &meta_b)
+            .unwrap();
+
+        let mut filter = serde_json::Map::new();
+        filter.insert("category".to_string(), serde_json::json!("physics"));
+
+        let results = sm.query_filtered(&emb, 5, &filter, 0).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 1);
+    }
+
+    #[test]
+    fn test_query_filtered_skips_expired() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let ttl = Arc::new(super::super::ttl::MemoryTtl::new());
+        let sm = SemanticMemory::new(Arc::clone(&db), 4, Arc::clone(&ttl)).expect("init failed");
+
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let mut meta = serde_json::Map::new();
+        meta.insert("kind".to_string(), serde_json::json!("test"));
+
+        sm.store_with_metadata(1, "live fact", &emb, &meta).unwrap();
+        sm.store_with_metadata(2, "expired fact", &emb, &meta)
+            .unwrap();
+        ttl.set_ttl(MemoryKind::Semantic, 2, 0); // expire id=2
+
+        let mut filter = serde_json::Map::new();
+        filter.insert("kind".to_string(), serde_json::json!("test"));
+
+        let results = sm.query_filtered(&emb, 5, &filter, 0).unwrap();
+        assert_eq!(results.len(), 1, "expired point must be excluded");
+        assert_eq!(results[0].0, 1);
+    }
+
+    #[test]
+    fn test_query_filtered_with_offset() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let e1 = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let e2 = vec![0.99_f32, 0.14, 0.0, 0.0];
+        let e3 = vec![0.98_f32, 0.20, 0.0, 0.0];
+
+        let mut meta = serde_json::Map::new();
+        meta.insert("grp".to_string(), serde_json::json!("x"));
+
+        sm.store_with_metadata(1, "best", &e1, &meta).unwrap();
+        sm.store_with_metadata(2, "second", &e2, &meta).unwrap();
+        sm.store_with_metadata(3, "third", &e3, &meta).unwrap();
+
+        let mut filter = serde_json::Map::new();
+        filter.insert("grp".to_string(), serde_json::json!("x"));
+
+        // offset=1 skips the top result, so second-best appears first
+        let paged = sm.query_filtered(&e1, 2, &filter, 1).unwrap();
+        assert_eq!(paged.len(), 2, "should get the 2nd and 3rd results");
+        assert!(
+            paged.iter().all(|r| r.0 != 1),
+            "top result must be skipped by offset"
+        );
+    }
+
     // ── #1049: edge-case / robustness tests ─────────────────────────────────────
 
     #[test]

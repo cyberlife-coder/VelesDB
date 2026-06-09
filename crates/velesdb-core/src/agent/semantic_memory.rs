@@ -1,11 +1,11 @@
 //! Semantic Memory - Long-term knowledge storage (US-002)
 //!
 //! Stores facts and knowledge as vectors with similarity search.
-//! Each fact has an ID, content text, and embedding vector.
+//! Each fact has an ID, content text, embedding vector, and optional metadata.
 
 use crate::{Database, Point};
 use parking_lot::RwLock;
-use serde_json::json;
+use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -73,12 +73,72 @@ impl SemanticMemory {
     /// Returns an error when embedding dimension is invalid, collection access fails,
     /// or persistence fails.
     pub fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), AgentMemoryError> {
-        memory_helpers::validate_dimension(self.dimension, embedding.len())?;
+        self.store_internal(id, content, embedding, None)
+    }
 
+    /// Stores a semantic memory point with additional metadata fields.
+    ///
+    /// `content` always wins: if `metadata` contains a `"content"` key, it is
+    /// overwritten by the `content` parameter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::store`].
+    pub fn store_with_metadata(
+        &self,
+        id: u64,
+        content: &str,
+        embedding: &[f32],
+        metadata: &Map<String, Value>,
+    ) -> Result<(), AgentMemoryError> {
+        self.store_internal(id, content, embedding, Some(metadata))
+    }
+
+    /// Updates payload fields of an existing fact without changing its embedding.
+    ///
+    /// Only facts that are tracked and not expired are updated. Any key in
+    /// `updates` is merged into the existing payload; `content` may be updated
+    /// through this method, but the vector is left untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentMemoryError::NotFound`] when the id is unknown or expired.
+    /// Returns other errors when collection access or persistence fails.
+    pub fn update_metadata(
+        &self,
+        id: u64,
+        updates: &Map<String, Value>,
+    ) -> Result<(), AgentMemoryError> {
+        if self.ttl.is_expired(MemoryKind::Semantic, id) || !self.stored_ids.read().contains(&id) {
+            return Err(AgentMemoryError::NotFound(id.to_string()));
+        }
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        let point = Point::new(id, embedding.to_vec(), Some(json!({"content": content})));
-        memory_helpers::upsert_points(&collection, vec![point])?;
+        let Some(point) = collection.get(&[id]).into_iter().flatten().next() else {
+            return Err(AgentMemoryError::NotFound(id.to_string()));
+        };
+        let payload = merge_payload(point.payload, updates)?;
+        memory_helpers::upsert_points(
+            &collection,
+            vec![Point::new(id, point.vector, Some(payload))],
+        )?;
+        Ok(())
+    }
 
+    fn store_internal(
+        &self,
+        id: u64,
+        content: &str,
+        embedding: &[f32],
+        metadata: Option<&Map<String, Value>>,
+    ) -> Result<(), AgentMemoryError> {
+        memory_helpers::validate_dimension(self.dimension, embedding.len())?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let point = Point::new(
+            id,
+            embedding.to_vec(),
+            Some(build_payload(content, metadata)),
+        );
+        memory_helpers::upsert_points(&collection, vec![point])?;
         self.stored_ids.write().insert(id);
         Ok(())
     }
@@ -172,6 +232,47 @@ impl SemanticMemory {
             .collect())
     }
 
+    /// Queries semantic memory with a payload filter and optional offset pagination.
+    ///
+    /// Results are ranked by vector similarity, filtered against `filter` (all
+    /// key-value pairs must match), TTL-expired points are excluded, and
+    /// `offset` leading results are skipped before taking `k`.
+    ///
+    /// The internal fetch budget is generous to survive both TTL eviction and
+    /// filter miss-rates; when the collection has very few matching entries the
+    /// returned slice may be shorter than `k`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when embedding dimension is invalid or collection access fails.
+    pub fn query_filtered(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+        filter: &Map<String, Value>,
+        offset: usize,
+    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        // over-fetch to absorb TTL evictions + payload filter misses + offset
+        let need = k.saturating_add(offset);
+        let fetch_k = need
+            .saturating_add(self.ttl.expired_count(MemoryKind::Semantic))
+            .saturating_mul(2)
+            .max(need.saturating_add(8));
+
+        memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let raw = memory_helpers::search_collection(&collection, query_embedding, fetch_k)?;
+
+        Ok(raw
+            .into_iter()
+            .filter(|r| !self.ttl.is_expired(MemoryKind::Semantic, r.point.id))
+            .filter(|r| payload_matches(&r.point, filter))
+            .skip(offset)
+            .take(k)
+            .map(|r| (r.point.id, r.score, extract_content(&r.point)))
+            .collect())
+    }
+
     /// Stores multiple semantic memory points in one batch.
     ///
     /// Each tuple is `(id, content, embedding)`. All embeddings are
@@ -193,7 +294,7 @@ impl SemanticMemory {
             points.push(Point::new(
                 *id,
                 embedding.to_vec(),
-                Some(json!({ "content": content })),
+                Some(build_payload(content, None)),
             ));
         }
 
@@ -326,13 +427,57 @@ impl SemanticMemory {
     }
 }
 
+/// Builds the payload `Value` from `content` and optional extra metadata.
+///
+/// `content` is always inserted last so it wins over any `"content"` key
+/// present in `metadata`.
+fn build_payload(content: &str, metadata: Option<&Map<String, Value>>) -> Value {
+    let mut map = metadata.cloned().unwrap_or_default();
+    map.insert("content".to_string(), Value::String(content.to_string()));
+    Value::Object(map)
+}
+
+/// Merges `updates` into an existing point payload, returning the new payload.
+///
+/// A missing payload starts from an empty object. Errors when the existing
+/// payload is present but not a JSON object.
+fn merge_payload(
+    existing: Option<Value>,
+    updates: &Map<String, Value>,
+) -> Result<Value, AgentMemoryError> {
+    let mut payload = existing.unwrap_or_else(|| Value::Object(Map::new()));
+    let obj = payload
+        .as_object_mut()
+        .ok_or_else(|| AgentMemoryError::IoError("corrupt payload".to_string()))?;
+    for (k, v) in updates {
+        obj.insert(k.clone(), v.clone());
+    }
+    Ok(payload)
+}
+
+/// Returns `true` when every key-value pair in `filter` matches the point payload.
+///
+/// An empty filter matches all points. A point with no payload only matches an
+/// empty filter.
+fn payload_matches(point: &Point, filter: &Map<String, Value>) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    let Some(obj) = point.payload.as_ref().and_then(Value::as_object) else {
+        return false;
+    };
+    filter
+        .iter()
+        .all(|(k, v)| obj.get(k).is_some_and(|pv| pv == v))
+}
+
 /// Extracts the `content` string from a point's payload, or `""` when absent.
 fn extract_content(point: &Point) -> String {
     point
         .payload
         .as_ref()
         .and_then(|p| p.get("content"))
-        .and_then(serde_json::Value::as_str)
+        .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
 }
