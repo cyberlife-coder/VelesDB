@@ -21,6 +21,7 @@ try:
     from llamaindex_velesdb.memory import (
         VelesDBSemanticMemory,
         VelesDBEpisodicMemory,
+        VelesDBChatMemory,
         VelesDBProceduralMemory,
     )
     _HAS_MEMORY = True
@@ -29,6 +30,7 @@ except ImportError as e:
     logging.getLogger(__name__).debug("Optional import failed: %s", e)
     VelesDBSemanticMemory = None  # type: ignore
     VelesDBEpisodicMemory = None  # type: ignore
+    VelesDBChatMemory = None  # type: ignore
     VelesDBProceduralMemory = None  # type: ignore
     _HAS_MEMORY = False
 
@@ -44,6 +46,7 @@ if _HAS_MEMORY:
     __all__.extend([
         "VelesDBSemanticMemory",
         "VelesDBEpisodicMemory",
+        "VelesDBChatMemory",
         "VelesDBProceduralMemory",
     ])
 __version__ = "1.18.0"

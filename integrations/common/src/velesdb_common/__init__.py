@@ -9,7 +9,13 @@ directly.
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.graph_ops_base import GraphOpsBase
 from velesdb_common.ids import make_initial_id_counter, stable_hash_id
-from velesdb_common.memory import format_procedural_results, store_procedure
+from velesdb_common.memory import (
+    chronological,
+    format_procedural_results,
+    parse_event_entry,
+    resolve_procedure_id,
+    store_procedure,
+)
 from velesdb_common.security import (
     SecurityError,
     ALLOWED_METRICS,
@@ -57,7 +63,10 @@ __all__ = [
     "make_initial_id_counter",
     "stable_hash_id",
     # memory
+    "chronological",
     "format_procedural_results",
+    "parse_event_entry",
+    "resolve_procedure_id",
     "store_procedure",
     # security
     "SecurityError",
