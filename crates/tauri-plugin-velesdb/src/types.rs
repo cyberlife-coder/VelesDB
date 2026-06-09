@@ -711,27 +711,89 @@ pub struct ProceduralDeleteRequest {
 }
 
 // ============================================================================
-// Snapshot DTOs (serialize / deserialize)
+// TTL / eviction / snapshot-versioning DTOs (EPIC-016 parity)
 // ============================================================================
 
-/// Request to serialize a memory subsystem to snapshot bytes.
+/// Which memory subsystem a TTL request targets.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemorySnapshotRequest {
-    /// Embedding dimension of the target memory collection.
-    #[serde(default = "default_dimension")]
-    pub dimension: usize,
+#[serde(rename_all = "lowercase")]
+pub enum MemoryKindDto {
+    /// Semantic (long-term knowledge) memory.
+    Semantic,
+    /// Episodic (event timeline) memory.
+    Episodic,
+    /// Procedural (learned patterns) memory.
+    Procedural,
 }
 
-/// Request to restore a memory subsystem from snapshot bytes.
+/// Request to set a TTL on a single memory entry.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemoryRestoreRequest {
-    /// Embedding dimension of the target memory collection.
-    #[serde(default = "default_dimension")]
-    pub dimension: usize,
-    /// Snapshot bytes previously produced by the matching serialize command.
-    pub data: Vec<u8>,
+pub struct MemoryTtlRequest {
+    /// Target memory subsystem.
+    pub kind: MemoryKindDto,
+    /// Entry ID to expire.
+    pub id: u64,
+    /// Time-to-live in seconds.
+    pub ttl_seconds: u64,
+}
+
+/// Result of an `auto_expire` pass over the persistent memory handle.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpireResultDto {
+    /// Semantic entries expired.
+    pub semantic_expired: usize,
+    /// Episodic entries expired.
+    pub episodic_expired: usize,
+    /// Procedural entries expired.
+    pub procedural_expired: usize,
+    /// Episodic entries consolidated into semantic memory.
+    pub episodic_consolidated: usize,
+    /// Procedural entries evicted for low confidence.
+    pub procedural_evicted: usize,
+    /// `true` when more old episodes remained than this cycle processed.
+    pub consolidation_truncated: bool,
+}
+
+impl From<velesdb_core::agent::ExpireResult> for ExpireResultDto {
+    fn from(r: velesdb_core::agent::ExpireResult) -> Self {
+        Self {
+            semantic_expired: r.semantic_expired,
+            episodic_expired: r.episodic_expired,
+            procedural_expired: r.procedural_expired,
+            episodic_consolidated: r.episodic_consolidated,
+            procedural_evicted: r.procedural_evicted,
+            consolidation_truncated: r.consolidation_truncated,
+        }
+    }
+}
+
+/// Request to evict procedures below a confidence threshold.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvictLowConfidenceRequest {
+    /// Minimum confidence; procedures below this are evicted.
+    pub min_confidence: f32,
+}
+
+/// Request to load a specific memory snapshot version.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadSnapshotVersionRequest {
+    /// Snapshot version number to restore.
+    pub version: u64,
+}
+
+/// Request executing a `VelesQL` query against one memory subsystem.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryQueryRequest {
+    /// `VelesQL` query string.
+    pub sql: String,
+    /// Named query parameters.
+    #[serde(default)]
+    pub params: std::collections::HashMap<String, serde_json::Value>,
 }
 
 // ============================================================================
