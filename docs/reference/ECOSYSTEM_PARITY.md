@@ -63,7 +63,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 - **Collection Types (Metadata)**: WASM and integration SDKs expose metadata collections with reduced column-type support.
 - **Property Indexes (WASM)**: Disabled by design — no persistence layer means indexes cannot survive page reloads.
 - **Quantization (RaBitQ)**: Experimental across all surfaces; API is unstable.
-- **Agent Memory (Server)**: Exposed via REST endpoints but not all memory pattern types are fully mapped.
+- **Agent Memory (Server)**: ⚠️ — exposed via REST endpoints but not all memory pattern types are fully mapped (no temporal/confidence-only queries, reinforcement, TTL, or snapshots over REST; those are embedded-only). TTL and snapshots are exposed in the **Python** embedded binding (✅), not over REST.
 - **Persistence (WASM)**: Disabled by design — `persistence` feature flag is excluded for `wasm32-unknown-unknown` targets.
 - **GPU**: Requires `gpu` feature flag; only available in crates that link `wgpu` (core, server, Python bindings).
 
