@@ -12,6 +12,7 @@ This directory contains examples demonstrating various VelesDB features and inte
 | [langchain/](./langchain/) | Python | Intermediate | LangChain VectorStore with hybrid search |
 | [llamaindex/](./llamaindex/) | Python | Intermediate | LlamaIndex VectorStore with Product Quantization |
 | [haystack/](../integrations/haystack/examples/) | Python | Intermediate | Haystack 2.x DocumentStore + RAG pipeline (lives under `integrations/haystack/`) |
+| [agent_memory/](./agent_memory/) | Python / Rust / TS | Intermediate | Agent memory: semantic + episodic + procedural, namespaced TTL, snapshots |
 | [python/](./python/) | Python | Beginner | SDK usage patterns (fusion, graph, hybrid) |
 | [python_example.py](./python_example.py) | Python | Beginner | REST API client (legacy) |
 | [wasm-browser-demo/](./wasm-browser-demo/) | HTML/JS | Beginner | Browser-based vector search, no server needed |
@@ -130,6 +131,24 @@ python fusion_strategies.py
 ```
 
 > **Note**: The `graphrag_langchain.py` and `graphrag_llamaindex.py` examples require an OpenAI API key and a running VelesDB server. All other examples are fully self-contained.
+
+### Agent Memory (`agent_memory/`) -- Intermediate
+
+End-to-end **AI agent memory** across all three SDKs, with a deterministic
+network-free embedder (no API key, no model download):
+
+- **Semantic** (facts), **Episodic** (timeline), **Procedural** (learned skills)
+- Namespaced **TTL** + `auto_expire`, and versioned **snapshot** save/load rollback
+
+```bash
+# Python (self-contained smoke test — prints a trace and exits 0)
+python examples/agent_memory/agent_loop.py
+
+# Rust (builds against velesdb-core)
+cd examples/agent_memory && cargo run --bin snapshot_ttl
+```
+
+See [agent_memory/README.md](./agent_memory/README.md) for the TypeScript SDK variant and details.
 
 ### REST API Client (`python_example.py`) -- Beginner
 
