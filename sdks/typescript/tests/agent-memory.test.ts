@@ -123,8 +123,10 @@ describe('Agent Memory REST methods', () => {
       expect(point.payload.name).toBe('deploy');
       expect(point.payload.steps).toEqual(['build', 'test', 'push']);
       expect(point.payload.env).toBe('prod');
-      // store returns the generated point ID
-      expect(point.id).toBe(id);
+      // store returns the generated point ID as a string (u64 boundary);
+      // the wire id is the numeric form of that same value.
+      expect(typeof id).toBe('string');
+      expect(String(point.id)).toBe(id);
     });
   });
 
@@ -238,6 +240,194 @@ describe('Agent Memory REST methods', () => {
       expect(matches).toHaveLength(1);
       expect(matches[0].id).toBe(id);
       expect(matches[0].payload?.name).toBe('deploy');
+    });
+  });
+
+  // ── numeric timestamp + content field alignment ───────────────────────────
+  describe('episodic numeric timestamp + semantic content field', () => {
+    it('writes content (not text) for a semantic fact', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await backend.storeSemanticFact('facts', {
+        id: 7,
+        text: 'the sky is blue',
+        embedding: [0.1, 0.2],
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.payload.content).toBe('the sky is blue');
+      expect(point.payload.text).toBeUndefined();
+      expect(point.payload._memory_type).toBe('semantic');
+    });
+
+    it('defaults episodic timestamp to numeric unix-seconds (floor ms/1000)', async () => {
+      // 1700000000123 ms -> 1700000000 s
+      vi.spyOn(Date, 'now').mockReturnValue(1700000000123);
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await backend.recordEpisodicEvent('events', {
+        eventType: 'click',
+        embedding: [0.1, 0.2],
+        data: {},
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.payload.timestamp).toBe(1700000000);
+      expect(typeof point.payload.timestamp).toBe('number');
+    });
+
+    it('round-trips an explicit numeric timestamp unchanged', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await backend.recordEpisodicEvent('events', {
+        eventType: 'login',
+        embedding: [0.3, 0.4],
+        data: {},
+        timestamp: 1234567890,
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.payload.timestamp).toBe(1234567890);
+    });
+  });
+
+  // ── string-id integrity across the u64 boundary ───────────────────────────
+  describe('string-id boundary (u64 precision)', () => {
+    it('returns generated episodic/procedural ids as strings', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      const eId = await backend.recordEpisodicEvent('events', {
+        eventType: 'x', embedding: [0.1], data: {},
+      });
+      const pId = await backend.storeProceduralPattern('patterns', {
+        name: 'p', steps: ['a'], embedding: [0.1],
+      });
+
+      expect(typeof eId).toBe('string');
+      expect(typeof pId).toBe('string');
+    });
+
+    it('accepts a caller numeric-string id within the safe range and preserves it exactly', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      // 9007199254740991 == Number.MAX_SAFE_INTEGER, the largest exact u64 in JS.
+      const big = String(Number.MAX_SAFE_INTEGER);
+      const id = await backend.recordEpisodicEvent('events', {
+        id: big, eventType: 'x', embedding: [0.1], data: {},
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      // The wire id is the exact integer; the returned id is its string form.
+      expect(point.id).toBe(Number.MAX_SAFE_INTEGER);
+      expect(id).toBe(big);
+    });
+
+    it('rejects a caller id beyond 2^53 rather than silently corrupting it', async () => {
+      // 2^53 + 1 cannot be represented exactly as a JS number; the REST wire
+      // only accepts JSON numbers, so this must throw, not lose precision.
+      const tooBig = '9007199254740993';
+      await expect(
+        backend.storeProceduralPattern('patterns', {
+          id: tooBig, name: 'p', steps: ['a'], embedding: [0.1],
+        })
+      ).rejects.toThrow();
+    });
+  });
+
+  // ── explicit caller-provided ids everywhere ───────────────────────────────
+  describe('caller-provided ids for episodic/procedural', () => {
+    it('uses the caller id for an episodic event', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      const id = await backend.recordEpisodicEvent('events', {
+        id: 42, eventType: 'x', embedding: [0.1], data: {},
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.id).toBe(42);
+      expect(id).toBe('42');
+    });
+
+    it('uses the caller id for a procedural pattern', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      const id = await backend.storeProceduralPattern('patterns', {
+        id: 99, name: 'p', steps: ['a'], embedding: [0.1],
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.id).toBe(99);
+      expect(id).toBe('99');
+    });
+  });
+
+  // ── temporal recall mirrors core recent / older_than ──────────────────────
+  describe('recallRecent / recallOlderThan', () => {
+    // Single scroll page of episodic points at distinct timestamps.
+    const scrollPage = {
+      ok: true,
+      json: () => Promise.resolve({
+        points: [
+          { id: 1, payload: { _memory_type: 'episodic', event_type: 'a', timestamp: 100 } },
+          { id: 2, payload: { _memory_type: 'episodic', event_type: 'b', timestamp: 300 } },
+          { id: 3, payload: { _memory_type: 'episodic', event_type: 'c', timestamp: 200 } },
+          // Non-episodic / missing-timestamp points must be ignored.
+          { id: 4, payload: { _memory_type: 'semantic', content: 'x' } },
+          { id: 5, payload: { _memory_type: 'episodic', event_type: 'd' } },
+        ],
+        next_cursor: null,
+      }),
+    };
+
+    it('recallRecent returns all episodic events most-recent-first', async () => {
+      mockFetch.mockResolvedValueOnce(scrollPage);
+
+      const events = await backend.recallRecentEvents('events');
+
+      expect(events.map((e) => e.timestamp)).toEqual([300, 200, 100]);
+      expect(events.map((e) => e.id)).toEqual(['2', '3', '1']);
+    });
+
+    it('recallRecent honours the since lower bound (inclusive)', async () => {
+      mockFetch.mockResolvedValueOnce(scrollPage);
+
+      const events = await backend.recallRecentEvents('events', 200);
+
+      expect(events.map((e) => e.timestamp)).toEqual([300, 200]);
+    });
+
+    it('recallOlderThan returns events strictly below the threshold', async () => {
+      mockFetch.mockResolvedValueOnce(scrollPage);
+
+      const events = await backend.recallOlderThanEvents('events', 200);
+
+      // 200 is excluded (strict <), 100 included.
+      expect(events.map((e) => e.timestamp)).toEqual([100]);
+    });
+
+    it('paginates across scroll cursors', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            points: [{ id: 1, payload: { _memory_type: 'episodic', timestamp: 100 } }],
+            next_cursor: 1,
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            points: [{ id: 2, payload: { _memory_type: 'episodic', timestamp: 200 } }],
+            next_cursor: null,
+          }),
+        });
+
+      const events = await backend.recallRecentEvents('events');
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(events.map((e) => e.timestamp)).toEqual([200, 100]);
     });
   });
 });

@@ -34,6 +34,7 @@ import type {
   CollectionConfigResponse,
   SemanticEntry,
   EpisodicEvent,
+  EpisodicRecord,
   ProceduralPattern,
   ScrollRequest,
   ScrollResponse,
@@ -88,6 +89,8 @@ import {
   wasmSearchSemanticMemory,
   wasmRecordEpisodicEvent,
   wasmRecallEpisodicEvents,
+  wasmRecallRecentEvents,
+  wasmRecallOlderThanEvents,
   wasmStoreProceduralPattern,
   wasmMatchProceduralPatterns,
 } from './wasm-stubs';
@@ -420,9 +423,11 @@ export class WasmBackend implements IVelesDBBackend {
   async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return wasmSearchIds(c, q, o); }
   async storeSemanticFact(c: string, e: SemanticEntry): Promise<void> { this.ensureInitialized(); return wasmStoreSemanticFact(c, e); }
   async searchSemanticMemory(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmSearchSemanticMemory(c, e, k); }
-  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<number> { this.ensureInitialized(); return wasmRecordEpisodicEvent(c, e); }
+  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<string> { this.ensureInitialized(); return wasmRecordEpisodicEvent(c, e); }
   async recallEpisodicEvents(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmRecallEpisodicEvents(c, e, k); }
-  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<number> { this.ensureInitialized(); return wasmStoreProceduralPattern(c, p); }
+  async recallRecentEvents(c: string, since?: number): Promise<EpisodicRecord[]> { this.ensureInitialized(); return wasmRecallRecentEvents(c, since); }
+  async recallOlderThanEvents(c: string, before: number): Promise<EpisodicRecord[]> { this.ensureInitialized(); return wasmRecallOlderThanEvents(c, before); }
+  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<string> { this.ensureInitialized(); return wasmStoreProceduralPattern(c, p); }
   async matchProceduralPatterns(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmMatchProceduralPatterns(c, e, k); }
 
   // Wave 4 stubs

@@ -10,6 +10,7 @@ import type {
   AgentMemoryConfig,
   SemanticEntry,
   EpisodicEvent,
+  EpisodicRecord,
   ProceduralPattern,
   SearchResult,
 } from './types';
@@ -47,18 +48,34 @@ export class AgentMemoryClient {
     return this.backend.searchSemanticMemory(collection, embedding, k);
   }
 
-  /** Record an episodic event. Returns the generated point ID. */
-  async recordEvent(collection: string, event: EpisodicEvent): Promise<number> {
+  /** Record an episodic event. Returns the point ID (string, u64-safe). */
+  async recordEvent(collection: string, event: EpisodicEvent): Promise<string> {
     return this.backend.recordEpisodicEvent(collection, event);
   }
 
-  /** Recall episodic events */
+  /** Recall episodic events by vector similarity. */
   async recallEvents(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
     return this.backend.recallEpisodicEvents(collection, embedding, k);
   }
 
-  /** Store a procedural pattern. Returns the generated point ID. */
-  async learnProcedure(collection: string, pattern: ProceduralPattern): Promise<number> {
+  /**
+   * Recall episodic events most-recent-first, optionally bounded below by
+   * `since` (inclusive unix-seconds). Mirrors core `episodic.recent(since)`.
+   */
+  async recallRecent(collection: string, since?: number): Promise<EpisodicRecord[]> {
+    return this.backend.recallRecentEvents(collection, since);
+  }
+
+  /**
+   * Recall episodic events strictly older than `before` (unix-seconds),
+   * most-recent-first. Mirrors core `episodic.older_than(before)`.
+   */
+  async recallOlderThan(collection: string, before: number): Promise<EpisodicRecord[]> {
+    return this.backend.recallOlderThanEvents(collection, before);
+  }
+
+  /** Store a procedural pattern. Returns the point ID (string, u64-safe). */
+  async learnProcedure(collection: string, pattern: ProceduralPattern): Promise<string> {
     return this.backend.storeProceduralPattern(collection, pattern);
   }
 
