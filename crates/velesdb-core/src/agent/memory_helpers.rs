@@ -233,7 +233,7 @@ pub(super) fn search_filtered(
 /// total length does not match the declared count.
 ///
 /// Used by `TemporalIndex::deserialize` (16-byte entries) and
-/// `MemoryTtl::deserialize` (24-byte entries).
+/// `MemoryTtl::deserialize` (25-byte entries).
 #[allow(clippy::cast_possible_truncation)] // count validated against buffer length
 pub(super) fn validate_binary_header(data: &[u8], entry_size: usize) -> Option<usize> {
     if data.len() < 8 {

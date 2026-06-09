@@ -406,10 +406,17 @@ impl AgentMemory {
         self.episodic.deserialize(&state.episodic)?;
         self.procedural.deserialize(&state.procedural)?;
 
-        if let Some(ttl) = MemoryTtl::deserialize(&state.ttl) {
+        // An empty TTL section is legitimately empty state; anything else that
+        // fails to deserialize is a corrupt/incompatible snapshot and must not
+        // silently drop every TTL (which would make expiring entries immortal).
+        if state.ttl.is_empty() {
+            self.ttl.clear();
+        } else if let Some(ttl) = MemoryTtl::deserialize(&state.ttl) {
             self.ttl.replace_from(&ttl);
         } else {
-            self.ttl.clear();
+            return Err(AgentMemoryError::SnapshotError(
+                "TTL state failed to deserialize (corrupt or incompatible snapshot)".to_string(),
+            ));
         }
 
         Ok(())

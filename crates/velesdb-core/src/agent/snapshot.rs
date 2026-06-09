@@ -38,7 +38,12 @@ use crate::storage::snapshot::crc32_hash;
 pub const SNAPSHOT_MAGIC: &[u8; 4] = b"VAMM";
 
 /// Current snapshot format version.
-pub const SNAPSHOT_VERSION: u8 = 1;
+///
+/// Bumped to 2 when the TTL entry layout gained a 1-byte `MemoryKind` tag
+/// (24 -> 25 bytes/entry). A v1 snapshot written by an earlier release is now
+/// rejected with [`SnapshotError::UnsupportedVersion`] instead of silently
+/// loading with every TTL dropped.
+pub const SNAPSHOT_VERSION: u8 = 2;
 
 /// Memory state for serialization.
 #[derive(Debug, Clone, Default)]
