@@ -380,6 +380,9 @@ pub async fn procedural_deserialize<R: Runtime>(
 // ============================================================================
 
 /// Sets a TTL on a single memory entry in the persistent registry.
+///
+/// Unconditional: unlike the Python binding, this does not verify the `id`
+/// exists first — a TTL set on an unknown id is simply a no-op at eviction.
 #[command]
 pub async fn memory_set_ttl<R: Runtime>(
     _app: AppHandle<R>,

@@ -25,17 +25,26 @@ import velesdb
 DIM = 64
 
 
+def _fnv1a(token: str) -> int:
+    """32-bit FNV-1a hash of a token (stable across processes)."""
+    h = 0x811C9DC5
+    for byte in token.encode("utf-8"):
+        h = ((h ^ byte) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
 def fake_embed(text: str) -> list[float]:
     """Deterministic, network-free embedding.
 
     Hashes each token into a fixed bucket so semantically related sentences
-    (which share words) land near each other under cosine similarity. Good
-    enough to make recall meaningful in a reproducible smoke test; it is NOT a
-    real model — swap in your embedder of choice in production.
+    (which share words) land near each other under cosine similarity. Uses a
+    fixed FNV-1a fold (not Python's salted ``hash``) so the embedding is fully
+    reproducible across runs and matches the Rust/TS examples. It is NOT a real
+    model — swap in your embedder of choice in production.
     """
     vec = [0.0] * DIM
     for token in text.lower().split():
-        bucket = hash(token) % DIM
+        bucket = _fnv1a(token) % DIM
         vec[bucket] += 1.0
     norm = sum(v * v for v in vec) ** 0.5
     return [v / norm for v in vec] if norm > 0.0 else vec

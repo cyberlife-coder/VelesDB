@@ -144,7 +144,9 @@ impl EpisodicMemory {
         ttl_seconds: u64,
     ) -> Result<(), AgentMemoryError> {
         if ttl_seconds == 0 {
-            memory_helpers::resolve_embedding(self.dimension, embedding)?;
+            if let Some(emb) = embedding {
+                memory_helpers::validate_dimension(self.dimension, emb.len())?;
+            }
             return self.delete(event_id);
         }
         self.record(event_id, description, timestamp, embedding)?;

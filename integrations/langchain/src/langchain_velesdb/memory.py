@@ -15,11 +15,17 @@ Example:
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import time
 
-from langchain_velesdb._common import make_initial_id_counter, parse_event_entry
-from velesdb_common.memory import format_procedural_results, store_procedure
+from langchain_velesdb._common import make_initial_id_counter
+from velesdb_common.memory import (
+    chronological,
+    format_procedural_results,
+    parse_event_entry,
+    resolve_procedure_id,
+    store_procedure,
+)
 
 try:
     from langchain.memory.chat_memory import BaseChatMemory
@@ -55,15 +61,6 @@ _ROLE_TO_MESSAGE = {
     "system": SystemMessage,
     "tool": ToolMessage,
 }
-
-
-def _chronological(events: List) -> List:
-    """Return episodic events oldest-first.
-
-    ``episodic.recent`` yields events newest-first; conversation history must
-    be read oldest-first so a turn's human prompt precedes its AI reply.
-    """
-    return list(reversed(events))
 
 
 def _event_to_message(role: str, content: str) -> BaseMessage:
@@ -155,7 +152,7 @@ class VelesDBChatMemory(BaseChatMemory):
         """
         # Episodic ``recent`` returns newest-first; read oldest-first so a
         # turn's human prompt precedes its AI reply.
-        events = _chronological(self._memory.episodic.recent(limit=self.window))
+        events = chronological(self._memory.episodic.recent(limit=self.window))
 
         if self.return_messages:
             return {self.memory_key: self._events_to_messages(events)}
@@ -413,8 +410,8 @@ class VelesDBProceduralMemory:
             min_confidence: Minimum confidence threshold for results.
 
         Returns:
-            List of dicts with ``name``, ``steps``, ``confidence``, and
-            ``score`` keys.
+            List of dicts with ``id``, ``name``, ``steps``, ``confidence``,
+            and ``score`` keys.
 
         Raises:
             RuntimeError: If no embeddings model is configured and no
@@ -440,23 +437,24 @@ class VelesDBProceduralMemory:
         )
         return format_procedural_results(results)
 
-    def reinforce(self, name: str, success: bool = True) -> None:
+    def reinforce(self, name_or_id: Union[str, int], success: bool = True) -> None:
         """Reinforce or weaken a stored procedure.
 
+        Accepts either a procedure ``name`` learned in the current session
+        or a numeric ``id`` taken from a :meth:`recall` result.  The numeric
+        form is what lets you reinforce procedures across sessions, where the
+        in-memory name→ID registry is empty.
+
         Args:
-            name: Name of the procedure to update.
+            name_or_id: Name (``str``) or numeric ``id`` (``int``) of the
+                procedure to update.
             success: ``True`` increases confidence; ``False`` decreases it.
 
         Raises:
-            KeyError: If the procedure name has not been learned in this
-                session.
+            KeyError: If a ``name`` was not learned in this session.
         """
-        if name not in self._name_to_id:
-            raise KeyError(
-                f"Unknown procedure '{name}'. "
-                "Call learn() before reinforce()."
-            )
-        self._procedural.reinforce(self._name_to_id[name], success)
+        proc_id = resolve_procedure_id(name_or_id, self._name_to_id)
+        self._procedural.reinforce(proc_id, success)
 
     def clear(self) -> None:
         """Reset the in-session procedure registry.

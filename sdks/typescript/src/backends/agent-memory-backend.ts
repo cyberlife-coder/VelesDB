@@ -15,9 +15,10 @@ import type {
   ProceduralPattern,
   EpisodicRecord,
 } from '../types';
-import type { BaseTransport, TransportResponse } from './shared';
+import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath } from './shared';
 import { parseRestPointId } from './crud-backend';
+import { scroll } from './scroll-backend';
 
 /** Minimal transport interface for agent memory operations. */
 export interface AgentMemoryTransport extends BaseTransport {
@@ -231,17 +232,14 @@ export async function matchProceduralPatterns(
 // Temporal recall (mirrors core EpisodicMemory::recent / older_than)
 // ---------------------------------------------------------------------------
 
-/** Raw scroll page shape (snake_case `next_cursor`). */
-interface ScrollPage {
-  points: Array<{ id: string | number; payload?: Record<string, unknown> }>;
-  next_cursor: string | number | null;
-}
-
 /**
  * Map a scrolled point to an {@link EpisodicRecord} when it is an episodic
  * event carrying a numeric timestamp; otherwise `undefined` (filtered out).
  */
-function toEpisodicRecord(point: ScrollPage['points'][number]): EpisodicRecord | undefined {
+function toEpisodicRecord(point: {
+  id: string | number;
+  payload?: Record<string, unknown>;
+}): EpisodicRecord | undefined {
   const payload = point.payload ?? {};
   if (payload._memory_type !== 'episodic') return undefined;
   if (typeof payload.timestamp !== 'number') return undefined;
@@ -256,18 +254,15 @@ async function scrollEpisodicRecords(
   const records: EpisodicRecord[] = [];
   let cursor: string | number | null = null;
   do {
-    const response: TransportResponse<ScrollPage> = await transport.requestJson<ScrollPage>(
-      'POST',
-      `${collectionPath(collection)}/points/scroll`,
-      { cursor: cursor ?? undefined, filter: { _memory_type: 'episodic' } }
-    );
-    throwOnError(response);
-    const page: ScrollPage = response.data!;
+    const page = await scroll(transport, collection, {
+      cursor: cursor ?? undefined,
+      filter: { _memory_type: 'episodic' },
+    });
     for (const point of page.points) {
       const record = toEpisodicRecord(point);
       if (record !== undefined) records.push(record);
     }
-    cursor = page.next_cursor;
+    cursor = page.nextCursor;
   } while (cursor !== null && cursor !== undefined);
   return records;
 }

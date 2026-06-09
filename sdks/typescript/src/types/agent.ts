@@ -14,9 +14,10 @@ export interface SemanticEntry {
   /**
    * Unique fact ID.
    *
-   * `string | number` mirrors the project's u64-id convention: ids above
-   * `Number.MAX_SAFE_INTEGER` (2^53-1) must be passed as decimal strings so
-   * JavaScript does not silently lose precision on the way to the u64 core.
+   * `string | number` is accepted as a convenience (a string must be a decimal
+   * integer). Ids must be non-negative integers within the JS safe-integer
+   * range (0..2^53-1): the REST wire transmits point ids as JSON numbers, so
+   * out-of-range ids are rejected (not silently truncated).
    */
   id: string | number;
   /** Fact text content */
@@ -31,7 +32,10 @@ export interface SemanticEntry {
 export interface EpisodicEvent {
   /**
    * Optional caller-provided event ID. When omitted, a monotonic id is
-   * generated. `string | number` preserves u64 precision above 2^53-1.
+   * generated. `string | number` is accepted as a convenience; ids must be
+   * non-negative integers within the JS safe-integer range (0..2^53-1) because
+   * the REST wire transmits them as JSON numbers, and out-of-range ids are
+   * rejected (not silently truncated).
    */
   id?: string | number;
   /** Event type identifier */
@@ -56,7 +60,10 @@ export interface EpisodicEvent {
 export interface ProceduralPattern {
   /**
    * Optional caller-provided pattern ID. When omitted, a monotonic id is
-   * generated. `string | number` preserves u64 precision above 2^53-1.
+   * generated. `string | number` is accepted as a convenience; ids must be
+   * non-negative integers within the JS safe-integer range (0..2^53-1) because
+   * the REST wire transmits them as JSON numbers, and out-of-range ids are
+   * rejected (not silently truncated).
    */
   id?: string | number;
   /** Procedure name */

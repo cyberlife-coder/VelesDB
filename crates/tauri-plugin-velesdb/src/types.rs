@@ -486,12 +486,6 @@ pub fn default_fusion() -> String {
     "rrf".to_string()
 }
 
-/// Default dimension for agent memory (384 for typical sentence transformers).
-#[must_use]
-pub const fn default_dimension() -> usize {
-    384
-}
-
 // ============================================================================
 // AgentMemory DTOs (EPIC-016 US-003)
 // ============================================================================
