@@ -178,21 +178,64 @@ impl AgentMemory {
     }
 
     /// Sets a TTL (in seconds) for a semantic memory entry.
+    ///
+    /// The TTL is namespaced to semantic memory: it can never expire an
+    /// episodic or procedural row that happens to share the same numeric id.
+    ///
+    /// Returns:
+    ///     ``True`` when `id` names a live semantic fact and the TTL was set;
+    ///     ``False`` when no such fact exists (the call is a no-op).
     #[pyo3(signature = (id, ttl_seconds))]
-    fn set_semantic_ttl(&self, id: u64, ttl_seconds: u64) {
-        self.core.set_semantic_ttl(id, ttl_seconds);
+    fn set_semantic_ttl(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<bool> {
+        let exists = py.allow_threads(|| self.core.semantic().get(id).map_err(to_py_err))?;
+        Ok(
+            self.apply_ttl(exists.is_some(), id, ttl_seconds, |c, i, t| {
+                c.set_semantic_ttl(i, t);
+            }),
+        )
     }
 
     /// Sets a TTL (in seconds) for an episodic memory entry.
+    ///
+    /// The TTL is namespaced to episodic memory (no cross-subsystem expiry).
+    ///
+    /// Returns:
+    ///     ``True`` when `id` names a live event and the TTL was set;
+    ///     ``False`` when no such event exists (the call is a no-op).
     #[pyo3(signature = (id, ttl_seconds))]
-    fn set_episodic_ttl(&self, id: u64, ttl_seconds: u64) {
-        self.core.set_episodic_ttl(id, ttl_seconds);
+    fn set_episodic_ttl(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<bool> {
+        let exists = py.allow_threads(|| {
+            self.core
+                .episodic()
+                .get_with_embedding(id)
+                .map_err(to_py_err)
+        })?;
+        Ok(
+            self.apply_ttl(exists.is_some(), id, ttl_seconds, |c, i, t| {
+                c.set_episodic_ttl(i, t);
+            }),
+        )
     }
 
     /// Sets a TTL (in seconds) for a procedural memory entry.
+    ///
+    /// The TTL is namespaced to procedural memory (no cross-subsystem expiry).
+    ///
+    /// Returns:
+    ///     ``True`` when `id` names a live procedure and the TTL was set;
+    ///     ``False`` when no such procedure exists (the call is a no-op).
     #[pyo3(signature = (id, ttl_seconds))]
-    fn set_procedural_ttl(&self, id: u64, ttl_seconds: u64) {
-        self.core.set_procedural_ttl(id, ttl_seconds);
+    fn set_procedural_ttl(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<bool> {
+        let exists = py.allow_threads(|| {
+            self.core
+                .procedural()
+                .list_all()
+                .map(|procs| procs.iter().any(|p| p.id == id))
+                .map_err(to_py_err)
+        })?;
+        Ok(self.apply_ttl(exists, id, ttl_seconds, |c, i, t| {
+            c.set_procedural_ttl(i, t);
+        }))
     }
 
     /// Expires entries past their TTL and consolidates old episodes.
@@ -299,6 +342,22 @@ impl AgentMemory {
 }
 
 impl AgentMemory {
+    /// Shared TTL gate for the three namespaced `set_*_ttl` methods.
+    ///
+    /// Only sets the TTL (via `set`, which routes to the subsystem's own
+    /// `MemoryKind` namespace) when `exists` is true, so a TTL is never
+    /// registered against an id no subsystem holds. Returns whether the TTL
+    /// was applied.
+    fn apply_ttl<F>(&self, exists: bool, id: u64, ttl_seconds: u64, set: F) -> bool
+    where
+        F: FnOnce(&CoreAgentMemory, u64, u64),
+    {
+        if exists {
+            set(&self.core, id, ttl_seconds);
+        }
+        exists
+    }
+
     /// Shared driver for the three VelesQL memory bridges: converts params,
     /// runs the core query off the GIL, then builds result dicts.
     fn run_memory_query<F>(

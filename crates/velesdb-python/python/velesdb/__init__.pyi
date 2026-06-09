@@ -1574,6 +1574,27 @@ class PySemanticMemory:
         """
         ...
 
+    def store_with_ttl(
+        self,
+        id: int,
+        content: str,
+        embedding: List[float],
+        ttl_seconds: int,
+    ) -> None:
+        """Store a knowledge fact with its embedding and a TTL.
+
+        The entry becomes eligible for expiry once ``ttl_seconds`` have
+        elapsed (enforced on query and by :meth:`AgentMemory.auto_expire`).
+        A ``ttl_seconds`` of ``0`` expires the fact immediately.
+
+        Args:
+            id: Unique identifier for the fact
+            content: Text content of the knowledge
+            embedding: Vector representation
+            ttl_seconds: Time-to-live in seconds
+        """
+        ...
+
     def query(self, embedding: List[float], top_k: int = 10) -> List[Dict[str, Any]]:
         """Query semantic memory by similarity.
 
@@ -1581,6 +1602,24 @@ class PySemanticMemory:
             List of dicts with 'id', 'score', 'content' keys
         """
         ...
+
+    def delete(self, id: int) -> None:
+        """Delete a knowledge fact by ID."""
+        ...
+
+    def serialize(self) -> bytes:
+        """Serialize all stored facts to a bytes blob for snapshotting.
+
+        The blob omits TTL state; use :meth:`AgentMemory.snapshot` for a
+        full round-trip including expiry.
+        """
+        ...
+
+    def deserialize(self, data: bytes) -> None:
+        """Replace semantic memory state from a :meth:`serialize` blob."""
+        ...
+
+    def __repr__(self) -> str: ...
 
 
 class PyEpisodicMemory:
@@ -1620,6 +1659,24 @@ class PyEpisodicMemory:
         """
         ...
 
+    def older_than(
+        self,
+        before: int,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Get events older than a given Unix timestamp.
+
+        Returns:
+            List of dicts with 'id', 'description', 'timestamp' keys
+        """
+        ...
+
+    def delete(self, event_id: int) -> None:
+        """Delete an event by ID."""
+        ...
+
+    def __repr__(self) -> str: ...
+
 
 class PyProceduralMemory:
     """Learned patterns with confidence scoring and reinforcement."""
@@ -1655,6 +1712,20 @@ class PyProceduralMemory:
         """
         ...
 
+    def list_all(self) -> List[Dict[str, Any]]:
+        """List all stored procedures.
+
+        Returns:
+            List of dicts with 'id', 'name', 'steps', 'confidence', 'score' keys
+        """
+        ...
+
+    def delete(self, procedure_id: int) -> None:
+        """Delete a procedure by ID."""
+        ...
+
+    def __repr__(self) -> str: ...
+
 
 class AgentMemory:
     """Unified agent memory with semantic, episodic, and procedural subsystems.
@@ -1666,12 +1737,20 @@ class AgentMemory:
         >>> memory = AgentMemory(db, dimension=768)
     """
 
-    def __init__(self, db: Database, dimension: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        db: Database,
+        dimension: Optional[int] = None,
+        snapshot_dir: Optional[str] = None,
+        max_snapshots: int = 10,
+    ) -> None:
         """Create a new AgentMemory from a Database.
 
         Args:
             db: Database instance
             dimension: Embedding dimension (default: 384)
+            snapshot_dir: Optional directory to enable versioned snapshots
+            max_snapshots: Number of snapshots to retain (default: 10)
         """
         ...
 
@@ -1683,6 +1762,118 @@ class AgentMemory:
     def procedural(self) -> PyProceduralMemory: ...
     @property
     def dimension(self) -> int: ...
+
+    def set_semantic_ttl(self, id: int, ttl_seconds: int) -> bool:
+        """Set a TTL (seconds) for a semantic memory entry.
+
+        The TTL is namespaced to semantic memory and never expires an
+        episodic or procedural row sharing the same numeric id.
+
+        Returns:
+            ``True`` if ``id`` names a live semantic fact and the TTL was
+            set; ``False`` (no-op) when no such fact exists.
+        """
+        ...
+
+    def set_episodic_ttl(self, id: int, ttl_seconds: int) -> bool:
+        """Set a TTL (seconds) for an episodic memory entry.
+
+        Namespaced to episodic memory (no cross-subsystem expiry).
+
+        Returns:
+            ``True`` if ``id`` names a live event and the TTL was set;
+            ``False`` (no-op) when no such event exists.
+        """
+        ...
+
+    def set_procedural_ttl(self, id: int, ttl_seconds: int) -> bool:
+        """Set a TTL (seconds) for a procedural memory entry.
+
+        Namespaced to procedural memory (no cross-subsystem expiry).
+
+        Returns:
+            ``True`` if ``id`` names a live procedure and the TTL was set;
+            ``False`` (no-op) when no such procedure exists.
+        """
+        ...
+
+    def auto_expire(self) -> Dict[str, int]:
+        """Expire entries past their TTL and consolidate old episodes.
+
+        Returns:
+            Dict with 'semantic_expired', 'episodic_expired',
+            'procedural_expired', 'episodic_consolidated',
+            'procedural_evicted' counts.
+        """
+        ...
+
+    def evict_low_confidence_procedures(self, min_confidence: float) -> int:
+        """Evict procedures whose confidence is below the threshold.
+
+        Returns:
+            Number of procedures evicted.
+        """
+        ...
+
+    def snapshot(self) -> int:
+        """Create a versioned snapshot of the current memory state.
+
+        Requires ``snapshot_dir`` to have been provided at construction.
+
+        Returns:
+            The version number of the created snapshot.
+        """
+        ...
+
+    def load_latest_snapshot(self) -> int:
+        """Load the most recent snapshot, restoring all subsystems.
+
+        Returns:
+            The version number of the loaded snapshot.
+        """
+        ...
+
+    def load_snapshot_version(self, version: int) -> None:
+        """Load a specific snapshot version, restoring all subsystems."""
+        ...
+
+    def list_snapshot_versions(self) -> List[int]:
+        """List all available snapshot version numbers."""
+        ...
+
+    def query_semantic(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query against the semantic memory collection.
+
+        Args:
+            query_str: VelesQL query string (e.g. ``WHERE vector NEAR $v``)
+            params: Optional query parameters (vectors as lists, scalars)
+
+        Returns:
+            List of result dicts.
+        """
+        ...
+
+    def query_episodic(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query against the episodic memory collection."""
+        ...
+
+    def query_procedural(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query against the procedural memory collection."""
+        ...
+
+    def __repr__(self) -> str: ...
 
 
 # ---------------------------------------------------------------------------
