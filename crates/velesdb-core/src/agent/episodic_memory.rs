@@ -11,7 +11,7 @@ use std::sync::Arc;
 use super::error::AgentMemoryError;
 use super::memory_helpers;
 use super::temporal_index::TemporalIndex;
-use super::ttl::MemoryTtl;
+use super::ttl::{MemoryKind, MemoryTtl};
 
 /// Episodic memory for storing event timelines with temporal context.
 ///
@@ -125,6 +125,13 @@ impl EpisodicMemory {
 
     /// Stores an event and assigns a TTL for automatic expiration.
     ///
+    /// A `ttl_seconds` of `0` means "expire immediately": rather than persisting
+    /// a live point that lingers until the next `auto_expire`, the event is
+    /// eagerly removed (and any pre-existing point for `event_id` deleted),
+    /// harmonising the behaviour with [`SemanticMemory::store_with_ttl`]. The
+    /// embedding is still dimension-validated so callers get the same error
+    /// contract as a real record.
+    ///
     /// # Errors
     ///
     /// Returns the same errors as [`Self::record`].
@@ -136,8 +143,13 @@ impl EpisodicMemory {
         embedding: Option<&[f32]>,
         ttl_seconds: u64,
     ) -> Result<(), AgentMemoryError> {
+        if ttl_seconds == 0 {
+            memory_helpers::resolve_embedding(self.dimension, embedding)?;
+            return self.delete(event_id);
+        }
         self.record(event_id, description, timestamp, embedding)?;
-        self.ttl.set_ttl(event_id, ttl_seconds);
+        self.ttl
+            .set_ttl(MemoryKind::Episodic, event_id, ttl_seconds);
         Ok(())
     }
 
@@ -203,6 +215,7 @@ impl EpisodicMemory {
             query_embedding,
             k,
             &self.ttl,
+            MemoryKind::Episodic,
         )?;
 
         Ok(results
@@ -230,7 +243,7 @@ impl EpisodicMemory {
             return Ok(None);
         };
 
-        if self.ttl.is_expired(point.id) {
+        if self.ttl.is_expired(MemoryKind::Episodic, point.id) {
             return Ok(None);
         }
 
@@ -261,7 +274,7 @@ impl EpisodicMemory {
         memory_helpers::delete_from_collection(&collection, &[id])?;
 
         self.temporal_index.remove(id);
-        self.ttl.remove(id);
+        self.ttl.remove(MemoryKind::Episodic, id);
         Ok(())
     }
 
@@ -337,7 +350,7 @@ impl EpisodicMemory {
             .get(ids)
             .into_iter()
             .flatten()
-            .filter(|p| !ttl.is_expired(p.id))
+            .filter(|p| !ttl.is_expired(MemoryKind::Episodic, p.id))
             .filter_map(|p| {
                 let (desc, ts) = extract_event_fields(&p)?;
                 Some((p.id, desc, ts))

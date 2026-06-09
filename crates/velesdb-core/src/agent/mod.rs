@@ -73,4 +73,4 @@ pub use snapshot::{
     SnapshotMetadata,
 };
 pub use temporal_index::{TemporalEntry, TemporalIndex, TemporalIndexStats};
-pub use ttl::{EvictionConfig, ExpireResult, MemoryTtl, TtlEntry};
+pub use ttl::{EvictionConfig, ExpireResult, MemoryKind, MemoryTtl, TtlEntry};

@@ -231,13 +231,15 @@ fn read_section(
 ) -> Result<Vec<u8>, SnapshotError> {
     let section_len = read_u64(&data[*offset..])? as usize;
     *offset += 8;
-    if *offset + section_len > payload_end {
-        return Err(SnapshotError::CorruptedData(format!(
-            "{label} data truncated"
-        )));
-    }
-    let section = data[*offset..*offset + section_len].to_vec();
-    *offset += section_len;
+    // Checked: a forged/corrupt `section_len` near `usize::MAX` must not wrap
+    // `*offset + section_len` (which could spuriously pass the bound and then
+    // panic on the slice). Mirrors `validate_binary_header`'s checked arithmetic.
+    let end = offset
+        .checked_add(section_len)
+        .filter(|end| *end <= payload_end)
+        .ok_or_else(|| SnapshotError::CorruptedData(format!("{label} data truncated")))?;
+    let section = data[*offset..end].to_vec();
+    *offset = end;
     Ok(section)
 }
 

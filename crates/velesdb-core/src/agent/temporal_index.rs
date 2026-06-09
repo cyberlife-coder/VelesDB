@@ -278,10 +278,15 @@ pub struct TemporalIndexStats {
 
 impl TemporalIndex {
     /// Returns statistics about the index.
+    ///
+    /// Acquires `id_to_timestamp` **before** `by_timestamp` to honour the global
+    /// lock ordering used by every mutator (`insert`, `remove`, `clear`) and
+    /// reader (`recent`, `older_than`). Locking them in the opposite order here
+    /// previously risked a deadlock against a concurrent mutator.
     #[must_use]
     pub fn stats(&self) -> TemporalIndexStats {
-        let by_ts = self.by_timestamp.read();
         let id_to_ts = self.id_to_timestamp.read();
+        let by_ts = self.by_timestamp.read();
 
         TemporalIndexStats {
             entry_count: id_to_ts.len(),

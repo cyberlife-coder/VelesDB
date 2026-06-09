@@ -25,7 +25,7 @@ use super::memory_helpers;
 use super::reinforcement::{
     power_law_decay, FixedRate, ReinforcementContext, ReinforcementStrategy,
 };
-use super::ttl::MemoryTtl;
+use super::ttl::{MemoryKind, MemoryTtl};
 
 struct ProcedureState {
     name: String,
@@ -206,6 +206,12 @@ impl ProceduralMemory {
 
     /// Learns a procedure and assigns a TTL for auto-expiration.
     ///
+    /// A `ttl_seconds` of `0` means "expire immediately": the procedure is
+    /// eagerly removed (and any pre-existing point for `procedure_id` deleted),
+    /// harmonising the behaviour with [`SemanticMemory::store_with_ttl`]. The
+    /// embedding is still dimension-validated so callers get the same error
+    /// contract as a real learn.
+    ///
     /// # Errors
     ///
     /// Returns the same errors as [`Self::learn`].
@@ -218,8 +224,13 @@ impl ProceduralMemory {
         confidence: f32,
         ttl_seconds: u64,
     ) -> Result<(), AgentMemoryError> {
+        if ttl_seconds == 0 {
+            memory_helpers::resolve_embedding(self.dimension, embedding)?;
+            return self.delete(procedure_id);
+        }
         self.learn(procedure_id, name, steps, embedding, confidence)?;
-        self.ttl.set_ttl(procedure_id, ttl_seconds);
+        self.ttl
+            .set_ttl(MemoryKind::Procedural, procedure_id, ttl_seconds);
         Ok(())
     }
 
@@ -247,6 +258,7 @@ impl ProceduralMemory {
             query_embedding,
             k,
             &self.ttl,
+            MemoryKind::Procedural,
         )?;
 
         let now_secs = std::time::SystemTime::now()
@@ -400,7 +412,7 @@ impl ProceduralMemory {
         Ok(points
             .into_iter()
             .flatten()
-            .filter(|p| !self.ttl.is_expired(p.id))
+            .filter(|p| !self.ttl.is_expired(MemoryKind::Procedural, p.id))
             .filter_map(|p| extract_procedure_match(&p, 0.0))
             .collect())
     }
@@ -417,6 +429,7 @@ impl ProceduralMemory {
             id,
             &self.stored_ids,
             &self.ttl,
+            MemoryKind::Procedural,
         )
     }
 

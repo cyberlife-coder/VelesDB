@@ -54,4 +54,36 @@ mod tests {
             Err(SnapshotError::ChecksumMismatch { .. })
         ));
     }
+
+    /// #1044: a forged section length must return `CorruptedData`, never panic.
+    /// The length is overwritten to `u64::MAX` so the unchecked `offset + len`
+    /// in `read_section` would have wrapped; the checked arithmetic must reject
+    /// it. The CRC is recomputed so validation reaches `read_section`.
+    #[test]
+    fn test_snapshot_forged_section_length_is_rejected_not_panicked() {
+        use crate::storage::snapshot::crc32_hash;
+
+        let state = MemoryState {
+            semantic: vec![1, 2, 3],
+            episodic: vec![4, 5, 6],
+            procedural: vec![7, 8, 9],
+            ttl: vec![10, 11, 12],
+        };
+        let mut data = create_snapshot(&state);
+
+        // Forge the first (semantic) section length: bytes [5..13).
+        data[5..13].copy_from_slice(&u64::MAX.to_le_bytes());
+
+        // Recompute the trailing CRC so the header check passes and execution
+        // reaches the (now checked) section reader.
+        let crc_offset = data.len() - 4;
+        let crc = crc32_hash(&data[..crc_offset]);
+        data[crc_offset..].copy_from_slice(&crc.to_le_bytes());
+
+        let result = load_snapshot(&data);
+        assert!(
+            matches!(result, Err(SnapshotError::CorruptedData(_))),
+            "forged section length must yield CorruptedData, got {result:?}"
+        );
+    }
 }
