@@ -25,6 +25,7 @@ import type {
   CollectionConfigResponse,
   SemanticEntry,
   EpisodicEvent,
+  EpisodicRecord,
   ProceduralPattern,
   SearchResult,
   VectorDocument,
@@ -206,7 +207,7 @@ export async function wasmSearchSemanticMemory(
 
 export async function wasmRecordEpisodicEvent(
   _collection: string, _event: EpisodicEvent
-): Promise<number> {
+): Promise<string> {
   wasmNotSupported('Agent memory');
 }
 
@@ -216,9 +217,21 @@ export async function wasmRecallEpisodicEvents(
   wasmNotSupported('Agent memory');
 }
 
+export async function wasmRecallRecentEvents(
+  _collection: string, _since?: number
+): Promise<EpisodicRecord[]> {
+  wasmNotSupported('Agent memory');
+}
+
+export async function wasmRecallOlderThanEvents(
+  _collection: string, _before: number
+): Promise<EpisodicRecord[]> {
+  wasmNotSupported('Agent memory');
+}
+
 export async function wasmStoreProceduralPattern(
   _collection: string, _pattern: ProceduralPattern
-): Promise<number> {
+): Promise<string> {
   wasmNotSupported('Agent memory');
 }
 

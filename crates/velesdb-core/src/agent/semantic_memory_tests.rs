@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use super::super::semantic_memory::SemanticMemory;
-    use super::super::ttl::MemoryTtl;
+    use super::super::ttl::{MemoryKind, MemoryTtl};
     use crate::Database;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -220,7 +220,8 @@ mod tests {
         let near = vec![0.99_f32, 0.14, 0.0, 0.0];
         // id=1 is the absolute best match and physically present, but expired.
         sm.store(1, "expired best match", &q).unwrap();
-        ttl.set_ttl(1, 0); // expires immediately, point still persisted
+        // Keyed by the semantic namespace so the subsystem observes the expiry.
+        ttl.set_ttl(MemoryKind::Semantic, 1, 0); // expires immediately, point still persisted
         sm.store(2, "live runner up", &near).unwrap();
 
         // Asking for k=1 must still return the live point, not an empty result.
@@ -245,7 +246,10 @@ mod tests {
         let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
         sm1.store_with_ttl(10, "fact with ttl", &emb, 9_999)
             .unwrap();
-        assert!(ttl.get(10).is_some(), "TTL entry tracked before serialize");
+        assert!(
+            ttl.get(MemoryKind::Semantic, 10).is_some(),
+            "TTL entry tracked before serialize"
+        );
 
         let bytes = sm1.serialize().unwrap();
 
@@ -261,7 +265,7 @@ mod tests {
         assert!(results.iter().any(|r| r.0 == 10));
         // Documented limitation: TTL is NOT carried by per-subsystem serialize.
         assert!(
-            ttl2.get(10).is_none(),
+            ttl2.get(MemoryKind::Semantic, 10).is_none(),
             "per-subsystem serialize intentionally omits TTL state"
         );
     }

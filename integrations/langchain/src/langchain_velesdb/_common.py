@@ -5,7 +5,6 @@ Not part of the public API — import from the top-level package instead.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, List, Tuple
 
@@ -23,7 +22,7 @@ from velesdb_common.graph import (  # noqa: F401
 __all__ = [
     "make_initial_id_counter", "build_graph_rest_payload",
     "is_timeout_exception", "open_native_graph", "parse_graph_traverse_response",
-    "payload_to_doc_parts", "validate_queries_batch", "parse_event_entry",
+    "payload_to_doc_parts", "validate_queries_batch",
 ]
 
 logger = logging.getLogger(__name__)
@@ -107,28 +106,3 @@ def validate_queries_batch(
     validate_batch_size_fn(len(queries))
     for q in queries:
         validate_text_fn(q)
-
-
-# ---------------------------------------------------------------------------
-# Episodic event parsing
-# ---------------------------------------------------------------------------
-
-def parse_event_entry(description: str) -> Tuple[str, str]:
-    """Parse a JSON-encoded episodic event description.
-
-    Args:
-        description: Raw description string stored in episodic memory.
-            Expected to be a JSON object with ``"role"`` and ``"content"``
-            keys.  Falls back gracefully on malformed input.
-
-    Returns:
-        A ``(role, content)`` tuple.  ``role`` is ``"human"`` if absent or
-        on parse failure.
-    """
-    try:
-        data = json.loads(description)
-        role = data.get("role", "human")
-        content = data.get("content", description)
-        return role, content
-    except json.JSONDecodeError:
-        return "human", description

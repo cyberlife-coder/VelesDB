@@ -28,7 +28,7 @@ pub use super::procedural_memory::{ProceduralMemory, ProcedureMatch};
 pub use super::semantic_memory::SemanticMemory;
 pub use super::snapshot::{MemoryState, SnapshotManager};
 pub use super::temporal_index::TemporalIndex;
-pub use super::ttl::{EvictionConfig, ExpireResult, MemoryTtl};
+pub use super::ttl::{EvictionConfig, ExpireResult, MemoryKind, MemoryTtl};
 
 /// Default embedding dimension for memory collections.
 pub const DEFAULT_DIMENSION: usize = 384;
@@ -145,17 +145,17 @@ impl AgentMemory {
 
     /// Sets TTL for a semantic memory entry.
     pub fn set_semantic_ttl(&self, id: u64, ttl_seconds: u64) {
-        self.ttl.set_ttl(id, ttl_seconds);
+        self.ttl.set_ttl(MemoryKind::Semantic, id, ttl_seconds);
     }
 
     /// Sets TTL for an episodic memory entry.
     pub fn set_episodic_ttl(&self, id: u64, ttl_seconds: u64) {
-        self.ttl.set_ttl(id, ttl_seconds);
+        self.ttl.set_ttl(MemoryKind::Episodic, id, ttl_seconds);
     }
 
     /// Sets TTL for a procedural memory entry.
     pub fn set_procedural_ttl(&self, id: u64, ttl_seconds: u64) {
-        self.ttl.set_ttl(id, ttl_seconds);
+        self.ttl.set_ttl(MemoryKind::Procedural, id, ttl_seconds);
     }
 
     /// Performs automatic expiration of entries that have exceeded their TTL.
@@ -172,25 +172,21 @@ impl AgentMemory {
     ///
     /// Returns an error when consolidation operations fail.
     pub fn auto_expire(&self) -> Result<ExpireResult, AgentMemoryError> {
-        // Read expired ids WITHOUT dropping their TTL entries yet. The entry is
+        // Read expired keys WITHOUT dropping their TTL entries yet. The entry is
         // removed (via the subsystem `delete`, which calls `ttl.remove`) only
         // after the point is actually deleted, so a failed delete leaves the TTL
         // entry intact and the id is retried on the next `auto_expire`. This
         // preserves the expiry invariant: a tracked-expired id is never forgotten
         // while its point still exists.
-        let expired_ids = self.ttl.get_expired();
+        //
+        // Each key carries its owning `MemoryKind`, so an expired semantic id is
+        // only ever deleted from semantic memory — it can never clobber a live
+        // row that happens to share the numeric id in another subsystem.
+        let expired_keys = self.ttl.get_expired();
         let mut result = ExpireResult::default();
 
-        for id in &expired_ids {
-            if self.semantic.delete(*id).is_ok() {
-                result.semantic_expired += 1;
-            }
-            if self.episodic.delete(*id).is_ok() {
-                result.episodic_expired += 1;
-            }
-            if self.procedural.delete(*id).is_ok() {
-                result.procedural_expired += 1;
-            }
+        for &(kind, id) in &expired_keys {
+            self.expire_one(kind, id, &mut result)?;
         }
 
         if self.eviction_config.consolidation_age_threshold > 0 {
@@ -198,10 +194,40 @@ impl AgentMemory {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs() as i64);
             let cutoff = now - self.eviction_config.consolidation_age_threshold as i64;
-            result.episodic_consolidated = self.consolidate_old_episodes(cutoff)?;
+            let outcome = self.consolidate_old_episodes(cutoff)?;
+            result.episodic_consolidated = outcome.consolidated;
+            result.consolidation_truncated = outcome.truncated;
         }
 
+        result.procedural_evicted =
+            self.evict_low_confidence_procedures(self.eviction_config.min_confidence_threshold)?;
+
         Ok(result)
+    }
+
+    /// Deletes a single expired entry from the subsystem that owns it and
+    /// increments the matching counter only on a real deletion.
+    fn expire_one(
+        &self,
+        kind: MemoryKind,
+        id: u64,
+        result: &mut ExpireResult,
+    ) -> Result<(), AgentMemoryError> {
+        match kind {
+            MemoryKind::Semantic => {
+                self.semantic.delete(id)?;
+                result.semantic_expired += 1;
+            }
+            MemoryKind::Episodic => {
+                self.episodic.delete(id)?;
+                result.episodic_expired += 1;
+            }
+            MemoryKind::Procedural => {
+                self.procedural.delete(id)?;
+                result.procedural_expired += 1;
+            }
+        }
+        Ok(())
     }
 
     /// Evicts procedures with confidence below the threshold.
@@ -380,27 +406,64 @@ impl AgentMemory {
         self.episodic.deserialize(&state.episodic)?;
         self.procedural.deserialize(&state.procedural)?;
 
-        if let Some(ttl) = MemoryTtl::deserialize(&state.ttl) {
+        // An empty TTL section is legitimately empty state; anything else that
+        // fails to deserialize is a corrupt/incompatible snapshot and must not
+        // silently drop every TTL (which would make expiring entries immortal).
+        if state.ttl.is_empty() {
+            self.ttl.clear();
+        } else if let Some(ttl) = MemoryTtl::deserialize(&state.ttl) {
             self.ttl.replace_from(&ttl);
         } else {
-            self.ttl.clear();
+            return Err(AgentMemoryError::SnapshotError(
+                "TTL state failed to deserialize (corrupt or incompatible snapshot)".to_string(),
+            ));
         }
 
         Ok(())
     }
 
-    fn consolidate_old_episodes(&self, cutoff_timestamp: i64) -> Result<usize, AgentMemoryError> {
-        let old_events = self.episodic.older_than(cutoff_timestamp, 1000)?;
+    /// Migrates episodic events older than `cutoff_timestamp` into semantic
+    /// memory, capped at `eviction_config.max_entries_per_cycle` per call.
+    ///
+    /// # Preconditions
+    ///
+    /// The episodic id is *not* reused verbatim as the semantic id: semantic
+    /// stores are upserts, so [`SemanticMemory::store_unique`] relocates the
+    /// fact to a fresh semantic id on collision. This guarantees consolidation
+    /// never clobbers an existing semantic fact even when the two subsystems
+    /// share a numeric id.
+    fn consolidate_old_episodes(
+        &self,
+        cutoff_timestamp: i64,
+    ) -> Result<ConsolidationOutcome, AgentMemoryError> {
+        let cap = self.eviction_config.max_entries_per_cycle;
+        // Fetch one past the cap so we can tell whether more old events remain
+        // than this cycle will process (the "truncated" signal).
+        let old_events = self
+            .episodic
+            .older_than(cutoff_timestamp, cap.saturating_add(1))?;
+        let truncated = old_events.len() > cap;
         let mut consolidated = 0;
 
-        for (id, _description, _timestamp) in old_events {
+        for (id, _description, _timestamp) in old_events.into_iter().take(cap) {
             if let Some((description, _ts, embedding)) = self.episodic.get_with_embedding(id)? {
-                self.semantic.store(id, &description, &embedding)?;
+                self.semantic.store_unique(id, &description, &embedding)?;
                 self.episodic.delete(id)?;
                 consolidated += 1;
             }
         }
 
-        Ok(consolidated)
+        Ok(ConsolidationOutcome {
+            consolidated,
+            truncated,
+        })
     }
+}
+
+/// Outcome of one consolidation pass.
+struct ConsolidationOutcome {
+    /// Number of episodes migrated to semantic memory this cycle.
+    consolidated: usize,
+    /// `true` when more old episodes remained than the per-cycle cap allowed.
+    truncated: bool,
 }

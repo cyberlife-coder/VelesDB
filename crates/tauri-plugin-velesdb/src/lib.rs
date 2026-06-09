@@ -187,6 +187,17 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands_memory::procedural_delete,
             commands_memory::procedural_serialize,
             commands_memory::procedural_deserialize,
+            // AgentMemory TTL / eviction / snapshot-versioning / VelesQL parity
+            commands_memory::memory_set_ttl,
+            commands_memory::memory_auto_expire,
+            commands_memory::memory_evict_low_confidence,
+            commands_memory::memory_snapshot,
+            commands_memory::memory_load_latest_snapshot,
+            commands_memory::memory_load_snapshot_version,
+            commands_memory::memory_list_snapshot_versions,
+            commands_memory::memory_query_semantic,
+            commands_memory::memory_query_episodic,
+            commands_memory::memory_query_procedural,
             // Knowledge Graph commands (EPIC-015 US-001)
             commands_graph::create_graph_collection,
             commands_graph::add_edge,

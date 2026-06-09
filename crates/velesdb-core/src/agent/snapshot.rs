@@ -38,7 +38,12 @@ use crate::storage::snapshot::crc32_hash;
 pub const SNAPSHOT_MAGIC: &[u8; 4] = b"VAMM";
 
 /// Current snapshot format version.
-pub const SNAPSHOT_VERSION: u8 = 1;
+///
+/// Bumped to 2 when the TTL entry layout gained a 1-byte `MemoryKind` tag
+/// (24 -> 25 bytes/entry). A v1 snapshot written by an earlier release is now
+/// rejected with [`SnapshotError::UnsupportedVersion`] instead of silently
+/// loading with every TTL dropped.
+pub const SNAPSHOT_VERSION: u8 = 2;
 
 /// Memory state for serialization.
 #[derive(Debug, Clone, Default)]
@@ -231,13 +236,15 @@ fn read_section(
 ) -> Result<Vec<u8>, SnapshotError> {
     let section_len = read_u64(&data[*offset..])? as usize;
     *offset += 8;
-    if *offset + section_len > payload_end {
-        return Err(SnapshotError::CorruptedData(format!(
-            "{label} data truncated"
-        )));
-    }
-    let section = data[*offset..*offset + section_len].to_vec();
-    *offset += section_len;
+    // Checked: a forged/corrupt `section_len` near `usize::MAX` must not wrap
+    // `*offset + section_len` (which could spuriously pass the bound and then
+    // panic on the slice). Mirrors `validate_binary_header`'s checked arithmetic.
+    let end = offset
+        .checked_add(section_len)
+        .filter(|end| *end <= payload_end)
+        .ok_or_else(|| SnapshotError::CorruptedData(format!("{label} data truncated")))?;
+    let section = data[*offset..end].to_vec();
+    *offset = end;
     Ok(section)
 }
 

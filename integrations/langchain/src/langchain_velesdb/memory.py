@@ -15,15 +15,28 @@ Example:
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import time
 
-from langchain_velesdb._common import make_initial_id_counter, parse_event_entry
-from velesdb_common.memory import format_procedural_results, store_procedure
+from langchain_velesdb._common import make_initial_id_counter
+from velesdb_common.memory import (
+    chronological,
+    format_procedural_results,
+    parse_event_entry,
+    resolve_procedure_id,
+    store_procedure,
+)
 
 try:
     from langchain.memory.chat_memory import BaseChatMemory
-    from langchain.schema import BaseMessage, HumanMessage, AIMessage
+    from langchain.schema import (
+        AIMessage,
+        BaseMessage,
+        ChatMessage,
+        HumanMessage,
+        SystemMessage,
+    )
+    from langchain_core.messages import ToolMessage
 except ImportError:
     raise ImportError(
         "langchain is required for VelesDBChatMemory. "
@@ -39,6 +52,27 @@ except ImportError:
     )
 
 
+# Map a stored episodic role to its LangChain message class.  Roles that are
+# not recognised are reconstructed as a generic ``ChatMessage`` so the original
+# role string is preserved rather than silently collapsed to "human".
+_ROLE_TO_MESSAGE = {
+    "human": HumanMessage,
+    "ai": AIMessage,
+    "system": SystemMessage,
+    "tool": ToolMessage,
+}
+
+
+def _event_to_message(role: str, content: str) -> BaseMessage:
+    """Rebuild a LangChain message, preserving the original role."""
+    message_cls = _ROLE_TO_MESSAGE.get(role)
+    if message_cls is ToolMessage:
+        return ToolMessage(content=content, tool_call_id="")
+    if message_cls is not None:
+        return message_cls(content=content)
+    return ChatMessage(role=role, content=content)
+
+
 class VelesDBChatMemory(BaseChatMemory):
     """LangChain chat memory backed by VelesDB EpisodicMemory.
 
@@ -48,6 +82,10 @@ class VelesDBChatMemory(BaseChatMemory):
     Args:
         path: Path to VelesDB database directory
         dimension: Embedding dimension (default: 384)
+        window: Maximum number of past messages to load (default: 20)
+        embedding: Optional LangChain Embeddings instance.  When provided,
+            each recorded turn is embedded so that similarity recall over the
+            conversation works; when omitted, turns are stored without vectors.
         memory_key: Key for memory variables (default: "history")
         human_prefix: Prefix for human messages (default: "Human")
         ai_prefix: Prefix for AI messages (default: "AI")
@@ -62,6 +100,7 @@ class VelesDBChatMemory(BaseChatMemory):
 
     path: str
     dimension: int = 384
+    window: int = 20
     memory_key: str = "history"
     human_prefix: str = "Human"
     ai_prefix: str = "AI"
@@ -69,18 +108,33 @@ class VelesDBChatMemory(BaseChatMemory):
 
     _db: Any = None
     _memory: Any = None
+    _embedding: Any = None
     _message_counter: int = 0
+    _recorded_ids: List[int] = []
+    _last_ts: int = 0
 
     class Config:
         arbitrary_types_allowed = True
+        # Allow the underscore-prefixed runtime handles (`_db`, `_memory`, ...)
+        # to be assigned in __init__. Without this, langchain's pydantic-v1
+        # BaseChatMemory rejects assignment to names absent from `__fields__`.
+        extra = "allow"
 
-    def __init__(self, path: str, dimension: int = 384, **kwargs):
-        super().__init__(**kwargs)
-        self.path = path
-        self.dimension = dimension
+    def __init__(
+        self,
+        path: str,
+        dimension: int = 384,
+        window: int = 20,
+        embedding: Optional[Any] = None,
+        **kwargs,
+    ):
+        super().__init__(path=path, dimension=dimension, window=window, **kwargs)
         self._db = velesdb.Database(path)
         self._memory = self._db.agent_memory(dimension=dimension)
+        self._embedding = embedding
         self._message_counter = make_initial_id_counter()
+        self._recorded_ids = []
+        self._last_ts = 0
 
     @property
     def memory_variables(self) -> List[str]:
@@ -96,15 +150,13 @@ class VelesDBChatMemory(BaseChatMemory):
         Returns:
             Dict with memory_key containing conversation history
         """
-        # Get recent events from episodic memory
-        recent_events = self._memory.episodic.recent(limit=20)
+        # Episodic ``recent`` returns newest-first; read oldest-first so a
+        # turn's human prompt precedes its AI reply.
+        events = chronological(self._memory.episodic.recent(limit=self.window))
 
         if self.return_messages:
-            messages = self._events_to_messages(recent_events)
-            return {self.memory_key: messages}
-        else:
-            history_str = self._events_to_string(recent_events)
-            return {self.memory_key: history_str}
+            return {self.memory_key: self._events_to_messages(events)}
+        return {self.memory_key: self._events_to_string(events)}
 
     def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, str]) -> None:
         """Save conversation turn to VelesDB.
@@ -116,52 +168,57 @@ class VelesDBChatMemory(BaseChatMemory):
         input_str = inputs.get("input", inputs.get("human_input", ""))
         output_str = outputs.get("output", outputs.get("response", ""))
 
-        timestamp = int(time.time())
+        # Each message gets a strictly increasing timestamp so chronological
+        # ordering is unambiguous even when several turns land in the same
+        # wall-clock second (timestamp-bucket collisions would otherwise
+        # interleave a later turn's prompt with an earlier turn's reply).
+        self._record("human", input_str)
+        self._record("ai", output_str)
 
-        # Save human message
+    def _next_timestamp(self) -> int:
+        """Return a strictly increasing millisecond timestamp."""
+        self._last_ts = max(int(time.time() * 1000), self._last_ts + 1)
+        return self._last_ts
+
+    def _record(self, role: str, content: str) -> None:
+        """Record one episodic turn, embedding it when a model is configured."""
         self._message_counter += 1
+        embedding = self._embedding.embed_query(content) if self._embedding else None
         self._memory.episodic.record(
             event_id=self._message_counter,
-            description=json.dumps({"role": "human", "content": input_str}),
-            timestamp=timestamp,
+            description=json.dumps({"role": role, "content": content}),
+            timestamp=self._next_timestamp(),
+            embedding=embedding,
         )
-
-        # Save AI message
-        self._message_counter += 1
-        self._memory.episodic.record(
-            event_id=self._message_counter,
-            description=json.dumps({"role": "ai", "content": output_str}),
-            timestamp=timestamp + 1,  # Slightly after human message
-        )
+        self._recorded_ids.append(self._message_counter)
 
     def clear(self) -> None:
-        """Reset the message counter for this session.
+        """Delete this session's stored messages and reset state.
 
-        Note: This only resets the in-process counter used for ID
-        generation.  Stored messages in the VelesDB episodic collection
-        are NOT deleted.  To start a fresh conversation without old
-        context, open a new database path or collection.
+        Removes every episodic event recorded by this instance, clears the
+        LangChain ``chat_memory`` buffer, and reseeds the ID counter so a
+        fresh conversation starts with no prior context.
         """
+        for event_id in self._recorded_ids:
+            self._memory.episodic.delete(event_id)
+        self._recorded_ids = []
+        self._last_ts = 0
         self._message_counter = make_initial_id_counter()
+        super().clear()
 
     def _events_to_messages(self, events: List) -> List[BaseMessage]:
-        """Convert episodic events to LangChain messages."""
+        """Convert chronological episodic events to LangChain messages."""
         messages = []
         for event in events:
-            description = event["description"]
-            role, content = parse_event_entry(description)
-            if role == "human":
-                messages.append(HumanMessage(content=content))
-            else:
-                messages.append(AIMessage(content=content))
+            role, content = parse_event_entry(event["description"])
+            messages.append(_event_to_message(role, content))
         return messages
 
     def _events_to_string(self, events: List) -> str:
-        """Convert episodic events to formatted string."""
+        """Convert chronological episodic events to a formatted string."""
         lines = []
         for event in events:
-            description = event["description"]
-            role, content = parse_event_entry(description)
+            role, content = parse_event_entry(event["description"])
             prefix = self.human_prefix if role == "human" else self.ai_prefix
             lines.append(f"{prefix}: {content}")
         return "\n".join(lines)
@@ -268,7 +325,7 @@ class VelesDBProceduralMemory:
     reinforced through success/failure feedback.
 
     Args:
-        db_path: Path to VelesDB database directory.
+        path: Path to VelesDB database directory.
         dimension: Embedding dimension (default: 384).
         embeddings: LangChain Embeddings instance used to encode the
             ``pattern`` string passed to :meth:`recall`.  Required for
@@ -279,7 +336,7 @@ class VelesDBProceduralMemory:
         >>> from langchain_velesdb import VelesDBProceduralMemory
         >>> from langchain_openai import OpenAIEmbeddings
         >>> memory = VelesDBProceduralMemory(
-        ...     db_path="./agent_data",
+        ...     path="./agent_data",
         ...     dimension=1536,
         ...     embeddings=OpenAIEmbeddings(),
         ... )
@@ -290,11 +347,12 @@ class VelesDBProceduralMemory:
 
     def __init__(
         self,
-        db_path: str,
+        path: str,
         dimension: int = 384,
         embeddings: Optional[Any] = None,
     ) -> None:
-        self._db = velesdb.Database(db_path)
+        self.path = path
+        self._db = velesdb.Database(path)
         self._memory = self._db.agent_memory(dimension=dimension)
         self._procedural = self._memory.procedural
         self._embeddings = embeddings
@@ -352,8 +410,8 @@ class VelesDBProceduralMemory:
             min_confidence: Minimum confidence threshold for results.
 
         Returns:
-            List of dicts with ``name``, ``steps``, ``confidence``, and
-            ``score`` keys.
+            List of dicts with ``id``, ``name``, ``steps``, ``confidence``,
+            and ``score`` keys.
 
         Raises:
             RuntimeError: If no embeddings model is configured and no
@@ -379,23 +437,24 @@ class VelesDBProceduralMemory:
         )
         return format_procedural_results(results)
 
-    def reinforce(self, name: str, success: bool = True) -> None:
+    def reinforce(self, name_or_id: Union[str, int], success: bool = True) -> None:
         """Reinforce or weaken a stored procedure.
 
+        Accepts either a procedure ``name`` learned in the current session
+        or a numeric ``id`` taken from a :meth:`recall` result.  The numeric
+        form is what lets you reinforce procedures across sessions, where the
+        in-memory name→ID registry is empty.
+
         Args:
-            name: Name of the procedure to update.
+            name_or_id: Name (``str``) or numeric ``id`` (``int``) of the
+                procedure to update.
             success: ``True`` increases confidence; ``False`` decreases it.
 
         Raises:
-            KeyError: If the procedure name has not been learned in this
-                session.
+            KeyError: If a ``name`` was not learned in this session.
         """
-        if name not in self._name_to_id:
-            raise KeyError(
-                f"Unknown procedure '{name}'. "
-                "Call learn() before reinforce()."
-            )
-        self._procedural.reinforce(self._name_to_id[name], success)
+        proc_id = resolve_procedure_id(name_or_id, self._name_to_id)
+        self._procedural.reinforce(proc_id, success)
 
     def clear(self) -> None:
         """Reset the in-session procedure registry.

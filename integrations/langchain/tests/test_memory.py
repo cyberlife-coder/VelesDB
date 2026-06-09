@@ -92,18 +92,111 @@ class TestVelesDBChatMemory:
             assert len(human_msgs) >= 1
             assert len(ai_msgs) >= 1
 
-    def test_chat_memory_clear(self):
-        """Test: VelesDBChatMemory clear resets counter."""
+    def test_chat_memory_chronological_order(self):
+        """Test: history is oldest-first across two turns (human before AI)."""
         from langchain_velesdb import VelesDBChatMemory
 
         with tempfile.TemporaryDirectory() as tmpdir:
             memory = VelesDBChatMemory(path=tmpdir, dimension=4)
 
+            memory.save_context({"input": "turn one"}, {"output": "reply one"})
+            memory.save_context({"input": "turn two"}, {"output": "reply two"})
+
+            history = memory.load_memory_variables({})["history"]
+            lines = history.split("\n")
+
+            # Exactly the four messages, oldest first, each prompt before reply.
+            assert lines == [
+                "Human: turn one",
+                "AI: reply one",
+                "Human: turn two",
+                "AI: reply two",
+            ]
+
+    def test_chat_memory_return_messages_order(self):
+        """Test: message objects are oldest-first with correct types."""
+        from langchain_velesdb import VelesDBChatMemory
+        from langchain.schema import HumanMessage, AIMessage
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = VelesDBChatMemory(
+                path=tmpdir, dimension=4, return_messages=True
+            )
+
+            memory.save_context({"input": "q1"}, {"output": "a1"})
+            memory.save_context({"input": "q2"}, {"output": "a2"})
+
+            messages = memory.load_memory_variables({})["history"]
+            types = [type(m) for m in messages]
+            contents = [m.content for m in messages]
+
+            assert types == [HumanMessage, AIMessage, HumanMessage, AIMessage]
+            assert contents == ["q1", "a1", "q2", "a2"]
+
+    def test_chat_memory_clear_empties_history(self):
+        """Test: clear() deletes stored messages and reseeds the counter."""
+        from langchain_velesdb import VelesDBChatMemory
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = VelesDBChatMemory(path=tmpdir, dimension=4)
+
+            memory.save_context({"input": "Hi"}, {"output": "Hello!"})
+            assert memory.load_memory_variables({})["history"] != ""
+
             initial_counter = memory._message_counter
             memory.clear()
 
-            # Counter should be reset to new timestamp
+            # History is now empty and the counter was reseeded.
+            assert memory.load_memory_variables({})["history"] == ""
+            assert memory._recorded_ids == []
             assert memory._message_counter != initial_counter
+
+    def test_chat_memory_records_embeddings_for_recall(self):
+        """Test: when an embedding model is configured, turns are recallable."""
+        from langchain_velesdb import VelesDBChatMemory
+
+        class MockEmbedding:
+            def embed_query(self, text: str):
+                # "weather" turns embed onto one axis, everything else onto another.
+                if "weather" in text or "sunny" in text:
+                    return [1.0, 0.0, 0.0, 0.0]
+                return [0.0, 1.0, 0.0, 0.0]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = VelesDBChatMemory(
+                path=tmpdir, dimension=4, embedding=MockEmbedding()
+            )
+
+            memory.save_context({"input": "hello there"}, {"output": "hi"})
+            memory.save_context(
+                {"input": "what is the weather?"}, {"output": "it is sunny"}
+            )
+
+            results = memory._memory.episodic.recall_similar(
+                [1.0, 0.0, 0.0, 0.0], top_k=2
+            )
+            # Embeddings were stored, so similarity recall returns the
+            # weather turn (impossible if turns were recorded without vectors).
+            assert len(results) >= 1
+            contents = " ".join(r["description"] for r in results)
+            assert "weather" in contents or "sunny" in contents
+
+    def test_chat_memory_preserves_system_role(self):
+        """Test: a stored 'system' role is reconstructed as SystemMessage."""
+        from langchain_velesdb import VelesDBChatMemory
+        from langchain.schema import SystemMessage
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = VelesDBChatMemory(
+                path=tmpdir, dimension=4, return_messages=True
+            )
+            # Record a system message directly via the internal recorder.
+            memory._record("system", "you are a helpful assistant")
+
+            messages = memory.load_memory_variables({})["history"]
+            assert len(messages) == 1
+            assert isinstance(messages[0], SystemMessage)
+            assert messages[0].content == "you are a helpful assistant"
 
 
 class TestVelesDBSemanticMemory:

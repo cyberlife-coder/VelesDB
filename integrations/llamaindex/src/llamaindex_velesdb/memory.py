@@ -15,12 +15,18 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import velesdb
 
 from llamaindex_velesdb._common import make_initial_id_counter
-from velesdb_common.memory import format_procedural_results, store_procedure
+from velesdb_common.memory import (
+    chronological,
+    format_procedural_results,
+    parse_event_entry,
+    resolve_procedure_id,
+    store_procedure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +200,27 @@ class VelesDBEpisodicMemory(_VelesDBMemoryBase):
             raise ValueError("embedding must not be empty")
         return self._memory.episodic.recall_similar(embedding, top_k=top_k)
 
+    def recent(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return the most recent events in chronological (oldest-first) order.
+
+        VelesDB returns recent events newest-first; this method reverses
+        them so the result reads as a forward timeline — the natural order
+        for replaying a sequence of events or a conversation.
+
+        Args:
+            limit: Maximum number of events to return.
+
+        Returns:
+            List of dicts with ``id``, ``description``, and ``timestamp``
+            keys, ordered oldest-first.
+
+        Raises:
+            ValueError: If ``limit`` is less than 1.
+        """
+        if limit < 1:
+            raise ValueError(f"limit must be >= 1, got {limit}")
+        return chronological(self._memory.episodic.recent(limit=limit))
+
     def clear(self) -> None:
         """Reinitialize the AgentMemory handle and reset the event counter.
 
@@ -202,6 +229,137 @@ class VelesDBEpisodicMemory(_VelesDBMemoryBase):
         """
         self._event_counter = make_initial_id_counter()
         self._memory = self._db.agent_memory(dimension=self._dimension)
+
+
+def _role_label(role: str, human_prefix: str, ai_prefix: str) -> str:
+    """Map a stored event role to its display prefix."""
+    return human_prefix if role == "human" else ai_prefix
+
+
+class VelesDBChatMemory(_VelesDBMemoryBase):
+    """Chat-history memory backed by VelesDB episodic storage for LlamaIndex.
+
+    Parity counterpart to ``langchain_velesdb.VelesDBChatMemory``: each
+    conversation turn is stored as two timestamped episodic events
+    (human + AI) and replayed in chronological order.
+
+    Messages are recorded WITHOUT embeddings — conversation turns are
+    retrieved by recency, not by vector similarity, so no embedding model
+    is required.
+
+    Args:
+        db_path: Path to VelesDB database directory.
+        dimension: Embedding dimension of the underlying store (default: 384).
+        human_prefix: Prefix used for human turns in the string view.
+        ai_prefix: Prefix used for AI turns in the string view.
+
+    Example:
+        >>> memory = VelesDBChatMemory(db_path="./chat")
+        >>> memory.save_context({"input": "Hi"}, {"output": "Hello!"})
+        >>> memory.load_memory_variables({})
+        {'history': 'Human: Hi\\nAI: Hello!'}
+    """
+
+    def __init__(
+        self,
+        db_path: str,
+        dimension: int = 384,
+        human_prefix: str = "Human",
+        ai_prefix: str = "AI",
+    ) -> None:
+        super().__init__(db_path, dimension)
+        self._human_prefix = human_prefix
+        self._ai_prefix = ai_prefix
+        self._message_counter = make_initial_id_counter()
+        self._last_timestamp = 0
+
+    def _next_timestamp(self) -> int:
+        """Return a strictly increasing per-message timestamp.
+
+        Multiple messages recorded within the same wall-clock second would
+        otherwise share a timestamp bucket, and episodic ``recent()`` orders
+        within a bucket by descending ID — which scrambles turn order once
+        reversed to chronological.  Forcing the timestamp to advance by at
+        least one each call keeps every message in its own bucket so the
+        timeline is unambiguous.
+        """
+        self._last_timestamp = max(int(time.time()), self._last_timestamp + 1)
+        return self._last_timestamp
+
+    def _record_turn(self, role: str, content: str) -> None:
+        """Record one chat message as an episodic event."""
+        self._message_counter += 1
+        description = json.dumps({"role": role, "content": content})
+        self._memory.episodic.record(
+            self._message_counter, description, self._next_timestamp()
+        )
+
+    def save_context(
+        self,
+        inputs: Dict[str, Any],
+        outputs: Dict[str, Any],
+    ) -> None:
+        """Persist one human/AI conversation turn.
+
+        Args:
+            inputs: Dict carrying the user message under ``"input"`` (or
+                ``"human_input"``).
+            outputs: Dict carrying the AI reply under ``"output"`` (or
+                ``"response"``).
+        """
+        human = inputs.get("input", inputs.get("human_input", ""))
+        ai = outputs.get("output", outputs.get("response", ""))
+        self._record_turn("human", human)
+        self._record_turn("ai", ai)
+
+    def load_history(self, limit: int = 20) -> List[Any]:
+        """Return chat history as LlamaIndex ``ChatMessage`` objects.
+
+        Args:
+            limit: Maximum number of messages to return (oldest-first).
+
+        Returns:
+            Chronologically ordered list of ``ChatMessage`` objects.
+        """
+        events = chronological(self._memory.episodic.recent(limit=limit))
+        return [self._event_to_message(e) for e in events]
+
+    def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, str]:
+        """Return chat history as a single formatted string.
+
+        Mirrors the LangChain adapter's default (string) view.
+
+        Args:
+            inputs: Unused; accepted for interface parity.
+
+        Returns:
+            ``{"history": "<prefix>: <content>\\n..."}`` oldest-first.
+        """
+        events = chronological(self._memory.episodic.recent(limit=20))
+        lines = [self._event_to_line(e) for e in events]
+        return {"history": "\n".join(lines)}
+
+    def _event_to_line(self, event: Dict[str, Any]) -> str:
+        """Format one stored event as a ``Prefix: content`` line."""
+        role, content = parse_event_entry(event["description"])
+        return f"{_role_label(role, self._human_prefix, self._ai_prefix)}: {content}"
+
+    def _event_to_message(self, event: Dict[str, Any]) -> Any:
+        """Convert one stored event into a LlamaIndex ``ChatMessage``."""
+        from llama_index.core.base.llms.types import ChatMessage, MessageRole
+
+        role, content = parse_event_entry(event["description"])
+        msg_role = MessageRole.USER if role == "human" else MessageRole.ASSISTANT
+        return ChatMessage(role=msg_role, content=content)
+
+    def clear(self) -> None:
+        """Reset the in-process message counter.
+
+        Only the in-process ID counter and timestamp clock are reset;
+        stored messages in the VelesDB episodic collection are NOT deleted.
+        """
+        self._message_counter = make_initial_id_counter()
+        self._last_timestamp = 0
 
 
 class VelesDBProceduralMemory(_VelesDBMemoryBase):
@@ -272,8 +430,10 @@ class VelesDBProceduralMemory(_VelesDBMemoryBase):
             min_confidence: Minimum confidence threshold for results.
 
         Returns:
-            List of dicts with ``name``, ``steps``, ``confidence``,
-            and ``score`` keys.
+            List of dicts with ``id``, ``name``, ``steps``, ``confidence``,
+            and ``score`` keys.  The ``id`` can be passed to
+            :meth:`reinforce` to reinforce a recalled procedure that was
+            not learned in the current session.
 
         Raises:
             ValueError: If ``top_k`` is less than 1 or ``embedding`` is empty.
@@ -290,22 +450,24 @@ class VelesDBProceduralMemory(_VelesDBMemoryBase):
         )
         return format_procedural_results(results)
 
-    def reinforce(self, name: str, success: bool = True) -> None:
+    def reinforce(self, name_or_id: Union[str, int], success: bool = True) -> None:
         """Reinforce or weaken a stored procedure.
 
+        Accepts either a procedure ``name`` learned in the current session
+        or a numeric ``id`` taken from a :meth:`recall` result.  The numeric
+        form is what lets you reinforce procedures across sessions, where the
+        in-memory name→ID registry is empty.
+
         Args:
-            name: Name of the procedure to update.
+            name_or_id: Name (``str``) or numeric ``id`` (``int``) of the
+                procedure to update.
             success: ``True`` increases confidence; ``False`` decreases it.
 
         Raises:
-            KeyError: If ``name`` was not learned in this session.
+            KeyError: If a ``name`` was not learned in this session.
         """
-        if name not in self._name_to_id:
-            raise KeyError(
-                f"Unknown procedure '{name}'. "
-                "Call learn() before reinforce()."
-            )
-        self._memory.procedural.reinforce(self._name_to_id[name], success)
+        proc_id = resolve_procedure_id(name_or_id, self._name_to_id)
+        self._memory.procedural.reinforce(proc_id, success)
 
     def clear(self) -> None:
         """Reset the in-session procedure registry.

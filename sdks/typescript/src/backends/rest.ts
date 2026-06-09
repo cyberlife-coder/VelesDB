@@ -34,6 +34,7 @@ import type {
   CollectionConfigResponse,
   SemanticEntry,
   EpisodicEvent,
+  EpisodicRecord,
   ProceduralPattern,
   ScrollRequest,
   ScrollResponse,
@@ -90,6 +91,8 @@ import {
   recallEpisodicEvents as _recallEpisodicEvents,
   storeProceduralPattern as _storeProceduralPattern,
   matchProceduralPatterns as _matchProceduralPatterns,
+  recallRecentEvents as _recallRecentEvents,
+  recallOlderThanEvents as _recallOlderThanEvents,
 } from './agent-memory-backend';
 import {
   search as _search, searchBatch as _searchBatch,
@@ -223,8 +226,10 @@ export class RestBackend implements IVelesDBBackend {
   // Agent Memory
   async storeSemanticFact(c: string, e: SemanticEntry): Promise<void> { this.ensureInitialized(); return _storeSemanticFact(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e); }
   async searchSemanticMemory(c: string, e: number[], k = 5): Promise<SearchResult[]> { this.ensureInitialized(); return _searchSemanticMemory(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e, k); }
-  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<number> { this.ensureInitialized(); return _recordEpisodicEvent(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e); }
+  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<string> { this.ensureInitialized(); return _recordEpisodicEvent(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e); }
   async recallEpisodicEvents(c: string, e: number[], k = 5): Promise<SearchResult[]> { this.ensureInitialized(); return _recallEpisodicEvents(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e, k); }
-  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<number> { this.ensureInitialized(); return _storeProceduralPattern(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, p); }
+  async recallRecentEvents(c: string, since?: number): Promise<EpisodicRecord[]> { this.ensureInitialized(); return _recallRecentEvents(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, since); }
+  async recallOlderThanEvents(c: string, before: number): Promise<EpisodicRecord[]> { this.ensureInitialized(); return _recallOlderThanEvents(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, before); }
+  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<string> { this.ensureInitialized(); return _storeProceduralPattern(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, p); }
   async matchProceduralPatterns(c: string, e: number[], k = 5): Promise<SearchResult[]> { this.ensureInitialized(); return _matchProceduralPatterns(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e, k); }
 }

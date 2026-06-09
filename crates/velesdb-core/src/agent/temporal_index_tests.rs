@@ -146,4 +146,100 @@ mod tests {
         assert_eq!(stats.min_timestamp, Some(1000));
         assert_eq!(stats.max_timestamp, Some(3000));
     }
+
+    /// Multiple ids sharing one timestamp bucket: `entry_count` counts every id
+    /// while `unique_timestamps` counts the single bucket. Removing one id keeps
+    /// the bucket alive until the last id leaves.
+    #[test]
+    fn test_temporal_index_shared_timestamp_bucket() {
+        let index = TemporalIndex::new();
+        index.insert(1, 5000);
+        index.insert(2, 5000);
+        index.insert(3, 5000);
+
+        let stats = index.stats();
+        assert_eq!(stats.entry_count, 3, "three ids");
+        assert_eq!(stats.unique_timestamps, 1, "one shared bucket");
+
+        // Removing one id leaves the bucket populated.
+        index.remove(2);
+        let after = index.stats();
+        assert_eq!(after.entry_count, 2);
+        assert_eq!(after.unique_timestamps, 1);
+        assert_eq!(index.get_timestamp(2), None);
+
+        // Draining the bucket entirely drops it.
+        index.remove(1);
+        index.remove(3);
+        let empty = index.stats();
+        assert_eq!(empty.entry_count, 0);
+        assert_eq!(empty.unique_timestamps, 0);
+        assert_eq!(empty.min_timestamp, None);
+    }
+
+    /// Re-inserting the same id with a new timestamp must move it out of its old
+    /// bucket (no ghost left behind) and into the new one.
+    #[test]
+    fn test_temporal_index_reinsert_moves_bucket() {
+        let index = TemporalIndex::new();
+        index.insert(1, 1000);
+        index.insert(2, 1000); // shares the 1000 bucket with id 1
+
+        // Move id 1 to a new timestamp.
+        index.insert(1, 9000);
+
+        assert_eq!(index.get_timestamp(1), Some(9000));
+        // The old bucket still holds id 2 only.
+        let at_1000 = index.range(1000, 1000);
+        assert_eq!(at_1000.len(), 1);
+        assert_eq!(at_1000[0].id, 2);
+        // The new bucket holds exactly id 1 (no duplicate ghost).
+        let at_9000 = index.range(9000, 9000);
+        assert_eq!(at_9000.len(), 1);
+        assert_eq!(at_9000[0].id, 1);
+
+        let stats = index.stats();
+        assert_eq!(stats.entry_count, 2, "still two distinct ids, no ghost");
+        assert_eq!(stats.unique_timestamps, 2);
+    }
+
+    /// #1042: `stats()` must lock `id_to_timestamp` before `by_timestamp`, the
+    /// same order as every mutator. Interleaving `stats()` with `insert`/`remove`
+    /// on background threads must not deadlock. Under `--test-threads=1` the
+    /// threads spawned here still run concurrently with each other.
+    #[test]
+    fn test_stats_lock_order_no_deadlock_under_contention() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let index = Arc::new(TemporalIndex::new());
+        for id in 0i64..50 {
+            index.insert(u64::try_from(id).unwrap(), id);
+        }
+
+        let writer = {
+            let index = Arc::clone(&index);
+            thread::spawn(move || {
+                for round in 0i64..1000 {
+                    let id = u64::try_from(round % 50).unwrap();
+                    index.insert(id, round);
+                    index.remove(id);
+                }
+            })
+        };
+        let reader = {
+            let index = Arc::clone(&index);
+            thread::spawn(move || {
+                let mut last = 0;
+                for _ in 0..1000 {
+                    last = index.stats().entry_count;
+                }
+                last
+            })
+        };
+
+        writer.join().expect("writer thread panicked");
+        // If stats() inverted lock order, this join would hang (deadlock).
+        let _ = reader.join().expect("reader thread panicked");
+    }
 }

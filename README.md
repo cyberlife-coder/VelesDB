@@ -117,7 +117,7 @@ memory.procedural.learn(1, "answer_geography", steps, embedding, confidence=0.8)
 |---------|-----|
 | TTL / Auto-expiration | `store_with_ttl()`, `auto_expire()` |
 | Snapshots / Rollback | `snapshot()`, `load_latest_snapshot()` |
-| Reinforcement | `reinforce(success=True)` — 4 strategies |
+| Reinforcement | `reinforce(success=True)` — 6 strategies |
 
 > **Full guide:** [docs/guides/AGENT_MEMORY.md](docs/guides/AGENT_MEMORY.md) | [Source code](crates/velesdb-core/src/agent/)
 

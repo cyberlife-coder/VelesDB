@@ -303,23 +303,30 @@ class Collection:
         return self._graph_store
 
 
+def _safe_len(vec: Any) -> int | None:
+    """Return the length of ``vec`` if measurable, else None."""
+    try:
+        return len(list(vec))
+    except TypeError:
+        return None
+
+
+def _dimension_from_points(points_or_id: Any) -> int | None:
+    """Detect the vector dimension from the first point of an upsert list."""
+    if not (isinstance(points_or_id, list) and points_or_id):
+        return None
+    first = points_or_id[0]
+    if not isinstance(first, dict):
+        return None
+    vec = first.get("vector")
+    return None if vec is None else _safe_len(vec)
+
+
 def _extract_dimension(points_or_id: Any, vector: Iterable[float] | None) -> int | None:
     """Return the vector dimension detectable from upsert arguments, or None."""
     if vector is not None:
-        try:
-            return len(list(vector))  # type: ignore[arg-type]
-        except TypeError:
-            return None
-    if isinstance(points_or_id, list) and points_or_id:
-        first = points_or_id[0]
-        if isinstance(first, dict):
-            vec = first.get("vector")
-            if vec is not None:
-                try:
-                    return len(vec)
-                except TypeError:
-                    pass
-    return None
+        return _safe_len(vector)
+    return _dimension_from_points(points_or_id)
 
 
 class _PendingCollection:

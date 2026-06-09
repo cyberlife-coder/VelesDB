@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use super::error::AgentMemoryError;
 use super::memory_helpers;
-use super::ttl::MemoryTtl;
+use super::ttl::{MemoryKind, MemoryTtl};
 
 /// Long-term semantic memory for storing knowledge facts with vector similarity search.
 ///
@@ -83,6 +83,38 @@ impl SemanticMemory {
         Ok(())
     }
 
+    /// Stores a fact under `preferred_id`, or under a freshly allocated id when
+    /// `preferred_id` is already taken, and returns the id actually used.
+    ///
+    /// [`Self::store`] upserts, so reusing an id silently overwrites the
+    /// existing fact. Consolidation (which reuses the *episodic* id as the
+    /// semantic id) must never clobber an unrelated semantic fact, so it relies
+    /// on this collision-avoiding path instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::store`].
+    pub fn store_unique(
+        &self,
+        preferred_id: u64,
+        content: &str,
+        embedding: &[f32],
+    ) -> Result<u64, AgentMemoryError> {
+        let id = self.allocate_id(preferred_id);
+        self.store(id, content, embedding)?;
+        Ok(id)
+    }
+
+    /// Returns `preferred_id` when free, otherwise the smallest id strictly
+    /// greater than every tracked id (so it cannot collide with a live fact).
+    fn allocate_id(&self, preferred_id: u64) -> u64 {
+        let ids = self.stored_ids.read();
+        if !ids.contains(&preferred_id) {
+            return preferred_id;
+        }
+        ids.iter().copied().max().map_or(0, |m| m.saturating_add(1))
+    }
+
     /// Stores a semantic memory point and assigns a TTL.
     ///
     /// A `ttl_seconds` of `0` means "expire immediately": rather than persisting
@@ -106,7 +138,7 @@ impl SemanticMemory {
             return self.delete(id);
         }
         self.store(id, content, embedding)?;
-        self.ttl.set_ttl(id, ttl_seconds);
+        self.ttl.set_ttl(MemoryKind::Semantic, id, ttl_seconds);
         Ok(())
     }
 
@@ -128,6 +160,7 @@ impl SemanticMemory {
             query_embedding,
             k,
             &self.ttl,
+            MemoryKind::Semantic,
         )?;
 
         Ok(results
@@ -182,7 +215,7 @@ impl SemanticMemory {
     ///
     /// Returns an error when collection access fails.
     pub fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, AgentMemoryError> {
-        if self.ttl.is_expired(id) {
+        if self.ttl.is_expired(MemoryKind::Semantic, id) {
             return Ok(None);
         }
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
@@ -205,7 +238,7 @@ impl SemanticMemory {
             .get(&all_ids)
             .into_iter()
             .flatten()
-            .filter(|p| !self.ttl.is_expired(p.id))
+            .filter(|p| !self.ttl.is_expired(MemoryKind::Semantic, p.id))
             .map(|p| (p.id, extract_content(&p)))
             .collect())
     }
@@ -234,7 +267,7 @@ impl SemanticMemory {
             memory_helpers::delete_from_collection(&collection, &ids)?;
         }
         for id in &ids {
-            self.ttl.remove(*id);
+            self.ttl.remove(MemoryKind::Semantic, *id);
         }
         self.stored_ids.write().clear();
         Ok(())
@@ -252,6 +285,7 @@ impl SemanticMemory {
             id,
             &self.stored_ids,
             &self.ttl,
+            MemoryKind::Semantic,
         )
     }
 

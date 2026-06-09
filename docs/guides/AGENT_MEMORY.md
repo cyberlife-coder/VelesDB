@@ -1,6 +1,6 @@
 # Agent Memory SDK - Complete Guide
 
-*Stable since v1.9.1 -- last reviewed v1.14.2 (May 2026)*
+*Stable since v1.9.1*
 
 Complete guide for using VelesDB's Agent Memory SDK. Covers the three memory subsystems (semantic, episodic, procedural), embedding generation, TTL configuration, snapshots, and production best practices.
 
@@ -52,7 +52,7 @@ AgentMemory
   +-- ProceduralMemory --> VelesDB VectorCollection ("_procedural_memory")
         - Confidence score [0.0, 1.0]
         - Reinforcement learning (success/failure)
-        - 4 adaptive strategies
+        - 6 adaptive strategies
 ```
 
 Each subsystem uses a dedicated VelesDB VectorCollection. Data is automatically persisted to disk (WAL + mmap).
@@ -85,6 +85,62 @@ memory.procedural   # -> ProceduralMemory
 ```
 
 > **Note**: The **Python and Rust** `AgentMemory` runs in **embedded mode** (same process), shown above. The **TypeScript/JavaScript SDK** accesses agent memory **over REST** against a running `velesdb-server` instead — see [TypeScript / JavaScript (REST)](#typescript--javascript-rest) below. The two share the same three memory subsystems but differ in transport.
+
+### 30-Second Quickstart
+
+The three calls below — store a fact, record an event, learn a procedure —
+are the core loop. Ids are **namespaced per subsystem**: semantic id `1`,
+episodic id `1`, and procedural id `1` are independent (see
+[TTL & Auto-Expiration](#ttl--auto-expiration) and
+[Snapshots & Restore](#snapshots--restore) for the consequences on expiry and
+consolidation).
+
+**Python** (embedded)
+
+```python
+from velesdb import Database, AgentMemory
+
+db = Database("./my_agent_data")
+memory = AgentMemory(db, dimension=384)
+
+memory.semantic.store(1, "Paris is the capital of France", embedding)
+event_ts = 1_700_000_000
+memory.episodic.record(1, "User asked about geography", event_ts, embedding)
+memory.procedural.learn(1, "answer_geography", ["search", "compose"],
+                        embedding, confidence=0.8)
+
+facts = memory.semantic.query(query_embedding, top_k=5)
+```
+
+**Rust** (embedded)
+
+```rust
+use std::sync::Arc;
+use velesdb_core::{Database, agent::AgentMemory};
+
+let db = Arc::new(Database::open("./my_agent_data")?);
+let memory = AgentMemory::new(Arc::clone(&db))?;
+
+memory.semantic().store(1, "Paris is the capital of France", &embedding)?;
+memory.episodic().record(1, "User asked about geography", 1_700_000_000, Some(&embedding))?;
+memory.procedural().learn(1, "answer_geography", &steps, Some(&embedding), 0.8)?;
+
+let facts = memory.semantic().query(&query_embedding, 5)?;
+```
+
+**TypeScript** (REST — requires a running `velesdb-server`)
+
+```typescript
+import { VelesDB } from '@wiscale/velesdb-sdk';
+
+const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+await db.init();
+await db.createCollection('knowledge', { dimension: 384, metric: 'cosine' });
+
+const memory = db.agentMemory({ dimension: 384 });
+await memory.storeFact('knowledge', { id: 1, text: 'fact', embedding });
+const facts = await memory.searchFacts('knowledge', queryEmbedding, 5);
+```
 
 ### File Structure Created
 
@@ -401,6 +457,53 @@ reliable = memory.procedural.recall(
 all_procs = memory.procedural.list_all()
 ```
 
+### VelesQL Queries (semantic / episodic / procedural)
+
+Each subsystem is backed by a regular VelesDB collection (`_semantic_memory`,
+`_episodic_memory`, `_procedural_memory`), so you can run **arbitrary VelesQL**
+against it via three bridges on `AgentMemory`: `query_semantic`,
+`query_episodic`, and `query_procedural`. They support vector similarity
+(`WHERE vector NEAR $v`), payload filters, `ORDER BY`, `LIMIT`, and `WITH`
+options — anything `execute_query_str` accepts. This is the retrieval surface to
+reach when the high-level helpers (`query`/`recall`/`recent`) are not expressive
+enough, e.g. range filters on `timestamp` or thresholds on `confidence`.
+
+Payload fields per subsystem: semantic → `content`; episodic → `description`,
+`timestamp`; procedural → `name`, `steps`, `confidence`.
+
+```python
+# Vector search with a parameter vector ($v).
+results = memory.query_semantic(
+    "SELECT * FROM _semantic_memory WHERE vector NEAR $v LIMIT 5",
+    {"v": query_embedding},
+)
+
+# Temporal range filter on episodic events (no embedding needed).
+events = memory.query_episodic(
+    "SELECT * FROM _episodic_memory "
+    "WHERE timestamp > 1700000050 ORDER BY timestamp DESC LIMIT 10",
+)
+
+# Confidence threshold on procedures.
+procs = memory.query_procedural(
+    "SELECT * FROM _procedural_memory WHERE confidence > 0.7 LIMIT 10",
+)
+```
+
+```rust
+use std::collections::HashMap;
+
+let mut params = HashMap::new();
+params.insert("v".to_string(), serde_json::json!(query_embedding));
+let results = memory.query_semantic(
+    "SELECT * FROM _semantic_memory WHERE vector NEAR $v LIMIT 5",
+    &params,
+)?;
+```
+
+These bridges are **embedded-only** (Rust and Python); the TypeScript/REST
+facade does not expose them.
+
 ### Deleting Memories
 
 All three memory types support deletion by ID:
@@ -449,63 +552,112 @@ def agent_respond(user_question: str):
 
 ## TTL & Auto-Expiration
 
-Each entry can have a time-to-live (TTL). Expired entries are filtered from search results.
+Each entry can have a time-to-live (TTL) in **seconds**. Expired entries are
+filtered from search results and physically removed by `auto_expire()`. TTL is
+exposed in **both** the Rust and Python embedded bindings (it is *not* available
+over REST / TypeScript — see the API availability table).
 
-### Configuration (Rust API only)
+### Namespaced by subsystem (`MemoryKind`)
+
+TTL is keyed by `(MemoryKind, id)`, not by the bare `u64` id. The three
+subsystems allocate ids independently, so semantic id `5`, episodic id `5`, and
+procedural id `5` are three distinct TTL entries. Setting a TTL on a semantic
+fact never expires an episodic event that happens to share the same numeric id,
+and `auto_expire()` only deletes a row from the subsystem that actually owns the
+key. The TTL map is serialized into snapshots with the same `(kind, id)`
+namespacing, so a save/restore round-trip preserves which subsystem each TTL
+belongs to.
+
+### Configuration (Rust)
 
 ```rust
-use velesdb_core::agent::AgentMemory;
+use std::sync::Arc;
+use velesdb_core::{Database, agent::AgentMemory};
 
-let memory = AgentMemory::new(db)?;
+let db = Arc::new(Database::open("./agent_data")?);
+let memory = AgentMemory::new(Arc::clone(&db))?;
 
-// 1-hour TTL on a semantic fact
-memory.set_semantic_ttl(fact_id, 3600);
+memory.set_semantic_ttl(fact_id, 3600);       // 1-hour TTL on a semantic fact
+memory.set_episodic_ttl(event_id, 86_400);    // 24-hour TTL on an event
+memory.set_procedural_ttl(proc_id, 604_800);  // 7-day TTL on a procedure
 
-// 24-hour TTL on an event
-memory.set_episodic_ttl(event_id, 86400);
-
-// 7-day TTL on a procedure
-memory.set_procedural_ttl(proc_id, 604800);
-
-// Remove all expired entries
-let expired = memory.auto_expire();
+// Remove all expired entries (returns an ExpireResult with per-subsystem counts)
+let result = memory.auto_expire()?;
 ```
 
-> **Note**: TTL is not yet exposed in Python bindings. Entries without TTL never expire.
+### Configuration (Python)
+
+```python
+# Set a TTL (seconds) per subsystem — ids are namespaced by subsystem.
+memory.set_semantic_ttl(fact_id, 3600)        # 1 hour
+memory.set_episodic_ttl(event_id, 86_400)     # 24 hours
+memory.set_procedural_ttl(proc_id, 604_800)   # 7 days
+
+# Store a fact with its TTL in one call:
+memory.semantic.store_with_ttl(fact_id, "ephemeral fact", embedding, 60)
+
+# Purge expired entries; returns a dict of per-subsystem counts.
+stats = memory.auto_expire()
+# {'semantic_expired': 1, 'episodic_expired': 0, 'procedural_expired': 0,
+#  'episodic_consolidated': 0, 'procedural_evicted': 0}
+```
 
 ### Behavior
 
 - Expired entries are **filtered from results** (query, recent, recall)
-- `auto_expire()` **physically deletes** expired entries
-- Old episodic events can be **consolidated** into semantic memory (configurable via `EvictionConfig`)
+- `auto_expire()` **physically deletes** expired entries and returns per-subsystem counts
+- Old episodic events can be **consolidated** into semantic memory (configurable via `EvictionConfig`); the migrated fact is stored under a **fresh** semantic id on collision, so consolidation never overwrites an existing semantic fact (see [Snapshots & Restore](#snapshots--restore))
 
 ---
 
 ## Snapshots & Restore
 
-Versioned snapshots with CRC32 integrity verification.
+Versioned snapshots with CRC32 integrity verification. Available in **both** the
+Rust and Python embedded bindings (not over REST / TypeScript). A snapshot
+serializes all three subsystems **and** the namespaced TTL map, so a
+save/restore round-trip preserves both the stored data and each entry's
+remaining time-to-live.
 
 ### Create & Restore (Rust API)
 
 ```rust
-use velesdb_core::agent::AgentMemory;
+use std::sync::Arc;
+use velesdb_core::{Database, agent::AgentMemory};
 
-// Create with snapshot support
-let memory = AgentMemory::new(db)?
-    .with_snapshots("./snapshots", 10)?;  // max 10 versions
+let db = Arc::new(Database::open("./agent_data")?);
 
-// Save current state
+// Create with snapshot support (builder).
+let memory = AgentMemory::new(Arc::clone(&db))?
+    .with_snapshots("./snapshots", 10);  // retain max 10 versions
+
+// Save current state.
 let version = memory.snapshot()?;
 println!("Snapshot v{version} created");
 
-// List available versions
+// List available versions.
 let versions = memory.list_snapshot_versions()?;
 
-// Restore a specific version
+// Restore a specific version, or the latest.
 memory.load_snapshot_version(3)?;
-
-// Restore the latest version
 memory.load_latest_snapshot()?;
+```
+
+### Create & Restore (Python API)
+
+Snapshots are enabled by passing `snapshot_dir` (and optionally `max_snapshots`,
+default 10) to the `AgentMemory` constructor:
+
+```python
+from velesdb import Database, AgentMemory
+
+db = Database("./agent_data")
+memory = AgentMemory(db, dimension=384,
+                     snapshot_dir="./snapshots", max_snapshots=10)
+
+version = memory.snapshot()                 # -> version number
+versions = memory.list_snapshot_versions()  # -> [1, 2, ...]
+memory.load_snapshot_version(version)       # restore a specific version
+memory.load_latest_snapshot()               # restore the most recent
 ```
 
 ### Snapshot Format
@@ -542,7 +694,14 @@ The default strategy is `FixedRate`. Advanced strategies are available via the R
 ```rust
 use velesdb_core::agent::reinforcement::AdaptiveLearningRate;
 
-let strategy = AdaptiveLearningRate::new(0.1, 10); // lr=0.1, half-life=10 uses
+// AdaptiveLearningRate has no `::new`; use the defaults or a struct literal.
+let strategy = AdaptiveLearningRate {
+    base_success_rate: 0.2,   // delta applied on success (before the usage multiplier)
+    base_failure_rate: 0.1,   // delta applied on failure
+    half_life_usage: 10,      // learning rate halves every 10 uses
+    min_rate_multiplier: 0.1, // floor on the decayed multiplier
+};
+// Equivalent: `let strategy = AdaptiveLearningRate::default();`
 memory.procedural().reinforce_with_strategy(proc_id, true, &strategy)?;
 ```
 
@@ -696,8 +855,9 @@ snapshots are embedded-only.
 | `procedural.reinforce()` | Yes | Yes | No |
 | `procedural.list_all()` | Yes | Yes | No |
 | `procedural.delete()` | Yes | Yes | Yes (`deleteMemory`) |
-| TTL management | No | Yes | No |
-| Snapshots | No | Yes | No |
+| TTL management (`set_*_ttl`, `store_with_ttl`, `auto_expire`) | Yes | Yes | No |
+| Snapshots (`snapshot`, `load_*_snapshot`, `list_snapshot_versions`) | Yes | Yes | No |
+| VelesQL bridges (`query_semantic` / `query_episodic` / `query_procedural`) | Yes | Yes | No |
 
 ---
 
@@ -781,10 +941,9 @@ The **embedded** SDK (Python/Rust) requires the `persistence` feature (mmap, fil
 Export your data (text + embeddings) and import via `semantic.store()` / `episodic.record()` / `procedural.learn()`. There is no automated migration tool.
 
 **Q: Is this production-ready?**
-Yes. 137 tests (110 Rust + 27 Python) cover the SDK end-to-end, including concurrent access, snapshot round-trips, TTL expiration, and reinforcement strategies.
+Yes. The SDK is covered end-to-end by Rust and Python test suites, including concurrent access, snapshot round-trips, TTL expiration, and reinforcement strategies.
 
 ---
 
 > **Source code**: [`crates/velesdb-core/src/agent/`](../../crates/velesdb-core/src/agent/)
-> **Tests**: 137 tests (110 Rust + 27 Python) cover the SDK end-to-end
 > **Python bindings**: [`crates/velesdb-python/src/agent.rs`](../../crates/velesdb-python/src/agent.rs)

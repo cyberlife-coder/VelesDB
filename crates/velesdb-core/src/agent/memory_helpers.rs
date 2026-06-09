@@ -152,11 +152,12 @@ pub(super) fn delete_tracked_point(
     id: u64,
     stored_ids: &RwLock<HashSet<u64>>,
     ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
 ) -> Result<(), AgentMemoryError> {
     let collection = get_collection(db, collection_name)?;
     delete_from_collection(&collection, &[id])?;
     stored_ids.write().remove(&id);
-    ttl.remove(id);
+    ttl.remove(kind, id);
     Ok(())
 }
 
@@ -206,6 +207,7 @@ pub(super) fn search_filtered(
     query_embedding: &[f32],
     k: usize,
     ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
 ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
     validate_dimension(dimension, query_embedding.len())?;
     let collection = get_collection(db, collection_name)?;
@@ -213,11 +215,13 @@ pub(super) fn search_filtered(
     // post-search TTL filter do not shrink the result set below `k`. Expired
     // ids occupy at most `expired_count` of the top-k slots, so fetching
     // `k + expired_count` and then filtering guarantees up to `k` live results.
-    let fetch_k = k.saturating_add(ttl.expired_count());
+    // Scoped to `kind` so another subsystem's expired entries do not inflate
+    // the over-fetch.
+    let fetch_k = k.saturating_add(ttl.expired_count(kind));
     let results = search_collection(&collection, query_embedding, fetch_k)?;
     Ok(results
         .into_iter()
-        .filter(|r| !ttl.is_expired(r.point.id))
+        .filter(|r| !ttl.is_expired(kind, r.point.id))
         .take(k)
         .collect())
 }
@@ -229,7 +233,7 @@ pub(super) fn search_filtered(
 /// total length does not match the declared count.
 ///
 /// Used by `TemporalIndex::deserialize` (16-byte entries) and
-/// `MemoryTtl::deserialize` (24-byte entries).
+/// `MemoryTtl::deserialize` (25-byte entries).
 #[allow(clippy::cast_possible_truncation)] // count validated against buffer length
 pub(super) fn validate_binary_header(data: &[u8], entry_size: usize) -> Option<usize> {
     if data.len() < 8 {
