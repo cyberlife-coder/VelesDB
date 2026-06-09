@@ -52,9 +52,6 @@ pub struct AgentMemory {
     episodic: EpisodicMemory,
     procedural: ProceduralMemory,
     ttl: Arc<MemoryTtl>,
-    #[allow(dead_code)]
-    // Reason: temporal_index will be used for time-based queries in future implementation
-    temporal_index: Arc<TemporalIndex>,
     eviction_config: EvictionConfig,
     snapshot_manager: Option<SnapshotManager>,
 }
@@ -83,14 +80,13 @@ impl AgentMemory {
     /// Returns an error when one of the underlying memory subsystems cannot be initialized.
     pub fn with_dimension(db: Arc<Database>, dimension: usize) -> Result<Self, AgentMemoryError> {
         let ttl = Arc::new(MemoryTtl::new());
-        let temporal_index = Arc::new(TemporalIndex::new());
 
         let semantic = SemanticMemory::new(Arc::clone(&db), dimension, Arc::clone(&ttl))?;
         let episodic = EpisodicMemory::new(
             Arc::clone(&db),
             dimension,
             Arc::clone(&ttl),
-            Arc::clone(&temporal_index),
+            Arc::new(TemporalIndex::new()),
         )?;
         let procedural = ProceduralMemory::new(Arc::clone(&db), dimension, Arc::clone(&ttl))?;
 
@@ -100,7 +96,6 @@ impl AgentMemory {
             episodic,
             procedural,
             ttl,
-            temporal_index,
             eviction_config: EvictionConfig::default(),
             snapshot_manager: None,
         })
