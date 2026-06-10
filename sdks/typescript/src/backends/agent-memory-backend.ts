@@ -15,6 +15,7 @@ import type {
   ProceduralPattern,
   EpisodicRecord,
 } from '../types';
+import { ValidationError } from '../types';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath } from './shared';
 import { parseRestPointId } from './crud-backend';
@@ -79,22 +80,36 @@ export function _resetIdState(): void {
  * precision loss — matching the project's documented string-id convention for
  * u64 (see `/search/scroll`, graph node/edge ids).
  */
-export function memoryIdToString(id: number): string {
+export function memoryIdToString(id: number | string): string {
   return String(id);
 }
 
+/** Largest value a u64 point id can take (`u64::MAX`). */
+const U64_MAX = 18446744073709551615n;
+
 /**
- * Normalise a caller-provided point id into the numeric u64 the REST wire
- * accepts. Accepts a `string | number`; a string must be a decimal integer.
+ * Normalise a caller-provided point id into the form the REST wire accepts.
  *
- * A thin intent-revealing alias over {@link parseRestPointId}, which owns the
- * string→number coercion and the range/integer validation ("non-negative
- * integer within the JS safe-integer range") in exactly one place. The REST
- * server deserialises point ids as JSON numbers, so ids above
- * `Number.MAX_SAFE_INTEGER` cannot be transmitted and are rejected rather than
- * silently corrupted.
+ * Numbers and decimal strings within the JS safe-integer range are funnelled
+ * through {@link parseRestPointId}, which owns the string→number coercion and
+ * the "non-negative integer" validation in exactly one place. Decimal strings
+ * above `Number.MAX_SAFE_INTEGER` (2^53-1) are forwarded verbatim as strings:
+ * since #1004 the server deserialises point ids from either JSON numbers or
+ * strings (`serde_id::deserialize_id_from_string_or_number`), so a string id
+ * survives the JavaScript boundary without precision loss. Strings beyond
+ * `u64::MAX` and non-decimal inputs are rejected.
  */
-export function resolveWireId(id: string | number): number {
+export function resolveWireId(id: string | number): string | number {
+  if (typeof id === 'string' && /^\d+$/.test(id)) {
+    const big = BigInt(id);
+    if (big > U64_MAX) {
+      throw new ValidationError(`Point id exceeds u64::MAX (${U64_MAX}): ${id}`);
+    }
+    if (big > BigInt(Number.MAX_SAFE_INTEGER)) {
+      // Precision-critical id — keep the exact decimal string on the wire.
+      return id;
+    }
+  }
   return parseRestPointId(id);
 }
 

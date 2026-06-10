@@ -391,13 +391,48 @@ describe('Agent Memory REST methods', () => {
       expect(id).toBe(big);
     });
 
-    it('rejects a caller id beyond 2^53 rather than silently corrupting it', async () => {
-      // 2^53 + 1 cannot be represented exactly as a JS number; the REST wire
-      // only accepts JSON numbers, so this must throw, not lose precision.
-      const tooBig = '9007199254740993';
+    it('forwards a caller string id beyond 2^53 as a string rather than corrupting it', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      // 2^53 + 1 cannot be represented exactly as a JS number. Since #1004
+      // the server deserialises point ids from JSON strings too, so the id
+      // is forwarded verbatim as a string — precision-safe — instead of
+      // being rejected.
+      const beyondSafe = '9007199254740993';
+      const id = await backend.storeProceduralPattern('patterns', {
+        id: beyondSafe, name: 'p', steps: ['a'], embedding: [0.1],
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.id).toBe(beyondSafe); // string on the wire — no precision loss
+      expect(id).toBe(beyondSafe);
+    });
+
+    it('forwards u64::MAX as a string id', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      const u64Max = '18446744073709551615';
+      const id = await backend.recordEpisodicEvent('events', {
+        id: u64Max, eventType: 'x', embedding: [0.1], data: {},
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.id).toBe(u64Max);
+      expect(id).toBe(u64Max);
+    });
+
+    it('rejects a string id beyond u64::MAX', async () => {
       await expect(
         backend.storeProceduralPattern('patterns', {
-          id: tooBig, name: 'p', steps: ['a'], embedding: [0.1],
+          id: '18446744073709551616', name: 'p', steps: ['a'], embedding: [0.1],
+        })
+      ).rejects.toThrow();
+    });
+
+    it('still rejects a numeric id beyond 2^53 (not exactly representable)', async () => {
+      await expect(
+        backend.storeProceduralPattern('patterns', {
+          id: Number.MAX_SAFE_INTEGER + 2, name: 'p', steps: ['a'], embedding: [0.1],
         })
       ).rejects.toThrow();
     });
