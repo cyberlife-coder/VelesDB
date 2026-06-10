@@ -382,9 +382,9 @@ impl RaBitQIndex {
 
     /// Load `RaBitQ` index from `<dir>/rabitq.idx`. Returns `None` if file doesn't exist.
     ///
-    /// The decoded index is validated ([`Self::validate_loaded`]) so a corrupt
+    /// The decoded index is validated (`validate_loaded`) so a corrupt
     /// rotation/centroid is rejected here rather than producing out-of-bounds
-    /// indexing in [`apply_rotation_flat`] during search.
+    /// indexing in `apply_rotation_flat` during search.
     ///
     /// # Errors
     ///

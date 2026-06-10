@@ -831,12 +831,19 @@ memory.snapshot()?;
 memory.load_latest_snapshot()?;
 ```
 
-> **Standalone `SemanticMemory` (embedded Rust / WASM only).** The Rust/WASM
-> crates can construct a standalone in-memory `SemanticMemory` without a backing
-> `Database`. In that mode it has **no auto-snapshot and no auto-load**, and any
-> TTL is enforced **in memory only** — entries are not persisted and expiry state
-> is lost on restart. This standalone constructor is not reachable from the
-> REST-backed TypeScript SDK (which has no in-process engine at all).
+> **Using `SemanticMemory` on its own.** The supported path is `AgentMemory`,
+> which owns the shared `MemoryTtl` and snapshot manager, so TTL and snapshots
+> round-trip across restarts. If you reach for a `SemanticMemory` directly:
+> - **Rust core** — `SemanticMemory::new_from_db(db, dim)` still requires a
+>   backing `Database`, but allocates a *fresh* `MemoryTtl` that is **not** wired
+>   to any snapshot manager; `serialize`/`deserialize` carry stored facts and
+>   intentionally omit TTL state, so expiry is **lost on restart**.
+> - **WASM** — a fully standalone, DB-less `SemanticMemory::new(dim)` exists
+>   (no auto-snapshot, no auto-load, payloads are not serialized).
+> - **Python** has no standalone `SemanticMemory` constructor — it is reachable
+>   only through `AgentMemory.semantic` (shared, snapshot-backed TTL).
+> - **TypeScript** is REST-backed with no in-process engine, so none of this
+>   applies.
 
 ### API Availability by Binding
 

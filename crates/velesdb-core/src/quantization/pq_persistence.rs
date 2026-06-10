@@ -90,7 +90,7 @@ impl ProductQuantizer {
     ///
     /// Returns `Error::Io` if deserialization or file I/O fails, or
     /// `Error::IndexCorrupted` if the decoded codebook/rotation is inconsistent
-    /// or the file exceeds [`MAX_PQ_ARTIFACT_BYTES`].
+    /// or the file exceeds `MAX_PQ_ARTIFACT_BYTES`.
     pub fn load_codebook(dir: &std::path::Path) -> Result<Option<Self>, Error> {
         let Some(quantizer): Option<Self> = postcard_load(dir, "codebook.pq", "PQ codebook")?
         else {

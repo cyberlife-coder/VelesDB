@@ -208,7 +208,7 @@ impl ProceduralMemory {
     ///
     /// A `ttl_seconds` of `0` means "expire immediately": the procedure is
     /// eagerly removed (and any pre-existing point for `procedure_id` deleted),
-    /// harmonising the behaviour with [`SemanticMemory::store_with_ttl`]. The
+    /// harmonising the behaviour with `SemanticMemory::store_with_ttl`. The
     /// embedding is still dimension-validated so callers get the same error
     /// contract as a real learn.
     ///
