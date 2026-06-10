@@ -10,7 +10,7 @@ use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
 
-use super::{distinct, pushdown, ExtractedComponents};
+use super::{distinct, pushdown, ExtractedComponents, MAX_LIMIT};
 
 impl Collection {
     /// Computes the CBO execution strategy and over-fetch factor for the query.
@@ -188,10 +188,19 @@ impl Collection {
                 .where_clause
                 .as_ref()
                 .is_some_and(Self::condition_contains_or);
-        let execution_limit = if has_graph_predicates {
-            graph_overfetch_limit(limit)
-        } else {
-            limit
+        // The bounded over-fetch window only makes sense when the fetch is
+        // RANKED (vector NEAR or similarity() threshold): "rows ranked beyond
+        // the window" is a meaningful trade-off there. The metadata/scan
+        // paths fetch in storage order — capping them would silently drop
+        // graph matches depending on insertion order, so they keep the
+        // exhaustive MAX_LIMIT window (sparse queries never reach here; they
+        // are dispatched by `try_early_return_path`).
+        let has_ranked_fetch =
+            extracted.vector_search.is_some() || !extracted.similarity_conditions.is_empty();
+        let execution_limit = match (has_graph_predicates, has_ranked_fetch) {
+            (true, true) => graph_overfetch_limit(limit),
+            (true, false) => MAX_LIMIT,
+            (false, _) => limit,
         };
         let search_opts = super::QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())
             .with_fusion(stmt.fusion_clause.clone());
@@ -364,9 +373,10 @@ impl Collection {
     }
 }
 
-/// Bounded over-fetch for SELECTs carrying graph MATCH predicates.
+/// Bounded over-fetch for SELECTs combining graph MATCH predicates with a
+/// RANKED fetch (`vector NEAR` or a `similarity()` threshold).
 ///
-/// Graph predicates are evaluated AFTER the vector/metadata fetch
+/// Graph predicates are evaluated AFTER the vector fetch
 /// (`apply_where_condition_to_results`), so the fetch over-samples to leave
 /// the graph filter enough surviving candidates. The previous blanket
 /// `MAX_LIMIT` (100k) hydrated up to 100k points per query and drove the
@@ -375,6 +385,11 @@ impl Collection {
 /// candidates (never below the user limit). Trade-off: graph-matching rows
 /// ranked beyond the over-fetch window are not surfaced; exhaustive
 /// retrieval should pre-filter by graph anchor ids instead.
+///
+/// Unranked metadata/scan fetches must NOT use this bound: they iterate in
+/// storage order, so a capped window would silently drop graph matches based
+/// on insertion order (those paths keep `MAX_LIMIT`, the pre-existing
+/// behavior).
 fn graph_overfetch_limit(limit: usize) -> usize {
     const GRAPH_OVERFETCH_CAP: usize = 10_000;
     limit.max(limit.saturating_mul(10).min(GRAPH_OVERFETCH_CAP))

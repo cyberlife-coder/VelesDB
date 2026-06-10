@@ -193,7 +193,101 @@ fn test_showcase_bare_from_alias_near_match_executes() {
 }
 
 // =========================================================================
-// B. Negative: anchor alias mismatch is a clear validation error
+// B. Completeness: graph MATCH without NEAR must scan past the ranked
+//    over-fetch window (regression: graph_overfetch_limit applied to
+//    unranked scans made results depend on insertion order)
+// =========================================================================
+
+/// Creates a "library" collection of 2000 points where ONLY the last 50
+/// inserted ids (1951..=2000) carry an outgoing REFS edge (all pointing at
+/// id 1). Every point shares `category = "common"` so a metadata filter
+/// alone does not narrow the candidate set.
+fn setup_large_collection_with_late_edges(db: &Database) {
+    db.create_vector_collection("library", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create library collection");
+    let vc = db
+        .get_vector_collection("library")
+        .expect("test: get library collection");
+
+    let points: Vec<Point> = (1..=2000u16)
+        .map(|i| {
+            Point::new(
+                u64::from(i),
+                vec![1.0, f32::from(i) * 0.001, 0.0, 0.0],
+                Some(json!({"category": "common"})),
+            )
+        })
+        .collect();
+    vc.upsert(points).expect("test: upsert library corpus");
+
+    for (edge_id, source) in (10_000u64..).zip(1951u64..=2000) {
+        let edge = GraphEdge::new(edge_id, source, 1, "REFS").expect("test: create edge");
+        vc.add_edge(edge).expect("test: add REFS edge");
+    }
+}
+
+/// GIVEN 2000 points where only the 50 last-inserted ids have outgoing edges
+/// WHEN running `SELECT * WHERE MATCH (a)-[:REFS]->(b) LIMIT 10` (no NEAR)
+/// THEN 10 rows are returned — the unranked scan must not stop at the
+///      ranked over-fetch window (100 candidates for LIMIT 10) and silently
+///      drop every match because of insertion order.
+#[test]
+fn test_graph_match_without_near_scans_beyond_overfetch_window() {
+    let (_dir, db) = create_test_db();
+    setup_large_collection_with_late_edges(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM library WHERE MATCH (a)-[:REFS]->(b) LIMIT 10",
+    )
+    .expect("graph MATCH without NEAR must execute");
+
+    assert_eq!(
+        results.len(),
+        10,
+        "LIMIT 10 must be filled: edges on late-inserted ids must be found"
+    );
+    for r in &results {
+        assert!(
+            (1951..=2000).contains(&r.point.id),
+            "only ids with an outgoing REFS edge may match, got {}",
+            r.point.id
+        );
+    }
+}
+
+/// GIVEN the same corpus, where every point matches `category = 'common'`
+/// WHEN combining the metadata filter with a graph MATCH and no NEAR
+/// THEN the metadata fetch window must not be capped at the ranked
+///      over-fetch bound either — 10 rows are returned.
+#[test]
+fn test_metadata_and_graph_match_without_near_scans_beyond_overfetch_window() {
+    let (_dir, db) = create_test_db();
+    setup_large_collection_with_late_edges(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM library \
+         WHERE category = 'common' AND MATCH (a)-[:REFS]->(b) LIMIT 10",
+    )
+    .expect("metadata + graph MATCH without NEAR must execute");
+
+    assert_eq!(
+        results.len(),
+        10,
+        "LIMIT 10 must be filled: metadata fetch must cover the whole collection"
+    );
+    for r in &results {
+        assert!(
+            (1951..=2000).contains(&r.point.id),
+            "only ids with an outgoing REFS edge may match, got {}",
+            r.point.id
+        );
+    }
+}
+
+// =========================================================================
+// C. Negative: anchor alias mismatch is a clear validation error
 // =========================================================================
 
 /// GIVEN an `agent_memory` collection with vectors and RELATES_TO edges
