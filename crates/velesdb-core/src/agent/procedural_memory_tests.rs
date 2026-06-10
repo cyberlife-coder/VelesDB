@@ -4,7 +4,7 @@
 mod tests {
     use super::super::procedural_memory::ProceduralMemory;
     use super::super::reinforcement::FixedRate;
-    use super::super::ttl::MemoryTtl;
+    use super::super::ttl::{MemoryKind, MemoryTtl};
     use crate::Database;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -237,7 +237,11 @@ mod tests {
     fn test_learn_with_ttl_zero_expires_immediately() {
         let dir = tempdir().unwrap();
         let db = Arc::new(Database::open(dir.path()).unwrap());
-        let pm = make_procedural(Arc::clone(&db));
+        // Build with an explicit shared TTL so the assertion can bypass TTL
+        // filtering and prove *physical* removal (not a shadow-persisted point).
+        let ttl = Arc::new(MemoryTtl::new());
+        let pm =
+            ProceduralMemory::new(db, 4, Arc::clone(&ttl)).expect("ProceduralMemory::new failed");
 
         let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
         pm.learn_with_ttl(77, "ephemeral", &steps(1), Some(&emb), 0.8, 0)
@@ -247,6 +251,16 @@ mod tests {
         assert!(
             all.iter().all(|p| p.id != 77),
             "TTL-0 procedure must not appear in list_all()"
+        );
+
+        // Clear the TTL entry: list_all no longer filters id 77 by expiry, so it
+        // only stays absent if the point was physically removed (stored_ids +
+        // collection), not merely shadow-persisted behind the TTL filter.
+        ttl.remove(MemoryKind::Procedural, 77);
+        let all_after = pm.list_all().unwrap();
+        assert!(
+            all_after.iter().all(|p| p.id != 77),
+            "TTL-0 procedure must be physically removed, not shadow-persisted"
         );
     }
 

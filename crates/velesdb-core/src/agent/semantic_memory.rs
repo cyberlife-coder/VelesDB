@@ -28,7 +28,17 @@ pub struct SemanticMemory {
 impl SemanticMemory {
     const COLLECTION_NAME: &'static str = "_semantic_memory";
 
-    /// Creates or opens semantic memory.
+    /// Creates or opens semantic memory with an **independent** in-memory TTL.
+    ///
+    /// # Standalone limitation
+    ///
+    /// The [`MemoryTtl`] allocated here is not shared with any snapshot
+    /// mechanism: TTL entries live in memory only and are **lost on restart**.
+    /// [`Self::serialize`] / [`Self::deserialize`] carry stored points but
+    /// intentionally omit TTL state (see [`Self::serialize`] for the full
+    /// contract). For full TTL persistence and snapshot support, create an
+    /// [`AgentMemory`](crate::agent::AgentMemory) instead — it owns the shared
+    /// `MemoryTtl`, snapshot manager, and all three subsystems.
     ///
     /// # Errors
     ///

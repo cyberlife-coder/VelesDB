@@ -153,6 +153,17 @@ describe('VelesDB Client', () => {
       await expect(db.get('docs', tooLarge)).rejects.toThrow(ValidationError);
       await expect(db.delete('docs', tooLarge)).rejects.toThrow(ValidationError);
     });
+
+    it('accepts decimal-string IDs for get/delete on REST backend (Issue #1047)', async () => {
+      // u64-safe string ids returned by recordEvent/learnProcedure must pass
+      // client validation and delegate to the backend, not be rejected.
+      mockBackend.delete.mockResolvedValue(true);
+      mockBackend.get.mockResolvedValue({ id: 12345, vector: [0.1] });
+
+      await expect(db.delete('docs', '12345')).resolves.toBe(true);
+      expect(mockBackend.delete).toHaveBeenCalledWith('docs', '12345');
+      await expect(db.get('docs', '12345')).resolves.toEqual({ id: 12345, vector: [0.1] });
+    });
   });
 
   describe('operations', () => {

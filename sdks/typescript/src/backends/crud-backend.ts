@@ -26,18 +26,26 @@ import {
 export type CrudTransport = BaseTransport;
 
 export function parseRestPointId(id: string | number): RestPointId {
+  // A decimal-string id (e.g. the u64-safe strings returned by the agent-memory
+  // record/learn helpers) is coerced to a number before range validation, so
+  // string and numeric ids share one validation gate. Only a plain run of
+  // digits is accepted — no sign, whitespace, decimal point, exponent, or hex —
+  // so '' / '  ' / '1e3' / '0x10' are rejected instead of silently coercing
+  // (`Number('')` would otherwise become 0).
+  const numeric =
+    typeof id === 'string' ? (/^\d+$/.test(id) ? Number(id) : NaN) : id;
   if (
-    typeof id !== 'number' ||
-    !Number.isFinite(id) ||
-    id < 0 ||
-    !Number.isInteger(id) ||
-    id > Number.MAX_SAFE_INTEGER
+    typeof numeric !== 'number' ||
+    !Number.isFinite(numeric) ||
+    numeric < 0 ||
+    !Number.isInteger(numeric) ||
+    numeric > Number.MAX_SAFE_INTEGER
   ) {
     throw new ValidationError(
       `REST backend requires numeric u64-compatible IDs in JS safe integer range (0..${Number.MAX_SAFE_INTEGER}). Received: ${String(id)}`
     );
   }
-  return id;
+  return numeric;
 }
 
 export function sparseVectorToRestFormat(sv: SparseVector): Record<string, number> {

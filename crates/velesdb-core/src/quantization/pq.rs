@@ -337,7 +337,7 @@ impl ProductQuantizer {
     /// (see [`Self::load_codebook`]) before it is used for search. After this
     /// returns `Ok`, the codebook layout matches its declared dimensions and
     /// the rotation matrix (if present) is `dimension * dimension`, so the
-    /// unchecked indexing in [`apply_rotation`](Self::apply_rotation) operates
+    /// unchecked indexing in `apply_rotation` operates
     /// only on in-bounds offsets.
     ///
     /// # Errors

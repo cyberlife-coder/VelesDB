@@ -149,6 +149,73 @@ describe('Agent Memory REST methods', () => {
       expect(point.payload.name).toBe('real-name');
       expect(point.payload.steps).toEqual(['a']);
     });
+
+    it('should not let caller metadata clobber reserved semantic keys', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      await backend.storeSemanticFact('facts', {
+        id: 1,
+        text: 'real-fact',
+        embedding: [0.1],
+        metadata: { _memory_type: 'hacked', content: 'spoofed' },
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.payload._memory_type).toBe('semantic');
+      expect(point.payload.content).toBe('real-fact');
+    });
+
+    it('should not let caller data/metadata clobber reserved episodic keys', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      await backend.recordEpisodicEvent('events', {
+        eventType: 'real-event',
+        embedding: [0.1],
+        timestamp: 123,
+        data: { _memory_type: 'hacked', event_type: 'spoofed', timestamp: 999 },
+        metadata: { _memory_type: 'hacked2', event_type: 'spoofed2' },
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.payload._memory_type).toBe('episodic');
+      expect(point.payload.event_type).toBe('real-event');
+      expect(point.payload.timestamp).toBe(123);
+    });
+  });
+
+  describe('delete accepts string ids (Issue #1047)', () => {
+    it('should delete by a decimal-string id (as returned by recordEvent/learnProcedure)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ deleted: true }),
+      });
+
+      // recordEvent/learnProcedure return ids as strings; the delete path must
+      // accept them and coerce to the numeric REST wire id, not throw.
+      const result = await backend.delete('events', '12345');
+
+      expect(result).toBe(true);
+      const url = mockFetch.mock.calls[0][0] as string;
+      expect(url).toMatch(/\/points\/12345$/);
+    });
+
+    it('should reject a non-integer string id', async () => {
+      await expect(backend.delete('events', '12.5')).rejects.toThrow(/numeric u64/);
+    });
+
+    it('should reject malformed string ids instead of coercing them', async () => {
+      // Number('') / Number('  ') === 0 and Number('1e3') === 1000 — these must
+      // be rejected, not silently treated as a valid id.
+      for (const bad of ['', '   ', '1e3', '0x10', '-5']) {
+        await expect(backend.delete('events', bad)).rejects.toThrow(/numeric u64/);
+      }
+    });
   });
 
   describe('recordEpisodicEvent (Issue #7)', () => {
