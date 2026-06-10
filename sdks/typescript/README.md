@@ -160,7 +160,13 @@ const queryVector = new Float32Array(1536).fill(0.1);
 const results = await db.search('products', queryVector, { k: 10 });
 ```
 
-> **REST backend note:** Document IDs must be numeric integers in the range `0..Number.MAX_SAFE_INTEGER`. String IDs are only supported with the WASM backend.
+> **REST backend note:** Document IDs must be non-negative `u64` integers. Pass a JS
+> number in the range `0..Number.MAX_SAFE_INTEGER`, or a decimal string for the full
+> `u64` range — string ids above 2^53-1 (up to `18446744073709551615`) are kept
+> verbatim on the wire, so the ids returned by `recordEvent`/`learnProcedure`
+> round-trip through `get`/`delete` without precision loss. Exception: the NDJSON
+> bulk endpoint (`streamUpsertPoints`) only accepts safe-range numeric ids.
+> Arbitrary (non-numeric) string IDs are only supported with the WASM backend.
 
 > **Versioned routes:** The REST backend uses `/v1/` as the canonical route prefix
 > (e.g. `POST /v1/collections/{name}/search`). Legacy routes without the prefix

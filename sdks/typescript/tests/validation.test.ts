@@ -26,6 +26,17 @@ describe('validateRestPointId', () => {
     expect(() => validateRestPointId('12345', rest)).not.toThrow();
   });
 
+  it('accepts decimal-string ids above 2^53 up to u64::MAX (store/delete symmetry)', () => {
+    // recordEvent/learnProcedure accept and return these ids; delete/get must
+    // accept the very same strings or the memory becomes write-only.
+    expect(() => validateRestPointId('9007199254740993', rest)).not.toThrow();
+    expect(() => validateRestPointId('18446744073709551615', rest)).not.toThrow();
+  });
+
+  it('rejects decimal-string ids beyond u64::MAX', () => {
+    expect(() => validateRestPointId('18446744073709551616', rest)).toThrow(ValidationError);
+  });
+
   it('rejects malformed string ids instead of coercing them', () => {
     for (const bad of ['', '   ', '1e3', '0x10', '-5', '12.5', '12abc']) {
       expect(() => validateRestPointId(bad, rest)).toThrow(ValidationError);

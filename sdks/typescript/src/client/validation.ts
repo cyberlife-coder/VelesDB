@@ -56,8 +56,9 @@ export function validateRestPointId(id: string | number, config: VelesDBConfig):
   if (config.backend !== 'rest') {
     return;
   }
-  // Delegate to the canonical backend gate so the string→number coercion and
-  // the "non-negative integer within JS safe-integer range" rule for REST point
-  // ids live in exactly one place (it throws `ValidationError` on a bad id).
+  // Delegate to the canonical backend gate so the id rules — non-negative
+  // integers in the JS safe-integer range, plus verbatim decimal strings up to
+  // u64::MAX — live in exactly one place (it throws `ValidationError` on a
+  // bad id).
   parseRestPointId(id);
 }

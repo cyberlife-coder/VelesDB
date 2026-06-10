@@ -216,6 +216,43 @@ describe('Agent Memory REST methods', () => {
         await expect(backend.delete('events', bad)).rejects.toThrow(/numeric u64/);
       }
     });
+
+    it('round-trips an id beyond 2^53: recordEvent then delete by the returned string id', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      // store accepts ids up to u64::MAX as decimal strings; the very same
+      // string handed back to the caller must be deletable, otherwise the
+      // memory is write-only over (2^53, u64::MAX].
+      const u64Max = '18446744073709551615';
+      const id = await backend.recordEpisodicEvent('events', {
+        id: u64Max, eventType: 'x', embedding: [0.1], data: {},
+      });
+      expect(id).toBe(u64Max);
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ deleted: true }),
+      });
+      const result = await backend.delete('events', id);
+
+      expect(result).toBe(true);
+      const url = mockFetch.mock.calls[1][0] as string;
+      // The exact decimal string travels verbatim in the path param.
+      expect(url).toMatch(/\/points\/18446744073709551615$/);
+    });
+
+    it('should get a point by a string id beyond 2^53 via the verbatim path param', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ id: '18446744073709551615', vector: [0.1] }),
+      });
+
+      const doc = await backend.get('events', '18446744073709551615');
+
+      expect(doc).not.toBeNull();
+      const url = mockFetch.mock.calls[0][0] as string;
+      expect(url).toMatch(/\/points\/18446744073709551615$/);
+    });
   });
 
   describe('recordEpisodicEvent (Issue #7)', () => {
