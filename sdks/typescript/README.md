@@ -30,7 +30,7 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 ### Previous (v1.13.0)
 
 - **WASM VelesQL executor** -- full browser-side VelesQL execution: SELECT/INSERT/UPDATE/DELETE/DDL + aggregations (COUNT/SUM/AVG/MIN/MAX) + GROUP BY/HAVING/UNION/INTERSECT/EXCEPT/JOIN/FUSION/MATCH 1-2 hops + NOT De Morgan distribution
-- **TS SDK coverage raised to 94%** -- 423 tests, per-file thresholds codified in `vitest.config.ts`
+- **TS SDK coverage raised** -- per-file thresholds codified in `vitest.config.ts` (423 tests as of v1.13.0; the vitest suite has since grown past 770 cases). Note: the suite runs locally via `npm test` and is not currently executed in CI
 - **SIFT1M standardized ANN benchmark** -- fvecs/ivecs loader + Criterion ef sweep on the INRIA TEXMEX dataset, feature-gated behind `--features bench-sift1m`
 - **Security hardening** -- `validateCollectionName()` helper on TS SDK prevents VelesQL injection in `trainPq`
 - **API consistency** -- `streamInsert` now serializes `payload: null` explicitly (matches `streamUpsertPoints`)
