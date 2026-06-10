@@ -620,4 +620,107 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].point.id, 2);
     }
+
+    // ========================================================================
+    // F. TTL — expired entries are invisible through the VelesQL bridges
+    // ========================================================================
+
+    /// Collects point ids from a result slice.
+    fn result_ids(results: &[crate::SearchResult]) -> Vec<u64> {
+        results.iter().map(|r| r.point.id).collect()
+    }
+
+    #[test]
+    fn test_query_semantic_filters_expired() {
+        let (_dir, _db, memory) = setup_agent_memory();
+
+        memory
+            .semantic()
+            .store(1, "expired fact", &[1.0, 0.0, 0.0, 0.0])
+            .unwrap();
+        memory
+            .semantic()
+            .store(2, "live fact", &[0.0, 1.0, 0.0, 0.0])
+            .unwrap();
+        // TTL of 0 seconds: expires immediately.
+        memory.set_semantic_ttl(1, 0);
+
+        let params = HashMap::new();
+        let results = memory
+            .query_semantic("SELECT * FROM _semantic_memory LIMIT 10", &params)
+            .expect("query_semantic should succeed");
+
+        let ids = result_ids(&results);
+        assert!(
+            !ids.contains(&1),
+            "expired semantic fact must not be returned by the VelesQL bridge"
+        );
+        assert!(ids.contains(&2), "live semantic fact must be returned");
+    }
+
+    #[test]
+    fn test_query_episodic_filters_expired() {
+        let (_dir, _db, memory) = setup_agent_memory();
+
+        memory
+            .episodic()
+            .record(1, "expired event", 1_000_000, Some(&[1.0, 0.0, 0.0, 0.0]))
+            .unwrap();
+        memory
+            .episodic()
+            .record(2, "live event", 2_000_000, Some(&[0.0, 1.0, 0.0, 0.0]))
+            .unwrap();
+        memory.set_episodic_ttl(1, 0);
+
+        let params = HashMap::new();
+        let results = memory
+            .query_episodic("SELECT * FROM _episodic_memory LIMIT 10", &params)
+            .expect("query_episodic should succeed");
+
+        let ids = result_ids(&results);
+        assert!(
+            !ids.contains(&1),
+            "expired episodic event must not be returned by the VelesQL bridge"
+        );
+        assert!(ids.contains(&2), "live episodic event must be returned");
+    }
+
+    #[test]
+    fn test_query_procedural_filters_expired() {
+        let (_dir, _db, memory) = setup_agent_memory();
+
+        memory
+            .procedural()
+            .learn(
+                1,
+                "expired_proc",
+                &["s1".into()],
+                Some(&[1.0, 0.0, 0.0, 0.0]),
+                0.9,
+            )
+            .unwrap();
+        memory
+            .procedural()
+            .learn(
+                2,
+                "live_proc",
+                &["s1".into()],
+                Some(&[0.0, 1.0, 0.0, 0.0]),
+                0.8,
+            )
+            .unwrap();
+        memory.set_procedural_ttl(1, 0);
+
+        let params = HashMap::new();
+        let results = memory
+            .query_procedural("SELECT * FROM _procedural_memory LIMIT 10", &params)
+            .expect("query_procedural should succeed");
+
+        let ids = result_ids(&results);
+        assert!(
+            !ids.contains(&1),
+            "expired procedure must not be returned by the VelesQL bridge"
+        );
+        assert!(ids.contains(&2), "live procedure must be returned");
+    }
 }

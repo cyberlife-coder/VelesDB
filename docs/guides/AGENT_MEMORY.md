@@ -604,7 +604,8 @@ stats = memory.auto_expire()
 
 ### Behavior
 
-- Expired entries are **filtered from results** (query, recent, recall)
+- Expired entries are **filtered from results** on every read surface: the native queries (query, recent, recall) and the `AgentMemory` VelesQL bridges (`query_semantic` / `query_episodic` / `query_procedural`)
+- TTLs assigned at store time (`store_with_ttl` / `record_with_ttl` / `learn_with_ttl`) are **durable**: the expiry is persisted as an `expires_at` (epoch seconds) payload field and the TTL map is rebuilt from payloads when the database is reopened, so TTL'd entries stay mortal across restarts — no snapshot required. TTLs set after the fact via `set_*_ttl` live in memory and persist only through snapshots
 - `auto_expire()` **physically deletes** expired entries and returns per-subsystem counts
 - Old episodic events can be **consolidated** into semantic memory (configurable via `EvictionConfig`); the migrated fact is stored under a **fresh** semantic id on collision, so consolidation never overwrites an existing semantic fact (see [Snapshots & Restore](#snapshots--restore))
 
@@ -837,7 +838,9 @@ memory.load_latest_snapshot()?;
 > - **Rust core** — `SemanticMemory::new_from_db(db, dim)` still requires a
 >   backing `Database`, but allocates a *fresh* `MemoryTtl` that is **not** wired
 >   to any snapshot manager; `serialize`/`deserialize` carry stored facts and
->   intentionally omit TTL state, so expiry is **lost on restart**.
+>   intentionally omit the TTL map. TTLs assigned via `store_with_ttl` persist
+>   their `expires_at` in the point payload and are rebuilt at reopen, so
+>   store-time expiry **survives restarts**; map-only TTLs do not.
 > - **WASM** — a fully standalone, DB-less `SemanticMemory::new(dim)` exists
 >   (no auto-snapshot, no auto-load, payloads are not serialized).
 > - **Python** has no standalone `SemanticMemory` constructor — it is reachable

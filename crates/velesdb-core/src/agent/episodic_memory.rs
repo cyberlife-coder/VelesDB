@@ -62,6 +62,12 @@ impl EpisodicMemory {
                 Self::rebuild_temporal_index(&collection.inner, &temporal_index);
             }
         }
+        memory_helpers::rebuild_ttl_from_payloads(
+            &db,
+            &collection_name,
+            &ttl,
+            MemoryKind::Episodic,
+        )?;
 
         Ok(Self {
             collection_name,
@@ -105,17 +111,28 @@ impl EpisodicMemory {
         timestamp: i64,
         embedding: Option<&[f32]>,
     ) -> Result<(), AgentMemoryError> {
+        self.record_internal(event_id, description, timestamp, embedding, None)
+    }
+
+    /// Shared store path: persists the event, optionally with a durable
+    /// `expires_at` payload field (epoch seconds) for TTL'd records.
+    fn record_internal(
+        &self,
+        event_id: u64,
+        description: &str,
+        timestamp: i64,
+        embedding: Option<&[f32]>,
+        expires_at: Option<u64>,
+    ) -> Result<(), AgentMemoryError> {
         let vector = memory_helpers::resolve_embedding(self.dimension, embedding)?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
-        let point = Point::new(
-            event_id,
-            vector,
-            Some(json!({
-                "description": description,
-                "timestamp": timestamp
-            })),
-        );
+        let mut payload = json!({
+            "description": description,
+            "timestamp": timestamp
+        });
+        memory_helpers::attach_expiry(&mut payload, expires_at);
+        let point = Point::new(event_id, vector, Some(payload));
 
         memory_helpers::upsert_points(&collection, vec![point])?;
         self.temporal_index.insert(event_id, timestamp);
@@ -131,6 +148,10 @@ impl EpisodicMemory {
     /// harmonising the behaviour with `SemanticMemory::store_with_ttl`. The
     /// embedding is still dimension-validated so callers get the same error
     /// contract as a real record.
+    ///
+    /// The expiry is persisted as an `expires_at` (epoch seconds) payload field,
+    /// so the TTL survives a process restart: the in-memory map is rebuilt from
+    /// payloads when the collection is reopened.
     ///
     /// # Errors
     ///
@@ -149,9 +170,16 @@ impl EpisodicMemory {
             }
             return self.delete(event_id);
         }
-        self.record(event_id, description, timestamp, embedding)?;
+        let expires_at = MemoryTtl::now().saturating_add(ttl_seconds);
+        self.record_internal(
+            event_id,
+            description,
+            timestamp,
+            embedding,
+            Some(expires_at),
+        )?;
         self.ttl
-            .set_ttl(MemoryKind::Episodic, event_id, ttl_seconds);
+            .set_expiry(MemoryKind::Episodic, event_id, expires_at);
         Ok(())
     }
 

@@ -803,3 +803,81 @@ fn test_reinforce_by_recalled_id_updates_same_procedure() {
         "reinforce(recalled_id) must raise the same procedure's confidence"
     );
 }
+
+// ============================================================================
+// TTL persistence across restart (durable expires_at in payload)
+// ============================================================================
+
+/// A TTL'd entry must remain mortal after dropping and reopening a DB-backed
+/// `AgentMemory` on the same path — no snapshot ritual required. Entries
+/// stored without TTL must survive the reopen untouched.
+#[test]
+fn test_ttl_survives_reopen_all_kinds() {
+    let dir = tempdir().unwrap();
+    let embedding = vec![1.0, 0.0, 0.0, 0.0];
+
+    {
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
+        memory
+            .semantic()
+            .store_with_ttl(1, "ephemeral fact", &embedding, 1)
+            .unwrap();
+        memory
+            .semantic()
+            .store(2, "durable fact", &embedding)
+            .unwrap();
+        memory
+            .episodic()
+            .record_with_ttl(10, "ephemeral event", 1_700_000_000, Some(&embedding), 1)
+            .unwrap();
+        memory
+            .procedural()
+            .learn_with_ttl(
+                20,
+                "ephemeral proc",
+                &["step".to_string()],
+                Some(&embedding),
+                0.9,
+                1,
+            )
+            .unwrap();
+    }
+
+    // Let the 1-second TTLs lapse, then reopen on the same path.
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
+
+    assert!(
+        memory.semantic().get(1).unwrap().is_none(),
+        "TTL'd semantic fact must stay expired after reopen"
+    );
+    let results = memory.semantic().query(&embedding, 10).unwrap();
+    assert!(
+        !results.iter().any(|r| r.0 == 1),
+        "expired semantic fact must be filtered from query after reopen"
+    );
+    assert!(
+        results.iter().any(|r| r.0 == 2),
+        "fact stored without TTL must survive reopen"
+    );
+
+    let recent = memory.episodic().recent(10, None).unwrap();
+    assert!(
+        !recent.iter().any(|e| e.0 == 10),
+        "TTL'd episodic event must stay expired after reopen"
+    );
+
+    let procs = memory.procedural().list_all().unwrap();
+    assert!(
+        !procs.iter().any(|p| p.id == 20),
+        "TTL'd procedure must stay expired after reopen"
+    );
+
+    // The rebuilt TTL map must also drive physical deletion on auto_expire.
+    let stats = memory.auto_expire().unwrap();
+    assert_eq!(stats.semantic_expired, 1, "expired semantic fact deleted");
+    assert_eq!(stats.episodic_expired, 1, "expired episodic event deleted");
+    assert_eq!(stats.procedural_expired, 1, "expired procedure deleted");
+}

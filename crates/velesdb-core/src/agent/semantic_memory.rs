@@ -33,10 +33,14 @@ impl SemanticMemory {
     /// # Standalone limitation
     ///
     /// The [`MemoryTtl`] allocated here is not shared with any snapshot
-    /// mechanism: TTL entries live in memory only and are **lost on restart**.
+    /// mechanism. TTLs assigned at store time ([`Self::store_with_ttl`]) are
+    /// durable: the expiry is persisted as an `expires_at` payload field and
+    /// the in-memory map is rebuilt from payloads at construction, so they
+    /// survive a restart. TTLs set only in the map (e.g. via
+    /// `AgentMemory::set_semantic_ttl`) remain in-memory, and
     /// [`Self::serialize`] / [`Self::deserialize`] carry stored points but
-    /// intentionally omit TTL state (see [`Self::serialize`] for the full
-    /// contract). For full TTL persistence and snapshot support, create an
+    /// intentionally omit the TTL map (see [`Self::serialize`] for the full
+    /// contract). For full TTL and snapshot support, create an
     /// [`AgentMemory`](crate::agent::AgentMemory) instead — it owns the shared
     /// `MemoryTtl`, snapshot manager, and all three subsystems.
     ///
@@ -54,6 +58,12 @@ impl SemanticMemory {
     ) -> Result<Self, AgentMemoryError> {
         let (collection_name, dimension, stored_ids) =
             memory_helpers::init_tracked_memory(&db, Self::COLLECTION_NAME, dimension)?;
+        memory_helpers::rebuild_ttl_from_payloads(
+            &db,
+            &collection_name,
+            &ttl,
+            MemoryKind::Semantic,
+        )?;
 
         Ok(Self {
             collection_name,
@@ -193,6 +203,10 @@ impl SemanticMemory {
     /// for `id` deleted). The embedding is still dimension-validated so callers
     /// get the same error contract as a real store.
     ///
+    /// The expiry is persisted as an `expires_at` (epoch seconds) payload field,
+    /// so the TTL survives a process restart: the in-memory map is rebuilt from
+    /// payloads when the collection is reopened.
+    ///
     /// # Errors
     ///
     /// Returns the same errors as [`Self::store`].
@@ -207,8 +221,14 @@ impl SemanticMemory {
             memory_helpers::validate_dimension(self.dimension, embedding.len())?;
             return self.delete(id);
         }
-        self.store(id, content, embedding)?;
-        self.ttl.set_ttl(MemoryKind::Semantic, id, ttl_seconds);
+        let expires_at = MemoryTtl::now().saturating_add(ttl_seconds);
+        let mut metadata = Map::new();
+        metadata.insert(
+            memory_helpers::EXPIRES_AT_KEY.to_string(),
+            Value::from(expires_at),
+        );
+        self.store_internal(id, content, embedding, Some(&metadata))?;
+        self.ttl.set_expiry(MemoryKind::Semantic, id, expires_at);
         Ok(())
     }
 
@@ -405,14 +425,16 @@ impl SemanticMemory {
     /// # TTL limitation
     ///
     /// The returned bytes contain only the stored points (id, embedding,
-    /// content) and intentionally **omit TTL state**. TTL is tracked in a single
-    /// `MemoryTtl` map shared across the semantic, episodic, and procedural
-    /// subsystems (see [`AgentMemory`](crate::agent::AgentMemory)), so it cannot
-    /// be partitioned per subsystem here. TTL is persisted and restored globally
-    /// by [`AgentMemory::snapshot`](crate::agent::AgentMemory::snapshot) /
+    /// payload — including any durable `expires_at` field) and intentionally
+    /// **omit the TTL map**. TTL is tracked in a single `MemoryTtl` map shared
+    /// across the semantic, episodic, and procedural subsystems (see
+    /// [`AgentMemory`](crate::agent::AgentMemory)), so it cannot be partitioned
+    /// per subsystem here. TTL is persisted and restored globally by
+    /// [`AgentMemory::snapshot`](crate::agent::AgentMemory::snapshot) /
     /// `restore_state`. Calling [`Self::deserialize`] in isolation therefore
-    /// restores facts but not their expiry; use the snapshot manager for a full
-    /// round-trip including TTL.
+    /// restores facts but refreshes the in-memory expiry map only at the next
+    /// construction (payload `expires_at` rebuild); use the snapshot manager
+    /// for an immediate full round-trip including TTL.
     ///
     /// # Errors
     ///

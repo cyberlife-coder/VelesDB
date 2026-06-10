@@ -130,6 +130,12 @@ impl ProceduralMemory {
     ) -> Result<Self, AgentMemoryError> {
         let (collection_name, dimension, stored_ids) =
             memory_helpers::init_tracked_memory(&db, Self::COLLECTION_NAME, dimension)?;
+        memory_helpers::rebuild_ttl_from_payloads(
+            &db,
+            &collection_name,
+            &ttl,
+            MemoryKind::Procedural,
+        )?;
 
         Ok(Self {
             collection_name,
@@ -177,6 +183,20 @@ impl ProceduralMemory {
         embedding: Option<&[f32]>,
         confidence: f32,
     ) -> Result<(), AgentMemoryError> {
+        self.learn_internal(procedure_id, name, steps, embedding, confidence, None)
+    }
+
+    /// Shared store path: persists the procedure, optionally with a durable
+    /// `expires_at` payload field (epoch seconds) for TTL'd procedures.
+    fn learn_internal(
+        &self,
+        procedure_id: u64,
+        name: &str,
+        steps: &[String],
+        embedding: Option<&[f32]>,
+        confidence: f32,
+        expires_at: Option<u64>,
+    ) -> Result<(), AgentMemoryError> {
         let vector = memory_helpers::resolve_embedding(self.dimension, embedding)?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
@@ -184,20 +204,18 @@ impl ProceduralMemory {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
 
-        let point = Point::new(
-            procedure_id,
-            vector,
-            Some(json!({
-                "name": name,
-                "steps": steps,
-                "confidence": confidence,
-                "usage_count": 0,
-                "created_at": now,
-                "last_used_at": now,
-                "success_count": 0,
-                "failure_count": 0
-            })),
-        );
+        let mut payload = json!({
+            "name": name,
+            "steps": steps,
+            "confidence": confidence,
+            "usage_count": 0,
+            "created_at": now,
+            "last_used_at": now,
+            "success_count": 0,
+            "failure_count": 0
+        });
+        memory_helpers::attach_expiry(&mut payload, expires_at);
+        let point = Point::new(procedure_id, vector, Some(payload));
 
         memory_helpers::upsert_points(&collection, vec![point])?;
         self.stored_ids.write().insert(procedure_id);
@@ -211,6 +229,10 @@ impl ProceduralMemory {
     /// harmonising the behaviour with `SemanticMemory::store_with_ttl`. The
     /// embedding is still dimension-validated so callers get the same error
     /// contract as a real learn.
+    ///
+    /// The expiry is persisted as an `expires_at` (epoch seconds) payload field,
+    /// so the TTL survives a process restart: the in-memory map is rebuilt from
+    /// payloads when the collection is reopened.
     ///
     /// # Errors
     ///
@@ -230,9 +252,17 @@ impl ProceduralMemory {
             }
             return self.delete(procedure_id);
         }
-        self.learn(procedure_id, name, steps, embedding, confidence)?;
+        let expires_at = MemoryTtl::now().saturating_add(ttl_seconds);
+        self.learn_internal(
+            procedure_id,
+            name,
+            steps,
+            embedding,
+            confidence,
+            Some(expires_at),
+        )?;
         self.ttl
-            .set_ttl(MemoryKind::Procedural, procedure_id, ttl_seconds);
+            .set_expiry(MemoryKind::Procedural, procedure_id, expires_at);
         Ok(())
     }
 
@@ -332,20 +362,24 @@ impl ProceduralMemory {
             (state.success_count, state.failure_count + 1)
         };
 
-        let updated_point = Point::new(
-            procedure_id,
-            point.vector.clone(),
-            Some(json!({
-                "name": state.name,
-                "steps": state.steps,
-                "confidence": new_confidence,
-                "usage_count": state.usage_count + 1,
-                "created_at": state.created_at,
-                "last_used_at": now,
-                "success_count": new_success,
-                "failure_count": new_failure
-            })),
-        );
+        let mut payload = json!({
+            "name": state.name,
+            "steps": state.steps,
+            "confidence": new_confidence,
+            "usage_count": state.usage_count + 1,
+            "created_at": state.created_at,
+            "last_used_at": now,
+            "success_count": new_success,
+            "failure_count": new_failure
+        });
+        // Preserve the durable TTL field: reinforcing must not strip expiry.
+        let prior_expiry = point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(memory_helpers::EXPIRES_AT_KEY))
+            .and_then(serde_json::Value::as_u64);
+        memory_helpers::attach_expiry(&mut payload, prior_expiry);
+        let updated_point = Point::new(procedure_id, point.vector.clone(), Some(payload));
 
         memory_helpers::upsert_points(&collection, vec![updated_point])?;
 
