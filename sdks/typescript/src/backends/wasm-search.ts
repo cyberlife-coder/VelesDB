@@ -286,10 +286,62 @@ export async function wasmMultiQuerySearch(
 // Query (VelesQL over WASM)
 // ---------------------------------------------------------------------------
 
+/**
+ * The only VelesQL shape the WASM backend can execute faithfully: a pure
+ * top-k NEAR scan — `SELECT * FROM <collection> WHERE <column> NEAR $param
+ * [LIMIT n]` (case-insensitive, optional trailing semicolon).
+ *
+ * `VectorStore.query()` is a brute-force k-NN that evaluates no other
+ * clause. Anything else (WHERE predicates, JOIN, GROUP BY, MATCH, set
+ * operations, FUSION, …) must be rejected loudly instead of silently
+ * dropping clauses and returning unfiltered neighbours.
+ */
+const PURE_NEAR_QUERY =
+  /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+[a-z_]\w*\s+near\s+\$([a-z_]\w*)\s*(?:limit\s+(\d+))?\s*;?\s*$/i;
+
+interface PureNearQuery {
+  /** Collection named in the FROM clause. */
+  from: string;
+  /** Name of the `$param` holding the query embedding. */
+  param: string;
+  /** `LIMIT n` value when present. */
+  limit?: number;
+}
+
+/** Parse `queryString` against the pure-NEAR shape or throw `NOT_SUPPORTED`. */
+function parsePureNearQuery(queryString: string): PureNearQuery {
+  const match = PURE_NEAR_QUERY.exec(queryString);
+  if (!match) {
+    throw new VelesDBError(
+      'The WASM backend only executes pure top-k NEAR queries of the form ' +
+        '"SELECT * FROM <collection> WHERE <column> NEAR $param [LIMIT n]". ' +
+        'WHERE predicates, JOIN, GROUP BY, MATCH, set operations and FUSION ' +
+        'are not evaluated in WASM — use the REST backend (velesdb-server) ' +
+        `for full VelesQL. Received: ${queryString}`,
+      'NOT_SUPPORTED'
+    );
+  }
+  const parsed: PureNearQuery = { from: match[1]!, param: match[2]! };
+  if (match[3] !== undefined) {
+    parsed.limit = Number(match[3]);
+  }
+  return parsed;
+}
+
+/** Resolve top-k: `LIMIT` from the query wins, then `params.k`, then 10. */
+function resolveQueryK(limit: number | undefined, requestedK: unknown): number {
+  if (limit !== undefined) {
+    return limit;
+  }
+  return typeof requestedK === 'number' && Number.isInteger(requestedK) && requestedK > 0
+    ? requestedK
+    : 10;
+}
+
 export async function wasmQuery(
   ctx: WasmContext,
   collectionName: string,
-  _queryString: string,
+  queryString: string,
   params?: Record<string, unknown>,
   _options?: QueryOptions
 ): Promise<QueryApiResponse> {
@@ -297,18 +349,21 @@ export async function wasmQuery(
   if (!collection) {
     throw new NotFoundError(`Collection '${collectionName}'`);
   }
-  const paramsVector = params?.q;
-  if (!Array.isArray(paramsVector) && !(paramsVector instanceof Float32Array)) {
+  const parsed = parsePureNearQuery(queryString);
+  if (parsed.from !== collectionName) {
     throw new VelesDBError(
-      'WASM query() expects params.q to contain the query embedding vector.',
+      `Query targets collection '${parsed.from}' but was executed against '${collectionName}'.`,
       'BAD_REQUEST'
     );
   }
-  const requestedK = params?.k;
-  const k =
-    typeof requestedK === 'number' && Number.isInteger(requestedK) && requestedK > 0
-      ? requestedK
-      : 10;
+  const paramsVector = params?.[parsed.param];
+  if (!Array.isArray(paramsVector) && !(paramsVector instanceof Float32Array)) {
+    throw new VelesDBError(
+      `WASM query() expects params.${parsed.param} to contain the query embedding vector.`,
+      'BAD_REQUEST'
+    );
+  }
+  const k = resolveQueryK(parsed.limit, params?.k);
   const raw: Record<string, unknown>[] = collection.store.query(
     paramsVector instanceof Float32Array ? paramsVector : new Float32Array(paramsVector),
     k

@@ -377,10 +377,12 @@ describe('wasmQuery', () => {
     );
   });
 
+  const PURE_NEAR = 'SELECT * FROM docs WHERE vector NEAR $q';
+
   it('throws BAD_REQUEST when params.q is not a vector', async () => {
     const ctx = buildCtx('docs', buildStore());
-    await expect(wasmQuery(ctx, 'docs', 'q', {})).rejects.toThrow(VelesDBError);
-    await expect(wasmQuery(ctx, 'docs', 'q', {})).rejects.toThrow(
+    await expect(wasmQuery(ctx, 'docs', PURE_NEAR, {})).rejects.toThrow(VelesDBError);
+    await expect(wasmQuery(ctx, 'docs', PURE_NEAR, {})).rejects.toThrow(
       /params\.q/
     );
   });
@@ -390,10 +392,10 @@ describe('wasmQuery', () => {
     const store = buildStore({ query });
     const ctx = buildCtx('docs', store);
 
-    await wasmQuery(ctx, 'docs', 'q', { q: [0.1, 0.2] });
+    await wasmQuery(ctx, 'docs', PURE_NEAR, { q: [0.1, 0.2] });
     expect(query).toHaveBeenCalledWith(expect.any(Float32Array), 10);
 
-    await wasmQuery(ctx, 'docs', 'q', {
+    await wasmQuery(ctx, 'docs', PURE_NEAR, {
       q: new Float32Array([0.1, 0.2]),
       k: 5,
     });
@@ -405,13 +407,13 @@ describe('wasmQuery', () => {
     const store = buildStore({ query });
     const ctx = buildCtx('docs', store);
 
-    await wasmQuery(ctx, 'docs', 'q', { q: [0.1, 0.2], k: -5 });
+    await wasmQuery(ctx, 'docs', PURE_NEAR, { q: [0.1, 0.2], k: -5 });
     expect(query).toHaveBeenLastCalledWith(expect.any(Float32Array), 10);
 
-    await wasmQuery(ctx, 'docs', 'q', { q: [0.1, 0.2], k: 3.5 });
+    await wasmQuery(ctx, 'docs', PURE_NEAR, { q: [0.1, 0.2], k: 3.5 });
     expect(query).toHaveBeenLastCalledWith(expect.any(Float32Array), 10);
 
-    await wasmQuery(ctx, 'docs', 'q', { q: [0.1, 0.2], k: 0 });
+    await wasmQuery(ctx, 'docs', PURE_NEAR, { q: [0.1, 0.2], k: 0 });
     expect(query).toHaveBeenLastCalledWith(expect.any(Float32Array), 10);
   });
 
@@ -420,10 +422,104 @@ describe('wasmQuery', () => {
     const store = buildStore({ query: vi.fn(() => raw) });
     const ctx = buildCtx('docs', store);
 
-    const out = await wasmQuery(ctx, 'docs', 'q', { q: [0.1, 0.2] });
+    const out = await wasmQuery(ctx, 'docs', PURE_NEAR, { q: [0.1, 0.2] });
     expect(out.results).toBe(raw);
     expect(out.stats.strategy).toBe('wasm-query');
     expect(out.stats.scannedNodes).toBe(2);
     expect(out.stats.executionTimeMs).toBe(0);
+  });
+});
+
+describe('wasmQuery — VelesQL faithfulness guard', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('never silently drops a WHERE filter: rejects and does not run raw k-NN', async () => {
+    const query = vi.fn(() => [{ id: 1 }, { id: 2 }]);
+    const store = buildStore({ query });
+    const ctx = buildCtx('docs', store);
+
+    const err: unknown = await wasmQuery(
+      ctx,
+      'docs',
+      "SELECT * FROM docs WHERE category='tech' AND vector NEAR $q",
+      { q: [0.1, 0.2] }
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(VelesDBError);
+    expect((err as VelesDBError).code).toBe('NOT_SUPPORTED');
+    expect((err as VelesDBError).message).toMatch(/REST/);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['JOIN', 'SELECT * FROM docs JOIN other ON docs.id = other.id WHERE vector NEAR $q'],
+    ['GROUP BY', 'SELECT category, COUNT(*) FROM docs GROUP BY category'],
+    ['MATCH', 'SELECT * FROM docs MATCH (a)-[:LINKS]->(b) WHERE vector NEAR $q'],
+    ['ORDER BY', 'SELECT * FROM docs WHERE vector NEAR $q ORDER BY id'],
+    ['UNION', 'SELECT * FROM docs UNION SELECT * FROM archived'],
+    ['FUSION', "SELECT * FROM docs LIMIT 20 USING FUSION(strategy = 'rrf', k = 60)"],
+    ['inline NEAR literal', 'SELECT * FROM docs WHERE vector NEAR [0.1, 0.2]'],
+  ])('rejects %s queries with NOT_SUPPORTED instead of raw k-NN', async (_label, sql) => {
+    const query = vi.fn(() => []);
+    const store = buildStore({ query });
+    const ctx = buildCtx('docs', store);
+
+    const err: unknown = await wasmQuery(ctx, 'docs', sql, { q: [0.1, 0.2] }).catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toBeInstanceOf(VelesDBError);
+    expect((err as VelesDBError).code).toBe('NOT_SUPPORTED');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('rejects a query whose FROM targets a different collection', async () => {
+    const query = vi.fn(() => []);
+    const store = buildStore({ query });
+    const ctx = buildCtx('docs', store);
+
+    const err: unknown = await wasmQuery(
+      ctx,
+      'docs',
+      'SELECT * FROM other WHERE vector NEAR $q',
+      { q: [0.1, 0.2] }
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(VelesDBError);
+    expect((err as VelesDBError).code).toBe('BAD_REQUEST');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('executes a pure NEAR query, LIMIT driving k', async () => {
+    const query = vi.fn(() => []);
+    const store = buildStore({ query });
+    const ctx = buildCtx('docs', store);
+
+    await wasmQuery(ctx, 'docs', 'SELECT * FROM docs WHERE vector NEAR $q LIMIT 3', {
+      q: [0.1, 0.2],
+    });
+    expect(query).toHaveBeenLastCalledWith(expect.any(Float32Array), 3);
+  });
+
+  it('reads the embedding from the parameter named in the query', async () => {
+    const query = vi.fn(() => []);
+    const store = buildStore({ query });
+    const ctx = buildCtx('docs', store);
+
+    await wasmQuery(ctx, 'docs', 'SELECT * FROM docs WHERE embedding NEAR $vec', {
+      vec: [0.1, 0.2],
+    });
+    expect(query).toHaveBeenLastCalledWith(expect.any(Float32Array), 10);
+  });
+
+  it('is case-insensitive and tolerates a trailing semicolon', async () => {
+    const query = vi.fn(() => []);
+    const store = buildStore({ query });
+    const ctx = buildCtx('docs', store);
+
+    await wasmQuery(ctx, 'docs', 'select * from docs where vector near $q limit 2;', {
+      q: [0.1, 0.2],
+    });
+    expect(query).toHaveBeenLastCalledWith(expect.any(Float32Array), 2);
   });
 });
