@@ -208,6 +208,14 @@ describe('Agent Memory REST methods', () => {
     it('should reject a non-integer string id', async () => {
       await expect(backend.delete('events', '12.5')).rejects.toThrow(/numeric u64/);
     });
+
+    it('should reject malformed string ids instead of coercing them', async () => {
+      // Number('') / Number('  ') === 0 and Number('1e3') === 1000 — these must
+      // be rejected, not silently treated as a valid id.
+      for (const bad of ['', '   ', '1e3', '0x10', '-5']) {
+        await expect(backend.delete('events', bad)).rejects.toThrow(/numeric u64/);
+      }
+    });
   });
 
   describe('recordEpisodicEvent (Issue #7)', () => {

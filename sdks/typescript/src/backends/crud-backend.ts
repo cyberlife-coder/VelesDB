@@ -28,8 +28,12 @@ export type CrudTransport = BaseTransport;
 export function parseRestPointId(id: string | number): RestPointId {
   // A decimal-string id (e.g. the u64-safe strings returned by the agent-memory
   // record/learn helpers) is coerced to a number before range validation, so
-  // string and numeric ids share one validation gate.
-  const numeric = typeof id === 'string' ? Number(id) : id;
+  // string and numeric ids share one validation gate. Only a plain run of
+  // digits is accepted — no sign, whitespace, decimal point, exponent, or hex —
+  // so '' / '  ' / '1e3' / '0x10' are rejected instead of silently coercing
+  // (`Number('')` would otherwise become 0).
+  const numeric =
+    typeof id === 'string' ? (/^\d+$/.test(id) ? Number(id) : NaN) : id;
   if (
     typeof numeric !== 'number' ||
     !Number.isFinite(numeric) ||
