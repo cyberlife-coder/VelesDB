@@ -115,7 +115,7 @@ impl EpisodicMemory {
     }
 
     /// Shared store path: persists the event, optionally with a durable
-    /// `expires_at` payload field (epoch seconds) for TTL'd records.
+    /// `_veles_expires_at` payload field (epoch seconds) for TTL'd records.
     fn record_internal(
         &self,
         event_id: u64,
@@ -149,9 +149,9 @@ impl EpisodicMemory {
     /// embedding is still dimension-validated so callers get the same error
     /// contract as a real record.
     ///
-    /// The expiry is persisted as an `expires_at` (epoch seconds) payload field,
-    /// so the TTL survives a process restart: the in-memory map is rebuilt from
-    /// payloads when the collection is reopened.
+    /// The expiry is persisted as a reserved `_veles_expires_at` (epoch
+    /// seconds) payload field, so the TTL survives a process restart: the
+    /// in-memory map is rebuilt from payloads when the collection is reopened.
     ///
     /// # Errors
     ///

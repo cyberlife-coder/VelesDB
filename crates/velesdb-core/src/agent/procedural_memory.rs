@@ -187,7 +187,7 @@ impl ProceduralMemory {
     }
 
     /// Shared store path: persists the procedure, optionally with a durable
-    /// `expires_at` payload field (epoch seconds) for TTL'd procedures.
+    /// `_veles_expires_at` payload field (epoch seconds) for TTL'd procedures.
     fn learn_internal(
         &self,
         procedure_id: u64,
@@ -230,9 +230,9 @@ impl ProceduralMemory {
     /// embedding is still dimension-validated so callers get the same error
     /// contract as a real learn.
     ///
-    /// The expiry is persisted as an `expires_at` (epoch seconds) payload field,
-    /// so the TTL survives a process restart: the in-memory map is rebuilt from
-    /// payloads when the collection is reopened.
+    /// The expiry is persisted as a reserved `_veles_expires_at` (epoch
+    /// seconds) payload field, so the TTL survives a process restart: the
+    /// in-memory map is rebuilt from payloads when the collection is reopened.
     ///
     /// # Errors
     ///

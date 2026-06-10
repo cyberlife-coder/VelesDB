@@ -110,7 +110,7 @@ impl MemoryTtl {
 
     /// Sets a TTL entry from a precomputed absolute expiry timestamp.
     ///
-    /// Used by the durable-TTL write path (which persists `expires_at` in the
+    /// Used by the durable-TTL write path (which persists `_veles_expires_at` in the
     /// point payload) and by the reopen path that rebuilds this map from
     /// payloads, so both sides share the exact same expiry instant.
     pub fn set_expiry(&self, kind: MemoryKind, id: u64, expires_at: u64) {

@@ -650,4 +650,149 @@ mod tests {
         // Half of each thread's writes were deleted: 4 threads * 12 survivors.
         assert_eq!(sm.count(), 4 * 12);
     }
+
+    // ── Reserved durable-TTL key: user "expires_at" metadata is business data ──
+
+    /// Reopens the database at `path` into a fresh `SemanticMemory` with its
+    /// own TTL map, mimicking a process restart (payload-driven TTL rebuild).
+    fn reopen_semantic(path: &std::path::Path) -> (Arc<MemoryTtl>, SemanticMemory) {
+        let db = Arc::new(Database::open(path).unwrap());
+        let ttl = Arc::new(MemoryTtl::new());
+        let sm = SemanticMemory::new(db, 4, Arc::clone(&ttl)).unwrap();
+        (ttl, sm)
+    }
+
+    /// Builds a one-entry metadata map.
+    fn meta_one(key: &str, value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        let mut map = serde_json::Map::new();
+        map.insert(key.to_string(), value);
+        map
+    }
+
+    /// A user business field named `expires_at` (subscription, offer, token…)
+    /// stored via `store_with_metadata` must stay plain metadata: visible in
+    /// session AND after a reopen, never rebuilt into the durable TTL map.
+    #[test]
+    fn test_user_expires_at_metadata_survives_restart() {
+        let dir = tempdir().unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let past_epoch = 1_000_000_u64; // long-gone epoch seconds
+
+        {
+            let db = Arc::new(Database::open(dir.path()).unwrap());
+            let sm = make_semantic(Arc::clone(&db));
+            let meta = meta_one("expires_at", serde_json::json!(past_epoch));
+            sm.store_with_metadata(1, "offer expired yesterday", &emb, &meta)
+                .unwrap();
+            assert!(sm.get(1).unwrap().is_some(), "fact visible in session");
+        }
+
+        let (ttl, sm) = reopen_semantic(dir.path());
+
+        assert!(
+            ttl.get(MemoryKind::Semantic, 1).is_none(),
+            "user expires_at metadata must not be rebuilt into the TTL map"
+        );
+        assert!(
+            sm.get(1).unwrap().is_some(),
+            "fact with user expires_at metadata must stay alive after reopen"
+        );
+        let results = sm.query(&emb, 5).unwrap();
+        assert!(results.iter().any(|r| r.0 == 1), "fact must stay queryable");
+
+        // The business field itself is preserved and filterable.
+        let filter = meta_one("expires_at", serde_json::json!(past_epoch));
+        let filtered = sm.query_filtered(&emb, 5, &filter, 0).unwrap();
+        assert_eq!(
+            filtered.len(),
+            1,
+            "user expires_at field must be preserved as metadata"
+        );
+    }
+
+    /// Same collision via `update_metadata`: merging a user `expires_at` into
+    /// an existing fact must not arm a durable TTL at the next reopen.
+    #[test]
+    fn test_update_metadata_user_expires_at_survives_restart() {
+        let dir = tempdir().unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+
+        {
+            let db = Arc::new(Database::open(dir.path()).unwrap());
+            let sm = make_semantic(Arc::clone(&db));
+            sm.store(1, "subscription fact", &emb).unwrap();
+            let updates = meta_one("expires_at", serde_json::json!(1_000_000_u64));
+            sm.update_metadata(1, &updates).unwrap();
+        }
+
+        let (ttl, sm) = reopen_semantic(dir.path());
+
+        assert!(
+            ttl.get(MemoryKind::Semantic, 1).is_none(),
+            "user expires_at update must not be rebuilt into the TTL map"
+        );
+        assert!(
+            sm.get(1).unwrap().is_some(),
+            "fact must stay alive after reopen"
+        );
+    }
+
+    /// The reserved durable-expiry key (`_veles_expires_at`) is stripped from
+    /// user metadata, mirroring how the `content` parameter owns `content`.
+    #[test]
+    fn test_reserved_expiry_key_stripped_from_store_metadata() {
+        let dir = tempdir().unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+
+        {
+            let db = Arc::new(Database::open(dir.path()).unwrap());
+            let sm = make_semantic(Arc::clone(&db));
+            let meta = meta_one("_veles_expires_at", serde_json::json!(1_u64));
+            sm.store_with_metadata(1, "spoof attempt", &emb, &meta)
+                .unwrap();
+        }
+
+        let (ttl, sm) = reopen_semantic(dir.path());
+
+        assert!(
+            ttl.get(MemoryKind::Semantic, 1).is_none(),
+            "reserved key must be stripped at store time"
+        );
+        assert!(sm.get(1).unwrap().is_some());
+    }
+
+    /// `update_metadata` must neither inject nor clobber the reserved durable
+    /// expiry: a legitimate `store_with_ttl` expiry survives a metadata update
+    /// and is rebuilt identically at reopen.
+    #[test]
+    fn test_update_metadata_preserves_legit_durable_ttl() {
+        let dir = tempdir().unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let original_expiry;
+
+        {
+            let db = Arc::new(Database::open(dir.path()).unwrap());
+            let ttl = Arc::new(MemoryTtl::new());
+            let sm = SemanticMemory::new(Arc::clone(&db), 4, Arc::clone(&ttl)).unwrap();
+            sm.store_with_ttl(1, "mortal fact", &emb, 9_999).unwrap();
+            original_expiry = ttl
+                .get(MemoryKind::Semantic, 1)
+                .expect("TTL tracked at store time")
+                .expires_at;
+
+            let mut updates = meta_one("tag", serde_json::json!("updated"));
+            updates.insert("_veles_expires_at".to_string(), serde_json::json!(1_u64));
+            sm.update_metadata(1, &updates).unwrap();
+        }
+
+        let (ttl, _sm) = reopen_semantic(dir.path());
+
+        let entry = ttl
+            .get(MemoryKind::Semantic, 1)
+            .expect("durable TTL must survive a metadata update");
+        assert_eq!(
+            entry.expires_at, original_expiry,
+            "reserved key in updates must not clobber the durable expiry"
+        );
+    }
 }

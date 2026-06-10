@@ -34,7 +34,7 @@ impl SemanticMemory {
     ///
     /// The [`MemoryTtl`] allocated here is not shared with any snapshot
     /// mechanism. TTLs assigned at store time ([`Self::store_with_ttl`]) are
-    /// durable: the expiry is persisted as an `expires_at` payload field and
+    /// durable: the expiry is persisted as a `_veles_expires_at` payload field and
     /// the in-memory map is rebuilt from payloads at construction, so they
     /// survive a restart. TTLs set only in the map (e.g. via
     /// `AgentMemory::set_semantic_ttl`) remain in-memory, and
@@ -93,13 +93,16 @@ impl SemanticMemory {
     /// Returns an error when embedding dimension is invalid, collection access fails,
     /// or persistence fails.
     pub fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), AgentMemoryError> {
-        self.store_internal(id, content, embedding, None)
+        self.store_internal(id, content, embedding, None, None)
     }
 
     /// Stores a semantic memory point with additional metadata fields.
     ///
     /// `content` always wins: if `metadata` contains a `"content"` key, it is
-    /// overwritten by the `content` parameter.
+    /// overwritten by the `content` parameter. The reserved system key
+    /// `_veles_expires_at` (durable TTL, see [`Self::store_with_ttl`]) is
+    /// likewise stripped from `metadata`; a plain `expires_at` key is ordinary
+    /// business metadata and is stored verbatim.
     ///
     /// # Errors
     ///
@@ -111,14 +114,16 @@ impl SemanticMemory {
         embedding: &[f32],
         metadata: &Map<String, Value>,
     ) -> Result<(), AgentMemoryError> {
-        self.store_internal(id, content, embedding, Some(metadata))
+        self.store_internal(id, content, embedding, Some(metadata), None)
     }
 
     /// Updates payload fields of an existing fact without changing its embedding.
     ///
     /// Only facts that are tracked and not expired are updated. Any key in
     /// `updates` is merged into the existing payload; `content` may be updated
-    /// through this method, but the vector is left untouched.
+    /// through this method, but the vector is left untouched. The reserved
+    /// system key `_veles_expires_at` (durable TTL) is ignored in `updates`
+    /// and preserved from the existing payload.
     ///
     /// # Errors
     ///
@@ -144,20 +149,22 @@ impl SemanticMemory {
         Ok(())
     }
 
+    /// Shared store path. The durable expiry travels through the dedicated
+    /// `expires_at` parameter (written under the reserved
+    /// [`memory_helpers::EXPIRES_AT_KEY`]), never through user `metadata`.
     fn store_internal(
         &self,
         id: u64,
         content: &str,
         embedding: &[f32],
         metadata: Option<&Map<String, Value>>,
+        expires_at: Option<u64>,
     ) -> Result<(), AgentMemoryError> {
         memory_helpers::validate_dimension(self.dimension, embedding.len())?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        let point = Point::new(
-            id,
-            embedding.to_vec(),
-            Some(build_payload(content, metadata)),
-        );
+        let mut payload = build_payload(content, metadata);
+        memory_helpers::attach_expiry(&mut payload, expires_at);
+        let point = Point::new(id, embedding.to_vec(), Some(payload));
         memory_helpers::upsert_points(&collection, vec![point])?;
         self.stored_ids.write().insert(id);
         Ok(())
@@ -203,9 +210,9 @@ impl SemanticMemory {
     /// for `id` deleted). The embedding is still dimension-validated so callers
     /// get the same error contract as a real store.
     ///
-    /// The expiry is persisted as an `expires_at` (epoch seconds) payload field,
-    /// so the TTL survives a process restart: the in-memory map is rebuilt from
-    /// payloads when the collection is reopened.
+    /// The expiry is persisted as a reserved `_veles_expires_at` (epoch
+    /// seconds) payload field, so the TTL survives a process restart: the
+    /// in-memory map is rebuilt from payloads when the collection is reopened.
     ///
     /// # Errors
     ///
@@ -222,12 +229,7 @@ impl SemanticMemory {
             return self.delete(id);
         }
         let expires_at = MemoryTtl::now().saturating_add(ttl_seconds);
-        let mut metadata = Map::new();
-        metadata.insert(
-            memory_helpers::EXPIRES_AT_KEY.to_string(),
-            Value::from(expires_at),
-        );
-        self.store_internal(id, content, embedding, Some(&metadata))?;
+        self.store_internal(id, content, embedding, None, Some(expires_at))?;
         self.ttl.set_expiry(MemoryKind::Semantic, id, expires_at);
         Ok(())
     }
@@ -425,7 +427,7 @@ impl SemanticMemory {
     /// # TTL limitation
     ///
     /// The returned bytes contain only the stored points (id, embedding,
-    /// payload — including any durable `expires_at` field) and intentionally
+    /// payload — including any durable `_veles_expires_at` field) and intentionally
     /// **omit the TTL map**. TTL is tracked in a single `MemoryTtl` map shared
     /// across the semantic, episodic, and procedural subsystems (see
     /// [`AgentMemory`](crate::agent::AgentMemory)), so it cannot be partitioned
@@ -433,7 +435,7 @@ impl SemanticMemory {
     /// [`AgentMemory::snapshot`](crate::agent::AgentMemory::snapshot) /
     /// `restore_state`. Calling [`Self::deserialize`] in isolation therefore
     /// restores facts but refreshes the in-memory expiry map only at the next
-    /// construction (payload `expires_at` rebuild); use the snapshot manager
+    /// construction (payload `_veles_expires_at` rebuild); use the snapshot manager
     /// for an immediate full round-trip including TTL.
     ///
     /// # Errors
@@ -462,9 +464,11 @@ impl SemanticMemory {
 /// Builds the payload `Value` from `content` and optional extra metadata.
 ///
 /// `content` is always inserted last so it wins over any `"content"` key
-/// present in `metadata`.
+/// present in `metadata`. The reserved [`memory_helpers::EXPIRES_AT_KEY`] is
+/// stripped: the durable TTL is only ever written by the system store path.
 fn build_payload(content: &str, metadata: Option<&Map<String, Value>>) -> Value {
     let mut map = metadata.cloned().unwrap_or_default();
+    map.remove(memory_helpers::EXPIRES_AT_KEY);
     map.insert("content".to_string(), Value::String(content.to_string()));
     Value::Object(map)
 }
@@ -472,7 +476,9 @@ fn build_payload(content: &str, metadata: Option<&Map<String, Value>>) -> Value 
 /// Merges `updates` into an existing point payload, returning the new payload.
 ///
 /// A missing payload starts from an empty object. Errors when the existing
-/// payload is present but not a JSON object.
+/// payload is present but not a JSON object. The reserved
+/// [`memory_helpers::EXPIRES_AT_KEY`] is skipped so a metadata update can
+/// neither inject nor clobber the durable TTL.
 fn merge_payload(
     existing: Option<Value>,
     updates: &Map<String, Value>,
@@ -482,6 +488,9 @@ fn merge_payload(
         .as_object_mut()
         .ok_or_else(|| AgentMemoryError::IoError("corrupt payload".to_string()))?;
     for (k, v) in updates {
+        if k == memory_helpers::EXPIRES_AT_KEY {
+            continue;
+        }
         obj.insert(k.clone(), v.clone());
     }
     Ok(payload)
