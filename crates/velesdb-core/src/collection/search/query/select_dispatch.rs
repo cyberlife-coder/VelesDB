@@ -10,7 +10,7 @@ use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
 
-use super::{distinct, pushdown, ExtractedComponents, MAX_LIMIT};
+use super::{distinct, pushdown, ExtractedComponents};
 
 impl Collection {
     /// Computes the CBO execution strategy and over-fetch factor for the query.
@@ -189,7 +189,7 @@ impl Collection {
                 .as_ref()
                 .is_some_and(Self::condition_contains_or);
         let execution_limit = if has_graph_predicates {
-            MAX_LIMIT
+            graph_overfetch_limit(limit)
         } else {
             limit
         };
@@ -362,6 +362,22 @@ impl Collection {
             _ => None,
         }
     }
+}
+
+/// Bounded over-fetch for SELECTs carrying graph MATCH predicates.
+///
+/// Graph predicates are evaluated AFTER the vector/metadata fetch
+/// (`apply_where_condition_to_results`), so the fetch over-samples to leave
+/// the graph filter enough surviving candidates. The previous blanket
+/// `MAX_LIMIT` (100k) hydrated up to 100k points per query and drove the
+/// downstream oversampling clamp into a `min > max` panic for filtered
+/// vector searches. Bound it to 10x the requested limit, capped at 10_000
+/// candidates (never below the user limit). Trade-off: graph-matching rows
+/// ranked beyond the over-fetch window are not surfaced; exhaustive
+/// retrieval should pre-filter by graph anchor ids instead.
+fn graph_overfetch_limit(limit: usize) -> usize {
+    const GRAPH_OVERFETCH_CAP: usize = 10_000;
+    limit.max(limit.saturating_mul(10).min(GRAPH_OVERFETCH_CAP))
 }
 
 /// Injects evaluated LET binding values into each result's payload.
