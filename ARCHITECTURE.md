@@ -16,7 +16,7 @@ VelesDB is a **single-binary, embeddable database** that fuses a **vector index 
 
 | Engine | What it does | Backed by |
 |--------|-------------|-----------|
-| **Vector** | k-nearest-neighbor search over high-dimensional embeddings | Native HNSW + SIMD-accelerated distance kernels (AVX-512, AVX2, NEON, WASM SIMD128) |
+| **Vector** | k-nearest-neighbor search over high-dimensional embeddings | Native HNSW + SIMD-accelerated distance kernels (AVX-512, AVX2, NEON; WASM uses the scalar fallback — SIMD128 kernels planned) |
 | **Graph** | Node/edge storage with BFS/DFS traversal, relationship properties | CSR-snapshot zero-copy traversal, FxHashSet visited sets |
 | **ColumnStore** | Typed metadata filtering (eq, range, IN, BETWEEN, LIKE) at scale | Per-column secondary indexes, RoaringBitmap for set operations |
 
@@ -93,7 +93,7 @@ Here is what happens, end-to-end, in roughly the order it happens. This is the p
 3. **Plan.** The cost-based optimizer (CBO) in `crates/velesdb-core/src/velesql/cost_estimator/` picks an execution strategy. For a vector + filter query, the choice is typically between *pre-filter* (apply the WHERE first then NEAR on the remaining points) and *post-filter* (NEAR first then WHERE on the result). Selectivity statistics drive the choice.
 4. **Cache.** A two-tier LRU plan cache (write-generation invalidated) hits or misses. A hit short-circuits steps 1–3 for repeat queries (~1 µs cache hit).
 5. **Execute.** The plan calls into the index layer:
-   - HNSW search descends the graph, calling SIMD distance kernels (one of AVX-512 / AVX2 / NEON / WASM SIMD128 / scalar) chosen at runtime by `simd_dispatch.rs`.
+   - HNSW search descends the graph, calling SIMD distance kernels (one of AVX-512 / AVX2 / NEON / scalar) chosen at runtime by `simd_dispatch.rs`; WASM dispatches to the scalar fallback (SIMD128 kernels planned).
    - The filter engine applies `date > '2024-01-01'` against the secondary index (RoaringBitmap intersection if multiple predicates).
 6. **Hydrate.** Top-k IDs are resolved to full `Point` records (vector + payload).
 7. **Serialize and return.** Results travel back up through the API layer.
@@ -177,7 +177,7 @@ The areas where VelesDB uses `unsafe` are:
 
 | Area | Why `unsafe` | Documented at |
 |------|-------------|--------------|
-| SIMD intrinsics (AVX2, AVX-512, NEON, WASM SIMD128) | The intrinsics themselves are `unsafe fn` | `crates/velesdb-core/src/simd_native/` (every block annotated `// SAFETY:`) |
+| SIMD intrinsics (AVX2, AVX-512, NEON) | The intrinsics themselves are `unsafe fn` | `crates/velesdb-core/src/simd_native/` (every block annotated `// SAFETY:`) |
 | `mmap` of vector data | Reading `&[f32]` from a memory-mapped file | `crates/velesdb-core/src/storage/mmap.rs` |
 | FFI for UniFFI mobile bindings | C ABI boundary | `crates/velesdb-mobile/` |
 | Compute shader buffer mapping (GPU) | wgpu buffer lifetime | `crates/velesdb-core/src/gpu/` |
