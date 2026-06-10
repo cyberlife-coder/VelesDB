@@ -146,6 +146,7 @@ impl Collection {
         }
         mr.projected = self.project_properties_with_score(
             &mr.bindings,
+            &mr.edge_bindings,
             &match_clause.return_clause,
             Some(candidate.score),
             payload_guard,
@@ -200,7 +201,14 @@ impl Collection {
             if let Some(alias) = pattern.nodes.first().and_then(|n| n.alias.as_ref()) {
                 bindings.insert(alias.clone(), node_id);
             }
-            self.evaluate_where_condition(node_id, Some(&bindings), cond, params, payload_guard)
+            self.evaluate_where_condition(
+                node_id,
+                Some(&bindings),
+                None,
+                cond,
+                params,
+                payload_guard,
+            )
         } else {
             Ok(true)
         }
@@ -245,6 +253,7 @@ impl Collection {
                 if self.evaluate_where_condition(
                     hit.target_id,
                     Some(&bindings),
+                    None,
                     cond,
                     params,
                     payload_guard,

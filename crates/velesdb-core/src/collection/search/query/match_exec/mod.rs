@@ -36,6 +36,8 @@ pub struct MatchResult {
     pub path: Vec<u64>,
     /// Bound variables from the pattern (alias -> node_id).
     pub bindings: HashMap<String, u64>,
+    /// Bound relationship aliases from the pattern (alias -> edge_id).
+    pub edge_bindings: HashMap<String, u64>,
     /// Similarity score if combined with vector search.
     pub score: Option<f32>,
     /// Projected properties from RETURN clause (EPIC-058 US-007).
@@ -52,6 +54,7 @@ impl MatchResult {
             depth,
             path,
             bindings: HashMap::new(),
+            edge_bindings: HashMap::new(),
             score: None,
             projected: HashMap::new(),
         }
@@ -336,6 +339,7 @@ impl Collection {
                 if !self.evaluate_where_condition(
                     *node_id,
                     Some(bindings),
+                    None,
                     where_clause,
                     ctx.params,
                     ctx.payload_guard,
@@ -352,6 +356,7 @@ impl Collection {
             result.bindings.clone_from(bindings);
             result.projected = self.project_properties(
                 bindings,
+                &HashMap::new(),
                 &ctx.match_clause.return_clause,
                 ctx.payload_guard,
             );

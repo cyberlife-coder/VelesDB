@@ -53,6 +53,8 @@ mod index_management;
 mod introspection;
 #[path = "bdd/match_graph_first.rs"]
 mod match_graph_first;
+#[path = "bdd/match_relationship_semantics.rs"]
+mod match_relationship_semantics;
 #[path = "bdd/match_vector_first.rs"]
 mod match_vector_first;
 #[path = "bdd/operators.rs"]
