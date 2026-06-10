@@ -151,6 +151,11 @@ impl Collection {
         query: &Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
+        // Resolve scalar WHERE parameters once (same guard as the SELECT
+        // pipeline) so both the static-filter and runtime-eval paths see
+        // bound values and missing parameters fail loudly.
+        let resolved_query = Self::resolve_query_where_params(query, params)?;
+        let query = resolved_query.as_ref().unwrap_or(query);
         let stmt = &query.select;
 
         let aggregations: &[AggregateFunction] = match &stmt.columns {
@@ -195,7 +200,7 @@ impl Collection {
             Self::condition_contains_graph_match(cond) || Self::condition_requires_vector_eval(cond)
         });
 
-        let filter = Self::build_static_filter(where_clause, use_runtime_where_eval, params);
+        let filter = Self::build_static_filter(where_clause, use_runtime_where_eval, params)?;
         let (columns_vec, has_count_star) = Self::prepare_agg_columns(aggregations);
 
         let payload_storage = self.payload_storage.read();

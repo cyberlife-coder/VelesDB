@@ -193,6 +193,12 @@ impl Collection {
             return Ok(results);
         }
 
+        // Resolve scalar WHERE parameters once so every downstream conversion
+        // to a payload Filter sees bound values; a missing parameter errors
+        // here instead of silently degrading to NULL.
+        let resolved_query = Self::resolve_query_where_params(query, params)?;
+        let query = resolved_query.as_ref().unwrap_or(query);
+
         // Phase 2-3: SELECT extraction, early-return, dispatch, and finalization.
         self.execute_select_pipeline(query, params, &ctx)
     }

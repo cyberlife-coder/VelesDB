@@ -73,5 +73,7 @@ mod vector_group_by;
 mod vector_search;
 #[path = "bdd/where_filters.rs"]
 mod where_filters;
+#[path = "bdd/where_params.rs"]
+mod where_params;
 #[path = "bdd/window_functions.rs"]
 mod window_functions;

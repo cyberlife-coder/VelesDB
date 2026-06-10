@@ -216,93 +216,83 @@ impl Collection {
 
     /// BUG-5 FIX: Resolve parameter placeholders in a condition.
     /// Replaces `Value::Parameter("name")` with the actual value from params `HashMap`.
+    ///
+    /// Delegates leaf resolution to [`Self::resolve_where_param`] (the single
+    /// strict resolver) so a missing or unsupported parameter is an error,
+    /// never a silent `NULL`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a referenced parameter is missing from `params`
+    /// or has an unsupported type (array/object).
     pub(crate) fn resolve_condition_params(
         cond: &crate::velesql::Condition,
         params: &HashMap<String, serde_json::Value>,
-    ) -> crate::velesql::Condition {
+    ) -> crate::error::Result<crate::velesql::Condition> {
         use crate::velesql::Condition;
 
         match cond {
-            Condition::Comparison(cmp) => {
-                let resolved_value = Self::resolve_value(&cmp.value, params);
-                Condition::Comparison(crate::velesql::Comparison {
-                    column: cmp.column.clone(),
-                    operator: cmp.operator,
-                    value: resolved_value,
-                })
-            }
+            Condition::And(left, right) => Ok(Condition::And(
+                Self::resolve_boxed_condition(left, params)?,
+                Self::resolve_boxed_condition(right, params)?,
+            )),
+            Condition::Or(left, right) => Ok(Condition::Or(
+                Self::resolve_boxed_condition(left, params)?,
+                Self::resolve_boxed_condition(right, params)?,
+            )),
+            Condition::Not(inner) => Ok(Condition::Not(Self::resolve_boxed_condition(
+                inner, params,
+            )?)),
+            Condition::Group(inner) => Ok(Condition::Group(Self::resolve_boxed_condition(
+                inner, params,
+            )?)),
+            other => Self::resolve_leaf_condition_params(other, params),
+        }
+    }
+
+    /// Boxes the recursive resolution of a nested condition.
+    fn resolve_boxed_condition(
+        cond: &crate::velesql::Condition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> crate::error::Result<Box<crate::velesql::Condition>> {
+        Ok(Box::new(Self::resolve_condition_params(cond, params)?))
+    }
+
+    /// Resolves parameters in leaf conditions (Comparison, IN, BETWEEN).
+    ///
+    /// Other leaf variants carry no scalar `Value` parameters and are cloned
+    /// unchanged.
+    fn resolve_leaf_condition_params(
+        cond: &crate::velesql::Condition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> crate::error::Result<crate::velesql::Condition> {
+        use crate::velesql::Condition;
+
+        Ok(match cond {
+            Condition::Comparison(cmp) => Condition::Comparison(crate::velesql::Comparison {
+                column: cmp.column.clone(),
+                operator: cmp.operator,
+                value: Self::resolve_where_param(&cmp.value, params)?,
+            }),
             Condition::In(in_cond) => {
-                let resolved_values: Vec<Value> = in_cond
+                let resolved_values = in_cond
                     .values
                     .iter()
-                    .map(|v| Self::resolve_value(v, params))
-                    .collect();
+                    .map(|v| Self::resolve_where_param(v, params))
+                    .collect::<crate::error::Result<Vec<Value>>>()?;
                 Condition::In(crate::velesql::InCondition {
                     column: in_cond.column.clone(),
                     values: resolved_values,
                     negated: in_cond.negated,
                 })
             }
-            Condition::Between(btw) => {
-                let resolved_low = Self::resolve_value(&btw.low, params);
-                let resolved_high = Self::resolve_value(&btw.high, params);
-                Condition::Between(crate::velesql::BetweenCondition {
-                    column: btw.column.clone(),
-                    low: resolved_low,
-                    high: resolved_high,
-                })
-            }
-            Condition::And(left, right) => Condition::And(
-                Box::new(Self::resolve_condition_params(left, params)),
-                Box::new(Self::resolve_condition_params(right, params)),
-            ),
-            Condition::Or(left, right) => Condition::Or(
-                Box::new(Self::resolve_condition_params(left, params)),
-                Box::new(Self::resolve_condition_params(right, params)),
-            ),
-            Condition::Not(inner) => {
-                Condition::Not(Box::new(Self::resolve_condition_params(inner, params)))
-            }
-            Condition::Group(inner) => {
-                Condition::Group(Box::new(Self::resolve_condition_params(inner, params)))
-            }
+            Condition::Between(btw) => Condition::Between(crate::velesql::BetweenCondition {
+                column: btw.column.clone(),
+                low: Self::resolve_where_param(&btw.low, params)?,
+                high: Self::resolve_where_param(&btw.high, params)?,
+            }),
             // These conditions don't have Value parameters to resolve
             other => other.clone(),
-        }
-    }
-
-    /// Resolve a single Value, substituting Parameter with actual value from params.
-    pub(crate) fn resolve_value(
-        value: &Value,
-        params: &HashMap<String, serde_json::Value>,
-    ) -> Value {
-        match value {
-            Value::Parameter(name) => {
-                if let Some(param_value) = params.get(name) {
-                    // Convert serde_json::Value to VelesQL Value
-                    match param_value {
-                        serde_json::Value::Number(n) => {
-                            if let Some(i) = n.as_i64() {
-                                Value::Integer(i)
-                            } else if let Some(u) = n.as_u64() {
-                                Value::UnsignedInteger(u)
-                            } else if let Some(f) = n.as_f64() {
-                                Value::Float(f)
-                            } else {
-                                Value::Null
-                            }
-                        }
-                        serde_json::Value::String(s) => Value::String(s.clone()),
-                        serde_json::Value::Bool(b) => Value::Boolean(*b),
-                        // Null, arrays, and objects not supported as params
-                        _ => Value::Null,
-                    }
-                } else {
-                    // Parameter not found, keep as null
-                    Value::Null
-                }
-            }
-            other => other.clone(),
-        }
+        })
     }
 }

@@ -174,6 +174,7 @@ impl Collection {
                 node_id,
                 bindings,
                 condition,
+                params,
                 payload_guard,
             ),
             // VectorSearch, VectorFusedSearch, SparseVectorSearch, and GraphMatch
@@ -218,11 +219,11 @@ impl Collection {
     /// is resolved to the correct node ID via bindings, and stripped before
     /// building the filter condition so the filter engine sees the bare field
     /// path.
-    #[allow(clippy::unnecessary_wraps)] // Consistent with other evaluate_* methods
     fn evaluate_metadata_condition_for_node(
         node_id: u64,
         bindings: Option<&HashMap<String, u64>>,
         condition: &crate::velesql::Condition,
+        params: &HashMap<String, serde_json::Value>,
         payload_guard: &LogPayloadStorage,
     ) -> Result<bool> {
         // Fix #486: Resolve the target node ID from the condition's column
@@ -237,7 +238,10 @@ impl Collection {
         };
 
         let rewritten = rewrite_condition_aliases(condition.clone(), bindings);
-        let filter_cond: filter::Condition = rewritten.into();
+        // Resolve parameter placeholders (e.g. `IN ($a, $b)`) before the
+        // filter conversion, which would otherwise turn them into NULL.
+        let resolved = Self::resolve_condition_params(&rewritten, params)?;
+        let filter_cond: filter::Condition = resolved.into();
         Ok(filter_cond.matches(&payload))
     }
 
