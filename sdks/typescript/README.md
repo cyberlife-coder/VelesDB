@@ -818,10 +818,13 @@ Each recall method returns `SearchResult[]`:
 
 - `score` is the cosine similarity in `[0, 1]` (for a `cosine` collection);
   higher means more similar.
-- `payload` carries the stored fields (`text`, `event_type`, `name`, `steps`,
-  plus your metadata). The reserved keys `_memory_type` / `text` /
+- `payload` carries the stored fields (`content` for semantic text,
+  `event_type` / `timestamp` for episodic, `name` / `steps` for procedural,
+  plus your metadata). The reserved payload keys `_memory_type` / `content` /
   `event_type` / `timestamp` / `name` / `steps` always take precedence over
   caller `metadata`/`data` of the same name, so they cannot be clobbered.
+  Note: the `SemanticEntry.text` input field is stored as `content` in the
+  payload — `result.payload?.content` is the fact text on recall.
 
 #### Semantic Memory (facts and knowledge)
 

@@ -831,6 +831,14 @@ memory.snapshot()?;
 memory.load_latest_snapshot()?;
 ```
 
+> **Using `SemanticMemory` directly.** `SemanticMemory::new_from_db()` (and
+> its Python/Rust counterparts) allocates a fresh in-memory `MemoryTtl` that
+> is **not** backed by a snapshot mechanism: TTL entries are **lost on
+> restart** and `serialize`/`deserialize` carry stored points but intentionally
+> omit TTL state. For full snapshot and TTL persistence, use `AgentMemory`
+> and call `snapshot()` / `load_latest_snapshot()` (see
+> [Snapshots & Restore](#snapshots--restore)).
+
 ### API Availability by Binding
 
 The **Python** and **Rust** bindings run embedded; the **TypeScript** SDK is
@@ -908,12 +916,7 @@ Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
   (readable via `memory.dimension`); the collection's own dimension governs
   storage and search.
 - **TTL and snapshots are not exposed over REST** — they are embedded-only
-  (Rust). When used, TTL durations are in **seconds**.
-
-> **Standalone `SemanticMemory`.** If you use a standalone in-memory
-> `SemanticMemory` (without a backing `Database`), it has **no auto-snapshot and
-> no auto-load**, and any TTL is enforced **in memory only** — entries are not
-> persisted and expiry state is lost on restart.
+  (Rust/Python). When used from Rust or Python, TTL durations are in **seconds**.
 
 ---
 
