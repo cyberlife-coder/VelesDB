@@ -120,6 +120,13 @@ Maps vector IDs to file offsets in the data file.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+The file is always replaced atomically: a persist writes a fsynced
+`vectors.idx.new` staging file, renames it over `vectors.idx` and fsyncs the
+directory (POSIX), so a crash mid-persist leaves the previous index intact.
+A 0-byte `vectors.idx` (torn in-place rewrite by older versions) is treated
+as absent and the index is rebuilt from WAL replay; any other unreadable
+index fails `open()` as corrupt.
+
 ## Vector WAL (vectors.wal)
 
 Write-Ahead Log for vector durability.
@@ -325,20 +332,33 @@ those versions are still recovered.
 ## Compaction (vectors.dat)
 
 `compact()` rewrites `vectors.dat` without deleted holes, under a staged
-commit protocol executed while holding the WAL lock:
+commit protocol. The staging step (1) runs under the caller's exclusive
+write access to the storage; the WAL lock is held only for the commit
+(steps 2–4), so no writer can append an entry between the data swap and the
+WAL truncation:
 
-1. The compacted data is written to `vectors.dat.tmp` and fsynced; the
-   matching rebuilt index is staged as a fsynced sidecar `vectors.idx.tmp`.
-2. **Commit point**: `vectors.dat.tmp` atomically replaces `vectors.dat`.
+1. *Staging (storage write exclusivity, no WAL lock)*: the compacted data is
+   written to `vectors.dat.tmp` and fsynced; the matching rebuilt index is
+   staged as a fsynced sidecar `vectors.idx.tmp`.
+2. **Commit point** *(WAL lock held from here through step 4)*:
+   `vectors.dat.tmp` atomically replaces `vectors.dat`.
 3. The staged sidecar is promoted onto `vectors.idx` and the directory is
    fsynced (POSIX) so the renames are durable.
 4. The WAL is flushed and **truncated** (`set_len(0)` + fsync) — compaction
    renders all prior WAL entries obsolete.
 
+The promoted `vectors.idx` is the final on-disk index of the compaction:
+no rewrite of it follows the commit. Outside compaction, every
+`vectors.idx` persist (flush, WAL-replay recovery) is itself atomic — staged
+as a fsynced `vectors.idx.new`, renamed over `vectors.idx`, directory
+fsynced — so no crash can leave a torn index next to the truncated WAL.
+
 Crash recovery of a partial compaction: a leftover `vectors.dat.tmp` means the
 commit never happened, so both staged files are discarded (the old state is
 authoritative); a leftover `vectors.idx.tmp` alone means the swap committed,
-so the sidecar is promoted. A non-truncated WAL replayed over the compacted
+so the sidecar is promoted. A leftover `vectors.idx.new` is never promoted
+(it may be torn; the current `vectors.idx`, or WAL replay, is authoritative).
+A non-truncated WAL replayed over the compacted
 file converges, because every STORE record carries the full vector value and
 deletes replay in order.
 
