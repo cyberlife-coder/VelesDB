@@ -16,7 +16,7 @@ mod index_prefilter;
 mod similarity;
 mod start_nodes;
 mod vector_first;
-mod where_eval;
+pub(in crate::collection::search::query) mod where_eval;
 
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};

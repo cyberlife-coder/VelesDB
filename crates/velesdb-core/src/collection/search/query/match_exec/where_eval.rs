@@ -165,7 +165,12 @@ impl Collection {
             Condition::Not(inner) => Ok(!self.eval_match_condition(ctx, inner)?),
             Condition::Group(inner) => self.eval_match_condition(ctx, inner),
             Condition::Similarity(sim) => {
-                self.evaluate_similarity_condition(ctx.node_id, sim, ctx.params)
+                // Audit 2026-06 F2: resolve the alias prefix of the similarity
+                // field (e.g. `a.embedding`) against the bound node so the
+                // score is computed on the aliased node, not the traversal
+                // target. Unbound/bare fields keep the previous behaviour.
+                let target_id = resolve_target_id(&sim.field, ctx.bindings, ctx.node_id);
+                self.evaluate_similarity_condition(target_id, sim, ctx.params)
             }
             // Fix #492: metadata conditions converted to filter engine evaluation.
             Condition::In(_)
@@ -514,7 +519,9 @@ fn strip_alias_owned(column: &str, bindings: Option<&HashMap<String, u64>>) -> S
 ///
 /// Returns `Some(&str)` for condition types that carry a `column` field.
 /// Non-metadata variants return `None`.
-fn column_of_metadata_condition(condition: &crate::velesql::Condition) -> Option<&str> {
+pub(in crate::collection::search::query) fn column_of_metadata_condition(
+    condition: &crate::velesql::Condition,
+) -> Option<&str> {
     use crate::velesql::Condition;
     match condition {
         Condition::In(ic) => Some(&ic.column),

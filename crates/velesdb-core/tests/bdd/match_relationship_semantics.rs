@@ -40,6 +40,20 @@ fn run_match(db: &Database, sql: &str, collection: &str) -> Vec<SearchResult> {
         .expect("test: execute MATCH query")
 }
 
+/// Parses `sql` and executes it with a `$q` vector parameter bound.
+fn run_match_with_vector(
+    db: &Database,
+    sql: &str,
+    collection: &str,
+    vector: &[f32],
+) -> Vec<SearchResult> {
+    let query = velesdb_core::velesql::Parser::parse(sql).expect("test: parse hybrid MATCH query");
+    let mut params = match_collection_param(collection);
+    params.insert("q".to_string(), json!(vector));
+    db.execute_query(&query, &params)
+        .expect("test: execute hybrid MATCH query")
+}
+
 /// GIVEN base: two nodes and a single `KNOWS` edge 1 -> 2 carrying
 /// `{since: 2020}`.
 fn setup_single_edge_collection(db: &Database) {
@@ -234,6 +248,106 @@ fn test_match_where_edge_property_in_list() {
     assert!(
         miss.is_empty(),
         "r.since IN (1998, 1999) must not match an edge with since = 2020"
+    );
+}
+
+// =========================================================================
+// C. Hybrid: similarity() on the start alias + relationship alias
+//    (audit 2026-06 cluster F2 — plan-dependent edge-alias semantics)
+//
+//    `similarity()` on the START alias routes the planner toward
+//    VectorFirst, which does not bind relationship aliases. Whenever the
+//    WHERE or RETURN clause references a relationship alias, the planner
+//    must fall back to GraphFirst so `r.prop` resolves against the EDGE.
+// =========================================================================
+
+/// GIVEN an edge 1-[KNOWS {since: 2020}]->2 and node 1 aligned with `$q`
+/// WHEN filtering with `similarity(a.embedding, $q) > 0.1 AND r.since = 2020`
+/// THEN the row is returned and `r.since` projects the edge property —
+///      identical to the same query without the similarity predicate.
+#[test]
+fn test_match_similarity_with_edge_property_filter_matches() {
+    let (_dir, db) = create_test_db();
+    setup_single_edge_collection(&db);
+
+    let results = run_match_with_vector(
+        &db,
+        "MATCH (a)-[r:KNOWS]->(b) \
+         WHERE similarity(a.embedding, $q) > 0.1 AND r.since = 2020 \
+         RETURN a, r.since LIMIT 10",
+        "pair",
+        &[1.0, 0.0, 0.0, 0.0],
+    );
+
+    assert_eq!(
+        results.len(),
+        1,
+        "similarity(a) AND r.since = 2020 must match the single edge; \
+         the plan must not change edge-alias semantics"
+    );
+    let projected = results[0]
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("r.since"))
+        .and_then(serde_json::Value::as_i64);
+    assert_eq!(
+        projected,
+        Some(2020),
+        "RETURN r.since must project the edge property under the hybrid plan, \
+         got payload: {:?}",
+        results[0].point.payload
+    );
+}
+
+/// GIVEN an edge 1-[KNOWS {since: 2020}]->2 and node 1 aligned with `$q`
+/// WHEN filtering with `similarity(a.embedding, $q) > 0.1 AND r.since = 1999`
+/// THEN no row is returned (the edge property does not match).
+#[test]
+fn test_match_similarity_with_edge_property_filter_rejects_non_matching() {
+    let (_dir, db) = create_test_db();
+    setup_single_edge_collection(&db);
+
+    let results = run_match_with_vector(
+        &db,
+        "MATCH (a)-[r:KNOWS]->(b) \
+         WHERE similarity(a.embedding, $q) > 0.1 AND r.since = 1999 \
+         RETURN a, r.since LIMIT 10",
+        "pair",
+        &[1.0, 0.0, 0.0, 0.0],
+    );
+
+    assert!(
+        results.is_empty(),
+        "r.since = 1999 must not match an edge with since = 2020, got {} row(s)",
+        results.len()
+    );
+}
+
+/// GIVEN an edge 1-[KNOWS {since: 2020}]->2 and node 1 aligned with `$q`
+/// WHEN filtering with `similarity(a.embedding, $q) > 0.1 AND r.since IS NULL`
+/// THEN no row is returned: the edge HAS a `since` property. Evaluating
+///      `r.since IS NULL` against a node payload (where the key is absent)
+///      would fabricate a false positive.
+#[test]
+fn test_match_similarity_with_edge_is_null_rejects_existing_property() {
+    let (_dir, db) = create_test_db();
+    setup_single_edge_collection(&db);
+
+    let results = run_match_with_vector(
+        &db,
+        "MATCH (a)-[r:KNOWS]->(b) \
+         WHERE similarity(a.embedding, $q) > 0.1 AND r.since IS NULL \
+         RETURN a, b LIMIT 10",
+        "pair",
+        &[1.0, 0.0, 0.0, 0.0],
+    );
+
+    assert!(
+        results.is_empty(),
+        "r.since IS NULL must be false for an edge carrying since = 2020, \
+         got {} false-positive row(s)",
+        results.len()
     );
 }
 
