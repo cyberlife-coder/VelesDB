@@ -214,6 +214,41 @@ impl Collection {
         DEFAULT_MAX_GROUPS
     }
 
+    /// Resolves parameter placeholders in HAVING threshold values.
+    ///
+    /// HAVING thresholds live in [`HavingCondition.value`], outside the WHERE
+    /// condition tree, so the WHERE resolver never visits them. Without this,
+    /// `HAVING COUNT(*) > $n` compares every group against an unresolved
+    /// placeholder and silently filters out all groups — even when `$n` is
+    /// bound.
+    ///
+    /// [`HavingCondition.value`]: crate::velesql::HavingCondition
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a referenced parameter is missing from `params`
+    /// or has an unsupported type (array/object).
+    pub(super) fn resolve_having_params(
+        having: &HavingClause,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> crate::error::Result<HavingClause> {
+        let conditions = having
+            .conditions
+            .iter()
+            .map(|cond| {
+                Ok(crate::velesql::HavingCondition {
+                    aggregate: cond.aggregate.clone(),
+                    operator: cond.operator,
+                    value: Self::resolve_where_param(&cond.value, params)?,
+                })
+            })
+            .collect::<crate::error::Result<Vec<_>>>()?;
+        Ok(HavingClause {
+            conditions,
+            operators: having.operators.clone(),
+        })
+    }
+
     /// BUG-5 FIX: Resolve parameter placeholders in a condition.
     /// Replaces `Value::Parameter("name")` with the actual value from params `HashMap`.
     ///
@@ -258,10 +293,14 @@ impl Collection {
         Ok(Box::new(Self::resolve_condition_params(cond, params)?))
     }
 
-    /// Resolves parameters in leaf conditions (Comparison, IN, BETWEEN).
+    /// Resolves parameters in leaf conditions (Comparison, IN, BETWEEN,
+    /// CONTAINS / CONTAINS ANY / CONTAINS ALL).
     ///
-    /// Other leaf variants carry no scalar `Value` parameters and are cloned
-    /// unchanged.
+    /// The remaining leaf variants are cloned unchanged: they carry no scalar
+    /// `Value` operands (geo thresholds are `f64` literals, LIKE/MATCH
+    /// patterns are strings, vector parameters are resolved by the vector
+    /// pipeline), except `GraphMatch`, whose pattern properties are evaluated
+    /// by the MATCH engine rather than by this resolver.
     fn resolve_leaf_condition_params(
         cond: &crate::velesql::Condition,
         params: &HashMap<String, serde_json::Value>,
@@ -274,25 +313,36 @@ impl Collection {
                 operator: cmp.operator,
                 value: Self::resolve_where_param(&cmp.value, params)?,
             }),
-            Condition::In(in_cond) => {
-                let resolved_values = in_cond
-                    .values
-                    .iter()
-                    .map(|v| Self::resolve_where_param(v, params))
-                    .collect::<crate::error::Result<Vec<Value>>>()?;
-                Condition::In(crate::velesql::InCondition {
-                    column: in_cond.column.clone(),
-                    values: resolved_values,
-                    negated: in_cond.negated,
-                })
-            }
+            Condition::In(in_cond) => Condition::In(crate::velesql::InCondition {
+                column: in_cond.column.clone(),
+                values: Self::resolve_value_list(&in_cond.values, params)?,
+                negated: in_cond.negated,
+            }),
             Condition::Between(btw) => Condition::Between(crate::velesql::BetweenCondition {
                 column: btw.column.clone(),
                 low: Self::resolve_where_param(&btw.low, params)?,
                 high: Self::resolve_where_param(&btw.high, params)?,
             }),
+            Condition::Contains(contains) => {
+                Condition::Contains(crate::velesql::ContainsCondition {
+                    column: contains.column.clone(),
+                    mode: contains.mode,
+                    values: Self::resolve_value_list(&contains.values, params)?,
+                })
+            }
             // These conditions don't have Value parameters to resolve
             other => other.clone(),
         })
+    }
+
+    /// Resolves every value in a list via [`Self::resolve_where_param`].
+    fn resolve_value_list(
+        values: &[Value],
+        params: &HashMap<String, serde_json::Value>,
+    ) -> crate::error::Result<Vec<Value>> {
+        values
+            .iter()
+            .map(|v| Self::resolve_where_param(v, params))
+            .collect()
     }
 }

@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use serde_json::json;
+use velesdb_core::velesql::{Parser, QueryValidator};
 use velesdb_core::{Database, Point};
 
 use super::helpers::{create_test_db, execute_sql, execute_sql_with_params, result_ids};
@@ -21,13 +22,13 @@ use super::helpers::{create_test_db, execute_sql, execute_sql_with_params, resul
 
 /// Populate a `products` collection for parameterized WHERE testing.
 ///
-/// | id | category    | price  | stock |
-/// |----|-------------|--------|-------|
-/// | 1  | electronics | 299.99 | 50    |
-/// | 2  | electronics | 99.99  | 200   |
-/// | 3  | books       | 19.99  | 30    |
-/// | 4  | books       | 29.99  | 0     |
-/// | 5  | clothing    | 49.99  | 100   |
+/// | id | category    | price  | stock | tags              |
+/// |----|-------------|--------|-------|-------------------|
+/// | 1  | electronics | 299.99 | 50    | new, sale         |
+/// | 2  | electronics | 99.99  | 200   | sale              |
+/// | 3  | books       | 19.99  | 30    | new               |
+/// | 4  | books       | 29.99  | 0     | clearance         |
+/// | 5  | clothing    | 49.99  | 100   | sale, clearance   |
 fn setup_products_collection(db: &Database) {
     execute_sql(
         db,
@@ -43,30 +44,56 @@ fn setup_products_collection(db: &Database) {
         Point::new(
             1,
             vec![1.0, 0.0, 0.0, 0.0],
-            Some(json!({"category": "electronics", "price": 299.99, "stock": 50})),
+            Some(
+                json!({"category": "electronics", "price": 299.99, "stock": 50,
+                "tags": ["new", "sale"]}),
+            ),
         ),
         Point::new(
             2,
             vec![0.0, 1.0, 0.0, 0.0],
-            Some(json!({"category": "electronics", "price": 99.99, "stock": 200})),
+            Some(
+                json!({"category": "electronics", "price": 99.99, "stock": 200,
+                "tags": ["sale"]}),
+            ),
         ),
         Point::new(
             3,
             vec![0.0, 0.0, 1.0, 0.0],
-            Some(json!({"category": "books", "price": 19.99, "stock": 30})),
+            Some(json!({"category": "books", "price": 19.99, "stock": 30,
+                "tags": ["new"]})),
         ),
         Point::new(
             4,
             vec![0.0, 0.0, 0.0, 1.0],
-            Some(json!({"category": "books", "price": 29.99, "stock": 0})),
+            Some(json!({"category": "books", "price": 29.99, "stock": 0,
+                "tags": ["clearance"]})),
         ),
         Point::new(
             5,
             vec![0.5, 0.5, 0.0, 0.0],
-            Some(json!({"category": "clothing", "price": 49.99, "stock": 100})),
+            Some(json!({"category": "clothing", "price": 49.99, "stock": 100,
+                "tags": ["sale", "clearance"]})),
         ),
     ])
     .expect("test: upsert products");
+}
+
+/// Execute a `VelesQL` aggregation query (GROUP BY/HAVING) with bind params.
+///
+/// Aggregation queries return `serde_json::Value` rather than
+/// `Vec<SearchResult>`, so they go through `VectorCollection::execute_aggregate`.
+fn execute_aggregate_sql_with_params(
+    db: &Database,
+    sql: &str,
+    params: &HashMap<String, serde_json::Value>,
+) -> velesdb_core::Result<serde_json::Value> {
+    let query = Parser::parse(sql).map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
+    let collection_name = &query.select.from;
+    let vc = db
+        .get_vector_collection(collection_name)
+        .ok_or_else(|| velesdb_core::Error::CollectionNotFound(collection_name.clone()))?;
+    vc.execute_aggregate(&query, params)
 }
 
 fn params_from(pairs: &[(&str, serde_json::Value)]) -> HashMap<String, serde_json::Value> {
@@ -278,5 +305,169 @@ fn scenario_update_where_missing_param_errors() {
     assert!(
         err.to_string().contains("Missing parameter"),
         "error should name the missing parameter, got: {err}"
+    );
+}
+
+// =========================================================================
+// Scenarios: CONTAINS / CONTAINS ANY with parameters
+// =========================================================================
+
+#[test]
+fn scenario_where_contains_param_matches_literal() {
+    // GIVEN a products collection with array tags
+    let (_dir, db) = create_test_db();
+    setup_products_collection(&db);
+
+    // WHEN selecting with a literal CONTAINS and the parameterized equivalent
+    let literal = execute_sql(
+        &db,
+        "SELECT * FROM products WHERE tags CONTAINS 'sale' LIMIT 10",
+    )
+    .expect("test: literal CONTAINS query");
+    let params = params_from(&[("tag", json!("sale"))]);
+    let parameterized = execute_sql_with_params(
+        &db,
+        "SELECT * FROM products WHERE tags CONTAINS $tag LIMIT 10",
+        &params,
+    )
+    .expect("test: parameterized CONTAINS query");
+
+    // THEN both return exactly the 'sale' tagged rows {1, 2, 5}
+    assert_eq!(result_ids(&literal), [1, 2, 5].into_iter().collect());
+    assert_eq!(
+        result_ids(&parameterized),
+        result_ids(&literal),
+        "CONTAINS $tag must return the same rows as the literal query"
+    );
+}
+
+#[test]
+fn scenario_where_contains_any_params_matches_literal() {
+    // GIVEN a products collection with array tags
+    let (_dir, db) = create_test_db();
+    setup_products_collection(&db);
+
+    // WHEN filtering with CONTAINS ANY over two parameters
+    let literal = execute_sql(
+        &db,
+        "SELECT * FROM products WHERE tags CONTAINS ANY ('new', 'clearance') LIMIT 10",
+    )
+    .expect("test: literal CONTAINS ANY query");
+    let params = params_from(&[("a", json!("new")), ("b", json!("clearance"))]);
+    let parameterized = execute_sql_with_params(
+        &db,
+        "SELECT * FROM products WHERE tags CONTAINS ANY ($a, $b) LIMIT 10",
+        &params,
+    )
+    .expect("test: parameterized CONTAINS ANY query");
+
+    // THEN both return rows tagged 'new' or 'clearance' {1, 3, 4, 5}
+    assert_eq!(result_ids(&literal), [1, 3, 4, 5].into_iter().collect());
+    assert_eq!(
+        result_ids(&parameterized),
+        result_ids(&literal),
+        "CONTAINS ANY ($a, $b) must return the same rows as the literal query"
+    );
+}
+
+#[test]
+fn scenario_where_contains_missing_param_errors() {
+    // GIVEN a products collection with array tags
+    let (_dir, db) = create_test_db();
+    setup_products_collection(&db);
+
+    // WHEN executing CONTAINS with an unbound parameter
+    let result = execute_sql_with_params(
+        &db,
+        "SELECT * FROM products WHERE tags CONTAINS $tag LIMIT 10",
+        &HashMap::new(),
+    );
+
+    // THEN an explicit missing-parameter error is raised (not an empty result)
+    let err = result.expect_err("missing CONTAINS parameter must be an error");
+    assert!(
+        err.to_string().contains("Missing parameter"),
+        "error should name the missing parameter, got: {err}"
+    );
+}
+
+// =========================================================================
+// Scenarios: HAVING with parameters and subqueries
+// =========================================================================
+
+#[test]
+fn scenario_having_count_param_matches_literal() {
+    // GIVEN a products collection (electronics: 2, books: 2, clothing: 1)
+    let (_dir, db) = create_test_db();
+    setup_products_collection(&db);
+
+    // WHEN filtering groups with a literal HAVING and the parameterized equivalent
+    let literal = execute_aggregate_sql_with_params(
+        &db,
+        "SELECT category, COUNT(*) FROM products GROUP BY category \
+         HAVING COUNT(*) > 1 ORDER BY category",
+        &HashMap::new(),
+    )
+    .expect("test: literal HAVING query");
+    let params = params_from(&[("n", json!(1))]);
+    let parameterized = execute_aggregate_sql_with_params(
+        &db,
+        "SELECT category, COUNT(*) FROM products GROUP BY category \
+         HAVING COUNT(*) > $n ORDER BY category",
+        &params,
+    )
+    .expect("test: parameterized HAVING query");
+
+    // THEN both keep exactly the two groups with more than one row
+    let literal_groups = literal.as_array().expect("test: literal array");
+    assert_eq!(
+        literal_groups.len(),
+        2,
+        "HAVING COUNT(*) > 1 should keep 2 groups, got {literal}"
+    );
+    assert_eq!(
+        parameterized, literal,
+        "HAVING COUNT(*) > $n must keep the same groups as the literal query"
+    );
+}
+
+#[test]
+fn scenario_having_missing_param_errors() {
+    // GIVEN a products collection
+    let (_dir, db) = create_test_db();
+    setup_products_collection(&db);
+
+    // WHEN executing HAVING with an unbound parameter
+    let result = execute_aggregate_sql_with_params(
+        &db,
+        "SELECT category, COUNT(*) FROM products GROUP BY category HAVING COUNT(*) > $n",
+        &HashMap::new(),
+    );
+
+    // THEN an explicit missing-parameter error is raised (not an empty result)
+    let err = result.expect_err("missing HAVING parameter must be an error, not zero groups");
+    assert!(
+        err.to_string().contains("Missing parameter"),
+        "error should name the missing parameter, got: {err}"
+    );
+}
+
+#[test]
+fn scenario_having_scalar_subquery_rejected_by_validation() {
+    // GIVEN a parsed aggregation query whose HAVING threshold is a subquery
+    let query = Parser::parse(
+        "SELECT category, COUNT(*) FROM products GROUP BY category \
+         HAVING COUNT(*) > (SELECT AVG(stock) FROM products)",
+    )
+    .expect("test: HAVING subquery must parse");
+
+    // WHEN validating it (the same gate the server runs before execution)
+    let result = QueryValidator::validate(&query);
+
+    // THEN V010 rejects the subquery instead of silently filtering all groups
+    let err = result.expect_err("HAVING subquery must be rejected by validation");
+    assert!(
+        err.to_string().contains("V010"),
+        "error should carry the V010 subquery code, got: {err}"
     );
 }

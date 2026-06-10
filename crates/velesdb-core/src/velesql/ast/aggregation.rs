@@ -76,6 +76,17 @@ pub struct HavingClause {
     pub operators: Vec<LogicalOp>,
 }
 
+impl HavingClause {
+    /// Returns `true` if any HAVING threshold value is a scalar subquery.
+    ///
+    /// Mirrors [`Condition::has_subquery`](super::condition::Condition::has_subquery)
+    /// for HAVING thresholds, which live outside the WHERE condition tree.
+    #[must_use]
+    pub fn has_subquery(&self) -> bool {
+        self.conditions.iter().any(|cond| cond.value.is_subquery())
+    }
+}
+
 /// A single HAVING condition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HavingCondition {

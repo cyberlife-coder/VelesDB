@@ -562,16 +562,17 @@ fn requires_select_validation(query: &Query) -> bool {
         && !query.is_admin_query()
 }
 
-/// Rejects subqueries appearing in any WHERE clause of the query.
+/// Rejects subqueries appearing in any WHERE or HAVING clause of the query.
 ///
 /// Subqueries are parsed but not yet executed: left unchecked, a predicate like
 /// `WHERE price > (SELECT AVG(price) FROM products)` silently evaluates to NULL,
 /// yielding wrong/empty results (or a silently no-op UPDATE) instead of an error.
+/// `HAVING COUNT(*) > (SELECT ...)` would likewise silently filter every group.
 fn reject_subqueries(query: &Query) -> Result<(), ValidationError> {
-    if where_clauses(query)
+    let in_where = where_clauses(query)
         .into_iter()
-        .any(Condition::has_subquery)
-    {
+        .any(Condition::has_subquery);
+    if in_where || query.has_having_subquery() {
         return Err(ValidationError::new(
             ValidationErrorKind::SubqueryNotExecutable,
             None,

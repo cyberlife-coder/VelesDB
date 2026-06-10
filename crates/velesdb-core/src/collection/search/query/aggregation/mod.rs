@@ -169,11 +169,18 @@ impl Collection {
         };
 
         if let Some(ref group_by) = stmt.group_by {
+            // HAVING thresholds are not part of the WHERE condition tree, so
+            // they need their own resolution pass (same loud-failure guard).
+            let having = stmt
+                .having
+                .as_ref()
+                .map(|h| Self::resolve_having_params(h, params))
+                .transpose()?;
             return self.execute_grouped_aggregate(
                 query,
                 aggregations,
                 &group_by.columns,
-                stmt.having.as_ref(),
+                having.as_ref(),
                 params,
             );
         }

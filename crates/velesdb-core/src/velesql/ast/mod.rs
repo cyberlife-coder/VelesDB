@@ -142,6 +142,24 @@ impl Query {
         matches!(self.dml, Some(DmlStatement::SelectEdges(_)))
     }
 
+    /// Returns `true` if any HAVING threshold value — in the main SELECT or
+    /// in compound operands (UNION/INTERSECT/EXCEPT) — is a scalar subquery.
+    ///
+    /// HAVING thresholds are not part of the WHERE condition tree, so
+    /// [`Condition::has_subquery`] never visits them; V010 validation checks
+    /// both.
+    #[must_use]
+    pub fn has_having_subquery(&self) -> bool {
+        let compound_stmts = self
+            .compound
+            .iter()
+            .flat_map(|c| c.operations.iter().map(|(_, stmt)| stmt));
+        std::iter::once(&self.select)
+            .chain(compound_stmts)
+            .filter_map(|stmt| stmt.having.as_ref())
+            .any(HavingClause::has_subquery)
+    }
+
     /// Returns true if this is an INSERT NODE query.
     #[must_use]
     pub fn is_insert_node_query(&self) -> bool {
