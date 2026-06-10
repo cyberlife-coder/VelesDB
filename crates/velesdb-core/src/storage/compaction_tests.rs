@@ -387,6 +387,173 @@ fn test_backup_file_cleaned_after_successful_compaction() {
     );
 }
 
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_compact_then_crash_preserves_post_compaction_writes() {
+    // Durability finding: compaction must render the prior WAL obsolete.
+    // Post-compaction fsync-acknowledged writes MUST survive a crash, and
+    // pre-compaction WAL entries MUST NOT roll back newer values.
+    let dir = tempdir().expect("tempdir");
+    let dim = 4;
+
+    {
+        let mut storage = storage_with_vectors(dir.path(), dim, &(1..=10).collect::<Vec<_>>());
+        for id in 6..=10u64 {
+            storage.delete(id).expect("delete");
+        }
+        storage.flush().expect("flush");
+
+        let reclaimed = storage.compact().expect("compact");
+        assert!(reclaimed > 0, "compaction should reclaim space");
+
+        // Post-compaction writes: store() under the default Fsync mode syncs
+        // the WAL record before returning, so both are acknowledged-durable.
+        storage.store(100, &[100.0; 4]).expect("store new id");
+        storage.store(1, &[111.0; 4]).expect("update existing id");
+
+        // Crash: drop without flush()/flush_index() — the WAL is the only
+        // durable record of the two writes above.
+    }
+
+    let storage = MmapStorage::new(dir.path(), dim).expect("reopen");
+    assert_eq!(
+        storage.retrieve(100).expect("retrieve"),
+        Some(vec![100.0; 4]),
+        "post-compaction insert must survive a crash (WAL replay)"
+    );
+    assert_eq!(
+        storage.retrieve(1).expect("retrieve"),
+        Some(vec![111.0; 4]),
+        "post-compaction update must not be rolled back by pre-compaction WAL entries"
+    );
+    // Pre-compaction deletes must not resurrect.
+    for id in 6..=10u64 {
+        assert!(
+            storage.retrieve(id).expect("retrieve").is_none(),
+            "pre-compaction deleted id {id} must stay deleted"
+        );
+    }
+}
+
+#[test]
+fn test_compact_truncates_wal() {
+    // Compaction renders the prior WAL obsolete: vectors.wal must be empty
+    // right after compact(), and fresh entries must append from offset 0.
+    let dir = tempdir().expect("tempdir");
+    let dim = 4;
+    let mut storage = storage_with_vectors(dir.path(), dim, &[1, 2, 3, 4]);
+    storage.delete(2).expect("delete");
+    storage.delete(4).expect("delete");
+
+    let wal_path = dir.path().join("vectors.wal");
+    assert!(
+        std::fs::metadata(&wal_path).expect("wal meta").len() > 0,
+        "WAL should contain pre-compaction entries"
+    );
+
+    let reclaimed = storage.compact().expect("compact");
+    assert!(reclaimed > 0);
+    assert_eq!(
+        std::fs::metadata(&wal_path).expect("wal meta").len(),
+        0,
+        "WAL must be truncated by compaction"
+    );
+    // No staged sidecar must linger after a successful commit.
+    assert!(!dir.path().join("vectors.idx.tmp").exists());
+
+    // A post-compaction store (Fsync mode) appends exactly one framed entry
+    // at the start of the truncated WAL: op(1)+id(8)+len(4)+data+crc(4).
+    storage.store(50, &[5.0; 4]).expect("store");
+    let entry_len = 17 + dim * std::mem::size_of::<f32>();
+    assert_eq!(
+        std::fs::metadata(&wal_path).expect("wal meta").len(),
+        u64::try_from(entry_len).expect("fits"),
+        "post-compaction entries must append from offset 0"
+    );
+}
+
+#[test]
+fn test_recover_promotes_staged_index_when_swap_committed() {
+    // Crash window: vectors.dat was swapped (commit point) but the crash hit
+    // before vectors.idx.tmp was promoted. Startup recovery must finish the
+    // commit so ids resolve against the compacted layout, not the stale index.
+    let dir = tempdir().expect("tempdir");
+    let dim = 4;
+    let vector_size = dim * std::mem::size_of::<f32>();
+
+    // Compacted data file: vectors for ids 1 and 3 packed at offsets 0 and 16.
+    let v1 = vec![1.0f32; dim];
+    let v3 = vec![3.0f32; dim];
+    let mut data = vec![0u8; 16 * 1024 * 1024];
+    data[..vector_size].copy_from_slice(crate::storage::vector_bytes::vector_to_bytes(&v1));
+    data[vector_size..2 * vector_size]
+        .copy_from_slice(crate::storage::vector_bytes::vector_to_bytes(&v3));
+    std::fs::write(dir.path().join("vectors.dat"), &data).expect("write dat");
+
+    // Stale pre-compaction index (id 2 still present, old offsets).
+    let mut stale: rustc_hash::FxHashMap<u64, usize> = rustc_hash::FxHashMap::default();
+    stale.insert(1, 0);
+    stale.insert(2, vector_size);
+    stale.insert(3, 2 * vector_size);
+    std::fs::write(
+        dir.path().join("vectors.idx"),
+        postcard::to_allocvec(&stale).expect("serialize"),
+    )
+    .expect("write idx");
+
+    // Staged compacted index awaiting promotion.
+    let mut staged: rustc_hash::FxHashMap<u64, usize> = rustc_hash::FxHashMap::default();
+    staged.insert(1, 0);
+    staged.insert(3, vector_size);
+    std::fs::write(
+        dir.path().join("vectors.idx.tmp"),
+        postcard::to_allocvec(&staged).expect("serialize"),
+    )
+    .expect("write idx.tmp");
+
+    let storage = MmapStorage::new(dir.path(), dim).expect("reopen recovers");
+    assert!(
+        !dir.path().join("vectors.idx.tmp").exists(),
+        "sidecar must be promoted, not left behind"
+    );
+    assert_eq!(storage.retrieve(1).expect("retrieve"), Some(v1));
+    assert_eq!(storage.retrieve(3).expect("retrieve"), Some(v3));
+    assert!(
+        storage.retrieve(2).expect("retrieve").is_none(),
+        "id deleted before compaction must not resurrect from the stale index"
+    );
+    assert_eq!(storage.len(), 2);
+}
+
+#[test]
+fn test_recover_discards_staged_files_when_swap_uncommitted() {
+    // Crash window: both staged files exist but vectors.dat.tmp was never
+    // renamed — the commit never happened. Recovery must drop both staged
+    // files and keep the old state authoritative.
+    let dir = tempdir().expect("tempdir");
+    let dim = 4;
+
+    {
+        let storage = storage_with_vectors(dir.path(), dim, &[1, 2]);
+        drop(storage);
+    }
+    // Reopen once so vectors.idx is persisted via WAL replay, then close.
+    drop(MmapStorage::new(dir.path(), dim).expect("reopen"));
+
+    std::fs::write(dir.path().join("vectors.dat.tmp"), b"half-built").expect("plant dat.tmp");
+    std::fs::write(dir.path().join("vectors.idx.tmp"), b"half-built").expect("plant idx.tmp");
+
+    let storage = MmapStorage::new(dir.path(), dim).expect("reopen");
+    assert!(!dir.path().join("vectors.dat.tmp").exists());
+    assert!(
+        !dir.path().join("vectors.idx.tmp").exists(),
+        "staged index of an uncommitted compaction must be discarded"
+    );
+    assert_eq!(storage.len(), 2);
+    assert!(storage.retrieve(1).expect("retrieve").is_some());
+    assert!(storage.retrieve(2).expect("retrieve").is_some());
+}
+
 // -------------------------------------------------------------------------
 // CompactionContext unit tests (direct construction)
 // -------------------------------------------------------------------------

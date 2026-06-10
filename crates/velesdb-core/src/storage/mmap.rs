@@ -306,17 +306,7 @@ impl MmapStorage {
     ///
     /// Shared by [`Self::flush_index`] and WAL replay recovery.
     fn persist_index_file(index_path: &Path, index: &ShardedIndex) -> io::Result<()> {
-        let file = File::create(index_path)?;
-        let mut writer = io::BufWriter::new(file);
-        let flat_index = index.to_hashmap();
-        let bytes = postcard::to_allocvec(&flat_index).map_err(io::Error::other)?;
-        writer.write_all(&bytes)?;
-        writer.flush()?;
-        writer
-            .into_inner()
-            .map_err(std::io::IntoInnerError::into_error)?
-            .sync_all()?;
-        Ok(())
+        compaction::persist_flat_index(index_path, &index.to_hashmap())
     }
 
     // ensure_capacity, reserve_capacity, compact, fragmentation_ratio are in mmap_capacity.rs

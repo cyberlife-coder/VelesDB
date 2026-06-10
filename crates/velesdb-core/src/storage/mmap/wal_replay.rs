@@ -29,6 +29,11 @@
 //!   warning are recorded, and replay continues so later valid entries are
 //!   still recovered. Unknown opcodes mid-stream stop replay (the framing can
 //!   no longer be trusted).
+//!
+//! A bare `0x04` byte is the legacy compaction marker: versions prior to the
+//! WAL-truncating compaction protocol appended it after a successful
+//! compaction. It carries no payload and is skipped so post-compaction
+//! entries written by those versions are still recovered.
 
 use crate::storage::log_payload::crc32_hash;
 use crate::storage::sharded_index::ShardedIndex;
@@ -189,8 +194,15 @@ fn is_crc_framed_wal(wal_path: &Path, file_len: u64) -> io::Result<bool> {
 
     let mut reader = BufReader::new(File::open(wal_path)?);
     let mut op = [0u8; 1];
-    if reader.read_exact(&mut op).is_err() {
-        return Ok(false);
+    // Skip leading legacy compaction markers (bare 0x04 bytes) so a WAL whose
+    // first real record sits behind a marker is still detected as CRC-framed.
+    loop {
+        if reader.read_exact(&mut op).is_err() {
+            return Ok(false);
+        }
+        if op[0] != 4 {
+            break;
+        }
     }
 
     match op[0] {
@@ -272,6 +284,12 @@ fn replay_one_entry(
     match op[0] {
         1 => replay_store(reader, file_len, index, target, next_offset, vector_size),
         2 => replay_delete(reader, file_len, index),
+        // Legacy compaction marker (no payload): written by pre-WAL-truncation
+        // versions after a successful compaction. Skip it and keep replaying so
+        // post-compaction entries are recovered; replaying the entries BEFORE
+        // the marker is convergent against the index those versions persisted
+        // (store records carry the full vector value, deletes replay in order).
+        4 => Ok(EntryOutcome::Applied),
         // Unknown opcode: framing is no longer trustworthy, so stop cleanly. If
         // bytes still follow the opcode this is mid-stream corruption — record
         // it for visibility, mirroring the CRC path; a trailing partial byte is
