@@ -397,6 +397,163 @@ fn test_rerank_euclidean_returns_sqrt_not_squared_with_cached_engine() {
     );
 }
 
+// =========================================================================
+// Regression: rerank must sort by METRIC semantics, not ascending raw value.
+// After transform_score, Cosine/DotProduct are similarities (higher =
+// better); an ascending sort + truncate(k) keeps the k WORST candidates.
+// =========================================================================
+
+/// Deterministic pseudo-random unit vector (LCG-seeded).
+///
+/// Unit norm keeps Cosine and DotProduct orderings identical and ensures
+/// the self-query is the unique maximum-similarity result.
+pub(super) fn unit_vector(seed: u64, dim: usize) -> Vec<f32> {
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
+    let mut v: Vec<f32> = (0..dim)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 40) as f32 / 8_388_608.0) - 1.0
+        })
+        .collect();
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    for x in &mut v {
+        *x /= norm;
+    }
+    v
+}
+
+/// Generates `n` random unit vectors with 10 planted neighbors of
+/// `query_id` in the last 10 slots.
+///
+/// The planted neighbors (similarity ~0.91..0.995) are well separated from
+/// the near-orthogonal random background, so the brute-force top-10 is
+/// unambiguous and within reach of coarse quantized traversal.
+pub(super) fn planted_unit_vectors(n: usize, dim: usize, query_id: usize) -> Vec<Vec<f32>> {
+    debug_assert!(query_id < n - 10, "query must not overlap planted slots");
+    let mut vectors: Vec<Vec<f32>> = (0..n).map(|i| unit_vector(i as u64 + 1, dim)).collect();
+    for slot in 0..10 {
+        let noise = unit_vector(1_000 + slot as u64, dim);
+        let eps = 0.1 + 0.04 * slot as f32;
+        let mut v: Vec<f32> = vectors[query_id]
+            .iter()
+            .zip(noise.iter())
+            .map(|(a, b)| a + eps * b)
+            .collect();
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        for x in &mut v {
+            *x /= norm;
+        }
+        vectors[n - 10 + slot] = v;
+    }
+    vectors
+}
+
+/// Brute-force top-k ids by exact metric similarity/distance.
+///
+/// Sorts independently of production code (explicit branch on
+/// `higher_is_better`) so the assertion is not self-referential.
+pub(super) fn brute_force_top_ids(
+    vectors: &[Vec<f32>],
+    query: &[f32],
+    metric: DistanceMetric,
+    k: usize,
+) -> Vec<usize> {
+    let mut scored: Vec<(usize, f32)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (i, metric.calculate(query, v)))
+        .collect();
+    if metric.higher_is_better() {
+        scored.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
+    } else {
+        scored.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+    }
+    scored.truncate(k);
+    scored.into_iter().map(|(i, _)| i).collect()
+}
+
+/// Asserts the self-query ranks first with maximal similarity and that
+/// recall@k vs brute-force is >= 0.95.
+pub(super) fn assert_top1_and_recall(
+    results: &[(usize, f32)],
+    vectors: &[Vec<f32>],
+    query_id: usize,
+    metric: DistanceMetric,
+    k: usize,
+) {
+    assert!(!results.is_empty(), "search returned no results");
+    assert_eq!(
+        results[0].0, query_id,
+        "self-query must rank first for {metric:?}, got node {} (score {})",
+        results[0].0, results[0].1
+    );
+    assert!(
+        results[0].1 > 0.99,
+        "self-similarity must be maximal for {metric:?}, got {}",
+        results[0].1
+    );
+
+    let expected = brute_force_top_ids(vectors, &vectors[query_id], metric, k);
+    let got: std::collections::HashSet<usize> = results.iter().map(|(id, _)| *id).collect();
+    let overlap = expected.iter().filter(|id| got.contains(id)).count();
+    let recall = overlap as f64 / k as f64;
+    assert!(
+        recall >= 0.95,
+        "recall@{k} vs brute-force must be >= 0.95 for {metric:?}, got {recall:.2}"
+    );
+}
+
+/// Builds a trained SQ8 index over `n` unit vectors and searches with the
+/// self-query, via `search()` (f32 traversal) or `search_with_config()`
+/// (int8 traversal).
+fn run_dual_precision_self_query(metric: DistanceMetric, use_int8_traversal: bool) {
+    let (dim, n, k) = (32, 100, 10);
+    let query_id = 42_usize;
+    let engine = CachedSimdDistance::new(metric, dim);
+    let mut hnsw = DualPrecisionHnsw::new(engine, dim, 16, 200, 1000).expect("test");
+
+    let vectors = planted_unit_vectors(n, dim, query_id);
+    for v in &vectors {
+        hnsw.insert(v).expect("test");
+    }
+    hnsw.force_train_quantizer();
+    assert!(hnsw.is_quantizer_trained());
+
+    let results = if use_int8_traversal {
+        let config = DualPrecisionConfig {
+            min_index_size: 0,
+            ..Default::default()
+        };
+        hnsw.search_with_config(&vectors[query_id], k, 100, &config)
+    } else {
+        hnsw.search(&vectors[query_id], k, 100)
+    };
+
+    assert_top1_and_recall(&results, &vectors, query_id, metric, k);
+}
+
+#[test]
+fn test_dual_precision_cosine_rerank_keeps_best_candidates() {
+    run_dual_precision_self_query(DistanceMetric::Cosine, false);
+}
+
+#[test]
+fn test_dual_precision_dot_product_rerank_keeps_best_candidates() {
+    run_dual_precision_self_query(DistanceMetric::DotProduct, false);
+}
+
+#[test]
+fn test_int8_traversal_cosine_rerank_keeps_best_candidates() {
+    run_dual_precision_self_query(DistanceMetric::Cosine, true);
+}
+
+#[test]
+fn test_int8_traversal_dot_product_rerank_keeps_best_candidates() {
+    run_dual_precision_self_query(DistanceMetric::DotProduct, true);
+}
+
 /// Same regression test for Cosine metric — verifies transform_score clamps
 /// cosine similarity correctly through the dual-precision rerank path.
 #[test]

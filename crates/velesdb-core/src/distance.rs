@@ -121,6 +121,9 @@ impl DistanceMetric {
     /// - **Similarity metrics** (`Cosine`, `DotProduct`, `Jaccard`): sorts descending (higher = better)
     /// - **Distance metrics** (`Euclidean`, `Hamming`): sorts ascending (lower = better)
     ///
+    /// Generic over the id type so both external ids (`u64`) and internal
+    /// HNSW node ids (`usize`) can be sorted with the same metric semantics.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -128,7 +131,7 @@ impl DistanceMetric {
     /// DistanceMetric::Cosine.sort_results(&mut results);
     /// assert_eq!(results[0].0, 1); // Highest similarity first
     /// ```
-    pub fn sort_results(&self, results: &mut [(u64, f32)]) {
+    pub fn sort_results<Id>(&self, results: &mut [(Id, f32)]) {
         if self.higher_is_better() {
             // Similarity metrics: descending order (higher = better)
             results.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
