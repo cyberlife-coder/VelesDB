@@ -61,6 +61,7 @@ export function validateRestPointId(id: string | number, config: VelesDBConfig):
   const numeric = typeof id === 'string' && /^\d+$/.test(id) ? Number(id) : id;
   if (
     typeof numeric !== 'number' ||
+    !Number.isFinite(numeric) ||
     !Number.isInteger(numeric) ||
     numeric < 0 ||
     numeric > Number.MAX_SAFE_INTEGER
