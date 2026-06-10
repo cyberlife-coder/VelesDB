@@ -16,13 +16,23 @@ VelesDB persists data in a binary format optimized for:
 
 ```
 collection_directory/
-├── config.json         # Collection configuration (JSON)
-├── vectors.bin         # Memory-mapped vector data
-├── vectors.idx         # Vector ID → offset index
-├── vectors.wal         # Vector WAL for durability
-├── payloads.log        # Append-only payload WAL
-├── payloads.snapshot   # Payload index snapshot (optional)
-└── hnsw.bin            # HNSW index (optional)
+├── config.json          # Collection configuration (JSON)
+├── vectors.dat          # Memory-mapped vector data
+├── vectors.idx          # Vector ID → offset index
+├── vectors.wal          # Vector WAL for durability
+├── payloads.log         # Append-only payload WAL
+├── payloads.snapshot    # Payload index snapshot (optional)
+├── native_meta.bin      # HNSW metadata sidecar (dimension, metric, generation)
+├── native_mappings.bin  # HNSW id ↔ internal-index mappings sidecar
+├── native_vectors.bin   # HNSW vector payload sidecar (when vector storage enabled)
+├── native_hnsw.gen      # HNSW save-generation marker
+├── native_hnsw.*        # HNSW graph dump files
+├── edge_store.bin       # Graph edge store (whole-file snapshot, graph collections)
+├── edges.wal            # Graph edge WAL (graph collections)
+├── property_index.bin   # Graph property index (graph collections)
+├── bm25.snapshot        # BM25 full-text index snapshot (when text-indexed)
+├── bm25.wal             # BM25 WAL (when text-indexed)
+└── sparse[-name].{wal,idx,terms,meta}  # Sparse index files (when sparse-indexed)
 ```
 
 ## Configuration File (config.json)
@@ -61,7 +71,7 @@ The `schema_version` field tracks the on-disk format version for forward-compati
 
 This field is validated at collection load time (`Collection::open()`). When a newer VelesDB writes a collection with a higher schema version, older binaries refuse to open it rather than silently corrupting data. The current schema version is defined as `CURRENT_SCHEMA_VERSION = 1` in `crates/velesdb-core/src/collection/types.rs`.
 
-## Vector Storage (vectors.bin)
+## Vector Storage (vectors.dat)
 
 ### Architecture
 
@@ -117,12 +127,20 @@ Write-Ahead Log for vector durability.
 ### WAL Entry Format
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                       WAL ENTRY                                  │
-├──────────┬──────────┬──────────────────────────────────────────┤
-│ Type (1B)│ ID (8B)  │ Data (dimension × 4 bytes)               │
-└──────────┴──────────┴──────────────────────────────────────────┘
+STORE entry:
+┌──────────┬──────────┬──────────┬─────────────────────┬───────────┐
+│ Op (1B)  │ ID (8B)  │ Len (4B) │ Data (Len bytes)    │ CRC32 (4B)│
+│ 0x01     │ u64 LE   │ u32 LE   │ [f32; dimension] LE │ u32 LE    │
+└──────────┴──────────┴──────────┴─────────────────────┴───────────┘
+
+DELETE entry:
+┌──────────┬──────────┬───────────┐
+│ Op (1B)  │ ID (8B)  │ CRC32 (4B)│
+│ 0x02     │ u64 LE   │ u32 LE    │
+└──────────┴──────────┴───────────┘
 ```
+
+The CRC32 covers all preceding fields of the record (`op + id [+ len + data]`).
 
 ### WAL Entry Types
 
@@ -130,6 +148,7 @@ Write-Ahead Log for vector durability.
 |------|-------|-------------|
 | STORE | 0x01 | Vector insertion/update |
 | DELETE | 0x02 | Vector deletion |
+| Legacy compaction marker | 0x04 | Bare byte appended after compaction by earlier versions; carries no payload and is skipped on replay |
 
 ### CRC32 Framing and Bounded Lengths
 
@@ -151,24 +170,34 @@ authoritative for that data).
 
 ## Payload Storage (payloads.log)
 
-Append-only log for JSON payloads.
+Append-only log for JSON payloads. Records are CRC32-protected.
 
 ### Log Entry Format
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      LOG ENTRY                                   │
-├──────────┬──────────┬──────────┬────────────────────────────────┤
-│ Type (1B)│ ID (8B)  │ Len (4B) │ JSON Data (variable)           │
-└──────────┴──────────┴──────────┴────────────────────────────────┘
+STORE entry:
+┌──────────┬──────────┬──────────┬─────────────────────┬───────────┐
+│ Type (1B)│ ID (8B)  │ Len (4B) │ JSON Data (Len B)   │ CRC32 (4B)│
+│ 0xC3     │ u64 LE   │ u32 LE   │ UTF-8 JSON          │ u32 LE    │
+└──────────┴──────────┴──────────┴─────────────────────┴───────────┘
+
+DELETE entry:
+┌──────────┬──────────┬───────────┐
+│ Type (1B)│ ID (8B)  │ CRC32 (4B)│
+│ 0xC4     │ u64 LE   │ u32 LE    │
+└──────────┴──────────┴───────────┘
 ```
+
+The CRC32 covers all preceding fields of the record.
 
 ### Entry Types
 
 | Type | Value | Description |
 |------|-------|-------------|
-| STORE | 0x01 | Payload insertion/update |
-| DELETE | 0x02 | Payload deletion (tombstone) |
+| STORE | 0xC3 | CRC-protected payload insertion/update |
+| DELETE | 0xC4 | CRC-protected payload deletion (tombstone) |
+| Legacy STORE | 0x01 | Pre-CRC store record (read-compat only) |
+| Legacy DELETE | 0x02 | Pre-CRC delete record (read-compat only) |
 
 ## Payload Snapshot (payloads.snapshot)
 
@@ -240,13 +269,13 @@ All multi-byte integers are stored in **little-endian** format.
 │     │                                                            │
 │     └─── CRC FAIL ► Replay entire payloads.log                   │
 │                                                                  │
-│  3. Load vectors.idx + vectors.bin                               │
+│  3. Load vectors.idx + vectors.dat                               │
 │     │                                                            │
 │     ▼                                                            │
 │  4. Replay vectors.wal (crash-safe order, see below)             │
 │     │                                                            │
 │     ▼                                                            │
-│  5. Load/rebuild HNSW index (load-time validation, see below)    │
+│  5. Create HNSW index (see note below)                           │
 │     │                                                            │
 │     ▼                                                            │
 │  6. Gap detection: compare storage IDs vs HNSW IDs               │
@@ -254,10 +283,15 @@ All multi-byte integers are stored in **little-endian** format.
 │     ├─── Counts match ──► No gap (O(1) fast path)                │
 │     │                                                            │
 │     └─── Gap found ────► Re-index missing vectors into HNSW      │
-│                          (crash during deferred merge recovery)   │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+> **Note on step 5.** `Collection::open()` only loads a persisted HNSW index
+> when a legacy `hnsw.bin` file is present — a file current versions never
+> write. The `native_*` sidecars written at flush time are therefore not
+> reloaded on this path: in practice the collection starts with an empty HNSW
+> index and step 6 re-indexes all stored vectors (O(N) rebuild at open).
 
 ### Crash-safe WAL replay ordering
 
@@ -283,7 +317,30 @@ Replay distinguishes two failure shapes:
 | **Mid-stream corruption** | A CRC failure followed by further validly framed records (bit-rot / tampering). | Skip the bad record, emit a metric + warning, and continue replaying the later valid entries. |
 
 An unknown opcode mid-stream is treated as a torn tail (framing is no longer
-trustworthy), so replay stops rather than fabricating further entries.
+trustworthy), so replay stops rather than fabricating further entries. One
+exception: a bare `0x04` byte (the legacy compaction marker written by earlier
+versions) is recognized and skipped so post-compaction entries written by
+those versions are still recovered.
+
+## Compaction (vectors.dat)
+
+`compact()` rewrites `vectors.dat` without deleted holes, under a staged
+commit protocol executed while holding the WAL lock:
+
+1. The compacted data is written to `vectors.dat.tmp` and fsynced; the
+   matching rebuilt index is staged as a fsynced sidecar `vectors.idx.tmp`.
+2. **Commit point**: `vectors.dat.tmp` atomically replaces `vectors.dat`.
+3. The staged sidecar is promoted onto `vectors.idx` and the directory is
+   fsynced (POSIX) so the renames are durable.
+4. The WAL is flushed and **truncated** (`set_len(0)` + fsync) — compaction
+   renders all prior WAL entries obsolete.
+
+Crash recovery of a partial compaction: a leftover `vectors.dat.tmp` means the
+commit never happened, so both staged files are discarded (the old state is
+authoritative); a leftover `vectors.idx.tmp` alone means the swap committed,
+so the sidecar is promoted. A non-truncated WAL replayed over the compacted
+file converges, because every STORE record carries the full vector value and
+deletes replay in order.
 
 ## Versioning
 
@@ -326,7 +383,7 @@ VelesDB handles corruption gracefully:
 | Mid-stream WAL CRC failure | Skip the bad record, emit a metric, continue replaying later valid entries |
 | Invalid snapshot CRC | Fall back to full WAL replay |
 | Missing files | Return explicit error |
-| Bitflip in data | Detected via checksum (if enabled) |
+| Bitflip in vector data (`vectors.dat`) | **Not detected** — the raw vector file carries no checksum; CRC32 protection covers WAL records and snapshots only |
 | Out-of-range length/count field | Rejected at load (`InvalidData`); never used to size an allocation |
 
 See `tests/crash_recovery/corruption.rs` for comprehensive corruption tests.
