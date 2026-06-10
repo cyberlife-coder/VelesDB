@@ -58,8 +58,8 @@ VelesDB core architecture is explicitly **hybrid by design**:
 │  │  Cosine  │  Euclidean  │  Dot Product  │  Hamming  │  Jaccard   │   │
 │  │  (33.1ns)│   (22.5ns)  │    (19.8ns)   │  (35.8ns) │   (35.1ns) │   │
 │  │                                                                  │   │
-│  │  AVX2/AVX-512 │ WASM SIMD128 │ ARM64 NEON │ Auto-vectorization │   │
-│  │               │              │ (simd_neon)│     Fallback       │   │
+│  │  AVX2/AVX-512 │ ARM64 NEON │ Scalar fallback (incl. WASM —    │   │
+│  │               │ (simd_neon)│ SIMD128 planned)                 │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 └────────────────────────────────────┬────────────────────────────────────┘
@@ -93,7 +93,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
 
 #### velesdb-wasm
 - WebAssembly module for browser/Node.js
-- SIMD128 optimized distance calculations
+- Scalar distance calculations (SIMD128 kernels planned)
 - IndexedDB persistence via binary export/import
 - ~50KB gzipped
 
@@ -269,7 +269,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
 **SIMD Strategy**:
 1. **Native (x86_64)**: AVX2/AVX-512 via `core::arch` intrinsics with 4-accumulator ILP
 2. **Native (aarch64)**: NEON 128-bit with 1-acc/4-acc variants
-3. **WASM**: SIMD128 (128-bit vectors)
+3. **WASM**: scalar fallback (SIMD128 kernels planned; `wasm32` dispatches to `SimdLevel::Scalar`)
 4. **Fallback**: Scalar with loop unrolling
 
 ### 6. Storage Layer
@@ -311,8 +311,9 @@ Query Vector
          │
          ▼
 ┌─────────────────┐
-│  Filter Engine  │ (if filters present)
-│  (ColumnStore)  │
+│  Filter Engine  │ (if filters present:
+│ (secondary idx +│  secondary indexes + JSON
+│  JSON filters)  │  payload filters)
 └────────┬────────┘
          │
          ▼
@@ -464,8 +465,8 @@ LIMIT 20 USING FUSION(strategy='rrf', k=60)
 | Windows x86_64 | ✅ Full | AVX2 | 100% |
 | macOS x86_64 | ✅ Full | AVX2 | 100% |
 | **macOS ARM64** | ✅ Full | **NEON** | **~90%** |
-| WASM (Browser) | ✅ Full | SIMD128 | ~70% |
-| WASM (Node.js) | ✅ Full | SIMD128 | ~70% |
+| WASM (Browser) | ✅ Full | Scalar (SIMD128 planned) | ~70% |
+| WASM (Node.js) | ✅ Full | Scalar (SIMD128 planned) | ~70% |
 | **iOS (ARM64)** | ✅ Full | NEON | ~90% |
 | **Android (ARM64)** | ✅ Full | NEON | ~90% |
 | **Android (ARMv7)** | ✅ Full | Fallback | ~70% |

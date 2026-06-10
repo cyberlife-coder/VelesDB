@@ -89,7 +89,7 @@ SIMD and GPU items that are part of the long-term roadmap but **explicitly on ho
 - Profiling on a real workload identifies one as a top-3 bottleneck
 - A community contributor opens a draft PR for one
 
-**What is NOT deferred** (already shipped in v1.13.x): AVX-512 / AVX2 / NEON kernels for f32/f16 cosine·dot·euclidean, WASM SIMD128, GPU SONG 3-stage pipeline (PR #626), GPU `search_auto` wiring (PR #638). Current SIMD coverage matrix in [`docs/reference/NATIVE_HNSW.md`](docs/reference/NATIVE_HNSW.md).
+**What is NOT deferred** (already shipped in v1.13.x): AVX-512 / AVX2 / NEON kernels for f32/f16 cosine·dot·euclidean, GPU SONG 3-stage pipeline (PR #626), GPU `search_auto` wiring (PR #638). WASM SIMD128 kernels remain planned (wasm32 currently uses the scalar fallback). Current SIMD coverage matrix in [`docs/reference/NATIVE_HNSW.md`](docs/reference/NATIVE_HNSW.md).
 
 ---
 
