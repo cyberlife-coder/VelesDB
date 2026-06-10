@@ -207,11 +207,13 @@ fn punch_hole_fallback(file: &File, offset: u64, len: u64) -> io::Result<bool> {
 
 /// Serializes a flat `id -> offset` index to `path` with fsync.
 ///
-/// Used by `MmapStorage::persist_index_file` for `vectors.idx` and by the
-/// compaction commit protocol to stage the `vectors.idx.tmp` sidecar BEFORE
-/// the data-file swap, so that startup recovery can finish the commit if a
-/// crash lands between the swap and the index promotion (see
-/// [`recover_compaction_artifacts`]).
+/// The write is in-place (`File::create` truncates first), so this must only
+/// target staging paths that are never load-bearing on their own: the
+/// `vectors.idx.tmp` sidecar staged BEFORE the data-file swap (covered by
+/// [`recover_compaction_artifacts`]) and the `vectors.idx.new` staging file
+/// of [`persist_flat_index_atomic`]. Live `vectors.idx` writes must go
+/// through [`persist_flat_index_atomic`] — a torn in-place rewrite of
+/// `vectors.idx` right after compaction truncated the WAL is unrecoverable.
 pub(super) fn persist_flat_index(path: &Path, index: &FxHashMap<u64, usize>) -> io::Result<()> {
     let bytes = postcard::to_allocvec(index).map_err(io::Error::other)?;
     let mut writer = io::BufWriter::new(File::create(path)?);
@@ -223,11 +225,39 @@ pub(super) fn persist_flat_index(path: &Path, index: &FxHashMap<u64, usize>) -> 
         .sync_all()
 }
 
-/// Promotes the staged index sidecar over `vectors.idx`.
+/// Atomically replaces `path` with a freshly serialized flat index.
+///
+/// Writes to a dedicated `<path>.new` staging file (distinct from the
+/// `vectors.idx.tmp` compaction sidecar, so startup recovery never promotes
+/// it), fsyncs it, renames it over `path`, then fsyncs the directory so the
+/// rename is durable (POSIX). A crash at any point leaves the previous
+/// `path` content intact and readable — unlike the former in-place
+/// `File::create` rewrite, whose truncate-then-write left a 0-byte/torn
+/// `vectors.idx` that bricked `open()` (fatal right after compaction
+/// emptied the WAL).
+pub(super) fn persist_flat_index_atomic(
+    path: &Path,
+    index: &FxHashMap<u64, usize>,
+) -> io::Result<()> {
+    let mut staging = path.as_os_str().to_owned();
+    staging.push(".new");
+    let staging = std::path::PathBuf::from(staging);
+
+    persist_flat_index(&staging, index)?;
+    promote_index_sidecar(&staging, path)?;
+    match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => sync_dir(dir),
+        _ => Ok(()),
+    }
+}
+
+/// Renames a fully written index file over `idx_path`.
 ///
 /// On Unix, `rename` atomically replaces the destination. On other platforms
-/// the destination is removed first; a crash in between leaves the sidecar in
-/// place, which startup recovery promotes (the data swap already committed).
+/// the destination is removed first; a crash in between leaves the source in
+/// place with the destination missing — startup then either promotes a
+/// `vectors.idx.tmp` sidecar (the compaction data swap already committed) or
+/// treats the absent `vectors.idx` as empty and rebuilds it from WAL replay.
 fn promote_index_sidecar(sidecar: &Path, idx_path: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     if idx_path.exists() {

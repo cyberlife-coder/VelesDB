@@ -50,6 +50,8 @@ mod histogram_tests;
 #[cfg(test)]
 mod hnsw_delta_wal_tests;
 #[cfg(test)]
+mod idx_persistence_tests;
+#[cfg(test)]
 mod log_payload_tests;
 #[cfg(test)]
 mod loom_tests;
