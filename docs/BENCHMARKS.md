@@ -144,14 +144,13 @@ No dedicated hybrid benchmark suite exists yet. Performance can be estimated fro
 | Dense HNSW search (k=10, 768D) | ~47 µs | hnsw_benchmark |
 | Sparse search (top-10, 10K) | ~57.6 µs | sparse_benchmark::top10_10k_corpus |
 | RRF fusion overhead | negligible (score merging) | -- |
-| **Estimated hybrid total** | **~0.12 ms** | Dense + Sparse + fusion (v1.13.0) |
+
+End-to-end hybrid latency has **not been measured**: there is no hybrid
+benchmark target in `crates/velesdb-core/benches/`, so no end-to-end number
+is claimed. The component micro-benchmarks above suggest the total is
+dominated by the sparse branch.
 
 The RRF fusion step is a simple score merge with no distance computation, so hybrid latency is dominated by the sparse search branch. For workloads where sparse search is the bottleneck, the MaxScore optimization provides early termination on high-selectivity queries.
-
-To run a hybrid search benchmark when available:
-```bash
-cargo bench -p velesdb-core --bench hybrid_benchmark -- --noplot
-```
 
 ---
 
