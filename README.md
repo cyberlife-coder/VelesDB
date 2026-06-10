@@ -62,11 +62,11 @@ VelesDB removes the US provider from the chain entirely. One Rust binary, local-
 |-------------------------------|------------------------|
 | pgvector for embeddings | **Vector Engine** — 450us p50 end-to-end (10K/384D, WAL ON, recall>=96%) |
 | Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
-| PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows*¹ |
+| PostgreSQL/DuckDB for metadata | **Typed ColumnStore + secondary indexes** — filtering API 130x faster than JSON scanning at 100K rows*¹ |
 | Custom glue code + 3 query languages | **VelesQL** — one language for everything |
 | 3 deployments, 3 configs, 3 backups | **6 MB binary** — works offline, air-gapped |
 
-> *¹ measured on 100K rows; ratio holds within ±5% on 10K–1M rows*
+> *¹ ColumnStore filtering API micro-benchmark, integer equality: 130x at 100K rows, 55x at 10K rows — see [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md). `SELECT ... WHERE` metadata filtering currently runs on secondary indexes + JSON payload filters (see [2] below).*
 
 ---
 ## What is VelesDB?

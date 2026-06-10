@@ -144,8 +144,8 @@
       "file": "README.md",
       "must_contain": "100K rows",
       "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
-      "source": "README.md ColumnStore 130x speedup baseline. Footnote *¹ documents holding range (10K-1M rows within ±5%).",
-      "last_updated": "2026-05-01"
+      "source": "README.md ColumnStore 130x speedup baseline. Footnote *¹ scopes the claim: filtering-API micro-benchmark, integer equality, 130x at 100K rows / 55x at 10K rows (docs/BENCHMARKS.md section 6); no 1M-row measurement exists.",
+      "last_updated": "2026-06-10"
     }
   ]
 }
