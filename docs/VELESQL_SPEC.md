@@ -936,11 +936,16 @@ LIMIT 10
 ```
 
 **Execution note (over-fetch window).** When a graph predicate is combined with
-`vector NEAR`, the engine over-fetches vector candidates before applying the
-graph filter: it retrieves up to `max(LIMIT, min(LIMIT × 10, 10 000))`
-candidates and keeps those that satisfy the pattern. Rows that match the graph
-pattern but rank beyond this candidate window are not returned. If the graph
-filter is highly selective, increase `LIMIT` to widen the window.
+a ranked fetch (`vector NEAR` or a `similarity()` threshold), the engine
+over-fetches vector candidates before applying the graph filter: it retrieves
+up to `max(LIMIT, min(LIMIT × 10, 10 000))` candidates and keeps those that
+satisfy the pattern. Rows that match the graph pattern but rank beyond this
+candidate window are not returned. If the graph filter is highly selective,
+increase `LIMIT` to widen the window. Without a ranked fetch (graph predicate
+alone, or combined with metadata filters only), the engine instead scans up to
+100 000 candidates in storage order before applying the graph filter: results
+are exhaustive for collections up to 100 000 points; beyond that bound,
+pattern-matching rows are not returned (unchanged from previous releases).
 
 ### Vector Search with Filters
 
