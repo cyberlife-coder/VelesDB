@@ -165,6 +165,14 @@ OPQ applique une rotation orthogonale aux vecteurs avant la quantification PQ. C
 
 ## RaBitQ : Randomized Binary Quantization (32x)
 
+> **Statut : non branché dans le chemin de requête des collections.**
+> `TRAIN QUANTIZER 'rabitq'` entraîne et persiste `rabitq.idx`, mais aucun
+> chemin de recherche de collection ne charge cet index aujourd'hui : les
+> recherches continuent sur les vecteurs f32 (les collections forcent le mode
+> de stockage `Full`). Le backend RaBitQ existe au niveau de l'API d'index
+> (`RaBitQPrecisionHnsw`) pour un usage programmatique direct. Les chiffres de
+> recall ci-dessous décrivent cette API, pas une requête `SELECT` standard.
+
 ### Comment ca marche ?
 
 RaBitQ combine la compression binaire (1-bit par dimension) avec une **rotation orthogonale aleatoire** qui preserve les distances. Contrairement a la quantification binaire naive, la rotation orthogonale distribue l'information de maniere plus uniforme sur tous les bits.

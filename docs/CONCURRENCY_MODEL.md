@@ -112,17 +112,20 @@ When multiple locks are needed, acquire them in this order:
 
 ### Global Lock Order (HNSW + Storage)
 
-For HNSW index operations that touch vector storage, columnar metadata,
-graph layers, and neighbor lists, the global lock acquisition order is:
+For HNSW index operations that touch the GPU snapshot cache, vector storage,
+the PDX columnar layout, graph layers, and neighbor lists, the global lock
+acquisition order is:
 
 ```
-vectors (rank 10) → columnar (rank 15) → layers (rank 20) → neighbors (rank 30)
+gpu_vectors_snapshot (rank 5) → vectors (rank 10) → columnar (rank 15)
+    → layers (rank 20) → neighbors (rank 30)
 ```
 
 | Lock | Rank | Component | Notes |
 |------|------|-----------|-------|
-| `vectors` | 10 | `ShardedVectors` / `ContiguousVectors` | Acquired first in upsert and search paths |
-| `columnar` | 15 | `ColumnStore` / typed columns | Metadata columns, acquired after vectors |
+| `gpu_vectors_snapshot` | 5 | GPU flat-vector snapshot cache (`Mutex`) | Acquired before `vectors` in the GPU path (`gpu` feature); writers release `vectors` before reacquiring it to invalidate |
+| `vectors` | 10 | `ShardedVectors` / `ContiguousVectors` | Acquired first among the core HNSW locks in upsert and search paths |
+| `columnar` | 15 | `ColumnarVectors` (PDX block-columnar layout of the HNSW vectors) | SIMD-parallel distance layout, acquired after vectors |
 | `layers` | 20 | HNSW layer structure (`RwLock`) | Global graph topology |
 | `neighbors` | 30 | Per-node neighbor lists (`RwLock`) | Fine-grained, acquired last |
 
