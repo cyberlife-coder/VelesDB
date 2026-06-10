@@ -36,7 +36,7 @@ pub const DEFAULT_DIMENSION: usize = 384;
 /// Unified memory interface for AI agents.
 ///
 /// Provides access to three memory subsystems:
-/// - `semantic`: Long-term knowledge (vector-graph storage)
+/// - `semantic`: Long-term knowledge (vector storage; graph linkage planned)
 /// - `episodic`: Event timeline with temporal context
 /// - `procedural`: Learned patterns and action sequences
 ///

@@ -745,13 +745,18 @@ decay setting yet.
 
 ### Throughput
 
-| Operation | Latency | Note |
-|-----------|---------|------|
-| `semantic.store()` | ~50 us | HNSW upsert |
-| `semantic.query()` | ~500 us (10K facts) | HNSW search k=10 |
-| `episodic.recent()` | ~10 us | B-tree index O(log N) |
-| `episodic.recall_similar()` | ~500 us (10K events) | HNSW search |
-| `procedural.recall()` | ~500 us (1K procs) | HNSW + confidence filter |
+> **Order-of-magnitude estimates, not measurements.** There is no agent-memory
+> benchmark in `crates/velesdb-core/benches/`; the figures below are derived
+> from the cost class of the underlying operation (HNSW search/upsert, B-tree
+> lookup) and should be treated as rough guidance only.
+
+| Operation | Estimated latency | Note |
+|-----------|------------------|------|
+| `semantic.store()` | tens of µs | HNSW upsert |
+| `semantic.query()` | hundreds of µs (10K facts) | HNSW search k=10 |
+| `episodic.recent()` | ~10 µs | B-tree index O(log N) |
+| `episodic.recall_similar()` | hundreds of µs (10K events) | HNSW search |
+| `procedural.recall()` | hundreds of µs (1K procs) | HNSW + confidence filter |
 
 ### Recommended Limits
 
@@ -774,7 +779,10 @@ decay setting yet.
 
 - `AgentMemory` is **thread-safe**: uses `Arc<Database>` + `parking_lot::RwLock`
 - Multiple threads can **read** simultaneously (query, recent, recall)
-- **Writes** (store, record, learn, reinforce) are serialized
+- Individual **storage writes** (store, record, learn) are serialized by the
+  underlying locks. Read-modify-write operations (`reinforce`,
+  `store_unique`, `snapshot`) are **not atomic**: two concurrent calls on the
+  same id can interleave between the read and the write (last writer wins)
 - No deadlock risk (deterministic lock ordering)
 
 ```python
@@ -954,13 +962,15 @@ Yes. VelesDB uses a Write-Ahead Log (WAL) with fsync. Data is durable as soon as
 Yes. Multiple `AgentMemory` instances on the same `Database` share the same collections. Useful for multi-threading.
 
 **Q: Does the SDK work in WASM or on mobile?**
-The **embedded** SDK (Python/Rust) requires the `persistence` feature (mmap, filesystem), which is disabled for WASM, so embedded agent memory does not run in-browser. The browser/WASM build of the TypeScript SDK does not support agent memory either (`capabilities().agentMemory` is `false` for the WASM backend). To use agent memory from JavaScript, point the SDK at a `velesdb-server` over **REST** (`backend: 'rest'`). Mobile support is possible via native bindings but not yet documented.
+The **embedded** SDK (Python/Rust) requires the `persistence` feature (mmap, filesystem), which is disabled for WASM, so embedded agent memory does not run in-browser. The browser/WASM build of the TypeScript SDK does not support agent memory either (`capabilities().agentMemory` is `false` for the WASM backend). To use agent memory from JavaScript, point the SDK at a `velesdb-server` over **REST** (`backend: 'rest'`).
+
+On **mobile** (iOS/Android via UniFFI, `velesdb-mobile`), a semantic-only surface ships as `VelesSemanticMemory`: `new(db, dimension)` (backed by a `_semantic_memory` collection), `store(id, content, embedding)`, `query(embedding, top_k)`, `len()`, `is_empty()`, `delete(id)`. Episodic/procedural memory, TTL, and snapshots are not exposed on mobile.
 
 **Q: How do I migrate from another memory system?**
 Export your data (text + embeddings) and import via `semantic.store()` / `episodic.record()` / `procedural.learn()`. There is no automated migration tool.
 
 **Q: Is this production-ready?**
-Yes. The SDK is covered end-to-end by Rust and Python test suites, including concurrent access, snapshot round-trips, TTL expiration, and reinforcement strategies.
+Yes. The SDK is covered end-to-end by Rust and Python test suites, including snapshot round-trips, TTL expiration (including across restarts), and reinforcement strategies. Concurrent access is exercised by a smoke test; see the Thread Safety section above for the atomicity caveats on read-modify-write operations.
 
 ---
 
