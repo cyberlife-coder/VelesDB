@@ -545,7 +545,8 @@ Execute a VelesQL query. Supports SELECT, WHERE, vector NEAR, GROUP BY, HAVING, 
 
 > **Backend support:** full VelesQL execution requires the **REST backend** (`velesdb-server`).
 > The WASM backend only executes pure top-k vector queries of the form
-> `SELECT * FROM <collection> WHERE <column> NEAR $param [LIMIT n]` and throws a
+> `SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]` (`vector` is the
+> grammar keyword, not a column name) and throws a
 > `NOT_SUPPORTED` error for anything else (WHERE predicates, JOIN, GROUP BY, MATCH,
 > set operations, FUSION) instead of silently ignoring clauses. Accordingly,
 > `db.capabilities().velesqlQuery` is `false` on WASM.

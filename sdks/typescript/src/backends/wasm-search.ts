@@ -288,8 +288,14 @@ export async function wasmMultiQuerySearch(
 
 /**
  * The only VelesQL shape the WASM backend can execute faithfully: a pure
- * top-k NEAR scan — `SELECT * FROM <collection> WHERE <column> NEAR $param
+ * top-k NEAR scan — `SELECT * FROM <collection> WHERE vector NEAR $param
  * [LIMIT n]` (case-insensitive, optional trailing semicolon).
+ *
+ * `vector` is the literal keyword from the grammar
+ * (`vector_search = { ^"vector" ~ ^"NEAR" ~ vector_value }`), not a column
+ * name — any other identifier left of NEAR is a parse error on
+ * velesdb-server, so it must be rejected here too or the query would work
+ * in WASM and break on REST.
  *
  * `VectorStore.query()` is a brute-force k-NN that evaluates no other
  * clause. Anything else (WHERE predicates, JOIN, GROUP BY, MATCH, set
@@ -297,7 +303,7 @@ export async function wasmMultiQuerySearch(
  * dropping clauses and returning unfiltered neighbours.
  */
 const PURE_NEAR_QUERY =
-  /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+[a-z_]\w*\s+near\s+\$([a-z_]\w*)\s*(?:limit\s+(\d+))?\s*;?\s*$/i;
+  /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+vector\s+near\s+\$([a-z_]\w*)\s*(?:limit\s+(\d+))?\s*;?\s*$/i;
 
 interface PureNearQuery {
   /** Collection named in the FROM clause. */
@@ -314,7 +320,7 @@ function parsePureNearQuery(queryString: string): PureNearQuery {
   if (!match) {
     throw new VelesDBError(
       'The WASM backend only executes pure top-k NEAR queries of the form ' +
-        '"SELECT * FROM <collection> WHERE <column> NEAR $param [LIMIT n]". ' +
+        '"SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]". ' +
         'WHERE predicates, JOIN, GROUP BY, MATCH, set operations and FUSION ' +
         'are not evaluated in WASM — use the REST backend (velesdb-server) ' +
         `for full VelesQL. Received: ${queryString}`,

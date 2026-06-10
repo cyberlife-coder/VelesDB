@@ -459,6 +459,11 @@ describe('wasmQuery — VelesQL faithfulness guard', () => {
     ['UNION', 'SELECT * FROM docs UNION SELECT * FROM archived'],
     ['FUSION', "SELECT * FROM docs LIMIT 20 USING FUSION(strategy = 'rrf', k = 60)"],
     ['inline NEAR literal', 'SELECT * FROM docs WHERE vector NEAR [0.1, 0.2]'],
+    // The pest grammar only admits the literal `vector` keyword left of NEAR
+    // (`vector_search = { ^"vector" ~ ^"NEAR" ~ vector_value }`); a column
+    // identifier is a guaranteed parse error on velesdb-server, so accepting
+    // it in WASM would recreate the WASM-works/REST-breaks divergence.
+    ['column identifier NEAR', 'SELECT * FROM docs WHERE embedding NEAR $q LIMIT 5'],
   ])('rejects %s queries with NOT_SUPPORTED instead of raw k-NN', async (_label, sql) => {
     const query = vi.fn(() => []);
     const store = buildStore({ query });
@@ -506,7 +511,7 @@ describe('wasmQuery — VelesQL faithfulness guard', () => {
     const store = buildStore({ query });
     const ctx = buildCtx('docs', store);
 
-    await wasmQuery(ctx, 'docs', 'SELECT * FROM docs WHERE embedding NEAR $vec', {
+    await wasmQuery(ctx, 'docs', 'SELECT * FROM docs WHERE vector NEAR $vec', {
       vec: [0.1, 0.2],
     });
     expect(query).toHaveBeenLastCalledWith(expect.any(Float32Array), 10);
