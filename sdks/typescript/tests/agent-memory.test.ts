@@ -189,6 +189,27 @@ describe('Agent Memory REST methods', () => {
     });
   });
 
+  describe('delete accepts string ids (Issue #1047)', () => {
+    it('should delete by a decimal-string id (as returned by recordEvent/learnProcedure)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ deleted: true }),
+      });
+
+      // recordEvent/learnProcedure return ids as strings; the delete path must
+      // accept them and coerce to the numeric REST wire id, not throw.
+      const result = await backend.delete('events', '12345');
+
+      expect(result).toBe(true);
+      const url = mockFetch.mock.calls[0][0] as string;
+      expect(url).toMatch(/\/points\/12345$/);
+    });
+
+    it('should reject a non-integer string id', async () => {
+      await expect(backend.delete('events', '12.5')).rejects.toThrow(/numeric u64/);
+    });
+  });
+
   describe('recordEpisodicEvent (Issue #7)', () => {
     it('should use generateUniqueId instead of Date.now for the point ID', async () => {
       const fixed = 1700000000000;

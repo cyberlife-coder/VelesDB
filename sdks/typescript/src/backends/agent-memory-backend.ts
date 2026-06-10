@@ -87,15 +87,15 @@ export function memoryIdToString(id: number): string {
  * Normalise a caller-provided point id into the numeric u64 the REST wire
  * accepts. Accepts a `string | number`; a string must be a decimal integer.
  *
- * Delegates range/integer validation to {@link parseRestPointId} so the rule
- * ("non-negative integer within the JS safe-integer range") lives in exactly
- * one place. The REST server deserialises point ids as JSON numbers, so ids
- * above `Number.MAX_SAFE_INTEGER` cannot be transmitted and are rejected here
- * rather than silently corrupted.
+ * A thin intent-revealing alias over {@link parseRestPointId}, which owns the
+ * string→number coercion and the range/integer validation ("non-negative
+ * integer within the JS safe-integer range") in exactly one place. The REST
+ * server deserialises point ids as JSON numbers, so ids above
+ * `Number.MAX_SAFE_INTEGER` cannot be transmitted and are rejected rather than
+ * silently corrupted.
  */
 export function resolveWireId(id: string | number): number {
-  const numeric = typeof id === 'string' ? Number(id) : id;
-  return parseRestPointId(numeric);
+  return parseRestPointId(id);
 }
 
 /** Current unix time in **seconds** (floor of epoch-millis / 1000). */
