@@ -30,6 +30,8 @@ mod aggregator_tests;
 mod ast;
 #[cfg(test)]
 mod ast_tests;
+#[cfg(test)]
+mod bare_alias_tests;
 mod cache;
 #[cfg(test)]
 mod cache_tests;

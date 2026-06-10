@@ -137,6 +137,61 @@ fn test_graph_match_without_from_alias_still_executes() {
     );
 }
 
+/// GIVEN documents with vectors and CITES edges
+/// WHEN running README showcase query #2 verbatim — bare FROM alias, no AS:
+///      `SELECT doc.*, similarity() FROM documents doc
+///       WHERE vector NEAR $query AND MATCH (doc)-[:CITES]->(ref)
+///       ORDER BY similarity() DESC`
+/// THEN it parses, validates (V011 anchor = bare alias `doc`), executes, and
+///      returns exactly the citing documents ordered by similarity DESC —
+///      identical to the `FROM documents AS doc` form.
+#[test]
+fn test_showcase_bare_from_alias_near_match_executes() {
+    let (_dir, db) = create_test_db();
+    db.create_vector_collection("documents", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create documents collection");
+    let vc = db
+        .get_vector_collection("documents")
+        .expect("test: get documents collection");
+    vc.upsert(vec![
+        Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(json!({"title": "A"}))),
+        Point::new(2, vec![0.9, 0.1, 0.0, 0.0], Some(json!({"title": "B"}))),
+        Point::new(3, vec![0.8, 0.2, 0.0, 0.0], Some(json!({"title": "C"}))),
+        Point::new(4, vec![0.7, 0.3, 0.0, 0.0], Some(json!({"title": "D"}))),
+    ])
+    .expect("test: upsert documents");
+    // 1 and 3 cite 2; 2 and 4 cite nothing.
+    for (edge_id, source) in [(300u64, 1u64), (301, 3)] {
+        let edge = GraphEdge::new(edge_id, source, 2, "CITES").expect("test: create edge");
+        vc.add_edge(edge).expect("test: add CITES edge");
+    }
+
+    let bare = "SELECT doc.*, similarity() FROM documents doc \
+                WHERE vector NEAR $query AND MATCH (doc)-[:CITES]->(ref) \
+                ORDER BY similarity() DESC";
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "query".to_string(),
+        json!([1.0_f32, 0.0_f32, 0.0_f32, 0.0_f32]),
+    );
+
+    let results =
+        execute_sql_with_params(&db, bare, &params).expect("showcase query #2 must execute");
+
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, vec![1, 3], "citing docs only, similarity DESC order");
+    assert!(
+        results[0].score >= results[1].score,
+        "ORDER BY similarity() DESC must hold"
+    );
+
+    // Strict equivalence with the AS form.
+    let with_as = bare.replace("FROM documents doc", "FROM documents AS doc");
+    let as_results = execute_sql_with_params(&db, &with_as, &params).expect("AS form must execute");
+    let as_ids: Vec<u64> = as_results.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, as_ids, "bare alias must behave exactly like AS alias");
+}
+
 // =========================================================================
 // B. Negative: anchor alias mismatch is a clear validation error
 // =========================================================================
