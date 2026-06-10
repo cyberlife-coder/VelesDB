@@ -1,7 +1,10 @@
 //! Query cache for `VelesQL` parsed queries.
 //!
 //! Provides an LRU cache for parsed AST to avoid re-parsing identical queries.
-//! Typical cache hit rates exceed 90% on repetitive workloads.
+//! Effective on workloads that repeat the **exact same query text**: a hit
+//! requires equality of the original query string, so two formatting variants
+//! of the same query (different whitespace, casing, parameter names) never
+//! share a cache entry.
 
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;

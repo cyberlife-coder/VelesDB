@@ -7,7 +7,9 @@
 //! - **Cosine**: Direct AVX-512/AVX2/NEON intrinsics
 //! - **Euclidean**: Direct native intrinsics with 4-acc unrolling
 //! - **Dot Product**: Direct FMA-optimized intrinsics
-//! - **Hamming (binary)**: POPCNT on packed u64 (48x faster than f32)
+//! - **Hamming (binary)**: `DistanceMetric::calculate` uses the f32 variant
+//!   (0.5 threshold per component); the POPCNT-on-packed-u64 fast path
+//!   (~48x faster) is a separate API consumed by the RaBitQ pipeline
 //! - **Jaccard**: Set similarity with SIMD acceleration
 
 use crate::simd_native;

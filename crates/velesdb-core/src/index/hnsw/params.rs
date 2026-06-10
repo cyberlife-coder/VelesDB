@@ -35,7 +35,12 @@ pub struct HnswParams {
     /// Initial capacity (grows automatically if exceeded).
     pub max_elements: usize,
     /// Vector storage mode (Full, SQ8, or Binary).
-    /// SQ8 provides 4x memory reduction with ~1% recall loss.
+    ///
+    /// Note: the collection path currently forces `Full` storage and keeps
+    /// quantized SQ8/Binary representations as an **additional** cache that
+    /// no production search path reads — selecting SQ8 there adds memory
+    /// rather than reducing it. The 4x-reduction figure applies only to a
+    /// backend that stores quantized vectors *instead of* f32.
     #[serde(default)]
     pub storage_mode: StorageMode,
     /// VAMANA alpha for neighbor diversification (default: 1.2).

@@ -5,7 +5,11 @@
 //!
 //! # Performance Goals
 //!
-//! - Maintain 50M+ items/sec throughput at 100k items (vs 19M/s with JSON)
+//! - Maintain 50M+ items/sec filter throughput at 100k items (vs 19M/s with
+//!   JSON) — measured by the `column_filter_benchmark` micro-benchmark of
+//!   this module's filtering API; the `SELECT ... WHERE` query path does not
+//!   currently invoke these typed filters (it uses secondary indexes + JSON
+//!   payload filters; the `ColumnStore` backs JOIN execution)
 //! - Cache-friendly sequential memory access
 //! - Support for common filter operations: Eq, Gt, Lt, In, Range
 //!
