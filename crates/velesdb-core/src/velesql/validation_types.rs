@@ -122,6 +122,9 @@ pub enum ValidationErrorKind {
     InvalidLetBinding,
     /// Subquery used in a WHERE clause; parsed but not yet executable.
     SubqueryNotExecutable,
+    /// MATCH predicate in SELECT WHERE whose anchor (first node) alias is
+    /// missing or does not match any declared FROM/JOIN alias.
+    GraphMatchAnchorMismatch,
 }
 
 impl ValidationErrorKind {
@@ -139,6 +142,7 @@ impl ValidationErrorKind {
             Self::UnsupportedArithmeticSimilarity => "V008",
             Self::InvalidLetBinding => "V009",
             Self::SubqueryNotExecutable => "V010",
+            Self::GraphMatchAnchorMismatch => "V011",
         }
     }
 
@@ -161,6 +165,9 @@ impl ValidationErrorKind {
             }
             Self::InvalidLetBinding => "LET bindings are not supported with DDL or DML statements",
             Self::SubqueryNotExecutable => "Subqueries are parsed but not yet executable",
+            Self::GraphMatchAnchorMismatch => {
+                "MATCH predicate anchor must be an alias declared in FROM/JOIN"
+            }
         }
     }
 }

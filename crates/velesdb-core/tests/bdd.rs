@@ -41,6 +41,8 @@ mod flush_operations;
 mod geo_distance;
 #[path = "bdd/graph_queries.rs"]
 mod graph_queries;
+#[path = "bdd/graph_vector_hybrid.rs"]
+mod graph_vector_hybrid;
 #[path = "bdd/helpers.rs"]
 mod helpers;
 #[path = "bdd/hybrid_compositions.rs"]
