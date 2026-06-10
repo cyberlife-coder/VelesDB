@@ -52,14 +52,18 @@ export function validateDocument(doc: VectorDocument, config: VelesDBConfig): vo
 
 /** Validate that a document ID is a valid REST point ID when using REST backend. */
 export function validateRestPointId(id: string | number, config: VelesDBConfig): void {
+  if (config.backend !== 'rest') {
+    return;
+  }
+  // Mirror parseRestPointId (backend layer): a string id is valid only as a
+  // plain run of decimal digits, coerced to a number for the range checks, so
+  // the u64-safe string ids returned by agent memory pass the same gate.
+  const numeric = typeof id === 'string' && /^\d+$/.test(id) ? Number(id) : id;
   if (
-    config.backend === 'rest' &&
-    (
-      typeof id !== 'number' ||
-      !Number.isInteger(id) ||
-      id < 0 ||
-      id > Number.MAX_SAFE_INTEGER
-    )
+    typeof numeric !== 'number' ||
+    !Number.isInteger(numeric) ||
+    numeric < 0 ||
+    numeric > Number.MAX_SAFE_INTEGER
   ) {
     throw new ValidationError(
       `REST backend requires numeric u64-compatible document IDs in JS safe integer range (0..${Number.MAX_SAFE_INTEGER})`
