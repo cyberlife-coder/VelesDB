@@ -139,6 +139,11 @@ RETURN dst LIMIT 100;
 SELECT * FROM docs
 WHERE category = 'tech' AND MATCH (d:Doc)-[:REL]->(x)
 LIMIT 10;
+
+-- With a FROM alias, the MATCH anchor must reuse it (validation rule V011)
+SELECT * FROM docs AS d
+WHERE category = 'tech' AND MATCH (d)-[:REL]->(x)
+LIMIT 10;
 ```
 
 ---
