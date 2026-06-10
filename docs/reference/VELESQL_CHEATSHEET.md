@@ -182,9 +182,10 @@ FROM items;
 ## Joins & set operations
 
 ```sql
--- INNER JOIN across collections (alias requires AS).
+-- INNER JOIN across collections (AS is optional: `docs d` == `docs AS d`).
 -- The joined (right) table must be matched on its primary key `id`.
 SELECT d.name, t.tag FROM docs AS d JOIN tags AS t ON d.tag_id = t.id;
+SELECT d.name, t.tag FROM docs d JOIN tags t ON d.tag_id = t.id;
 
 -- Set operations
 SELECT * FROM a UNION SELECT * FROM b;
@@ -236,4 +237,6 @@ FLUSH FULL docs;
 | Max payload size | configurable (`limits.max_payload_size`) |
 
 > Reserved words: `vector` and `score` are language keywords, not free payload
-> field names. Table aliases require `AS` (`FROM docs AS d`, not `FROM docs d`).
+> field names. Table aliases accept both forms: `FROM docs AS d` and
+> `FROM docs d`. A bare alias may not be a clause keyword (`WHERE`, `LIMIT`,
+> `ORDER`, ...); quote it with backticks to use one anyway.

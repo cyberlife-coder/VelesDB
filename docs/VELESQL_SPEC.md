@@ -110,8 +110,8 @@ The SELECT statement is the primary way to query data from collections.
 ```sql
 [LET <name> = <expr> ...]
 SELECT [DISTINCT] <columns> [, <window_fn>() OVER (...) [AS <alias>] ...]
-FROM <collection> [AS <alias>]
-[JOIN <collection2> [AS <alias>] ON <condition> | USING (<column>)]
+FROM <collection> [[AS] <alias>]
+[JOIN <collection2> [[AS] <alias>] ON <condition> | USING (<column>)]
 [WHERE <conditions>]
 [GROUP BY <columns>]
 [HAVING <aggregate_condition>]
@@ -228,7 +228,11 @@ FROM docs WHERE vector NEAR $v ORDER BY similarity() DESC LIMIT 5
 ## FROM Clause
 
 Specify the source collection. An optional alias enables shorter column references
-and is required for self-joins.
+and is required for self-joins. The `AS` keyword is optional: `FROM documents d`
+and `FROM documents AS d` are strictly equivalent. A bare alias may not be a
+reserved clause keyword (`WHERE`, `GROUP`, `HAVING`, `ORDER`, `LIMIT`, `OFFSET`,
+`WITH`, `USING`, `UNION`, `INTERSECT`, `EXCEPT`, `INNER`, `LEFT`, `RIGHT`,
+`FULL`, `OUTER`, `JOIN`, `ON`, `AS`); quote it (`` `limit` ``) to use one anyway.
 
 ```sql
 -- Simple
@@ -236,6 +240,9 @@ SELECT * FROM my_collection
 
 -- With alias
 SELECT * FROM documents AS d
+
+-- Bare alias (no AS) — identical semantics
+SELECT * FROM documents d
 
 -- Alias used in column references
 SELECT d.title, d.category FROM documents AS d WHERE d.price > 50
@@ -251,8 +258,8 @@ Combine data from multiple collections.
 
 ```sql
 SELECT <columns>
-FROM <table1> [AS <alias1>]
-[INNER | LEFT | RIGHT | FULL] JOIN <table2> [AS <alias2>]
+FROM <table1> [[AS] <alias1>]
+[INNER | LEFT | RIGHT | FULL] JOIN <table2> [[AS] <alias2>]
   ON <alias1>.<col> = <alias2>.<col>
 ```
 
@@ -2577,8 +2584,10 @@ parameterized vector search and `MATCH` normally.
 
 ### Divergences from standard SQL
 
-- **Table aliases require `AS`**: `FROM docs AS d`, not `FROM docs d` (the
-  no-`AS` form is intentionally rejected to avoid ambiguity with `JOIN`).
+- **Bare table aliases reserve clause keywords**: `FROM docs d` and
+  `FROM docs AS d` are both accepted and equivalent, but a bare alias may not
+  be a clause keyword (`WHERE`, `LIMIT`, `JOIN`, `UNION`, ...) — quote it with
+  backticks to use one anyway.
 - **`vector` and `score` are reserved keywords**, not free payload field names —
   `vector NEAR ...` and `score` in aggregates/ordering refer to the query vector
   and the computed similarity score.
