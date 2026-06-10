@@ -831,6 +831,13 @@ memory.snapshot()?;
 memory.load_latest_snapshot()?;
 ```
 
+> **Standalone `SemanticMemory` (embedded Rust / WASM only).** The Rust/WASM
+> crates can construct a standalone in-memory `SemanticMemory` without a backing
+> `Database`. In that mode it has **no auto-snapshot and no auto-load**, and any
+> TTL is enforced **in memory only** — entries are not persisted and expiry state
+> is lost on restart. This standalone constructor is not reachable from the
+> REST-backed TypeScript SDK (which has no in-process engine at all).
+
 ### API Availability by Binding
 
 The **Python** and **Rust** bindings run embedded; the **TypeScript** SDK is
@@ -840,6 +847,13 @@ REST-backed (`db.agentMemory(...)`, methods named `storeFact` / `searchFacts` /
 three subsystems; temporal/confidence-only queries, reinforcement, TTL, and
 snapshots are embedded-only.
 
+The TypeScript method names diverge from the embedded Python/Rust API
+(`storeFact` vs `store`, `searchFacts` vs `query`, …) **by design**: the TS SDK
+follows JavaScript camelCase conventions and disambiguates the three subsystems
+(`storeFact` / `recordEvent` / `learnProcedure`) on a single REST facade, whereas
+the embedded bindings expose each subsystem as its own object (`semantic.store`,
+`episodic.record`, `procedural.learn`). The mapping below is the source of truth.
+
 | Method | Python | Rust | TypeScript (REST) |
 |--------|--------|------|-------------------|
 | `semantic.store()` | Yes | Yes | Yes (`storeFact`) |
@@ -848,16 +862,16 @@ snapshots are embedded-only.
 | `episodic.record()` | Yes | Yes | Yes (`recordEvent`, returns id) |
 | `episodic.recent()` | Yes | Yes | No (no temporal query) |
 | `episodic.recall_similar()` | Yes | Yes | Yes (`recallEvents`) |
-| `episodic.older_than()` | Yes | Yes | No |
+| `episodic.older_than()` | Yes | Yes | No (no temporal query) |
 | `episodic.delete()` | Yes | Yes | Yes (`deleteMemory`) |
 | `procedural.learn()` | Yes | Yes | Yes (`learnProcedure`, returns id) |
 | `procedural.recall()` | Yes | Yes | Yes (`recallProcedures`) |
-| `procedural.reinforce()` | Yes | Yes | No |
-| `procedural.list_all()` | Yes | Yes | No |
+| `procedural.reinforce()` | Yes | Yes | No (confidence scoring embedded-only) |
+| `procedural.list_all()` | Yes | Yes | No (embedded-only) |
 | `procedural.delete()` | Yes | Yes | Yes (`deleteMemory`) |
-| TTL management (`set_*_ttl`, `store_with_ttl`, `auto_expire`) | Yes | Yes | No |
-| Snapshots (`snapshot`, `load_*_snapshot`, `list_snapshot_versions`) | Yes | Yes | No |
-| VelesQL bridges (`query_semantic` / `query_episodic` / `query_procedural`) | Yes | Yes | No |
+| TTL management (`set_*_ttl`, `store_with_ttl`, `auto_expire`) | Yes | Yes | No (embedded-only) |
+| Snapshots (`snapshot`, `load_*_snapshot`, `list_snapshot_versions`) | Yes | Yes | No (embedded-only) |
+| VelesQL bridges (`query_semantic` / `query_episodic` / `query_procedural`) | Yes | Yes | No (embedded-only) |
 
 ---
 
@@ -908,12 +922,7 @@ Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
   (readable via `memory.dimension`); the collection's own dimension governs
   storage and search.
 - **TTL and snapshots are not exposed over REST** — they are embedded-only
-  (Rust). When used, TTL durations are in **seconds**.
-
-> **Standalone `SemanticMemory`.** If you use a standalone in-memory
-> `SemanticMemory` (without a backing `Database`), it has **no auto-snapshot and
-> no auto-load**, and any TTL is enforced **in memory only** — entries are not
-> persisted and expiry state is lost on restart.
+  (Python and Rust). When used, TTL durations are in **seconds**.
 
 ---
 

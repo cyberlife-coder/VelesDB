@@ -84,8 +84,13 @@ export class AgentMemoryClient {
     return this.backend.matchProceduralPatterns(collection, embedding, k);
   }
 
-  /** Delete a memory entry (fact, event, or procedure) by its point ID. */
-  async deleteMemory(collection: string, id: number): Promise<boolean> {
+  /**
+   * Delete a memory entry (fact, event, or procedure) by its point ID.
+   *
+   * Accepts the `string` ids returned by `recordEvent` / `learnProcedure`
+   * (u64-safe decimal strings) as well as numeric ids.
+   */
+  async deleteMemory(collection: string, id: string | number): Promise<boolean> {
     return this.backend.delete(collection, id);
   }
 }

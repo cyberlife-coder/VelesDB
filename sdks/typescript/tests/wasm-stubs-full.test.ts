@@ -180,6 +180,16 @@ const stubCases: StubCase[] = [
     feature: /Agent memory/,
   },
   {
+    name: 'wasmRecallRecentEvents',
+    call: () => wasmStubs.wasmRecallRecentEvents('c', 0),
+    feature: /Agent memory/,
+  },
+  {
+    name: 'wasmRecallOlderThanEvents',
+    call: () => wasmStubs.wasmRecallOlderThanEvents('c', 0),
+    feature: /Agent memory/,
+  },
+  {
     name: 'wasmStoreProceduralPattern',
     call: () =>
       wasmStubs.wasmStoreProceduralPattern('c', {} as ProceduralPattern),
@@ -209,7 +219,7 @@ describe.each(stubCases)('wasm-stubs: $name', ({ call, feature }) => {
 });
 
 describe('wasm-stubs — cardinality guard', () => {
-  it('covers all 27 stub exports (index + graph + explain + sparse + agent)', () => {
-    expect(stubCases).toHaveLength(27);
+  it('covers all 29 stub exports (index + graph + explain + sparse + agent)', () => {
+    expect(stubCases).toHaveLength(29);
   });
 });

@@ -149,6 +149,44 @@ describe('Agent Memory REST methods', () => {
       expect(point.payload.name).toBe('real-name');
       expect(point.payload.steps).toEqual(['a']);
     });
+
+    it('should not let caller metadata clobber reserved semantic keys', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      await backend.storeSemanticFact('facts', {
+        id: 1,
+        text: 'real-fact',
+        embedding: [0.1],
+        metadata: { _memory_type: 'hacked', content: 'spoofed' },
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.payload._memory_type).toBe('semantic');
+      expect(point.payload.content).toBe('real-fact');
+    });
+
+    it('should not let caller data/metadata clobber reserved episodic keys', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      await backend.recordEpisodicEvent('events', {
+        eventType: 'real-event',
+        embedding: [0.1],
+        timestamp: 123,
+        data: { _memory_type: 'hacked', event_type: 'spoofed', timestamp: 999 },
+        metadata: { _memory_type: 'hacked2', event_type: 'spoofed2' },
+      });
+
+      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      expect(point.payload._memory_type).toBe('episodic');
+      expect(point.payload.event_type).toBe('real-event');
+      expect(point.payload.timestamp).toBe(123);
+    });
   });
 
   describe('recordEpisodicEvent (Issue #7)', () => {
