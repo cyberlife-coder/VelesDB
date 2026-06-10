@@ -1875,8 +1875,8 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `actual_rows` | u64 | Number of rows returned by execution |
 | `actual_time_ms` | f64 | Wall-clock execution time in milliseconds |
 | `loops` | u64 | Number of execution iterations (always 1) |
-| `nodes_visited` | u64 | Graph nodes visited (0 for non-MATCH queries) |
-| `edges_traversed` | u64 | Graph edges traversed (0 for non-MATCH queries) |
+| `nodes_visited` | u64 | For MATCH queries, currently set to the result row count (not a real traversal counter); 0 for non-MATCH queries |
+| `edges_traversed` | u64 | For MATCH queries, currently set to the result row count (not a real traversal counter); 0 for non-MATCH queries |
 
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 
