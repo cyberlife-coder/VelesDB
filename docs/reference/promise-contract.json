@@ -32,7 +32,7 @@
       "id": "core_readme_columnstore_claim",
       "file": "crates/velesdb-core/README.md",
       "must_contain": "ColumnStore filtering",
-      "validation_command": "cargo bench -p velesdb-core --bench filter_benchmark"
+      "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark"
     },
     {
       "id": "readme_simd_dot_product_latency",
@@ -94,7 +94,7 @@
       "id": "readme_columnstore_130x_claim",
       "file": "README.md",
       "must_contain": "130x faster",
-      "validation_command": "cargo bench -p velesdb-core --bench filter_benchmark",
+      "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
       "source": "README.md: JSON scan 3.84ms vs ColumnStore 29.5us at 100K rows",
       "last_updated": "2026-04-13"
     },
@@ -143,7 +143,7 @@
       "id": "readme_columnstore_speedup_baseline_rows",
       "file": "README.md",
       "must_contain": "100K rows",
-      "validation_command": "cargo bench -p velesdb-core --bench filter_benchmark",
+      "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
       "source": "README.md ColumnStore 130x speedup baseline. Footnote *¹ documents holding range (10K-1M rows within ±5%).",
       "last_updated": "2026-05-01"
     }
