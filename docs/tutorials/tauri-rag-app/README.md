@@ -4,7 +4,6 @@
 
 Build a fully local **Retrieval-Augmented Generation (RAG)** desktop application that runs entirely offline with microsecond-latency vector search.
 
-![VelesDB RAG App](./screenshots/app-preview.png)
 
 ## 📋 Table of Contents
 
@@ -780,8 +779,8 @@ let hybrid_results = app.velesdb().hybrid_search(
 
 - [VelesDB Documentation](https://github.com/cyberlife-coder/VelesDB)
 - [Tauri v2 Guide](https://v2.tauri.app/)
-- [tauri-plugin-velesdb API](../../crates/tauri-plugin-velesdb/README.md)
-- [Complete Example Code](../../demos/tauri-rag-app/)
+- [tauri-plugin-velesdb API](../../../crates/tauri-plugin-velesdb/README.md)
+- [Complete Example Code](../../../demos/tauri-rag-app/)
 
 ---
 
