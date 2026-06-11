@@ -13,9 +13,13 @@ generated from the crate version. Regenerate them after bumping Cargo.toml with:
     cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --test-threads=1
 
 Usage:
-    python3 scripts/bump_version.py 1.17.0
+    python3 scripts/bump_version.py 1.17.0 [2026-06-05]
+
+The optional second argument is the bump date (ISO) stamped onto
+`Last updated:` lines; it defaults to today.
 """
 
+import datetime
 import re
 import sys
 from pathlib import Path
@@ -85,8 +89,30 @@ def _sub_all(text: str, pattern: str, repl: str, flags: int = 0) -> "tuple[str, 
     return re.subn(pattern, repl, text, flags=flags)
 
 
-def _bump_last_updated(text: str, ver: str) -> "tuple[str, int]":
-    """Rewrite the version on the single `Last updated: ...` stamp line.
+MONTHS = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+
+
+def _stamp_date(line: str, date: "datetime.date") -> str:
+    """Rewrite the first date on a stamp line to `date`, preserving the
+    stamp's own format (ISO `2026-06-05` or long `May 1, 2026`). Lines
+    without a recognizable date come back unchanged."""
+    new_line, c = re.subn(r"\d{4}-\d{2}-\d{2}", date.isoformat(), line, count=1)
+    if c:
+        return new_line
+    long_form = f"{MONTHS[date.month - 1]} {date.day}, {date.year}"
+    pattern = r"(?:" + "|".join(MONTHS) + r") \d{1,2}, \d{4}"
+    new_line, _ = re.subn(pattern, long_form, line, count=1)
+    return new_line
+
+
+def _bump_last_updated(text: str, ver: str, date: "datetime.date") -> "tuple[str, int]":
+    """Rewrite the version AND the date on the single `Last updated: ...`
+    stamp line. A version-only rewrite used to produce stamps claiming a
+    version that did not exist on the stamped date (the bump leaves the date
+    behind); bumping both keeps the stamp meaning "doc revision at bump time".
 
     Prefer the disambiguated `VelesDB vX.Y.Z`; otherwise the first `(vX.Y.Z`.
     """
@@ -102,11 +128,12 @@ def _bump_last_updated(text: str, ver: str) -> "tuple[str, int]":
     else:
         new_line, c = re.subn(r"(\(v)" + VERSION_RE, r"\g<1>" + ver, line, count=1)
     if c:
+        new_line = _stamp_date(new_line, date)
         text = text[: m.start()] + new_line + text[m.end():]
     return text, c
 
 
-def bump_file(path: Path, fmt: str, ver: str) -> int:
+def bump_file(path: Path, fmt: str, ver: str, date: "datetime.date") -> int:
     """Apply the format-specific rewrite. Returns number of replacements."""
     text = text0 = path.read_text(encoding="utf-8")
     ML = re.MULTILINE
@@ -172,7 +199,7 @@ def bump_file(path: Path, fmt: str, ver: str) -> int:
         text, b = _sub_all(text, r"(velesdb-)" + VERSION_RE + r"(-amd64\.deb)", r"\g<1>" + ver + r"\g<2>")
         n = a + b
     elif fmt == "doc_last_updated_version":
-        text, n = _bump_last_updated(text, ver)
+        text, n = _bump_last_updated(text, ver, date)
     else:
         raise RuntimeError(f"Unknown format '{fmt}' for {path}")
     if n and text != text0:
@@ -203,13 +230,18 @@ def bump_cargo_workspace(ver: str) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or not re.fullmatch(VERSION_RE, sys.argv[1]):
+    if len(sys.argv) not in (2, 3) or not re.fullmatch(VERSION_RE, sys.argv[1]):
         # Strict X.Y.Z only: the rewrite patterns target a bare `\d+\.\d+\.\d+`,
         # and a pre-release suffix cannot be matched safely without colliding
         # with trailing `-amd64`/`-blue`-style tokens. Reject rather than mangle.
-        print("usage: bump_version.py X.Y.Z  (release versions only, no pre-release suffix)", file=sys.stderr)
+        print("usage: bump_version.py X.Y.Z [YYYY-MM-DD]  (release versions only, no pre-release suffix)", file=sys.stderr)
         return 2
     ver = sys.argv[1]
+    try:
+        date = datetime.date.fromisoformat(sys.argv[2]) if len(sys.argv) == 3 else datetime.date.today()
+    except ValueError:
+        print("usage: bump_version.py X.Y.Z [YYYY-MM-DD]  (bump date must be ISO)", file=sys.stderr)
+        return 2
 
     total = bump_cargo_workspace(ver)
     print(f"  Cargo.toml [workspace.package] + dep pins: {total} change(s)")
@@ -219,7 +251,7 @@ def main() -> int:
         if not path.exists():
             print(f"  SKIP {rel} (missing)")
             continue
-        n = bump_file(path, fmt, ver)
+        n = bump_file(path, fmt, ver, date)
         total += n
         flag = "OK  " if n else "MISS"  # MISS = pattern matched nothing; investigate
         print(f"  {flag} {rel} [{fmt}]: {n}")
