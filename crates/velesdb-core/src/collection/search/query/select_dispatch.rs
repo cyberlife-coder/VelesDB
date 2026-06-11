@@ -205,12 +205,7 @@ impl Collection {
         // order. Over-fetch 10× (capped at 10 000) so ORDER BY can select
         // the true top-k from the anchor set.
         let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
-        let anchor_fetch_limit =
-            if Self::has_order_by_similarity(stmt) && extracted.vector_search.is_none() {
-                graph_overfetch_limit(limit)
-            } else {
-                limit
-            };
+        let anchor_fetch_limit = anchor_fetch_limit(stmt, extracted, limit);
         let anchored = self.try_anchored_fetch(
             stmt,
             params,
@@ -609,6 +604,18 @@ fn main_select_execution_limit(extracted: &ExtractedComponents, limit: usize) ->
 fn graph_overfetch_limit(limit: usize) -> usize {
     const GRAPH_OVERFETCH_CAP: usize = 10_000;
     limit.max(limit.saturating_mul(10).min(GRAPH_OVERFETCH_CAP))
+}
+
+fn anchor_fetch_limit(
+    stmt: &crate::velesql::SelectStatement,
+    extracted: &ExtractedComponents,
+    limit: usize,
+) -> usize {
+    if Collection::has_order_by_similarity(stmt) && extracted.vector_search.is_none() {
+        graph_overfetch_limit(limit)
+    } else {
+        limit
+    }
 }
 
 /// Injects evaluated LET binding values into each result's payload.
