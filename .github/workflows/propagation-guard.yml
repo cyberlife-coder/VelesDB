@@ -105,11 +105,9 @@ jobs:
       - name: Typecheck
         working-directory: sdks/typescript
         run: npm run typecheck
-      - name: Run contract + wasm parity tests
+      - name: Run full vitest suite
         working-directory: sdks/typescript
-        run: |
-          npm test -- velesql-contract-fixtures.test.ts
-          npm test -- wasm-backend.test.ts
+        run: npm test
 
   integrations-python:
     name: Python Integrations Check
