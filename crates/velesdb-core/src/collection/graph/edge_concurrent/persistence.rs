@@ -23,15 +23,12 @@ impl ConcurrentEdgeStore {
 
         let expected = edges.len();
         let added = concurrent.add_edges_batch(edges);
-        #[cfg(debug_assertions)]
         if added != expected {
-            eprintln!(
-                "[velesdb] WARNING: skipped {} duplicate edge(s) during CES reconstruction",
+            tracing::warn!(
+                "skipped {} duplicate edge(s) during CES reconstruction",
                 expected - added
             );
         }
-        #[cfg(not(debug_assertions))]
-        let _ = (expected, added);
 
         concurrent.build_read_snapshot();
         concurrent
