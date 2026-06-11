@@ -31,9 +31,16 @@ fn test_merge_parallel_union_keeps_best_score_higher_is_better() {
 
     let merged = merge_select_parallel_results(graph, vector, true, 10);
 
-    assert_eq!(ids_of(&merged), vec![2, 3, 1], "descending best-score order");
+    assert_eq!(
+        ids_of(&merged),
+        vec![2, 3, 1],
+        "descending best-score order"
+    );
     let id2 = merged.iter().find(|r| r.point.id == 2).expect("id 2");
-    assert!((id2.score - 0.9).abs() < f32::EPSILON, "best score must win");
+    assert!(
+        (id2.score - 0.9).abs() < f32::EPSILON,
+        "best score must win"
+    );
 }
 
 /// Lower-is-better polarity: the LOWER score wins per id and the merged
@@ -47,7 +54,10 @@ fn test_merge_parallel_union_keeps_best_score_lower_is_better() {
 
     assert_eq!(ids_of(&merged), vec![2, 1, 3], "ascending best-score order");
     let id1 = merged.iter().find(|r| r.point.id == 1).expect("id 1");
-    assert!((id1.score - 0.3).abs() < f32::EPSILON, "lower score must win");
+    assert!(
+        (id1.score - 0.3).abs() < f32::EPSILON,
+        "lower score must win"
+    );
 }
 
 /// The merged union is truncated to `limit` after sorting.
@@ -90,7 +100,14 @@ fn test_parallel_strategy_returns_best_score_union_of_both_branches() {
     let (k, limit) = (10, 5);
 
     let parallel = col
-        .dispatch_vector_with_strategy(&query, &filter, ExecutionStrategy::Parallel, k, limit, &opts)
+        .dispatch_vector_with_strategy(
+            &query,
+            &filter,
+            ExecutionStrategy::Parallel,
+            k,
+            limit,
+            &opts,
+        )
         .expect("test: parallel dispatch");
 
     // Reference union: run both branches exactly as the Parallel arm does.

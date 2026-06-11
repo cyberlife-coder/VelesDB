@@ -311,6 +311,10 @@ harness = false
 name = "scale_benchmark"
 harness = false
 
+[[bench]]
+name = "agent_memory_benchmark"
+harness = false
+
 # ============================================================================
 # Target-specific dependencies (WASM compatibility)
 # ============================================================================

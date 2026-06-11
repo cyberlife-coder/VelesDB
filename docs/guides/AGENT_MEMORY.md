@@ -801,20 +801,24 @@ decay setting yet.
 
 ### Throughput
 
-> **Order-of-magnitude estimates, not measurements.** There is no agent-memory
-> benchmark in `crates/velesdb-core/benches/`; the figures below are derived
-> from the cost class of the underlying operation (HNSW search/upsert, B-tree
-> lookup) and should be treated as rough guidance only.
+Measured with `cargo bench -p velesdb-core --bench agent_memory_benchmark`
+(criterion, release profile) on an Apple M5 Pro (64 GB), 2026-06-12.
+Scale: 384-dimensional embeddings, 10K facts/events and 1K procedures
+pre-seeded:
 
-| Operation | Estimated latency | Note |
-|-----------|------------------|------|
-| `semantic.store()` | tens of µs | HNSW upsert |
-| `semantic.query()` | hundreds of µs (10K facts) | HNSW search k=10 |
-| `episodic.recent()` | ~10 µs | B-tree index O(log N) |
-| `episodic.recall_similar()` | hundreds of µs (10K events) | HNSW search |
-| `procedural.recall()` | hundreds of µs (1K procs) | HNSW + confidence filter |
+| Operation | Measured latency (mean) | Note |
+|-----------|------------------------|------|
+| `semantic.store()` | ~12 ms | durable single upsert — WAL fsync dominates; use `store_batch()` for bulk loads (the benchmark seeds 10K facts in seconds) |
+| `semantic.query()` k=10 | ~55 µs | HNSW search over 10K facts |
+| `query_semantic()` NEAR + MATCH | ~5.6 ms | hybrid vector + graph, 1 000-anchor `RELATES_TO` set scored exactly |
+| `episodic.record()` | ~19 ms | durable single upsert + temporal index |
+| `episodic.recent()` (10) | ~25 µs | B-tree temporal index O(log N) |
+| `procedural.recall()` k=5 | ~45 µs | HNSW + confidence filter over 1K procedures |
 
 ### Recommended Limits
+
+> Guidance derived from the cost class of the underlying operations
+> (HNSW search/upsert, B-tree lookup) — these are not measured cliffs.
 
 | Metric | Recommended Limit | Beyond |
 |--------|------------------|--------|
@@ -824,6 +828,9 @@ decay setting yet.
 | Embedding dimension | 384-1536 | > 1536: consider quantization |
 
 ### Memory Footprint
+
+Estimated from the storage layout (4 bytes × dimension + payload + HNSW
+edges), not measured:
 
 - ~1.5 KB per 384D vector (vector + payload + HNSW index)
 - 100K memories = ~150 MB RAM
@@ -1022,7 +1029,8 @@ No. The dimension is fixed when the collection is created. If you switch embeddi
 Yes. VelesDB uses a Write-Ahead Log (WAL) with fsync. Data is durable as soon as `store`/`record`/`learn` returns.
 
 **Q: How much disk space per memory?**
-~1.5 KB per entry at 384D. 100K memories = ~150 MB on disk.
+~1.5 KB per entry at 384D (estimate from the storage layout, see Memory
+Footprint above). 100K memories = ~150 MB on disk.
 
 **Q: Can I use multiple AgentMemory instances on the same folder?**
 Yes. Multiple `AgentMemory` instances on the same `Database` share the same collections. Useful for multi-threading.

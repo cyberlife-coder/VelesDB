@@ -281,7 +281,10 @@ fn test_rabitq_below_min_index_size_falls_back_to_f32() {
     // 100 vectors < default min_index_size (5000): default-config search
     // must produce the identical exact-f32 result list.
     let fallback = hnsw.search(&query, 10, 100);
-    assert_eq!(fallback, baseline, "below-min search must stay on exact f32");
+    assert_eq!(
+        fallback, baseline,
+        "below-min search must stay on exact f32"
+    );
 }
 
 // =========================================================================

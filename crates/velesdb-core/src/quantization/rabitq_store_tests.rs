@@ -1,7 +1,7 @@
 //! Tests for `RaBitQVectorStore`.
 
-use crate::quantization::RaBitQCorrection;
 use super::RaBitQVectorStore;
+use crate::quantization::RaBitQCorrection;
 
 #[test]
 fn test_new_store_is_empty() {

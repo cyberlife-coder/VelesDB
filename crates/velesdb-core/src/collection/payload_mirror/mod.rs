@@ -219,7 +219,8 @@ impl MirrorState {
         let old_live = std::mem::take(&mut self.live);
         self.id_rows.clear();
         for (new_idx, old_idx) in old_live.iter().enumerate() {
-            let (Some(&id), Ok(idx32)) = (old_row_ids.get(old_idx as usize), u32::try_from(new_idx))
+            let (Some(&id), Ok(idx32)) =
+                (old_row_ids.get(old_idx as usize), u32::try_from(new_idx))
             else {
                 // Unreachable: `live` ⊆ `0..row_count == old_row_ids.len()`
                 // and the compacted index space only shrinks.
