@@ -299,7 +299,7 @@ impl Collection {
         config.point_count =
             super::recovery::reconcile_point_count(&config, &vector_storage, &payload_storage);
 
-        Self::recover_index_state(&path, &config, &vector_storage, &index)?;
+        let index = Self::recover_index_state(&path, &config, &vector_storage, index)?;
 
         let collection = Self::assemble(CollectionParts {
             path,
@@ -321,22 +321,63 @@ impl Collection {
         Ok(collection)
     }
 
-    /// Pre-assemble index recovery: quantizer preinstall + gap recovery.
+    /// Pre-assemble index recovery: quantizer preinstall + 3-pass
+    /// reconciliation of the (possibly stale) loaded HNSW index against the
+    /// WAL-replayed vector storage.
     ///
-    /// The persisted `RaBitQ` quantizer installs BEFORE gap recovery so the
-    /// recovered vectors re-insert through it — otherwise the lazy training
-    /// threshold (1000 inserts) would preempt the TRAIN QUANTIZER artifact
-    /// with a throwaway quantizer on every reopen of a realistically sized
-    /// collection (the HNSW graph is rebuilt on open).
+    /// The persisted `RaBitQ` quantizer installs BEFORE the reconciliation so
+    /// the recovered vectors re-insert through it — otherwise the lazy
+    /// training threshold (1000 inserts) would preempt the TRAIN QUANTIZER
+    /// artifact with a throwaway quantizer on every reopen of a realistically
+    /// sized collection.
+    ///
+    /// When the reconciliation mutated the index, it is re-saved before the
+    /// open completes: the vector WAL was truncated during replay, so without
+    /// a fresh save the reconciled delta would be undetectable after the next
+    /// crash. Returns the index to assemble (a fresh one when the loaded
+    /// index could not be verified — see [`Self::rebuild_if_unverifiable`]).
     fn recover_index_state(
         path: &std::path::Path,
         config: &CollectionConfig,
         vector_storage: &Arc<RwLock<MmapStorage>>,
-        index: &Arc<HnswIndex>,
-    ) -> Result<()> {
+        index: Arc<HnswIndex>,
+    ) -> Result<Arc<HnswIndex>> {
+        let wal_ids = vector_storage.write().take_wal_replayed_ids();
+        let (index, rebuilt) = Self::rebuild_if_unverifiable(config, index, &wal_ids)?;
         #[cfg(feature = "persistence")]
-        super::quantizer_restore::preinstall_persisted_rabitq(path, config.dimension, index)?;
-        super::recovery::run_crash_recovery(config, vector_storage, index)
+        super::quantizer_restore::preinstall_persisted_rabitq(path, config.dimension, &index)?;
+        let changed =
+            super::recovery::run_crash_recovery(config, vector_storage, &index, &wal_ids)?;
+        if rebuilt || changed {
+            index.save(path)?;
+        }
+        Ok(index)
+    }
+
+    /// Replaces a loaded index that cannot be verified against storage.
+    ///
+    /// Pass 3 of the open-time reconciliation compares the indexed vectors
+    /// against storage for every WAL-touched id. An index loaded without
+    /// sidecar vector storage (fast-insert save) has nothing to compare:
+    /// when WAL-touched ids overlap its mappings, some entries may be stale
+    /// with no way to tell which. Fall back to a fresh empty index — gap
+    /// recovery then rebuilds it entirely from storage (simple and safe).
+    fn rebuild_if_unverifiable(
+        config: &CollectionConfig,
+        index: Arc<HnswIndex>,
+        wal_ids: &[u64],
+    ) -> Result<(Arc<HnswIndex>, bool)> {
+        let overlap = wal_ids.iter().any(|id| index.mappings.contains(*id));
+        if index.has_vector_storage() || !overlap {
+            return Ok((index, false));
+        }
+        tracing::warn!(
+            "loaded HNSW index has no vector storage but {} WAL-touched ids overlap it; \
+             rebuilding from vector storage",
+            wal_ids.len()
+        );
+        let fresh = Self::build_hnsw_index(config, config.hnsw_params)?;
+        Ok((Arc::new(fresh), true))
     }
 
     /// Post-open hooks that need a fully assembled collection.
@@ -359,10 +400,15 @@ impl Collection {
 
     // create_graph_collection is in lifecycle_create.rs
 
-    /// Loads the HNSW index from `hnsw.bin` or creates an empty one.
+    /// Loads the persisted HNSW index or creates an empty one.
     ///
-    /// When `hnsw.bin` is absent and `config.hnsw_params` is set, the
-    /// persisted custom params are honoured so they survive collection reopen.
+    /// The presence gate is `native_meta.bin` — the commit point written
+    /// LAST by `HnswIndex::save` (generation-stamped, issue #617). When the
+    /// load fails or the persisted meta does not match the collection config,
+    /// an empty index is built instead and gap recovery rebuilds it from
+    /// vector storage (see [`Self::try_load_hnsw`]). When no persisted index
+    /// exists and `config.hnsw_params` is set, the persisted custom params
+    /// are honoured so they survive collection reopen.
     ///
     /// Both branches honour `config.storage_mode`: the load path upgrades the
     /// backend to `RaBitQ` when the collection mode requires it (and installs
@@ -372,15 +418,49 @@ impl Collection {
         path: &std::path::Path,
         config: &CollectionConfig,
     ) -> Result<Arc<HnswIndex>> {
-        if path.join("hnsw.bin").exists() {
-            let idx = HnswIndex::load_with_storage_mode(path, config.storage_mode)?;
-            Ok(Arc::new(idx))
-        } else {
-            Ok(Arc::new(Self::build_hnsw_index(
-                config,
-                config.hnsw_params,
-            )?))
+        if let Some(idx) = Self::try_load_hnsw(path, config) {
+            return Ok(Arc::new(idx));
         }
+        Ok(Arc::new(Self::build_hnsw_index(
+            config,
+            config.hnsw_params,
+        )?))
+    }
+
+    /// Attempts to load the persisted HNSW index, validating it against the
+    /// collection config.
+    ///
+    /// Returns `None` — with a `warn` log — when `native_meta.bin` is absent,
+    /// the load fails (corruption, generation mismatch, …), or the persisted
+    /// dimension/metric disagree with the collection config. The caller then
+    /// falls back to an empty index rebuilt by gap recovery, which is the
+    /// pre-existing slow-but-safe behaviour.
+    fn try_load_hnsw(path: &std::path::Path, config: &CollectionConfig) -> Option<HnswIndex> {
+        if !path.join("native_meta.bin").exists() {
+            return None;
+        }
+        let idx = match HnswIndex::load_with_storage_mode(path, config.storage_mode) {
+            Ok(idx) => idx,
+            Err(e) => {
+                tracing::warn!(
+                    "failed to load persisted HNSW index from {path:?}: {e}; \
+                     falling back to full rebuild from vector storage"
+                );
+                return None;
+            }
+        };
+        if idx.dimension() != config.dimension || idx.metric() != config.metric {
+            tracing::warn!(
+                loaded_dimension = idx.dimension(),
+                loaded_metric = ?idx.metric(),
+                config_dimension = config.dimension,
+                config_metric = ?config.metric,
+                "persisted HNSW index does not match the collection config; \
+                 falling back to full rebuild from vector storage"
+            );
+            return None;
+        }
+        Some(idx)
     }
 
     /// Loads all named sparse indexes from disk.

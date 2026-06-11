@@ -434,45 +434,31 @@ fn test_missing_vectors_file() {
 fn test_corrupted_hnsw_index() {
     let temp = TempDir::new().expect("Failed to create temp dir");
 
-    // Create collection with enough data to build index
+    // Create collection with enough data to build index, then persist the
+    // HNSW graph files (flush_full — the fast flush defers the HNSW save).
     let collection = create_test_collection(temp.path(), 100, 64);
-    collection.flush().unwrap();
+    collection.flush_full().unwrap();
     drop(collection);
 
-    // Corrupt HNSW index file
-    let hnsw_file = temp.path().join("hnsw.bin");
-    if hnsw_file.exists() {
-        let mutator = FileMutator::new(&hnsw_file, 42);
-        mutator.corrupt_header(32).expect("Corrupt failed");
+    // Corrupt the persisted HNSW graph file.
+    let hnsw_file = temp.path().join("native_hnsw.graph");
+    assert!(
+        hnsw_file.exists(),
+        "flush_full must persist native_hnsw.graph"
+    );
+    let mutator = FileMutator::new(&hnsw_file, 42);
+    mutator.corrupt_header(32).expect("Corrupt failed");
 
-        // Attempt to open
-        let result = VectorCollection::open(temp.path().to_path_buf());
+    // Open must SUCCEED: the corrupt graph is rejected at load and the
+    // index is rebuilt from vector storage (gap recovery fallback).
+    let coll =
+        VectorCollection::open(temp.path().to_path_buf()).expect("open must rebuild, not fail");
+    assert_eq!(coll.len(), 100, "all documents must survive the rebuild");
 
-        match result {
-            Ok(coll) => {
-                // Index might be rebuilt or searches might fail
-                eprintln!("Collection opened with {} documents", coll.len());
-
-                // Try a search - might fail or return wrong results
-                #[allow(clippy::cast_precision_loss)]
-                let query: Vec<f32> = (0..64).map(|i: i32| i as f32 / 100.0).collect();
-                match coll.search(&query, 5) {
-                    Ok(results) => {
-                        eprintln!("Search returned {} results", results.len());
-                    }
-                    Err(e) => {
-                        eprintln!("Search failed (expected): {e}");
-                    }
-                }
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                eprintln!("Got expected error: {msg}");
-            }
-        }
-    } else {
-        eprintln!("No HNSW index file - test skipped");
-    }
+    #[allow(clippy::cast_precision_loss)]
+    let query: Vec<f32> = (0..64).map(|i: i32| i as f32 / 100.0).collect();
+    let results = coll.search(&query, 5).expect("search after rebuild");
+    assert_eq!(results.len(), 5, "rebuilt index must serve searches");
 }
 
 // =============================================================================

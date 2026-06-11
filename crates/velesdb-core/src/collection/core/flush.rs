@@ -358,10 +358,19 @@ impl Collection {
     ///
     /// Returns an error if the compaction I/O fails.
     pub(crate) fn compact_vector_storage(&self) -> Result<usize> {
-        self.vector_storage
+        let reclaimed = self
+            .vector_storage
             .write()
             .compact()
-            .map_err(|e| Error::Storage(format!("storage compaction failed: {e}")))
+            .map_err(|e| Error::Storage(format!("storage compaction failed: {e}")))?;
+        // Compaction truncates the vector WAL, so the WAL no longer covers
+        // the delta since the last HNSW save. Re-save the index to restore
+        // the invariant "WAL ⊇ writes since last index save" that open-time
+        // reconciliation relies on.
+        self.index.save(&self.path)?;
+        self.inserts_since_last_hnsw_save
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        Ok(reclaimed)
     }
 
     /// Applies post-creation overrides to the advanced configuration

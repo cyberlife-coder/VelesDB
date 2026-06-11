@@ -22,6 +22,14 @@ const MAX_LAYERS: usize = 4096;
 /// this below ~1024 (`max_connections_0`); this is a generous safety ceiling.
 const MAX_NEIGHBORS_PER_NODE: usize = 1 << 20;
 
+/// Current `.graph` file format version, written on every dump.
+///
+/// - v1: header without alpha — loads with [`DEFAULT_ALPHA`].
+/// - v2: header carries the VAMANA `alpha` (f32 LE) after `count_check`, so
+///   a custom alpha survives the save/load round-trip instead of silently
+///   resetting to the default.
+const GRAPH_FORMAT_VERSION: u32 = 2;
+
 /// Builds an `InvalidData` I/O error with the given message.
 fn corrupt(msg: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, msg.into())
@@ -36,6 +44,8 @@ pub(super) struct LoadedGraph {
     pub(super) ef_construction: usize,
     pub(super) entry_point: usize,
     pub(super) max_layer: usize,
+    /// VAMANA alpha (v2 header); [`DEFAULT_ALPHA`] for v1 files.
+    pub(super) alpha: f32,
 }
 
 /// Temporary struct for graph file header fields during dump.
@@ -46,6 +56,7 @@ struct GraphFileHeader {
     ef_construction: u32,
     entry_point: u64,
     max_layer: u32,
+    alpha: f32,
 }
 
 /// Reads a little-endian `u32` from the reader and returns it as `usize`.
@@ -64,6 +75,13 @@ fn read_u64_field(reader: &mut BufReader<File>) -> std::io::Result<usize> {
     let mut buf = [0u8; 8];
     reader.read_exact(&mut buf)?;
     Ok(u64::from_le_bytes(buf) as usize)
+}
+
+/// Reads a little-endian `f32` from the reader.
+fn read_f32_field(reader: &mut BufReader<File>) -> std::io::Result<f32> {
+    let mut buf = [0u8; 4];
+    reader.read_exact(&mut buf)?;
+    Ok(f32::from_le_bytes(buf))
 }
 
 impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
@@ -159,6 +177,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                 }
             },
             max_layer: self.max_layer.load(std::sync::atomic::Ordering::Relaxed) as u32,
+            alpha: self.alpha,
         };
 
         Self::write_graph_header(&mut writer, &header, count)?;
@@ -166,15 +185,14 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         writer.flush()
     }
 
-    /// Writes the graph file header fields to the writer.
+    /// Writes the graph file header fields to the writer (v2: alpha last).
     fn write_graph_header(
         writer: &mut BufWriter<File>,
         header: &GraphFileHeader,
         count: u64,
     ) -> std::io::Result<()> {
-        let version: u32 = 1;
-        let fields: [&[u8]; 8] = [
-            &version.to_le_bytes(),
+        let fields: [&[u8]; 9] = [
+            &GRAPH_FORMAT_VERSION.to_le_bytes(),
             &header.num_layers.to_le_bytes(),
             &header.max_connections.to_le_bytes(),
             &header.max_connections_0.to_le_bytes(),
@@ -182,6 +200,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             &header.entry_point.to_le_bytes(),
             &header.max_layer.to_le_bytes(),
             &count.to_le_bytes(),
+            &header.alpha.to_le_bytes(),
         ];
         for field in &fields {
             writer.write_all(field)?;
@@ -251,7 +270,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             max_connections_0: graph.max_connections_0,
             ef_construction: graph.ef_construction,
             level_mult,
-            alpha: DEFAULT_ALPHA,
+            alpha: graph.alpha,
             stagnation_limit: graph.ef_construction / 2,
             pre_allocated_capacity: std::sync::atomic::AtomicUsize::new(0),
             columnar: parking_lot::RwLock::new(None),
@@ -395,6 +414,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             ef_construction: graph_header.ef_construction,
             entry_point: graph_header.entry_point,
             max_layer: graph_header.max_layer,
+            alpha: graph_header.alpha,
         })
     }
 
@@ -404,10 +424,24 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         reader: &mut BufReader<File>,
         count: usize,
     ) -> std::io::Result<LoadedGraph> {
-        Self::validate_graph_version(reader)?;
-        let header = Self::read_graph_header_fields(reader, count)?;
+        let version = Self::validate_graph_version(reader)?;
+        let header = Self::read_graph_header_fields(reader, count, version)?;
         Self::validate_graph_header(&header, count)?;
+        Self::validate_graph_alpha(header.alpha)?;
         Ok(header)
+    }
+
+    /// Rejects an alpha read from an untrusted v2 `.graph` header that falls
+    /// outside the VAMANA range enforced by `HnswParams::validate` (finite
+    /// and `>= 1.0`). A corrupt alpha would silently degrade every future
+    /// insert's neighbor selection.
+    fn validate_graph_alpha(alpha: f32) -> std::io::Result<()> {
+        if !alpha.is_finite() || alpha < 1.0 {
+            return Err(corrupt(format!(
+                "graph alpha {alpha} is not finite and >= 1.0 (corrupt header)"
+            )));
+        }
+        Ok(())
     }
 
     /// Validates header fields read from an untrusted `.graph` file against
@@ -453,41 +487,55 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         Ok(())
     }
 
-    /// Validates the graph file version byte is supported.
-    fn validate_graph_version(reader: &mut BufReader<File>) -> std::io::Result<()> {
+    /// Validates the graph file version is supported, returning it.
+    ///
+    /// v1 (pre-alpha persistence) and v2 are both accepted; the caller uses
+    /// the version to decide whether an alpha field follows the header.
+    fn validate_graph_version(reader: &mut BufReader<File>) -> std::io::Result<u32> {
         let mut buf4 = [0u8; 4];
         reader.read_exact(&mut buf4)?;
         let version = u32::from_le_bytes(buf4);
-        if version != 1 {
+        if version == 0 || version > GRAPH_FORMAT_VERSION {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Unsupported graph version: {version}"),
             ));
         }
-        Ok(())
+        Ok(version)
     }
 
     /// Reads the graph header fields after version validation.
     ///
     /// `count` is the trusted vector count from the `.vectors` file; the
     /// header's own `count_check` field must match it, otherwise the two
-    /// files are inconsistent (corruption / mismatched pair).
+    /// files are inconsistent (corruption / mismatched pair). v2 headers
+    /// carry the VAMANA alpha after `count_check`; v1 files load with
+    /// [`DEFAULT_ALPHA`].
     fn read_graph_header_fields(
         reader: &mut BufReader<File>,
         count: usize,
+        version: u32,
     ) -> std::io::Result<LoadedGraph> {
-        let num_layers = read_u32_field(reader)?;
-        let max_connections = read_u32_field(reader)?;
-        let max_connections_0 = read_u32_field(reader)?;
-        let ef_construction = read_u32_field(reader)?;
-        let entry_point = read_u64_field(reader)?;
-        let max_layer = read_u32_field(reader)?;
+        let mut header = Self::read_graph_header_params(reader)?;
         let count_check = read_u64_field(reader)?;
         if count_check != count {
             return Err(corrupt(format!(
                 "graph count {count_check} != vectors count {count} (mismatched files)"
             )));
         }
+        header.alpha = Self::read_graph_header_alpha(reader, version)?;
+        Ok(header)
+    }
+
+    /// Reads the six fixed HNSW param fields of the graph header (the
+    /// fields preceding `count_check`, common to v1 and v2).
+    fn read_graph_header_params(reader: &mut BufReader<File>) -> std::io::Result<LoadedGraph> {
+        let num_layers = read_u32_field(reader)?;
+        let max_connections = read_u32_field(reader)?;
+        let max_connections_0 = read_u32_field(reader)?;
+        let ef_construction = read_u32_field(reader)?;
+        let entry_point = read_u64_field(reader)?;
+        let max_layer = read_u32_field(reader)?;
 
         Ok(LoadedGraph {
             layers: Vec::new(), // populated by caller
@@ -497,7 +545,18 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             ef_construction,
             entry_point,
             max_layer,
+            alpha: DEFAULT_ALPHA, // overwritten by caller for v2 headers
         })
+    }
+
+    /// Reads the trailing VAMANA alpha for v2 headers; v1 files predate the
+    /// field and load with [`DEFAULT_ALPHA`].
+    fn read_graph_header_alpha(reader: &mut BufReader<File>, version: u32) -> std::io::Result<f32> {
+        if version >= 2 {
+            read_f32_field(reader)
+        } else {
+            Ok(DEFAULT_ALPHA)
+        }
     }
 
     /// Reads `num_layers` layers from the graph file, validating every node

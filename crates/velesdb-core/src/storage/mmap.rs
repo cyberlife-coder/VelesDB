@@ -77,6 +77,12 @@ pub struct MmapStorage {
     /// entirely for bulk import scenarios where data can be re-derived.
     /// Default is `Fsync` (unchanged from pre-#423 behavior).
     pub(super) durability: DurabilityMode,
+    /// Ids touched by the WAL replay performed in [`MmapStorage::new`]
+    /// (store + delete entries), deduplicated. The replay truncates the WAL,
+    /// so these ids are the only remaining witness of writes the persisted
+    /// HNSW index may not reflect; `Collection::open` drains them via
+    /// [`MmapStorage::take_wal_replayed_ids`] for stale-entry reconciliation.
+    pub(super) wal_replayed_ids: Vec<u64>,
 }
 
 impl MmapStorage {
@@ -144,7 +150,7 @@ impl MmapStorage {
         let data_len = data_file.metadata()?.len();
         let (index, next_offset) = Self::load_index(&index_path, dimension, data_len)?;
 
-        let (mmap, next_offset) = Self::replay_wal(
+        let (mmap, next_offset, wal_replayed_ids) = Self::replay_wal(
             mmap,
             next_offset,
             &wal_path,
@@ -165,7 +171,14 @@ impl MmapStorage {
             metrics: Arc::new(StorageMetrics::new()),
             remap_epoch: AtomicU64::new(0),
             durability,
+            wal_replayed_ids,
         })
+    }
+
+    /// Drains the ids touched by the open-time WAL replay (see the
+    /// `wal_replayed_ids` field). Subsequent calls return an empty vec.
+    pub(crate) fn take_wal_replayed_ids(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.wal_replayed_ids)
     }
 
     /// Returns the current durability mode.
@@ -286,6 +299,9 @@ impl MmapStorage {
     /// → persist `vectors.idx` → only then truncate the WAL. Truncating before
     /// the mmap and index are durable would lose the replayed writes on a crash
     /// in that window.
+    ///
+    /// Returns the deduplicated ids touched by the replay so the caller can
+    /// reconcile the persisted HNSW index against them after the WAL is gone.
     fn replay_wal(
         mut mmap: MmapMut,
         mut next_offset: usize,
@@ -294,7 +310,8 @@ impl MmapStorage {
         index: &ShardedIndex,
         dimension: usize,
         data_file: &File,
-    ) -> io::Result<(MmapMut, usize)> {
+    ) -> io::Result<(MmapMut, usize, Vec<u64>)> {
+        let mut touched_ids = Vec::new();
         let replayed = wal_replay::replay_wal_to_index(
             wal_path,
             index,
@@ -302,6 +319,7 @@ impl MmapStorage {
             &mut mmap,
             data_file,
             &mut next_offset,
+            &mut touched_ids,
         )?;
         if replayed > 0 {
             // 1. Make the recovered vector bytes durable.
@@ -312,7 +330,9 @@ impl MmapStorage {
             // 3. Safe to clear the WAL now that mmap + index are durable.
             wal_replay::truncate_wal(wal_path)?;
         }
-        Ok((mmap, next_offset))
+        touched_ids.sort_unstable();
+        touched_ids.dedup();
+        Ok((mmap, next_offset, touched_ids))
     }
 
     /// Serializes the sharded index to `index_path`, atomically.
