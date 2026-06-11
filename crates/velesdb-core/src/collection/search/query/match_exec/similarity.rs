@@ -17,6 +17,22 @@ use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 use std::collections::HashMap;
 
+/// Bundled invariant state for projecting one match result's RETURN items.
+struct ProjectionCtx<'a> {
+    bindings: &'a HashMap<String, u64>,
+    edge_bindings: &'a HashMap<String, u64>,
+    edge_paths: &'a HashMap<String, Vec<u64>>,
+    score: Option<f32>,
+    payload_guard: &'a LogPayloadStorage,
+}
+
+/// Output key of a RETURN item: its `AS` alias, or the raw expression.
+fn projection_key(item: &crate::velesql::ReturnItem) -> String {
+    item.alias
+        .clone()
+        .unwrap_or_else(|| item.expression.clone())
+}
+
 impl Collection {
     /// Projects properties from RETURN clause for a match result (Fix #489).
     ///
@@ -34,12 +50,14 @@ impl Collection {
         &self,
         bindings: &HashMap<String, u64>,
         edge_bindings: &HashMap<String, u64>,
+        edge_paths: &HashMap<String, Vec<u64>>,
         return_clause: &crate::velesql::ReturnClause,
         payload_guard: &LogPayloadStorage,
     ) -> HashMap<String, serde_json::Value> {
         self.project_properties_with_score(
             bindings,
             edge_bindings,
+            edge_paths,
             return_clause,
             None,
             payload_guard,
@@ -56,50 +74,85 @@ impl Collection {
         &self,
         bindings: &HashMap<String, u64>,
         edge_bindings: &HashMap<String, u64>,
+        edge_paths: &HashMap<String, Vec<u64>>,
         return_clause: &crate::velesql::ReturnClause,
         score: Option<f32>,
         payload_guard: &LogPayloadStorage,
     ) -> HashMap<String, serde_json::Value> {
+        let ctx = ProjectionCtx {
+            bindings,
+            edge_bindings,
+            edge_paths,
+            score,
+            payload_guard,
+        };
         let mut projected = HashMap::new();
-
         for item in &return_clause.items {
-            match parse_projection_item(&item.expression) {
-                ProjectionItem::Wildcard => {
-                    Self::project_wildcard(bindings, payload_guard, &mut projected);
+            self.project_return_item(&ctx, item, &mut projected);
+        }
+        projected
+    }
+
+    /// Projects one RETURN item into `projected` according to its shape.
+    fn project_return_item(
+        &self,
+        ctx: &ProjectionCtx<'_>,
+        item: &crate::velesql::ReturnItem,
+        projected: &mut HashMap<String, serde_json::Value>,
+    ) {
+        match parse_projection_item(&item.expression) {
+            ProjectionItem::Wildcard => {
+                Self::project_wildcard(ctx.bindings, ctx.payload_guard, projected);
+            }
+            ProjectionItem::FunctionCall(name) => {
+                if let ("similarity", Some(s)) = (name, ctx.score) {
+                    projected.insert(
+                        "similarity()".to_string(),
+                        serde_json::Value::from(f64::from(s)),
+                    );
                 }
-                ProjectionItem::FunctionCall(name) => {
-                    if name == "similarity" {
-                        if let Some(s) = score {
-                            projected.insert(
-                                "similarity()".to_string(),
-                                serde_json::Value::from(f64::from(s)),
-                            );
-                        }
-                    }
-                }
-                ProjectionItem::PropertyPath { alias, property } => {
-                    // Relationship aliases project from the traversed edge's
-                    // properties (audit 2026-06 F).
-                    if let Some(&edge_id) = edge_bindings.get(alias) {
-                        self.project_edge_property(edge_id, property, item, &mut projected);
-                    } else {
-                        Self::project_property_path(
-                            alias,
-                            property,
-                            item,
-                            bindings,
-                            payload_guard,
-                            &mut projected,
-                        );
-                    }
-                }
-                ProjectionItem::BareAlias(alias) => {
-                    Self::project_bare_alias(alias, bindings, payload_guard, &mut projected);
+            }
+            ProjectionItem::PropertyPath { alias, property } => {
+                self.project_aliased_property(ctx, alias, property, item, projected);
+            }
+            ProjectionItem::BareAlias(alias) => {
+                // A variable-length relationship alias binds a LIST of
+                // relationships (openCypher): project the edge-id list.
+                if let Some(edge_ids) = ctx.edge_paths.get(alias) {
+                    projected.insert(projection_key(item), serde_json::json!(edge_ids));
+                } else {
+                    Self::project_bare_alias(alias, ctx.bindings, ctx.payload_guard, projected);
                 }
             }
         }
+    }
 
-        projected
+    /// Projects a dotted property, dispatching on what the alias binds:
+    /// a fixed-length edge, a variable-length edge list, or a node.
+    fn project_aliased_property(
+        &self,
+        ctx: &ProjectionCtx<'_>,
+        alias: &str,
+        property: &str,
+        item: &crate::velesql::ReturnItem,
+        projected: &mut HashMap<String, serde_json::Value>,
+    ) {
+        // Relationship aliases project from the traversed edge's
+        // properties (audit 2026-06 F).
+        if let Some(&edge_id) = ctx.edge_bindings.get(alias) {
+            self.project_edge_property(edge_id, property, item, projected);
+        } else if let Some(edge_ids) = ctx.edge_paths.get(alias) {
+            self.project_edge_path_property(edge_ids, property, item, projected);
+        } else {
+            Self::project_property_path(
+                alias,
+                property,
+                item,
+                ctx.bindings,
+                ctx.payload_guard,
+                projected,
+            );
+        }
     }
 
     /// Projects a single dotted property (e.g., `r.since`) from a bound
@@ -117,11 +170,30 @@ impl Collection {
         let Some(value) = super::where_eval::edge_property_path(&edge, property) else {
             return;
         };
-        let key = item
-            .alias
-            .clone()
-            .unwrap_or_else(|| item.expression.clone());
-        projected.insert(key, value.clone());
+        projected.insert(projection_key(item), value.clone());
+    }
+
+    /// Projects a dotted property across a variable-length alias's edge list
+    /// as a JSON array, positionally aligned with the traversed path (missing
+    /// properties yield `null`), mirroring openCypher's `[rel IN r | rel.prop]`.
+    fn project_edge_path_property(
+        &self,
+        edge_ids: &[u64],
+        property: &str,
+        item: &crate::velesql::ReturnItem,
+        projected: &mut HashMap<String, serde_json::Value>,
+    ) {
+        let values: Vec<serde_json::Value> = edge_ids
+            .iter()
+            .map(|&edge_id| {
+                self.edge_store
+                    .get_edge(edge_id)
+                    .as_ref()
+                    .and_then(|edge| super::where_eval::edge_property_path(edge, property).cloned())
+                    .unwrap_or(serde_json::Value::Null)
+            })
+            .collect();
+        projected.insert(projection_key(item), serde_json::Value::Array(values));
     }
 
     /// Projects ALL properties from ALL bound nodes into the result (RETURN *).
@@ -315,6 +387,7 @@ impl Collection {
                     result.projected = self.project_properties_with_score(
                         &result.bindings,
                         &result.edge_bindings,
+                        &result.edge_paths,
                         &match_clause.return_clause,
                         Some(score),
                         payload_guard,

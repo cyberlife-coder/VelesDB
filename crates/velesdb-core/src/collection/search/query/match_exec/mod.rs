@@ -38,6 +38,11 @@ pub struct MatchResult {
     pub bindings: HashMap<String, u64>,
     /// Bound relationship aliases from the pattern (alias -> edge_id).
     pub edge_bindings: HashMap<String, u64>,
+    /// Variable-length relationship aliases (alias -> ordered edge-id list).
+    ///
+    /// openCypher list semantics: `MATCH (a)-[r*1..3]->(b)` binds `r` to the
+    /// LIST of traversed relationships, not a single edge.
+    pub edge_paths: HashMap<String, Vec<u64>>,
     /// Similarity score if combined with vector search.
     pub score: Option<f32>,
     /// Projected properties from RETURN clause (EPIC-058 US-007).
@@ -55,6 +60,7 @@ impl MatchResult {
             path,
             bindings: HashMap::new(),
             edge_bindings: HashMap::new(),
+            edge_paths: HashMap::new(),
             score: None,
             projected: HashMap::new(),
         }
@@ -339,7 +345,7 @@ impl Collection {
                 if !self.evaluate_where_condition(
                     *node_id,
                     Some(bindings),
-                    None,
+                    where_eval::EdgeAliasBindings::NONE,
                     where_clause,
                     ctx.params,
                     ctx.payload_guard,
@@ -356,6 +362,7 @@ impl Collection {
             result.bindings.clone_from(bindings);
             result.projected = self.project_properties(
                 bindings,
+                &HashMap::new(),
                 &HashMap::new(),
                 &ctx.match_clause.return_clause,
                 ctx.payload_guard,

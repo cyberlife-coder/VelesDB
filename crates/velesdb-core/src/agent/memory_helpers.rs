@@ -311,6 +311,49 @@ pub(super) fn attach_expiry(payload: &mut serde_json::Value, expires_at: Option<
     }
 }
 
+/// Durably sets (or refreshes) the TTL of an existing memory point.
+///
+/// Unlike `MemoryTtl::set_ttl` (in-memory map only, lost on restart), this
+/// persists the expiry as the reserved [`EXPIRES_AT_KEY`] payload field via
+/// an upsert and then updates the in-memory map, so the TTL survives a
+/// restart (it is rebuilt by [`rebuild_ttl_from_payloads`]).
+///
+/// # Errors
+///
+/// Returns `NotFound` when no point with `id` exists, or `CollectionError`
+/// when the collection cannot be resolved or the upsert fails.
+pub(super) fn set_ttl_durable(
+    db: &Database,
+    collection_name: &str,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+    id: u64,
+    ttl_seconds: u64,
+) -> Result<(), AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    let Some(point) = collection.get(&[id]).into_iter().flatten().next() else {
+        return Err(AgentMemoryError::NotFound(format!(
+            "memory id {id} not found in {collection_name}"
+        )));
+    };
+    let expires_at = super::ttl::MemoryTtl::now().saturating_add(ttl_seconds);
+    let mut payload = point
+        .payload
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+    attach_expiry(&mut payload, Some(expires_at));
+    upsert_points(
+        &collection,
+        vec![Point {
+            id,
+            vector: point.vector,
+            payload: Some(payload),
+            sparse_vectors: point.sparse_vectors,
+        }],
+    )?;
+    ttl.set_expiry(kind, id, expires_at);
+    Ok(())
+}
+
 /// Rebuilds the in-memory TTL map for `kind` from persisted point payloads.
 ///
 /// Called eagerly at subsystem construction (same pattern and cost class as

@@ -577,9 +577,17 @@ use velesdb_core::{Database, agent::AgentMemory};
 let db = Arc::new(Database::open("./agent_data")?);
 let memory = AgentMemory::new(Arc::clone(&db))?;
 
+// In-memory TTLs (fast, but lost on restart):
 memory.set_semantic_ttl(fact_id, 3600);       // 1-hour TTL on a semantic fact
 memory.set_episodic_ttl(event_id, 86_400);    // 24-hour TTL on an event
 memory.set_procedural_ttl(proc_id, 604_800);  // 7-day TTL on a procedure
+
+// Durable TTLs: persisted to the reserved `_veles_expires_at` payload field
+// (like `store_with_ttl`), so they survive a restart. Result-returning —
+// fails with NotFound when the id does not exist.
+memory.set_semantic_ttl_durable(fact_id, 3600)?;
+memory.set_episodic_ttl_durable(event_id, 86_400)?;
+memory.set_procedural_ttl_durable(proc_id, 604_800)?;
 
 // Remove all expired entries (returns an ExpireResult with per-subsystem counts)
 let result = memory.auto_expire()?;

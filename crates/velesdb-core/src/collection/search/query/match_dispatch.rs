@@ -302,10 +302,15 @@ fn collect_condition_predicates(
     }
 }
 
-/// Merges two sets of `MatchResult`s by `node_id` (union semantics).
+/// Merges two sets of `MatchResult`s by `node_id` + compatible bindings
+/// (union semantics).
 ///
-/// When both sets contain the same `node_id`, the result with the *better*
-/// score is kept (higher for similarity metrics, lower for distance metrics).
+/// Rows for the same `node_id` merge only when their bindings are
+/// *compatible* (no alias bound to different values on both sides): the
+/// result with the *better* score is kept (higher for similarity metrics,
+/// lower for distance metrics) and absorbs the loser's missing data. Rows
+/// with conflicting edge bindings stay separate so parallel edges between
+/// the same node pair survive the merge as distinct rows (audit 2026-06).
 /// Results without a score use a sentinel that always loses to real scores.
 ///
 /// The merged output is sorted best-to-worst according to `higher_is_better`.
@@ -316,63 +321,85 @@ fn merge_match_results(
 ) -> Vec<super::match_exec::MatchResult> {
     use std::collections::HashMap;
 
-    let mut by_node: HashMap<u64, super::match_exec::MatchResult> =
+    let mut by_node: HashMap<u64, Vec<super::match_exec::MatchResult>> =
         HashMap::with_capacity(graph_results.len() + vector_results.len());
 
-    for r in graph_results {
-        by_node.insert(r.node_id, r);
-    }
-
-    for r in vector_results {
+    for r in graph_results.into_iter().chain(vector_results) {
         upsert_better_score(&mut by_node, r, higher_is_better);
     }
 
-    let mut merged: Vec<super::match_exec::MatchResult> = by_node.into_values().collect();
+    let mut merged: Vec<super::match_exec::MatchResult> = by_node.into_values().flatten().collect();
     sort_match_results_by_score(&mut merged, higher_is_better);
     merged
 }
 
-/// Inserts `candidate` into `by_node`, keeping whichever entry has the better
-/// score while merging result data from the losing duplicate.
+/// Inserts `candidate` into its node group, merging into the first
+/// binding-compatible entry (better score wins) or appending a new row when
+/// every existing entry conflicts on some alias.
 ///
 /// Audit 2026-06 F2: replacing the whole entry dropped plan-specific data —
 /// a GraphFirst row's `r.*` projection/edge bindings were clobbered by the
 /// VectorFirst candidate for the same `node_id`. The winner keeps its score
 /// but absorbs the bindings/projections it is missing.
 fn upsert_better_score(
-    by_node: &mut std::collections::HashMap<u64, super::match_exec::MatchResult>,
+    by_node: &mut std::collections::HashMap<u64, Vec<super::match_exec::MatchResult>>,
     candidate: super::match_exec::MatchResult,
     higher_is_better: bool,
 ) {
+    let group = by_node.entry(candidate.node_id).or_default();
+    let Some(existing) = group
+        .iter_mut()
+        .find(|entry| bindings_compatible(entry, &candidate))
+    else {
+        group.push(candidate);
+        return;
+    };
+
     let worse_sentinel = if higher_is_better {
         f32::NEG_INFINITY
     } else {
         f32::MAX
     };
-    match by_node.entry(candidate.node_id) {
-        std::collections::hash_map::Entry::Occupied(mut entry) => {
-            let new_score = candidate.score.unwrap_or(worse_sentinel);
-            let old_score = entry.get().score.unwrap_or(worse_sentinel);
-            let new_wins = if higher_is_better {
-                new_score > old_score
-            } else {
-                new_score < old_score
-            };
-            if new_wins {
-                let loser = entry.insert(candidate);
-                merge_missing_result_data(entry.get_mut(), loser);
-            } else {
-                merge_missing_result_data(entry.get_mut(), candidate);
-            }
-        }
-        std::collections::hash_map::Entry::Vacant(entry) => {
-            entry.insert(candidate);
-        }
+    let new_score = candidate.score.unwrap_or(worse_sentinel);
+    let old_score = existing.score.unwrap_or(worse_sentinel);
+    let new_wins = if higher_is_better {
+        new_score > old_score
+    } else {
+        new_score < old_score
+    };
+    if new_wins {
+        let loser = std::mem::replace(existing, candidate);
+        merge_missing_result_data(existing, loser);
+    } else {
+        merge_missing_result_data(existing, candidate);
     }
 }
 
-/// Copies `projected`, `edge_bindings`, and `bindings` entries that the merge
-/// winner lacks from the losing duplicate (winner's own entries take priority).
+/// Whether two results for the same node can merge: no node alias, edge
+/// alias, or variable-length edge path is bound to *different* values on
+/// both sides. Aliases bound on only one side are compatible (the merge
+/// absorbs them); conflicting edge bindings mean distinct parallel-edge rows.
+fn bindings_compatible(
+    a: &super::match_exec::MatchResult,
+    b: &super::match_exec::MatchResult,
+) -> bool {
+    let maps_agree = |x: &std::collections::HashMap<String, u64>,
+                      y: &std::collections::HashMap<String, u64>| {
+        x.iter()
+            .all(|(k, v)| y.get(k).is_none_or(|other| other == v))
+    };
+    let paths_agree = a
+        .edge_paths
+        .iter()
+        .all(|(k, v)| b.edge_paths.get(k).is_none_or(|other| other == v));
+    maps_agree(&a.bindings, &b.bindings)
+        && maps_agree(&a.edge_bindings, &b.edge_bindings)
+        && paths_agree
+}
+
+/// Copies `projected`, `edge_bindings`, `edge_paths`, and `bindings` entries
+/// that the merge winner lacks from the losing duplicate (winner's own
+/// entries take priority).
 fn merge_missing_result_data(
     winner: &mut super::match_exec::MatchResult,
     loser: super::match_exec::MatchResult,
@@ -382,6 +409,9 @@ fn merge_missing_result_data(
     }
     for (key, value) in loser.edge_bindings {
         winner.edge_bindings.entry(key).or_insert(value);
+    }
+    for (key, value) in loser.edge_paths {
+        winner.edge_paths.entry(key).or_insert(value);
     }
     for (key, value) in loser.bindings {
         winner.bindings.entry(key).or_insert(value);

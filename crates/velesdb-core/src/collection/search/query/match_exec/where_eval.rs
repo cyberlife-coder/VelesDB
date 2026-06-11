@@ -101,6 +101,23 @@ pub(super) fn resolve_query_vector(
     }
 }
 
+/// Edge-alias bindings handed to WHERE evaluation: `scalar` holds
+/// fixed-length relationship aliases (alias -> edge id), `paths` holds
+/// variable-length aliases (alias -> ordered edge-id list).
+#[derive(Clone, Copy)]
+pub(crate) struct EdgeAliasBindings<'a> {
+    pub(crate) scalar: Option<&'a HashMap<String, u64>>,
+    pub(crate) paths: Option<&'a HashMap<String, Vec<u64>>>,
+}
+
+impl EdgeAliasBindings<'_> {
+    /// No edge aliases in scope (single-node patterns, candidate probes).
+    pub(crate) const NONE: EdgeAliasBindings<'static> = EdgeAliasBindings {
+        scalar: None,
+        paths: None,
+    };
+}
+
 /// Bundled per-node context for MATCH WHERE evaluation.
 ///
 /// Groups the invariant evaluation state so the recursive condition walk
@@ -112,6 +129,10 @@ struct MatchWhereCtx<'a> {
     /// Bound relationship aliases (alias -> traversed edge id) so `r.prop`
     /// resolves against the EDGE's properties (audit 2026-06 F).
     edge_bindings: Option<&'a HashMap<String, u64>>,
+    /// Variable-length relationship aliases (alias -> ordered edge-id list).
+    /// `r.prop` over a list uses ANY-element semantics: the condition holds
+    /// when at least one traversed edge satisfies it.
+    edge_paths: Option<&'a HashMap<String, Vec<u64>>>,
     params: &'a HashMap<String, serde_json::Value>,
     payload_guard: &'a LogPayloadStorage,
 }
@@ -135,7 +156,7 @@ impl Collection {
         &self,
         node_id: u64,
         bindings: Option<&HashMap<String, u64>>,
-        edge_bindings: Option<&HashMap<String, u64>>,
+        edges: EdgeAliasBindings<'_>,
         condition: &crate::velesql::Condition,
         params: &HashMap<String, serde_json::Value>,
         payload_guard: &LogPayloadStorage,
@@ -143,7 +164,8 @@ impl Collection {
         let ctx = MatchWhereCtx {
             node_id,
             bindings,
-            edge_bindings,
+            edge_bindings: edges.scalar,
+            edge_paths: edges.paths,
             params,
             payload_guard,
         };
@@ -230,6 +252,16 @@ impl Collection {
         if let Some(edge_id) = resolve_edge_target(&cmp.column, ctx.edge_bindings) {
             return self.evaluate_edge_comparison(edge_id, cmp, ctx.params);
         }
+        // Variable-length alias: ANY traversed edge satisfying the comparison
+        // makes the condition hold (openCypher's `any(rel IN r WHERE ...)`).
+        if let Some(edge_ids) = resolve_edge_path_target(&cmp.column, ctx.edge_paths) {
+            for edge_id in edge_ids {
+                if self.evaluate_edge_comparison(*edge_id, cmp, ctx.params)? {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
 
         let target_id = resolve_target_id(&cmp.column, ctx.bindings, ctx.node_id);
 
@@ -288,6 +320,16 @@ impl Collection {
         // properties, not a node payload.
         if let Some(edge_id) = column.and_then(|col| resolve_edge_target(col, ctx.edge_bindings)) {
             return self.evaluate_metadata_condition_for_edge(edge_id, condition, ctx);
+        }
+        // Variable-length alias: ANY-element semantics over the edge list.
+        if let Some(edge_ids) = column.and_then(|col| resolve_edge_path_target(col, ctx.edge_paths))
+        {
+            for &edge_id in edge_ids {
+                if self.evaluate_metadata_condition_for_edge(edge_id, condition, ctx)? {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
         }
 
         let target_id = column.map_or(ctx.node_id, |col| {
@@ -488,6 +530,16 @@ fn resolve_target_id(
 fn resolve_edge_target(column: &str, edge_bindings: Option<&HashMap<String, u64>>) -> Option<u64> {
     let (alias, _) = column.split_once('.')?;
     edge_bindings?.get(alias).copied()
+}
+
+/// Resolves an alias-prefixed column against variable-length relationship
+/// aliases, returning the ordered edge-id list bound to the alias.
+fn resolve_edge_path_target<'a>(
+    column: &str,
+    edge_paths: Option<&'a HashMap<String, Vec<u64>>>,
+) -> Option<&'a Vec<u64>> {
+    let (alias, _) = column.split_once('.')?;
+    edge_paths?.get(alias)
 }
 
 /// Looks up a (possibly nested) property path on an edge's properties.
