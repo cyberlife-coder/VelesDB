@@ -311,6 +311,25 @@ pub(super) fn attach_expiry(payload: &mut serde_json::Value, expires_at: Option<
     }
 }
 
+/// Retrieves a point by id, surfacing `NotFound` when it does not exist.
+///
+/// The `collection.get(&[id]) … next()` idiom shared by the agent
+/// read-modify-write flows (`set_ttl_durable`, metadata updates).
+pub(super) fn get_point_or_not_found(
+    collection: &Collection,
+    collection_name: &str,
+    id: u64,
+) -> Result<Point, AgentMemoryError> {
+    collection
+        .get(&[id])
+        .into_iter()
+        .flatten()
+        .next()
+        .ok_or_else(|| {
+            AgentMemoryError::NotFound(format!("memory id {id} not found in {collection_name}"))
+        })
+}
+
 /// Durably sets (or refreshes) the TTL of an existing memory point.
 ///
 /// Unlike `MemoryTtl::set_ttl` (in-memory map only, lost on restart), this
@@ -318,10 +337,23 @@ pub(super) fn attach_expiry(payload: &mut serde_json::Value, expires_at: Option<
 /// an upsert and then updates the in-memory map, so the TTL survives a
 /// restart (it is rebuilt by [`rebuild_ttl_from_payloads`]).
 ///
+/// A `ttl_seconds` of 0 expires the entry immediately; its storage is
+/// reclaimed by the next `auto_expire` sweep. Expired entries are invisible
+/// on every read surface and cannot be resurrected here: refreshing an
+/// already-expired id returns `NotFound`, mirroring `update_metadata`.
+///
+/// # Concurrency
+///
+/// This is a read-modify-write without a cross-call lock (the engine has no
+/// transactions): a concurrent writer to the same id follows last-writer-wins
+/// for the whole point, like the other agent update flows.
+///
 /// # Errors
 ///
-/// Returns `NotFound` when no point with `id` exists, or `CollectionError`
-/// when the collection cannot be resolved or the upsert fails.
+/// Returns `NotFound` when no live point with `id` exists, or
+/// `CollectionError` when the collection cannot be resolved, the stored
+/// payload is not a JSON object (the expiry field cannot be attached), or
+/// the upsert fails.
 pub(super) fn set_ttl_durable(
     db: &Database,
     collection_name: &str,
@@ -331,16 +363,26 @@ pub(super) fn set_ttl_durable(
     ttl_seconds: u64,
 ) -> Result<(), AgentMemoryError> {
     let collection = get_collection(db, collection_name)?;
-    let Some(point) = collection.get(&[id]).into_iter().flatten().next() else {
+    // Expired-but-not-yet-swept entries are invisible on every read surface;
+    // refreshing their TTL would silently resurrect them.
+    if ttl.is_expired(kind, id) {
         return Err(AgentMemoryError::NotFound(format!(
-            "memory id {id} not found in {collection_name}"
+            "memory id {id} is expired in {collection_name}"
         )));
-    };
+    }
+    let point = get_point_or_not_found(&collection, collection_name, id)?;
     let expires_at = super::ttl::MemoryTtl::now().saturating_add(ttl_seconds);
     let mut payload = point
         .payload
         .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
     attach_expiry(&mut payload, Some(expires_at));
+    if payload.get(EXPIRES_AT_KEY).is_none() {
+        // attach_expiry is a no-op on non-object payloads — failing loudly
+        // beats returning Ok for a TTL that would silently vanish on restart.
+        return Err(AgentMemoryError::CollectionError(format!(
+            "memory id {id} in {collection_name} has a non-object payload; cannot persist TTL"
+        )));
+    }
     upsert_points(
         &collection,
         vec![Point {

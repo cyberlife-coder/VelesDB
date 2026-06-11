@@ -55,7 +55,15 @@ impl Collection {
             let mut path = Vec::new();
             let mut bindings = start_bindings.clone();
             let mut edge_bindings = HashMap::new();
-            let mut edge_paths = HashMap::new();
+            // Pre-seed every variable-length alias with an empty list so a
+            // zero-hop match (`*0..N`) binds `[]` (openCypher) instead of
+            // silently degrading to node-alias resolution.
+            let mut edge_paths: HashMap<String, Vec<u64>> = pattern
+                .relationships
+                .iter()
+                .filter(|rel| rel.range.is_some())
+                .filter_map(|rel| rel.alias.clone().map(|alias| (alias, Vec::new())))
+                .collect();
             let mut walk = Walk {
                 pattern,
                 edge_store,
@@ -151,6 +159,7 @@ impl Collection {
             return EdgeAliasSave::None;
         };
         if rel.range.is_some() {
+            // Entry pre-seeded in traverse_pattern; push this hop's edge.
             walk.edge_paths
                 .entry(alias.clone())
                 .or_default()
@@ -172,11 +181,10 @@ impl Collection {
                 walk.edge_bindings.remove(&alias);
             }
             EdgeAliasSave::PathPushed(alias) => {
+                // Pop only — the entry stays (pre-seeded; an empty list is
+                // the valid zero-hop binding).
                 if let Some(list) = walk.edge_paths.get_mut(&alias) {
                     list.pop();
-                    if list.is_empty() {
-                        walk.edge_paths.remove(&alias);
-                    }
                 }
             }
         }
@@ -342,27 +350,29 @@ impl Collection {
     ///
     /// Edge bindings participate so parallel edges between the same node
     /// pair yield distinct rows when the relationship is aliased (audit
-    /// 2026-06: parallel edges previously collapsed to one row). Prefixes
-    /// keep node and edge aliases from colliding in the flat key space.
+    /// 2026-06: parallel edges previously collapsed to one row). Entries are
+    /// structured `(namespace, alias, hop index, id)` tuples — node (0),
+    /// edge (1), path hop (2) — so alias namespaces cannot collide and no
+    /// per-row string formatting happens on this hot path.
     fn binding_signature(
         bindings: &HashMap<String, u64>,
         edge_bindings: &HashMap<String, u64>,
         edge_paths: &HashMap<String, Vec<u64>>,
-    ) -> Vec<(String, u64)> {
-        let mut signature: Vec<(String, u64)> = bindings
+    ) -> Vec<(u8, String, u64, u64)> {
+        let mut signature: Vec<(u8, String, u64, u64)> = bindings
             .iter()
-            .map(|(k, v)| (format!("n:{k}"), *v))
+            .map(|(k, v)| (0, k.clone(), 0, *v))
             .collect();
-        signature.extend(edge_bindings.iter().map(|(k, v)| (format!("e:{k}"), *v)));
+        signature.extend(edge_bindings.iter().map(|(k, v)| (1, k.clone(), 0, *v)));
         for (alias, edge_ids) in edge_paths {
             signature.extend(
                 edge_ids
                     .iter()
                     .enumerate()
-                    .map(|(i, id)| (format!("p:{alias}:{i}"), *id)),
+                    .map(|(i, id)| (2, alias.clone(), i as u64, *id)),
             );
         }
-        signature.sort_by(|a, b| a.0.cmp(&b.0));
+        signature.sort_unstable();
         signature
     }
 }

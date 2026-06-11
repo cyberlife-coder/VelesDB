@@ -607,3 +607,98 @@ fn test_var_length_distinct_paths_are_distinct_rows() {
         "two distinct 2-hop edge paths must yield two rows"
     );
 }
+
+/// WHEN a filter-engine condition (IN) references a var-length alias
+/// THEN ANY-element semantics apply with the alias correctly stripped
+/// (review 2026-06-11 finding 1: IN/BETWEEN/LIKE/IS NULL previously
+/// resolved `r.w` as a nested path and matched nothing).
+#[test]
+fn test_var_length_alias_in_condition_uses_any_semantics() {
+    let (_dir, db) = create_test_db();
+    setup_chain_collection(&db);
+
+    let any_hit = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) WHERE r.w IN (20, 99) RETURN c LIMIT 10",
+        "chain",
+    );
+    assert_eq!(
+        any_hit.len(),
+        1,
+        "one traversed edge has w=20 → path matches"
+    );
+
+    let no_hit = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) WHERE r.w IN (98, 99) RETURN c LIMIT 10",
+        "chain",
+    );
+    assert!(no_hit.is_empty(), "no traversed edge is in the list");
+}
+
+/// IS NULL on a var-length alias property: every traversed edge HAS `w`,
+/// so `r.w IS NULL` must reject the path (no edge satisfies it) while
+/// `r.w IS NOT NULL` keeps it.
+#[test]
+fn test_var_length_alias_is_null_semantics() {
+    let (_dir, db) = create_test_db();
+    setup_chain_collection(&db);
+
+    let null_rows = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) WHERE r.w IS NULL RETURN c LIMIT 10",
+        "chain",
+    );
+    assert!(
+        null_rows.is_empty(),
+        "every traversed edge carries w → IS NULL matches no edge"
+    );
+
+    let not_null_rows = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) WHERE r.w IS NOT NULL RETURN c LIMIT 10",
+        "chain",
+    );
+    assert_eq!(
+        not_null_rows.len(),
+        1,
+        "edges carry w → IS NOT NULL matches"
+    );
+}
+
+/// Zero-hop variable-length matches bind the alias to an EMPTY list:
+/// RETURN r projects [], and WHERE on the alias matches nothing
+/// (ANY over an empty list is false) instead of degrading to node-payload
+/// resolution.
+#[test]
+fn test_var_length_zero_hop_binds_empty_list() {
+    let (_dir, db) = create_test_db();
+    setup_chain_collection(&db);
+
+    let results = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*0..1]->(c) RETURN r LIMIT 10",
+        "chain",
+    );
+    // Zero-hop row (c = a) plus the 1-hop row (c = node 2).
+    assert_eq!(results.len(), 2, "zero-hop and one-hop rows both match");
+    let projections: Vec<serde_json::Value> = results
+        .iter()
+        .filter_map(|r| r.point.payload.as_ref().and_then(|p| p.get("r")).cloned())
+        .collect();
+    assert!(
+        projections.contains(&serde_json::json!([])),
+        "the zero-hop row must project r as an empty list, got {projections:?}"
+    );
+
+    let filtered = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*0..1]->(c) WHERE r.w = 10 RETURN c LIMIT 10",
+        "chain",
+    );
+    assert_eq!(
+        filtered.len(),
+        1,
+        "only the 1-hop row can satisfy r.w = 10 (ANY over [] is false)"
+    );
+}

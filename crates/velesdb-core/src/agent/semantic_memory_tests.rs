@@ -721,6 +721,28 @@ mod tests {
         assert!(results.iter().any(|r| r.0 == 1), "fact stays queryable");
     }
 
+    /// `set_ttl_durable` on an expired-but-not-yet-swept id must surface
+    /// `NotFound` instead of resurrecting the dead fact with a fresh TTL
+    /// (expired entries are invisible on every read AND write surface).
+    #[test]
+    fn test_set_ttl_durable_expired_id_is_not_found() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+
+        sm.store(1, "fact to expire", &emb).unwrap();
+        sm.set_ttl_durable(1, 0).unwrap(); // expires immediately
+        assert!(sm.get(1).unwrap().is_none(), "fact invisible once expired");
+
+        let err = sm.set_ttl_durable(1, 3600).unwrap_err();
+        assert!(
+            matches!(err, AgentMemoryError::NotFound(_)),
+            "refreshing an expired id must not resurrect it, got: {err:?}"
+        );
+        assert!(sm.get(1).unwrap().is_none(), "fact must stay invisible");
+    }
+
     /// `set_ttl_durable` on a missing id surfaces a `NotFound` error instead
     /// of silently arming a TTL for a nonexistent fact.
     #[test]

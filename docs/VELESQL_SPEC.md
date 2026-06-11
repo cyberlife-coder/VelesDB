@@ -1646,6 +1646,9 @@ traversed relationships, not a single edge:
   `any(rel IN r WHERE rel.prop = x)`).
 - Distinct edge paths to the same target are distinct result rows, and
   parallel edges between the same node pair yield one row per aliased edge.
+  **Anonymous relationships** (`-[:TYPE]->`) keep the collapsed cardinality —
+  bind an alias when parallel edges must be distinguished (a known divergence
+  from openCypher, which always counts one row per relationship).
 
 ### RETURN Clause
 

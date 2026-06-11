@@ -244,11 +244,7 @@ impl Collection {
             return;
         };
         if let Some(value) = Self::get_nested_property(payload_map, property) {
-            let key = item
-                .alias
-                .clone()
-                .unwrap_or_else(|| item.expression.clone());
-            projected.insert(key, value.clone());
+            projected.insert(projection_key(item), value.clone());
         }
     }
 
@@ -542,5 +538,19 @@ fn build_match_payload(
         object.insert(key.clone(), value.clone());
     }
     object.insert("_bindings".to_string(), serde_json::json!(result.bindings));
+    // Edge identities make parallel-edge rows (same node bindings, different
+    // edge) and variable-length paths distinguishable by every consumer.
+    if !result.edge_bindings.is_empty() {
+        object.insert(
+            "_edge_bindings".to_string(),
+            serde_json::json!(result.edge_bindings),
+        );
+    }
+    if !result.edge_paths.is_empty() {
+        object.insert(
+            "_edge_paths".to_string(),
+            serde_json::json!(result.edge_paths),
+        );
+    }
     serde_json::Value::Object(object)
 }

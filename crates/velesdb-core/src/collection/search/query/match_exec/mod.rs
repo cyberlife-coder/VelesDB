@@ -26,7 +26,14 @@ use crate::velesql::{GraphPattern, MatchClause};
 use std::collections::{HashMap, HashSet};
 
 /// Result of a MATCH query traversal.
+///
+/// Relationship aliases live in exactly one of two maps: fixed-length
+/// aliases in `edge_bindings` (scalar edge id), variable-length aliases in
+/// `edge_paths` (ordered edge-id list, possibly empty for zero-hop matches).
+/// Consumers resolving an alias must consult both (see
+/// `where_eval::MatchWhereCtx::edge_targets` for the canonical helper).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MatchResult {
     /// Node ID that was matched.
     pub node_id: u64,
@@ -180,7 +187,7 @@ struct TraversalCtx<'a> {
     limit: usize,
     iteration_count: &'a mut u32,
     reported_cardinality: &'a mut usize,
-    seen_bindings: &'a mut HashSet<Vec<(String, u64)>>,
+    seen_bindings: &'a mut HashSet<Vec<(u8, String, u64, u64)>>,
 }
 
 impl Collection {
