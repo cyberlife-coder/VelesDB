@@ -11,13 +11,24 @@ exercise rather than a porting project.
 | Framework | Connector | API surface | Package |
 |-----------|-----------|-------------|---------|
 | **LangChain** | [`langchain-velesdb`](langchain) | `VectorStore` (`add_texts`, `similarity_search`, `similarity_search_with_score`, `delete`) | `pip install langchain-velesdb` |
-| **LlamaIndex** | [`llama-index-vector-stores-velesdb`](llamaindex) | `VectorStore` (`add`, `query`, `delete_nodes`) | `pip install llama-index-vector-stores-velesdb` |
+| **LlamaIndex** | [`llama-index-vector-stores-velesdb`](llamaindex) | `VectorStore` (`add`, `query`, `delete`) | `pip install llama-index-vector-stores-velesdb` |
 | **Haystack 2.x** | [`haystack-velesdb`](haystack) | `DocumentStore` (`write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, `delete_documents`) | `pip install haystack-velesdb` |
 
 All three connectors share the same VelesDB persistence layer
-(`velesdb` Python wheel, PyO3 bindings) and respect the same payload schema,
-so a collection populated through one framework is readable by the other two
-without re-indexing.
+(`velesdb` Python wheel, PyO3 bindings), but each one stores documents under
+its **own payload schema** — a collection populated through one framework is
+**not** transparently readable by the other two:
+
+| Connector | Text key | ID key(s) in payload | Metadata |
+|-----------|----------|----------------------|----------|
+| LangChain | `text` | none (numeric point id only) | flattened into payload |
+| LlamaIndex | `text` | `node_id`, `ref_doc_id` | scalar fields flattened |
+| Haystack | `content` | `_doc_id` | flattened (reserved keys stripped) |
+
+For example, a Haystack-written collection opened from LangChain yields
+documents with empty `page_content` (LangChain reads the `text` key, Haystack
+writes `content`). To move data across frameworks, re-index it through the
+target connector or re-map the payload keys with the raw `velesdb` API.
 
 ### Supported Python versions
 
@@ -47,12 +58,13 @@ core package that lacked the API surface the connectors call into.
 | Add documents (with embedding) | ✅ | ✅ | ✅ |
 | Vector similarity search | ✅ | ✅ | ✅ |
 | Metadata filtering | ✅ | ✅ | ✅ |
-| Score normalisation (cosine → [0,1]) | ✅ | ✅ | ✅ |
-| Hybrid search (vector + BM25) | ✅ | ✅ | ⚠️ via separate retriever |
-| Delete by ID | ✅ | ✅ | ✅ |
+| Score normalisation (cosine → [0,1]) | ✅ `similarity_search_with_score` | ❌ raw cosine scores | ✅ `scale_score=True` (default) |
+| Hybrid search (vector + BM25) | ✅ `hybrid_search` | ✅ `hybrid_query` | ❌ not surfaced (dense `embedding_retrieval` only) |
+| Delete | ✅ by document ID | ✅ by `ref_doc_id` (removes all chunks) | ✅ by document ID |
 | `DuplicatePolicy.FAIL` enforcement | N/A | N/A | ✅ |
-| Pipeline serialisation (`to_dict`/`from_dict`) | ✅ | ✅ | ✅ |
+| Pipeline serialisation (`to_dict`/`from_dict`) | ❌ no such protocol in LangChain | ✅ | ✅ |
 | Persistence path support | ✅ | ✅ | ✅ |
+| MMR search | ✅ `max_marginal_relevance_search` | ❌ | ❌ |
 
 **Pass-through limitations** (apply to all three integrations): named sparse
 indexes, RSF / Weighted fusion, and `@collection` cross-collection MATCH are
@@ -63,9 +75,14 @@ for the full feature matrix.
 ## Quick start
 
 ```python
-# LangChain
+# LangChain — requires an Embeddings implementation
+from langchain_core.embeddings import DeterministicFakeEmbedding  # demo only
 from langchain_velesdb import VelesDBVectorStore
-store = VelesDBVectorStore(path="./data", collection_name="rag")
+store = VelesDBVectorStore(
+    embedding=DeterministicFakeEmbedding(size=384),  # swap for OpenAIEmbeddings() etc.
+    path="./data",
+    collection_name="rag",
+)
 
 # LlamaIndex
 from llamaindex_velesdb import VelesDBVectorStore
@@ -76,8 +93,9 @@ from haystack_velesdb import VelesDBDocumentStore
 store = VelesDBDocumentStore(path="./data", collection_name="rag")
 ```
 
-The same `./data` directory and `rag` collection are reachable from any of
-the three connectors after the first write.
+Each connector persists into the same kind of `./data` directory, but use
+one framework per collection — payload schemas differ across connectors
+(see the table above).
 
 ## Reporting issues
 
