@@ -1,86 +1,86 @@
-# 🎯 Search Modes - Guide de Configuration du Recall
+# 🎯 Search Modes - Recall Configuration Guide
 
-*Version 1.18.0 -- Mai 2026*
+*Version 1.18.0 -- 2026-06-12*
 
-Guide complet pour configurer le compromis **recall vs latence** dans VelesDB. Couvre la recherche dense (HNSW), sparse (SPLADE/BM42), et hybride (dense+sparse avec fusion). Comparaison avec les pratiques Milvus, OpenSearch et Qdrant.
+Complete guide to configuring the **recall vs latency** trade-off in VelesDB. Covers dense search (HNSW), sparse search (SPLADE/BM42), and hybrid search (dense+sparse with fusion). Includes a comparison with Milvus, OpenSearch, and Qdrant practices.
 
 ---
 
-## Table des Matières
+## Table of Contents
 
-1. [Vue d'ensemble](#vue-densemble)
-2. [Les 5 Modes de Recherche (+Custom)](#les-5-modes-de-recherche-custom)
-3. [Parametres HNSW detailles](#paramètres-hnsw-détaillés)
+1. [Overview](#overview)
+2. [The 5 Search Modes (+Custom)](#the-5-search-modes-custom)
+3. [Detailed HNSW Parameters](#detailed-hnsw-parameters)
 4. [Sparse Vector Search](#sparse-vector-search)
 5. [Hybrid Search](#hybrid-search)
 6. [Fusion Strategies](#fusion-strategies)
-7. [Comparaison avec la concurrence](#comparaison-avec-la-concurrence)
-8. [Guide de configuration par cas d'usage](#guide-de-configuration-par-cas-dusage)
-9. [API et exemples](#api-et-exemples)
+7. [Comparison with the Competition](#comparison-with-the-competition)
+8. [Configuration Guide by Use Case](#configuration-guide-by-use-case)
+9. [API and Examples](#api-and-examples)
 10. [Benchmarks](#benchmarks)
 11. [FAQ](#faq)
 
 ---
 
-## Vue d'ensemble
+## Overview
 
-### Qu'est-ce que le Recall ?
+### What is Recall?
 
-Le **recall@k** mesure le pourcentage de vrais voisins les plus proches retrouvés parmi les k résultats retournés.
+**Recall@k** measures the percentage of true nearest neighbors found among the k returned results.
 
 ```
-Recall@10 = (Nombre de vrais top-10 retrouvés) / 10 × 100%
+Recall@10 = (Number of true top-10 neighbors found) / 10 × 100%
 ```
 
-| Recall | Signification |
+| Recall | Meaning |
 |--------|---------------|
-| **100%** | Tous les vrais voisins trouvés (recherche exacte) |
-| **95-99%** | Excellent, suffisant pour 99% des cas RAG/recommandation |
-| **90-95%** | Acceptable pour exploration/prototypage |
-| **< 90%** | Risque de résultats manquants importants |
+| **100%** | All true neighbors found (exact search) |
+| **95-99%** | Excellent, sufficient for 99% of RAG/recommendation cases |
+| **90-95%** | Acceptable for exploration/prototyping |
+| **< 90%** | Risk of missing important results |
 
-### Le compromis fondamental
+### The fundamental trade-off
 
 ```
-                    Latence
+                    Latency
                         ↑
                         │
           Fast ●────────┤  < 1ms    (~92% recall)
                         │
-      Adaptive ●╌╌╌╌╌╌╌┤  ~1-5ms   (95%+ recall, auto-escalade)
+      Adaptive ●╌╌╌╌╌╌╌┤  ~1-5ms   (95%+ recall, auto-escalation)
                         │
       Balanced ●────────┤  ~2ms     (~99% recall)
                         │
       Accurate ●────────┤  ~5ms     (~99.5%+ recall)
                         │
-       Perfect ●────────┤  ~15ms+   (100% recall, HNSW exhaustive)
+       Perfect ●────────┤  ~15ms+   (100% recall, exhaustive HNSW)
                         │
         ────────────────┴────────────────→ Recall
                    92%      95%      99%   100%
 ```
 
-> Le mode **Adaptive** est en pointillés car sa latence varie selon la difficulté de la query.
-> Pour les queries faciles (~80% du trafic typique), il est proche de Fast.
-> Pour les queries difficiles, il escalade automatiquement vers Balanced/Accurate.
+> The **Adaptive** mode is shown with a dashed line because its latency varies with query difficulty.
+> For easy queries (~80% of typical traffic), it is close to Fast.
+> For hard queries, it automatically escalates toward Balanced/Accurate.
 
 ---
 
-## Les 5 Modes de Recherche (+Custom)
+## The 5 Search Modes (+Custom)
 
-VelesDB expose 5 **presets** prédéfinis plus un mode `Custom` via l'enum `SearchQuality` :
+VelesDB exposes 5 predefined **presets** plus a `Custom` mode via the `SearchQuality` enum:
 
-### 1. Fast — Latence minimale
+### 1. Fast — Minimal latency
 
-| Paramètre | Valeur |
+| Parameter | Value |
 |-----------|--------|
 | `ef_search` | `max(64, k × 2)` |
-| Recall typique | ~92% |
-| Latence (100K vecs, 768D) | < 1 ms |
+| Typical recall | ~92% |
+| Latency (100K vecs, 768D) | < 1 ms |
 
-**Cas d'usage :**
-- Autocomplétion temps réel
-- Suggestions "as-you-type"
-- Prototypage rapide
+**Use cases:**
+- Real-time autocomplete
+- "As-you-type" suggestions
+- Rapid prototyping
 
 ```rust
 // ef_search = max(64, k * 2) = 64
@@ -89,41 +89,41 @@ collection.search_with_ef(&query, 10, 64)?;
 
 ---
 
-### 2. Balanced — Défaut recommandé ⭐
+### 2. Balanced — Recommended default ⭐
 
-| Paramètre | Valeur |
+| Parameter | Value |
 |-----------|--------|
 | `ef_search` | `max(128, k × 4)` |
-| Recall typique | ~99% |
-| Latence (100K vecs, 768D) | ~2 ms |
+| Typical recall | ~99% |
+| Latency (100K vecs, 768D) | ~2 ms |
 
-**Cas d'usage :**
+**Use cases:**
 - RAG / Retrieval-Augmented Generation
-- Recherche sémantique générale
-- Chatbots avec contexte
+- General semantic search
+- Context-aware chatbots
 
 ```rust
-// Défaut si non spécifié
+// Default when unspecified
 collection.search(&query, 10);
 ```
 
 ---
 
-### 3. Accurate — Haute précision
+### 3. Accurate — High precision
 
-| Paramètre | Valeur |
+| Parameter | Value |
 |-----------|--------|
 | `ef_search` | `max(512, k × 16)` |
-| Recall typique | ~99.5%+ |
-| Latence (100K vecs, 768D) | ~5 ms |
+| Typical recall | ~99.5%+ |
+| Latency (100K vecs, 768D) | ~5 ms |
 
-**Cas d'usage :**
-- Recherche de documents légaux
-- E-commerce (recommandations produit)
-- Détection de plagiat
-- Recherche médicale/scientifique
-- Audit de conformité
-- Déduplication critique
+**Use cases:**
+- Legal document search
+- E-commerce (product recommendations)
+- Plagiarism detection
+- Medical/scientific search
+- Compliance auditing
+- Critical deduplication
 
 ```rust
 // ef_search = max(512, k * 16) = 512
@@ -132,119 +132,119 @@ collection.search_with_ef(&query, 10, 512)?;
 
 ---
 
-### 4. Perfect — 100% Recall garanti
+### 4. Perfect — Guaranteed 100% recall
 
-| Paramètre | Valeur |
+| Parameter | Value |
 |-----------|--------|
-| Algorithme | **HNSW exhaustif** avec `ef_search = max(4096, k × 100)` |
-| Recall | **100%** garanti (via pool de candidats exhaustif) |
-| Latence (100K vecs, 768D) | ~15 ms |
+| Algorithm | **Exhaustive HNSW** with `ef_search = max(4096, k × 100)` |
+| Recall | **100%** guaranteed (via an exhaustive candidate pool) |
+| Latency (100K vecs, 768D) | ~15 ms |
 
-**Cas d'usage :**
-- Validation/benchmark du recall HNSW
-- Recherche légale/médico-légale
-- Petits datasets critiques (< 50K vecteurs)
+**Use cases:**
+- Validating/benchmarking HNSW recall
+- Legal/forensic search
+- Small critical datasets (< 50K vectors)
 
 ```rust
 // HNSW exhaustive search: ef_search = max(4096, k * 100) = 4096
 collection.search_with_ef(&query, 10, 4096)?;
 ```
 
-> **Note** : Le mode Perfect utilise toujours le graphe HNSW, mais avec un pool de candidats suffisamment large pour garantir un recall de 100% en pratique.
+> **Note**: Perfect mode still uses the HNSW graph, but with a candidate pool large enough to guarantee 100% recall in practice.
 
 ---
 
-### 5. Adaptive — Latence optimale adaptative
+### 5. Adaptive — Adaptive optimal latency
 
-| Paramètre | Valeur |
+| Parameter | Value |
 |-----------|--------|
-| `ef_search` | Phase 1 : `min_ef` (ex: 32). Phase 2 : `min_ef × 2` si query difficile (cap: `max_ef`) |
-| Recall typique | 95%+ (≥99% sur queries difficiles grâce à l'escalade) |
-| Latence (100K vecs, 768D) | ~1 ms (queries faciles), ~3-5 ms (queries difficiles) |
+| `ef_search` | Phase 1: `min_ef` (e.g. 32). Phase 2: `min_ef × 2` if the query is hard (cap: `max_ef`) |
+| Typical recall | 95%+ (≥99% on hard queries thanks to escalation) |
+| Latency (100K vecs, 768D) | ~1 ms (easy queries), ~3-5 ms (hard queries) |
 
-**Fonctionnement en 2 phases :**
+**Two-phase operation:**
 
-1. Recherche rapide avec `min_ef` (ex: 32)
-2. Analyse du **spread** des résultats : `(max_distance - min_distance) / min_distance`
-3. Si spread > 2.0 (résultats dispersés = query difficile) → re-recherche avec ef doublé
-4. Si spread ≤ 2.0 (cluster dense = query facile) → retour immédiat des résultats
+1. Fast search with `min_ef` (e.g. 32)
+2. Analyze the **spread** of the results: `(max_distance - min_distance) / min_distance`
+3. If spread > 2.0 (scattered results = hard query) → re-search with doubled ef
+4. If spread ≤ 2.0 (dense cluster = easy query) → return the results immediately
 
-**Cas d'usage :**
-- Workloads mixtes où la majorité des queries sont faciles
-- APIs avec SLA de latence sur le P50 (pas seulement le P99)
-- RAG en production avec des queries variées (certaines proches d'un cluster, d'autres ambiguës)
+**Use cases:**
+- Mixed workloads where most queries are easy
+- APIs with a latency SLA on the P50 (not only the P99)
+- Production RAG with varied queries (some close to a cluster, others ambiguous)
 
 ```rust
 use velesdb_core::SearchQuality;
 
-// ef adaptatif entre 32 (queries faciles) et 512 (queries difficiles)
+// Adaptive ef between 32 (easy queries) and 512 (hard queries)
 let quality = SearchQuality::Adaptive { min_ef: 32, max_ef: 512 };
 let results = index.search_with_quality(&query, 10, quality);
 ```
 
 ```sql
--- En VelesQL
+-- In VelesQL
 SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 WITH (mode = 'adaptive');
 ```
 
-**Impact mesuré** : réduction de 2-4x de la latence médiane par rapport au mode Balanced, sans régression sur le recall P99.
+**Measured impact**: 2-4x reduction in median latency compared to Balanced mode, with no regression on P99 recall.
 
 ---
 
-## Paramètres HNSW détaillés
+## Detailed HNSW Parameters
 
-### Paramètres de construction (index-time)
+### Build-time parameters (index-time)
 
-| Paramètre | Description | Défaut VelesDB | Impact |
+| Parameter | Description | VelesDB default | Impact |
 |-----------|-------------|----------------|--------|
-| `M` | Connexions par nœud | **24-32** (auto) | ↑ M = ↑ recall, ↑ mémoire |
-| `ef_construction` | Taille du pool de candidats à la construction | **300-400** (auto) | ↑ ef = ↑ qualité index, ↑ temps build |
+| `M` | Connections per node | **24-32** (auto) | ↑ M = ↑ recall, ↑ memory |
+| `ef_construction` | Candidate pool size at build time | **300-400** (auto) | ↑ ef = ↑ index quality, ↑ build time |
 
-### Paramètres de recherche (query-time)
+### Search-time parameters (query-time)
 
-| Paramètre | Description | Range | Impact |
+| Parameter | Description | Range | Impact |
 |-----------|-------------|-------|--------|
-| `ef_search` | Taille du pool de candidats à la recherche | 64 - 4096+ | ↑ ef = ↑ recall, ↑ latence |
-| `k` | Nombre de résultats demandés | 1 - 1000 | Doit être ≤ ef_search |
+| `ef_search` | Candidate pool size at search time | 64 - 4096+ | ↑ ef = ↑ recall, ↑ latency |
+| `k` | Number of requested results | 1 - 1000 | Must be ≤ ef_search |
 
-### Règle d'or
+### Golden rule
 
 ```
-ef_search ≥ k × multiplicateur
+ef_search ≥ k × multiplier
 
-Multiplicateur recommandé par mode:
+Recommended multiplier per mode:
 - Fast:      2x
 - Balanced:  4x
 - Accurate:  16x
 - Perfect:   100x
 ```
 
-### Auto-scaling de VelesDB
+### VelesDB auto-scaling
 
-VelesDB ajuste automatiquement `M` et `ef_construction` selon la dimension des vecteurs :
+VelesDB automatically tunes `M` and `ef_construction` based on vector dimensionality:
 
-| Dimension | M | ef_construction | Justification |
+| Dimension | M | ef_construction | Rationale |
 |-----------|---|-----------------|---------------|
-| 0-256 | 24 | 300 | Petits embeddings (word2vec, MiniLM) |
-| 257+ | 32 | 400 | Embeddings standards et grands (BERT, OpenAI, Cohere) |
+| 0-256 | 24 | 300 | Small embeddings (word2vec, MiniLM) |
+| 257+ | 32 | 400 | Standard and large embeddings (BERT, OpenAI, Cohere) |
 
 ---
 
 ## Sparse Vector Search
 
-### Vue d'ensemble
+### Overview
 
-La recherche sparse utilise des vecteurs creux (sparse vectors) ou seules quelques dimensions ont des valeurs non nulles. Ce format est typique des modeles de recherche par mots-cles comme **SPLADE**, **BM42**, ou **TF-IDF**.
+Sparse search uses sparse vectors, where only a few dimensions have non-zero values. This format is typical of keyword-based retrieval models such as **SPLADE**, **BM42**, or **TF-IDF**.
 
 ```
-Dense vector:  [0.12, 0.45, 0.03, 0.67, 0.22, ...]  (toutes dimensions)
-Sparse vector: {42: 0.8, 156: 0.3, 891: 0.5}         (quelques dimensions)
+Dense vector:  [0.12, 0.45, 0.03, 0.67, 0.22, ...]  (all dimensions)
+Sparse vector: {42: 0.8, 156: 0.3, 891: 0.5}         (a few dimensions)
 ```
 
-### Format des Sparse Vectors
+### Sparse Vector Format
 
-VelesDB stocke les sparse vectors comme des paires `(indice, valeur)` :
+VelesDB stores sparse vectors as `(index, value)` pairs:
 
 ```json
 {
@@ -256,45 +256,45 @@ VelesDB stocke les sparse vectors comme des paires `(indice, valeur)` :
 
 > **Note**: The REST API also accepts the parallel-array format (`{indices: [...], values: [...]}`) for backward compatibility.
 
-Les sparse vectors supportent les **named vectors** : un point peut avoir plusieurs sparse vectors nommes (par exemple `"bm25"`, `"splade"`).
+Sparse vectors support **named vectors**: a point can have several named sparse vectors (for example `"bm25"`, `"splade"`).
 
 ### Scoring
 
-La similarite sparse est calculee par **inner product** (produit scalaire) sur les dimensions partagees :
+Sparse similarity is computed as the **inner product** (dot product) over the shared dimensions:
 
 ```
-score = sum(query[i] * doc[i]) pour tout i ou les deux vecteurs ont une valeur
+score = sum(query[i] * doc[i]) for every i where both vectors have a value
 ```
 
-### Algorithmes de Recherche
+### Search Algorithms
 
-VelesDB selectionne automatiquement l'algorithme optimal :
+VelesDB automatically selects the optimal algorithm:
 
-| Algorithme | Condition | Description |
+| Algorithm | Condition | Description |
 |-----------|-----------|-------------|
-| **MaxScore DAAT** | Defaut | Document-At-A-Time avec early termination. Trie les termes par contribution et ignore les termes qui ne peuvent pas ameliorer le top-K |
-| **Linear Scan** | > 30% couverture | Scan lineaire quand la requete couvre plus de 30% des documents (total_postings > 0.3 * doc_count * query_nnz) |
+| **MaxScore DAAT** | Default | Document-At-A-Time with early termination. Sorts terms by contribution and skips terms that cannot improve the top-K |
+| **Linear Scan** | > 30% coverage | Linear scan when the query covers more than 30% of the documents (total_postings > 0.3 * doc_count * query_nnz) |
 
-### Accumulateur
+### Accumulator
 
-| Taille du corpus | Accumulateur |
+| Corpus size | Accumulator |
 |-----------------|-------------|
-| <= 10M documents | Dense array (O(1) acces) |
-| > 10M documents | FxHashMap (memoire proportionnelle aux hits) |
+| <= 10M documents | Dense array (O(1) access) |
+| > 10M documents | FxHashMap (memory proportional to hits) |
 
-### Exemple VelesQL
+### VelesQL Example
 
 ```sql
--- Recherche sparse uniquement
+-- Sparse-only search
 SELECT * FROM docs WHERE vector SPARSE_NEAR $keywords LIMIT 10
 
--- Avec filtre metadata
+-- With a metadata filter
 SELECT * FROM docs
 WHERE vector SPARSE_NEAR $bm25_query AND category = 'tech'
 LIMIT 20
 ```
 
-### Exemple REST API
+### REST API Example
 
 ```bash
 curl -X POST http://localhost:8080/collections/docs/search/sparse \
@@ -305,7 +305,7 @@ curl -X POST http://localhost:8080/collections/docs/search/sparse \
   }'
 ```
 
-### Exemple Python SDK
+### Python SDK Example
 
 ```python
 import velesdb
@@ -323,37 +323,37 @@ results = coll.search_request(velesdb.SearchOptions(
 
 ## Hybrid Search
 
-### Vue d'ensemble
+### Overview
 
-La recherche hybride combine la recherche **dense** (embeddings semantiques) et **sparse** (mots-cles) pour obtenir le meilleur des deux mondes :
+Hybrid search combines **dense** search (semantic embeddings) and **sparse** search (keywords) to get the best of both worlds:
 
-- **Dense** : comprend le sens semantique ("voiture" ~ "automobile")
-- **Sparse** : precision sur les termes exacts ("RUSTSEC-2025-0141")
-- **Hybrid** : combine les deux pour un recall superieur
+- **Dense**: understands semantic meaning ("car" ~ "automobile")
+- **Sparse**: precision on exact terms ("RUSTSEC-2025-0141")
+- **Hybrid**: combines both for higher recall
 
-### Quand utiliser chaque mode
+### When to use each mode
 
-| Mode | Forces | Faiblesses | Cas d'usage |
+| Mode | Strengths | Weaknesses | Use cases |
 |------|--------|-----------|-------------|
-| **Dense seul** | Semantique, langues, paraphrases | Termes techniques rares | RAG general, chatbots |
-| **Sparse seul** | Termes exacts, acronymes, codes | Pas de comprehension semantique | Recherche de logs, codes erreur |
-| **Hybride** | Combine les deux | Plus de calcul | Production RAG, e-commerce |
+| **Dense only** | Semantics, languages, paraphrases | Rare technical terms | General RAG, chatbots |
+| **Sparse only** | Exact terms, acronyms, codes | No semantic understanding | Log search, error codes |
+| **Hybrid** | Combines both | More compute | Production RAG, e-commerce |
 
-### Exemple VelesQL
+### VelesQL Example
 
 ```sql
--- Hybrid search avec RRF (USING FUSION est une clause finale : après LIMIT)
+-- Hybrid search with RRF (USING FUSION is a trailing clause: after LIMIT)
 SELECT * FROM products
 WHERE vector NEAR $embedding AND vector SPARSE_NEAR $bm25
 LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
--- Hybrid search avec poids explicites
+-- Hybrid search with explicit weights
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
 LIMIT 20 USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 ```
 
-### Exemple REST API
+### REST API Example
 
 ```bash
 curl -X POST http://localhost:8080/collections/docs/search \
@@ -365,9 +365,9 @@ curl -X POST http://localhost:8080/collections/docs/search \
   }'
 ```
 
-Quand les deux champs `vector` et `sparse_vector` sont fournis, VelesDB execute automatiquement une recherche hybride avec fusion RRF (k=60) par defaut.
+When both the `vector` and `sparse_vector` fields are provided, VelesDB automatically runs a hybrid search with RRF fusion (k=60) by default.
 
-### Exemple Python SDK
+### Python SDK Example
 
 ```python
 results = coll.search_request(velesdb.SearchOptions(
@@ -377,9 +377,9 @@ results = coll.search_request(velesdb.SearchOptions(
 ))
 ```
 
-### Execution parallele
+### Parallel execution
 
-Avec le feature flag `persistence` active (defaut), les branches dense et sparse sont executees en parallele via `rayon::join`. Sans `persistence`, elles sont executees sequentiellement.
+With the `persistence` feature flag enabled (default), the dense and sparse branches are executed in parallel via `rayon::join`. Without `persistence`, they are executed sequentially.
 
 ---
 
@@ -387,78 +387,78 @@ Avec le feature flag `persistence` active (defaut), les branches dense et sparse
 
 ### RRF (Reciprocal Rank Fusion)
 
-RRF combine les resultats par **position dans le classement**. Le score fusionne est :
+RRF combines results by **position in the ranking**. The fused score is:
 
 ```
 score_rrf(d) = 1/(k + rank_dense(d)) + 1/(k + rank_sparse(d))
 ```
 
-| Parametre | Defaut | Description |
+| Parameter | Default | Description |
 |-----------|--------|-------------|
-| `k` | 60 | Constante de ranking. k plus petit = plus de poids aux premiers rangs |
+| `k` | 60 | Ranking constant. Smaller k = more weight on the top ranks |
 
-**Avantages :**
-- Pas besoin de normaliser les scores
-- Robuste aux differences d'echelle entre dense et sparse
-- Defaut recommande pour la plupart des cas
+**Advantages:**
+- No need to normalize scores
+- Robust to scale differences between dense and sparse
+- Recommended default for most cases
 
-**VelesQL :**
+**VelesQL:**
 ```sql
 USING FUSION(strategy = 'rrf', k = 60)
 ```
 
 ### RSF (Reciprocal Score Fusion)
 
-RSF combine les resultats par **scores normalises** avec des poids explicites :
+RSF combines results by **normalized scores** with explicit weights:
 
 ```
 score_rsf(d) = dense_weight * norm(score_dense(d)) + sparse_weight * norm(score_sparse(d))
 ```
 
-La normalisation est min-max par branche. `dense_weight + sparse_weight` doit valoir 1.0.
+Normalization is min-max per branch. `dense_weight + sparse_weight` must equal 1.0.
 
-| Parametre | Defaut | Description |
+| Parameter | Default | Description |
 |-----------|--------|-------------|
-| `dense_weight` | 0.5 | Poids du score dense |
-| `sparse_weight` | 0.5 | Poids du score sparse |
+| `dense_weight` | 0.5 | Weight of the dense score |
+| `sparse_weight` | 0.5 | Weight of the sparse score |
 
-**Avantages :**
-- Controle fin sur l'importance relative de chaque source
-- Utile quand une source est systematiquement plus fiable
+**Advantages:**
+- Fine-grained control over the relative importance of each source
+- Useful when one source is consistently more reliable
 
-**VelesQL :**
+**VelesQL:**
 ```sql
 USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 ```
 
-### Comparaison RRF vs RSF
+### RRF vs RSF Comparison
 
 | Aspect | RRF | RSF |
 |--------|-----|-----|
-| **Parametrage** | 1 parametre (k) | 2 parametres (poids) |
-| **Normalisation** | Par rang (implicite) | Par score (min-max) |
-| **Quand utiliser** | Defaut, pas de tuning | Quand une source est plus fiable |
-| **Robustesse** | Tres robuste | Sensible a la distribution des scores |
+| **Tuning** | 1 parameter (k) | 2 parameters (weights) |
+| **Normalization** | By rank (implicit) | By score (min-max) |
+| **When to use** | Default, no tuning | When one source is more reliable |
+| **Robustness** | Very robust | Sensitive to score distribution |
 
 ---
 
-## Comparaison avec la concurrence
+## Comparison with the Competition
 
 ### VelesDB vs Milvus
 
 | Aspect | VelesDB | Milvus |
 |--------|---------|--------|
-| **Presets** | 4 modes nommés (Fast→Perfect) + Custom | Pas de presets, `search_params` manuels |
-| **100% recall** | `SearchQuality::Perfect` (HNSW exhaustif) | `FLAT` index séparé |
-| **Paramètre principal** | `SearchQuality` enum | `params={"ef": N}` |
-| **Auto-tuning** | ✅ Basé sur dimension | ❌ Manuel |
+| **Presets** | 4 named modes (Fast→Perfect) + Custom | No presets, manual `search_params` |
+| **100% recall** | `SearchQuality::Perfect` (exhaustive HNSW) | Separate `FLAT` index |
+| **Main parameter** | `SearchQuality` enum | `params={"ef": N}` |
+| **Auto-tuning** | ✅ Dimension-based | ❌ Manual |
 
-**Équivalence Milvus :**
+**Milvus equivalence:**
 ```python
 # Milvus
 search_params = {"metric_type": "COSINE", "params": {"ef": 128}}
 
-# VelesDB équivalent
+# VelesDB equivalent
 SearchQuality::Balanced  // ef_search = 128
 ```
 
@@ -466,12 +466,12 @@ SearchQuality::Balanced  // ef_search = 128
 
 | Aspect | VelesDB | OpenSearch k-NN |
 |--------|---------|-----------------|
-| **Presets** | 4 modes + Custom | Pas de presets |
-| **100% recall** | Mode Perfect (HNSW exhaustif) | `"method": "exact"` dans mapping |
-| **Paramètre** | `SearchQuality` | `ef_search` dans query |
-| **Approche** | Query-time | Query-time ou index-time |
+| **Presets** | 4 modes + Custom | No presets |
+| **100% recall** | Perfect mode (exhaustive HNSW) | `"method": "exact"` in mapping |
+| **Parameter** | `SearchQuality` | `ef_search` in query |
+| **Approach** | Query-time | Query-time or index-time |
 
-**Équivalence OpenSearch :**
+**OpenSearch equivalence:**
 ```json
 // OpenSearch
 {
@@ -486,7 +486,7 @@ SearchQuality::Balanced  // ef_search = 128
   }
 }
 
-// VelesDB équivalent
+// VelesDB equivalent
 SearchQuality::Accurate  // ef_search = 512
 ```
 
@@ -494,12 +494,12 @@ SearchQuality::Accurate  // ef_search = 512
 
 | Aspect | VelesDB | Qdrant |
 |--------|---------|--------|
-| **Presets** | 4 modes + Custom | Pas de presets officiels |
-| **100% recall** | Mode Perfect (HNSW exhaustif) | `exact: true` dans search |
-| **Paramètre** | `SearchQuality` | `hnsw_ef` dans search params |
+| **Presets** | 4 modes + Custom | No official presets |
+| **100% recall** | Perfect mode (exhaustive HNSW) | `exact: true` in search |
+| **Parameter** | `SearchQuality` | `hnsw_ef` in search params |
 | **Quantization** | SQ8, Binary | Scalar, Product |
 
-**Équivalence Qdrant :**
+**Qdrant equivalence:**
 ```json
 // Qdrant
 {
@@ -508,11 +508,11 @@ SearchQuality::Accurate  // ef_search = 512
   "params": { "hnsw_ef": 128, "exact": false }
 }
 
-// VelesDB équivalent
+// VelesDB equivalent
 SearchQuality::Balanced
 ```
 
-### Tableau récapitulatif des équivalences
+### Equivalence summary table
 
 | VelesDB Mode | ef_search | Milvus ef | OpenSearch ef_search | Qdrant hnsw_ef |
 |--------------|-----------|-----------|----------------------|----------------|
@@ -523,110 +523,110 @@ SearchQuality::Balanced
 
 ---
 
-## Guide de configuration par cas d'usage
+## Configuration Guide by Use Case
 
 ### 🤖 RAG / Chatbot
 
 ```rust
-// Configuration recommandée pour production (latence optimale)
-SearchQuality::Adaptive { min_ef: 32, max_ef: 512 }  // 95%+, ~1-5ms selon query
+// Recommended production configuration (optimal latency)
+SearchQuality::Adaptive { min_ef: 32, max_ef: 512 }  // 95%+, ~1-5ms depending on query
 
-// Alternative fixe pour rappel constant
+// Fixed alternative for constant recall
 SearchQuality::Balanced  // ~99% recall, ~2ms
 
-// Si réponses critiques (médical, légal)
+// For critical answers (medical, legal)
 SearchQuality::Accurate  // ~99.5%+ recall, ~5ms
 ```
 
-### 🛒 E-commerce / Recommandations
+### 🛒 E-commerce / Recommendations
 
 ```rust
-// Suggestions temps réel (autocomplétion)
+// Real-time suggestions (autocomplete)
 SearchQuality::Fast  // ~92% recall, < 1ms
 
-// Pages produit (mixte facile/difficile)
-SearchQuality::Adaptive { min_ef: 32, max_ef: 256 }  // rapide sur queries simples
+// Product pages (mixed easy/hard)
+SearchQuality::Adaptive { min_ef: 32, max_ef: 256 }  // fast on simple queries
 
-// Page produit (précision importante)
+// Product page (precision matters)
 SearchQuality::Balanced  // ~99% recall
 ```
 
-### 🔍 Recherche documentaire
+### 🔍 Document search
 
 ```rust
-// Recherche exploratoire
+// Exploratory search
 SearchQuality::Balanced
 
-// Recherche légale / audit
-SearchQuality::Accurate  // ou Perfect pour petits corpus
+// Legal search / audit
+SearchQuality::Accurate  // or Perfect for small corpora
 ```
 
-### 🧬 Recherche scientifique/médicale
+### 🧬 Scientific/medical research
 
 ```rust
-// Papers, séquences génomiques
+// Papers, genomic sequences
 SearchQuality::Accurate  // ~99.5%+ recall
 
-// Validation finale
-SearchQuality::Perfect  // 100% recall garanti
+// Final validation
+SearchQuality::Perfect  // guaranteed 100% recall
 ```
 
 ### 📱 Mobile / Edge / IoT
 
 ```rust
-// Latence critique, batterie limitée
+// Critical latency, limited battery
 SearchQuality::Fast
 
-// Avec quantization binaire pour mémoire
+// With binary quantization for memory
 HnswParams::with_binary(dimension)
 ```
 
-### 🔄 Déduplication / Near-duplicate detection
+### 🔄 Deduplication / Near-duplicate detection
 
 ```rust
-// Détection de duplicatas exacts
-SearchQuality::Perfect  // Aucun faux négatif
+// Exact duplicate detection
+SearchQuality::Perfect  // No false negatives
 
-// Détection approximative (OK si quelques doublons échappent)
+// Approximate detection (OK if a few duplicates slip through)
 SearchQuality::Accurate
 ```
 
 ---
 
-## API et exemples
+## API and Examples
 
 ### Rust
 
 ```rust
 use velesdb_core::VectorCollection;
 
-// Méthode 1: Mode par défaut (Balanced, ef_search=128)
+// Method 1: Default mode (Balanced, ef_search=128)
 let results = collection.search(&query_vector, 10)?;
 
-// Méthode 2: ef_search personnalisé (haute précision)
+// Method 2: Custom ef_search (high precision)
 let results = collection.search_with_ef(&query_vector, 10, 1024)?;
 
-// Méthode 3: ef_search pour mode rapide
+// Method 3: ef_search for fast mode
 let results = collection.search_with_ef(&query_vector, 10, 64)?;
 
-// Méthode 4: Mode parfait (HNSW exhaustif, ef_search=4096)
+// Method 4: Perfect mode (exhaustive HNSW, ef_search=4096)
 let results = collection.search_with_ef(&query_vector, 10, 4096)?;
 ```
 
 ### REST API
 
 ```bash
-# Mode par défaut (Balanced)
+# Default mode (Balanced)
 curl -X POST http://localhost:8080/collections/my_collection/search \
   -H "Content-Type: application/json" \
   -d '{"vector": [0.1, 0.2, ...], "top_k": 10}'
 
-# ef_search personnalisé
+# Custom ef_search
 curl -X POST http://localhost:8080/collections/my_collection/search \
   -H "Content-Type: application/json" \
   -d '{"vector": [0.1, 0.2, ...], "top_k": 10, "ef_search": 512}'
 
-# Mode via le parametre "mode" (v1.9.2)
+# Mode via the "mode" parameter (v1.9.2)
 curl -X POST http://localhost:8080/collections/my_collection/search \
   -H "Content-Type: application/json" \
   -d '{"vector": [0.1, 0.2, ...], "top_k": 10, "mode": "accurate"}'
@@ -645,24 +645,24 @@ curl -X POST http://localhost:8080/collections/my_collection/search \
 ### VelesQL
 
 ```sql
--- Mode par défaut (Balanced)
+-- Default mode (Balanced)
 SELECT * FROM my_collection
 WHERE vector NEAR $query
 LIMIT 10;
 
--- Mode explicite
+-- Explicit mode
 SELECT * FROM my_collection
 WHERE vector NEAR $query
 LIMIT 10
 WITH (mode = 'accurate');
 
--- Mode adaptatif (latence optimale pour workloads mixtes)
+-- Adaptive mode (optimal latency for mixed workloads)
 SELECT * FROM my_collection
 WHERE vector NEAR $query
 LIMIT 10
 WITH (mode = 'adaptive');
 
--- ef_search personnalisé
+-- Custom ef_search
 SELECT * FROM my_collection
 WHERE vector NEAR $query
 LIMIT 10
@@ -691,32 +691,32 @@ Session Settings
 velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 ```
 
-> Note : `max_results` est un réglage d'affichage du REPL. Indépendamment du
-> CLI, le moteur applique `LIMIT 10` par défaut à tout SELECT sans clause
-> `LIMIT` explicite (exceptions : `MATCH ... RETURN` et les requêtes
-> UNION/INTERSECT/EXCEPT, sans défaut).
+> Note: `max_results` is a REPL display setting. Independently of the CLI,
+> the engine applies a default `LIMIT 10` to any SELECT without an explicit
+> `LIMIT` clause (exceptions: `MATCH ... RETURN` and UNION/INTERSECT/EXCEPT
+> queries, which have no default).
 
 ---
 
 ## Benchmarks
 
-### Conditions de test
+### Test conditions
 
-- **CPU** : AMD Ryzen 9 5900X (12 cores)
-- **RAM** : 64 GB DDR4
-- **Dataset** : 100K vecteurs, 768 dimensions (OpenAI embeddings)
-- **Métrique** : Cosine similarity
+- **CPU**: AMD Ryzen 9 5900X (12 cores)
+- **RAM**: 64 GB DDR4
+- **Dataset**: 100K vectors, 768 dimensions (OpenAI embeddings)
+- **Metric**: Cosine similarity
 
-### Résultats
+### Results
 
-| Mode | ef_search | Recall@10 | Latence p50 | Latence p99 | QPS |
+| Mode | ef_search | Recall@10 | p50 latency | p99 latency | QPS |
 |------|-----------|-----------|-------------|-------------|-----|
 | Fast | 64 | ~92% | 0.8 ms | 1.5 ms | 12,500 |
 | Balanced | 128 | ~99% | 1.9 ms | 3.2 ms | 5,200 |
 | Accurate | 512 | ~99.5% | 4.1 ms | 6.8 ms | 2,400 |
 | Perfect | 4096 | 100.0% | 14.2 ms | 22.1 ms | 700 |
 
-### Scaling avec le dataset
+### Scaling with dataset size
 
 | Dataset Size | Balanced Latency | Perfect Latency | Ratio |
 |--------------|------------------|-----------------|-------|
@@ -725,30 +725,30 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 | 500K | 3.2 ms | 240 ms | 75x |
 | 1M | 4.8 ms | 480 ms | 100x |
 
-> **Observation** : Les modes Fast, Balanced et Accurate scalent en O(log n) grace a HNSW. Le mode Perfect utilise aussi HNSW mais avec un pool de candidats tres large, ce qui augmente la latence. Pour les tres grands datasets, Accurate offre un excellent compromis recall/latence.
+> **Observation**: The Fast, Balanced, and Accurate modes scale in O(log n) thanks to HNSW. Perfect mode also uses HNSW but with a very large candidate pool, which increases latency. For very large datasets, Accurate offers an excellent recall/latency trade-off.
 
 ---
 
 ## FAQ
 
-### Q: Quel mode choisir pour du RAG ?
+### Q: Which mode should I pick for RAG?
 
-**R:** `Balanced` (défaut) convient à 95% des cas RAG. Si vous avez des exigences légales/médicales, utilisez `Accurate`.
+**A:** `Balanced` (default) fits 95% of RAG cases. If you have legal/medical requirements, use `Accurate`.
 
-### Q: Le mode Perfect est-il vraiment 100% recall ?
+### Q: Is Perfect mode really 100% recall?
 
-**R:** Oui, garanti en pratique. Il utilise HNSW avec un pool de candidats exhaustif (`ef_search = max(4096, k * 100)`), ce qui force le graphe a explorer suffisamment de noeuds pour retrouver tous les vrais voisins.
+**A:** Yes, guaranteed in practice. It uses HNSW with an exhaustive candidate pool (`ef_search = max(4096, k * 100)`), which forces the graph to explore enough nodes to find all true neighbors.
 
-### Q: Puis-je utiliser Perfect en production ?
+### Q: Can I use Perfect in production?
 
-**R:** Oui, mais avec précautions :
-- Datasets < 50K : Acceptable (~25ms)
-- Datasets 50K-200K : Cas critiques seulement
-- Datasets > 200K : Recommandé uniquement en batch/offline
+**A:** Yes, but with precautions:
+- Datasets < 50K: Acceptable (~25ms)
+- Datasets 50K-200K: Critical cases only
+- Datasets > 200K: Recommended only for batch/offline workloads
 
-### Q: Comment mesurer le recall de mon index ?
+### Q: How do I measure the recall of my index?
 
-**R:** Comparez les résultats ANN vs Perfect sur un échantillon :
+**A:** Compare ANN vs Perfect results on a sample:
 
 ```rust
 // Benchmark recall
@@ -759,23 +759,23 @@ let recall = calculate_recall(&ann_results, &exact_results);
 println!("Recall@10: {:.1}%", recall * 100.0);
 ```
 
-### Q: ef_search peut-il être > nombre de vecteurs ?
+### Q: Can ef_search exceed the number of vectors?
 
-**R:** Oui, mais au-dela d'un certain seuil, le gain de recall est negligeable et la latence augmente significativement. Le mode Perfect (`ef_search = 4096`) est deja calibre pour garantir 100% recall.
+**A:** Yes, but beyond a certain threshold, the recall gain is negligible while latency increases significantly. Perfect mode (`ef_search = 4096`) is already calibrated to guarantee 100% recall.
 
-### Q: Milvus utilise `ef` et VelesDB `ef_search`, c'est pareil ?
+### Q: Milvus uses `ef` and VelesDB uses `ef_search` — are they the same thing?
 
-**R:** Oui, c'est la même chose. `ef_search` est le nom standard dans la littérature HNSW.
+**A:** Yes, they are the same. `ef_search` is the standard name in the HNSW literature.
 
 ---
 
-## Ressources
+## Resources
 
-- [HNSW Paper original (Malkov & Yashunin, 2018)](https://arxiv.org/abs/1603.09320)
+- [Original HNSW paper (Malkov & Yashunin, 2018)](https://arxiv.org/abs/1603.09320)
 - [Milvus HNSW tuning guide](https://milvus.io/docs/index-with-milvus.md)
 - [OpenSearch k-NN performance guide](https://opensearch.org/docs/latest/search-plugins/knn/performance-tuning/)
 - [Qdrant HNSW configuration](https://qdrant.tech/documentation/concepts/indexing/)
 
 ---
 
-*Documentation VelesDB -- Mars 2026*
+*VelesDB Documentation -- 2026-06-12*
