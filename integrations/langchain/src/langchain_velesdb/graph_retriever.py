@@ -167,7 +167,10 @@ class GraphRetriever(BaseRetriever):
             from langchain_velesdb.security import validate_k
             validate_k(self.seed_k, "seed_k")
             validate_k(self.expand_k, "expand_k")
-            object.__setattr__(self, "_graph_collection", self._init_native_graph())
+            # low_latency mode never traverses the graph, so it must not
+            # require a graph collection to exist (vector-only retrieval).
+            if not self.low_latency:
+                object.__setattr__(self, "_graph_collection", self._init_native_graph())
         else:
             raise ValueError(
                 f"Invalid mode '{self.mode}'. Must be 'native' or 'rest'."

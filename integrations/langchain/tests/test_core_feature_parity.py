@@ -7,6 +7,7 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
 from langchain_core.embeddings import Embeddings
 
 
@@ -104,8 +105,34 @@ def _load_vectorstore_module():
     return vs_mod
 
 
-def test_collection_creation_propagates_storage_mode():
-    module = _load_vectorstore_module()
+_PATCHED_PREFIXES = ("velesdb", "langchain_velesdb")
+
+
+@pytest.fixture()
+def vectorstore_module():
+    """Load vectorstore.py against the fake velesdb, restoring sys.modules.
+
+    ``_load_vectorstore_module`` replaces ``velesdb``, ``langchain_velesdb``
+    and several of its submodules in ``sys.modules``. Without restoration,
+    every test module that runs afterwards in the same session imports the
+    fakes instead of the real packages (historically 17 unrelated failures).
+    """
+    saved = {
+        name: module
+        for name, module in sys.modules.items()
+        if name.split(".")[0].startswith(_PATCHED_PREFIXES)
+    }
+    try:
+        yield _load_vectorstore_module()
+    finally:
+        for name in list(sys.modules):
+            if name.split(".")[0].startswith(_PATCHED_PREFIXES):
+                del sys.modules[name]
+        sys.modules.update(saved)
+
+
+def test_collection_creation_propagates_storage_mode(vectorstore_module):
+    module = vectorstore_module
     store = module.VelesDBVectorStore(
         embedding=_FakeEmbeddings(),
         path="/tmp/velesdb_test",
@@ -117,8 +144,8 @@ def test_collection_creation_propagates_storage_mode():
     assert store._collection.create_args["storage_mode"] == "sq8"
 
 
-def test_similarity_search_with_ef_uses_core_search_variant():
-    module = _load_vectorstore_module()
+def test_similarity_search_with_ef_uses_core_search_variant(vectorstore_module):
+    module = vectorstore_module
     store = module.VelesDBVectorStore(embedding=_FakeEmbeddings(), path="/tmp/velesdb_test", collection_name="ef")
     store.add_texts(["hello"])
 
@@ -128,8 +155,8 @@ def test_similarity_search_with_ef_uses_core_search_variant():
     assert store._collection.search_with_ef_calls[0]["ef_search"] == 96
 
 
-def test_similarity_search_ids_returns_core_shape():
-    module = _load_vectorstore_module()
+def test_similarity_search_ids_returns_core_shape(vectorstore_module):
+    module = vectorstore_module
     store = module.VelesDBVectorStore(embedding=_FakeEmbeddings(), path="/tmp/velesdb_test", collection_name="ids")
     store.add_texts(["hello"])
 
