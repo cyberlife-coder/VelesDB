@@ -978,4 +978,98 @@ mod tests {
         assert_eq!(added, 2);
         assert_eq!(collection.edge_count(), 2);
     }
+
+    // =========================================================================
+    // EPIC-015: Strict-schema node-label validation in store_node_payload
+    // =========================================================================
+
+    fn create_strict_schema_collection() -> (Collection, TempDir) {
+        use crate::collection::graph::{GraphSchema, NodeType};
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let schema = GraphSchema::new()
+            .with_node_type(NodeType::new("Person"))
+            .with_node_type(NodeType::new("Company"));
+        let collection = Collection::create_graph_collection(
+            temp_dir.path().to_path_buf(),
+            "strict_kg",
+            schema,
+            None,
+            DistanceMetric::Cosine,
+        )
+        .expect("Failed to create strict-schema collection");
+        (collection, temp_dir)
+    }
+
+    #[test]
+    fn test_store_node_payload_valid_label_accepted_in_strict_schema() {
+        let (col, _tmp) = create_strict_schema_collection();
+        let payload = serde_json::json!({"_labels": ["Person"], "name": "Alice"});
+        assert!(
+            col.store_node_payload(1, &payload).is_ok(),
+            "declared label must be accepted"
+        );
+    }
+
+    #[test]
+    fn test_store_node_payload_undeclared_label_rejected_in_strict_schema() {
+        let (col, _tmp) = create_strict_schema_collection();
+        let payload = serde_json::json!({"_labels": ["Animal"], "name": "Dog"});
+        let err = col
+            .store_node_payload(1, &payload)
+            .expect_err("undeclared label must be rejected");
+        assert!(
+            err.to_string().contains("Animal"),
+            "error must name the offending label, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_store_node_payload_no_labels_allowed_in_strict_schema() {
+        // Payloads without `_labels` cannot carry a type; they pass validation
+        // (no type to reject) — the caller may add a typed payload later.
+        let (col, _tmp) = create_strict_schema_collection();
+        let payload = serde_json::json!({"name": "unlabelled"});
+        assert!(
+            col.store_node_payload(1, &payload).is_ok(),
+            "payload without _labels must not be blocked by schema validation"
+        );
+    }
+
+    #[test]
+    fn test_store_node_payload_schemaless_accepts_any_label() {
+        let (col, _tmp) = create_graph_test_collection();
+        let payload = serde_json::json!({"_labels": ["ArbitraryType"], "data": 42});
+        assert!(
+            col.store_node_payload(1, &payload).is_ok(),
+            "schemaless collection must accept any label"
+        );
+    }
+
+    #[test]
+    fn test_store_node_payload_multiple_labels_all_validated() {
+        let (col, _tmp) = create_strict_schema_collection();
+        // Both labels declared → ok
+        let ok = serde_json::json!({"_labels": ["Person", "Company"]});
+        assert!(col.store_node_payload(1, &ok).is_ok());
+        // One undeclared label → rejected
+        let bad = serde_json::json!({"_labels": ["Person", "Robot"]});
+        let err = col
+            .store_node_payload(2, &bad)
+            .expect_err("second label is undeclared");
+        assert!(err.to_string().contains("Robot"));
+    }
+
+    #[test]
+    fn test_store_node_payload_rejected_does_not_mutate_state() {
+        let (col, _tmp) = create_strict_schema_collection();
+        let bad = serde_json::json!({"_labels": ["Alien"], "name": "ET"});
+        col.store_node_payload(99, &bad).expect_err("must fail");
+        // Node must not be stored
+        assert!(
+            col.get_node_payload(99)
+                .expect("retrieve must not error")
+                .is_none(),
+            "failed write must leave no payload behind"
+        );
+    }
 }

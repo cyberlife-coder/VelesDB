@@ -157,6 +157,29 @@ impl Collection {
         Ok(replayed)
     }
 
+    /// Enforces strict-schema node-type validation for a node payload write.
+    ///
+    /// In schemaless mode (the default) or when the payload carries no
+    /// `_labels`, this is a no-op. In strict mode every declared label is
+    /// checked against the schema before any mutation takes place, so an
+    /// undeclared node type is rejected atomically with no partial write.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SchemaValidation` if any label in `_labels` is not
+    /// declared in the strict schema.
+    fn validate_node_labels_against_schema(&self, payload: &serde_json::Value) -> Result<()> {
+        let schema = match self.config.read().graph_schema.clone() {
+            Some(s) if !s.is_schemaless() => s,
+            _ => return Ok(()),
+        };
+
+        for label in extract_labels(payload) {
+            schema.validate_node_type(&label)?;
+        }
+        Ok(())
+    }
+
     /// Enforces strict-schema referential integrity for an edge write.
     ///
     /// In schemaless mode (the default), this is a no-op and returns
@@ -439,16 +462,11 @@ impl Collection {
     ///
     /// Returns an error if storage fails.
     pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
-        // TODO(EPIC-015): in strict-schema mode, validate the node's `_labels`
-        // against `GraphSchema::validate_node_type` here (and on INSERT NODE) to
-        // reject undeclared node types. Today only edge writes are validated
-        // (`validate_edge_referential_integrity`); node writes are unchecked.
-        // Crash durability for node payloads is already provided by the
-        // payload WAL: `storage.store(node_id, payload)` below appends a
-        // CRC-checked record to `payloads.log` and fsyncs (LogPayloadStorage,
-        // DurabilityMode::Fsync), replayed on open. No edge-WAL work is
-        // needed here — only graph EDGES lacked WAL coverage.
+        // Reject undeclared node types before any mutation. Schemaless and
+        // payloads without `_labels` short-circuit at zero cost.
         // LOCK ORDER: payload_storage(3) → label_index(7) → graph_range_indexes(7).
+        self.validate_node_labels_against_schema(payload)?;
+
         let mut storage = self.payload_storage.write();
 
         // Remove old labels and property indexes if this is an update.
