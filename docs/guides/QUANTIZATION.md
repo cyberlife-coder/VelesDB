@@ -143,9 +143,10 @@ Training is **explicit**: it is not triggered automatically. The collection must
 `rotation.opq` for OPQ) into the collection directory. On reopen, the
 codebook is reloaded and the PQ cache is rebuilt by re-encoding all stored
 vectors (O(n) cost at open time) — ADC rescoring therefore survives
-restarts. Note: a quantizer trained lazily at insertion time (`storage='pq'`
-mode without `TRAIN QUANTIZER`) is NOT persisted; only `TRAIN QUANTIZER`
-writes the codebook to disk.
+restarts. A quantizer trained lazily at insertion time (`storage='pq'` mode
+without `TRAIN QUANTIZER`) is persisted too: every full flush writes the
+current codebook to disk (`flush_pq_codebook`), so lazy-trained PQ also
+survives restarts — at parity with the RaBitQ flush hook.
 
 ### Training via Rust
 
