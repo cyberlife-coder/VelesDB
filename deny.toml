@@ -37,6 +37,16 @@ ignore = [
     # runtime path is not affected.
     { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 + 0.8.5: phf/tauri build transitives — production rand is 0.9.3" },
 
+    # ── velesdb-python (PyO3) ─────────────────────────────────────────
+    # OOB read in BoundListIterator/BoundTupleIterator nth/nth_back.
+    # velesdb-python never calls nth/nth_back on Python sequence iterators
+    # (verified by grep over crates/velesdb-python/src), so the vulnerable
+    # path is unreachable. The fix lands in pyo3 0.29, but the numpy crate
+    # (required for zero-copy NumPy views) caps at pyo3 0.28 today.
+    # Re-evaluate at every numpy release; drop this ignore once numpy
+    # supports pyo3 >= 0.29.
+    { id = "RUSTSEC-2026-0176", reason = "pyo3 nth/nth_back OOB: code path unreachable from velesdb-python; patched pyo3 0.29 blocked upstream by numpy (max 0.28)" },
+
     # ── velesdb-cli transitive ────────────────────────────────────────
     { id = "RUSTSEC-2024-0384", reason = "instant: velesdb-cli transitive (clap/indicatif chain), unmaintained" },
 
@@ -75,13 +85,15 @@ allow = [
     "BSL-1.0",
     "Unicode-3.0",
     "LicenseRef-ELv2",
+    # webpki-root-certs (Mozilla CA certificate DATA) — permissive data license
+    "CDLA-Permissive-2.0",
 ]
 # Note: Unicode-DFS-2016 removed - not used by current deps
 
 # Exception for local crates (Elastic License 2.0 - source available)
 [[licenses.clarify]]
 name = "tauri-plugin-velesdb"
-expression = "MIT"
+expression = "LicenseRef-ELv2"
 license-files = []
 
 [[licenses.clarify]]

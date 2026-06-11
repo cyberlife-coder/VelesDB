@@ -1,22 +1,366 @@
 {\rtf1\ansi\deff0\nouicompat{\fonttbl{\f0\fswiss\fcharset0 Arial;}}
-{\*\generator Riched20 10.0.19041}\viewkind4\uc1 
-\pard\sa200\sl276\slmult1\b\f0\fs28 VelesDB License Agreement\b0\fs22\par
+\pard\sa120\sl276\slmult1\f0\fs22
+VelesDB Core License 1.0\par
 \par
-\b Elastic License 2.0 (ELv2)\b0\par
+Based on the Elastic License 2.0 (ELv2) \u8212? Adapted for VelesDB Core\par
 \par
-Copyright (c) 2024 Julien Lange (WiScale France)\par
+Copyright (c) 2024-2026 Wiscale France. All rights reserved.\par
 \par
-\b License Grant\b0\par
-You may use, copy, modify, and distribute VelesDB for any purpose, including commercial use, subject to the following conditions:\par
+VelesDB\u174? is a registered trademark of Wiscale France.\par
 \par
-\b Restrictions\b0 :\par
-- You may not provide VelesDB as a hosted or managed service to third parties\par
-- You may not remove or obscure any license or copyright notices\par
+---\par
 \par
-\b Commercial Use\b0 : For commercial cloud hosting or managed services, please contact contact@wiscale.fr for licensing options.\par
+\b Acceptance\b0\par
 \par
-\b Disclaimer\b0\par
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.\par
+By using the Software, you agree to all of the terms and conditions below.\par
 \par
-For the complete license text, see: https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE\par
+\b Copyright License\b0\par
+\par
+The Licensor grants you a non-exclusive, royalty-free, worldwide, non-sublicensable, non-transferable license to use, copy, distribute, make available, and prepare derivative works of the Software, in each case subject to the limitations and conditions below.\par
+\par
+\b Limitations\b0\par
+\par
+### 1) No Hosted or Managed Service\par
+\par
+You may not provide the Software to third parties as a Hosted or Managed Service.\par
+\par
+A "Hosted or Managed Service" is any service where You (or a third party acting on Your behalf) host, operate, or make available the Software \u8212? directly or indirectly \u8212? to third parties who are provided access to a Substantial Set of the Software's features or functionality.\par
+\par
+This restriction includes, without limitation:\par
+\par
+- offering the Software as a cloud service, hosted service, managed service, or database-as-a-service (DBaaS),\par
+- operating the Software for third parties, including as a managed service provider (MSP), outsourcer, consultant, hosting provider, or service provider, even if provided to a single customer,\par
+- exposing the Software's query, administration, indexing, ingestion, storage, graph traversal, knowledge graph, columnar filtering, or management capabilities (or any substantially similar capabilities) to third parties through any interface, including but not limited to: APIs, SDKs, web interfaces, command lines, gateways, middleware, service layers, application wrappers, proxy layers, or any other programmatic or interactive mechanism.\par
+\par
+If third parties can store data in, query, manage collections or indexes, traverse or manage graph nodes and edges, filter structured data, administer schemas, or otherwise use the Software as a database, vector database, graph database, knowledge graph engine, columnar store, search engine, or query engine \u8212? whether directly or through any intermediary layer \u8212? this constitutes a Hosted or Managed Service and requires a separate commercial license from the Licensor.\par
+\par
+### 2) No Competitive Offering\par
+\par
+You may not use the Software to build, sell, offer, operate, or otherwise make commercially available any product or service that is Substantially Similar to the Software or that competes with the Software as:\par
+\par
+- a database,\par
+- a vector database,\par
+- a graph database or knowledge graph engine,\par
+- a columnar store or analytical engine,\par
+- a search engine,\par
+- a query engine, or\par
+- a hybrid search, retrieval, or multi-model data system.\par
+\par
+This restriction applies whether the product is offered as software, as a service, or as a component of a larger offering, and regardless of whether the Software's code is modified.\par
+\par
+This restriction does NOT prohibit:\par
+\par
+- internal use of the Software within your own organization,\par
+- integration of the Software as a backend component of your own product or service (provided end users receive only the results of your application and are not given access to the Software's core database capabilities),\par
+- use of the Software to power features such as search, retrieval, ranking, recommendations, or RAG within your own product.\par
+\par
+### 3) No Circumvention of Paid Features\par
+\par
+You may not move, change, disable, or circumvent any licensing mechanism or functionality that enforces paid features, and you may not remove or obscure any functionality in the Software that is protected by such licensing mechanism.\par
+\par
+### 4) No Removal of Notices; Trademarks\par
+\par
+You may not alter, remove, or obscure any licensing, copyright, or other notices of the Licensor in the Software. Any use of the Licensor's trademarks is subject to applicable law.\par
+\par
+### 5) Benchmarking\par
+\par
+You may conduct and publish benchmarks of the Software, provided that any public disclosure of benchmark results includes all of the following:\par
+\par
+- the benchmarking methodology used,\par
+- the dataset(s) used (including size, type, and source),\par
+- the hardware configuration (CPU, RAM, storage, network),\par
+- the software version of VelesDB Core tested,\par
+- the full configuration of the Software as tested (including relevant parameters, tuning, and index settings),\par
+- any other software or tools used in the benchmark.\par
+\par
+The purpose of this requirement is transparency and reproducibility, not restriction. Benchmarks that omit this information may not be published or distributed publicly.\par
+\par
+\b Redistribution\b0\par
+\par
+### Attribution for Public-Facing Applications\par
+\par
+If You deploy or make publicly available an Application or Service that uses the Software as a component \u8212? including SaaS products, web applications, mobile applications, or browser-based applications \u8212? You must include a visible attribution notice containing a hyperlink to https://velesdb.com.\par
+\par
+**Placement:** The notice must appear in at least one location that is accessible to end users without requiring a separate action (e.g., not solely in source code or internal documentation). Acceptable placements include, but are not limited to:\par
+\par
+- a website footer or sidebar;\par
+- an application's About, Credits, or Settings page;\par
+- API documentation or developer portal;\par
+- a README or landing page for open-source projects that integrate the Software.\par
+\par
+**Format:** The notice may take any reasonable form, such as:\par
+\par
+- "Powered by [VelesDB](https://velesdb.com)"\par
+- "Built with [VelesDB](https://velesdb.com)"\par
+- The VelesDB logo (available at https://velesdb.com/brand) linking to https://velesdb.com\par
+\par
+The key requirement is a **clickable link to https://velesdb.com** that is visible to end users.\par
+\par
+**Exemptions:** This requirement does not apply to:\par
+- internal use within your organization;\par
+- development, testing, or staging environments;\par
+- holders of a VelesDB Enterprise or Premium license (which may include waived or alternative attribution terms \u8212? contact contact@wiscale.fr).\par
+\par
+Failure to comply with this attribution requirement constitutes a violation of this license.\par
+\par
+### Redistribution Terms\par
+\par
+You may redistribute the Software (in original or modified form), including through container images (e.g., Docker), installers, package managers (e.g., Homebrew, apt, cargo), infrastructure-as-code templates (e.g., Terraform, Helm), or any other distribution mechanism, provided that:\par
+\par
+1. a complete copy of this license is included with each distribution,\par
+2. all copyright and licensing notices in the Software are preserved and unmodified,\par
+3. the redistributed Software remains governed by this license (you may not relicense it under different terms),\par
+4. if modified, the distribution includes prominent notices stating that you have modified the Software, and\par
+5. redistribution does not grant recipients any right to provide the Software as a Hosted or Managed Service.\par
+\par
+For the avoidance of doubt, redistribution of the Software does not, by itself, constitute a Hosted or Managed Service, provided that the recipient operates the Software for its own internal use and not for the benefit of third parties.\par
+\par
+\b Permitted Use (Clarification)\b0\par
+\par
+You may use the Software in production, including for commercial purposes, and you may embed or integrate the Software into your own products and services, provided that:\par
+\par
+- the Software is used only as an internal component of your product or service, and\par
+- your end users are not provided access to a Substantial Set of the Software's features or functionality.\par
+\par
+For example, it is permitted to use the Software internally to power features such as:\par
+\par
+- search and retrieval,\par
+- retrieval-augmented generation (RAG),\par
+- ranking and recommendations,\par
+- document indexing and similarity matching,\par
+- knowledge graph traversal and relationship discovery,\par
+- structured data filtering and analytics,\par
+- any other feature where end users receive only the results produced by your application and do not receive access to the Software itself.\par
+\par
+**Embedded and local-first use.** The Software is designed to run as an embedded database (in-process, WASM, mobile, desktop, or server). Using the Software in embedded mode within your own application \u8212? including in browser-based (WASM), mobile (iOS/Android), desktop (Tauri), or server-side deployments \u8212? is expressly permitted under this license, provided the Software serves only as an internal component and end users do not receive direct access to the Software's database capabilities.\par
+\par
+\b Business Model Clarification\b0\par
+\par
+The Licensor offers the Software under a multi-tier model:\par
+\par
+- **VelesDB Core** \u8212? available under this license (source-available, free for permitted use).\par
+- **VelesDB Enterprise** \u8212? available under a separate commercial license for advanced features, support, and use cases not permitted under this license.\par
+- **VelesDB Cloud** \u8212? the Licensor's proprietary managed database service.\par
+\par
+Any use of the Software as a Hosted or Managed Service, as a Competitive Offering, or in any other manner not permitted by this license requires a separate **Enterprise** or **Premium** commercial license from the Licensor.\par
+\par
+\b Examples (Non-Normative)\b0\par
+\par
+### Allowed under this license\par
+\par
+- Your application uses VelesDB Core internally to power search, retrieval, or RAG, and customers cannot create or manage collections, indexes, or databases, nor run arbitrary queries against VelesDB Core.\par
+- You distribute VelesDB Core bundled with a desktop, mobile, or on-premise application for the customer's own internal use.\par
+- You use VelesDB Core as a backend for your SaaS product, where end users interact only with your application's interface and receive only processed results.\par
+- You publish benchmark results comparing VelesDB Core to other databases, with full methodology disclosure.\par
+- You redistribute VelesDB Core via Docker Hub, a package manager, or an infrastructure template, with this license included.\par
+\par
+### Requires a commercial (Enterprise/Premium) license\par
+\par
+- Offering VelesDB Core (or a derivative) as a hosted, managed, or cloud database service (DBaaS), regardless of whether it is branded as "VelesDB" or under a different name.\par
+- Operating VelesDB Core for a customer as a managed service provider, outsourcer, or consultant, where the customer has access to the Software's core capabilities.\par
+- Building and selling a product that competes with VelesDB as a vector database, search engine, or query engine.\par
+- A cloud provider offering VelesDB as a managed database, managed cluster, hosted indexing/query platform, or vector database as a service.\par
+- A multi-tenant service where tenants have access to the Software's database-like capabilities (collections, indexes, schemas, queries, ingestion).\par
+- Any service \u8212? regardless of the interface layer or branding \u8212? where third parties can effectively use the Software as a database.\par
+\par
+\b Patents\b0\par
+\par
+The Licensor grants you a license, under any patent claims the Licensor can license, or becomes able to license, to make, have made, use, sell, offer for sale, import and have imported the Software, in each case subject to the limitations and conditions in this license.\par
+\par
+This license does not cover any patent claims that you cause to be infringed by modifications or additions to the Software.\par
+\par
+If you or your company make any written claim that the Software infringes or contributes to infringement of any patent, your patent license for the Software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.\par
+\par
+\b Notices\b0\par
+\par
+You must ensure that anyone who gets a copy of any part of the Software from you also gets a copy of these terms.\par
+\par
+If you modify the Software, you must include in any modified copies of the Software prominent notices stating that you have modified the Software.\par
+\par
+\b No Other Rights\b0\par
+\par
+These terms do not imply any licenses other than those expressly granted in these terms.\par
+\par
+\b Termination\b0\par
+\par
+If you use the Software in violation of these terms, such use is not licensed, and your licenses will automatically terminate.\par
+\par
+If the Licensor provides you with a notice of your violation, and you cease all violation of this license no later than 30 days after you receive that notice, your licenses will be reinstated retroactively. However, if you violate these terms after such reinstatement, any additional violation of these terms will cause your licenses to terminate automatically and permanently.\par
+\par
+\b No Liability\b0\par
+\par
+As far as the law allows, the Software comes as is, without any warranty or condition, and the Licensor will not be liable to you for any damages arising out of these terms or the use or nature of the Software, under any kind of legal claim.\par
+\par
+\b Definitions\b0\par
+\par
+The **"Licensor"** is Wiscale France.\par
+\par
+The **"Software"** is the software the Licensor makes available under these terms, including VelesDB Core and all associated components, libraries, tools, and documentation.\par
+\par
+The **"Author"** is Julien Lange.\par
+\par
+**"You"** refers to the individual or entity agreeing to these terms.\par
+\par
+**"Your company"** is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization. "Control" means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise. Control can be direct or indirect.\par
+\par
+**"Your licenses"** are all the licenses granted to you for the Software under these terms.\par
+\par
+**"Use"** means anything you do with the Software requiring one of your licenses.\par
+\par
+**"Hosted or Managed Service"** means any service, platform, or offering where You (or a third party acting on Your behalf) host, operate, or make available the Software for third parties, and those third parties are provided with access \u8212? directly or indirectly \u8212? to a Substantial Set of the Software's features or functionality. Access includes, without limitation, access through any of the following: APIs, SDKs, web interfaces, command lines, gateways, middleware, service layers, application wrappers, proxy layers, webhooks, message queues, or any other programmatic or interactive mechanism that enables third parties to create, manage, query, administer, index, ingest, store, traverse graphs, manage knowledge graph nodes or edges, filter structured data, or otherwise use the Software's core database, vector, graph, columnar, or hybrid capabilities.\par
+\par
+**"Substantial Set of features or functionality"** means access to features or functionality that, taken together, would reasonably allow a third party to use the Software as a general-purpose database, vector database, graph database, knowledge graph engine, columnar store, search engine, query engine, or hybrid/multi-model data system, or as a replacement for the Software, rather than merely receiving the results of your product's or application's features.\par
+\par
+**"Substantially Similar"** means a product or service that provides database, vector database, graph database, knowledge graph, columnar store, search engine, query engine, hybrid search, or multi-model data capabilities that overlap in purpose and function with the core capabilities of the Software to a degree that would reasonably be considered competitive. A product is not Substantially Similar merely because it uses the Software internally as a component.\par
+\par
+**"Competitive Offering"** means any product or service that is Substantially Similar to the Software and is made commercially available to third parties, whether as software, as a service, or as a component of a larger offering.\par
+\par
+**"Cloud Provider"** means any entity that provides cloud computing infrastructure, platform, or software services to third parties, including (without limitation) infrastructure-as-a-service (IaaS), platform-as-a-service (PaaS), and software-as-a-service (SaaS) providers.\par
+\par
+---\par
+\par
+\b Licensing FAQ (VelesDB Core License 1.0)\b0\par
+\par
+This FAQ is provided for convenience and developer guidance only. It does not replace, modify, or supplement the license terms above. In case of any conflict, the license terms prevail. If in doubt, contact the Licensor (Wiscale France \u8212? contact@wiscale.fr).\par
+\par
+### 1) Can I use VelesDB Core in production?\par
+\par
+**Yes.** Production use is permitted, including commercial production use, as long as you comply with the license limitations (no Hosted or Managed Service, no Competitive Offering).\par
+\par
+### 2) Can I use VelesDB Core inside my own SaaS product?\par
+\par
+**Yes.** If VelesDB Core is used only as an internal component of your SaaS and your customers interact only with your application's interface (not with VelesDB directly), this is permitted.\par
+\par
+In practice: your customers can use your app's features (search, RAG, recommendations, etc.), but they cannot create collections, manage indexes, run arbitrary queries, or otherwise use VelesDB as a database product.\par
+\par
+### 3) Can I use VelesDB Core as a backend for a RAG system?\par
+\par
+**Yes.** Using VelesDB Core to index documents, store embeddings, and retrieve results for a RAG pipeline is a typical permitted use case, as long as end users receive only the generated answers from your application and do not have direct database access.\par
+\par
+### 4) What is NOT allowed without a commercial license?\par
+\par
+- Offering VelesDB Core (or a derivative) as a hosted or managed database service (DBaaS, vector DB as a service, managed cluster, etc.).\par
+- Operating VelesDB Core for a customer as an MSP, outsourcer, or consultant where the customer has access to VelesDB's core capabilities.\par
+- Building and selling a competing database, vector database, search engine, or query engine based on VelesDB Core.\par
+- A cloud provider (e.g., AWS, GCP, Azure, or any other) offering VelesDB as a managed database service.\par
+\par
+If you want to do any of the above, you need an **Enterprise or Premium license**.\par
+\par
+### 5) Can I expose a public API endpoint that runs vector search against VelesDB Core?\par
+\par
+**It depends:**\par
+\par
+- **Allowed:** You expose an endpoint like `/search` or `/recommend` that returns results for your product, without giving customers the ability to create/manage collections, ingest vectors, manage indexes, run arbitrary queries, or administer the database.\par
+- **Not allowed without a commercial license:** You expose VelesDB-like capabilities (collections, ingestion, indexing, querying, admin) to third parties in a way that makes your service effectively "VelesDB as a service."\par
+\par
+### 6) Can I let my customers upload documents, and I index them in VelesDB Core for RAG?\par
+\par
+**Yes.** As long as customers are using your product's document upload feature and are not given direct access to VelesDB's database capabilities (no collection management, no arbitrary queries, no index administration).\par
+\par
+### 7) Can a cloud provider offer VelesDB as a managed service?\par
+\par
+**No, not under this license.** Cloud providers (or any third party) offering VelesDB as a managed database, DBaaS, managed cluster, hosted indexing/query platform, or vector database as a service must obtain a commercial license from Wiscale France.\par
+\par
+### 8) Can an agency, consultant, or MSP host VelesDB Core for a client?\par
+\par
+**Not under this license** if the arrangement constitutes a Hosted or Managed Service (including single-customer managed hosting where the client has access to VelesDB's core capabilities). That scenario requires a commercial license.\par
+\par
+### 9) Can I embed VelesDB Core in a desktop, mobile, or on-prem product I sell?\par
+\par
+**Yes.** Distributing VelesDB Core bundled with your product is permitted, provided you comply with the license (include the license text and notices), and you are not providing it as a Hosted or Managed Service.\par
+\par
+### 10) Can I modify VelesDB Core and keep my changes private?\par
+\par
+**Yes.** The license allows modification. If you distribute a modified version, you must include prominent notices stating that you modified it, and you must provide a copy of the license terms to recipients.\par
+\par
+### 11) Can I redistribute VelesDB Core?\par
+\par
+**Yes.** You may redistribute the Software (as-is or modified) through any mechanism (Docker, package managers, Helm charts, etc.), provided:\par
+\par
+- the license text is included,\par
+- copyright notices are preserved,\par
+- the software remains under this license,\par
+- if modified, modifications are prominently marked.\par
+\par
+Redistribution does not grant recipients any right to provide the Software as a Hosted or Managed Service.\par
+\par
+### 12) Can I publish benchmarks of VelesDB Core?\par
+\par
+**Yes.** You are encouraged to benchmark VelesDB Core. However, public benchmark results must include full disclosure of methodology, dataset, hardware, software version, and configuration. This ensures transparency and reproducibility.\par
+\par
+### 13) Can I build a competing database product using VelesDB Core?\par
+\par
+**No.** The No Competitive Offering clause prohibits using the Software to build, sell, or offer a product that competes with VelesDB as a database, vector database, graph database, columnar store, search engine, or query engine.\par
+\par
+However, using VelesDB Core as an internal component of a non-competing product (e.g., a CRM, an e-commerce platform, a content management system) is permitted.\par
+\par
+### 14) Can I remove license headers or copyright notices?\par
+\par
+**No.** You may not alter, remove, or obscure licensing, copyright, or other notices.\par
+\par
+### 15) Can I use the name "VelesDB" for my fork?\par
+\par
+**No.** VelesDB\u174? is a registered trademark of Wiscale France. You may not brand your fork, derivative work, or product as "VelesDB" without written permission from Wiscale France. Use of the VelesDB name or logo is subject to applicable trademark law.\par
+\par
+### 16) What about a multi-tenant service where each tenant only has limited features?\par
+\par
+If tenants (third parties) get access to a Substantial Set of VelesDB's database, vector database, or query capabilities, it is a Hosted or Managed Service and requires a commercial license, regardless of the number of features exposed per tenant.\par
+\par
+### 17) What if my service wraps VelesDB behind an API gateway or middleware?\par
+\par
+The license explicitly covers indirect access through APIs, SDKs, gateways, middleware, service layers, and application wrappers. If the end result is that third parties can use the Software as a database \u8212? regardless of how many layers sit between them and VelesDB \u8212? a commercial license is required.\par
+\par
+### 18) What if I'm unsure whether my use case is permitted?\par
+\par
+**Ask.** Contact Wiscale France (contact@wiscale.fr) for clarification or to discuss a commercial license. We want developers to build great things with VelesDB \u8212? we're happy to help you find the right license for your use case.\par
+\par
+### 19) How do I get an Enterprise or Premium license?\par
+\par
+Contact Wiscale France (contact@wiscale.fr) to discuss licensing for hosted/managed services, Competitive Offerings, cloud provider partnerships, and other premium use cases.\par
+\par
+### 20) What is the difference between VelesDB Core, Enterprise, and Cloud?\par
+\par
+| Tier | License | Use Case |\par
+|------|---------|----------|\par
+| **VelesDB Core** | This license (source-available) | Internal use, embedding, SaaS backend, development, testing |\par
+| **VelesDB Enterprise** | Commercial license | Advanced features, support, hosted/managed services, competitive offerings |\par
+| **VelesDB Cloud** | Proprietary SaaS | Fully managed database service operated by Wiscale France |\par
+\par
+### 21) Can I use VelesDB's graph engine and knowledge graph features in my product?\par
+\par
+**Yes.** You can use the vector, graph, columnar, and hybrid search features internally within your product. The restriction applies only if you expose those capabilities directly to third parties as a database service, or if you build a competing graph/vector/search product.\par
+\par
+### 22) Can I embed VelesDB in a browser (WASM), mobile app, or Tauri desktop app?\par
+\par
+**Yes.** Embedded and local-first use is expressly permitted. VelesDB is designed to run in-process (WASM, iOS, Android, Tauri, server). As long as the Software serves as an internal component of your application, this is a permitted use.\par
+\par
+### 23) Does the license cover the premium features (Hybrid Search, RBAC, SSO, etc.)?\par
+\par
+The VelesDB Core license covers VelesDB Core. Premium features (such as RBAC, SSO, GPU Acceleration, Audit Logging, Multi-Tenancy, Encryption at Rest, and Snapshots) are available under VelesDB Enterprise with a separate commercial license. You may not circumvent the licensing mechanism that enforces premium features.\par
+\par
+### 24) Can I use VelesDB Core's VelesQL query language in my product?\par
+\par
+**Yes.** Using VelesQL to query data internally within your product is permitted. However, exposing a general-purpose VelesQL endpoint to third parties (allowing them to run arbitrary queries) would constitute providing access to a Substantial Set of the Software's capabilities and is not permitted without a commercial license.\par
+\par
+### 25) Do I need to display "Powered by VelesDB" on my website or app?\par
+\par
+**Yes, if your app is public.** Include a link to velesdb.com somewhere visible \u8212? footer, About page, credits, or docs. That's it. No specific size, color, or position required. Just a clickable link that users can find.\par
+\par
+Want to remove it? An Enterprise license waives the attribution requirement.\par
+\par
+### 26) What counts as a "public-facing application"?\par
+\par
+Anything accessible by people outside your organization: a SaaS product, a public website, a mobile app on app stores, a public API. Internal tools and staging environments don't count.\par
+\par
+### 27) Can I use the VelesDB logo instead of text?\par
+\par
+**Yes.** Logo or text, your choice \u8212? as long as it links to velesdb.com. Brand assets are at https://velesdb.com/brand.\par
+\par
+---\par
+\par
+\b Trademark Notice\b0\par
+\par
+VelesDB\u174? is a registered trademark of Wiscale France. All rights reserved.\par
+\par
+Use of the VelesDB name, logo, or brand assets is subject to applicable trademark law. You may not use the VelesDB name or logo to imply endorsement, affiliation, or sponsorship by Wiscale France without prior written permission. Forks and derivative works must not be branded as "VelesDB" without explicit authorization from Wiscale France.\par
 }

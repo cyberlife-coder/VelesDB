@@ -550,6 +550,12 @@ jobs:
           pattern: binaries-*
           merge-multiple: true
 
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          echo "Published checksums:" && cat SHA256SUMS
+
       - name: Extract release notes from CHANGELOG
         run: |
           # Extract everything between ## [version] and the next ## [

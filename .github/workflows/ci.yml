@@ -249,8 +249,8 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
 
-      - name: Run security audit
-        run: cargo deny check advisories
+      - name: Run security audit (advisories, licenses, bans, sources)
+        run: cargo deny check advisories licenses bans sources
 
   # ===========================================================================
   # NOTE: Miri & Loom moved to quality-deep.yml (weekly + manual)
@@ -691,6 +691,9 @@ jobs:
     needs: [lint, test, security, wasm-check, openapi-drift, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, sonarcloud]
     if: always()
     steps:
+      # sonarcloud is intentionally absent from the gate below: it is an
+      # external service (skipped on forks / token-less runs) and must not
+      # block merges. It stays in `needs` so its status is visible here.
       - name: Check results
         run: |
           [[ "${{ needs.lint.result }}" == "success" ]] && \

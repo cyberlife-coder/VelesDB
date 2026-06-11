@@ -92,7 +92,29 @@ install_velesdb() {
     echo -e "${YELLOW}⬇️  Downloading VelesDB v${version}...${NC}"
     local tmp_dir=$(mktemp -d)
     curl -fsSL "$download_url" -o "${tmp_dir}/${archive_name}"
-    
+
+    # Verify checksum against the SHA256SUMS published with the release
+    local sums_url="https://github.com/${REPO}/releases/download/v${version}/SHA256SUMS"
+    if curl -fsSL "$sums_url" -o "${tmp_dir}/SHA256SUMS" 2>/dev/null; then
+        echo -e "${YELLOW}🔐 Verifying checksum...${NC}"
+        local expected actual
+        expected=$(grep "  ${archive_name}\$" "${tmp_dir}/SHA256SUMS" | awk '{print $1}')
+        if [ -z "$expected" ]; then
+            echo -e "${RED}❌ ${archive_name} missing from SHA256SUMS${NC}"; exit 1
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "${tmp_dir}/${archive_name}" | awk '{print $1}')
+        else
+            actual=$(shasum -a 256 "${tmp_dir}/${archive_name}" | awk '{print $1}')
+        fi
+        if [ "$expected" != "$actual" ]; then
+            echo -e "${RED}❌ Checksum mismatch for ${archive_name} (expected ${expected}, got ${actual})${NC}"; exit 1
+        fi
+        echo -e "${GREEN}✅ Checksum verified${NC}"
+    else
+        echo -e "${YELLOW}⚠️  No SHA256SUMS published for v${version} (pre-1.19 release) — skipping verification${NC}"
+    fi
+
     # Extract
     echo -e "${YELLOW}📦 Extracting...${NC}"
     tar -xzf "${tmp_dir}/${archive_name}" -C "$INSTALL_DIR"
