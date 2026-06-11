@@ -262,13 +262,8 @@ impl Collection {
         // The standard anchored path skips text-MATCH shapes; handle
         // them here by restricting hybrid fusion to the anchor set so
         // relevant anchors outside the global top-K are not missed.
-        let hybrid_anchored = self.try_anchored_hybrid_fetch(
-            stmt,
-            params,
-            extracted,
-            execution_limit,
-            graph_cache,
-        )?;
+        let hybrid_anchored =
+            self.try_anchored_hybrid_fetch(stmt, params, extracted, execution_limit, graph_cache)?;
         if let Some(r) = hybrid_anchored {
             return Ok(r);
         }

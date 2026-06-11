@@ -85,6 +85,7 @@ impl Collection {
         self.index.save(&self.path)?;
         self.inserts_since_last_hnsw_save
             .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.flush_pq_codebook()?;
         Ok(())
     }
 
@@ -115,6 +116,29 @@ impl Collection {
         Ok(())
     }
 
+    /// Persists the lazy-trained PQ codebook to `codebook.pq` on every full flush.
+    ///
+    /// No-op when no PQ quantizer has been trained yet. The codebook is also
+    /// saved by the explicit `TRAIN QUANTIZER` path (`database/training.rs`),
+    /// so this covers the lazy-training case to prevent codebook loss on restart.
+    #[cfg(feature = "persistence")]
+    fn flush_pq_codebook(&self) -> Result<()> {
+        let guard = self.pq_quantizer.read();
+        let Some(ref pq) = *guard else {
+            return Ok(());
+        };
+        pq.save_codebook(&self.path)?;
+        if pq.rotation.is_some() {
+            pq.save_rotation(&self.path)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "persistence"))]
+    fn flush_pq_codebook(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Saves HNSW to disk only when the insert counter exceeds the threshold.
     ///
     /// Issue #423 Component 3: periodic safety save to limit crash recovery
@@ -134,39 +158,10 @@ impl Collection {
     /// Drains the delta buffer into the HNSW index (if active).
     ///
     /// No-op when the delta buffer is inactive (no rebuild in progress).
-    /// After draining, the buffer is empty and inactive.
-    ///
-    /// Filters out IDs that have been deleted from vector storage since they
-    /// were buffered, preventing ghost vectors from being re-inserted into
-    /// HNSW after a concurrent delete.
-    ///
-    /// Uses `insert_batch_parallel` for consistent batch insert performance
-    /// (same strategy as `merge_deferred_batch` in crud.rs).
-    ///
-    /// # Lock ordering
-    ///
-    /// Acquires `vector_storage` (position 2) briefly for the validity
-    /// check, releases it, then inserts into the index (no lock).
-    /// `delta_buffer` (position 10) is acquired first via `deactivate_and_drain`.
-    /// The caller must NOT hold any lower-numbered lock when calling this method.
     #[cfg(feature = "persistence")]
     fn drain_delta_into_index(&self) {
         let drained = self.delta_buffer.deactivate_and_drain();
-        if drained.is_empty() {
-            return;
-        }
-        // Filter out vectors deleted from storage during the buffer's
-        // lifetime to prevent ghost re-insertion into HNSW.
-        let storage = self.vector_storage.read();
-        let valid: Vec<(u64, &[f32])> = drained
-            .iter()
-            .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
-            .map(|(id, v)| (*id, v.as_slice()))
-            .collect();
-        drop(storage); // Release read lock before batch insert
-        if !valid.is_empty() {
-            self.index.insert_batch_parallel(valid);
-        }
+        self.filter_and_insert_valid(&drained);
     }
 
     /// No-op stub when persistence is disabled.
@@ -175,47 +170,45 @@ impl Collection {
 
     /// Drains the deferred indexer into the HNSW index (if configured).
     ///
-    /// No-op when deferred indexing is not configured or disabled.
-    /// After draining, both buffers are empty and inactive.
-    ///
-    /// Filters out IDs that have been deleted from vector storage since they
-    /// were buffered, preventing ghost vectors from being re-inserted into
-    /// HNSW after a concurrent delete.
-    ///
-    /// Uses `insert_batch_parallel` for consistent batch insert performance
-    /// (same strategy as `merge_deferred_batch` in crud.rs).
-    ///
-    /// # Lock ordering
-    ///
-    /// Acquires `vector_storage` (position 2) briefly for the validity
-    /// check, releases it, then inserts into the index (no lock).
-    /// `deferred_indexer` (position 11) is acquired first via `drain_all`.
-    /// The caller must NOT hold any lower-numbered lock.
+    /// No-op when deferred indexing is not configured.
     #[cfg(feature = "persistence")]
     fn drain_deferred_into_index(&self) {
         if let Some(ref di) = self.deferred_indexer {
             let drained = di.drain_all();
-            if drained.is_empty() {
-                return;
-            }
-            // Filter out vectors deleted from storage during the buffer's
-            // lifetime to prevent ghost re-insertion into HNSW.
-            let storage = self.vector_storage.read();
-            let valid: Vec<(u64, &[f32])> = drained
-                .iter()
-                .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
-                .map(|(id, v)| (*id, v.as_slice()))
-                .collect();
-            drop(storage); // Release read lock before batch insert
-            if !valid.is_empty() {
-                self.index.insert_batch_parallel(valid);
-            }
+            self.filter_and_insert_valid(&drained);
         }
     }
 
     /// No-op stub when persistence is disabled.
     #[cfg(not(feature = "persistence"))]
     fn drain_deferred_into_index(&self) {}
+
+    /// Filters `drained` to live vectors and batch-inserts them into HNSW.
+    ///
+    /// Shared by `drain_delta_into_index` and `drain_deferred_into_index`.
+    ///
+    /// # Lock ordering
+    ///
+    /// Acquires `vector_storage` (position 2) briefly, releases it before
+    /// calling `insert_batch_parallel` (no index lock held during the
+    /// storage read). Callers must drain their respective buffer lock
+    /// (position 10 or 11) before calling this method.
+    #[cfg(feature = "persistence")]
+    fn filter_and_insert_valid(&self, drained: &[(u64, Vec<f32>)]) {
+        if drained.is_empty() {
+            return;
+        }
+        let storage = self.vector_storage.read();
+        let valid: Vec<(u64, &[f32])> = drained
+            .iter()
+            .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
+            .map(|(id, v)| (*id, v.as_slice()))
+            .collect();
+        drop(storage);
+        if !valid.is_empty() {
+            self.index.insert_batch_parallel(valid);
+        }
+    }
 
     /// Drains the async index builder buffer into the HNSW index.
     ///

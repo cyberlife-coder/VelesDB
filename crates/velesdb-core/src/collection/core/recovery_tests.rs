@@ -142,3 +142,27 @@ fn test_metadata_only_skips_recovery() {
     // Metadata-only has dimension 0, no vectors, no HNSW content.
     assert_eq!(reopened.config.read().dimension, 0);
 }
+
+// =========================================================================
+// Flush + reopen — gap recovery must be a no-op when index is complete
+// =========================================================================
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_no_gap_after_flush_and_reopen() {
+    let temp = tempfile::tempdir().expect("temp dir");
+
+    {
+        let coll = Collection::create(PathBuf::from(temp.path()), 4, DistanceMetric::Cosine)
+            .expect("create");
+        coll.upsert(make_points(8)).expect("upsert");
+        coll.flush_full().expect("flush_full");
+    }
+
+    let reopened = Collection::open(PathBuf::from(temp.path())).expect("reopen");
+    // After a full flush + clean reopen there must be no gap.
+    let recovered =
+        recovery::recover_hnsw_gap(&reopened.vector_storage, &reopened.index, 4).expect("recover");
+    assert_eq!(recovered, 0, "no gap after clean flush+reopen");
+    assert_eq!(reopened.index.len(), 8, "all vectors present in HNSW");
+}

@@ -494,14 +494,19 @@ impl Collection {
 
         let mut results = Vec::new();
 
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+
         for mr in match_results {
+            let base = payload_storage.retrieve(mr.node_id).ok().flatten();
+            if is_payload_expired(base.as_ref(), now_secs) {
+                continue;
+            }
             let vector = vector_storage
                 .retrieve(mr.node_id)?
                 .unwrap_or_else(Vec::new);
-            let payload = Some(build_match_payload(
-                payload_storage.retrieve(mr.node_id).ok().flatten(),
-                &mr,
-            ));
+            let payload = Some(build_match_payload(base, &mr));
 
             let point = crate::Point {
                 id: mr.node_id,
@@ -518,6 +523,17 @@ impl Collection {
 
         Ok(results)
     }
+}
+
+/// Returns `true` when the payload carries a `_veles_expires_at` epoch-seconds
+/// field whose value is strictly less than `now_secs`.
+fn is_payload_expired(payload: Option<&serde_json::Value>, now_secs: u64) -> bool {
+    let Some(serde_json::Value::Object(map)) = payload else {
+        return false;
+    };
+    map.get("_veles_expires_at")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|exp| exp < now_secs)
 }
 
 fn build_match_payload(

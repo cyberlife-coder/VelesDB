@@ -226,9 +226,7 @@ impl FusionStrategy {
                 dense_weight,
                 sparse_weight,
             } => Self::fuse_relative_score(&results, *dense_weight, *sparse_weight),
-            Self::WeightedRRF { weights, k } => {
-                Self::fuse_weighted_rrf(results, weights, *k)
-            }
+            Self::WeightedRRF { weights, k } => Self::fuse_weighted_rrf(results, weights, *k),
         }
     }
 

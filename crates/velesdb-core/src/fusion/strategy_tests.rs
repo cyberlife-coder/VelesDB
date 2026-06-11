@@ -671,7 +671,13 @@ fn test_weighted_rrf_weight_count_mismatch_is_error() {
     let results = vec![vec![(1u64, 0.9)]]; // 1 branch but 2 weights
     let err = strategy.fuse(results).unwrap_err();
     assert!(
-        matches!(err, FusionError::WeightCountMismatch { weights: 2, branches: 1 }),
+        matches!(
+            err,
+            FusionError::WeightCountMismatch {
+                weights: 2,
+                branches: 1
+            }
+        ),
         "unexpected error: {err}"
     );
 }
@@ -748,7 +754,10 @@ fn test_weighted_rrf_unequal_weights_change_ranking() {
     let fused_biased = biased.fuse(results).unwrap();
 
     // Equal weights: both docs appear rank-0 in one branch, so scores are symmetric.
-    assert_eq!(fused_equal[0].1, fused_equal[1].1, "equal weights → equal scores");
+    assert!(
+        (fused_equal[0].1 - fused_equal[1].1).abs() < f32::EPSILON,
+        "equal weights → equal scores"
+    );
     // Biased toward branch 1 where doc2 is rank-0 → doc2 wins.
     assert_eq!(fused_biased[0].0, 2, "biased toward branch 1 → doc2 wins");
 }
