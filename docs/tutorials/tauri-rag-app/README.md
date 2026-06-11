@@ -143,7 +143,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
-tauri-plugin-velesdb = "0.1"  # Add VelesDB plugin
+tauri-plugin-velesdb = "1"  # Add VelesDB plugin
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"

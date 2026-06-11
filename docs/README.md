@@ -22,10 +22,18 @@ Detailed guides for using VelesDB features:
 | [Configuration](./guides/CONFIGURATION.md) | `velesdb.toml` configuration reference |
 | [Search Modes](./guides/SEARCH_MODES.md) | Understanding Fast/Balanced/Accurate/Perfect modes |
 | [CLI & REPL](./guides/CLI_REPL.md) | Command-line interface and interactive shell |
-| [Quantization](./guides/QUANTIZATION.md) | Vector compression (SQ8, Binary) |
+| [Quantization](./guides/QUANTIZATION.md) | Vector compression (SQ8, PQ, Binary, RaBitQ) |
 | [Tuning Guide](./guides/TUNING_GUIDE.md) | HNSW parameter tuning and performance optimization |
+| [Agent Memory](./guides/AGENT_MEMORY.md) | AI agent memory: semantic, episodic, procedural, TTL, snapshots |
+| [Graph Patterns](./guides/GRAPH_PATTERNS.md) | Graph modeling and `MATCH` pattern recipes |
+| [Multi-Model Queries](./guides/MULTIMODEL_QUERIES.md) | Combining vector, graph, and structured data in one VelesQL query |
+| [Server Security](./guides/SERVER_SECURITY.md) | API keys, TLS, CORS, and operations hardening |
+| [Business Scenarios](./guides/BUSINESS_SCENARIOS.md) | End-to-end business problems solved with single queries |
+| [Python Performance](./guides/PYTHON_PERFORMANCE.md) | Throughput tuning for the Python binding |
+| [Concurrency & Locking](./guides/CONCURRENCY_LOCKING.md) | Concurrent access and file-locking behavior |
 | [Write Concurrency](./guides/WRITE_CONCURRENCY.md) | Single-writer-per-collection model, batching patterns, Enterprise tier |
 | [Use Cases](./guides/USE_CASES.md) | Common use cases and recommended configurations |
+| [Migration v1.6](./guides/MIGRATION_v1.6.md) / [v1.7](./guides/MIGRATION_v1.7.md) | Version migration guides |
 | [Troubleshooting](./NEW_USER_TROUBLESHOOTING.md) | Solutions for common issues new users encounter |
 
 ---
@@ -37,7 +45,7 @@ In-depth technical documentation:
 | Reference | Description |
 |-----------|-------------|
 | [Architecture](./reference/ARCHITECTURE.md) | System design and internals |
-| [VelesQL Specification](./VELESQL_SPEC.md) | Query language grammar and syntax (v3.6, canonical) |
+| [VelesQL Specification](./VELESQL_SPEC.md) | Query language grammar and syntax (v3.10.0, canonical) |
 | [VelesQL Cheat Sheet](./reference/VELESQL_CHEATSHEET.md) | One-page quick reference: search, filter, graph MATCH, fusion, sparse, EXPLAIN |
 | [VelesQL Contract](./reference/VELESQL_CONTRACT.md) | Canonical REST contract (`/query`, `/match`, error model) |
 | [VelesQL Conformance](./reference/VELESQL_CONFORMANCE_MATRIX.md) | Cross-ecosystem conformance matrix |

@@ -776,4 +776,4 @@ invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-
 
 ---
 
-*Last updated: 2026-04-09 (Storage compaction concurrency documentation)*
+*Last updated: 2026-06-12 (HNSW persisted-graph reload at open; storage compaction concurrency)*
