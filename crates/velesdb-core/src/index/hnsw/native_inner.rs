@@ -163,6 +163,36 @@ impl NativeHnswInner {
     /// Returns true when the backend is `RaBitQ` with a trained quantizer.
     #[cfg(feature = "persistence")]
     #[must_use]
+    /// Returns `true` when this index runs the `RaBitQ` backend.
+    pub fn is_rabitq_backend(&self) -> bool {
+        matches!(self.backend, HnswBackend::RaBitQ(_))
+    }
+
+    /// Converts a Standard backend into an (untrained) `RaBitQ` backend.
+    ///
+    /// Vacuum rebuilds insert through a Standard graph so lazy quantizer
+    /// training can never fire mid-rebuild (it would train a throwaway
+    /// quantizer from compaction order); the caller promotes afterwards and
+    /// installs the carried-over quantizer, if any. A backend that is
+    /// already `RaBitQ` is returned unchanged.
+    pub fn promote_to_rabitq(self, dimension: usize) -> Self {
+        match self.backend {
+            HnswBackend::Standard(inner) => {
+                let distance = CachedSimdDistance::new(self.metric, dimension);
+                Self {
+                    backend: HnswBackend::RaBitQ(Box::new(RaBitQPrecisionHnsw::from_inner(
+                        inner, distance, dimension,
+                    ))),
+                    metric: self.metric,
+                }
+            }
+            backend @ HnswBackend::RaBitQ(_) => Self {
+                backend,
+                metric: self.metric,
+            },
+        }
+    }
+
     pub fn is_rabitq_quantizer_trained(&self) -> bool {
         matches!(&self.backend, HnswBackend::RaBitQ(precision) if precision.is_quantizer_trained())
     }

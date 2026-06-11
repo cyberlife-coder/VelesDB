@@ -171,13 +171,19 @@ impl HnswIndex {
         active_vectors: &[(u64, Vec<f32>)],
     ) -> Result<HnswInner, VacuumError> {
         let params = HnswParams::auto(self.dimension);
+        let target_mode = self.inner.read().storage_mode();
+        // Always rebuild through a Standard backend: inserting via a RaBitQ
+        // backend would lazily train a throwaway quantizer at the sample
+        // threshold (then re-encode everything a second time on install) —
+        // and would silently SELF-train an untrained collection from
+        // compaction order. The graph is promoted afterwards.
         let new_inner = HnswInner::new_with_storage_mode(
             self.metric,
             params.max_connections,
             active_vectors.len().max(1000), // max_elements with reasonable minimum
             params.ef_construction,
             self.dimension,
-            self.inner.read().storage_mode(),
+            crate::StorageMode::Full,
         )
         .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
@@ -192,8 +198,14 @@ impl HnswIndex {
             .parallel_insert(&refs_for_hnsw)
             .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
+        if target_mode != crate::StorageMode::RaBitQ {
+            return Ok(new_inner);
+        }
+        let new_inner = new_inner.promote_to_rabitq(self.dimension);
         #[cfg(feature = "persistence")]
         if let Some(rabitq) = self.inner.read().rabitq_quantizer() {
+            // Single encode pass with the carried-over quantizer; an
+            // untrained collection stays untrained (no state change).
             new_inner
                 .install_trained_rabitq(rabitq)
                 .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;

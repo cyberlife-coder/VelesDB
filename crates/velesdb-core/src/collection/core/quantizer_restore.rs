@@ -95,28 +95,7 @@ impl Collection {
     /// backend). Search then stays on exact f32 distances, which is correct
     /// but unaccelerated.
     fn restore_persisted_rabitq(&self) -> Result<()> {
-        if self.index.is_rabitq_quantizer_trained() {
-            return Ok(());
-        }
-        let Some(rabitq) = RaBitQIndex::load(&self.path)? else {
-            return Ok(());
-        };
-        if rabitq.dimension != self.config.read().dimension {
-            tracing::warn!(
-                rabitq_dim = rabitq.dimension,
-                "rabitq.idx dimension does not match the collection; quantizer not installed"
-            );
-            return Ok(());
-        }
-        let installed = self.index.install_trained_rabitq(Arc::new(rabitq))?;
-        if installed {
-            tracing::debug!("restored RaBitQ quantizer from rabitq.idx; vectors re-encoded");
-        } else {
-            tracing::warn!(
-                "rabitq.idx present but the HNSW backend is not RaBitQ; quantizer not installed"
-            );
-        }
-        Ok(())
+        preinstall_persisted_rabitq(&self.path, self.config.read().dimension, &self.index)
     }
 
     /// Installs a freshly trained `RaBitQ` quantizer into the live index.
@@ -144,4 +123,48 @@ impl Collection {
     pub(crate) fn pq_cache_len(&self) -> usize {
         self.pq_cache.read().len()
     }
+}
+
+/// Installs a persisted `rabitq.idx` into `index` when its backend is
+/// `RaBitQ` and no quantizer is active yet.
+///
+/// Called BEFORE gap recovery in `Collection::open` so recovered vectors
+/// re-insert through the persisted quantizer — otherwise the lazy training
+/// threshold (1000 inserts) would preempt the trained artifact with a
+/// throwaway quantizer on every reopen of a realistically sized collection.
+/// Also called as a post-open safety net (idempotent: an already-trained
+/// quantizer short-circuits).
+///
+/// # Errors
+///
+/// Returns an error when reading `rabitq.idx` or re-encoding fails;
+/// dimension mismatches degrade to f32 with a warning instead.
+#[cfg(feature = "persistence")]
+pub(super) fn preinstall_persisted_rabitq(
+    path: &std::path::Path,
+    dimension: usize,
+    index: &crate::index::HnswIndex,
+) -> Result<()> {
+    if index.is_rabitq_quantizer_trained() {
+        return Ok(());
+    }
+    let Some(rabitq) = RaBitQIndex::load(path)? else {
+        return Ok(());
+    };
+    if rabitq.dimension != dimension {
+        tracing::warn!(
+            rabitq_dim = rabitq.dimension,
+            "rabitq.idx dimension does not match the collection; quantizer not installed"
+        );
+        return Ok(());
+    }
+    let installed = index.install_trained_rabitq(Arc::new(rabitq))?;
+    if installed {
+        tracing::debug!("restored RaBitQ quantizer from rabitq.idx; vectors re-encoded");
+    } else {
+        tracing::warn!(
+            "rabitq.idx present but the HNSW backend is not RaBitQ; quantizer not installed"
+        );
+    }
+    Ok(())
 }

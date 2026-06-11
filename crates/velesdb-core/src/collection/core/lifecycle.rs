@@ -299,7 +299,7 @@ impl Collection {
         config.point_count =
             super::recovery::reconcile_point_count(&config, &vector_storage, &payload_storage);
 
-        super::recovery::run_crash_recovery(&config, &vector_storage, &index)?;
+        Self::recover_index_state(&path, &config, &vector_storage, &index)?;
 
         let collection = Self::assemble(CollectionParts {
             path,
@@ -319,6 +319,24 @@ impl Collection {
         collection.run_post_open_hooks()?;
 
         Ok(collection)
+    }
+
+    /// Pre-assemble index recovery: quantizer preinstall + gap recovery.
+    ///
+    /// The persisted `RaBitQ` quantizer installs BEFORE gap recovery so the
+    /// recovered vectors re-insert through it — otherwise the lazy training
+    /// threshold (1000 inserts) would preempt the TRAIN QUANTIZER artifact
+    /// with a throwaway quantizer on every reopen of a realistically sized
+    /// collection (the HNSW graph is rebuilt on open).
+    fn recover_index_state(
+        path: &std::path::Path,
+        config: &CollectionConfig,
+        vector_storage: &Arc<RwLock<MmapStorage>>,
+        index: &Arc<HnswIndex>,
+    ) -> Result<()> {
+        #[cfg(feature = "persistence")]
+        super::quantizer_restore::preinstall_persisted_rabitq(path, config.dimension, index)?;
+        super::recovery::run_crash_recovery(config, vector_storage, index)
     }
 
     /// Post-open hooks that need a fully assembled collection.

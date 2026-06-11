@@ -743,9 +743,50 @@ fn test_train_rabitq_wiring_survives_reopen() {
     let result_ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
     let brute_ids = sin_brute_force_top_k(&query_vec, 64, 300, 10);
     let overlap = brute_ids.intersection(&result_ids).count();
+    // Same bar as rabitq_precision_tests: exact-f32 rerank over oversampled
+    // candidates on a small set must be near-perfect; anything lower hides
+    // partial store misalignment.
     assert!(
-        overlap >= 7,
-        "recall@10 vs brute force should be >= 0.7 after reopen, got {overlap}/10"
+        overlap >= 9,
+        "recall@10 vs brute force should be >= 0.9 after reopen, got {overlap}/10"
+    );
+}
+
+/// The persisted TRAIN artifact must survive a reopen even when the
+/// collection exceeds the lazy-training threshold (1000 vectors): gap
+/// recovery re-inserts every vector on open, and without the pre-recovery
+/// install those inserts would lazily train a throwaway quantizer that
+/// preempts `rabitq.idx` (review 2026-06-11 finding 1).
+#[test]
+fn test_train_rabitq_survives_reopen_beyond_lazy_threshold() {
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("rbq_large", 32, DistanceMetric::Euclidean)
+            .unwrap();
+        seed_sin_vectors(&db, "rbq_large", 32, 1200);
+        let query = Parser::parse("TRAIN QUANTIZER ON rbq_large WITH (m=4, type=rabitq)").unwrap();
+        db.execute_query(&query, &std::collections::HashMap::new())
+            .unwrap();
+        assert_eq!(db.flush_all(), 0, "flush before reopen must succeed");
+    }
+
+    let db = Database::open(dir.path()).unwrap();
+    let coll = db.resolve_writable_collection("rbq_large").unwrap();
+    assert!(
+        coll.is_rabitq_quantizer_trained(),
+        "the persisted quantizer must be installed before gap recovery"
+    );
+
+    let query_vec = sin_vector(32, 7);
+    let results = coll.search(&query_vec, 10).unwrap();
+    assert_eq!(results.len(), 10);
+    let result_ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    let brute_ids = sin_brute_force_top_k(&query_vec, 32, 1200, 10);
+    let overlap = brute_ids.intersection(&result_ids).count();
+    assert!(
+        overlap >= 9,
+        "recall@10 vs brute force should be >= 0.9 after large reopen, got {overlap}/10"
     );
 }
 

@@ -14,10 +14,12 @@
 //!
 //! The figures above describe the quantization primitives themselves. In the
 //! collection query path: `RaBitQ` (binary traversal backend) and PQ (ADC
-//! rescoring) are wired end-to-end, including persistence across reopens.
-//! SQ8/Binary collection modes currently maintain caches that no search path
-//! consumes — collection search stays full-precision f32 for those modes.
-//! See `docs/guides/QUANTIZATION.md`.
+//! rescoring) are wired end-to-end. Persistence across reopens covers
+//! TRAIN-QUANTIZER-produced artifacts (`rabitq.idx`, `codebook.pq`); a PQ
+//! quantizer trained lazily from inserts (no TRAIN statement) is in-memory
+//! only and retrains after a restart. SQ8/Binary collection modes currently
+//! maintain caches that no search path consumes — collection search stays
+//! full-precision f32 for those modes. See `docs/guides/QUANTIZATION.md`.
 
 use std::io;
 

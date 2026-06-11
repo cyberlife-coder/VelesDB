@@ -309,6 +309,17 @@ impl HnswIndex {
         else {
             return Ok(());
         };
+        // Warn-and-degrade like the collection-level restore: a stale or
+        // foreign rabitq.idx must not make the index un-openable — search
+        // stays on exact f32 distances instead.
+        if rabitq.dimension != self.dimension {
+            tracing::warn!(
+                rabitq_dim = rabitq.dimension,
+                index_dim = self.dimension,
+                "rabitq.idx dimension mismatch; quantizer not installed"
+            );
+            return Ok(());
+        }
         inner
             .install_trained_rabitq(std::sync::Arc::new(rabitq))
             .map_err(std::io::Error::other)?;
@@ -426,5 +437,10 @@ impl HnswIndex {
     #[must_use]
     pub(crate) fn is_rabitq_quantizer_trained(&self) -> bool {
         self.inner.read().is_rabitq_quantizer_trained()
+    }
+
+    /// Returns `true` when this index runs the `RaBitQ` backend.
+    pub(crate) fn is_rabitq_backend(&self) -> bool {
+        self.inner.read().is_rabitq_backend()
     }
 }
