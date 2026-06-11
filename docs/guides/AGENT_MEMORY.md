@@ -649,9 +649,12 @@ memory.episodic.record_with_ttl(event_id, "transient event", timestamp, 60)
 memory.procedural.learn_with_ttl(proc_id, "draft proc", ["step 1"], 60)
 
 # Purge expired entries; returns a dict of per-subsystem counts.
+# 'consolidation_truncated' is True when consolidation hit the per-cycle
+# cap and more old episodes remain — call auto_expire() again to drain.
 stats = memory.auto_expire()
 # {'semantic_expired': 1, 'episodic_expired': 0, 'procedural_expired': 0,
-#  'episodic_consolidated': 0, 'procedural_evicted': 0}
+#  'episodic_consolidated': 0, 'procedural_evicted': 0,
+#  'consolidation_truncated': False}
 ```
 
 ### Behavior

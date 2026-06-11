@@ -301,7 +301,10 @@ impl AgentMemory {
     ///
     /// Returns:
     ///     Dict with 'semantic_expired', 'episodic_expired', 'procedural_expired',
-    ///     'episodic_consolidated', 'procedural_evicted' counts.
+    ///     'episodic_consolidated', 'procedural_evicted' counts, plus a
+    ///     'consolidation_truncated' bool — True when consolidation hit the
+    ///     per-cycle cap and more old episodes remain (call auto_expire again
+    ///     to drain them).
     fn auto_expire(&self, py: Python<'_>) -> PyResult<PyObject> {
         let result = py.allow_threads(|| self.core.auto_expire().map_err(to_py_err))?;
         Ok(expire_result_to_dict(py, &result))
@@ -458,6 +461,10 @@ fn expire_result_to_dict(py: Python<'_>, r: &velesdb_core::agent::ExpireResult) 
     let _ = dict.set_item(
         PyString::intern(py, "procedural_evicted"),
         r.procedural_evicted,
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "consolidation_truncated"),
+        r.consolidation_truncated,
     );
     dict.into()
 }
@@ -681,7 +688,13 @@ impl PyEpisodicMemory {
         py.allow_threads(|| {
             let emb_ref = embedding.as_deref();
             self.inner()
-                .record_with_ttl(event_id, &description_owned, timestamp, emb_ref, ttl_seconds)
+                .record_with_ttl(
+                    event_id,
+                    &description_owned,
+                    timestamp,
+                    emb_ref,
+                    ttl_seconds,
+                )
                 .map_err(to_py_err)
         })
     }

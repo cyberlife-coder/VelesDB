@@ -1875,7 +1875,10 @@ class AgentMemory:
         Returns:
             Dict with 'semantic_expired', 'episodic_expired',
             'procedural_expired', 'episodic_consolidated',
-            'procedural_evicted' counts.
+            'procedural_evicted' counts, plus a 'consolidation_truncated'
+            bool — ``True`` when consolidation hit the per-cycle cap and
+            more old episodes remain (call :meth:`auto_expire` again to
+            drain them).
         """
         ...
 

@@ -415,6 +415,9 @@ class TestTtlAndEviction:
         ):
             assert key in result
             assert isinstance(result[key], int)
+        # Truncation flag: True when consolidation hit the per-cycle cap and
+        # another auto_expire pass is needed to drain remaining old episodes.
+        assert result["consolidation_truncated"] is False
 
     def test_auto_expire_removes_expired_entry(self, memory):
         """set_semantic_ttl(0) + auto_expire deletes the entry from storage."""
