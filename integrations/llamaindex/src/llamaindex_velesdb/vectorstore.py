@@ -365,11 +365,15 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         """Delete every node whose payload ``ref_doc_id`` matches."""
         from llamaindex_velesdb.security import validate_query
 
+        # NOTE: $ref parameter binding silently matches nothing on published
+        # velesdb wheels <= 1.18.0 (scalar param equality bug, fixed upstream
+        # for 1.19) — this connector must run on published engines, so the
+        # value is escaped (single quotes doubled) and the whole statement is
+        # checked by validate_query. Switch to params once the minimum pin
+        # is >= the first fixed release. Not a SQL engine — VelesQL only,
+        # and collection_name is validated at construction ([a-zA-Z0-9_-]+).
         escaped = ref_doc_id.replace("'", "''")
-        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-        # collection_name validated at construction ([a-zA-Z0-9_-]+), value has
-        # single-quotes doubled. Not a real SQL engine — VelesQL only.
-        query_str = (
+        query_str = (  # nosec B608  # identifier regex-validated; value quote-escaped + validate_query'd
             f"SELECT * FROM {self.collection_name} "
             f"WHERE ref_doc_id = '{escaped}' LIMIT {_REF_DOC_SCAN_BATCH}"
         )

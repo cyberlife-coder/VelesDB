@@ -6,7 +6,7 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 ## What's New (unreleased)
 
-- **Relation + durable-TTL surface** (REST backend): `relate()`, `unrelate()`, `getRelations()`, `setTtlDurable()` — now fully tested and documented (see [Relations & durable TTL](#relations--durable-ttl) below). The WASM backend throws `NOT_SUPPORTED` for these methods.
+- **Relation + durable-TTL surface** (REST backend): `relate()`, `unrelate()`, `getRelations()`, `setTtlDurable()` — now fully tested and documented (see [Knowledge Graph API](#knowledge-graph-api) and [Agent Memory API](#agent-memory-api) below). The WASM backend throws `NOT_SUPPORTED` for these methods.
 - The shipped example (`examples/hybrid_queries.ts`) was rewritten against the real API and is now compile-checked in CI.
 
 ## What's New in v1.17.0 / v1.18.0

@@ -134,6 +134,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bindings-generation flow it documents is verified.
 
 ### Fixed
+- **Scalar `$param` equality in `WHERE` silently matched nothing** on v1.18.0
+  (e.g. `WHERE session_id = $current_session` returned zero rows while the
+  literal form matched) — fixed as part of the GraphFirst/WHERE evaluation
+  rework (#1082); covered by the flagship-query BDD test which binds both a
+  vector and a scalar parameter.
 - **Tauri plugin: 25 registered commands had no Tauri v2 permission** and were
   unreachable from the webview (the extended AgentMemory surface shipped in
   v1.18.0); all 63 commands now carry permissions and the sync test parses the

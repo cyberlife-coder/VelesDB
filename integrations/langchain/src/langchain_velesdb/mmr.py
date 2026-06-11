@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 from typing import Any, List, Optional, Sequence
 
-from langchain_core.documents import Document
+from langchain_core.documents import Document  # nosemgrep: ai.python.detect-langchain.detect-langchain  # this package IS the LangChain connector
 
 from langchain_velesdb.security import validate_k, validate_text
 
@@ -99,7 +99,7 @@ class MMRSearchMixin:
         self,
         embedding: List[float],
         k: int = 4,
-        filter: Optional[dict] = None,
+        filter: Optional[dict] = None,  # pylint: disable=redefined-builtin  # public API kwarg name, cannot rename without breaking callers
         **kwargs: Any,
     ) -> List[Document]:
         """Search for documents most similar to a raw embedding vector.
@@ -123,7 +123,7 @@ class MMRSearchMixin:
         k: int = 4,
         fetch_k: int = 20,
         lambda_mult: float = 0.5,
-        filter: Optional[dict] = None,
+        filter: Optional[dict] = None,  # pylint: disable=redefined-builtin  # public API kwarg name, cannot rename without breaking callers
         **kwargs: Any,
     ) -> List[Document]:
         """Return documents selected using maximal marginal relevance.
@@ -157,7 +157,7 @@ class MMRSearchMixin:
         k: int = 4,
         fetch_k: int = 20,
         lambda_mult: float = 0.5,
-        filter: Optional[dict] = None,
+        filter: Optional[dict] = None,  # pylint: disable=redefined-builtin  # public API kwarg name, cannot rename without breaking callers
         **kwargs: Any,
     ) -> List[Document]:
         """Return documents selected by MMR for a raw embedding vector.
