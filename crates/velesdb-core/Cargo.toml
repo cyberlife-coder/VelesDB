@@ -151,6 +151,19 @@ name = "crash_driver"
 path = "examples/crash_driver.rs"
 required-features = ["persistence"]
 
+[[example]]
+name = "profile_batch_insert"
+path = "examples/profile_batch_insert.rs"
+required-features = ["persistence"]
+
+[[test]]
+name = "scale_recall_100k"
+required-features = ["persistence"]
+
+[[test]]
+name = "chunked_insert_recall"
+required-features = ["persistence"]
+
 [[bench]]
 name = "search_benchmark"
 harness = false
