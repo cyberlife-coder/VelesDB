@@ -128,6 +128,14 @@ impl ConcurrentEdgeStore {
 
     /// Checks if an edge with the given ID exists.
     #[must_use]
+    /// Returns the highest edge id in the store, if any.
+    ///
+    /// O(edges) over the id registry — no edge cloning.
+    pub fn max_edge_id(&self) -> Option<u64> {
+        self.edge_ids.read().keys().max().copied()
+    }
+
+    /// Returns `true` when an edge with `edge_id` exists.
     pub fn contains_edge(&self, edge_id: u64) -> bool {
         self.edge_ids.read().contains_key(&edge_id)
     }

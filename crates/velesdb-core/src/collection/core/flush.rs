@@ -258,9 +258,14 @@ impl Collection {
         let range_index_path = self.path.join("range_index.bin");
         self.range_index.read().save_to_file(&range_index_path)?;
 
-        // Save EdgeStore for graph collections (BUG-1: was never persisted)
-        if self.config.read().graph_schema.is_some() {
-            let edge_store_path = self.path.join("edge_store.bin");
+        // Save the EdgeStore snapshot for ANY collection that uses the graph
+        // dimension (edges now WAL-persist on every collection type, so the
+        // snapshot + truncate compaction must follow them — otherwise the
+        // edge WAL grows without bound and a torn tail never heals). The
+        // `edge_store.bin exists` arm keeps persisting deletions down to an
+        // empty store.
+        let edge_store_path = self.path.join("edge_store.bin");
+        if !self.edge_store.is_empty() || edge_store_path.exists() {
             self.edge_store.save_to_file(&edge_store_path)?;
             // The snapshot now contains every edge, so the edge WAL delta is
             // redundant — truncate it AFTER the snapshot is durably written so

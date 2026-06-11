@@ -758,6 +758,251 @@ mod tests {
         );
     }
 
+    // ── Graph dimension: relate / relations / unrelate ─────────────────────
+
+    /// relate() creates a typed edge between two live facts; relations()
+    /// exposes it; unrelate() removes it.
+    #[test]
+    fn test_relate_relations_unrelate_roundtrip() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "context", &emb).unwrap();
+        sm.store(2, "fact", &emb).unwrap();
+
+        let props = meta_one("weight", serde_json::json!(0.9));
+        let edge_id = sm.relate(1, 2, "RELATES_TO", Some(&props)).unwrap();
+
+        let rels = sm.relations(1).unwrap();
+        assert_eq!(rels.len(), 1);
+        assert_eq!(rels[0].id(), edge_id);
+        assert_eq!(rels[0].target(), 2);
+        assert_eq!(rels[0].label(), "RELATES_TO");
+        assert_eq!(rels[0].property("weight"), Some(&serde_json::json!(0.9)));
+
+        assert!(sm.unrelate(edge_id).unwrap(), "edge must be removed");
+        assert!(sm.relations(1).unwrap().is_empty());
+    }
+
+    /// relate() refuses missing and expired endpoints (write surfaces must
+    /// not resurrect or dangle).
+    #[test]
+    fn test_relate_rejects_missing_and_expired_endpoints() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "context", &emb).unwrap();
+
+        let err = sm.relate(1, 999, "RELATES_TO", None).unwrap_err();
+        assert!(matches!(err, AgentMemoryError::NotFound(_)));
+
+        sm.store(2, "ephemeral", &emb).unwrap();
+        sm.set_ttl_durable(2, 0).unwrap(); // expires immediately
+        let err = sm.relate(1, 2, "RELATES_TO", None).unwrap_err();
+        assert!(matches!(err, AgentMemoryError::NotFound(_)));
+    }
+
+    /// Deleting a memory cascades to its relation edges (no dangling edges).
+    #[test]
+    fn test_delete_memory_cascades_relations() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "context", &emb).unwrap();
+        sm.store(2, "fact", &emb).unwrap();
+        sm.relate(1, 2, "RELATES_TO", None).unwrap();
+
+        sm.delete(2).unwrap();
+        assert!(
+            sm.relations(1).unwrap().is_empty(),
+            "deleting the target memory must cascade away the edge"
+        );
+    }
+
+    /// Relations survive a restart (edge WAL) and the edge-id allocator
+    /// reseeds past persisted edges.
+    #[test]
+    fn test_relations_survive_restart_without_id_collision() {
+        let dir = tempdir().unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let first_edge;
+        {
+            let db = Arc::new(Database::open(dir.path()).unwrap());
+            let sm = make_semantic(Arc::clone(&db));
+            sm.store(1, "context", &emb).unwrap();
+            sm.store(2, "fact", &emb).unwrap();
+            first_edge = sm.relate(1, 2, "RELATES_TO", None).unwrap();
+        }
+
+        let (_ttl, sm) = reopen_semantic(dir.path());
+        let rels = sm.relations(1).unwrap();
+        assert_eq!(rels.len(), 1, "edge must survive the restart (edge WAL)");
+        assert_eq!(rels[0].id(), first_edge);
+
+        sm.store(3, "another fact", &emb).unwrap();
+        let second_edge = sm.relate(1, 3, "SUPPORTS", None).unwrap();
+        assert_ne!(
+            second_edge, first_edge,
+            "reseeded allocator must not collide with persisted edges"
+        );
+        assert_eq!(sm.relations(1).unwrap().len(), 2);
+    }
+
+    /// Snapshot round-trip preserves relations: serialize captures the edges
+    /// between snapshotted memories and restore re-adds them (review
+    /// 2026-06-11: restore previously wiped every relation via the cascade).
+    #[test]
+    fn test_snapshot_roundtrip_preserves_relations() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "ctx", &emb).unwrap();
+        sm.store(2, "fact", &emb).unwrap();
+        let edge_id = sm.relate(1, 2, "RELATES_TO", None).unwrap();
+
+        let snapshot = sm.serialize().unwrap();
+        // Mutate after the snapshot: unrelate + add a new relation.
+        sm.unrelate(edge_id).unwrap();
+        sm.store(3, "other", &emb).unwrap();
+        sm.relate(1, 3, "SUPPORTS", None).unwrap();
+
+        sm.deserialize(&snapshot).unwrap();
+
+        let rels = sm.relations(1).unwrap();
+        assert_eq!(rels.len(), 1, "restore must bring back the snapshot edge");
+        assert_eq!(rels[0].target(), 2);
+        assert_eq!(rels[0].label(), "RELATES_TO");
+    }
+
+    /// Pre-graph snapshots (bare point arrays) still load — without edges.
+    #[test]
+    fn test_legacy_bare_array_snapshot_still_loads() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "ctx", &emb).unwrap();
+
+        // Simulate an old snapshot: a bare JSON array of points.
+        let points: Vec<crate::Point> = vec![crate::Point::new(
+            7,
+            emb.clone(),
+            Some(serde_json::json!({"content": "legacy"})),
+        )];
+        let legacy = serde_json::to_vec(&points).unwrap();
+
+        sm.deserialize(&legacy).unwrap();
+        assert!(sm.get(7).unwrap().is_some(), "legacy snapshot points load");
+        assert!(sm.relations(7).unwrap().is_empty());
+    }
+
+    /// flush() compacts the edge WAL into the snapshot for memory (vector)
+    /// collections too, and edges survive the reopen via the snapshot
+    /// (review 2026-06-11: the WAL previously grew forever and a torn tail
+    /// permanently broke edge durability).
+    #[test]
+    fn test_flush_compacts_edge_wal_and_edges_survive_reopen() {
+        let dir = tempdir().unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        {
+            let db = Arc::new(Database::open(dir.path()).unwrap());
+            let sm = make_semantic(Arc::clone(&db));
+            sm.store(1, "ctx", &emb).unwrap();
+            sm.store(2, "fact", &emb).unwrap();
+            sm.relate(1, 2, "RELATES_TO", None).unwrap();
+            db.flush_all();
+        }
+
+        let collection_dir = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|e| e.file_name().to_string_lossy().starts_with("_semantic"))
+            .expect("semantic collection dir")
+            .path();
+        assert!(
+            collection_dir.join("edge_store.bin").exists(),
+            "flush must snapshot the edge store for memory collections"
+        );
+        let wal_len = std::fs::metadata(collection_dir.join("edges.wal")).map_or(0, |m| m.len());
+        assert_eq!(wal_len, 0, "flush must truncate the compacted edge WAL");
+
+        let (_ttl, sm) = reopen_semantic(dir.path());
+        assert_eq!(
+            sm.relations(1).unwrap().len(),
+            1,
+            "edges must survive reopen via the snapshot"
+        );
+    }
+
+    /// relations() hides edges whose endpoint has expired (read invisibility
+    /// extends to the graph surface).
+    #[test]
+    fn test_relations_hide_expired_endpoints() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "ctx", &emb).unwrap();
+        sm.store(2, "ephemeral fact", &emb).unwrap();
+        sm.relate(1, 2, "RELATES_TO", None).unwrap();
+
+        sm.set_ttl_durable(2, 0).unwrap(); // expires immediately
+        assert!(
+            sm.relations(1).unwrap().is_empty(),
+            "edges to expired endpoints must be invisible"
+        );
+    }
+
+    /// THE mission query: vector NEAR + graph MATCH + scalar metadata over
+    /// agent memory, end-to-end through the VelesQL bridge.
+    #[test]
+    fn test_mission_query_near_match_scalar_over_memory() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let memory = crate::agent::AgentMemory::with_dimension(Arc::clone(&db), 4)
+            .expect("test: AgentMemory::with_dimension");
+        let sm = memory.semantic();
+
+        let close = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let far = vec![0.0_f32, 1.0, 0.0, 0.0];
+        let tech = meta_one("category", serde_json::json!("tech"));
+        let bio = meta_one("category", serde_json::json!("bio"));
+
+        // ctx(1) relates to fact(2); ctx(3) has no relations; ctx(4) wrong category.
+        sm.store_with_metadata(1, "ctx about rust", &close, &tech)
+            .unwrap();
+        sm.store_with_metadata(2, "fact: rust is fast", &close, &tech)
+            .unwrap();
+        sm.store_with_metadata(3, "ctx unrelated", &close, &tech)
+            .unwrap();
+        sm.store_with_metadata(4, "ctx other domain", &far, &bio)
+            .unwrap();
+        sm.relate(1, 2, "RELATES_TO", None).unwrap();
+        sm.relate(4, 2, "RELATES_TO", None).unwrap();
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("q".to_string(), serde_json::json!([1.0, 0.0, 0.0, 0.0]));
+        let results = memory
+            .query_semantic(
+                "SELECT * FROM memory AS m \
+                 WHERE vector NEAR $q AND category = 'tech' \
+                 AND MATCH (m)-[:RELATES_TO]->(f) LIMIT 5",
+                &params,
+            )
+            .unwrap();
+
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        assert_eq!(
+            ids,
+            vec![1],
+            "only ctx 1 is tech AND relates to a fact; got {ids:?}"
+        );
+    }
+
     /// A user business field named `expires_at` (subscription, offer, token…)
     /// stored via `store_with_metadata` must stay plain metadata: visible in
     /// session AND after a reopen, never rebuilt into the durable TTL map.

@@ -99,6 +99,7 @@ impl Collection {
             query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
             index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
             edge_store: Arc::new(parts.edge_store),
+            edge_wal_lock: Arc::new(Mutex::new(())),
             sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             payload_mirror: Arc::new(crate::collection::payload_mirror::PayloadMirror::default()),
@@ -309,6 +310,10 @@ impl Collection {
         // edge_store snapshot so edge mutations since the last flush survive
         // a crash. No-op when edges.wal is absent (legacy / non-graph DBs).
         #[cfg(feature = "persistence")]
+        // Snapshot-loaded edges must re-enter the property indexes BEFORE the
+        // WAL replays (replay indexes its own ADDs — running the full pass
+        // after it would double-index the replayed edges).
+        collection.reindex_edge_properties_from_store();
         collection.replay_edge_wal()?;
 
         Ok(collection)

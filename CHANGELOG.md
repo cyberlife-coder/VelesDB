@@ -35,6 +35,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `similarity()` cascades, text/hybrid fusion) keep the bounded window,
   now documented per shape. Anchor sets are evaluated once and shared with
   the exact WHERE post-filter.
+- **Agent memory graph dimension — relate() API**: each memory subsystem
+  (semantic/episodic/procedural) gains `relate(from, to, rel_type, props)`,
+  `relations(id)` and `unrelate(edge_id)`. Relation edges are typed,
+  WAL-durable, reject expired/missing endpoints, and cascade away when a
+  memory is deleted — `MATCH (m)-[:RELATES_TO]->(f)` is now executable over
+  agent memory, completing the flagship NEAR + MATCH + scalar query
+  end-to-end. Under the hood, the graph dimension is now first-class on
+  every collection type: edge WAL durability, the flush-time snapshot +
+  WAL compaction, and delete-cascade are unconditional (previously gated to
+  graph collections — vector-collection edges silently vanished on restart
+  and the WAL never compacted); edge property indexes are rebuilt from the
+  snapshot on open (previously lost after compaction, graph collections
+  included); edge WAL appends are ordered with their store apply so replay
+  resolves id collisions exactly like live execution; and memory snapshots
+  (`serialize`/`snapshot`) now capture relation edges and restore them
+  (previously a restore silently wiped every relation). Older bare-array
+  snapshots still load.
 - **Durable post-hoc TTL setters for agent memory**: Result-returning
   `set_semantic_ttl_durable` / `set_episodic_ttl_durable` /
   `set_procedural_ttl_durable` on `AgentMemory` (and `set_ttl_durable` on each

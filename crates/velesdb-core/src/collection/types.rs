@@ -237,6 +237,16 @@ pub(crate) struct Collection {
     /// Lock order position **8** is now managed internally by `ConcurrentEdgeStore`.
     pub(super) edge_store: Arc<ConcurrentEdgeStore>,
 
+    /// Serializes edge-WAL append + edge-store apply pairs so the WAL order
+    /// always equals the apply order (replay resolves id collisions exactly
+    /// like live execution) and concurrent appends cannot interleave one
+    /// entry's bytes.
+    ///
+    /// Lock order position: **7c** — acquired with no other collection lock
+    /// held; the edge store's internal `edge_ids → shards` chain is acquired
+    /// while holding it.
+    pub(super) edge_wal_lock: Arc<Mutex<()>>,
+
     /// Named sparse inverted indexes for sparse vector search (EPIC-062).
     /// Key is the sparse vector name (e.g., `""` for default, `"title"`, `"body"`).
     pub(super) sparse_indexes: Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>>,

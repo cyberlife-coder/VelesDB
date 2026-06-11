@@ -97,6 +97,8 @@ pub struct ProceduralMemory {
     /// ACT-R decay exponent `d` for passive confidence decay at recall time.
     /// `None` disables decay (default — backward-compatible behaviour).
     activation_decay_exponent: Option<f32>,
+    /// Edge-id allocator for [`Self::relate`] (seeded past existing edges).
+    next_edge_id: std::sync::atomic::AtomicU64,
 }
 
 impl ProceduralMemory {
@@ -137,6 +139,11 @@ impl ProceduralMemory {
             MemoryKind::Procedural,
         )?;
 
+        let next_edge_id = memory_helpers::seed_edge_counter(&memory_helpers::get_collection(
+            &db,
+            &collection_name,
+        )?);
+
         Ok(Self {
             collection_name,
             db,
@@ -145,6 +152,7 @@ impl ProceduralMemory {
             reinforcement_strategy: Arc::new(FixedRate::default()),
             stored_ids,
             activation_decay_exponent: None,
+            next_edge_id,
         })
     }
 
@@ -290,6 +298,73 @@ impl ProceduralMemory {
             procedure_id,
             ttl_seconds,
         )
+    }
+
+    /// Relates two live procedures with a typed, durable graph edge (e.g.
+    /// `DEPENDS_ON`, `REFINES`); see `SemanticMemory::relate` for semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when either endpoint is missing or expired, or
+    /// `CollectionError` when the edge write fails.
+    pub fn relate(
+        &self,
+        from_id: u64,
+        to_id: u64,
+        rel_type: &str,
+        properties: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<u64, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        for id in [from_id, to_id] {
+            memory_helpers::ensure_live(
+                &collection,
+                &self.collection_name,
+                &self.ttl,
+                MemoryKind::Procedural,
+                id,
+            )?;
+        }
+        let edge_id = memory_helpers::add_relation_edge(
+            &collection,
+            &self.next_edge_id,
+            (from_id, to_id),
+            rel_type,
+            properties,
+        )?;
+        // Close the check-then-add window: an endpoint deleted concurrently
+        // (its cascade may have run before our edge landed) must not leave a
+        // dangling, WAL-durable edge behind.
+        memory_helpers::verify_relation_endpoints(&collection, edge_id, (from_id, to_id))?;
+        Ok(edge_id)
+    }
+
+    /// Returns the outgoing relations of a procedure.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn relations(
+        &self,
+        id: u64,
+    ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        // Expired entries are invisible on every read surface — edges whose
+        // target has expired (but is not yet swept) are hidden too.
+        Ok(collection
+            .get_outgoing_edges(id)
+            .into_iter()
+            .filter(|edge| !self.ttl.is_expired(MemoryKind::Procedural, edge.target()))
+            .collect())
+    }
+
+    /// Removes a relation edge created by [`Self::relate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn unrelate(&self, edge_id: u64) -> Result<bool, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        Ok(collection.remove_edge(edge_id))
     }
 
     /// Recalls matching procedures by vector similarity.
