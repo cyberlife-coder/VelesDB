@@ -86,6 +86,7 @@ impl Collection {
         self.inserts_since_last_hnsw_save
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.flush_pq_codebook()?;
+        self.flush_rabitq_quantizer()?;
         Ok(())
     }
 
@@ -136,6 +137,27 @@ impl Collection {
 
     #[cfg(not(feature = "persistence"))]
     fn flush_pq_codebook(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Persists the lazily-trained `RaBitQ` quantizer to `rabitq.idx` on every
+    /// full flush (parity with [`Self::flush_pq_codebook`]).
+    ///
+    /// No-op when the backend is not `RaBitQ` or no quantizer is trained yet.
+    /// The artifact is also saved by the explicit `TRAIN QUANTIZER` path
+    /// (`database/training.rs`); this covers the lazy-training case so the
+    /// quantizer survives a restart instead of silently degrading to f32.
+    #[cfg(feature = "persistence")]
+    fn flush_rabitq_quantizer(&self) -> Result<()> {
+        let Some(rabitq) = self.index.rabitq_quantizer() else {
+            return Ok(());
+        };
+        rabitq.save(&self.path)?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "persistence"))]
+    fn flush_rabitq_quantizer(&self) -> Result<()> {
         Ok(())
     }
 

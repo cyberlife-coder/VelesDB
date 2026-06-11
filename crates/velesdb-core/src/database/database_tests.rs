@@ -790,6 +790,54 @@ fn test_train_rabitq_survives_reopen_beyond_lazy_threshold() {
     );
 }
 
+/// A lazily-trained `RaBitQ` quantizer (1000-insert threshold, no explicit
+/// `TRAIN QUANTIZER`) must be persisted to `rabitq.idx` by the full flush and
+/// reinstalled on reopen, instead of silently degrading to f32 search
+/// (parity with the PQ codebook flush).
+#[test]
+fn test_lazy_trained_rabitq_survives_reopen_via_flush() {
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection_with_options(
+            "rbq_lazy",
+            32,
+            DistanceMetric::Euclidean,
+            StorageMode::RaBitQ,
+        )
+        .unwrap();
+        seed_sin_vectors(&db, "rbq_lazy", 32, 1200);
+        let coll = db.resolve_writable_collection("rbq_lazy").unwrap();
+        assert!(
+            coll.is_rabitq_quantizer_trained(),
+            "1200 inserts must cross the lazy-train threshold"
+        );
+        assert_eq!(db.flush_all(), 0, "flush before reopen must succeed");
+        assert!(
+            coll.data_path().join("rabitq.idx").exists(),
+            "full flush must persist the lazily-trained quantizer"
+        );
+    }
+
+    let db = Database::open(dir.path()).unwrap();
+    let coll = db.resolve_writable_collection("rbq_lazy").unwrap();
+    assert!(
+        coll.is_rabitq_quantizer_trained(),
+        "lazily-trained quantizer must be reinstalled from rabitq.idx on open"
+    );
+
+    let query_vec = sin_vector(32, 7);
+    let results = coll.search(&query_vec, 10).unwrap();
+    assert_eq!(results.len(), 10);
+    let result_ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    let brute_ids = sin_brute_force_top_k(&query_vec, 32, 1200, 10);
+    let overlap = brute_ids.intersection(&result_ids).count();
+    assert!(
+        overlap >= 9,
+        "recall@10 vs brute force should be >= 0.9 after lazy reopen, got {overlap}/10"
+    );
+}
+
 /// PQ persistence round-trip: the codebook saved by `TRAIN QUANTIZER` must be
 /// reloaded on open and the PQ cache rebuilt, so the ADC rescore path stays
 /// live after a restart.

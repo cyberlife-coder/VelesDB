@@ -196,7 +196,9 @@ OPQ applique une rotation orthogonale aux vecteurs avant la quantification PQ. C
 > vecteurs sont ré-encodés (coût O(n·d) à l'ouverture, même classe que la
 > gap recovery HNSW). Si la collection a été créée avec un autre mode de
 > stockage, l'entraînement persiste l'index et bascule la config ; le
-> backend RaBitQ prend effet à la prochaine ouverture.
+> backend RaBitQ prend effet à la prochaine ouverture. Un quantizer
+> entraîné automatiquement (lazy, seuil de 1000 insertions) est lui aussi
+> persisté dans `rabitq.idx` au flush complet, à parité avec le codebook PQ.
 
 ### Comment ca marche ?
 
