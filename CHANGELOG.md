@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`DistanceEngine` dimension checks now assert in release builds** (were
+  debug-only): a length mismatch panics instead of reading out of bounds
+  through the safe public API.
 - **BREAKING (VelesQL) — variable-length relationship aliases bind lists
   (openCypher semantics)**: `MATCH (a)-[r:T*1..3]->(b)` now binds `r` to the
   ordered LIST of traversed relationships instead of the last edge.
@@ -106,27 +109,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fuse()` path like the other weighted strategies.
 - **REST + TypeScript SDK parity for relations and durable TTL (#1082)**:
   `relate`/`unrelate`/`getRelations` and `setTtlDurable` are exposed over
-  REST (`/collections/{name}/points/{id}/relations`,
+  REST (`POST /collections/{name}/relations` (create),
+  `GET /collections/{name}/points/{id}/relations`,
   `/collections/{name}/relations/{edge_id}`,
   `/collections/{name}/points/{id}/ttl`) and in `@wiscale/velesdb-sdk`, with
   the OpenAPI spec regenerated and the SDK methods covered by tests.
-- **`GET /metrics` served by default**: the Prometheus endpoint is registered
-  unconditionally (previously opt-in) and documented in the OpenAPI spec; it
+- **`GET /metrics` served by default**: the `prometheus` feature is now a
+  default feature (previously opt-in), so released binaries and the Docker
+  image expose the endpoint out of the box; documented in the OpenAPI spec; it
   stays behind API-key auth whenever keys are configured.
+- **Release artifacts ship a `SHA256SUMS` file**; `install.sh` verifies the
+  downloaded archive against it.
 - **Python durable TTL for episodic and procedural memory**:
   `set_episodic_ttl_durable` / `set_procedural_ttl_durable` bindings bring
   the PyO3 SDK to parity with the Rust durable TTL setters.
 - **Agent-memory criterion benchmark**: `agent_memory_benchmark` (semantic
   store/query/hybrid NEAR + MATCH, episodic record/recent, procedural recall
-  at 10K entries, 384-dim) plus measured figures with provenance in the
+  at 10K facts/events and 1K procedures, 384-dim) plus measured figures with provenance in the
   agent-memory guide (Apple M5 Pro: `semantic.query` 55.5 µs at k=10,
-  `episodic.recent` 24.7 µs, NEAR + MATCH 5.46 ms at 1,000 anchors, `store`
+  `episodic.recent` 24.7 µs, NEAR + MATCH ~5.5 ms at 1,000 anchors, `store`
   12.1 ms — fsync-dominated).
 - **Mobile `uniffi-bindgen` binary**: `velesdb-mobile` now ships the
   documented `uniffi-bindgen` binary, and the Swift/Kotlin
   bindings-generation flow it documents is verified.
 
 ### Fixed
+- **Tauri plugin: 25 registered commands had no Tauri v2 permission** and were
+  unreachable from the webview (the extended AgentMemory surface shipped in
+  v1.18.0); all 63 commands now carry permissions and the sync test parses the
+  registration source as ground truth, so the gap cannot silently recur.
+- **`MATCH ... RETURN` without `LIMIT` silently capped results at 100**: the
+  default is now the server-wide 100 000-row ceiling, matching the documented
+  contract (pinned by a >100-row BDD test).
 - **Persisted HNSW graph was never reloaded at open**: `Collection::open` now
   loads the serialized `index.hnsw` and reconciles it in 3 passes against the
   vector store and WAL (stale entries dropped, missing vectors re-indexed,

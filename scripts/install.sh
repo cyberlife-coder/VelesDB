@@ -77,7 +77,7 @@ install_velesdb() {
         linux-x86_64)  archive_name="velesdb-x86_64-unknown-linux-gnu.tar.gz" ;;
         macos-x86_64)  archive_name="velesdb-x86_64-apple-darwin.tar.gz" ;;
         macos-aarch64) archive_name="velesdb-aarch64-apple-darwin.tar.gz" ;;
-        linux-aarch64) archive_name="velesdb-aarch64-unknown-linux-gnu.tar.gz" ;;
+        linux-aarch64) echo -e "${RED}❌ No prebuilt ARM-Linux binary yet — build from source: cargo install velesdb-server velesdb-cli${NC}"; exit 1 ;;
         *)             echo -e "${RED}❌ No binary available for ${platform}${NC}"; exit 1 ;;
     esac
     

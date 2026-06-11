@@ -810,7 +810,7 @@ pre-seeded:
 |-----------|------------------------|------|
 | `semantic.store()` | ~12 ms | durable single upsert — WAL fsync dominates; use `store_batch()` for bulk loads (the benchmark seeds 10K facts in seconds) |
 | `semantic.query()` k=10 | ~55 µs | HNSW search over 10K facts |
-| `query_semantic()` NEAR + MATCH | ~5.6 ms | hybrid vector + graph, 1 000-anchor `RELATES_TO` set scored exactly |
+| `query_semantic()` NEAR + MATCH | ~5.5 ms | hybrid vector + graph, 1 000-anchor `RELATES_TO` set scored exactly |
 | `episodic.record()` | ~19 ms | durable single upsert + temporal index |
 | `episodic.recent()` (10) | ~25 µs | B-tree temporal index O(log N) |
 | `procedural.recall()` k=5 | ~45 µs | HNSW + confidence filter over 1K procedures |

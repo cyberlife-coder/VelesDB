@@ -337,7 +337,7 @@ val collection = db.getCollection("docs")!!
 val results = collection.search(embedding, 10u)
 ```
 
-📖 Full guide: [crates/velesdb-mobile/README.md](../crates/velesdb-mobile/README.md)
+📖 Full guide: [crates/velesdb-mobile/README.md](../../crates/velesdb-mobile/README.md)
 
 ---
 
@@ -425,4 +425,4 @@ docker run -v velesdb_data:/data velesdb
 - **[VelesQL Guide](../VELESQL_SPEC.md)** - SQL-like query language
 - **[API Reference](../reference/api-reference.md)** - REST API documentation
 - **[Benchmarks](../BENCHMARKS.md)** - Performance metrics
-- **[Examples](../examples/)** - Sample applications including Tauri RAG app
+- **[Examples](../../examples/)** - Sample applications including Tauri RAG app

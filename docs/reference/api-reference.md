@@ -669,8 +669,9 @@ Execute a VelesQL query.
 **Contract note:** top-level `MATCH` on `/query` requires `collection` in request body.  
 **Default LIMIT:** a SELECT without an explicit `LIMIT` clause returns at most
 10 rows (engine default). `MATCH ... RETURN` and compound queries
-(UNION/INTERSECT/EXCEPT) have no default — specify `LIMIT` explicitly for
-exhaustive retrieval.  
+(UNION/INTERSECT/EXCEPT) have no implicit limit and are bounded only by the
+server-wide 100 000-row ceiling — specify `LIMIT` explicitly for
+predictable result sizes.  
 Canonical reference: [`VELESQL_CONTRACT.md`](./VELESQL_CONTRACT.md)
 
 ### POST /aggregate

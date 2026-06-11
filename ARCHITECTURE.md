@@ -8,7 +8,7 @@ This document is the **15-minute read** an engineer or a technical due-diligence
 
 ## TL;DR — three sentences
 
-VelesDB is a **single-binary, embeddable database** that fuses a **vector index (HNSW)**, a **graph engine** (nodes + edges + traversal), and a **typed columnstore** behind a **shared SQL-like query language called VelesQL**. The target use case is local-first AI agents and RAG pipelines that today have to stitch together pgvector + Neo4j + PostgreSQL by hand. The whole engine ships as a single ~9 MB binary (7–13 MB depending on platform and binary, measured on v1.18.0 release artifacts), runs on Linux/macOS/Windows/iOS/Android/WASM, and persists to a directory on disk that the user controls.
+VelesDB is a **single-binary, embeddable database** that fuses a **vector index (HNSW)**, a **graph engine** (nodes + edges + traversal), and a **typed columnstore** behind a **shared SQL-like query language called VelesQL**. The target use case is local-first AI agents and RAG pipelines that today have to stitch together pgvector + Neo4j + PostgreSQL by hand. The whole engine ships as a single ~9 MB binary (6–13 MB depending on platform and binary, measured on v1.18.0 release artifacts), runs on Linux/macOS/Windows/iOS/Android/WASM, and persists to a directory on disk that the user controls.
 
 ---
 

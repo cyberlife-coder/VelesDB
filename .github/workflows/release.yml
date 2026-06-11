@@ -551,10 +551,18 @@ jobs:
           merge-multiple: true
 
       - name: Generate SHA256SUMS
+        # Tolerates the republish-without-binaries dispatch path (build
+        # skipped -> no artifacts directory): checksums are only generated
+        # when binaries were actually downloaded.
         run: |
+          mkdir -p artifacts
           cd artifacts
-          sha256sum * > SHA256SUMS
-          echo "Published checksums:" && cat SHA256SUMS
+          if ls * >/dev/null 2>&1; then
+            sha256sum * > SHA256SUMS
+            echo "Published checksums:" && cat SHA256SUMS
+          else
+            echo "No binary artifacts in this run — skipping SHA256SUMS"
+          fi
 
       - name: Extract release notes from CHANGELOG
         run: |

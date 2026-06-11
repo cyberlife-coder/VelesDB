@@ -1349,11 +1349,13 @@ sparse, scalar-filter, and hybrid forms alike. VelesQL is ANN-first: a SELECT
 is a top-k retrieval, so an unbounded default would defeat top-k vector search.
 `EXPLAIN` surfaces the implicit limit as `Limit: 10 (default)`.
 
-Exceptions (no implicit limit):
+Exceptions (no implicit `LIMIT 10`):
 
-- `MATCH ... RETURN` graph queries return all matching rows;
+- `MATCH ... RETURN` graph queries return all matching rows, bounded only by
+  the server-wide ceiling of 100 000 rows per query;
 - compound queries (`UNION` / `INTERSECT` / `EXCEPT`) evaluate their operands
-  exhaustively; only an explicit outer `LIMIT` caps the merged result.
+  up to the same 100 000-row ceiling; only an explicit outer `LIMIT` caps the
+  merged result.
 
 Always specify `LIMIT` explicitly — both to bound vector search and for
 exhaustive retrieval beyond the default 10 rows.
@@ -2806,7 +2808,7 @@ SELECT id AS `select` FROM docs
 
 | Feature | Default | Notes |
 |---------|---------|-------|
-| LIMIT | 10 (every SELECT form) | Exceptions: `MATCH ... RETURN` and compound queries (UNION/INTERSECT/EXCEPT) have no default. Always specify LIMIT for exhaustive retrieval |
+| LIMIT | 10 (every SELECT form) | Exceptions: `MATCH ... RETURN` and compound queries (UNION/INTERSECT/EXCEPT) have no implicit `LIMIT 10` (bounded by the 100 000-row server ceiling). Always specify LIMIT for exhaustive retrieval |
 | OFFSET | 0 | |
 | ORDER BY direction | ASC | Explicit DESC recommended for similarity |
 | metric (CREATE) | cosine | |

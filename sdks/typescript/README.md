@@ -4,6 +4,16 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 **v1.18.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
+## What's New (unreleased)
+
+- **Relation + durable-TTL surface** (REST backend): `relate()`, `unrelate()`, `getRelations()`, `setTtlDurable()` — now fully tested and documented (see [Relations & durable TTL](#relations--durable-ttl) below). The WASM backend throws `NOT_SUPPORTED` for these methods.
+- The shipped example (`examples/hybrid_queries.ts`) was rewritten against the real API and is now compile-checked in CI.
+
+## What's New in v1.17.0 / v1.18.0
+
+- v1.17.0: no SDK-facing API change (engine-side release).
+- v1.18.0: agent-memory parity wave — temporal recall facades (`recallRecent` / `recallOlderThan`), id-coercion hardening for `deleteMemory(string | number)`.
+
 ## What's New in v1.16.0
 
 - **First-party embedding helper.** New `OpenAIEmbedder` (plus the `Embedder` interface and `OpenAIEmbedderOptions` type), exported from the package root. It calls any OpenAI-compatible `/embeddings` endpoint via the global `fetch` API — no extra runtime dependency — so you can go from text to vectors without hand-writing the request. See [Embedding helper](#embedding-helper) below. Works in Node.js ≥ 18, browsers, and Deno.

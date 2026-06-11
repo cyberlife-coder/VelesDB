@@ -47,7 +47,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 | **Property Indexes** (secondary, trigram) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Quantization** (SQ8 / Binary / PQ) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Quantization** (RaBitQ) | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
-| **Agent Memory** (semantic, episodic, procedural) | ✅ | ⚠️ | ✅ | ✅ | ✅ | N/A | ✅ | ✅ | ⚠️ | ⚠️ | N/A |
+| **Agent Memory** (semantic, episodic, procedural) | ✅ | ⚠️ | ✅ | ⚠️ | ⚠️ | N/A | ✅ | ✅ | ⚠️ | ⚠️ | N/A |
 | **Persistence** (WAL / mmap) | ✅ | ✅ | ✅ | ❌ | ✅ | N/A | N/A | N/A | N/A | N/A | N/A |
 | **GPU Acceleration** (wgpu) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
@@ -74,11 +74,12 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 
   | Operation | REST | TS SDK (REST backend) | TS SDK (WASM backend) | Python |
   |---|---|---|---|---|
-  | `relate()` (create edge) | ✅ `POST .../relations` | ✅ `client.relate()` | ✅ `wasmRelate` | ❌ (use `GraphCollection.add_edge` or the core API) |
-  | `unrelate()` (delete edge) | ✅ `DELETE .../relations/{edge_id}` | ✅ `client.unrelate()` | ✅ `wasmUnrelate` | ❌ |
-  | `getRelations()` (list outgoing) | ✅ `GET .../points/{id}/relations` | ✅ `client.getRelations()` | ✅ `wasmGetRelations` | ❌ |
-  | Durable TTL set/refresh | ✅ `PATCH .../points/{id}/ttl` | ✅ `client.setTtlDurable()` | ✅ `wasmSetTtlDurable` | ✅ `set_semantic/episodic/procedural_ttl_durable`, `store_with_ttl`, `record_with_ttl`, `learn_with_ttl` |
-  | Temporal recall facades | n/a (use `/query`) | ✅ `recallRecent` / `recallOlderThan` | ✅ | ✅ `episodic.recent` / `episodic.older_than` |
+  | `relate()` (create edge) | ✅ `POST .../relations` | ✅ `client.relate()` | ❌ (`wasmRelate` throws `NOT_SUPPORTED` — REST backend only) | ❌ (use `GraphCollection.add_edge` or the core API) |
+  | `unrelate()` (delete edge) | ✅ `DELETE .../relations/{edge_id}` | ✅ `client.unrelate()` | ❌ (throws `NOT_SUPPORTED`) | ❌ |
+  | `getRelations()` (list outgoing) | ✅ `GET .../points/{id}/relations` | ✅ `client.getRelations()` | ❌ (throws `NOT_SUPPORTED`) | ❌ |
+  | Durable TTL set/refresh | ✅ `PATCH .../points/{id}/ttl` | ✅ `client.setTtlDurable()` | ❌ (throws `NOT_SUPPORTED`) | ✅ `set_semantic/episodic/procedural_ttl_durable`, `store_with_ttl`, `record_with_ttl`, `learn_with_ttl` |
+  | Temporal recall facades | n/a (use `/query`) | ✅ `recallRecent` / `recallOlderThan` | ❌ (throws `NOT_SUPPORTED`) | ✅ `episodic.recent` / `episodic.older_than` |
+- **Agent Memory (WASM / Mobile)**: ⚠️ semantic-only surface (`SemanticMemory` in WASM, `VelesSemanticMemory` on mobile); episodic/procedural memory, TTL helpers, and snapshots are not exposed on these bindings.
 - **Persistence (WASM)**: Disabled by design — `persistence` feature flag is excluded for `wasm32-unknown-unknown` targets.
 - **GPU**: Requires `gpu` feature flag; only available in crates that link `wgpu` (core, server, Python bindings).
 

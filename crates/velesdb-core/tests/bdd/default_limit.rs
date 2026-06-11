@@ -125,6 +125,41 @@ fn test_match_return_without_limit_returns_all_matches() {
     );
 }
 
+/// GIVEN 150 nodes labeled `Bulk` (above the historical silent cap of 100)
+/// WHEN running `MATCH (n:Bulk) RETURN n` without LIMIT
+/// THEN all 150 matches are returned — pins the contract against any
+/// implicit per-query cap below the server-wide `MAX_LIMIT` ceiling.
+#[test]
+fn test_match_return_without_limit_exceeds_one_hundred_matches() {
+    let (_dir, db) = create_test_db();
+    db.create_vector_collection("bulk", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create bulk collection");
+    let vc = db
+        .get_vector_collection("bulk")
+        .expect("test: get bulk collection");
+    let points: Vec<Point> = (1..=150u64)
+        .map(|i| {
+            Point::new(
+                i,
+                vec![1.0, 0.01, 0.0, 0.0],
+                Some(json!({"_labels": ["Bulk"], "rank": i})),
+            )
+        })
+        .collect();
+    vc.upsert(points).expect("test: upsert bulk nodes");
+
+    let mut params = std::collections::HashMap::new();
+    params.insert("_collection".to_string(), json!("bulk"));
+    let results = execute_sql_with_params(&db, "MATCH (n:Bulk) RETURN n", &params)
+        .expect("MATCH without LIMIT must execute");
+
+    assert_eq!(
+        results.len(),
+        150,
+        "MATCH ... RETURN must not silently cap below MAX_LIMIT"
+    );
+}
+
 /// GIVEN two disjoint collections of 8 rows each
 /// WHEN running `SELECT ... UNION SELECT ...` without LIMIT
 /// THEN all 16 rows survive (compound queries have no implicit limit).

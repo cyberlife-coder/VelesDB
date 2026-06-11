@@ -32,10 +32,6 @@ ignore = [
     { id = "RUSTSEC-2025-0081", reason = "unic-char-property: tauri transitive, unmaintained" },
     { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: tauri transitive, unmaintained" },
     { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: tauri transitive, unmaintained" },
-    # rand 0.7.3 + 0.8.5 enter the graph via phf → kuchikiki → tauri-utils
-    # (build-time). Production rand is on 0.9.3, already patched, so the
-    # runtime path is not affected.
-    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 + 0.8.5: phf/tauri build transitives — production rand is 0.9.3" },
 
     # ── velesdb-python (PyO3) ─────────────────────────────────────────
     # OOB read in BoundListIterator/BoundTupleIterator nth/nth_back.
@@ -60,12 +56,10 @@ ignore = [
     { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill: postcard 1.x → heapless transitive — no fix in postcard 1.x" },
 
     # ── indicatif transitive ──────────────────────────────────────────
-    { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif transitive, unmaintained" },
 
     # ── uniffi / velesdb-mobile transitive ────────────────────────────
     # bincode was dropped from velesdb-core directly but re-enters via
     # uniffi (velesdb-mobile only). Tracked in the uniffi 0.32 upgrade.
-    { id = "RUSTSEC-2025-0141", reason = "bincode: uniffi transitive (velesdb-mobile only) — awaiting uniffi upgrade" },
 
     # ── rustls-pemfile (no live vulnerability) ────────────────────────
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: unmaintained marker only, no active CVE" },

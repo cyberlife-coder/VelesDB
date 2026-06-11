@@ -95,13 +95,13 @@ VelesDB core architecture is explicitly **hybrid by design**:
 - WebAssembly module for browser/Node.js
 - Scalar distance calculations (SIMD128 kernels planned)
 - IndexedDB persistence via binary export/import
-- ~50KB gzipped
+- ~430 KB gzipped (v1.18.0 npm artifact)
 
 #### velesdb-server
 - Axum-based REST API server
 - OpenAPI/Swagger documentation
-- 46 REST endpoints (method+path combinations)
-- Prometheus metrics (planned)
+- 48 REST endpoints (55 method+path operations)
+- Prometheus metrics served by default (`GET /metrics`)
 
 #### velesdb-python
 - PyO3 bindings for Python
