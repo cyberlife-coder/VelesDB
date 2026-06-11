@@ -1275,6 +1275,180 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /collections/{name}/points/{id}/relations:
+    get:
+      tags:
+      - graph
+      summary: List outgoing relation edges for a point.
+      operationId: get_point_relations
+      parameters:
+      - name: name
+        in: path
+        description: Collection name
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        description: Point ID
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      responses:
+        '200':
+          description: Outgoing relations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationsResponse'
+        '404':
+          description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /collections/{name}/points/{id}/ttl:
+    patch:
+      tags:
+      - points
+      summary: Set (or refresh) the durable TTL of a point.
+      description: |-
+        Persists `_veles_expires_at` in the point's payload so the expiry
+        survives a restart. A `ttl_seconds` of `0` expires the point immediately.
+      operationId: set_point_ttl
+      parameters:
+      - name: name
+        in: path
+        description: Collection name
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        description: Point ID
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetTtlRequest'
+        required: true
+      responses:
+        '204':
+          description: TTL set successfully
+        '400':
+          description: Non-object payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Collection or point not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /collections/{name}/relations:
+    post:
+      tags:
+      - graph
+      summary: Create a relation edge between two points in a collection.
+      description: |-
+        Works on vector, graph, and metadata collections alike.
+        The edge ID is auto-assigned; the response body carries the allocated value.
+      operationId: relate_points
+      parameters:
+      - name: name
+        in: path
+        description: Collection name
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RelateRequest'
+        required: true
+      responses:
+        '201':
+          description: Relation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelateResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /collections/{name}/relations/{edge_id}:
+    delete:
+      tags:
+      - graph
+      summary: Remove a relation edge by ID.
+      operationId: unrelate_points
+      parameters:
+      - name: name
+        in: path
+        description: Collection name
+        required: true
+        schema:
+          type: string
+      - name: edge_id
+        in: path
+        description: Edge ID to remove
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      responses:
+        '204':
+          description: Relation removed
+        '404':
+          description: Collection or edge not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /collections/{name}/sanity:
     get:
       tags:
@@ -3225,6 +3399,15 @@ components:
         - `SELECT *` → `{id, field1, field2, ...}` (no vector)
         - `SELECT col1, col2` → `{col1, col2}`
         - `SELECT similarity() AS score, title` → `{score, title}`
+
+        ## MATCH-query extra fields
+
+        When the query contains a `MATCH` clause, each row may carry additional
+        graph-specific fields:
+        - `_edge_bindings` — map of alias → edge (id, source, target, label, properties)
+          for every named relationship in the pattern.
+        - `_edge_paths` — array of edge-ID arrays, one per matched path variable.
+          Only present when the `MATCH` clause binds a path variable (`p = (…)-[…]->(…)`).
       required:
       - results
       - timing_ms
@@ -3238,7 +3421,11 @@ components:
         results:
           type: array
           items: {}
-          description: Projected result rows. Shape depends on SELECT clause.
+          description: |-
+            Projected result rows. Shape depends on SELECT clause.
+
+            MATCH queries may include `_edge_bindings` and `_edge_paths` fields
+            in each row — see the struct documentation for details.
         rows_returned:
           type: integer
           description: Number of rows returned.
@@ -3266,6 +3453,80 @@ components:
         velesql_contract_version:
           type: string
           description: '`VelesQL` contract version used by this response.'
+    RelateRequest:
+      type: object
+      description: Request body for `POST /collections/{name}/relations`.
+      required:
+      - source
+      - target
+      - rel_type
+      properties:
+        properties:
+          description: Optional edge properties.
+        rel_type:
+          type: string
+          description: Relationship type label (e.g. `"KNOWS"`, `"RELATED_TO"`).
+        source:
+          oneOf:
+          - type: integer
+            format: int64
+          - type: string
+          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
+        target:
+          oneOf:
+          - type: integer
+            format: int64
+          - type: string
+          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
+    RelateResponse:
+      type: object
+      description: Response body for `POST /collections/{name}/relations`.
+      required:
+      - edge_id
+      properties:
+        edge_id:
+          type: string
+          description: Allocated edge ID.
+    RelationEdge:
+      type: object
+      description: A single relation edge in a response.
+      required:
+      - id
+      - source
+      - target
+      - rel_type
+      - properties
+      properties:
+        id:
+          type: string
+          description: Edge ID.
+        properties:
+          description: Edge properties (null when empty).
+        rel_type:
+          type: string
+          description: Relationship type label.
+        source:
+          type: string
+          description: Source point ID.
+        target:
+          type: string
+          description: Target point ID.
+    RelationsResponse:
+      type: object
+      description: Response body for `GET /collections/{name}/points/{id}/relations`.
+      required:
+      - edges
+      - count
+      properties:
+        count:
+          type: integer
+          description: Total count.
+          minimum: 0
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/RelationEdge'
+          description: Outgoing relation edges.
     ScrollPoint:
       type: object
       description: A single point in a scroll response.
@@ -3425,6 +3686,19 @@ components:
           type: number
           format: float
           description: Similarity score.
+    SetTtlRequest:
+      type: object
+      description: Request body for `PATCH /collections/{name}/points/{id}/ttl`.
+      required:
+      - ttl_seconds
+      properties:
+        ttl_seconds:
+          type: integer
+          format: int64
+          description: |-
+            Number of seconds from now until this point expires.
+            A value of `0` expires the point immediately.
+          minimum: 0
     SparseVectorInput:
       oneOf:
       - type: object
