@@ -631,12 +631,22 @@ sweeps it.
 
 ```python
 # Set a TTL (seconds) per subsystem — ids are namespaced by subsystem.
+# In-memory TTLs (fast, but lost on restart):
 memory.set_semantic_ttl(fact_id, 3600)        # 1 hour
 memory.set_episodic_ttl(event_id, 86_400)     # 24 hours
 memory.set_procedural_ttl(proc_id, 604_800)   # 7 days
 
-# Store a fact with its TTL in one call:
+# Durable TTLs: persisted to the reserved `_veles_expires_at` payload field
+# (like `store_with_ttl`), so they survive a restart. Raise KeyError when
+# the id does not exist.
+memory.set_semantic_ttl_durable(fact_id, 3600)
+memory.set_episodic_ttl_durable(event_id, 86_400)
+memory.set_procedural_ttl_durable(proc_id, 604_800)
+
+# Store an entry with its (durable) TTL in one call:
 memory.semantic.store_with_ttl(fact_id, "ephemeral fact", embedding, 60)
+memory.episodic.record_with_ttl(event_id, "transient event", timestamp, 60)
+memory.procedural.learn_with_ttl(proc_id, "draft proc", ["step 1"], 60)
 
 # Purge expired entries; returns a dict of per-subsystem counts.
 stats = memory.auto_expire()
@@ -933,7 +943,7 @@ the embedded bindings expose each subsystem as its own object (`semantic.store`,
 | `procedural.reinforce()` | Yes | Yes | No (confidence scoring embedded-only) |
 | `procedural.list_all()` | Yes | Yes | No (embedded-only) |
 | `procedural.delete()` | Yes | Yes | Yes (`deleteMemory`) |
-| TTL management (`set_*_ttl`, `store_with_ttl`, `auto_expire`) | Yes | Yes | Partial — durable per-point TTL via `db.setTtlDurable()`; subsystem helpers embedded-only |
+| TTL management (`set_*_ttl`, `set_*_ttl_durable`, `store_with_ttl` / `record_with_ttl` / `learn_with_ttl`, `auto_expire`) | Yes | Yes | Partial — durable per-point TTL via `db.setTtlDurable()`; subsystem helpers embedded-only |
 | Snapshots (`snapshot`, `load_*_snapshot`, `list_snapshot_versions`) | Yes | Yes | No (embedded-only) |
 | VelesQL bridges (`query_semantic` / `query_episodic` / `query_procedural`) | Yes | Yes | No (embedded-only) |
 

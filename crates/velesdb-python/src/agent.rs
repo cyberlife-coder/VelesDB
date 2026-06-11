@@ -238,6 +238,65 @@ impl AgentMemory {
         }))
     }
 
+    /// Durably sets the TTL (in seconds) of an existing semantic fact.
+    ///
+    /// Unlike `set_semantic_ttl` (in-memory map only, lost on restart), the
+    /// expiry is persisted to the reserved `_veles_expires_at` payload field
+    /// and survives a restart. A `ttl_seconds` of 0 expires the fact
+    /// immediately.
+    ///
+    /// Raises:
+    ///     KeyError: If no semantic fact with `id` exists.
+    #[pyo3(signature = (id, ttl_seconds))]
+    fn set_semantic_ttl_durable(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.core
+                .set_semantic_ttl_durable(id, ttl_seconds)
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Durably sets the TTL (in seconds) of an existing episodic event.
+    ///
+    /// Unlike `set_episodic_ttl` (in-memory map only, lost on restart), the
+    /// expiry is persisted to the reserved `_veles_expires_at` payload field
+    /// and survives a restart. A `ttl_seconds` of 0 expires the event
+    /// immediately.
+    ///
+    /// Raises:
+    ///     KeyError: If no event with `id` exists.
+    #[pyo3(signature = (id, ttl_seconds))]
+    fn set_episodic_ttl_durable(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.core
+                .set_episodic_ttl_durable(id, ttl_seconds)
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Durably sets the TTL (in seconds) of an existing procedure.
+    ///
+    /// Unlike `set_procedural_ttl` (in-memory map only, lost on restart), the
+    /// expiry is persisted to the reserved `_veles_expires_at` payload field
+    /// and survives a restart. A `ttl_seconds` of 0 expires the procedure
+    /// immediately.
+    ///
+    /// Raises:
+    ///     KeyError: If no procedure with `id` exists.
+    #[pyo3(signature = (id, ttl_seconds))]
+    fn set_procedural_ttl_durable(
+        &self,
+        py: Python<'_>,
+        id: u64,
+        ttl_seconds: u64,
+    ) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.core
+                .set_procedural_ttl_durable(id, ttl_seconds)
+                .map_err(to_py_err)
+        })
+    }
+
     /// Expires entries past their TTL and consolidates old episodes.
     ///
     /// Returns:
@@ -593,6 +652,40 @@ impl PyEpisodicMemory {
         })
     }
 
+    /// Record an event with a TTL in one durable call.
+    ///
+    /// The expiry is persisted to the reserved `_veles_expires_at` payload
+    /// field (like `SemanticMemory.store_with_ttl`), so the TTL survives a
+    /// restart. A `ttl_seconds` of 0 expires the event immediately.
+    ///
+    /// Args:
+    ///     event_id: Unique identifier
+    ///     description: Event description
+    ///     timestamp: Unix timestamp
+    ///     ttl_seconds: Time-to-live in seconds
+    ///     embedding: Optional embedding for similarity search
+    ///
+    /// Example:
+    ///     >>> memory.episodic.record_with_ttl(1, "transient", int(time.time()), 60)
+    #[pyo3(signature = (event_id, description, timestamp, ttl_seconds, embedding = None))]
+    fn record_with_ttl(
+        &self,
+        py: Python<'_>,
+        event_id: u64,
+        description: &str,
+        timestamp: i64,
+        ttl_seconds: u64,
+        embedding: Option<Vec<f32>>,
+    ) -> PyResult<()> {
+        let description_owned = description.to_string();
+        py.allow_threads(|| {
+            let emb_ref = embedding.as_deref();
+            self.inner()
+                .record_with_ttl(event_id, &description_owned, timestamp, emb_ref, ttl_seconds)
+                .map_err(to_py_err)
+        })
+    }
+
     /// Get recent events from episodic memory.
     ///
     /// Args:
@@ -727,6 +820,50 @@ impl PyProceduralMemory {
             let emb_ref = embedding.as_deref();
             self.inner()
                 .learn(procedure_id, &name_owned, &steps, emb_ref, confidence)
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Learn a procedure with a TTL in one durable call.
+    ///
+    /// The expiry is persisted to the reserved `_veles_expires_at` payload
+    /// field (like `SemanticMemory.store_with_ttl`), so the TTL survives a
+    /// restart. A `ttl_seconds` of 0 expires the procedure immediately.
+    ///
+    /// Args:
+    ///     procedure_id: Unique identifier
+    ///     name: Human-readable name
+    ///     steps: List of action steps
+    ///     ttl_seconds: Time-to-live in seconds
+    ///     embedding: Optional embedding for similarity matching
+    ///     confidence: Initial confidence (0.0-1.0, default: 0.5)
+    ///
+    /// Example:
+    ///     >>> memory.procedural.learn_with_ttl(1, "greet", ["wave"], 3600)
+    #[allow(clippy::too_many_arguments)] // Reason: `py` is an injected PyO3 token, not a user-facing argument
+    #[pyo3(signature = (procedure_id, name, steps, ttl_seconds, embedding = None, confidence = 0.5))]
+    fn learn_with_ttl(
+        &self,
+        py: Python<'_>,
+        procedure_id: u64,
+        name: &str,
+        steps: Vec<String>,
+        ttl_seconds: u64,
+        embedding: Option<Vec<f32>>,
+        confidence: f32,
+    ) -> PyResult<()> {
+        let name_owned = name.to_string();
+        py.allow_threads(|| {
+            let emb_ref = embedding.as_deref();
+            self.inner()
+                .learn_with_ttl(
+                    procedure_id,
+                    &name_owned,
+                    &steps,
+                    emb_ref,
+                    confidence,
+                    ttl_seconds,
+                )
                 .map_err(to_py_err)
         })
     }
