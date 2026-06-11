@@ -29,7 +29,6 @@ from llamaindex_velesdb.security import (
     validate_batch_size,
     validate_collection_name,
     validate_sparse_vector,
-    validate_url,
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
@@ -111,7 +110,6 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
     collection_name: str = "llamaindex"
     metric: str = "cosine"
     storage_mode: str = "full"
-    server_url: Optional[str] = None
     search_quality: Optional[str] = None
 
     _db: Optional[velesdb.Database] = PrivateAttr(default=None)
@@ -127,7 +125,6 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         collection_name: str = "llamaindex",
         metric: str = "cosine",
         storage_mode: str = "full",
-        server_url: Optional[str] = None,
         search_quality: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
@@ -153,8 +150,6 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
                 - "rabitq": RaBitQ with scalar correction (32x compression, good recall).
 
                 Examples: ``storage_mode="int8"`` is equivalent to ``storage_mode="sq8"``.
-            server_url: Optional URL of a VelesDB server for server mode. When
-                provided, must be a valid http:// or https:// URL.
             search_quality: Optional default quality preset for all queries:
                 ``"fast"``, ``"balanced"``, ``"accurate"``, ``"perfect"``,
                 ``"autotune"``, ``"custom:N"``, ``"adaptive:MIN:MAX"``.
@@ -164,14 +159,20 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
 
         Raises:
             SecurityError: If any parameter fails validation.
+            TypeError: If the removed ``server_url`` parameter is passed.
         """
+        if "server_url" in kwargs:
+            raise TypeError(
+                "server_url has been removed: it was accepted but never "
+                "used. VelesDBVectorStore always runs embedded (local "
+                "files); to talk to a remote velesdb-server use its REST "
+                "API instead."
+            )
         # Security: Validate all inputs
         validated_path = validate_path(path)
         validated_collection = validate_collection_name(collection_name)
         validated_metric = validate_metric(metric)
         validated_storage_mode = validate_storage_mode(storage_mode)
-        if server_url is not None:
-            validate_url(server_url)
         validated_quality: Optional[str] = None
         if search_quality is not None:
             validated_quality = validate_search_quality(search_quality)
@@ -181,7 +182,6 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
             storage_mode=validated_storage_mode,
             collection_name=validated_collection,
             metric=validated_metric,
-            server_url=server_url,
             search_quality=validated_quality,
             **kwargs,
         )

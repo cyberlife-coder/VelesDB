@@ -35,7 +35,6 @@ from langchain_velesdb.security import (
     validate_batch_size,
     validate_collection_name,
     validate_sparse_vector,
-    validate_url,
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
@@ -86,7 +85,6 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         collection_name: str = "langchain",
         metric: str = "cosine",
         storage_mode: str = "full",
-        server_url: Optional[str] = None,
         search_quality: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
@@ -113,8 +111,6 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
                 - "rabitq": RaBitQ with scalar correction (32x compression, good recall).
 
                 Examples: ``storage_mode="f32"`` is equivalent to ``storage_mode="full"``.
-            server_url: Optional URL of a VelesDB server for server mode. When
-                provided, must be a valid http:// or https:// URL.
             search_quality: Optional default quality preset for all similarity
                 searches: ``"fast"``, ``"balanced"``, ``"accurate"``,
                 ``"perfect"``, ``"autotune"``, ``"custom:N"``,
@@ -125,14 +121,19 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
 
         Raises:
             SecurityError: If any parameter fails validation.
+            TypeError: If the removed ``server_url`` parameter is passed.
         """
+        if "server_url" in kwargs:
+            raise TypeError(
+                "server_url has been removed: it was accepted but never "
+                "used. VelesDBVectorStore always runs embedded (local "
+                "files); to talk to a remote velesdb-server use its REST "
+                "API instead."
+            )
         self._path = validate_path(path)
         self._collection_name = validate_collection_name(collection_name)
         self._metric = validate_metric(metric)
         self._storage_mode = validate_storage_mode(storage_mode)
-        if server_url is not None:
-            validate_url(server_url)
-        self.server_url = server_url
         self._search_quality: Optional[str] = None
         if search_quality is not None:
             self._search_quality = validate_search_quality(search_quality)

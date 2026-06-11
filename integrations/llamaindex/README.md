@@ -220,12 +220,6 @@ hits = vector_store.query_ids(query_embedding=embedding, top_k=50)
 # [{"id": "abc", "score": 0.92}, ...]
 ```
 
-### Server Mode: URL Validation
-
-When connecting to a remote `velesdb-server` via the `path` parameter as a URL,
-`validate_url` is called automatically during initialization to reject
-malformed URLs before any network request is issued.
-
 ### Hybrid Search (Vector + BM25)
 
 ```python

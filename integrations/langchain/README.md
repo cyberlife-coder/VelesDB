@@ -211,12 +211,6 @@ results = vectorstore.similarity_search_with_ef(
 )
 ```
 
-### Server Mode: URL Validation
-
-When connecting to a remote `velesdb-server` via the `url` parameter,
-`validate_url` is called automatically during initialization to reject
-malformed URLs before any network request is issued.
-
 ### Hybrid Search (Vector + BM25)
 
 ```python

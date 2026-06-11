@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so rows are distinguishable by edge identity.
 
 ### Added
+- **LangChain MMR + by-vector search** (`langchain-velesdb`):
+  `max_marginal_relevance_search`, `max_marginal_relevance_search_by_vector`
+  and `similarity_search_by_vector` are now implemented (previously raised
+  `NotImplementedError` from the base class), including
+  `as_retriever(search_type="mmr")`. `similarity_search_with_score` now
+  normalises cosine scores from `[-1, 1]` to `[0, 1]` on the dense path.
 - **GraphFirst anchored fetch — exhaustive hybrid retrieval**: `MATCH (...)`
   predicates that are AND-required by a SELECT WHERE clause are now evaluated
   FIRST; retrieval happens within their anchor sets and is exhaustive (a
@@ -90,6 +96,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PQ end-to-end; SQ8/Binary collection modes maintain caches that no search
   path consumes (search stays full-precision f32), pending a reduced-memory
   storage mode.
+- **LlamaIndex `delete(ref_doc_id)` was a silent no-op for chunked documents**
+  (`llama-index-vector-stores-velesdb`): it deleted only the hash of
+  `ref_doc_id`, never the chunks. Nodes now persist `ref_doc_id` in their
+  payload and `delete()` removes every matching chunk (paged scan past the
+  VelesQL LIMIT-10 default). The LlamaIndex Quick Start (README + docstrings)
+  now goes through `StorageContext` — the previously documented
+  `from_documents(..., vector_store=...)` call silently indexed into an
+  in-memory store, leaving the VelesDB collection empty.
+- **LangChain GraphRetriever `low_latency=True` required a graph collection**
+  it never used (`langchain-velesdb`, same fix in the LlamaIndex retriever);
+  vector-only mode now works without one.
+
+### Removed
+- **`server_url` parameter of both `VelesDBVectorStore` classes**
+  (`langchain-velesdb`, `llama-index-vector-stores-velesdb`): it was accepted
+  and validated but never used — no server mode exists in these connectors;
+  every operation runs against the embedded local database. Passing it now
+  raises `TypeError` instead of silently doing nothing, and the misleading
+  "Server Mode" README sections are gone. Use the REST API to talk to a
+  remote `velesdb-server`.
 
 ## [1.18.0] — 2026-06-07
 
