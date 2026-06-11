@@ -51,14 +51,21 @@ impl Collection {
 
         // WAL-before-apply (crash durability): log the edge to the edge WAL
         // before mutating the in-memory store, so a crash between the two
-        // replays the edge on the next open. Gated to graph collections.
+        // replays the edge on the next open. Unconditional: the append only
+        // happens when an edge IS written, so collections that never use the
+        // graph dimension pay nothing — and edges on vector collections
+        // (e.g. agent-memory relations) are as durable as on graph ones.
+        //
+        // The WAL lock spans append + apply so the WAL order always equals
+        // the store-apply order (replay must resolve id collisions exactly
+        // like live execution) and concurrent appends can never interleave
+        // a multi-write entry.
+        let _wal_guard = self.edge_wal_lock.lock();
         #[cfg(feature = "persistence")]
-        if self.config.read().graph_schema.is_some() {
-            crate::collection::graph::edge_wal::wal_append_add(
-                &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
-                &edge,
-            )?;
-        }
+        crate::collection::graph::edge_wal::wal_append_add(
+            &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+            &edge,
+        )?;
 
         self.edge_store.add_edge(edge)?;
 
@@ -99,13 +106,15 @@ impl Collection {
             self.validate_edge_referential_integrity(edge)?;
         }
 
+        // Unconditional WAL (see add_edge): writing edges implies wanting
+        // them back after a restart, whatever the collection type. The WAL
+        // lock spans append + apply (see add_edge).
+        let _wal_guard = self.edge_wal_lock.lock();
         #[cfg(feature = "persistence")]
-        if self.config.read().graph_schema.is_some() {
-            crate::collection::graph::edge_wal::wal_append_add_batch(
-                &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
-                &edges,
-            )?;
-        }
+        crate::collection::graph::edge_wal::wal_append_add_batch(
+            &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+            &edges,
+        )?;
 
         // Capture property metadata before the edges are moved into the store.
         let index_meta: Vec<(u64, String, _)> = edges
@@ -370,20 +379,25 @@ impl Collection {
     /// `true` if the edge existed and was removed, `false` if it didn't exist.
     #[must_use]
     pub fn remove_edge(&self, edge_id: u64) -> bool {
+        // Cheap pre-check: a remove of a non-existent id must not create or
+        // grow the WAL with junk tombstones (a racing remove between this
+        // check and the append still replays as a harmless no-op).
+        if !self.edge_store.contains_edge(edge_id) {
+            return false;
+        }
         // WAL-before-apply (crash durability): log the remove intent before
-        // mutating the store. A remove of a non-existent id replays as a
-        // harmless no-op. Fail-closed: if the WAL append fails we do NOT
+        // mutating the store. Fail-closed: if the WAL append fails we do NOT
         // mutate the store and report `false` (no panic — matches the
-        // no-unwrap policy and the bool return contract).
+        // no-unwrap policy and the bool return contract). Unconditional for
+        // the same reason as add_edge; the WAL lock spans append + apply.
+        let _wal_guard = self.edge_wal_lock.lock();
         #[cfg(feature = "persistence")]
-        if self.config.read().graph_schema.is_some() {
-            if let Err(e) = crate::collection::graph::edge_wal::wal_append_remove(
-                &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
-                edge_id,
-            ) {
-                tracing::error!("Edge WAL append remove failed for edge {edge_id}: {e}");
-                return false;
-            }
+        if let Err(e) = crate::collection::graph::edge_wal::wal_append_remove(
+            &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+            edge_id,
+        ) {
+            tracing::error!("Edge WAL append remove failed for edge {edge_id}: {e}");
+            return false;
         }
 
         // Atomic check-and-remove — no TOCTOU race.
@@ -399,6 +413,31 @@ impl Collection {
     #[must_use]
     pub fn edge_count(&self) -> usize {
         self.edge_store.len()
+    }
+
+    /// Returns the highest edge id in the graph, if any (no edge cloning).
+    pub(crate) fn max_edge_id(&self) -> Option<u64> {
+        self.edge_store.max_edge_id()
+    }
+
+    /// Returns `true` when an edge with `edge_id` exists.
+    pub(crate) fn edge_exists(&self, edge_id: u64) -> bool {
+        self.edge_store.contains_edge(edge_id)
+    }
+
+    /// Rebuilds edge property indexes from edges already in the store.
+    ///
+    /// Called on open AFTER the edge snapshot is loaded and BEFORE the edge
+    /// WAL replays (replay indexes its own ADDs), so snapshot-loaded edge
+    /// properties become queryable again — previously they were only ever
+    /// indexed at write time and silently lost once the WAL was truncated
+    /// into the snapshot.
+    pub(crate) fn reindex_edge_properties_from_store(&self) {
+        for edge in self.edge_store.all_edges() {
+            if !edge.properties().is_empty() {
+                self.index_edge_properties(edge.id(), edge.label(), edge.properties());
+            }
+        }
     }
 
     // -------------------------------------------------------------------------

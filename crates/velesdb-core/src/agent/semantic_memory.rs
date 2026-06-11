@@ -23,6 +23,8 @@ pub struct SemanticMemory {
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     stored_ids: RwLock<HashSet<u64>>,
+    /// Edge-id allocator for [`Self::relate`] (seeded past existing edges).
+    next_edge_id: std::sync::atomic::AtomicU64,
 }
 
 impl SemanticMemory {
@@ -65,12 +67,18 @@ impl SemanticMemory {
             MemoryKind::Semantic,
         )?;
 
+        let next_edge_id = memory_helpers::seed_edge_counter(&memory_helpers::get_collection(
+            &db,
+            &collection_name,
+        )?);
+
         Ok(Self {
             collection_name,
             db,
             dimension,
             ttl,
             stored_ids,
+            next_edge_id,
         })
     }
 
@@ -134,13 +142,17 @@ impl SemanticMemory {
         id: u64,
         updates: &Map<String, Value>,
     ) -> Result<(), AgentMemoryError> {
-        if self.ttl.is_expired(MemoryKind::Semantic, id) || !self.stored_ids.read().contains(&id) {
+        if !self.stored_ids.read().contains(&id) {
             return Err(AgentMemoryError::NotFound(id.to_string()));
         }
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        let Some(point) = collection.get(&[id]).into_iter().flatten().next() else {
-            return Err(AgentMemoryError::NotFound(id.to_string()));
-        };
+        let point = memory_helpers::ensure_live(
+            &collection,
+            &self.collection_name,
+            &self.ttl,
+            MemoryKind::Semantic,
+            id,
+        )?;
         let payload = merge_payload(point.payload, updates)?;
         memory_helpers::upsert_points(
             &collection,
@@ -254,6 +266,78 @@ impl SemanticMemory {
             id,
             ttl_seconds,
         )
+    }
+
+    /// Relates two live facts with a typed, durable graph edge
+    /// (`MATCH (a)-[:REL_TYPE]->(b)` becomes executable over this memory).
+    ///
+    /// Returns the allocated edge id. Edges are WAL-persisted and cascade
+    /// away when either endpoint memory is deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when either endpoint is missing or expired, or
+    /// `CollectionError` when the edge write fails.
+    pub fn relate(
+        &self,
+        from_id: u64,
+        to_id: u64,
+        rel_type: &str,
+        properties: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<u64, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        for id in [from_id, to_id] {
+            memory_helpers::ensure_live(
+                &collection,
+                &self.collection_name,
+                &self.ttl,
+                MemoryKind::Semantic,
+                id,
+            )?;
+        }
+        let edge_id = memory_helpers::add_relation_edge(
+            &collection,
+            &self.next_edge_id,
+            (from_id, to_id),
+            rel_type,
+            properties,
+        )?;
+        // Close the check-then-add window: an endpoint deleted concurrently
+        // (its cascade may have run before our edge landed) must not leave a
+        // dangling, WAL-durable edge behind.
+        memory_helpers::verify_relation_endpoints(&collection, edge_id, (from_id, to_id))?;
+        Ok(edge_id)
+    }
+
+    /// Returns the outgoing relations of a fact (edges it points from).
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn relations(
+        &self,
+        id: u64,
+    ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        // Expired entries are invisible on every read surface — edges whose
+        // target has expired (but is not yet swept) are hidden too.
+        Ok(collection
+            .get_outgoing_edges(id)
+            .into_iter()
+            .filter(|edge| !self.ttl.is_expired(MemoryKind::Semantic, edge.target()))
+            .collect())
+    }
+
+    /// Removes a relation edge created by [`Self::relate`].
+    ///
+    /// Returns `true` when the edge existed and was removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn unrelate(&self, edge_id: u64) -> Result<bool, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        Ok(collection.remove_edge(edge_id))
     }
 
     /// Queries semantic memory by vector similarity.

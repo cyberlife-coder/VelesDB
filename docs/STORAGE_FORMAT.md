@@ -27,8 +27,8 @@ collection_directory/
 ├── native_vectors.bin   # HNSW vector payload sidecar (when vector storage enabled)
 ├── native_hnsw.gen      # HNSW save-generation marker
 ├── native_hnsw.*        # HNSW graph dump files
-├── edge_store.bin       # Graph edge store (whole-file snapshot, graph collections)
-├── edges.wal            # Graph edge WAL (graph collections)
+├── edge_store.bin       # Graph edge store (whole-file snapshot, any collection with edges)
+├── edges.wal            # Graph edge WAL (any collection that writes edges)
 ├── property_index.bin   # Graph property index (graph collections)
 ├── bm25.snapshot        # BM25 full-text index snapshot (when text-indexed)
 ├── bm25.wal             # BM25 WAL (when text-indexed)

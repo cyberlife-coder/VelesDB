@@ -593,6 +593,38 @@ memory.set_procedural_ttl_durable(proc_id, 604_800)?;
 let result = memory.auto_expire()?;
 ```
 
+### Graph dimension: relating memories
+
+Each subsystem can link its memories with typed, durable graph edges —
+making `MATCH` patterns executable over agent memory:
+
+```rust
+// ctx (1) relates to fact (2); edges are WAL-persisted and cascade away
+// when either memory is deleted. Endpoints must be live (not expired).
+let edge_id = memory.semantic().relate(1, 2, "RELATES_TO", None)?;
+let edges = memory.semantic().relations(1)?;   // outgoing edges of 1
+memory.semantic().unrelate(edge_id)?;          // remove one relation
+
+// The flagship hybrid query now executes end-to-end:
+let results = memory.query_semantic(
+    "SELECT * FROM memory AS m \
+     WHERE vector NEAR $q AND category = 'tech' \
+     AND MATCH (m)-[:RELATES_TO]->(f) LIMIT 5",
+    &params,
+)?;
+```
+
+Relations are per-subsystem (edges live inside each memory collection).
+They are durable on two paths: the edge WAL in the collection directory
+(compacted into `edge_store.bin` at flush), and subsystem snapshots —
+`serialize`/`snapshot` capture the relation edges between snapshotted
+memories and restore them with the points.
+
+Expiry note: `relations()` hides edges whose endpoint has expired. The
+VelesQL `MATCH` bridge filters expired ids from the *result* rows; an
+expired endpoint deeper in a pattern stops matching once `auto_expire`
+sweeps it.
+
 ### Configuration (Python)
 
 ```python

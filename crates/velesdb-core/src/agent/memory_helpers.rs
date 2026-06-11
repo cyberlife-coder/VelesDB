@@ -53,7 +53,7 @@ pub(super) fn open_or_create_collection(
     collection_name: &str,
     dimension: usize,
 ) -> Result<usize, AgentMemoryError> {
-    if let Some(collection) = db.get_vector_collection(collection_name) {
+    let actual_dimension = if let Some(collection) = db.get_vector_collection(collection_name) {
         let existing_dim = collection.config().dimension;
         if existing_dim != dimension {
             return Err(AgentMemoryError::DimensionMismatch {
@@ -61,11 +61,12 @@ pub(super) fn open_or_create_collection(
                 actual: dimension,
             });
         }
-        Ok(existing_dim)
+        existing_dim
     } else {
         db.create_collection(collection_name, dimension, DistanceMetric::Cosine)?;
-        Ok(dimension)
-    }
+        dimension
+    };
+    Ok(actual_dimension)
 }
 
 /// Loads all IDs from an existing collection into a `HashSet`.
@@ -95,16 +96,39 @@ pub(super) fn rebuild_stored_ids(stored_ids: &RwLock<HashSet<u64>>, points: &[Po
     }
 }
 
-/// Serializes points from a collection using the given ID set.
+/// Snapshot payload: memory points plus the relation edges between them.
+///
+/// Older snapshots were a bare `Vec<Point>` JSON array; `deserialize` keeps
+/// reading those (no edges). New snapshots serialize this envelope so
+/// relations survive a serialize → restore round-trip.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MemorySnapshot {
+    points: Vec<Point>,
+    #[serde(default)]
+    edges: Vec<crate::collection::graph::GraphEdge>,
+}
+
+/// Serializes points (and the relation edges connecting them) from a
+/// collection using the given ID set.
 pub(super) fn serialize_points(
     collection: &Collection,
     ids: &[u64],
 ) -> Result<Vec<u8>, AgentMemoryError> {
     let points: Vec<_> = collection.get(ids).into_iter().flatten().collect();
-    serde_json::to_vec(&points).map_err(|e| AgentMemoryError::IoError(e.to_string()))
+    let id_set: HashSet<u64> = points.iter().map(|p| p.id).collect();
+    // Only edges whose BOTH endpoints are part of the snapshot are
+    // meaningful after a restore.
+    let edges: Vec<_> = collection
+        .get_all_edges()
+        .into_iter()
+        .filter(|e| id_set.contains(&e.source()) && id_set.contains(&e.target()))
+        .collect();
+    serde_json::to_vec(&MemorySnapshot { points, edges })
+        .map_err(|e| AgentMemoryError::IoError(e.to_string()))
 }
 
-/// Deserializes points from bytes and replaces the collection contents.
+/// Deserializes a snapshot and replaces the collection contents — points AND
+/// relation edges (the clear's delete-cascade removes the previous edges).
 ///
 /// Returns the deserialized points so callers can rebuild their own indexes.
 pub(super) fn deserialize_into_collection(
@@ -115,13 +139,25 @@ pub(super) fn deserialize_into_collection(
         return Ok(None);
     }
 
-    let points: Vec<Point> =
-        serde_json::from_slice(data).map_err(|e| AgentMemoryError::IoError(e.to_string()))?;
+    let snapshot: MemorySnapshot = serde_json::from_slice(data)
+        .or_else(|_| {
+            // Backward compatibility: pre-graph snapshots are a bare array.
+            serde_json::from_slice::<Vec<Point>>(data).map(|points| MemorySnapshot {
+                points,
+                edges: Vec::new(),
+            })
+        })
+        .map_err(|e| AgentMemoryError::IoError(e.to_string()))?;
 
     clear_collection(collection)?;
-    upsert_points(collection, points.clone())?;
+    upsert_points(collection, snapshot.points.clone())?;
+    if !snapshot.edges.is_empty() {
+        collection
+            .add_edges_batch(snapshot.edges)
+            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+    }
 
-    Ok(Some(points))
+    Ok(Some(snapshot.points))
 }
 
 /// Deletes points by ID from a collection.
@@ -311,6 +347,88 @@ pub(super) fn attach_expiry(payload: &mut serde_json::Value, expires_at: Option<
     }
 }
 
+/// Verifies that a memory id refers to a live (non-expired, existing) point
+/// and returns it.
+///
+/// Expired-but-not-yet-swept entries are invisible on every read surface;
+/// write surfaces (TTL refresh, relate) must reject them the same way.
+pub(super) fn ensure_live(
+    collection: &Collection,
+    collection_name: &str,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+    id: u64,
+) -> Result<Point, AgentMemoryError> {
+    if ttl.is_expired(kind, id) {
+        return Err(AgentMemoryError::NotFound(format!(
+            "memory id {id} is expired in {collection_name}"
+        )));
+    }
+    get_point_or_not_found(collection, collection_name, id)
+}
+
+/// Seeds a relation edge-id counter past every existing edge id.
+///
+/// One pass over the edge-id registry (no edge cloning).
+pub(super) fn seed_edge_counter(collection: &Collection) -> std::sync::atomic::AtomicU64 {
+    let next = collection
+        .max_edge_id()
+        .map_or(1, |max| max.saturating_add(1));
+    std::sync::atomic::AtomicU64::new(next)
+}
+
+/// Adds a relation edge between two memory points, allocating a fresh edge
+/// id from `next_edge_id` (skipping ids taken by direct graph writes; the
+/// `EdgeExists` retry covers the residual allocation race).
+pub(super) fn add_relation_edge(
+    collection: &Collection,
+    next_edge_id: &std::sync::atomic::AtomicU64,
+    endpoints: (u64, u64),
+    rel_type: &str,
+    properties: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<u64, AgentMemoryError> {
+    let (from_id, to_id) = endpoints;
+    loop {
+        let edge_id = next_edge_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if collection.edge_exists(edge_id) {
+            continue; // taken by a direct graph write — no junk WAL entry
+        }
+        let mut edge = crate::collection::graph::GraphEdge::new(edge_id, from_id, to_id, rel_type)
+            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        if let Some(props) = properties {
+            let map: std::collections::HashMap<String, serde_json::Value> =
+                props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            edge = edge.with_properties(map);
+        }
+        match collection.add_edge(edge) {
+            Ok(()) => return Ok(edge_id),
+            // Lost the residual allocation race — try the next id.
+            Err(crate::error::Error::EdgeExists(_)) => {}
+            Err(e) => return Err(AgentMemoryError::CollectionError(e.to_string())),
+        }
+    }
+}
+
+/// Compensates the `relate()` check-then-add window: when an endpoint was
+/// deleted between `ensure_live` and the edge write, the cascade may have
+/// already run — remove the freshly written edge instead of leaving it
+/// dangling forever.
+pub(super) fn verify_relation_endpoints(
+    collection: &Collection,
+    edge_id: u64,
+    endpoints: (u64, u64),
+) -> Result<(), AgentMemoryError> {
+    let (from_id, to_id) = endpoints;
+    let alive = collection.get(&[from_id, to_id]);
+    if alive.iter().flatten().count() == 2 {
+        return Ok(());
+    }
+    let _ = collection.remove_edge(edge_id);
+    Err(AgentMemoryError::NotFound(format!(
+        "a relation endpoint ({from_id} or {to_id}) was deleted concurrently"
+    )))
+}
+
 /// Retrieves a point by id, surfacing `NotFound` when it does not exist.
 ///
 /// The `collection.get(&[id]) … next()` idiom shared by the agent
@@ -365,12 +483,7 @@ pub(super) fn set_ttl_durable(
     let collection = get_collection(db, collection_name)?;
     // Expired-but-not-yet-swept entries are invisible on every read surface;
     // refreshing their TTL would silently resurrect them.
-    if ttl.is_expired(kind, id) {
-        return Err(AgentMemoryError::NotFound(format!(
-            "memory id {id} is expired in {collection_name}"
-        )));
-    }
-    let point = get_point_or_not_found(&collection, collection_name, id)?;
+    let point = ensure_live(&collection, collection_name, ttl, kind, id)?;
     let expires_at = super::ttl::MemoryTtl::now().saturating_add(ttl_seconds);
     let mut payload = point
         .payload

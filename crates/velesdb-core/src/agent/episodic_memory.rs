@@ -23,6 +23,8 @@ pub struct EpisodicMemory {
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     temporal_index: Arc<TemporalIndex>,
+    /// Edge-id allocator for [`Self::relate`] (seeded past existing edges).
+    next_edge_id: std::sync::atomic::AtomicU64,
 }
 
 impl EpisodicMemory {
@@ -69,12 +71,18 @@ impl EpisodicMemory {
             MemoryKind::Episodic,
         )?;
 
+        let next_edge_id = memory_helpers::seed_edge_counter(&memory_helpers::get_collection(
+            &db,
+            &collection_name,
+        )?);
+
         Ok(Self {
             collection_name,
             db,
             dimension: actual_dimension,
             ttl,
             temporal_index,
+            next_edge_id,
         })
     }
     fn rebuild_temporal_index(
@@ -203,6 +211,73 @@ impl EpisodicMemory {
             event_id,
             ttl_seconds,
         )
+    }
+
+    /// Relates two live events with a typed, durable graph edge (e.g.
+    /// `CAUSED`, `FOLLOWED`); see `SemanticMemory::relate` for semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when either endpoint is missing or expired, or
+    /// `CollectionError` when the edge write fails.
+    pub fn relate(
+        &self,
+        from_id: u64,
+        to_id: u64,
+        rel_type: &str,
+        properties: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<u64, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        for id in [from_id, to_id] {
+            memory_helpers::ensure_live(
+                &collection,
+                &self.collection_name,
+                &self.ttl,
+                MemoryKind::Episodic,
+                id,
+            )?;
+        }
+        let edge_id = memory_helpers::add_relation_edge(
+            &collection,
+            &self.next_edge_id,
+            (from_id, to_id),
+            rel_type,
+            properties,
+        )?;
+        // Close the check-then-add window: an endpoint deleted concurrently
+        // (its cascade may have run before our edge landed) must not leave a
+        // dangling, WAL-durable edge behind.
+        memory_helpers::verify_relation_endpoints(&collection, edge_id, (from_id, to_id))?;
+        Ok(edge_id)
+    }
+
+    /// Returns the outgoing relations of an event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn relations(
+        &self,
+        id: u64,
+    ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        // Expired entries are invisible on every read surface — edges whose
+        // target has expired (but is not yet swept) are hidden too.
+        Ok(collection
+            .get_outgoing_edges(id)
+            .into_iter()
+            .filter(|edge| !self.ttl.is_expired(MemoryKind::Episodic, edge.target()))
+            .collect())
+    }
+
+    /// Removes a relation edge created by [`Self::relate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn unrelate(&self, edge_id: u64) -> Result<bool, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        Ok(collection.remove_edge(edge_id))
     }
 
     /// Returns recent events, optionally filtered by a lower timestamp bound.
