@@ -7,6 +7,7 @@ use crate::error::Result;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
+use std::collections::HashSet;
 
 /// Attaches RRF component scores to a `SearchResult` from the component map.
 fn attach_rrf_components(
@@ -323,6 +324,62 @@ impl Collection {
                 &component_map,
             ),
         )
+    }
+
+    /// Hybrid search restricted to `anchor_ids` in both vector and BM25 branches.
+    ///
+    /// Used when a graph MATCH predicate AND-requires anchor membership: RRF
+    /// fusion only considers points in the anchor set, so a relevant anchor
+    /// outside the global top-K is still surfaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match.
+    pub(crate) fn hybrid_search_with_anchors(
+        &self,
+        vector_query: &[f32],
+        text_query: &str,
+        k: usize,
+        vector_weight: Option<f32>,
+        rrf_k: Option<u32>,
+        anchor_ids: &HashSet<u64>,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+        validate_dimension_match(config.dimension, vector_query.len())?;
+        drop(config);
+
+        let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
+        let text_weight = 1.0 - weight;
+        // Reason: RRF k is typically 1–1000; u32→f32 is lossless below 2^24.
+        #[allow(clippy::cast_precision_loss)]
+        let rrf_constant = rrf_k.unwrap_or(60).max(1) as f32;
+
+        let overfetch_k = k.saturating_mul(4).max(k + 10);
+        // Vector branch: restrict retrieval to anchor set.
+        let anchor_search =
+            self.search_near_with_anchor_ids(vector_query, anchor_ids, None, overfetch_k)?;
+        let vector_scored: Vec<crate::scored_result::ScoredResult> = anchor_search
+            .into_iter()
+            .map(|r| crate::scored_result::ScoredResult::new(r.point.id, r.score))
+            .collect();
+
+        // BM25 branch: over-fetch then restrict to anchor set.
+        let bm25_all = self.text_index.search(text_query, overfetch_k);
+        let text_results: Vec<(u64, f32)> = bm25_all
+            .into_iter()
+            .filter(|(id, _)| anchor_ids.contains(id))
+            .collect();
+
+        let (fused_scores, component_map) = Self::compute_rrf_scores_with_components(
+            &vector_scored,
+            &text_results,
+            weight,
+            text_weight,
+            rrf_constant,
+        );
+
+        let scored_ids = Self::top_k_from_scores(fused_scores, k);
+        Ok(self.resolve_scored_ids_with_components(&scored_ids, &component_map))
     }
 
     /// Resolves scored IDs with filter and optional per-component score breakdown.
