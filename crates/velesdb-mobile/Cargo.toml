@@ -16,9 +16,15 @@ categories = ["database", "api-bindings"]
 crate-type = ["cdylib", "staticlib", "lib"]
 name = "velesdb_mobile"
 
+# Standard UniFFI bindgen entry point (library mode); used by the mobile
+# build flow documented in docs/guides/INSTALLATION.md.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
 [dependencies]
 velesdb-core = { workspace = true }
-uniffi = { version = "0.31", features = ["tokio"] }
+uniffi = { version = "0.31", features = ["tokio", "cli"] }
 tokio = { version = "1.52", features = ["rt-multi-thread"] }
 parking_lot = "0.12"
 thiserror = "2.0"
