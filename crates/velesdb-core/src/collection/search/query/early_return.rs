@@ -58,12 +58,6 @@ impl Collection {
         };
 
         let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
-        let execution_limit = if has_graph_predicates {
-            MAX_LIMIT
-        } else {
-            limit
-        };
-
         let early_ctx = EarlyReturnCtx {
             stmt,
             params,
@@ -74,39 +68,97 @@ impl Collection {
 
         // EPIC-044 US-003: NOT similarity() requires full scan
         if extracted.is_not_similarity_query {
-            let results = self.execute_early_return_query(
-                |s| s.execute_not_similarity_query(cond, params, execution_limit),
-                &early_ctx,
-            )?;
-            return Ok(Some(results));
+            return self.run_not_similarity_early(&early_ctx, limit).map(Some);
         }
 
-        // EPIC-044 US-002: Union mode for similarity() OR metadata
+        // EPIC-044 US-002: Union mode for similarity() OR metadata.
+        // The union path keeps the MAX_LIMIT window when graph predicates
+        // are present: its similarity/metadata legs rank independently and
+        // would each need anchor-aware fetching to drop it.
+        let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
+        let execution_limit = if has_graph_predicates {
+            MAX_LIMIT
+        } else {
+            limit
+        };
         let results = self.execute_early_return_query(
             |s| s.execute_union_query(cond, params, execution_limit),
             &early_ctx,
+            &mut graph_cache,
         )?;
         Ok(Some(results))
     }
 
+    /// Runs the NOT-similarity early path with GraphFirst anchoring:
+    /// AND-required MATCH predicates restrict the scan to their anchor set,
+    /// making the fetch exact at `limit` instead of a MAX_LIMIT window.
+    fn run_not_similarity_early(
+        &self,
+        early: &EarlyReturnCtx<'_>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
+        let anchors = if early.has_graph_predicates {
+            self.compute_required_anchor_ids(
+                early.cond,
+                early.params,
+                &early.stmt.from_alias,
+                &mut graph_cache,
+            )?
+        } else {
+            None
+        };
+        let execution_limit = if early.has_graph_predicates && anchors.is_none() {
+            MAX_LIMIT
+        } else {
+            limit
+        };
+        self.execute_early_return_query(
+            |s| {
+                s.execute_not_similarity_query_over(
+                    early.cond,
+                    early.params,
+                    execution_limit,
+                    anchors.as_ref(),
+                )
+            },
+            early,
+            &mut graph_cache,
+        )
+    }
+
     /// Executes an early-return query path with guard-rail checks and post-processing.
+    ///
+    /// `graph_cache` carries anchor sets a GraphFirst prefilter already
+    /// computed, so the exact post-filter never re-runs the traversals.
     pub(super) fn execute_early_return_query(
         &self,
         execute_fn: impl FnOnce(&Self) -> Result<Vec<SearchResult>>,
         early: &EarlyReturnCtx<'_>,
+        graph_cache: &mut super::where_eval::GraphMatchEvalCache,
     ) -> Result<Vec<SearchResult>> {
         let mut results =
             execute_fn(self).inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
         if early.has_graph_predicates {
             results = self
-                .apply_where_condition_to_results(
+                .apply_where_condition_to_results_with_cache(
                     results,
                     early.cond,
                     early.params,
                     &early.stmt.from_alias,
+                    graph_cache,
                 )
                 .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
         }
+        self.finalize_early_results(results, early)
+    }
+
+    /// DISTINCT / ORDER BY / OFFSET / LIMIT post-processing for early paths.
+    fn finalize_early_results(
+        &self,
+        mut results: Vec<SearchResult>,
+        early: &EarlyReturnCtx<'_>,
+    ) -> Result<Vec<SearchResult>> {
         // Bug #475: Apply DISTINCT before ORDER BY (same as finalize_query_results path).
         if early.stmt.distinct == crate::velesql::DistinctMode::All {
             results = super::distinct::apply_distinct(results, &early.stmt.columns);

@@ -39,9 +39,12 @@ pub use crate::velesql::query_stats::QueryStats;
 /// This is the planner's *intent*; the executor realizes it only partially:
 /// on the SELECT path (`execution_paths.rs`), `GraphFirst` selects a
 /// full-scan-then-score realization for metadata filters and every other
-/// variant (including `Parallel`) is executed as `VectorFirst`; graph
-/// predicates in SELECT WHERE are always applied as a post-filter over the
-/// vector candidates. On the top-level MATCH path (`match_dispatch.rs`),
+/// variant (including `Parallel`) is executed as `VectorFirst`. Graph
+/// predicates in SELECT WHERE that are AND-required take the GraphFirst
+/// anchored fetch (`graph_prefilter.rs`) independently of this strategy —
+/// anchor sets are evaluated first and retrieval is exhaustive within them;
+/// only OR/NOT-wrapped predicates remain post-filters over the fetch
+/// window. On the top-level MATCH path (`match_dispatch.rs`),
 /// `Parallel` runs `GraphFirst` and `VectorFirst` **sequentially** and merges
 /// the result sets (true parallelism is a future optimization).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

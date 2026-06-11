@@ -188,49 +188,110 @@ impl Collection {
                 .where_clause
                 .as_ref()
                 .is_some_and(Self::condition_contains_or);
-        // The bounded over-fetch window only makes sense when the fetch is
-        // RANKED (vector NEAR or similarity() threshold): "rows ranked beyond
-        // the window" is a meaningful trade-off there. The metadata/scan
-        // paths fetch in storage order — capping them would silently drop
-        // graph matches depending on insertion order, so they keep the
-        // exhaustive MAX_LIMIT window (sparse queries never reach here; they
-        // are dispatched by `try_early_return_path`).
-        let has_ranked_fetch =
-            extracted.vector_search.is_some() || !extracted.similarity_conditions.is_empty();
-        let execution_limit = match (has_graph_predicates, has_ranked_fetch) {
-            (true, true) => graph_overfetch_limit(limit),
-            (true, false) => MAX_LIMIT,
-            (false, _) => limit,
-        };
+        let execution_limit = main_select_execution_limit(extracted, limit);
         let search_opts = super::QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())
             .with_fusion(stmt.fusion_clause.clone());
         let first_similarity = extracted.similarity_conditions.first().cloned();
         let (cbo_strategy, cbo_over_fetch) =
             self.compute_cbo_strategy(stmt, extracted.filter_condition.as_ref(), limit);
 
-        let mut results = self
-            .dispatch_vector_query(
-                extracted.vector_search.as_ref(),
-                first_similarity.as_ref(),
-                &extracted.similarity_conditions,
-                extracted.filter_condition.as_ref(),
-                execution_limit,
-                skip_metadata_prefilter_for_graph_or,
-                &search_opts,
-                cbo_strategy,
-                cbo_over_fetch,
-            )
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+        // GraphFirst by anchor ids: AND-required MATCH predicates are
+        // evaluated FIRST so retrieval is exhaustive within the graph
+        // matches instead of bounded by an over-fetch window. The cache
+        // carries the computed anchor sets into the exact post-filter.
+        let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
+        let anchored = self.try_anchored_fetch(stmt, params, extracted, limit, &mut graph_cache)?;
+
+        let mut results = match anchored {
+            Some(results) => results,
+            None => self
+                .dispatch_vector_query(
+                    extracted.vector_search.as_ref(),
+                    first_similarity.as_ref(),
+                    &extracted.similarity_conditions,
+                    extracted.filter_condition.as_ref(),
+                    execution_limit,
+                    skip_metadata_prefilter_for_graph_or,
+                    &search_opts,
+                    cbo_strategy,
+                    cbo_over_fetch,
+                )
+                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?,
+        };
 
         if has_graph_predicates {
-            if let Some(cond) = stmt.where_clause.as_ref() {
-                results = self
-                    .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
-                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-            }
+            results = self.post_filter_graph_where(stmt, params, results, &mut graph_cache)?;
         }
 
         Ok(results)
+    }
+
+    /// Applies the exact WHERE post-filter when graph predicates are present,
+    /// reusing the warmed anchor cache.
+    fn post_filter_graph_where(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        results: Vec<SearchResult>,
+        graph_cache: &mut super::where_eval::GraphMatchEvalCache,
+    ) -> Result<Vec<SearchResult>> {
+        let Some(cond) = stmt.where_clause.as_ref() else {
+            return Ok(results);
+        };
+        self.apply_where_condition_to_results_with_cache(
+            results,
+            cond,
+            params,
+            &stmt.from_alias,
+            graph_cache,
+        )
+        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())
+    }
+
+    /// Attempts the GraphFirst anchored fetch for the main SELECT path.
+    ///
+    /// Applicable when the WHERE clause AND-requires at least one MATCH
+    /// predicate and the fetch is either plain NEAR or unranked — the
+    /// similarity()-cascade and BM25 text-fusion shapes keep their dedicated
+    /// scoring pipelines (the post-filter window applies there).
+    ///
+    /// Returns `Ok(None)` to fall through to the regular dispatch.
+    fn try_anchored_fetch(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+        limit: usize,
+        graph_cache: &mut super::where_eval::GraphMatchEvalCache,
+    ) -> Result<Option<Vec<SearchResult>>> {
+        let Some(cond) = stmt.where_clause.as_ref() else {
+            return Ok(None);
+        };
+        if !anchored_fetch_applies(extracted, cond) {
+            return Ok(None);
+        }
+        let Some(anchor_ids) =
+            self.compute_required_anchor_ids(cond, params, &stmt.from_alias, graph_cache)?
+        else {
+            return Ok(None);
+        };
+        let results = match extracted.vector_search.as_ref() {
+            Some(vector) => self.search_near_with_anchor_ids(
+                vector,
+                &anchor_ids,
+                extracted.filter_condition.as_ref(),
+                limit,
+            )?,
+            None => self.fetch_anchor_candidates(
+                &anchor_ids,
+                cond,
+                params,
+                &stmt.from_alias,
+                graph_cache,
+                limit,
+            )?,
+        };
+        Ok(Some(results))
     }
 
     /// Analyzes JOIN pushdown opportunities (EPIC-031 US-006).
@@ -390,6 +451,39 @@ impl Collection {
 /// storage order, so a capped window would silently drop graph matches based
 /// on insertion order (those paths keep `MAX_LIMIT`, the pre-existing
 /// behavior).
+/// Whether the GraphFirst anchored fetch covers this query shape: graph
+/// predicates present, and no similarity() cascade or BM25 text-MATCH
+/// fusion (those keep their dedicated scoring pipelines).
+fn anchored_fetch_applies(
+    extracted: &ExtractedComponents,
+    cond: &crate::velesql::Condition,
+) -> bool {
+    !extracted.graph_match_predicates.is_empty()
+        && extracted.similarity_conditions.is_empty()
+        && Collection::extract_match_query(cond).is_none()
+}
+
+/// Fetch window for the main SELECT path.
+///
+/// The bounded over-fetch window only makes sense when the fetch is RANKED
+/// (vector NEAR or similarity() threshold): "rows ranked beyond the window"
+/// is a meaningful trade-off there. The metadata/scan paths fetch in storage
+/// order — capping them would silently drop graph matches depending on
+/// insertion order, so they keep the exhaustive MAX_LIMIT window (sparse
+/// queries never reach here; they are dispatched by `try_early_return_path`).
+/// This window only applies when the GraphFirst anchored fetch declined
+/// (`try_anchored_fetch`).
+fn main_select_execution_limit(extracted: &ExtractedComponents, limit: usize) -> usize {
+    let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
+    let has_ranked_fetch =
+        extracted.vector_search.is_some() || !extracted.similarity_conditions.is_empty();
+    match (has_graph_predicates, has_ranked_fetch) {
+        (true, true) => graph_overfetch_limit(limit),
+        (true, false) => MAX_LIMIT,
+        (false, _) => limit,
+    }
+}
+
 fn graph_overfetch_limit(limit: usize) -> usize {
     const GRAPH_OVERFETCH_CAP: usize = 10_000;
     limit.max(limit.saturating_mul(10).min(GRAPH_OVERFETCH_CAP))

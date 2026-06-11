@@ -43,6 +43,7 @@ mod execution_paths;
 mod extraction;
 #[cfg(test)]
 mod extraction_tests;
+mod graph_prefilter;
 mod hybrid_sparse;
 #[cfg(test)]
 mod hybrid_sparse_tests;
