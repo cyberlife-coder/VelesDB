@@ -23,6 +23,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Unaliased patterns (`-[:T]->`) keep the collapsed cardinality. Result
   payloads now carry `_edge_bindings` / `_edge_paths` alongside `_bindings`
   so rows are distinguishable by edge identity.
+- **Implicit MATCH anchor binding (V011 relaxed)**: when a
+  `SELECT ... WHERE vector NEAR ... AND MATCH (...)` pattern does not
+  reference the FROM alias, the pattern's anchor node now binds to the FROM
+  alias implicitly; guards G1–G3 reject inverted, ambiguous, or multi-anchor
+  patterns with actionable errors naming both aliases. The flagship
+  agent-memory query — `SELECT memory.*, similarity() FROM agent_memory AS
+  memory WHERE vector NEAR $embedding AND MATCH (ctx)-[:RELATES_TO]->(fact)
+  AND session_id = $current_session ORDER BY similarity() DESC LIMIT 10` —
+  now runs verbatim, covered by end-to-end BDD tests.
+- **Implicit `LIMIT 10` is a documented contract**: a `SELECT` without a
+  `LIMIT` clause has always returned at most 10 rows; the default is now a
+  shared named constant, the VelesQL spec and guides state it, and `EXPLAIN`
+  displays the implicit limit instead of omitting it.
+- **Strict-schema node-type validation (#1082)**: `store_node_payload` on a
+  collection with a strict schema now rejects node payloads whose node type
+  is not declared in the schema (previously accepted silently).
+- **ColumnStore auto-vacuum triggers automatically**: the
+  PostgreSQL-inspired vacuum threshold is now wired into the delete path
+  (payload-mirror delete application), so tombstone compaction runs without
+  a manual `vacuum` call.
+- **Durable point TTL enforced on every read path**: `search`, `get`,
+  `scroll` and VelesQL `query` now all filter points whose
+  `_veles_expires_at` has passed; previously an expired point could still be
+  returned by some read paths until the next expiry sweep.
 
 ### Added
 - **LangChain MMR + by-vector search** (`langchain-velesdb`):
@@ -77,8 +101,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequential-scan debt justifies the build; secondary indexes keep precedence.
 - **CI (#1076)**: full TypeScript SDK vitest suite on every PR; nightly 100K
   recall@10 ≥ 0.95 gate (`perf-gate-e2e` schedule + manual dispatch).
+- **WeightedRRF fusion strategy (#1082)**: reciprocal-rank fusion with
+  per-source weights and 0-based ranks; weights are revalidated on the
+  `fuse()` path like the other weighted strategies.
+- **REST + TypeScript SDK parity for relations and durable TTL (#1082)**:
+  `relate`/`unrelate`/`getRelations` and `setTtlDurable` are exposed over
+  REST (`/collections/{name}/points/{id}/relations`,
+  `/collections/{name}/relations/{edge_id}`,
+  `/collections/{name}/points/{id}/ttl`) and in `@wiscale/velesdb-sdk`, with
+  the OpenAPI spec regenerated and the SDK methods covered by tests.
+- **`GET /metrics` served by default**: the Prometheus endpoint is registered
+  unconditionally (previously opt-in) and documented in the OpenAPI spec; it
+  stays behind API-key auth whenever keys are configured.
+- **Python durable TTL for episodic and procedural memory**:
+  `set_episodic_ttl_durable` / `set_procedural_ttl_durable` bindings bring
+  the PyO3 SDK to parity with the Rust durable TTL setters.
+- **Agent-memory criterion benchmark**: `agent_memory_benchmark` (semantic
+  store/query/hybrid NEAR + MATCH, episodic record/recent, procedural recall
+  at 10K entries, 384-dim) plus measured figures with provenance in the
+  agent-memory guide (Apple M5 Pro: `semantic.query` 55.5 µs at k=10,
+  `episodic.recent` 24.7 µs, NEAR + MATCH 5.46 ms at 1,000 anchors, `store`
+  12.1 ms — fsync-dominated).
+- **Mobile `uniffi-bindgen` binary**: `velesdb-mobile` now ships the
+  documented `uniffi-bindgen` binary, and the Swift/Kotlin
+  bindings-generation flow it documents is verified.
 
 ### Fixed
+- **Persisted HNSW graph was never reloaded at open**: `Collection::open` now
+  loads the serialized `index.hnsw` and reconciles it in 3 passes against the
+  vector store and WAL (stale entries dropped, missing vectors re-indexed,
+  a mutated index re-saved); previously the persisted graph was ignored and
+  the index was rebuilt by re-inserting every vector on every open.
+- **`HnswParams.alpha` never reached the native graph (#1082)**: the
+  configured diversification alpha is now propagated to the native graph
+  constructor and persists across restarts.
+- **Lazily-trained RaBitQ quantizer now persists at flush**: parity with PQ —
+  previously only an explicit `TRAIN QUANTIZER` persisted `rabitq.idx`, so a
+  lazily-trained quantizer vanished on restart.
+- **TTL expiry TOCTOU on the MATCH result path (#1082)**: the expiry
+  timestamp is snapshotted once before the result loop and expired points
+  are skipped inline, closing the window where a point could expire between
+  payload retrieval and the expiry check.
+- **Test suite compiles under `--no-default-features`**: the weekly
+  Miri/cargo-careful gate is unblocked (it could not build the suite before).
+- **`velesdb-migrate` test flakiness**: `validate_url` tests no longer mutate
+  process environment variables (a policy parameter is injected instead),
+  removing cross-test interference.
+- **LangChain test suite green in full runs** (`langchain-velesdb`): a
+  leaked module fake from `test_core_feature_parity` broke 17 unrelated
+  tests; `sys.modules` is now restored after the fixture loads.
 - **`TRAIN QUANTIZER 'rabitq'` trained an index nothing ever loaded**: the
   persisted `rabitq.idx` had zero load-path callers, the persisted HNSW meta
   hardcoded `StorageMode::Full` on save, and the collection load path ignored
