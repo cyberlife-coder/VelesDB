@@ -256,6 +256,10 @@ engines:
       # in a struct would add indirection without clarity gain.
       - "crates/velesdb-core/src/collection/search/query/execution_paths.rs"
       - "crates/velesdb-core/src/collection/search/query/join.rs"
+      # select_dispatch.rs: `resolve_initial_results` (10 params) threads per-query
+      # context through the anchored/hybrid-anchored/vector-fallback dispatch chain;
+      # same rationale as execution_paths.rs / join.rs above.
+      - "crates/velesdb-core/src/collection/search/query/select_dispatch.rs"
 
       # --- CLI / REPL (interactive tool, not production engine) ---
       - "crates/velesdb-cli/src/**"
