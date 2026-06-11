@@ -29,6 +29,8 @@ mod vector;
 mod vector_dispatch_parity_tests;
 mod vector_filter;
 #[cfg(test)]
+mod vector_filter_tests;
+#[cfg(test)]
 mod vector_tests;
 
 // Re-export all search methods via trait implementations

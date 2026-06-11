@@ -226,7 +226,9 @@ impl MmapStorage {
     /// Validates every persisted offset against the backing file size (#898):
     /// a corrupt index entry whose `offset + vector_size` overflows or exceeds
     /// `data_len` would otherwise yield out-of-bounds reads or an inflated
-    /// `next_offset`. Such an index is rejected as corrupt.
+    /// `next_offset`. Such an index is rejected as corrupt. A 0-byte file is
+    /// the one exception: it is the footprint of a torn legacy in-place
+    /// rewrite, carries no information, and is treated as absent.
     fn load_index(
         index_path: &Path,
         dimension: usize,
@@ -237,6 +239,17 @@ impl MmapStorage {
         }
 
         let bytes = std::fs::read(index_path)?;
+        if bytes.is_empty() {
+            // A valid postcard-encoded index is never 0 bytes (even an empty
+            // map serializes to one length byte). A 0-byte vectors.idx is the
+            // footprint of a torn in-place rewrite by pre-atomic-persist
+            // versions and carries no information: treat it as absent so WAL
+            // replay can rebuild, instead of failing open() forever. A
+            // non-empty corrupt file still fails loudly below — it may
+            // witness real corruption that must not be silently discarded.
+            tracing::warn!("vectors.idx is 0 bytes (torn legacy rewrite); rebuilding from WAL");
+            return Ok((ShardedIndex::new(), 0));
+        }
         let flat_index: FxHashMap<u64, usize> = postcard::from_bytes(&bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
@@ -302,21 +315,13 @@ impl MmapStorage {
         Ok((mmap, next_offset))
     }
 
-    /// Serializes the sharded index to `index_path` with fsync.
+    /// Serializes the sharded index to `index_path`, atomically.
     ///
-    /// Shared by [`Self::flush_index`] and WAL replay recovery.
+    /// Shared by [`Self::flush_index`] and WAL replay recovery. Goes through
+    /// a staged `vectors.idx.new` + rename so an interrupted persist can
+    /// never leave a torn `vectors.idx` behind (audit 2026-06, finding 3).
     fn persist_index_file(index_path: &Path, index: &ShardedIndex) -> io::Result<()> {
-        let file = File::create(index_path)?;
-        let mut writer = io::BufWriter::new(file);
-        let flat_index = index.to_hashmap();
-        let bytes = postcard::to_allocvec(&flat_index).map_err(io::Error::other)?;
-        writer.write_all(&bytes)?;
-        writer.flush()?;
-        writer
-            .into_inner()
-            .map_err(std::io::IntoInnerError::into_error)?
-            .sync_all()?;
-        Ok(())
+        compaction::persist_flat_index_atomic(index_path, &index.to_hashmap())
     }
 
     // ensure_capacity, reserve_capacity, compact, fragmentation_ratio are in mmap_capacity.rs

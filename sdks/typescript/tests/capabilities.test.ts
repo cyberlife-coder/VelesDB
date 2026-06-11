@@ -71,15 +71,14 @@ describe('REST_CAPABILITIES — full-feature contract', () => {
 });
 
 describe('WASM_CAPABILITIES — focused subset', () => {
-  it('supports the core search paths + VelesQL execution', () => {
+  it('supports the core search paths', () => {
     expect(WASM_CAPABILITIES.vectorSearch).toBe(true);
     expect(WASM_CAPABILITIES.textSearch).toBe(true);
     expect(WASM_CAPABILITIES.hybridSearch).toBe(true);
     expect(WASM_CAPABILITIES.multiQuerySearch).toBe(true);
-    expect(WASM_CAPABILITIES.velesqlQuery).toBe(true);
   });
 
-  it('does NOT support persistent / graph / streaming features', () => {
+  it('does NOT support persistent / graph / streaming / VelesQL features', () => {
     expect(WASM_CAPABILITIES.sparseSearch).toBe(false);
     expect(WASM_CAPABILITIES.scroll).toBe(false);
     expect(WASM_CAPABILITIES.graphTraversal).toBe(false);
@@ -87,6 +86,9 @@ describe('WASM_CAPABILITIES — focused subset', () => {
     expect(WASM_CAPABILITIES.agentMemory).toBe(false);
     expect(WASM_CAPABILITIES.streamInsert).toBe(false);
     expect(WASM_CAPABILITIES.pqTraining).toBe(false);
+    // query() only executes pure top-k NEAR statements — full VelesQL is
+    // not advertised so callers route VelesQL workloads to REST upfront.
+    expect(WASM_CAPABILITIES.velesqlQuery).toBe(false);
     expect(WASM_CAPABILITIES.collectionIntrospection).toBe(false);
   });
 });

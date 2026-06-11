@@ -30,7 +30,7 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 ### Previous (v1.13.0)
 
 - **WASM VelesQL executor** -- full browser-side VelesQL execution: SELECT/INSERT/UPDATE/DELETE/DDL + aggregations (COUNT/SUM/AVG/MIN/MAX) + GROUP BY/HAVING/UNION/INTERSECT/EXCEPT/JOIN/FUSION/MATCH 1-2 hops + NOT De Morgan distribution
-- **TS SDK coverage raised to 94%** -- 423 tests, per-file thresholds codified in `vitest.config.ts`
+- **TS SDK coverage raised** -- per-file thresholds codified in `vitest.config.ts` (423 tests as of v1.13.0; the vitest suite has since grown past 770 cases). Note: the suite runs locally via `npm test` and is not currently executed in CI
 - **SIFT1M standardized ANN benchmark** -- fvecs/ivecs loader + Criterion ef sweep on the INRIA TEXMEX dataset, feature-gated behind `--features bench-sift1m`
 - **Security hardening** -- `validateCollectionName()` helper on TS SDK prevents VelesQL injection in `trainPq`
 - **API consistency** -- `streamInsert` now serializes `payload: null` explicitly (matches `streamUpsertPoints`)
@@ -160,7 +160,13 @@ const queryVector = new Float32Array(1536).fill(0.1);
 const results = await db.search('products', queryVector, { k: 10 });
 ```
 
-> **REST backend note:** Document IDs must be numeric integers in the range `0..Number.MAX_SAFE_INTEGER`. String IDs are only supported with the WASM backend.
+> **REST backend note:** Document IDs must be non-negative `u64` integers. Pass a JS
+> number in the range `0..Number.MAX_SAFE_INTEGER`, or a decimal string for the full
+> `u64` range — string ids above 2^53-1 (up to `18446744073709551615`) are kept
+> verbatim on the wire, so the ids returned by `recordEvent`/`learnProcedure`
+> round-trip through `get`/`delete` without precision loss. Exception: the NDJSON
+> bulk endpoint (`streamUpsertPoints`) only accepts safe-range numeric ids.
+> Arbitrary (non-numeric) string IDs are only supported with the WASM backend.
 
 > **Versioned routes:** The REST backend uses `/v1/` as the canonical route prefix
 > (e.g. `POST /v1/collections/{name}/search`). Legacy routes without the prefix
@@ -536,6 +542,14 @@ Get detailed collection configuration (dimension, metric, storage mode, point co
 #### `db.query(collection, queryString, params?, options?)`
 
 Execute a VelesQL query. Supports SELECT, WHERE, vector NEAR, GROUP BY, HAVING, ORDER BY, JOIN, UNION/INTERSECT/EXCEPT, and USING FUSION.
+
+> **Backend support:** full VelesQL execution requires the **REST backend** (`velesdb-server`).
+> The WASM backend only executes pure top-k vector queries of the form
+> `SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]` (`vector` is the
+> grammar keyword, not a column name) and throws a
+> `NOT_SUPPORTED` error for anything else (WHERE predicates, JOIN, GROUP BY, MATCH,
+> set operations, FUSION) instead of silently ignoring clauses. Accordingly,
+> `db.capabilities().velesqlQuery` is `false` on WASM.
 
 ```typescript
 // Vector similarity search

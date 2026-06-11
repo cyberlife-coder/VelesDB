@@ -68,7 +68,8 @@ export function _resetIdState(): void {
 }
 
 // ---------------------------------------------------------------------------
-// String <-> u64 id boundary (single source of truth)
+// String <-> u64 id boundary (inbound validation lives in `parseRestPointId`,
+// the single gate shared with the CRUD backend and the client layer)
 // ---------------------------------------------------------------------------
 
 /**
@@ -79,23 +80,8 @@ export function _resetIdState(): void {
  * precision loss — matching the project's documented string-id convention for
  * u64 (see `/search/scroll`, graph node/edge ids).
  */
-export function memoryIdToString(id: number): string {
+export function memoryIdToString(id: number | string): string {
   return String(id);
-}
-
-/**
- * Normalise a caller-provided point id into the numeric u64 the REST wire
- * accepts. Accepts a `string | number`; a string must be a decimal integer.
- *
- * A thin intent-revealing alias over {@link parseRestPointId}, which owns the
- * string→number coercion and the range/integer validation ("non-negative
- * integer within the JS safe-integer range") in exactly one place. The REST
- * server deserialises point ids as JSON numbers, so ids above
- * `Number.MAX_SAFE_INTEGER` cannot be transmitted and are rejected rather than
- * silently corrupted.
- */
-export function resolveWireId(id: string | number): number {
-  return parseRestPointId(id);
 }
 
 /** Current unix time in **seconds** (floor of epoch-millis / 1000). */
@@ -117,7 +103,7 @@ export async function storeSemanticFact(
     `${collectionPath(collection)}/points`,
     {
       points: [{
-        id: resolveWireId(entry.id),
+        id: parseRestPointId(entry.id),
         vector: entry.embedding,
         payload: {
           // Caller metadata is spread first so the reserved keys below
@@ -149,7 +135,7 @@ export async function recordEpisodicEvent(
   collection: string,
   event: EpisodicEvent
 ): Promise<string> {
-  const id = event.id !== undefined ? resolveWireId(event.id) : generateUniqueId();
+  const id = event.id !== undefined ? parseRestPointId(event.id) : generateUniqueId();
   const timestamp = event.timestamp ?? nowUnixSeconds();
 
   const response = await transport.requestJson(
@@ -193,7 +179,7 @@ export async function storeProceduralPattern(
   collection: string,
   pattern: ProceduralPattern
 ): Promise<string> {
-  const id = pattern.id !== undefined ? resolveWireId(pattern.id) : generateUniqueId();
+  const id = pattern.id !== undefined ? parseRestPointId(pattern.id) : generateUniqueId();
 
   const response = await transport.requestJson(
     'POST',

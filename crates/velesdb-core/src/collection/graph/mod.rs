@@ -14,6 +14,11 @@
 //!
 //! # Example
 //!
+//! Note: `GraphNode`/`Element` are exported value types for programmatic
+//! construction; the query runtime itself persists node data as JSON payloads
+//! (`GraphCollection::upsert_node_payload` / `INSERT NODE`) and MATCH
+//! evaluates against those payloads, not against `GraphNode` instances.
+//!
 //! ```rust,ignore
 //! use velesdb_core::collection::graph::{GraphSchema, NodeType, EdgeType, ValueType, GraphNode, Element};
 //! use std::collections::HashMap;

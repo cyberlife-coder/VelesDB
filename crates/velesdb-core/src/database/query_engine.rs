@@ -463,15 +463,8 @@ impl Database {
             return base_collection.execute_query(&single_query, params);
         }
 
-        let analysis = Self::analyze_join_pushdown_for_select(&query.select);
-
+        let analysis = Self::prepare_join_pushdown(&mut single_query, params)?;
         let pushed = analysis.column_store_filters.clone();
-
-        single_query.select.joins.clear();
-        if !pushed.is_empty() {
-            single_query.select.where_clause =
-                Self::strip_pushed_conditions(query.select.where_clause.as_ref(), &pushed);
-        }
 
         let row_budget = Self::join_row_budget(&query.select, &analysis);
 
@@ -493,6 +486,35 @@ impl Database {
         }
 
         Ok(results)
+    }
+
+    /// Resolves WHERE parameters, runs pushdown analysis, and strips pushed
+    /// conditions from the base query (JOIN path of `execute_single_select`).
+    ///
+    /// Parameter placeholders are resolved before the analysis so pushed-down
+    /// filters never silently convert them to NULL at the `ColumnStore` layer
+    /// (the collection pipeline resolves its own copy independently).
+    fn prepare_join_pushdown(
+        single_query: &mut crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<crate::collection::search::query::pushdown::PushdownAnalysis> {
+        if let Some(cond) = single_query.select.where_clause.take() {
+            single_query.select.where_clause = Some(
+                crate::collection::Collection::resolve_condition_params(&cond, params)?,
+            );
+        }
+
+        let analysis = Self::analyze_join_pushdown_for_select(&single_query.select);
+
+        let resolved_where = single_query.select.where_clause.clone();
+        single_query.select.joins.clear();
+        if !analysis.column_store_filters.is_empty() {
+            single_query.select.where_clause = Self::strip_pushed_conditions(
+                resolved_where.as_ref(),
+                &analysis.column_store_filters,
+            );
+        }
+        Ok(analysis)
     }
 
     /// Computes the bound on joined rows to materialize.

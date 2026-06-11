@@ -250,3 +250,47 @@ fn test_agent_memory_show_collections_includes_internal() {
         "SHOW COLLECTIONS should include _procedural_memory, got: {names:?}"
     );
 }
+
+// ============================================================================
+// Durable TTL key — user "expires_at" metadata is business data, not a TTL
+// ============================================================================
+
+/// A semantic fact carrying a user metadata field named `expires_at` (a common
+/// business field: subscription, offer, token…) must never be interpreted as a
+/// durable TTL — only the reserved `_veles_expires_at` system key is.
+#[test]
+fn test_user_expires_at_metadata_is_not_interpreted_as_ttl() {
+    // GIVEN an agent memory holding a fact whose metadata carries a past epoch
+    // under the user key "expires_at"
+    let dir = TempDir::new().expect("test: create temp dir");
+    {
+        let db = Arc::new(Database::open(dir.path()).expect("test: open database"));
+        let memory =
+            AgentMemory::with_dimension(Arc::clone(&db), 4).expect("test: create AgentMemory");
+        let mut meta = serde_json::Map::new();
+        meta.insert("expires_at".to_string(), serde_json::json!(1_000_000_u64));
+        memory
+            .semantic()
+            .store_with_metadata(1, "offer expired yesterday", &[1.0, 0.0, 0.0, 0.0], &meta)
+            .expect("store fact with business expires_at metadata");
+    }
+
+    // WHEN the database is reopened and expired entries are purged
+    let db = Arc::new(Database::open(dir.path()).expect("test: reopen database"));
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).expect("test: reopen AgentMemory");
+    let stats = memory.auto_expire().expect("auto_expire should succeed");
+
+    // THEN the fact is untouched: not expired, still queryable
+    assert_eq!(
+        stats.semantic_expired, 0,
+        "user expires_at metadata must not expire the fact"
+    );
+    let results = memory
+        .semantic()
+        .query(&[1.0, 0.0, 0.0, 0.0], 5)
+        .expect("query semantic memory");
+    assert!(
+        results.iter().any(|r| r.0 == 1),
+        "fact must survive reopen + auto_expire"
+    );
+}

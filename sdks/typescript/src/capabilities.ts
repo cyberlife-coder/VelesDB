@@ -93,11 +93,17 @@ export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
  * Capability map for the WASM backend.
  *
  * The WASM build ships a focused subset: the dense / text / hybrid /
- * multi-query search paths plus VelesQL execution. Everything that
- * relies on persistent on-disk structures (secondary indexes, graph,
- * streaming, PQ training, agent memory, introspection, sparse
- * inverted index) is explicitly `false`. See `backends/wasm-stubs.ts`
- * for the exact set of `wasmNotSupported()` throw sites.
+ * multi-query search paths. Everything that relies on persistent
+ * on-disk structures (secondary indexes, graph, streaming, PQ
+ * training, agent memory, introspection, sparse inverted index) is
+ * explicitly `false`. See `backends/wasm-stubs.ts` for the exact set
+ * of `wasmNotSupported()` throw sites.
+ *
+ * `velesqlQuery` is `false`: `query()` only executes pure top-k NEAR
+ * statements (`SELECT * FROM <collection> WHERE vector NEAR $param
+ * [LIMIT n]`) and throws `NOT_SUPPORTED` for any other VelesQL clause
+ * (WHERE predicates, JOIN, GROUP BY, MATCH, set operations, FUSION),
+ * so full VelesQL is not advertised.
  */
 export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   vectorSearch: true,
@@ -111,6 +117,6 @@ export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   agentMemory: false,
   streamInsert: false,
   pqTraining: false,
-  velesqlQuery: true,
+  velesqlQuery: false,
   collectionIntrospection: false,
 });

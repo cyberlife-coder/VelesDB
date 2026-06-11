@@ -339,6 +339,8 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
     /// Re-ranks candidate node IDs using exact f32 distances.
     ///
     /// RF-DEDUP: Mirrors `DualPrecisionHnsw::rerank_with_exact_f32`.
+    /// Transformed scores are metric-dependent (higher = better for
+    /// Cosine/DotProduct), so the final sort uses the metric's ordering.
     fn rerank_with_exact_f32(
         &self,
         query: &[f32],
@@ -360,7 +362,7 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
             Vec::new()
         };
 
-        reranked.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+        self.inner.distance.metric().sort_results(&mut reranked);
         reranked.truncate(k);
         reranked
     }

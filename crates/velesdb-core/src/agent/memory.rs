@@ -36,7 +36,7 @@ pub const DEFAULT_DIMENSION: usize = 384;
 /// Unified memory interface for AI agents.
 ///
 /// Provides access to three memory subsystems:
-/// - `semantic`: Long-term knowledge (vector-graph storage)
+/// - `semantic`: Long-term knowledge (vector storage; graph linkage planned)
 /// - `episodic`: Event timeline with temporal context
 /// - `procedural`: Learned patterns and action sequences
 ///
@@ -334,7 +334,8 @@ impl AgentMemory {
     ///
     /// Delegates to `Collection::execute_query_str` on the `_semantic_memory`
     /// collection. Use standard `VelesQL` syntax including `WHERE vector NEAR $v`,
-    /// payload filters, `ORDER BY`, and `WITH` options.
+    /// payload filters, `ORDER BY`, and `WITH` options. TTL-expired entries are
+    /// filtered from the results, matching the native query APIs.
     ///
     /// # Errors
     ///
@@ -349,6 +350,8 @@ impl AgentMemory {
             self.semantic.collection_name(),
             sql,
             params,
+            &self.ttl,
+            MemoryKind::Semantic,
         )
     }
 
@@ -356,7 +359,8 @@ impl AgentMemory {
     ///
     /// Delegates to `Collection::execute_query_str` on the `_episodic_memory`
     /// collection. Supports payload field filters like `WHERE timestamp > N`,
-    /// `ORDER BY timestamp DESC`, and similarity search via `NEAR`.
+    /// `ORDER BY timestamp DESC`, and similarity search via `NEAR`. TTL-expired
+    /// entries are filtered from the results, matching the native query APIs.
     ///
     /// # Errors
     ///
@@ -371,6 +375,8 @@ impl AgentMemory {
             self.episodic.collection_name(),
             sql,
             params,
+            &self.ttl,
+            MemoryKind::Episodic,
         )
     }
 
@@ -378,7 +384,8 @@ impl AgentMemory {
     ///
     /// Delegates to `Collection::execute_query_str` on the `_procedural_memory`
     /// collection. Supports payload field filters like `WHERE confidence > 0.7`,
-    /// `ORDER BY confidence DESC`, and scan queries.
+    /// `ORDER BY confidence DESC`, and scan queries. TTL-expired entries are
+    /// filtered from the results, matching the native query APIs.
     ///
     /// # Errors
     ///
@@ -393,6 +400,8 @@ impl AgentMemory {
             self.procedural.collection_name(),
             sql,
             params,
+            &self.ttl,
+            MemoryKind::Procedural,
         )
     }
 

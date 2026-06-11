@@ -68,6 +68,17 @@ Rules:
 - For graph-only execution, `/collections/{name}/match` remains supported.
 - `SELECT ... WHERE ... AND MATCH (...)` is supported and does not require
   `collection` in body when `FROM <collection>` is present.
+- The MATCH anchor (first node of the pattern) must carry an alias; when the
+  `FROM`/`JOIN` clauses declare aliases, the anchor alias must be one of them.
+  Violations fail validation with error code `V011`. When `FROM` has no alias,
+  any anchor alias is accepted.
+- Execution note: combined with `vector NEAR` (or a `similarity()` threshold),
+  graph predicates are applied as a filter over an over-fetched candidate
+  window of `max(LIMIT, min(LIMIT × 10, 10 000))` ranked vector candidates;
+  pattern-matching rows ranked beyond that window are not returned. Without a
+  ranked fetch, the candidate scan is bounded at 100 000 points (storage
+  order); collections larger than that may miss pattern-matching rows beyond
+  the bound (unchanged from previous releases).
 
 Success response shape:
 

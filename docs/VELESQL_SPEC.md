@@ -84,6 +84,8 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 - Conformance test matrix: `docs/reference/VELESQL_CONFORMANCE_MATRIX.md`.
 - Recommended developer syntax for mixed filters:
   `SELECT ... FROM <collection> WHERE ... AND MATCH (...)`.
+  When `FROM` declares an alias, the MATCH anchor must reuse it (rule V011 —
+  see [Graph Match Predicate in WHERE](#graph-match-predicate-in-where)).
 
 ---
 
@@ -110,8 +112,8 @@ The SELECT statement is the primary way to query data from collections.
 ```sql
 [LET <name> = <expr> ...]
 SELECT [DISTINCT] <columns> [, <window_fn>() OVER (...) [AS <alias>] ...]
-FROM <collection> [AS <alias>]
-[JOIN <collection2> [AS <alias>] ON <condition> | USING (<column>)]
+FROM <collection> [[AS] <alias>]
+[JOIN <collection2> [[AS] <alias>] ON <condition> | USING (<column>)]
 [WHERE <conditions>]
 [GROUP BY <columns>]
 [HAVING <aggregate_condition>]
@@ -228,7 +230,11 @@ FROM docs WHERE vector NEAR $v ORDER BY similarity() DESC LIMIT 5
 ## FROM Clause
 
 Specify the source collection. An optional alias enables shorter column references
-and is required for self-joins.
+and is required for self-joins. The `AS` keyword is optional: `FROM documents d`
+and `FROM documents AS d` are strictly equivalent. A bare alias may not be a
+reserved clause keyword (`WHERE`, `GROUP`, `HAVING`, `ORDER`, `LIMIT`, `OFFSET`,
+`WITH`, `USING`, `UNION`, `INTERSECT`, `EXCEPT`, `INNER`, `LEFT`, `RIGHT`,
+`FULL`, `OUTER`, `JOIN`, `ON`, `AS`); quote it (`` `limit` ``) to use one anyway.
 
 ```sql
 -- Simple
@@ -236,6 +242,9 @@ SELECT * FROM my_collection
 
 -- With alias
 SELECT * FROM documents AS d
+
+-- Bare alias (no AS) — identical semantics
+SELECT * FROM documents d
 
 -- Alias used in column references
 SELECT d.title, d.category FROM documents AS d WHERE d.price > 50
@@ -251,8 +260,8 @@ Combine data from multiple collections.
 
 ```sql
 SELECT <columns>
-FROM <table1> [AS <alias1>]
-[INNER | LEFT | RIGHT | FULL] JOIN <table2> [AS <alias2>]
+FROM <table1> [[AS] <alias1>]
+[INNER | LEFT | RIGHT | FULL] JOIN <table2> [[AS] <alias2>]
   ON <alias1>.<col> = <alias2>.<col>
 ```
 
@@ -907,6 +916,37 @@ LIMIT 10
 This filters rows that participate in the specified graph pattern, combined with
 any other scalar conditions.
 
+**Anchor alias rule (V011).** The first node of the pattern (the *anchor*) must
+carry an alias. When the `FROM` clause (or a `JOIN`) declares an alias, the
+anchor alias must be one of those declared aliases — the pattern is anchored on
+the rows of that table. When `FROM` has no alias, any anchor alias is accepted.
+Violations are rejected at validation time with error code `V011`
+(`MATCH predicate anchor must be an alias declared in FROM/JOIN`):
+
+```sql
+-- OK: anchor 'd' matches the FROM alias
+SELECT * FROM docs AS d
+WHERE category = 'tech' AND MATCH (d)-[:REL]->(x)
+LIMIT 10
+
+-- Rejected with V011: anchor 'ctx' does not match FROM alias 'd'
+SELECT * FROM docs AS d
+WHERE category = 'tech' AND MATCH (ctx)-[:REL]->(x)
+LIMIT 10
+```
+
+**Execution note (over-fetch window).** When a graph predicate is combined with
+a ranked fetch (`vector NEAR` or a `similarity()` threshold), the engine
+over-fetches vector candidates before applying the graph filter: it retrieves
+up to `max(LIMIT, min(LIMIT × 10, 10 000))` candidates and keeps those that
+satisfy the pattern. Rows that match the graph pattern but rank beyond this
+candidate window are not returned. If the graph filter is highly selective,
+increase `LIMIT` to widen the window. Without a ranked fetch (graph predicate
+alone, or combined with metadata filters only), the engine instead scans up to
+100 000 candidates in storage order before applying the graph filter: results
+are exhaustive for collections up to 100 000 points; beyond that bound,
+pattern-matching rows are not returned (unchanged from previous releases).
+
 ### Vector Search with Filters
 
 Combine vector search with any number of metadata filters:
@@ -1312,8 +1352,10 @@ Available variables: `vector_score`, `bm25_score`, `graph_score`, `sparse_score`
 
 ```sql
 -- RAG scoring: blend vector similarity with text relevance
+-- (the evaluated binding 'relevance' is injected into each row's payload;
+--  note that `SELECT *, expr` is not valid syntax — use `*` or an explicit list)
 LET relevance = 0.7 * vector_score + 0.3 * bm25_score
-SELECT *, relevance AS score
+SELECT *
 FROM documents
 WHERE vector NEAR $query AND content MATCH 'machine learning'
 ORDER BY relevance DESC
@@ -1572,18 +1614,25 @@ Relationships connect nodes with direction and optional type/range:
 -[r:TYPE1|TYPE2]->               -- Multiple relationship types
 -[*1..3]->                       -- Variable-length (1 to 3 hops)
 -[r:TYPE *2..5]->                -- Named with type and range
--[*]->                           -- Any length
 ```
 
 #### Range Specification
 
-| Syntax | Meaning |
-|--------|---------|
-| `*1..3` | Between 1 and 3 hops |
-| `*..5` | Up to 5 hops |
-| `*2..` | At least 2 hops |
-| `*3` | Exactly 3 hops |
-| `*` | Any number of hops |
+| Syntax | Meaning | Executable |
+|--------|---------|------------|
+| `*1..3` | Between 1 and 3 hops | Yes |
+| `*..5` | Up to 5 hops (lower bound defaults to 1) | Yes |
+| `*3` | Exactly 3 hops | Yes |
+| `*2..` | At least 2 hops, open-ended | Parses, **rejected at validation** |
+| `*` | Any number of hops | Parses, **rejected at validation** |
+
+**Hop bound.** The maximum hop count of any range is capped by the validator at
+`DEFAULT_MAX_GRAPH_EXPANSION = 32` (configurable via
+`ValidationConfig::max_graph_expansion`). Open-ended forms (`*`, `*2..`) map to
+an unbounded upper limit and are therefore always rejected under the default
+configuration with a `Graph expansion exceeded: max=32` complexity error
+(surfaced directly by `Parser::parse`) — use an explicit bounded range such as
+`*1..32` instead.
 
 ### RETURN Clause
 
@@ -1793,10 +1842,22 @@ estimated plan and actual execution statistics side-by-side. Unlike `EXPLAIN`
 > **Caution:** EXPLAIN ANALYZE executes the query. Use with care on write
 > queries (INSERT, UPDATE, DELETE) as they will modify data.
 
-#### Syntax
+#### Invocation
 
-```sql
-EXPLAIN ANALYZE <query>
+`EXPLAIN ANALYZE` is **not a parsed VelesQL statement** — the grammar only
+accepts `EXPLAIN <select-query>`. ANALYZE mode is requested at the API level:
+
+- REST: `POST /query/explain` with `"analyze": true` in the request body.
+- Rust API: `Database::explain_analyze_query(...)` /
+  `Collection::explain_analyze_query(...)`.
+
+```json
+POST /query/explain
+{
+  "query": "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+  "params": { "v": [0.1, 0.2, 0.3] },
+  "analyze": true
+}
 ```
 
 #### Return Fields
@@ -1819,8 +1880,8 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `actual_rows` | u64 | Number of rows returned by execution |
 | `actual_time_ms` | f64 | Wall-clock execution time in milliseconds |
 | `loops` | u64 | Number of execution iterations (always 1) |
-| `nodes_visited` | u64 | Graph nodes visited (0 for non-MATCH queries) |
-| `edges_traversed` | u64 | Graph edges traversed (0 for non-MATCH queries) |
+| `nodes_visited` | u64 | For MATCH queries, currently set to the result row count (not a real traversal counter); 0 for non-MATCH queries |
+| `edges_traversed` | u64 | For MATCH queries, currently set to the result row count (not a real traversal counter); 0 for non-MATCH queries |
 
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 
@@ -1858,15 +1919,17 @@ When histogram data is available, `Filter` plan nodes include additional fields:
 
 #### Examples
 
-```sql
--- Analyze a vector search query
-EXPLAIN ANALYZE SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+Queries to analyze are passed in the `query` field of `/query/explain` with
+`"analyze": true` (the `EXPLAIN` keyword itself must not be part of the string):
 
--- Analyze a filtered query
-EXPLAIN ANALYZE SELECT * FROM products WHERE category = 'tech' AND price > 50 LIMIT 20
+```json
+// Analyze a vector search query
+{ "query": "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+  "params": { "v": [0.1, 0.2] }, "analyze": true }
 
--- Analyze a graph traversal
-EXPLAIN ANALYZE MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10
+// Analyze a filtered query
+{ "query": "SELECT * FROM products WHERE category = 'tech' AND price > 50 LIMIT 20",
+  "analyze": true }
 ```
 
 After ≥ 10 vector queries against the same collection, the EMA feedback
@@ -2577,8 +2640,10 @@ parameterized vector search and `MATCH` normally.
 
 ### Divergences from standard SQL
 
-- **Table aliases require `AS`**: `FROM docs AS d`, not `FROM docs d` (the
-  no-`AS` form is intentionally rejected to avoid ambiguity with `JOIN`).
+- **Bare table aliases reserve clause keywords**: `FROM docs d` and
+  `FROM docs AS d` are both accepted and equivalent, but a bare alias may not
+  be a clause keyword (`WHERE`, `LIMIT`, `JOIN`, `UNION`, ...) — quote it with
+  backticks to use one anyway.
 - **`vector` and `score` are reserved keywords**, not free payload field names —
   `vector NEAR ...` and `score` in aggregates/ordering refer to the query vector
   and the computed similarity score.
@@ -2884,9 +2949,10 @@ SELECT * FROM docs
 WHERE vector NEAR $query AND content MATCH 'neural networks'
 LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
--- With custom scoring weights
+-- With custom scoring weights (the evaluated binding 'score' is injected
+-- into each row's payload; `SELECT *, expr` is not valid syntax)
 LET score = 0.7 * vector_score + 0.3 * bm25_score
-SELECT *, score AS relevance
+SELECT *
 FROM documents
 WHERE vector NEAR $query AND content MATCH 'transformer'
 ORDER BY score DESC
@@ -3131,11 +3197,13 @@ DESCRIBE documents
 
 -- View query execution plan without running
 EXPLAIN SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
-
--- Run with instrumentation: get the plan + actual rows / time / per-node stats
--- (v1.15.0+: also returns feedback_calibration once the EMA loop is warm)
-EXPLAIN ANALYZE SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
 ```
+
+For instrumented execution (plan + actual rows / time / per-node stats,
+plus `feedback_calibration` once the EMA loop is warm), use
+`POST /query/explain` with `"analyze": true` — see
+[EXPLAIN ANALYZE](#explain-analyze-v38) above (`EXPLAIN ANALYZE` is not a
+parsed statement).
 
 ### Window Functions
 
@@ -3147,9 +3215,10 @@ FROM articles
 WHERE vector NEAR $query
 LIMIT 50
 
--- Dense rank by an aggregated metric per author
+-- Dense rank per author by publication year (window ORDER BY accepts
+-- columns or similarity(), not aggregate expressions like COUNT(*))
 SELECT author, year, COUNT(*) AS papers,
-       DENSE_RANK() OVER (PARTITION BY author ORDER BY COUNT(*) DESC) AS productivity_rank
+       DENSE_RANK() OVER (PARTITION BY author ORDER BY year DESC) AS recency_rank
 FROM publications
 GROUP BY author, year
 ```

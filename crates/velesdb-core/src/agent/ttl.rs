@@ -105,10 +105,18 @@ impl MemoryTtl {
     /// * `id` - Entry identifier
     /// * `ttl_seconds` - Time-to-live in seconds from now
     pub fn set_ttl(&self, kind: MemoryKind, id: u64, ttl_seconds: u64) {
-        let now = Self::now();
+        self.set_expiry(kind, id, Self::now().saturating_add(ttl_seconds));
+    }
+
+    /// Sets a TTL entry from a precomputed absolute expiry timestamp.
+    ///
+    /// Used by the durable-TTL write path (which persists `_veles_expires_at` in the
+    /// point payload) and by the reopen path that rebuilds this map from
+    /// payloads, so both sides share the exact same expiry instant.
+    pub fn set_expiry(&self, kind: MemoryKind, id: u64, expires_at: u64) {
         let entry = TtlEntry {
-            expires_at: now.saturating_add(ttl_seconds),
-            created_at: now,
+            expires_at,
+            created_at: Self::now(),
         };
         self.entries.write().insert((kind, id), entry);
     }

@@ -21,6 +21,8 @@ struct Walk<'a, 't> {
     edge_store: &'a crate::collection::graph::ConcurrentEdgeStore,
     ctx: &'a mut TraversalCtx<'t>,
     bindings: &'a mut HashMap<String, u64>,
+    /// Bound relationship aliases (alias -> traversed edge id).
+    edge_bindings: &'a mut HashMap<String, u64>,
     path: &'a mut Vec<u64>,
 }
 
@@ -40,11 +42,13 @@ impl Collection {
 
             let mut path = Vec::new();
             let mut bindings = start_bindings.clone();
+            let mut edge_bindings = HashMap::new();
             let mut walk = Walk {
                 pattern,
                 edge_store,
                 ctx: &mut *ctx,
                 bindings: &mut bindings,
+                edge_bindings: &mut edge_bindings,
                 path: &mut path,
             };
             self.expand_pattern(&mut walk, *start_id, 0)?;
@@ -97,19 +101,56 @@ impl Collection {
         rel_idx: usize,
         hops: u32,
     ) -> Result<()> {
+        // Relationship isomorphism (Cypher semantics): an edge may be
+        // traversed at most once per matched path. `walk.path` is exactly
+        // the in-progress path's edge list (push/pop backtracking below),
+        // so a linear scan gives per-path visited-edge tracking with no
+        // extra state; paths are short (bounded by the pattern's max hops
+        // and the depth guard-rail).
         if walk.ctx.all_results.len() >= walk.ctx.limit
+            || walk.path.contains(&edge.id())
             || !Self::edge_matches(edge, &walk.pattern.relationships[rel_idx])
         {
             return Ok(());
         }
         let next_id = Self::edge_next_node(edge, current_id);
         walk.path.push(edge.id());
+        let saved_alias = Self::bind_edge_alias(walk, rel_idx, edge.id());
         *walk.ctx.iteration_count += 1;
         let depth = walk.path.len() as u32;
         self.check_depth_and_periodic_guardrails(depth, walk.ctx)?;
         self.expand_relationship(walk, next_id, rel_idx, hops.saturating_add(1))?;
+        Self::restore_edge_alias(walk, saved_alias);
         walk.path.pop();
         Ok(())
+    }
+
+    /// Binds the relationship alias (if any) to the traversed edge id so
+    /// `WHERE r.prop` / `RETURN r.prop` resolve against the edge.
+    ///
+    /// Returns the alias and its previous value for backtracking. For
+    /// variable-length relationships the alias tracks the most recently
+    /// traversed edge of that segment.
+    fn bind_edge_alias(
+        walk: &mut Walk<'_, '_>,
+        rel_idx: usize,
+        edge_id: u64,
+    ) -> Option<(String, Option<u64>)> {
+        let alias = walk.pattern.relationships[rel_idx].alias.clone()?;
+        let previous = walk.edge_bindings.insert(alias.clone(), edge_id);
+        Some((alias, previous))
+    }
+
+    /// Restores a relationship alias binding saved by [`Self::bind_edge_alias`].
+    fn restore_edge_alias(walk: &mut Walk<'_, '_>, saved: Option<(String, Option<u64>)>) {
+        let Some((alias, previous)) = saved else {
+            return;
+        };
+        if let Some(edge_id) = previous {
+            walk.edge_bindings.insert(alias, edge_id);
+        } else {
+            walk.edge_bindings.remove(&alias);
+        }
     }
 
     fn try_bind_next_node(
@@ -140,6 +181,7 @@ impl Collection {
             if !self.evaluate_where_condition(
                 node_id,
                 Some(&*walk.bindings),
+                Some(&*walk.edge_bindings),
                 where_clause,
                 walk.ctx.params,
                 walk.ctx.payload_guard,
@@ -155,8 +197,10 @@ impl Collection {
 
         let mut result = MatchResult::new(node_id, walk.path.len() as u32, walk.path.clone());
         result.bindings.clone_from(walk.bindings);
+        result.edge_bindings.clone_from(walk.edge_bindings);
         result.projected = self.project_properties(
             walk.bindings,
+            walk.edge_bindings,
             &walk.ctx.match_clause.return_clause,
             walk.ctx.payload_guard,
         );

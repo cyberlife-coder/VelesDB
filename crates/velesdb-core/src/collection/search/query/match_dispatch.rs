@@ -332,7 +332,13 @@ fn merge_match_results(
     merged
 }
 
-/// Inserts `candidate` into `by_node`, keeping whichever entry has the better score.
+/// Inserts `candidate` into `by_node`, keeping whichever entry has the better
+/// score while merging result data from the losing duplicate.
+///
+/// Audit 2026-06 F2: replacing the whole entry dropped plan-specific data —
+/// a GraphFirst row's `r.*` projection/edge bindings were clobbered by the
+/// VectorFirst candidate for the same `node_id`. The winner keeps its score
+/// but absorbs the bindings/projections it is missing.
 fn upsert_better_score(
     by_node: &mut std::collections::HashMap<u64, super::match_exec::MatchResult>,
     candidate: super::match_exec::MatchResult,
@@ -353,12 +359,32 @@ fn upsert_better_score(
                 new_score < old_score
             };
             if new_wins {
-                entry.insert(candidate);
+                let loser = entry.insert(candidate);
+                merge_missing_result_data(entry.get_mut(), loser);
+            } else {
+                merge_missing_result_data(entry.get_mut(), candidate);
             }
         }
         std::collections::hash_map::Entry::Vacant(entry) => {
             entry.insert(candidate);
         }
+    }
+}
+
+/// Copies `projected`, `edge_bindings`, and `bindings` entries that the merge
+/// winner lacks from the losing duplicate (winner's own entries take priority).
+fn merge_missing_result_data(
+    winner: &mut super::match_exec::MatchResult,
+    loser: super::match_exec::MatchResult,
+) {
+    for (key, value) in loser.projected {
+        winner.projected.entry(key).or_insert(value);
+    }
+    for (key, value) in loser.edge_bindings {
+        winner.edge_bindings.entry(key).or_insert(value);
+    }
+    for (key, value) in loser.bindings {
+        winner.bindings.entry(key).or_insert(value);
     }
 }
 
@@ -524,5 +550,81 @@ mod tests {
     fn test_merge_empty_inputs_euclidean() {
         let merged = merge_match_results(Vec::new(), Vec::new(), false);
         assert!(merged.is_empty());
+    }
+
+    // --- collision data merge (audit 2026-06 cluster F2, finding 5) ---
+
+    /// Builds a GraphFirst-style result: unscored, with edge projection data.
+    fn graph_mr_with_edge_data(node_id: u64) -> MatchResult {
+        let mut r = MatchResult::new(node_id, 1, vec![100]);
+        r.bindings.insert("b".to_string(), node_id);
+        r.edge_bindings.insert("r".to_string(), 100);
+        r.projected
+            .insert("r.since".to_string(), serde_json::json!(2020));
+        r
+    }
+
+    /// GIVEN a GraphFirst result carrying `r.since` projection + edge binding
+    ///   and a scored VectorFirst candidate for the same node without them
+    /// WHEN the candidate wins the score comparison
+    /// THEN the winning score is kept BUT the GraphFirst-only projection,
+    ///      edge bindings, and node bindings survive the merge.
+    #[test]
+    fn test_merge_collision_preserves_graph_edge_data() {
+        let graph = vec![graph_mr_with_edge_data(1)];
+        let vector = vec![mr(1, Some(0.9))];
+
+        let merged = merge_match_results(graph, vector, true);
+
+        assert_eq!(merged.len(), 1);
+        assert!(
+            (merged[0].score.expect("test: should have score") - 0.9).abs() < f32::EPSILON,
+            "the better (vector) score must win"
+        );
+        assert_eq!(
+            merged[0].projected.get("r.since"),
+            Some(&serde_json::json!(2020)),
+            "GraphFirst projection must survive the collision merge"
+        );
+        assert_eq!(
+            merged[0].edge_bindings.get("r"),
+            Some(&100),
+            "GraphFirst edge binding must survive the collision merge"
+        );
+        assert_eq!(
+            merged[0].bindings.get("b"),
+            Some(&1),
+            "GraphFirst node binding must survive the collision merge"
+        );
+    }
+
+    /// GIVEN a scored GraphFirst result that beats the vector candidate
+    /// WHEN the candidate loses the score comparison
+    /// THEN candidate-only data (e.g. its projection keys) still survives.
+    #[test]
+    fn test_merge_collision_preserves_loser_only_keys() {
+        let mut graph = graph_mr_with_edge_data(1);
+        graph.score = Some(0.95);
+        let mut vector = mr(1, Some(0.5));
+        vector
+            .projected
+            .insert("similarity()".to_string(), serde_json::json!(0.5));
+
+        let merged = merge_match_results(vec![graph], vec![vector], true);
+
+        assert_eq!(merged.len(), 1);
+        assert!(
+            (merged[0].score.expect("test: should have score") - 0.95).abs() < f32::EPSILON,
+            "the better (graph) score must win"
+        );
+        assert!(
+            merged[0].projected.contains_key("similarity()"),
+            "loser-only projection keys must survive the collision merge"
+        );
+        assert_eq!(
+            merged[0].projected.get("r.since"),
+            Some(&serde_json::json!(2020)),
+            "winner projection must be untouched"
+        );
     }
 }

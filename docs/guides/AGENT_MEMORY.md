@@ -604,7 +604,9 @@ stats = memory.auto_expire()
 
 ### Behavior
 
-- Expired entries are **filtered from results** (query, recent, recall)
+- Expired entries are **filtered from results** on every read surface: the native queries (query, recent, recall) and the `AgentMemory` VelesQL bridges (`query_semantic` / `query_episodic` / `query_procedural`)
+- TTLs assigned at store time (`store_with_ttl` / `record_with_ttl` / `learn_with_ttl`) are **durable**: the expiry is persisted as a reserved `_veles_expires_at` (epoch seconds) payload field and the TTL map is rebuilt from payloads when the database is reopened, so TTL'd entries stay mortal across restarts — no snapshot required. TTLs set after the fact via `set_*_ttl` live in memory and persist only through snapshots
+- `_veles_expires_at` is a **reserved system key**: `store_with_metadata` and `update_metadata` strip it from user metadata, so it can only be written by the `*_with_ttl` store paths. A plain `expires_at` metadata field is ordinary business data — it is stored, filterable, and never interpreted as a TTL
 - `auto_expire()` **physically deletes** expired entries and returns per-subsystem counts
 - Old episodic events can be **consolidated** into semantic memory (configurable via `EvictionConfig`); the migrated fact is stored under a **fresh** semantic id on collision, so consolidation never overwrites an existing semantic fact (see [Snapshots & Restore](#snapshots--restore))
 
@@ -744,13 +746,18 @@ decay setting yet.
 
 ### Throughput
 
-| Operation | Latency | Note |
-|-----------|---------|------|
-| `semantic.store()` | ~50 us | HNSW upsert |
-| `semantic.query()` | ~500 us (10K facts) | HNSW search k=10 |
-| `episodic.recent()` | ~10 us | B-tree index O(log N) |
-| `episodic.recall_similar()` | ~500 us (10K events) | HNSW search |
-| `procedural.recall()` | ~500 us (1K procs) | HNSW + confidence filter |
+> **Order-of-magnitude estimates, not measurements.** There is no agent-memory
+> benchmark in `crates/velesdb-core/benches/`; the figures below are derived
+> from the cost class of the underlying operation (HNSW search/upsert, B-tree
+> lookup) and should be treated as rough guidance only.
+
+| Operation | Estimated latency | Note |
+|-----------|------------------|------|
+| `semantic.store()` | tens of µs | HNSW upsert |
+| `semantic.query()` | hundreds of µs (10K facts) | HNSW search k=10 |
+| `episodic.recent()` | ~10 µs | B-tree index O(log N) |
+| `episodic.recall_similar()` | hundreds of µs (10K events) | HNSW search |
+| `procedural.recall()` | hundreds of µs (1K procs) | HNSW + confidence filter |
 
 ### Recommended Limits
 
@@ -773,7 +780,10 @@ decay setting yet.
 
 - `AgentMemory` is **thread-safe**: uses `Arc<Database>` + `parking_lot::RwLock`
 - Multiple threads can **read** simultaneously (query, recent, recall)
-- **Writes** (store, record, learn, reinforce) are serialized
+- Individual **storage writes** (store, record, learn) are serialized by the
+  underlying locks. Read-modify-write operations (`reinforce`,
+  `store_unique`, `snapshot`) are **not atomic**: two concurrent calls on the
+  same id can interleave between the read and the write (last writer wins)
 - No deadlock risk (deterministic lock ordering)
 
 ```python
@@ -837,7 +847,10 @@ memory.load_latest_snapshot()?;
 > - **Rust core** — `SemanticMemory::new_from_db(db, dim)` still requires a
 >   backing `Database`, but allocates a *fresh* `MemoryTtl` that is **not** wired
 >   to any snapshot manager; `serialize`/`deserialize` carry stored facts and
->   intentionally omit TTL state, so expiry is **lost on restart**.
+>   intentionally omit the TTL map. TTLs assigned via `store_with_ttl` persist
+>   their expiry in the reserved `_veles_expires_at` payload field and are
+>   rebuilt at reopen, so store-time expiry **survives restarts**; map-only
+>   TTLs do not.
 > - **WASM** — a fully standalone, DB-less `SemanticMemory::new(dim)` exists
 >   (no auto-snapshot, no auto-load, payloads are not serialized).
 > - **Python** has no standalone `SemanticMemory` constructor — it is reachable
@@ -951,13 +964,15 @@ Yes. VelesDB uses a Write-Ahead Log (WAL) with fsync. Data is durable as soon as
 Yes. Multiple `AgentMemory` instances on the same `Database` share the same collections. Useful for multi-threading.
 
 **Q: Does the SDK work in WASM or on mobile?**
-The **embedded** SDK (Python/Rust) requires the `persistence` feature (mmap, filesystem), which is disabled for WASM, so embedded agent memory does not run in-browser. The browser/WASM build of the TypeScript SDK does not support agent memory either (`capabilities().agentMemory` is `false` for the WASM backend). To use agent memory from JavaScript, point the SDK at a `velesdb-server` over **REST** (`backend: 'rest'`). Mobile support is possible via native bindings but not yet documented.
+The **embedded** SDK (Python/Rust) requires the `persistence` feature (mmap, filesystem), which is disabled for WASM, so embedded agent memory does not run in-browser. The browser/WASM build of the TypeScript SDK does not support agent memory either (`capabilities().agentMemory` is `false` for the WASM backend). To use agent memory from JavaScript, point the SDK at a `velesdb-server` over **REST** (`backend: 'rest'`).
+
+On **mobile** (iOS/Android via UniFFI, `velesdb-mobile`), a semantic-only surface ships as `VelesSemanticMemory`: `new(db, dimension)` (backed by a `_semantic_memory` collection), `store(id, content, embedding)`, `query(embedding, top_k)`, `len()`, `is_empty()`, `delete(id)`. Episodic/procedural memory, TTL, and snapshots are not exposed on mobile.
 
 **Q: How do I migrate from another memory system?**
 Export your data (text + embeddings) and import via `semantic.store()` / `episodic.record()` / `procedural.learn()`. There is no automated migration tool.
 
 **Q: Is this production-ready?**
-Yes. The SDK is covered end-to-end by Rust and Python test suites, including concurrent access, snapshot round-trips, TTL expiration, and reinforcement strategies.
+Yes. The SDK is covered end-to-end by Rust and Python test suites, including snapshot round-trips, TTL expiration (including across restarts), and reinforcement strategies. Concurrent access is exercised by a smoke test; see the Thread Safety section above for the atomicity caveats on read-modify-write operations.
 
 ---
 

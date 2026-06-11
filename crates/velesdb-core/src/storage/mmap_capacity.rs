@@ -95,7 +95,13 @@ impl MmapStorage {
         if bytes_reclaimed > 0 {
             let data_path = self.path.join("vectors.dat");
             self.data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
-            self.flush_full()?;
+            // No flush_full() here: `commit_compaction` already synced the
+            // compacted data file before the swap, promoted an identical
+            // fsynced vectors.idx and truncated the WAL. Rewriting
+            // vectors.idx at this point is redundant (`&mut self` excludes
+            // concurrent mutation) and used to reopen the exact crash window
+            // the staged commit closed — a torn index next to an
+            // already-empty WAL is unrecoverable (audit 2026-06, finding 3).
         }
 
         Ok(bytes_reclaimed)

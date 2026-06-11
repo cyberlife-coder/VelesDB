@@ -274,7 +274,9 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     /// `self.inner.compute_distance()` returns the raw engine distance, which
     /// may be squared L2 for Euclidean when `D = CachedSimdDistance`. We apply
     /// `transform_score()` to convert to the user-visible metric (e.g. sqrt
-    /// for Euclidean, similarity clamping for Cosine).
+    /// for Euclidean, similarity clamping for Cosine). Transformed scores are
+    /// metric-dependent (higher = better for Cosine/DotProduct), so the final
+    /// sort MUST use the metric's ordering, not a plain ascending sort.
     pub(super) fn rerank_with_exact_f32(
         &self,
         query: &[f32],
@@ -296,7 +298,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             Vec::new()
         };
 
-        reranked.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+        self.inner.distance.metric().sort_results(&mut reranked);
         reranked.truncate(k);
         reranked
     }

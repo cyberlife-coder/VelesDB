@@ -217,6 +217,47 @@ fn test_rabitq_precision_recall_above_threshold() {
 }
 
 // =========================================================================
+// Regression: rerank must sort by METRIC semantics, not ascending raw value.
+// After transform_score, Cosine/DotProduct are similarities (higher =
+// better); an ascending sort + truncate(k) keeps the k WORST candidates.
+// =========================================================================
+
+/// Builds a trained `RaBitQ` index over `n` unit vectors and searches with
+/// the self-query, asserting top-1 identity and recall@k >= 0.95.
+///
+/// Uses 64 dims (vs 32 for SQ8 tests): `RaBitQ` allocates 1 bit per dim,
+/// and 32-bit codes are too coarse to rank near-orthogonal random vectors.
+fn run_rabitq_self_query(metric: DistanceMetric) {
+    use super::dual_precision_tests::{assert_top1_and_recall, planted_unit_vectors};
+
+    let (dim, n, k) = (64, 100, 10);
+    let query_id = 42_usize;
+    let engine = CachedSimdDistance::new(metric, dim);
+    let hnsw = RaBitQPrecisionHnsw::new(engine, dim, 16, 200, 1000).expect("test");
+
+    let vectors = planted_unit_vectors(n, dim, query_id);
+    for v in &vectors {
+        hnsw.insert(v).expect("test");
+    }
+    hnsw.force_train_quantizer().expect("test");
+    assert!(hnsw.is_quantizer_trained());
+
+    let results = hnsw.search(&vectors[query_id], k, 100);
+
+    assert_top1_and_recall(&results, &vectors, query_id, metric, k);
+}
+
+#[test]
+fn test_rabitq_cosine_rerank_keeps_best_candidates() {
+    run_rabitq_self_query(DistanceMetric::Cosine);
+}
+
+#[test]
+fn test_rabitq_dot_product_rerank_keeps_best_candidates() {
+    run_rabitq_self_query(DistanceMetric::DotProduct);
+}
+
+// =========================================================================
 // Regression: transform_score applied
 // =========================================================================
 

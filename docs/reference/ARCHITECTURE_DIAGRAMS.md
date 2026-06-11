@@ -200,7 +200,7 @@ graph LR
         MAC_A[macOS aarch64<br/>NEON]
         IOS[iOS aarch64<br/>NEON]
         ANDROID[Android<br/>arm64/armv7/x86_64]
-        BROWSER[Browser<br/>WASM SIMD128]
+        BROWSER[Browser<br/>WASM scalar - SIMD128 planned]
     end
 
     subgraph "Crates"

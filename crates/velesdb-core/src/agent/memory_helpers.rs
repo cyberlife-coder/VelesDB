@@ -13,6 +13,20 @@ use std::collections::HashSet;
 
 use super::error::AgentMemoryError;
 
+/// Reserved payload key carrying the durable expiry timestamp (epoch seconds).
+///
+/// Written by the `*_with_ttl` store paths so a TTL survives a process
+/// restart: the in-memory [`MemoryTtl`](super::ttl::MemoryTtl) map is just a
+/// cache rebuilt from this field at subsystem construction. Payloads without
+/// this key (or with a non-u64 value) have no TTL.
+///
+/// The key is namespaced (`_veles_` prefix, like the `_semantic_memory`
+/// system collections) so a user metadata field named `expires_at` — a common
+/// business field — is never interpreted as a TTL. User-facing metadata paths
+/// (`SemanticMemory::store_with_metadata` / `update_metadata`) strip this
+/// reserved key, mirroring how the `content` parameter owns `content`.
+pub(super) const EXPIRES_AT_KEY: &str = "_veles_expires_at";
+
 /// Looks up a `Collection` by name, returning an `AgentMemoryError` if absent.
 pub(super) fn get_collection(db: &Database, name: &str) -> Result<Collection, AgentMemoryError> {
     db.get_vector_collection(name)
@@ -287,10 +301,53 @@ pub(super) fn resolve_embedding(
     Ok(embedding.map_or_else(|| vec![0.0; dimension], <[f32]>::to_vec))
 }
 
+/// Inserts the durable [`EXPIRES_AT_KEY`] into a JSON object payload.
+///
+/// No-op when `expires_at` is `None` or the payload is not a JSON object
+/// (the `*_with_ttl` callers always build object payloads).
+pub(super) fn attach_expiry(payload: &mut serde_json::Value, expires_at: Option<u64>) {
+    if let (Some(expiry), Some(obj)) = (expires_at, payload.as_object_mut()) {
+        obj.insert(EXPIRES_AT_KEY.to_string(), serde_json::Value::from(expiry));
+    }
+}
+
+/// Rebuilds the in-memory TTL map for `kind` from persisted point payloads.
+///
+/// Called eagerly at subsystem construction (same pattern and cost class as
+/// the episodic temporal-index rebuild) so that after a restart, `is_expired`,
+/// `expired_count`, and `auto_expire` all see the durable TTLs again. Points
+/// without an [`EXPIRES_AT_KEY`] payload field have no TTL.
+///
+/// # Errors
+///
+/// Returns an error when the collection cannot be resolved.
+pub(super) fn rebuild_ttl_from_payloads(
+    db: &Database,
+    collection_name: &str,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+) -> Result<(), AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    let all_ids = collection.all_ids();
+    for point in collection.get(&all_ids).into_iter().flatten() {
+        let expiry = point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(EXPIRES_AT_KEY))
+            .and_then(serde_json::Value::as_u64);
+        if let Some(expires_at) = expiry {
+            ttl.set_expiry(kind, point.id, expires_at);
+        }
+    }
+    Ok(())
+}
+
 /// Executes a `VelesQL` query string against a named collection.
 ///
-/// Resolves the collection from the database by name, then delegates to
-/// `Collection::execute_query_str`.
+/// Resolves the collection from the database by name, delegates to
+/// `Collection::execute_query_str`, then filters out TTL-expired points so the
+/// `VelesQL` bridge has the same read semantics as the native query APIs
+/// (expired-but-not-yet-deleted entries are invisible on every read surface).
 ///
 /// # Errors
 ///
@@ -301,11 +358,17 @@ pub(super) fn execute_velesql(
     collection_name: &str,
     sql: &str,
     params: &std::collections::HashMap<String, serde_json::Value>,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
 ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
     let collection = get_collection(db, collection_name)?;
-    collection
+    let results = collection
         .execute_query_str(sql, params)
-        .map_err(AgentMemoryError::DatabaseError)
+        .map_err(AgentMemoryError::DatabaseError)?;
+    Ok(results
+        .into_iter()
+        .filter(|r| !ttl.is_expired(kind, r.point.id))
+        .collect())
 }
 
 #[cfg(test)]

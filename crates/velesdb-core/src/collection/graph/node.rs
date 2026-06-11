@@ -15,6 +15,11 @@ use std::collections::HashMap;
 /// Nodes are distinct from Points in that they have a label (type) and structured
 /// properties, while Points are primarily vector data with metadata.
 ///
+/// Note: this is a construction/value type. The query runtime stores node
+/// data as JSON payloads (`upsert_node_payload` / `INSERT NODE`) and MATCH
+/// evaluates against those payloads; no production query path consumes
+/// `GraphNode` instances directly.
+///
 /// # Example
 ///
 /// ```rust,ignore

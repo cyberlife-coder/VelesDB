@@ -41,6 +41,8 @@ mod flush_operations;
 mod geo_distance;
 #[path = "bdd/graph_queries.rs"]
 mod graph_queries;
+#[path = "bdd/graph_vector_hybrid.rs"]
+mod graph_vector_hybrid;
 #[path = "bdd/helpers.rs"]
 mod helpers;
 #[path = "bdd/hybrid_compositions.rs"]
@@ -51,6 +53,8 @@ mod index_management;
 mod introspection;
 #[path = "bdd/match_graph_first.rs"]
 mod match_graph_first;
+#[path = "bdd/match_relationship_semantics.rs"]
+mod match_relationship_semantics;
 #[path = "bdd/match_vector_first.rs"]
 mod match_vector_first;
 #[path = "bdd/operators.rs"]
@@ -71,5 +75,7 @@ mod vector_group_by;
 mod vector_search;
 #[path = "bdd/where_filters.rs"]
 mod where_filters;
+#[path = "bdd/where_params.rs"]
+mod where_params;
 #[path = "bdd/window_functions.rs"]
 mod window_functions;

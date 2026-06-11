@@ -27,15 +27,23 @@ impl Collection {
     /// - `BareAlias`: all properties from a single bound node
     ///
     /// The caller must pass a pre-acquired `payload_guard` to avoid
-    /// per-node lock acquisitions during traversal.
-    #[allow(clippy::unused_self)] // Method on Collection for API consistency
+    /// per-node lock acquisitions during traversal. `edge_bindings` maps
+    /// relationship aliases to traversed edge ids so `RETURN r.prop`
+    /// projects the EDGE's property (audit 2026-06 F).
     pub(crate) fn project_properties(
         &self,
         bindings: &HashMap<String, u64>,
+        edge_bindings: &HashMap<String, u64>,
         return_clause: &crate::velesql::ReturnClause,
         payload_guard: &LogPayloadStorage,
     ) -> HashMap<String, serde_json::Value> {
-        self.project_properties_with_score(bindings, return_clause, None, payload_guard)
+        self.project_properties_with_score(
+            bindings,
+            edge_bindings,
+            return_clause,
+            None,
+            payload_guard,
+        )
     }
 
     /// Projects properties with an optional similarity score (Fix #489).
@@ -44,10 +52,10 @@ impl Collection {
     /// When `score` is `Some`, `RETURN similarity()` injects it into the
     /// projected map. All other variants work identically to
     /// [`project_properties`].
-    #[allow(clippy::unused_self)] // Method on Collection for API consistency
     pub(crate) fn project_properties_with_score(
         &self,
         bindings: &HashMap<String, u64>,
+        edge_bindings: &HashMap<String, u64>,
         return_clause: &crate::velesql::ReturnClause,
         score: Option<f32>,
         payload_guard: &LogPayloadStorage,
@@ -70,14 +78,20 @@ impl Collection {
                     }
                 }
                 ProjectionItem::PropertyPath { alias, property } => {
-                    Self::project_property_path(
-                        alias,
-                        property,
-                        item,
-                        bindings,
-                        payload_guard,
-                        &mut projected,
-                    );
+                    // Relationship aliases project from the traversed edge's
+                    // properties (audit 2026-06 F).
+                    if let Some(&edge_id) = edge_bindings.get(alias) {
+                        self.project_edge_property(edge_id, property, item, &mut projected);
+                    } else {
+                        Self::project_property_path(
+                            alias,
+                            property,
+                            item,
+                            bindings,
+                            payload_guard,
+                            &mut projected,
+                        );
+                    }
                 }
                 ProjectionItem::BareAlias(alias) => {
                     Self::project_bare_alias(alias, bindings, payload_guard, &mut projected);
@@ -86,6 +100,28 @@ impl Collection {
         }
 
         projected
+    }
+
+    /// Projects a single dotted property (e.g., `r.since`) from a bound
+    /// relationship alias, reading the traversed edge's properties.
+    fn project_edge_property(
+        &self,
+        edge_id: u64,
+        property: &str,
+        item: &crate::velesql::ReturnItem,
+        projected: &mut HashMap<String, serde_json::Value>,
+    ) {
+        let Some(edge) = self.edge_store.get_edge(edge_id) else {
+            return;
+        };
+        let Some(value) = super::where_eval::edge_property_path(&edge, property) else {
+            return;
+        };
+        let key = item
+            .alias
+            .clone()
+            .unwrap_or_else(|| item.expression.clone());
+        projected.insert(key, value.clone());
     }
 
     /// Projects ALL properties from ALL bound nodes into the result (RETURN *).
@@ -278,6 +314,7 @@ impl Collection {
                     result.score = Some(score);
                     result.projected = self.project_properties_with_score(
                         &result.bindings,
+                        &result.edge_bindings,
                         &match_clause.return_clause,
                         Some(score),
                         payload_guard,

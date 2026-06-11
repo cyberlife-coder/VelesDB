@@ -12,10 +12,15 @@ use super::ColumnStore;
 impl ColumnStore {
     /// Inserts a row with primary key validation and index update.
     ///
+    /// Type checking is **not** enforced on the fresh-insert path: a value
+    /// that does not match the target column type is silently stored as
+    /// NULL (`push_typed` fallback). Use `set_column_value` for validated
+    /// writes.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the primary key is missing, duplicated, or any
-    /// provided value does not match the target column type.
+    /// Returns an error if the primary key is missing or duplicated (when a
+    /// duplicate row is live), or if `GeoPoint` coordinates are out of range.
     pub fn insert_row(
         &mut self,
         values: &[(&str, ColumnValue)],

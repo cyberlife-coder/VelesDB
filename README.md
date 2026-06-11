@@ -19,7 +19,7 @@
   <a href="https://pypi.org/project/velesdb/"><img src="https://img.shields.io/pypi/v/velesdb.svg" alt="PyPI"></a>
   <a href="https://www.npmjs.com/package/@wiscale/velesdb-sdk"><img src="https://img.shields.io/npm/v/@wiscale/velesdb-sdk.svg" alt="npm"></a>
   <a href="https://app.codacy.com/gh/cyberlife-coder/VelesDB/dashboard"><img src="https://img.shields.io/codacy/coverage/58c73832dd294ba38144856ae69e9cf2?branch=main" alt="Codacy coverage"></a>
-  <img src="https://img.shields.io/badge/tests-8526_(Rust%2BTS%2BPy)-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-9k%2B_(Rust%2BTS%2BPy)-brightgreen" alt="Tests">
   <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-VelesDB_Core_1.0-blue" alt="License"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="Stars"></a>
   <a href="https://img.shields.io/badge/contributors-welcome-brightgreen"><img src="https://img.shields.io/badge/contributors-welcome-brightgreen" alt="Contributors Welcome"></a>
@@ -62,11 +62,11 @@ VelesDB removes the US provider from the chain entirely. One Rust binary, local-
 |-------------------------------|------------------------|
 | pgvector for embeddings | **Vector Engine** — 450us p50 end-to-end (10K/384D, WAL ON, recall>=96%) |
 | Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
-| PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows*¹ |
+| PostgreSQL/DuckDB for metadata | **Typed ColumnStore + secondary indexes** — filtering API 130x faster than JSON scanning at 100K rows*¹ |
 | Custom glue code + 3 query languages | **VelesQL** — one language for everything |
 | 3 deployments, 3 configs, 3 backups | **6 MB binary** — works offline, air-gapped |
 
-> *¹ measured on 100K rows; ratio holds within ±5% on 10K–1M rows*
+> *¹ ColumnStore filtering API micro-benchmark, integer equality: 130x at 100K rows, 55x at 10K rows — see [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md). `SELECT ... WHERE` metadata filtering currently runs on secondary indexes + JSON payload filters (see [2] below).*
 
 ---
 ## What is VelesDB?
@@ -80,7 +80,7 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 | **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning [2] |
 
 > [1] Reproduce: `python benchmarks/velesdb_benchmark.py --recall` (Python SDK path, 10K/384D, WAL fsync on, i9-14900KF reference machine). See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [CHANGELOG v1.13.0](CHANGELOG.md).
-> [2] Reproduce: `cargo bench -p velesdb-core --bench filter_benchmark`. See [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md) — at 100K rows: ColumnStore 29.5 us vs JSON scan 3.84 ms (integer equality filter).
+> [2] Reproduce: `cargo bench -p velesdb-core --bench column_filter_benchmark`. See [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md) — at 100K rows: ColumnStore 29.5 us vs JSON scan 3.84 ms (integer equality filter). Micro-benchmark of the ColumnStore filtering API; `SELECT ... WHERE` metadata filtering currently runs on secondary indexes + JSON payload filters (the ColumnStore engine backs JOIN execution).
 
 All three are queried through **VelesQL** — a single SQL-like language with vector, graph, and columnar extensions:
 
@@ -128,7 +128,7 @@ memory.procedural.learn(1, "answer_geography", steps, embedding, confidence=0.8)
 | | **VelesDB** | Chroma | Qdrant | pgvector |
 |---|---|---|---|---|
 | **Architecture** | Unified vector + graph + columnar | Vector only | Vector + payload | Vector extension for PostgreSQL |
-| **Metadata filtering** | **ColumnStore (130x vs JSON)** | JSON scan | JSON payload | SQL (PostgreSQL) |
+| **Metadata filtering** | **Typed ColumnStore [2] + secondary indexes** | JSON scan | JSON payload | SQL (PostgreSQL) |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
 | **Binary size** | 6 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
 | **Search latency** | **450us** p50 (10K/384D, WAL ON, recall>=96%) | ~1-5ms | ~1-5ms (in-memory) | ~5-20ms |
@@ -330,7 +330,7 @@ All `cargo bench` commands below are run as `cargo bench -p velesdb-core --bench
 
 ### Distance Metrics
 
-5 metrics with SIMD acceleration (AVX-512, AVX2, NEON, WASM SIMD128):
+5 metrics with SIMD acceleration (AVX-512, AVX2, NEON; WASM currently uses the scalar fallback — SIMD128 kernels are planned):
 
 | Metric | What it measures | Use case | SIMD perf (768D)*² |
 |--------|-----------------|----------|------------------|
@@ -387,19 +387,23 @@ LIMIT 20
 
 ## ColumnStore Engine
 
-Typed columnar storage — the same approach DuckDB and ClickHouse use. **130x faster** than JSON scanning at 100K rows.
+Typed columnar storage — the same approach DuckDB and ClickHouse use. Its
+filtering API is **130x faster** than JSON scanning at 100K rows
+(micro-benchmark: `cargo bench -p velesdb-core --bench column_filter_benchmark`).
 
 ```
 JSON scan: 3.84 ms @ 100K    →    ColumnStore: 29.5 us @ 100K (130x faster)
 ```
+
+Today the ColumnStore engine backs `JOIN` execution. `SELECT ... WHERE`
+metadata filtering runs on secondary indexes + JSON payload filters, with
+pre-filter or post-filter chosen automatically by the query planner:
 
 ```sql
 SELECT * FROM products
 WHERE vector NEAR $query AND in_stock = true AND price < 50.0
 LIMIT 10
 ```
-
-Pre-filter or post-filter automatically optimized by the query planner.
 
 ---
 
@@ -418,7 +422,7 @@ memory.procedural.learn(3, "handle_refund", steps, embedding, confidence=0.9)
 
 ### RAG with Metadata Filtering
 
-Vector search alone returns noise. VelesDB's ColumnStore filters eliminate irrelevant results 130x faster than JSON scanning.
+Vector search alone returns noise. VelesDB combines vector search with metadata filters (secondary indexes + planner-chosen pre/post-filtering) to eliminate irrelevant results.
 
 ```sql
 SELECT * FROM docs
