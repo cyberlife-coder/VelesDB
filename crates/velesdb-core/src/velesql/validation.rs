@@ -1,8 +1,8 @@
 //! Query validation for VelesQL (EPIC-044 US-007).
 //!
 //! Type definitions (`ValidationError`, `ValidationErrorKind`, `ValidationConfig`,
-//! `ComplexityStats`) live in `validation_types.rs` to keep each file under
-//! the 500 NLOC limit.
+//! `ComplexityStats`) live in `validation_types.rs` and the V011 MATCH anchor
+//! rule in `validation_anchor.rs`, to keep each file under the 500 NLOC limit.
 
 use super::ast::{ArithmeticExpr, Condition, DmlStatement, OrderByExpr, Query, SelectColumns};
 use super::error::{ParseError, ParseErrorKind};
@@ -74,71 +74,10 @@ impl QueryValidator {
         Self::validate_qualified_wildcards(stmt)?;
         Self::validate_vector_group_by(stmt)?;
         stmt.where_clause.as_ref().map_or(Ok(()), |condition| {
-            Self::walk_graph_match_anchors(condition, &stmt.from_alias)
+            // V011 anchor rule (explicit and implicit binding, guards
+            // G1/G2/G3) lives in `validation_anchor.rs`.
+            super::validation_anchor::walk_graph_match_anchors(condition, &stmt.from_alias)
         })
-    }
-
-    /// Recursively validates every `GraphMatch` predicate anchor in a SELECT
-    /// WHERE condition tree.
-    ///
-    /// Mirrors the runtime anchor rule (`resolve_anchor_alias` in
-    /// `execution_paths.rs`) so misanchored queries fail at validation time
-    /// with an actionable message instead of mid-execution:
-    /// - the first node of each MATCH pattern must carry an alias;
-    /// - when FROM/JOIN aliases are declared, that alias must be one of them
-    ///   (a bare `FROM table` declares no alias and accepts any anchor).
-    fn walk_graph_match_anchors(
-        condition: &Condition,
-        from_aliases: &[String],
-    ) -> Result<(), ValidationError> {
-        match condition {
-            Condition::GraphMatch(predicate) => {
-                Self::check_graph_match_anchor(predicate, from_aliases)
-            }
-            Condition::And(l, r) | Condition::Or(l, r) => {
-                Self::walk_graph_match_anchors(l, from_aliases)?;
-                Self::walk_graph_match_anchors(r, from_aliases)
-            }
-            Condition::Not(inner) | Condition::Group(inner) => {
-                Self::walk_graph_match_anchors(inner, from_aliases)
-            }
-            _ => Ok(()),
-        }
-    }
-
-    /// Checks a single MATCH predicate's anchor (first node) alias.
-    fn check_graph_match_anchor(
-        predicate: &super::ast::GraphMatchPredicate,
-        from_aliases: &[String],
-    ) -> Result<(), ValidationError> {
-        let anchor = predicate
-            .pattern
-            .nodes
-            .first()
-            .and_then(|node| node.alias.as_deref());
-        let Some(anchor) = anchor else {
-            return Err(ValidationError::new(
-                ValidationErrorKind::GraphMatchAnchorMismatch,
-                None,
-                "MATCH (...)",
-                "MATCH in SELECT WHERE requires an alias on the first node, \
-                 e.g. MATCH (d:Doc)-[:REL]->(x)",
-            ));
-        };
-        if !from_aliases.is_empty() && !from_aliases.iter().any(|a| a == anchor) {
-            return Err(ValidationError::new(
-                ValidationErrorKind::GraphMatchAnchorMismatch,
-                None,
-                format!("MATCH ({anchor})"),
-                format!(
-                    "MATCH anchor alias '{anchor}' must match one of the FROM/JOIN aliases \
-                     {from_aliases:?}. Anchor the pattern on a declared alias, \
-                     e.g. MATCH ({hint})-[:REL]->(x)",
-                    hint = from_aliases[0]
-                ),
-            ));
-        }
-        Ok(())
     }
 
     /// Validates that `similarity()` in SELECT or ORDER BY has a score context.

@@ -23,6 +23,14 @@ impl Collection {
     }
 
     /// Extracts and validates the anchor alias from the first node in a MATCH predicate.
+    ///
+    /// Mirrors the V011 anchor rule (`validation_anchor.rs`): an anchor alias
+    /// declared in FROM/JOIN binds explicitly; otherwise the leftmost node
+    /// binds implicitly to the FROM rows, guarded by G1 (a declared alias in
+    /// a non-anchor position) and G3 (no `@collection` override on the
+    /// anchor). G2 (implicit anchor shared across MATCH predicates) is
+    /// validation-only: it needs the whole WHERE tree, and every execution
+    /// path runs `QueryValidator::validate` before reaching this point.
     fn resolve_anchor_alias(
         predicate: &crate::velesql::GraphMatchPredicate,
         from_aliases: &[String],
@@ -39,15 +47,51 @@ impl Collection {
             )
         })?;
 
-        // BUG-8: Check anchor alias against ALL aliases visible in scope.
-        if !from_aliases.is_empty() && !from_aliases.iter().any(|a| a == &anchor_alias) {
+        // BUG-8: explicit anchor — or a bare FROM, where any anchor is accepted.
+        if from_aliases.is_empty() || from_aliases.iter().any(|a| a == &anchor_alias) {
+            return Ok(anchor_alias);
+        }
+        Self::check_implicit_anchor_guards(predicate, &anchor_alias, from_aliases)?;
+        // Implicit anchor: the leftmost node binds to the FROM rows.
+        Ok(anchor_alias)
+    }
+
+    /// Runtime G1/G3 guards for an anchor alias not declared in FROM/JOIN
+    /// (implicit binding candidate).
+    fn check_implicit_anchor_guards(
+        predicate: &crate::velesql::GraphMatchPredicate,
+        anchor_alias: &str,
+        from_aliases: &[String],
+    ) -> Result<()> {
+        // G1: a declared alias elsewhere in the pattern means the anchor must
+        // be that alias (the pattern direction is likely inverted).
+        let declared = predicate
+            .pattern
+            .nodes
+            .iter()
+            .skip(1)
+            .filter_map(|node| node.alias.as_deref())
+            .find(|alias| from_aliases.iter().any(|f| f == alias));
+        if let Some(declared) = declared {
             return Err(crate::error::Error::Config(format!(
-                "MATCH predicate anchor alias '{}' must match one of the FROM/JOIN aliases: {:?}",
-                anchor_alias, from_aliases
+                "MATCH predicate anchor alias '{anchor_alias}' must be the declared \
+                 FROM/JOIN alias '{declared}' used elsewhere in the pattern"
             )));
         }
-
-        Ok(anchor_alias)
+        // G3: a @collection anchor resolves outside the FROM collection and
+        // cannot bind implicitly to its rows.
+        if predicate
+            .pattern
+            .nodes
+            .first()
+            .is_some_and(|node| node.collection.is_some())
+        {
+            return Err(crate::error::Error::Config(format!(
+                "MATCH predicate anchor alias '{anchor_alias}' has a @collection \
+                 override; anchor on one of the FROM/JOIN aliases: {from_aliases:?}"
+            )));
+        }
+        Ok(())
     }
 
     /// Builds a `MatchClause` that returns all bindings for anchor evaluation.

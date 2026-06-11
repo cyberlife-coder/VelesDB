@@ -140,7 +140,9 @@ SELECT * FROM docs
 WHERE category = 'tech' AND MATCH (d:Doc)-[:REL]->(x)
 LIMIT 10;
 
--- With a FROM alias, the MATCH anchor must reuse it (validation rule V011)
+-- With a FROM alias, the MATCH anchor reuses it — or, when no pattern alias
+-- matches a declared alias, the leftmost node binds implicitly to the FROM
+-- rows (validation rule V011)
 SELECT * FROM docs AS d
 WHERE category = 'tech' AND MATCH (d)-[:REL]->(x)
 LIMIT 10;

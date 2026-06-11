@@ -4,7 +4,8 @@
 //! Regression coverage for the production panic where graph predicates forced
 //! `execution_limit = MAX_LIMIT` (100k) and the downstream oversampling clamp
 //! hit `f64::clamp` with `min > max` ("triple hybrid" showcase query), and for
-//! the late runtime-only anchor-alias check that is now a validation error.
+//! the V011 anchor rule (explicit binding, implicit binding with guards
+//! G1/G2/G3, and the G1 validation error).
 //!
 //! All tests exercise the full pipeline: SQL string -> parse -> validate ->
 //! execute -> verify.
@@ -12,7 +13,9 @@
 use serde_json::json;
 use velesdb_core::{Database, GraphEdge, Point};
 
-use super::helpers::{create_test_db, execute_sql, execute_sql_with_params, vector_param};
+use super::helpers::{
+    create_test_db, execute_sql, execute_sql_with_params, result_ids, vector_param,
+};
 
 // =========================================================================
 // Module-specific setup
@@ -361,35 +364,132 @@ fn test_metadata_and_graph_match_without_near_scans_beyond_overfetch_window() {
 }
 
 // =========================================================================
-// C. Negative: anchor alias mismatch is a clear validation error
+// C. Flagship: implicit anchor binding (V011 relaxation, guards G1/G2/G3)
 // =========================================================================
 
-/// GIVEN an `agent_memory` collection with vectors and RELATES_TO edges
-/// WHEN running the mission query verbatim, whose MATCH anchors on `ctx`
-///      while the FROM alias is `memory`
-/// THEN the query is rejected with a clear, actionable error naming the
-///      mismatched anchor alias BEFORE any execution (no panic, no results).
-#[test]
-fn test_mission_query_anchor_alias_mismatch_is_clear_error() {
-    let (_dir, db) = create_test_db();
+/// Creates an `agent_memory` collection for the flagship query.
+///
+/// Vectors (4-dim, cosine), query is `[1, 0, 0, 0]`; similarity strictly
+/// decreases with the id.
+///
+/// | ids    | session_id | outgoing RELATES_TO |
+/// |--------|------------|---------------------|
+/// | 1..=12 | sess-42    | yes (-> 20)         |
+/// | 13     | sess-42    | no                  |
+/// | 14     | other      | yes (-> 20)         |
+/// | 20     | other      | no (target only)    |
+fn setup_agent_memory(db: &Database) {
     db.create_vector_collection("agent_memory", 4, velesdb_core::DistanceMetric::Cosine)
         .expect("test: create agent_memory");
     let vc = db
         .get_vector_collection("agent_memory")
         .expect("test: get agent_memory");
-    vc.upsert(vec![
-        Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(json!({"kind": "fact"}))),
-        Point::new(2, vec![0.9, 0.1, 0.0, 0.0], Some(json!({"kind": "fact"}))),
-    ])
-    .expect("test: upsert agent_memory");
-    let edge = GraphEdge::new(200, 1, 2, "RELATES_TO").expect("test: create edge");
-    vc.add_edge(edge).expect("test: add RELATES_TO edge");
+
+    let session = |id: u16| {
+        if id == 14 || id == 20 {
+            "other"
+        } else {
+            "sess-42"
+        }
+    };
+    let points: Vec<Point> = (1..=14u16)
+        .chain(std::iter::once(20))
+        .map(|id| {
+            Point::new(
+                u64::from(id),
+                vec![1.0, 0.05 * f32::from(id), 0.0, 0.0],
+                Some(json!({"session_id": session(id)})),
+            )
+        })
+        .collect();
+    vc.upsert(points).expect("test: upsert agent_memory");
+
+    for (edge_id, source) in (500u64..).zip((1u64..=12).chain(std::iter::once(14))) {
+        let edge = GraphEdge::new(edge_id, source, 20, "RELATES_TO").expect("test: create edge");
+        vc.add_edge(edge).expect("test: add RELATES_TO edge");
+    }
+}
+
+/// GIVEN an `agent_memory` collection with embeddings, session payloads, and
+///      RELATES_TO edges
+/// WHEN running the flagship agent-memory query VERBATIM (implicit anchor:
+///      no pattern alias matches the FROM alias `memory`, so `ctx` binds to
+///      the FROM rows)
+/// THEN it returns the memories with an outgoing RELATES_TO edge AND the
+///      matching session_id, ordered by similarity DESC, capped at LIMIT 10.
+#[test]
+fn test_flagship_agent_memory_query_runs_verbatim() {
+    let (_dir, db) = create_test_db();
+    setup_agent_memory(&db);
 
     let sql = "SELECT memory.*, similarity() FROM agent_memory AS memory \
-               WHERE vector NEAR $v AND MATCH (ctx)-[:RELATES_TO]->(fact) AND kind = 'fact' \
+               WHERE vector NEAR $embedding AND MATCH (ctx)-[:RELATES_TO]->(fact) \
+               AND session_id = $current_session \
+               ORDER BY similarity() DESC LIMIT 10";
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "embedding".to_string(),
+        json!([1.0_f32, 0.0_f32, 0.0_f32, 0.0_f32]),
+    );
+    params.insert("current_session".to_string(), json!("sess-42"));
+
+    let results = execute_sql_with_params(&db, sql, &params)
+        .expect("flagship agent-memory query must run verbatim");
+
+    // Candidates: ids 1..=12 (outgoing edge + session match; 13 has no edge,
+    // 14/20 are in another session). LIMIT 10 keeps the 10 most similar.
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        ids,
+        (1..=10).collect::<Vec<u64>>(),
+        "top-10 relating session memories, similarity DESC order"
+    );
+    for pair in results.windows(2) {
+        assert!(
+            pair[0].score >= pair[1].score,
+            "ORDER BY similarity() DESC must hold"
+        );
+    }
+}
+
+/// GIVEN the same agent-memory corpus
+/// WHEN excluding the pattern with NOT MATCH (implicit anchor, exact dual of
+///      the positive case)
+/// THEN only the memories WITHOUT an outgoing RELATES_TO edge are returned.
+#[test]
+fn test_not_match_implicit_anchor_excludes_relating_memories() {
+    let (_dir, db) = create_test_db();
+    setup_agent_memory(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM agent_memory AS memory \
+         WHERE NOT MATCH (ctx)-[:RELATES_TO]->(fact) LIMIT 20",
+    )
+    .expect("NOT MATCH with implicit anchor must execute");
+
+    assert_eq!(
+        result_ids(&results),
+        [13u64, 20].into_iter().collect(),
+        "only memories without an outgoing RELATES_TO edge may remain"
+    );
+}
+
+/// GIVEN the same agent-memory corpus
+/// WHEN the FROM alias `memory` appears in a NON-anchor position of the
+///      pattern (guard G1: inverted direction)
+/// THEN the query is rejected with a clear, actionable error naming both the
+///      anchor and the declared alias BEFORE any execution.
+#[test]
+fn test_g1_anchor_inversion_is_clear_error() {
+    let (_dir, db) = create_test_db();
+    setup_agent_memory(&db);
+
+    let sql = "SELECT memory.*, similarity() FROM agent_memory AS memory \
+               WHERE vector NEAR $v AND MATCH (ctx)-[:RELATES_TO]->(memory) \
                ORDER BY similarity() DESC LIMIT 10";
     let err = execute_sql_with_params(&db, sql, &vector_param(&[1.0, 0.0, 0.0, 0.0]))
-        .expect_err("anchor alias 'ctx' does not match FROM alias 'memory'");
+        .expect_err("FROM alias 'memory' in non-anchor position must be rejected (G1)");
 
     let msg = err.to_string();
     assert!(
@@ -397,7 +497,7 @@ fn test_mission_query_anchor_alias_mismatch_is_clear_error() {
         "error must name the mismatched anchor alias, got: {msg}"
     );
     assert!(
-        msg.contains("memory"),
-        "error must list the declared FROM/JOIN aliases, got: {msg}"
+        msg.contains("MATCH (memory)-[:RELATES_TO]->(ctx)"),
+        "error must suggest the user's pattern re-anchored on 'memory', got: {msg}"
     );
 }

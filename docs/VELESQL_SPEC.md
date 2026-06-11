@@ -84,8 +84,10 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 - Conformance test matrix: `docs/reference/VELESQL_CONFORMANCE_MATRIX.md`.
 - Recommended developer syntax for mixed filters:
   `SELECT ... FROM <collection> WHERE ... AND MATCH (...)`.
-  When `FROM` declares an alias, the MATCH anchor must reuse it (rule V011 —
-  see [Graph Match Predicate in WHERE](#graph-match-predicate-in-where)).
+  When `FROM` declares an alias, the MATCH anchor either reuses it or — when
+  no pattern alias matches a declared alias — binds implicitly to the FROM
+  rows (rule V011 — see
+  [Graph Match Predicate in WHERE](#graph-match-predicate-in-where)).
 
 ---
 
@@ -916,22 +918,47 @@ LIMIT 10
 This filters rows that participate in the specified graph pattern, combined with
 any other scalar conditions.
 
-**Anchor alias rule (V011).** The first node of the pattern (the *anchor*) must
-carry an alias. When the `FROM` clause (or a `JOIN`) declares an alias, the
-anchor alias must be one of those declared aliases — the pattern is anchored on
-the rows of that table. When `FROM` has no alias, any anchor alias is accepted.
+**Anchor rule (V011) — explicit and implicit.** The first node of the pattern
+(the *anchor*) must carry an alias. The pattern binds to the FROM rows:
+
+- **Explicitly** — when the anchor alias is one of the aliases declared by
+  `FROM` or a `JOIN`, the pattern is anchored on the rows of that table.
+- **Implicitly** — when **no** alias in the pattern matches a declared alias,
+  the leftmost node binds to the FROM rows. Three guards apply:
+  - **G1**: if a pattern alias *does* match a declared alias, the anchor must
+    be that alias (catches inverted pattern directions);
+  - **G2**: the implicit anchor alias must not appear in another `MATCH`
+    predicate of the same WHERE clause — chain into a single pattern instead,
+    e.g. `MATCH (m)-[:R]->(f)-[:S]->(g)`;
+  - **G3**: the anchor node must not carry a `@collection` override (it would
+    resolve outside the FROM collection).
+- When `FROM` has no alias, any anchor alias is accepted.
+
+`NOT MATCH` applies the same rule uniformly (exact dual of the positive case).
+
+> **Note.** Implicit binding is *not* Cypher's existential MATCH semantics:
+> the leftmost node always binds to the candidate row. `MATCH (ctx)-[:R]->(f)`
+> keeps the rows that have an outgoing `R` edge — it does not test whether the
+> pattern exists *anywhere* in the graph.
+
 Violations are rejected at validation time with error code `V011`
 (`MATCH predicate anchor must be an alias declared in FROM/JOIN`):
 
 ```sql
--- OK: anchor 'd' matches the FROM alias
+-- OK: anchor 'd' matches the FROM alias (explicit)
 SELECT * FROM docs AS d
 WHERE category = 'tech' AND MATCH (d)-[:REL]->(x)
 LIMIT 10
 
--- Rejected with V011: anchor 'ctx' does not match FROM alias 'd'
+-- OK: no pattern alias matches 'd' — 'ctx' binds implicitly to the docs rows
 SELECT * FROM docs AS d
 WHERE category = 'tech' AND MATCH (ctx)-[:REL]->(x)
+LIMIT 10
+
+-- Rejected with V011 (G1): the FROM alias 'd' is in a non-anchor position;
+-- anchor the pattern on it instead, e.g. MATCH (d)-[:REL]->(w)
+SELECT * FROM docs AS d
+WHERE category = 'tech' AND MATCH (w)-[:REL]->(d)
 LIMIT 10
 ```
 

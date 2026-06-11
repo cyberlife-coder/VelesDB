@@ -22,10 +22,15 @@ const CORRECTED_EXAMPLES: &[&str] = &[
     "SELECT author, year, COUNT(*) AS papers,\n\
      DENSE_RANK() OVER (PARTITION BY author ORDER BY year DESC) AS recency_rank\n\
      FROM publications GROUP BY author, year",
-    // Graph predicate anchored on the FROM alias (rule V011).
+    // Graph predicate anchored on the FROM alias (rule V011, explicit).
     "SELECT * FROM docs AS d\n\
      WHERE category = 'tech' AND MATCH (d)-[:REL]->(x)\n\
      LIMIT 10",
+    // Flagship agent-memory query: no pattern alias matches `memory`, so the
+    // anchor `ctx` binds implicitly to the FROM rows (rule V011, implicit).
+    "SELECT memory.*, similarity() FROM agent_memory AS memory \
+     WHERE vector NEAR $embedding AND MATCH (ctx)-[:RELATES_TO]->(fact) \
+     AND session_id = $current_session ORDER BY similarity() DESC LIMIT 10",
     // Bounded variable-length range at the documented cap.
     "MATCH (src)-[:LINKS*1..32]->(dst) RETURN dst LIMIT 10",
     // Plain EXPLAIN remains a parsed statement.
@@ -86,13 +91,27 @@ fn unbounded_ranges_are_rejected_at_validation() {
 }
 
 #[test]
-fn anchor_alias_mismatch_is_rejected_with_v011() {
+fn implicit_anchor_binding_is_accepted() {
+    // No pattern alias matches the FROM alias 'd': the anchor 'ctx' binds
+    // implicitly to the docs rows (spec "Anchor rule (V011)" implicit case).
     let statement = "SELECT * FROM docs AS d\n\
          WHERE category = 'tech' AND MATCH (ctx)-[:REL]->(x)\n\
          LIMIT 10";
-    let query = Parser::parse(statement).expect("anchor-mismatch example must parse");
+    let query = Parser::parse(statement).expect("implicit-anchor example must parse");
+    QueryValidator::validate(&query)
+        .expect("spec documents implicit anchor binding as accepted, but validation rejected it");
+}
+
+#[test]
+fn g1_anchor_inversion_is_rejected_with_v011() {
+    // The FROM alias 'd' appears in a non-anchor position (guard G1): the
+    // pattern direction is inverted and the spec documents a V011 rejection.
+    let statement = "SELECT * FROM docs AS d\n\
+         WHERE category = 'tech' AND MATCH (w)-[:REL]->(d)\n\
+         LIMIT 10";
+    let query = Parser::parse(statement).expect("G1 anchor-inversion example must parse");
     let err = QueryValidator::validate(&query)
-        .expect_err("spec documents anchor mismatch as a V011 validation error");
+        .expect_err("spec documents the G1 anchor inversion as a V011 validation error");
     assert!(
         format!("{err:?}").contains("V011") || format!("{err}").contains("V011"),
         "expected a V011 error, got: {err:?}"
