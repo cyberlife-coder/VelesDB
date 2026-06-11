@@ -62,6 +62,10 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+# Page size for the delete(ref_doc_id) payload scan (VelesQL SELECT
+# defaults to LIMIT 10, far too small for chunked documents).
+_REF_DOC_SCAN_BATCH = 1000
+
 
 class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, ScrollOpsMixin, BasePydanticVectorStore):
     """VelesDB vector store for LlamaIndex.
@@ -71,15 +75,22 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
 
     Example:
         >>> from llamaindex_velesdb import VelesDBVectorStore
-        >>> from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+        >>> from llama_index.core import (
+        ...     SimpleDirectoryReader, StorageContext, VectorStoreIndex,
+        ... )
         >>>
-        >>> # Create vector store
+        >>> # Create vector store and wrap it in a StorageContext —
+        >>> # from_documents() ignores a bare vector_store= keyword and
+        >>> # would silently index into an in-memory store instead.
         >>> vector_store = VelesDBVectorStore(path="./velesdb_data")
+        >>> storage_context = StorageContext.from_defaults(
+        ...     vector_store=vector_store
+        ... )
         >>>
-        >>> # Build index from documents
+        >>> # Build index from documents (chunks are written to VelesDB)
         >>> documents = SimpleDirectoryReader("data").load_data()
         >>> index = VectorStoreIndex.from_documents(
-        ...     documents, vector_store=vector_store
+        ...     documents, storage_context=storage_context
         ... )
         >>>
         >>> # Query
@@ -324,17 +335,51 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         return ids
 
     def delete(self, ref_doc_id: str, **delete_kwargs: Any) -> None:
-        """Delete nodes by reference document ID.
+        """Delete all nodes that belong to a reference document.
+
+        Implements the LlamaIndex vector-store protocol: every node whose
+        ``ref_doc_id`` payload field matches is removed, so a document that
+        was split into N chunks loses all N. The hash of ``ref_doc_id``
+        itself is deleted too, covering nodes inserted with the document id
+        as their node id.
 
         Args:
             ref_doc_id: Reference document ID to delete.
             **delete_kwargs: Additional arguments.
         """
-        if self._collection is None:
+        collection = self._collection or self._open_existing_collection()
+        if collection is None:
             return
 
-        int_id = _stable_hash_id(ref_doc_id)
-        self._collection.delete([int_id])
+        self._delete_nodes_of_ref_doc(collection, ref_doc_id)
+        collection.delete([_stable_hash_id(ref_doc_id)])
+
+    def _open_existing_collection(self) -> Optional[velesdb.Collection]:
+        """Bind to the named collection if it already exists on disk."""
+        self._collection = self._get_db().get_collection(self.collection_name)
+        return self._collection
+
+    def _delete_nodes_of_ref_doc(
+        self, collection: velesdb.Collection, ref_doc_id: str
+    ) -> None:
+        """Delete every node whose payload ``ref_doc_id`` matches."""
+        from llamaindex_velesdb.security import validate_query
+
+        escaped = ref_doc_id.replace("'", "''")
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        # collection_name validated at construction ([a-zA-Z0-9_-]+), value has
+        # single-quotes doubled. Not a real SQL engine — VelesQL only.
+        query_str = (
+            f"SELECT * FROM {self.collection_name} "
+            f"WHERE ref_doc_id = '{escaped}' LIMIT {_REF_DOC_SCAN_BATCH}"
+        )
+        validate_query(query_str)
+        while True:
+            rows = collection.query(query_str)
+            if rows:
+                collection.delete([row["id"] for row in rows])
+            if len(rows) < _REF_DOC_SCAN_BATCH:
+                break
 
     def add_bulk(self, nodes: List[BaseNode], **add_kwargs: Any) -> List[str]:
         """Bulk insert optimized for large batches.
