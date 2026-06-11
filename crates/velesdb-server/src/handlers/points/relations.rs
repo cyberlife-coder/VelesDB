@@ -120,7 +120,9 @@ pub async fn relate_points(
     };
 
     let properties: std::collections::HashMap<String, serde_json::Value> = match req.properties {
-        serde_json::Value::Object(map) => map.into_iter().collect(),
+        serde_json::Value::Object(ref map) => {
+            map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        }
         serde_json::Value::Null => std::collections::HashMap::new(),
         _ => {
             return error_response(
@@ -130,32 +132,47 @@ pub async fn relate_points(
         }
     };
 
-    // Auto-assign edge ID with retry on collision (mirrors add_relation_edge).
+    match insert_edge_with_retry(&coll, &req, properties) {
+        Ok(edge_id) => (StatusCode::CREATED, Json(RelateResponse { edge_id })).into_response(),
+        Err(r) => r,
+    }
+}
+
+/// Assigns a collision-free edge ID and inserts the edge, retrying on `EdgeExists`.
+#[allow(clippy::result_large_err)]
+fn insert_edge_with_retry(
+    coll: &velesdb_core::collection::AnyCollection,
+    req: &RelateRequest,
+    properties: std::collections::HashMap<String, serde_json::Value>,
+) -> Result<u64, axum::response::Response> {
     let mut next_id = coll.max_edge_id().map_or(1, |m| m.saturating_add(1));
-    let edge_id = loop {
+    loop {
         if coll.edge_exists(next_id) {
             next_id = next_id.saturating_add(1);
             continue;
         }
         let edge = match GraphEdge::new(next_id, req.source, req.target, &req.rel_type) {
             Ok(e) => e.with_properties(properties.clone()),
-            Err(e) => return error_response(StatusCode::BAD_REQUEST, format!("invalid edge: {e}")),
+            Err(e) => {
+                return Err(error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid edge: {e}"),
+                ))
+            }
         };
         match coll.add_edge(edge) {
-            Ok(()) => break next_id,
+            Ok(()) => return Ok(next_id),
             Err(velesdb_core::Error::EdgeExists(_)) => {
                 next_id = next_id.saturating_add(1);
             }
             Err(e) => {
-                return error_response(
+                return Err(error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("failed to create relation: {e}"),
-                )
+                ))
             }
         }
-    };
-
-    (StatusCode::CREATED, Json(RelateResponse { edge_id })).into_response()
+    }
 }
 
 /// Remove a relation edge by ID.
