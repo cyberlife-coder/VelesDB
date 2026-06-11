@@ -553,9 +553,11 @@ def agent_respond(user_question: str):
 ## TTL & Auto-Expiration
 
 Each entry can have a time-to-live (TTL) in **seconds**. Expired entries are
-filtered from search results and physically removed by `auto_expire()`. TTL is
-exposed in **both** the Rust and Python embedded bindings (it is *not* available
-over REST / TypeScript — see the API availability table).
+filtered from search results and physically removed by `auto_expire()`. The
+helpers below are exposed in **both** the Rust and Python embedded bindings;
+over REST / TypeScript only the durable per-point form is available, via the
+client's `db.setTtlDurable(collection, pointId, ttlSeconds)` — see the API
+availability table.
 
 ### Namespaced by subsystem (`MemoryKind`)
 
@@ -902,10 +904,12 @@ memory.load_latest_snapshot()?;
 
 The **Python** and **Rust** bindings run embedded; the **TypeScript** SDK is
 REST-backed (`db.agentMemory(...)`, methods named `storeFact` / `searchFacts` /
-`recordEvent` / `recallEvents` / `learnProcedure` / `recallProcedures` /
-`deleteMemory`). The TS facade covers vector store + similarity recall over the
-three subsystems; temporal/confidence-only queries, reinforcement, TTL, and
-snapshots are embedded-only.
+`recordEvent` / `recallEvents` / `recallRecent` / `recallOlderThan` /
+`learnProcedure` / `recallProcedures` / `deleteMemory`). The TS facade covers
+vector store + similarity recall + episodic temporal recall over the three
+subsystems, and durable per-point TTL via the client's `db.setTtlDurable()`;
+confidence-only queries, reinforcement, the subsystem-namespaced TTL helpers,
+and snapshots are embedded-only.
 
 The TypeScript method names diverge from the embedded Python/Rust API
 (`storeFact` vs `store`, `searchFacts` vs `query`, …) **by design**: the TS SDK
@@ -920,16 +924,16 @@ the embedded bindings expose each subsystem as its own object (`semantic.store`,
 | `semantic.query()` | Yes | Yes | Yes (`searchFacts`) |
 | `semantic.delete()` | Yes | Yes | Yes (`deleteMemory`) |
 | `episodic.record()` | Yes | Yes | Yes (`recordEvent`, returns id) |
-| `episodic.recent()` | Yes | Yes | No (no temporal query) |
+| `episodic.recent()` | Yes | Yes | Yes (`recallRecent`) |
 | `episodic.recall_similar()` | Yes | Yes | Yes (`recallEvents`) |
-| `episodic.older_than()` | Yes | Yes | No (no temporal query) |
+| `episodic.older_than()` | Yes | Yes | Yes (`recallOlderThan`) |
 | `episodic.delete()` | Yes | Yes | Yes (`deleteMemory`) |
 | `procedural.learn()` | Yes | Yes | Yes (`learnProcedure`, returns id) |
 | `procedural.recall()` | Yes | Yes | Yes (`recallProcedures`) |
 | `procedural.reinforce()` | Yes | Yes | No (confidence scoring embedded-only) |
 | `procedural.list_all()` | Yes | Yes | No (embedded-only) |
 | `procedural.delete()` | Yes | Yes | Yes (`deleteMemory`) |
-| TTL management (`set_*_ttl`, `store_with_ttl`, `auto_expire`) | Yes | Yes | No (embedded-only) |
+| TTL management (`set_*_ttl`, `store_with_ttl`, `auto_expire`) | Yes | Yes | Partial — durable per-point TTL via `db.setTtlDurable()`; subsystem helpers embedded-only |
 | Snapshots (`snapshot`, `load_*_snapshot`, `list_snapshot_versions`) | Yes | Yes | No (embedded-only) |
 | VelesQL bridges (`query_semantic` / `query_episodic` / `query_procedural`) | Yes | Yes | No (embedded-only) |
 
@@ -981,8 +985,15 @@ Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
 - The **`dimension`** passed to `db.agentMemory({ dimension })` is advisory
   (readable via `memory.dimension`); the collection's own dimension governs
   storage and search.
-- **TTL and snapshots are not exposed over REST** — they are embedded-only
-  (Python and Rust). When used, TTL durations are in **seconds**.
+- **Temporal recall is available**: `memory.recallRecent(collection, since?)`
+  and `memory.recallOlderThan(collection, before)` return
+  `EpisodicRecord[]` (`{ id, timestamp, payload }`) most-recent-first,
+  mirroring the embedded `episodic.recent()` / `episodic.older_than()`.
+- **Durable per-point TTL is available over REST** via
+  `db.setTtlDurable(collection, pointId, ttlSeconds)` (TTL in **seconds**,
+  persisted as `_veles_expires_at`). The subsystem-namespaced TTL helpers
+  (`set_*_ttl`, `store_with_ttl`, `auto_expire`) and **snapshots** remain
+  embedded-only (Python and Rust).
 
 ---
 
