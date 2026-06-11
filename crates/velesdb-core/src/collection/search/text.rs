@@ -181,11 +181,11 @@ impl Collection {
     ///
     /// Returns `(fused_scores, component_map)` where `component_map` maps each
     /// point ID to its individual `(vector_rrf, bm25_rrf)` contributions.
-    // TODO(EPIC-040): unify with fusion::FusionStrategy once it gains a weighted,
-    // 0-based RRF entry point. The current FusionStrategy::fuse_rrf is unweighted
-    // and 1-based (1/(k+rank+1)), whereas this hybrid uses per-branch weights and
-    // 0-based ranks (weight/(rank+k)); delegating today would change every fused
-    // score and break the hybrid_compositions regression guards.
+    // EPIC-040: FusionStrategy::WeightedRRF now provides the same weighted,
+    // 0-based entry point (weight/(rank+k)). This method keeps its one-pass
+    // implementation to build the fused-score map and per-component breakdown
+    // simultaneously, avoiding a second iteration over the branches for the
+    // score-explanation path.
     #[allow(clippy::cast_precision_loss)]
     fn compute_rrf_scores_with_components(
         vector_results: &[crate::scored_result::ScoredResult],
