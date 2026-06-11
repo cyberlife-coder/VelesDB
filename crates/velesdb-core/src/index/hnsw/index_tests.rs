@@ -3348,3 +3348,15 @@ fn test_hnsw_save_load_roundtrips_rabitq_backend_and_quantizer() {
         "self-query must return itself as top-1 after reload"
     );
 }
+
+#[test]
+fn test_with_params_propagates_alpha_to_native_graph() {
+    let params = HnswParams::auto(4).with_alpha(1.5);
+    let index = HnswIndex::with_params(4, crate::DistanceMetric::Cosine, params)
+        .expect("with_params must succeed with valid alpha");
+    let actual = index.inner.read().alpha();
+    assert!(
+        (actual - 1.5).abs() < f32::EPSILON,
+        "alpha 1.5 must propagate to native graph, got {actual}"
+    );
+}
