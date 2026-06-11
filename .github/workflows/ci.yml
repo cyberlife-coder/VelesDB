@@ -398,11 +398,23 @@ jobs:
       - name: Install velesdb-common (local shared package)
         run: pip install -e integrations/common
 
+      # All three RAG framework connectors are installed and tested from
+      # source. Until 2026-06 only LlamaIndex ran here — the LangChain
+      # suite was never executed in CI and rotted to 21 failures.
+      - name: Install & Test LangChain integration
+        run: |
+          pip install -e "integrations/langchain[dev]"
+          python -m pytest integrations/langchain/tests/ -v --tb=short
+
       - name: Install & Test LlamaIndex integration
         run: |
-          cd integrations/llamaindex
-          pip install -e ".[dev]" 2>/dev/null || pip install pytest pytest-asyncio
-          python -m pytest tests/ -v --tb=short
+          pip install -e "integrations/llamaindex[dev]"
+          python -m pytest integrations/llamaindex/tests/ -v --tb=short
+
+      - name: Install & Test Haystack integration
+        run: |
+          pip install -e "integrations/haystack[dev]"
+          python -m pytest integrations/haystack/tests/ -v --tb=short
 
   # ===========================================================================
   # Python SDK Tests — velesdb-python (PyO3) binding functional suite.
